@@ -330,10 +330,10 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Elimina");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Impostazioni strumento");
-    EXPECT_EQ(localization.text("ui.panel.active_material", "Active Material"),
-              "Materiale attivo");
-    EXPECT_EQ(localization.text("ui.active_material.browse", "Browse"),
-              "Sfoglia");
+    EXPECT_EQ(localization.text("ui.panel.face_texture", "Face Texture"),
+              "Texture faccia");
+    EXPECT_EQ(localization.text("ui.material_browser.assign", "Assign"),
+              "Assegna");
     EXPECT_EQ(localization.text("ui.panel.layers", "Layers"), "Livelli");
     EXPECT_EQ(localization.text("ui.layers.add_selection",
                                 "Add Selection to Layer"),
@@ -425,10 +425,10 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Delete");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Tool Settings");
-    EXPECT_EQ(localization.text("ui.panel.active_material", "Active Material"),
-              "Active Material");
-    EXPECT_EQ(localization.text("ui.active_material.browse", "Browse"),
-              "Browse");
+    EXPECT_EQ(localization.text("ui.panel.face_texture", "Face Texture"),
+              "Face Texture");
+    EXPECT_EQ(localization.text("ui.material_browser.assign", "Assign"),
+              "Assign");
     EXPECT_EQ(localization.text("viewport.tool.radial_array.label",
                                 "Radial Array"),
               "Radial Array");
@@ -663,12 +663,6 @@ TEST(LocalizationResourceTests,
       italian->at("ui.viewport.context_menu.command.center_selection"),
       "Centra la vista sulla selezione");
   EXPECT_EQ(english->at(
-                "ui.viewport.context_menu.command.set_material_under_mouse"),
-            "Set Material under Mouse as Active");
-  EXPECT_EQ(italian->at(
-                "ui.viewport.context_menu.command.set_material_under_mouse"),
-            "Imposta come attivo il materiale sotto il mouse");
-  EXPECT_EQ(english->at(
                 "ui.viewport.context_menu.command.edit_material_under_mouse"),
             "Edit Material under Mouse");
   EXPECT_EQ(italian->at(
@@ -680,14 +674,18 @@ TEST(LocalizationResourceTests,
             "Cut Selection");
   EXPECT_EQ(italian->at("keybindings.target.edit.cut.label"),
             "Taglia selezione");
-  EXPECT_EQ(english->at(
-                "keybindings.target.viewport.material."
-                "apply_active_to_selection.label"),
-            "Apply Active Material under Mouse");
-  EXPECT_EQ(italian->at(
-                "keybindings.target.viewport.material."
-                "apply_active_to_selection.label"),
-            "Applica il materiale attivo sotto il mouse");
+  for (const auto &[locale, catalog] : catalogs) {
+    SCOPED_TRACE(locale);
+    for (const std::string_view retired : {
+             "ui.panel.active_material", "ui.active_material.browse",
+             "modeling.action.apply_active_material.label",
+             "keybindings.target.edit.apply_material.label",
+             "keybindings.target.viewport.material.sample_face.label",
+             "keybindings.target.viewport.material.apply_active_to_selection.label",
+             "ui.viewport.context_menu.command.set_material_under_mouse"}) {
+      EXPECT_EQ(catalog.find(std::string(retired)), catalog.end()) << retired;
+    }
+  }
 }
 
 TEST(LocalizationResourceTests,

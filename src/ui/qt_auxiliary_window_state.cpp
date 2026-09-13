@@ -52,6 +52,21 @@ QtAuxiliaryWindowState::load(const std::filesystem::path &path) {
       settings.value(QStringLiteral("sidebarWidth"), 200).toInt();
   settings.endGroup();
 
+  settings.beginGroup(QStringLiteral("FaceTexture"));
+  state.face_texture_browser_grid_mode =
+      settings.value(QStringLiteral("gridMode"), true).toBool();
+  state.face_texture_browser_tile_size =
+      settings.value(QStringLiteral("tileSize"), 64).toInt();
+  state.face_texture_browser_sidebar_visible =
+      settings.value(QStringLiteral("sidebarVisible"), true).toBool();
+  state.face_texture_browser_sidebar_width =
+      settings.value(QStringLiteral("sidebarWidth"), 120).toInt();
+  state.face_texture_splitter_state =
+      settings.value(QStringLiteral("splitterState")).toByteArray();
+  state.face_texture_layout_migrated =
+      settings.value(QStringLiteral("layoutMigrated"), false).toBool();
+  settings.endGroup();
+
   settings.beginGroup(QStringLiteral("StandardMaterialEditor"));
   state.standard_material_editor_geometry =
       settings.value(QStringLiteral("geometry")).toByteArray();
@@ -89,6 +104,15 @@ bool QtAuxiliaryWindowState::save(const std::filesystem::path &path) const {
   settings.setValue(QStringLiteral("tileSize"), material_browser_tile_size);
   settings.setValue(QStringLiteral("sidebarVisible"), material_browser_sidebar_visible);
   settings.setValue(QStringLiteral("sidebarWidth"), material_browser_sidebar_width);
+  settings.endGroup();
+
+  settings.beginGroup(QStringLiteral("FaceTexture"));
+  settings.setValue(QStringLiteral("gridMode"), face_texture_browser_grid_mode);
+  settings.setValue(QStringLiteral("tileSize"), face_texture_browser_tile_size);
+  settings.setValue(QStringLiteral("sidebarVisible"), face_texture_browser_sidebar_visible);
+  settings.setValue(QStringLiteral("sidebarWidth"), face_texture_browser_sidebar_width);
+  settings.setValue(QStringLiteral("splitterState"), face_texture_splitter_state);
+  settings.setValue(QStringLiteral("layoutMigrated"), face_texture_layout_migrated);
   settings.endGroup();
 
   settings.beginGroup(QStringLiteral("StandardMaterialEditor"));

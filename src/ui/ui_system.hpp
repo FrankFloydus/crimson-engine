@@ -61,7 +61,7 @@ class QtCommandPalette;
 class QtMaterialFindReplaceDialog;
 class QtMaterialBrowserWindow;
 class QtTextureInfoWindow;
-class QtActiveMaterialPanel;
+class QtFaceTexturePanel;
 class QtMaterialPreviewSurface;
 class QtRetainedMessageBox;
 class QtStandardMaterialEditorWindow;
@@ -208,8 +208,10 @@ private:
   void show_settings_dialog();
   void show_autosave_recovery();
   void show_material_browser();
+  void configure_material_browser(QtMaterialBrowserWindow &browser);
   void refresh_material_browser_usage();
-  void handle_material_browser_action(QtMaterialBrowserActionRequest request);
+  void handle_material_browser_action(QtMaterialBrowserWindow &source,
+                                      QtMaterialBrowserActionRequest request);
   void show_material_texture_info(ProjectAssetId material_id,
                                   bool activate = true);
   void refresh_material_texture_info();
@@ -221,7 +223,7 @@ private:
   void invalidate_material_presentation_cache();
   void observe_material_presentation_events();
   void refresh_material_presentation_cache();
-  void refresh_active_material_panel(QuaderMaterialReference active_reference);
+  void refresh_face_texture_material(QuaderMaterialReference reference);
   void synchronize_material_presentation_consumers();
   void refresh_material_picker_presentations();
   void revalidate_material_find_replace_presentations();
@@ -236,7 +238,8 @@ private:
   [[nodiscard]] std::vector<QtMaterialPresentationItem>
   replacement_material_presentations() const;
   void validate_material_find_replace_context();
-  void import_material_textures(QString destination_folder);
+  void import_material_textures(QtMaterialBrowserWindow &source,
+                               QString destination_folder);
   void delete_material_folder(QString folder);
   void finish_material_folder_operation(const QuaderApiStatus &result);
   [[nodiscard]] bool allow_main_window_close();
@@ -268,7 +271,7 @@ private:
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
   QtTextureInfoWindow *material_texture_info_window_ = nullptr;
   std::uint64_t material_texture_info_catalog_revision_ = 0u;
-  QtActiveMaterialPanel *active_material_panel_ = nullptr;
+  QtFaceTexturePanel *face_texture_panel_ = nullptr;
   QtMaterialBrowserWindow *material_picker_window_ = nullptr;
   QtMaterialFindReplaceDialog *material_find_replace_dialog_ = nullptr;
   QtMaterialPreviewSurface *material_preview_surface_ = nullptr;
@@ -368,14 +371,6 @@ private:
     friend bool operator==(const ToolSettingsPresentationStamp &,
                            const ToolSettingsPresentationStamp &) = default;
   };
-  /** Captures face-texture settings and shortcut inputs shown by retained controls. */
-  struct FaceTexturePresentationStamp final {
-    QuaderFaceTextureRevision settings;
-    std::uint64_t keybindings_revision = 0u;
-    double rotation_step = 0.0;
-    friend bool operator==(const FaceTexturePresentationStamp &,
-                           const FaceTexturePresentationStamp &) = default;
-  };
 
   RetainedUiPresenter<OutlinerPresentationStamp> outliner_presenter_;
   RetainedUiPresenter<LayersPresentationStamp> layers_presenter_;
@@ -385,7 +380,6 @@ private:
   RetainedUiPresenter<ToolbarTransformPresentationStamp>
       toolbar_transform_presenter_;
   RetainedUiPresenter<ToolSettingsPresentationStamp> tool_settings_presenter_;
-  RetainedUiPresenter<FaceTexturePresentationStamp> face_texture_presenter_;
   QuaderEditorApi *project_workspace_events_editor_ = nullptr;
   std::vector<QuaderEventSubscription>
       project_workspace_event_subscriptions_;
@@ -399,9 +393,9 @@ private:
   std::uint64_t material_presentation_observed_event_generation_ = 0;
   std::uint64_t material_presentation_invalidation_generation_ = 1;
   std::uint64_t material_browser_catalog_signature_ = 0;
-  QuaderMaterialReference material_browser_active_reference_;
   std::optional<QuaderProjectMaterialDependencyRevision>
       material_browser_dependency_revision_;
+  std::optional<QuaderProjectMaterialUsageRevision> material_browser_usage_revision_;
   enum class MaterialClipboardMode : std::uint8_t { Empty, Copy, Cut };
   /** Captures the committed source identity fenced by the app-local clipboard. */
   struct MaterialClipboardSource final {
@@ -416,16 +410,16 @@ private:
     std::vector<ProjectAssetId> material_ids;
     std::vector<MaterialClipboardSource> sources;
   } material_clipboard_;
-  /** Captures material identity and catalog revision shown by the active-material panel. */
-  struct ActiveMaterialPanelPresentationStamp final {
+  /** Captures material identity and catalog revision shown by the Face Texture canvas. */
+  struct FaceTextureMaterialPresentationStamp final {
     std::uint64_t catalog_revision = 0u;
     QuaderMaterialReference reference;
-    friend bool operator==(const ActiveMaterialPanelPresentationStamp &,
-                           const ActiveMaterialPanelPresentationStamp &) =
+    friend bool operator==(const FaceTextureMaterialPresentationStamp &,
+                           const FaceTextureMaterialPresentationStamp &) =
         default;
   };
-  RetainedUiPresenter<ActiveMaterialPanelPresentationStamp>
-      active_material_panel_presenter_;
+  RetainedUiPresenter<FaceTextureMaterialPresentationStamp>
+      face_texture_panel_presenter_;
 
   /** Keys one attempted material-catalog rebuild by owner and invalidation revisions. */
   struct MaterialPresentationCatalogStamp final {

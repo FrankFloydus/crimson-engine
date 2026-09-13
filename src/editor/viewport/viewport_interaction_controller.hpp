@@ -63,8 +63,6 @@ public:
   /// Cheap counters proving idle frames avoid material interaction work.
   struct MaterialInteractionWorkStats final {
     std::uint64_t face_pick_count = 0;
-    std::uint64_t sample_request_count = 0;
-    std::uint64_t apply_target_request_count = 0;
     std::uint64_t apply_face_to_mesh_request_count = 0;
     std::uint64_t transfer_face_texture_request_count = 0;
   };
@@ -180,16 +178,6 @@ public:
       const ViewportToolPointerLifecycleFrame &frame);
 
 private:
-  /// User intent retained only while disambiguating click from double-click.
-  struct PendingApplyActiveMaterial final {
-    ViewportPointerGesture pointer;
-    std::uint64_t scene_session_id = 0;
-    ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
-    int modeling_object_id = -1;
-    int face_id = -1;
-    std::string active_material_id;
-  };
-
   /// Keeps the original scene and selected source for a reserved mouse gesture.
   struct FaceTextureTransferPointer final {
     ViewportPointerGesture pointer;
@@ -229,7 +217,6 @@ private:
   TransformGizmoInteraction transform_gizmo_;
   PointLightRangeInteraction point_light_range_;
   ViewportSelectionInteraction selection_;
-  std::optional<PendingApplyActiveMaterial> pending_apply_active_material_;
   // Ownership only: transfer happens on the semantic trigger, never while held.
   std::optional<FaceTextureTransferPointer> transfer_face_texture_pointer_;
   // A reset drops pane ownership, but the old release must not become a click

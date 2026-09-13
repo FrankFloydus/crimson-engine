@@ -180,6 +180,45 @@ deserialize_owned_project_dependencies(std::vector<std::byte> bytes) {
   return result;
 }
 
+[[nodiscard]] QdrProjectMaterialUsageReadResult
+deserialize_owned_project_material_usage(std::vector<std::byte> bytes) {
+  QdrProjectMaterialUsageReadResult result;
+  result.source_byte_count = bytes.size();
+  result.source_content_hash = quader_io::qdr_binary_content_hash(bytes);
+  result.stats.file_bytes = bytes.size();
+  const auto started = std::chrono::steady_clock::now();
+  const auto container = quader_io::read_qdr_binary_container(std::move(bytes));
+  result.stats.container_access_and_verification_ms =
+      std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - started).count();
+  if (!container.ok) {
+    result.message = container.message;
+    result.diagnostics = container.diagnostics;
+    return result;
+  }
+  result.scene_uuid = container.scene_uuid;
+  result.stats.stored_chunk_bytes = container.stored_chunk_bytes;
+  result.stats.raw_chunk_bytes = container.raw_chunk_bytes;
+  result.stats.compressed_chunk_count = container.compressed_chunk_count;
+  auto decoded = decode_qdr_scene_binary_material_usage(container);
+  result.scene_name = std::move(decoded.scene_name);
+  result.material_ids = std::move(decoded.material_ids);
+  result.embedded_material_ids = std::move(decoded.embedded_material_ids);
+  result.stats.logical_geometry_count = decoded.stats.logical_geometry_count;
+  result.stats.unique_geometry_decoded_count = decoded.stats.unique_geometry_decoded_count;
+  result.stats.metadata_access_ms = decoded.stats.metadata_access_ms;
+  result.stats.geometry_decode_ms = decoded.stats.geometry_decode_ms;
+  for (const auto &chunk : container.chunks) {
+    if (chunk.was_decompressed()) {
+      result.stats.decompressed_bytes += chunk.raw_size;
+      result.stats.decompression_ms += chunk.decompression_time_ms();
+    }
+  }
+  result.ok = true;
+  result.complete = true;
+  return result;
+}
+
 } // namespace
 
 QdrProjectReadResult QdrDocumentReader::deserialize_project_document(
@@ -304,6 +343,66 @@ QdrProjectDependencyReadResult QdrDocumentReader::read_project_dependencies(
             "qdr.binary.unknown_error",
             "Unknown error reading QDR scene dependencies."),
         path);
+  }
+}
+
+QdrProjectMaterialUsageReadResult
+QdrDocumentReader::deserialize_project_material_usage(
+    std::span<const std::byte> bytes) {
+  QDR_PROFILE_FUNCTION();
+  try {
+    return deserialize_owned_project_material_usage(copy_bytes(bytes));
+  } catch (const quader_io::QdrDiagnosticException &exception) {
+    return project_error_result<QdrProjectMaterialUsageReadResult>(exception.diagnostic());
+  } catch (const std::exception &exception) {
+    return project_error_result<QdrProjectMaterialUsageReadResult>(
+        "qdr.binary.material_usage_read_failed", exception.what());
+  } catch (...) {
+    return project_error_result<QdrProjectMaterialUsageReadResult>(
+        "qdr.binary.unknown_error", "Unknown error reading QDR material usage.");
+  }
+}
+
+QdrProjectMaterialUsageReadResult QdrDocumentReader::read_project_material_usage(
+    const std::filesystem::path &path) {
+  QDR_PROFILE_FUNCTION();
+  const auto started = std::chrono::steady_clock::now();
+  try {
+    auto source = quader_io::read_file_bytes_shared(path);
+    if (!source.ok) {
+      return project_read_result_with_source_path(
+          project_error_result<QdrProjectMaterialUsageReadResult>(
+              "qdr.file_read_failed", "Could not read QDR scene '" + path.string() +
+              "': " + source.message), path);
+    }
+    const double read_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    auto result = deserialize_owned_project_material_usage(std::move(source.bytes));
+    result.stats.byte_read_ms = read_ms;
+    return project_read_result_with_source_path(std::move(result), path);
+  } catch (const quader_io::QdrDiagnosticException &exception) {
+    return project_read_result_with_source_path(
+        project_error_result<QdrProjectMaterialUsageReadResult>(exception.diagnostic()), path);
+  } catch (const std::exception &exception) {
+    return project_read_result_with_source_path(
+        project_error_result<QdrProjectMaterialUsageReadResult>(
+            "qdr.binary.material_usage_read_failed", exception.what()), path);
+  } catch (...) {
+    return project_read_result_with_source_path(
+        project_error_result<QdrProjectMaterialUsageReadResult>(
+            "qdr.binary.unknown_error", "Unknown error reading QDR material usage."), path);
+  }
+}
+
+QdrMeshMaterialSlotsReadResult QdrDocumentReader::deserialize_mesh_material_slots(
+    std::span<const std::byte> bytes, std::uint16_t scene_schema_version) {
+  try {
+    return {.ok = true, .material_slots =
+        decode_qdr_geometry_material_slots(bytes, scene_schema_version)};
+  } catch (const std::exception &exception) {
+    return {.message = exception.what()};
+  } catch (...) {
+    return {.message = "Unknown error reading QDR mesh material slots."};
   }
 }
 

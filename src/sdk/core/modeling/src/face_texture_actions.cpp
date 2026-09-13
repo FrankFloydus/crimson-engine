@@ -11,7 +11,6 @@
 #include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/face_texture_scale_steps.hpp>
-#include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
@@ -22,7 +21,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <map>
 #include <optional>
 #include <set>
 #include <span>
@@ -93,22 +91,11 @@ constexpr double kTau = 2.0 * kPi;
   return true;
 }
 
-/// Holds inverse affine rows in double precision until destination storage.
+/// Holds inverse affine rows in double precision for texture-gradient projection.
 struct InverseTransform {
   quader_geometry::QVec3d x_row;
   quader_geometry::QVec3d y_row;
   quader_geometry::QVec3d z_row;
-  QVec3 origin;
-
-  [[nodiscard]] QVec3 point(QVec3 world) const {
-    const quader_geometry::QVec3d delta{
-        static_cast<double>(world.x) - origin.x,
-        static_cast<double>(world.y) - origin.y,
-        static_cast<double>(world.z) - origin.z};
-    return {static_cast<float>(quader_geometry::dot(x_row, delta)),
-            static_cast<float>(quader_geometry::dot(y_row, delta)),
-            static_cast<float>(quader_geometry::dot(z_row, delta))};
-  }
 };
 
 [[nodiscard]] std::optional<InverseTransform>
@@ -133,7 +120,7 @@ inverse_transform(const NativeTransform &transform) {
     return std::nullopt;
   }
   return InverseTransform{x_row / determinant, y_row / determinant,
-                           z_row / determinant, transform.origin};
+                           z_row / determinant};
 }
 
 [[nodiscard]] QVec3 geometric_normal(std::span<const QVec3> points) {
@@ -177,7 +164,6 @@ struct TargetWork {
   InverseTransform inverse_world;
   std::optional<NativeDocument> candidate;
   std::set<quader_poly::ElementId> modified_faces;
-  std::set<quader_poly::ElementId> modified_vertices;
   bool materials_changed = false;
 
   [[nodiscard]] NativeDocument &edit() {
@@ -1349,230 +1335,37 @@ struct ProjectionBounds {
   return std::nullopt;
 }
 
-[[nodiscard]] bool self_intersects(const NativeDocument &document,
-                                  const NativeFace &face) {
-  const auto normal = quader_poly::face_normal(document, face);
-  std::vector<quader_geometry::QVec2d> projected;
-  projected.reserve(face.vertices.size());
-  for (const auto id : face.vertices) {
-    const auto *vertex = quader_poly::find_vertex(document, id);
-    if (vertex == nullptr) {
-      return true;
-    }
-    projected.emplace_back(quader_poly::generated_texture_uv(vertex->position,
-                                                              normal));
-  }
-  for (std::size_t first = 0U; first < projected.size(); ++first) {
-    const std::size_t first_next = (first + 1U) % projected.size();
-    for (std::size_t second = first + 1U; second < projected.size(); ++second) {
-      const std::size_t second_next = (second + 1U) % projected.size();
-      if (first_next == second || second_next == first) {
-        continue;
-      }
-      if (quader_geometry::segments_intersect_2d(
-              projected[first], projected[first_next], projected[second],
-              projected[second_next], 1.0e-10)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-[[nodiscard]] std::optional<Error> validate_mirror_topology(
-    const TargetWork &target) {
-  if (!target.candidate.has_value()) {
-    return std::nullopt;
-  }
-  using Edge = std::pair<quader_poly::ElementId, quader_poly::ElementId>;
-  std::map<Edge, std::vector<std::pair<quader_poly::ElementId, bool>>> edges;
-  for (const auto &face : target.candidate->faces) {
-    for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
-      const auto a = face.vertices[corner];
-      const auto b = face.vertices[(corner + 1U) % face.vertices.size()];
-      edges[{std::min(a, b), std::max(a, b)}].emplace_back(face.id, a < b);
-    }
-    if (target.modified_faces.contains(face.id) &&
-        self_intersects(*target.candidate, face)) {
-      return make_error(ErrorCode::ValidationFailed,
-          "The face reflection creates a self-intersecting face loop.");
-    }
-  }
-  for (const auto &[edge, incidence] : edges) {
-    static_cast<void>(edge);
-    if (incidence.size() == 2U &&
-        (target.modified_faces.contains(incidence[0].first) ||
-         target.modified_faces.contains(incidence[1].first)) &&
-        incidence[0].second == incidence[1].second) {
-      return make_error(ErrorCode::ValidationFailed,
-          "The face reflection conflicts with an adjacent face's winding. "
-          "Select the complete connected surface and use Treat as One.");
-    }
-  }
-  return std::nullopt;
-}
-
-[[nodiscard]] std::optional<Error> apply_geometry_mirror(
+[[nodiscard]] std::optional<Error> apply_face_uv_mirror(
     std::vector<TargetWork> &targets, std::span<const FaceWork> faces,
-    const FaceWork &reference, const FaceTextureActionOptions &options) {
+    const FaceTextureActionOptions &options) {
   const bool horizontal =
       options.action == FaceTextureAction::FlipFaceHorizontal;
-  const auto reference_basis = geometric_basis(
-      targets[reference.target_index], reference);
-  if (!reference_basis.valid) {
-    return face_error(reference, "The face reflection has no geometric axis.");
-  }
-  const auto reference_axis = horizontal ? reference_basis.u_axis
-                                         : reference_basis.v_axis;
-  double group_min = std::numeric_limits<double>::infinity();
-  double group_max = -std::numeric_limits<double>::infinity();
+  TextureBounds group_bounds;
   if (options.treat_as_one) {
     for (const auto &face : faces) {
-      for (const auto point : face.world_positions) {
-        const double coordinate = quader::dot(point, reference_axis);
-        group_min = std::min(group_min, coordinate);
-        group_max = std::max(group_max, coordinate);
-      }
+      group_bounds.include(face.effective_uvs);
     }
   }
-  std::vector<std::map<quader_poly::ElementId, QVec3>> destinations(targets.size());
-  std::map<std::pair<std::size_t, quader_poly::ElementId>, QVec3> expected_normals;
   for (const auto &face : faces) {
-    auto &target = targets[face.target_index];
-    const auto basis = options.treat_as_one ? reference_basis
-                                          : geometric_basis(target, face);
-    if (!basis.valid) {
-      return face_error(face, "The face reflection has no geometric axis.");
-    }
-    const auto axis = horizontal ? basis.u_axis : basis.v_axis;
-    double minimum = group_min;
-    double maximum = group_max;
+    auto bounds = group_bounds;
     if (!options.treat_as_one) {
-      minimum = std::numeric_limits<double>::infinity();
-      maximum = -std::numeric_limits<double>::infinity();
-      for (const auto position : face.world_positions) {
-        const double coordinate = quader::dot(position, axis);
-        minimum = std::min(minimum, coordinate);
-        maximum = std::max(maximum, coordinate);
-      }
+      bounds.include(face.effective_uvs);
     }
-    const double center = (minimum + maximum) * 0.5;
-    auto &target_destinations = destinations[face.target_index];
-    for (std::size_t corner = 0U; corner < face.world_positions.size(); ++corner) {
-      const auto original = face.world_positions[corner];
-      const float distance = static_cast<float>(
-          2.0 * (quader::dot(original, axis) - center));
-      const auto destination = distance == 0.0F
-          ? face.local_positions[corner]
-          : target.inverse_world.point(original - axis * distance);
-      if (!finite(destination)) {
-        return face_error(face, "The reflected vertex is non-finite.");
-      }
-      const auto [entry, inserted] = target_destinations.emplace(
-          face.face->vertices[corner], destination);
-      // Coordinate-magnitude-relative tolerances can accept different mirrors
-      // on a small face far from the origin. One shared vertex must have one
-      // destination, within the polygon owner's fixed geometric tolerance.
-      constexpr float kPositionTolerance =
-          quader_poly::document_internal::kEpsilon;
-      if (!inserted &&
-          (std::abs(entry->second.x - destination.x) > kPositionTolerance ||
-           std::abs(entry->second.y - destination.y) > kPositionTolerance ||
-           std::abs(entry->second.z - destination.z) > kPositionTolerance)) {
-        return face_error(face,
-            "Selected faces require conflicting positions for a shared vertex. "
-            "Use Treat as One or change the selection.");
-      }
+    const double minimum = horizontal ? bounds.min_u : bounds.min_v;
+    const double maximum = horizontal ? bounds.max_u : bounds.max_v;
+    if (minimum == maximum) {
+      continue;
     }
-    expected_normals[{face.target_index, face.face->id}] =
-        face.world_normal - axis * (2.0F * quader::dot(face.world_normal, axis));
-  }
-  // Capture every incident face before moving anything. This includes
-  // unselected neighbors, whose corner UVs must remain attached to vertices.
-  std::vector<FaceWork> affected;
-  for (std::size_t index = 0U; index < targets.size(); ++index) {
-    auto &target = targets[index];
-    for (const auto &[id, destination] : destinations[index]) {
-      const auto *vertex = quader_poly::find_vertex(*target.original, id);
-      if (vertex->position.x != destination.x ||
-          vertex->position.y != destination.y ||
-          vertex->position.z != destination.z) {
-        target.modified_vertices.insert(id);
-      }
+    // Mirror the existing effective chart, including authored residuals and
+    // occurrence sampling. Group mode shares only its UV bounds; it must not
+    // reproject disconnected or non-affine charts through an active face.
+    auto desired = face.effective_uvs;
+    for (auto &uv : desired) {
+      auto &coordinate = horizontal ? uv.x : uv.y;
+      coordinate = static_cast<float>(minimum + maximum - coordinate);
     }
-    for (const auto &face : target.original->faces) {
-      if (!expected_normals.contains({index, face.id}) &&
-          !std::ranges::any_of(face.vertices, [&](auto id) {
-            return target.modified_vertices.contains(id);
-          })) {
-        continue;
-      }
-      FaceWork captured;
-      if (auto error = capture_face(target, index,
-              FaceTextureActionFace{.face = make_id<FaceTag>(face.id)}, captured)) {
-        return error;
-      }
-      affected.push_back(std::move(captured));
-      target.modified_faces.insert(face.id);
-    }
-    auto &candidate = target.edit();
-    for (const auto &[id, destination] : destinations[index]) {
-      if (target.modified_vertices.contains(id)) {
-        auto *vertex = quader_poly::find_vertex(candidate, id);
-        vertex->position = destination;
-      }
-    }
-  }
-  std::vector<quader_poly::document_internal::VertexLookupIndex> source_lookups;
-  std::vector<quader_poly::document_internal::VertexLookupIndex> result_lookups;
-  source_lookups.reserve(targets.size());
-  result_lookups.reserve(targets.size());
-  for (const auto& target : targets) {
-    source_lookups.emplace_back(*target.original);
-    result_lookups.emplace_back(*target.candidate);
-  }
-  for (const auto &face : faces) {
-    auto &candidate = targets[face.target_index].edit();
-    if (!quader_poly::document_internal::reverse_reflected_face_winding(
-            *targets[face.target_index].original, *face.face, candidate,
-            *quader_poly::find_face(candidate, face.face->id),
-            source_lookups[face.target_index], result_lookups[face.target_index])) {
-      return face_error(face,
-          "The reflection cannot preserve this face's texture interpolation.");
-    }
-  }
-  for (const auto &face : affected) {
-    auto &target = targets[face.target_index];
-    auto &candidate = *target.candidate;
-    auto *edited_face = quader_poly::find_face(candidate, face.face->id);
-    std::vector<QVec3> positions;
-    std::vector<QVec3> world_positions;
-    std::vector<QVec2> desired;
-    for (const auto id : edited_face->vertices) {
-      const auto *vertex = quader_poly::find_vertex(candidate, id);
-      positions.push_back(vertex->position);
-      world_positions.push_back(quader_poly::document_internal::transform_point(
-          target.world, vertex->position));
-      const auto original = std::ranges::find(face.face->vertices, id);
-      desired.push_back(face.effective_uvs[static_cast<std::size_t>(
-          original - face.face->vertices.begin())]);
-    }
-    const auto normal = quader_poly::face_normal(candidate, *edited_face);
-    const auto expected = expected_normals.find({face.target_index, face.face->id});
-    if (expected != expected_normals.end() &&
-        quader::dot(geometric_normal(world_positions), expected->second) < 0.999F) {
-      return face_error(face, "The reflected face lost its intended facing.");
-    }
-    auto base = quader_poly::solve_face_texture_base_uvs(
-        positions, desired, normal, edited_face->texture_transform, target.sampling);
-    if (!base.has_value()) {
-      return face_error(face,
-          "The reflection cannot preserve this face's effective texture mapping.");
-    }
-    edited_face->uvs = std::move(*base);
-  }
-  for (const auto &target : targets) {
-    if (auto error = validate_mirror_topology(target)) {
+    if (auto error = set_effective_uvs(targets[face.target_index], face,
+                                      desired, face.face->texture_transform)) {
       return error;
     }
   }
@@ -1607,7 +1400,7 @@ struct ProjectionBounds {
          action == FaceTextureAction::ProjectSphere;
 }
 
-[[nodiscard]] bool geometry_action(FaceTextureAction action) {
+[[nodiscard]] bool face_uv_mirror_action(FaceTextureAction action) {
   return action == FaceTextureAction::FlipFaceHorizontal ||
          action == FaceTextureAction::FlipFaceVertical;
 }
@@ -1675,9 +1468,6 @@ struct ProjectionBounds {
       for (const auto id : target.modified_faces) {
         prepared.receipt.affected.faces.push_back(make_id<FaceTag>(id));
       }
-      for (const auto id : target.modified_vertices) {
-        prepared.receipt.affected.vertices.push_back(make_id<VertexTag>(id));
-      }
       prepared.receipt.modified = prepared.receipt.affected;
       result.changed = true;
     }
@@ -1708,7 +1498,6 @@ Result<PreparedFaceTextureAction> prepare_face_texture_action(
     requested_face_count += target.faces.size();
   }
   const bool capture_world = alignment_action(options.action) ||
-      geometry_action(options.action) ||
       (bounds_action(options.action) && options.treat_as_one && requested_face_count > 1U);
   std::vector<TargetWork> targets;
   std::vector<FaceWork> faces;
@@ -1774,8 +1563,8 @@ Result<PreparedFaceTextureAction> prepare_face_texture_action(
     if (auto error = apply_projection(targets, faces, options.action)) {
       return fail(std::move(*error));
     }
-  } else if (geometry_action(options.action)) {
-    if (auto error = apply_geometry_mirror(targets, faces, reference, options)) {
+  } else if (face_uv_mirror_action(options.action)) {
+    if (auto error = apply_face_uv_mirror(targets, faces, options)) {
       return fail(std::move(*error));
     }
   } else if (bounds_action(options.action) && options.treat_as_one &&
@@ -1799,9 +1588,9 @@ Result<PreparedFaceTextureAction> prepare_face_texture_action(
       }
     }
   }
-  return prepare_texture_documents(targets, geometry_action(options.action),
-      geometry_action(options.action) ? "Selected faces reflected."
-                                       : "Face texture changed.");
+  return prepare_texture_documents(targets, false,
+      face_uv_mirror_action(options.action) ? "Face UVs mirrored."
+                                          : "Face texture changed.");
 }
 
 Result<PreparedFaceTextureAction> prepare_face_texture_transfer(

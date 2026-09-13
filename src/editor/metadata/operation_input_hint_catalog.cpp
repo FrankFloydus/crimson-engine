@@ -39,14 +39,7 @@ void append_selection_keybinding_hints(
   hints.push_back(keybinding_hint(
       "viewport.frame_selection",
       "keybindings.target.viewport.frame_selection.label", "Focus Selection"));
-  hints.push_back(keybinding_hint(
-      "viewport.material.sample_face",
-      "keybindings.target.viewport.material.sample_face.label",
-      "Set Material under Mouse as Active"));
-  hints.push_back(keybinding_hint(
-      "viewport.material.apply_active_to_selection",
-      "keybindings.target.viewport.material.apply_active_to_selection.label",
-      "Apply Active Material under Mouse"));
+
 }
 
 void append_modal_completion_hints(

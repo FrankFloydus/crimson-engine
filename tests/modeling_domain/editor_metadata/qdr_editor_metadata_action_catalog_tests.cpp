@@ -30,7 +30,7 @@ const qhc::HostActionDescriptor& require_action(std::string_view id)
 
 TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogLinksPanelActionsToDescriptorOnlyOperationsOrTools) {
 	const std::span<const qhc::HostActionDescriptor> actions = qhc::action_catalog();
-	EXPECT_TRUE(actions.size() == 44U);
+	EXPECT_TRUE(actions.size() == 43U);
 
 	for (const qhc::HostActionDescriptor& action : actions) {
 		EXPECT_FALSE(action.id.empty());
@@ -76,8 +76,7 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogPreservesOper
   EXPECT_FALSE(require_action("cut_tool").show_in_operations_panel);
   EXPECT_FALSE(require_action("mirror_tool").show_in_operations_panel);
   EXPECT_FALSE(require_action("poly_tool").show_in_operations_panel);
-  EXPECT_FALSE(
-      require_action("apply_active_material").show_in_operations_panel);
+  EXPECT_EQ(qhc::find_action_descriptor("apply_active_material"), nullptr);
   EXPECT_TRUE(require_action("bevel_edges").show_in_operations_panel);
 }
 
@@ -128,12 +127,6 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogDescribesSele
 	EXPECT_TRUE(slice_quad.availability.minimum_selected_faces == 1U);
 	EXPECT_FALSE(slice_quad.availability.requires_single_object);
 
-	const qhc::HostActionDescriptor& apply_material = require_action("apply_active_material");
-        EXPECT_TRUE(apply_material.availability.selection_mode ==
-                    qhc::HostSelectionMode::Face);
-        EXPECT_TRUE(apply_material.availability.minimum_selected_faces == 1U);
-	EXPECT_FALSE(apply_material.show_in_operations_panel);
-
 	const qhc::HostActionDescriptor& mirror_tool = require_action("mirror_tool");
         EXPECT_TRUE(mirror_tool.kind == qhc::HostActionKind::Tool);
         EXPECT_TRUE(same_text(mirror_tool.tool_id, "mirror"));
@@ -171,5 +164,4 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionIdsDisambiguateShare
 	EXPECT_TRUE(qhc::find_action_descriptor("recalculate_inside_mesh") == nullptr);
 	EXPECT_TRUE(qhc::find_action_descriptor("recalculate_outside_faces") == nullptr);
 	EXPECT_TRUE(qhc::find_action_descriptor("recalculate_inside_faces") == nullptr);
-	EXPECT_TRUE(same_text(require_action("apply_active_material").operation_id, "assign_material"));
 }

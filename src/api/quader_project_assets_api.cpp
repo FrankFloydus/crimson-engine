@@ -12,6 +12,7 @@
 #include "api/quader_events_api_internal_access.hpp"
 #include "editor/material/material_presentation_service.hpp"
 #include "editor/material/project_asset_dependency_service.hpp"
+#include "editor/material/project_material_usage_service.hpp"
 #include "editor/material/project_material_import_service.hpp"
 #include "editor/material/project_material_organization_service.hpp"
 #include "editor/material/project_material_deletion_service.hpp"
@@ -140,7 +141,6 @@ std::vector<QuaderProjectSceneMaterialDependencies> to_public_scenes(
 
 void publish_material_deletion_events(
     QuaderEventsApi *events, ProjectSession &project,
-    std::optional<ProjectAssetId> previous_active,
     const std::optional<StandardMaterialEditSnapshot> &previous_draft) {
   if (events == nullptr) {
     return;
@@ -153,14 +153,9 @@ void publish_material_deletion_events(
         .project_id = project.manifest()->id(),
         .project_name = project.manifest()->name(),
         .project_root = std::string(root_utf8.begin(), root_utf8.end()),
-        .project_asset_id = project.active_material_id(),
     };
   };
   notifications.push_back(make_event(quader_event::kProjectAssetsChanged));
-  if (project.active_material_id() != previous_active) {
-    notifications.push_back(
-        make_event(quader_event::kActiveProjectMaterialChanged));
-  }
   if (previous_draft &&
       !project.standard_material_editor().has_document()) {
     auto event = make_event(quader_event::kStandardMaterialClosed);
@@ -201,44 +196,6 @@ QuaderProjectAssetsApi::materials() const {
   }
   return quader_api_result_from_status(
       status(session_, true, false), std::move(result));
-}
-
-QuaderApiResult<QuaderProjectMaterialInfo>
-QuaderProjectAssetsApi::active_material() const {
-  ProjectSession *project =
-      QuaderApiSessionInternalAccess::project_session(session_);
-  if (project == nullptr || !project->has_project()) {
-    return quader_api_result_from_status<QuaderProjectMaterialInfo>(
-        status(session_, false, false,
-               "Project materials are unavailable without an open project."));
-  }
-  const std::optional<ProjectAssetId> active = project->active_material_id();
-  const ProjectMaterialCatalogEntry *entry =
-      active.has_value() ? project->material_catalog().find(*active) : nullptr;
-  if (entry == nullptr) {
-    return quader_api_result_from_status<QuaderProjectMaterialInfo>(
-        status(session_, false, false,
-               "The active project material is unavailable."));
-  }
-  return quader_api_result_from_status(status(session_, true, false),
-                                       to_public_info(*entry));
-}
-
-QuaderApiVoidResult
-QuaderProjectAssetsApi::set_active_material(ProjectAssetId material_id) {
-  ProjectSession *project =
-      QuaderApiSessionInternalAccess::project_session(session_);
-  if (project == nullptr || !project->has_project()) {
-    return status(session_, false, false,
-                  "Project materials are unavailable without an open project.");
-  }
-  const ProjectSessionResult changed = project->set_active_material(material_id);
-  QuaderApiVoidResult result =
-      status(session_, changed.ok, changed.changed, changed.message);
-  if (changed.ok && changed.changed && events_ != nullptr) {
-    publish_active_material_changed();
-  }
-  return result;
 }
 
 QuaderApiResult<QuaderProjectMaterialPreview>
@@ -680,21 +637,66 @@ QuaderProjectAssetsApi::material_dependency_revision() const {
       });
 }
 
+QuaderApiResult<QuaderProjectMaterialUsageRevision>
+QuaderProjectAssetsApi::material_usage_revision() const {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return quader_api_result_from_status<QuaderProjectMaterialUsageRevision>(
+        status(session_, false, false, "Open a project before inspecting material usage."));
+  }
+  const auto source = project->material_usage().snapshot();
+  return quader_api_result_from_status(status(session_, true, false),
+      QuaderProjectMaterialUsageRevision{
+          .project_id = source->project_id,
+          .project_generation = source->project_generation,
+          .revision = source->revision,
+          .complete = source->complete,
+      });
+}
+
+QuaderApiResult<QuaderProjectMaterialUsageSnapshot>
+QuaderProjectAssetsApi::material_usage(bool refresh_files) const {
+  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return quader_api_result_from_status<QuaderProjectMaterialUsageSnapshot>(
+        status(session_, false, false, "Open a project before inspecting material usage."));
+  }
+  const auto source = project->material_usage().snapshot(refresh_files);
+  QuaderProjectMaterialUsageSnapshot result{
+      .project_id = source->project_id,
+      .project_generation = source->project_generation,
+      .revision = source->revision,
+      .complete = source->complete,
+  };
+  result.used_materials.reserve(source->material_ids.size() +
+                                source->active_scene_embedded_material_ids.size());
+  for (const auto id : source->material_ids) {
+    result.used_materials.push_back(QuaderMaterialReference::project(id));
+  }
+  for (const auto id : source->active_scene_embedded_material_ids) {
+    result.used_materials.push_back(QuaderMaterialReference::embedded(id));
+  }
+  result.issues.reserve(source->issues.size());
+  for (const auto &issue : source->issues) {
+    result.issues.push_back({issue.scene_id, issue.session_id,
+        issue.project_relative_path, issue.scene_name, issue.message});
+  }
+  return quader_api_result_from_status(status(session_, true, false), std::move(result));
+}
+
 QuaderApiVoidResult QuaderProjectAssetsApi::delete_material_folder(
     std::string_view folder, std::uint64_t expected_revision) {
   auto *project = QuaderApiSessionInternalAccess::project_session(session_);
   if (project == nullptr || !project->has_project()) {
     return status(session_, false, false, "Open a project before deleting material folders.");
   }
-  const auto previous_active = project->active_material_id();
   const auto *draft = project->standard_material_editor().current();
   const std::optional<StandardMaterialEditSnapshot> previous_draft =
       draft != nullptr ? std::optional(*draft) : std::nullopt;
   const auto result = ProjectMaterialDeletionService(*project).delete_folder(folder, expected_revision);
   const auto api_result = status(session_, result);
   if (result.ok && result.changed) {
-    publish_material_deletion_events(events_, *project, previous_active,
-                                     previous_draft);
+    publish_material_deletion_events(events_, *project, previous_draft);
   }
   return api_result;
 }
@@ -707,7 +709,6 @@ QuaderApiVoidResult QuaderProjectAssetsApi::delete_materials(
     return status(session_, false, false,
                   "Open a project before deleting materials.");
   }
-  const auto previous_active = project->active_material_id();
   const auto *draft = project->standard_material_editor().current();
   const std::optional<StandardMaterialEditSnapshot> previous_draft =
       draft != nullptr ? std::optional(*draft) : std::nullopt;
@@ -715,25 +716,9 @@ QuaderApiVoidResult QuaderProjectAssetsApi::delete_materials(
       material_ids, expected_revision);
   const auto api_result = status(session_, result);
   if (result.ok && result.changed) {
-    publish_material_deletion_events(events_, *project, previous_active,
-                                     previous_draft);
+    publish_material_deletion_events(events_, *project, previous_draft);
   }
   return api_result;
-}
-
-void QuaderProjectAssetsApi::publish_active_material_changed() {
-  auto *project = QuaderApiSessionInternalAccess::project_session(session_);
-  if (events_ == nullptr || project == nullptr || !project->has_project()) {
-    return;
-  }
-  const auto root_utf8 = project->root().u8string();
-  (void)QuaderEventsApiInternalAccess::publish(*events_, QuaderEvent{
-      .name = std::string(quader_event::kActiveProjectMaterialChanged),
-      .project_id = project->manifest()->id(),
-      .project_name = project->manifest()->name(),
-      .project_root = std::string(root_utf8.begin(), root_utf8.end()),
-      .project_asset_id = project->active_material_id(),
-  });
 }
 
 void QuaderProjectAssetsApi::publish_assets_changed() {
@@ -750,7 +735,6 @@ void QuaderProjectAssetsApi::publish_assets_changed() {
     event.project_name = project->manifest()->name();
     const auto root_utf8 = project->root().u8string();
     event.project_root.emplace(root_utf8.begin(), root_utf8.end());
-    event.project_asset_id = project->active_material_id();
   }
   (void)QuaderEventsApiInternalAccess::publish(*events_, std::move(event));
 }

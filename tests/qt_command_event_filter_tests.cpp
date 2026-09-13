@@ -15,6 +15,8 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_face_texture_panel.hpp"
+#include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "ui/ui_context.hpp"
@@ -24,6 +26,11 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDockWidget>
+#include <QDoubleSpinBox>
+#include <QMainWindow>
+#include <QScrollArea>
+#include <QWindow>
 #include <QEnterEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -780,6 +787,103 @@ TEST(QtCommandEventFilterTests,
   ASSERT_EQ(notifications.size(), 2u);
   EXPECT_EQ(notifications.back().message, notifications.front().message);
   EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
+  application.removeEventFilter(&command_filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     FaceTextureNumericEditorsKeepKeyboardOwnershipDockedAndFloating) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-face-texture-keyboard-ownership-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Face Texture Keyboard Ownership");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+
+  quader::QtCommandEventFilter command_filter(editor, []() {
+    return quader::ViewportToolState{
+        .active_tool = quader::ViewportToolId::Select,
+        .selection_mode = quader::ViewportSelectionMode::Face};
+  });
+  application.installEventFilter(&command_filter);
+  QMainWindow window;
+  window.resize(900, 950);
+  auto *unrelated_content = new QWidget(&window);
+  unrelated_content->setMinimumWidth(160);
+  window.setCentralWidget(unrelated_content);
+  auto *dock = new QDockWidget(&window);
+  dock->setObjectName(QStringLiteral("dock_face_texture"));
+  auto *panel = new quader::QtFaceTexturePanel(dock);
+  dock->setWidget(panel);
+  window.addDockWidget(Qt::RightDockWidgetArea, dock);
+  panel->bind(editor);
+  auto *scale = panel->findChild<QDoubleSpinBox *>(
+      QStringLiteral("face_texture.texture.scale_x"));
+  auto *scroll = panel->findChild<QScrollArea *>(
+      QStringLiteral("face_texture.controls_scroll"));
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(scroll, nullptr);
+  auto *line = scale->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  window.show();
+  QCoreApplication::processEvents();
+  const auto active_tool = editor.tools().active_tool();
+  const auto command_revision = editor.commands().last_status_revision();
+
+  for (bool floating : {false, true}) {
+    SCOPED_TRACE(floating);
+    dock->setFloating(floating);
+    dock->window()->activateWindow();
+    dock->window()->raise();
+    scroll->ensureWidgetVisible(scale);
+    line->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(scale->isEnabled());
+    ASSERT_EQ(QApplication::focusWidget(), scale)
+        << "QAbstractSpinBox owns focus through its line editor's focus proxy";
+    EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(line));
+    ASSERT_TRUE(line->visibleRegion().contains(line->rect().center()));
+    const QPoint editor_center = line->mapToGlobal(line->rect().center());
+    EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(
+        dock->window()->windowHandle(), editor_center))
+        << "the native dock window keeps clicks in the numeric editor out of "
+           "the viewport's external-pointer fallback";
+    EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
+        window.windowHandle(), unrelated_content->mapToGlobal(
+                                   unrelated_content->rect().center())))
+        << "an unrelated main-window region keeps its own pointer ownership";
+
+    send_key_press(*line, Qt::Key_A, Qt::ControlModifier, QStringLiteral("a"));
+    EXPECT_EQ(line->selectedText(), line->text());
+    send_key_press(*line, Qt::Key_Delete, Qt::NoModifier);
+    EXPECT_TRUE(line->text().isEmpty());
+    EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
+    EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+    EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
+
+    const double expected = floating ? 5.0 : 3.0;
+    send_key_press(*line, floating ? Qt::Key_5 : Qt::Key_3, Qt::NoModifier,
+                   floating ? QStringLiteral("5") : QStringLiteral("3"));
+    send_key_press(*line, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
+              std::optional<double>(expected));
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+    EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
+    EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+    EXPECT_EQ(editor.tools().active_tool(), active_tool);
+    EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
+  }
+  panel->unbind();
   application.removeEventFilter(&command_filter);
 }
 

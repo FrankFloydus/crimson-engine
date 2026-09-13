@@ -22,6 +22,7 @@
 #include <flatbuffers/verifier.h>
 
 #include "qdr_scene_generated.h"
+#include "qdr_scene_usage_schema10_generated.h"
 
 #include <algorithm>
 #include <array>
@@ -42,6 +43,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -1642,8 +1644,9 @@ referenced_mesh_asset_ids(const fb::ScenePayload &payload) {
   return references;
 }
 
+template <typename StoredMaterialComponent>
 [[nodiscard]] MaterialComponent
-decode_material_component(const fb::MaterialComponent &value) {
+decode_material_component(const StoredMaterialComponent &value) {
   MaterialComponent material{.material = MaterialReference(value.material())};
   if (const flatbuffers::String *project_id = value.project_material_id();
       project_id != nullptr && !project_id->str().empty()) {
@@ -1658,7 +1661,7 @@ decode_material_component(const fb::MaterialComponent &value) {
   }
   if (const auto *slots = value.material_slots()) {
     for (std::size_t index = 0u; index < slots->size(); ++index) {
-      const fb::MaterialSlotBinding *slot = slots->Get(index);
+      const auto *slot = slots->Get(index);
       if (!material.material_slots
                .emplace(slot->slot(), slot->material_id())
                .second) {
@@ -1669,7 +1672,7 @@ decode_material_component(const fb::MaterialComponent &value) {
   }
   if (const auto *slots = value.project_material_slots()) {
     for (std::size_t index = 0u; index < slots->size(); ++index) {
-      const fb::ProjectMaterialSlotBinding *slot = slots->Get(index);
+      const auto *slot = slots->Get(index);
       const std::optional<ProjectAssetId> parsed = ProjectAssetId::parse(
           string_from_fb(slot->project_material_id()));
       if (!parsed.has_value() ||
@@ -1817,11 +1820,11 @@ decode_project_asset_dependencies(const Payload &payload) {
   }
   dependencies.reserve(stored_dependencies->size());
   for (std::size_t index = 0u; index < stored_dependencies->size(); ++index) {
-    const fb::ProjectAssetDependency *stored =
-        stored_dependencies->Get(index);
+    const auto *stored = stored_dependencies->Get(index);
     const std::optional<ProjectAssetId> stable_id =
         ProjectAssetId::parse(string_from_fb(stored->stable_id()));
-    const ProjectAssetKind kind = project_asset_kind_from_fb(stored->kind());
+    const ProjectAssetKind kind = project_asset_kind_from_fb(
+        static_cast<fb::ProjectAssetKind>(stored->kind()));
     const ProjectIoResult<ProjectRelativePath> path =
         ProjectRelativePath::parse_portable(
             string_from_fb(stored->project_relative_path()));
@@ -2537,6 +2540,331 @@ decode_retired_schema_10_dependency_projection(
   };
 }
 
+/// Reads slot identities from validated topology without constructing a render mesh.
+template <typename GeometryPayload>
+[[nodiscard]] std::vector<std::uint32_t>
+geometry_material_slots(const GeometryPayload &payload,
+                        std::uint16_t scene_schema_version) {
+  std::set<std::uint32_t> slots;
+  const auto kind = static_cast<fb::GeometryKind>(payload.kind());
+  if (kind == fb::GeometryKind::AuthoredPolygon) {
+    if constexpr (std::is_same_v<GeometryPayload, fb::GeometryPayload>) {
+      (void)encoded_geometry_write_disposition(payload, scene_schema_version);
+    }
+    const auto *authored = payload.authored_payload();
+    if (authored != nullptr && authored->size() != 0u) {
+      auto decoded = modeling::deserialize_qdr_authored_topology(
+          std::as_bytes(std::span(authored->data(), authored->size())));
+      if (!decoded.ok()) {
+        throw std::runtime_error("SDK authored-topology decoding failed: " +
+                                 decoded.error_message());
+      }
+      const auto topology =
+          MeshProjectionService::polygon_document_from_sdk_document(decoded.value());
+      if (!topology.has_value()) {
+        throw std::runtime_error("QDR authored-topology export failed.");
+      }
+      for (const auto &face : topology->faces) {
+        slots.insert(face.material_slot);
+      }
+    } else if constexpr (std::is_same_v<GeometryPayload, fb::GeometryPayload>) {
+      for (const auto &face : decode_polygon_document(payload).faces) {
+        slots.insert(face.material_slot);
+      }
+    } else {
+      throw std::runtime_error("QDR authored geometry has no SDK topology payload.");
+    }
+  } else if (kind == fb::GeometryKind::CompiledMesh) {
+    const auto *vertices = payload.mesh_vertices();
+    const auto *indices = payload.mesh_indices();
+    const std::size_t vertex_count = vertices ? vertices->size() : 0u;
+    const std::size_t index_count = indices ? indices->size() : 0u;
+    if (indices != nullptr) {
+      for (const std::uint32_t index : *indices) {
+        if (index >= vertex_count) {
+          throw std::runtime_error("QDR compiled geometry index references a missing vertex.");
+        }
+      }
+    }
+    if (vertices != nullptr) {
+      for (const auto *vertex : *vertices) {
+        const auto &position = vertex->position();
+        const auto &normal = vertex->normal();
+        const auto &uv = vertex->uv();
+        if (!std::isfinite(position.x()) || !std::isfinite(position.y()) ||
+            !std::isfinite(position.z()) || !std::isfinite(normal.x()) ||
+            !std::isfinite(normal.y()) || !std::isfinite(normal.z()) ||
+            !std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
+          throw std::runtime_error("QDR compiled geometry attributes must be finite.");
+        }
+      }
+    }
+    if (const auto *mappings = payload.mesh_texture_mapping();
+        mappings != nullptr && mappings->size() != 0u) {
+      if (mappings->size() != vertex_count) {
+        throw std::runtime_error("QDR compiled geometry has an invalid texture mapping count.");
+      }
+      for (const auto *mapping : *mappings) {
+        const auto &normal = mapping->geometric_normal();
+        if (!std::isfinite(mapping->carrier_00()) ||
+            !std::isfinite(mapping->carrier_01()) ||
+            !std::isfinite(mapping->carrier_10()) ||
+            !std::isfinite(mapping->carrier_11()) ||
+            !std::isfinite(normal.x()) || !std::isfinite(normal.y()) ||
+            !std::isfinite(normal.z())) {
+          throw std::runtime_error("QDR compiled geometry texture mapping must be finite.");
+        }
+      }
+    }
+    const auto *primitives = payload.mesh_primitives();
+    if (primitives != nullptr && primitives->size() != 0u) {
+      for (const auto *primitive : *primitives) {
+        const std::uint64_t end =
+            static_cast<std::uint64_t>(primitive->index_offset()) +
+            primitive->index_count();
+        if (primitive->index_offset() > index_count || end > index_count ||
+            primitive->index_count() % 3u != 0u) {
+          throw std::runtime_error("QDR compiled geometry contains an invalid primitive span.");
+        }
+        if (primitive->index_count() != 0u) {
+          slots.insert(primitive->material_slot());
+        }
+      }
+    } else if (index_count != 0u) {
+      if (index_count % 3u != 0u) {
+        throw std::runtime_error("QDR compiled geometry has incomplete triangles.");
+      }
+      slots.insert(0u);
+    }
+  } else {
+    throw std::runtime_error("QDR geometry contains an unknown payload kind.");
+  }
+  return {slots.begin(), slots.end()};
+}
+
+namespace usage10 = ::quader::qdr::usage_schema10::fb;
+
+template <typename Payload>
+[[nodiscard]] QdrSceneBinaryMaterialUsageDecodeResult
+collect_scene_material_usage(
+    const Payload &payload,
+    const quader_io::QdrBinaryContainerReadResult &container,
+    std::uint16_t scene_schema_version) {
+  constexpr bool kRetired = std::is_same_v<Payload, usage10::ScenePayload>;
+  QdrSceneBinaryMaterialUsageDecodeResult result;
+  result.scene_name = string_from_fb(payload.scene_name(), "Untitled Scene");
+  (void)decode_project_asset_dependencies(payload);
+
+  std::set<AssetId> texture_ids;
+  if (const auto *textures = payload.textures()) {
+    for (const auto *texture : *textures) {
+      if (texture->id() == kInvalidAssetId ||
+          !texture_ids.insert(texture->id()).second ||
+          static_cast<unsigned>(texture->color_space()) > 1u) {
+        throw std::runtime_error("QDR scene contains an invalid or duplicate texture asset.");
+      }
+    }
+  }
+  std::set<AssetId> material_ids;
+  if (const auto *materials = payload.materials()) {
+    for (const auto *material : *materials) {
+      if (material->id() == kInvalidAssetId ||
+          !material_ids.insert(material->id()).second) {
+        throw std::runtime_error("QDR scene contains an invalid or duplicate material asset.");
+      }
+      if constexpr (kRetired) {
+        if (material->texture() != kInvalidAssetId &&
+            !texture_ids.contains(material->texture())) {
+          throw std::runtime_error("Retired QDR material references a missing texture.");
+        }
+        if (const auto *transform = material->texture_transform()) {
+          const auto finite_pair = [](const auto *value) {
+            return value == nullptr ||
+                   (std::isfinite(value->x()) && std::isfinite(value->y()));
+          };
+          if (!finite_pair(transform->center()) ||
+              !finite_pair(transform->scale()) ||
+              !finite_pair(transform->offset()) ||
+              !std::isfinite(transform->rotation_degrees())) {
+            throw std::runtime_error("Retired QDR material has an invalid texture transform.");
+          }
+        }
+      }
+    }
+  }
+
+  const auto geometry_started = std::chrono::steady_clock::now();
+  std::unordered_map<std::uint64_t, const quader_io::QdrBinaryChunk *> chunks;
+  for (const auto &chunk : container.chunks) {
+    (void)chunk.bytes(); // Check every checksum, including unreferenced payloads.
+    if (chunk.type == static_cast<std::uint32_t>(quader_io::QdrBinaryChunkType::Geometry)) {
+      if (chunk.schema_version != (kRetired ? 2u : kGeometryChunkSchemaVersion) ||
+          !chunks.emplace(chunk.id, &chunk).second) {
+        throw std::runtime_error("QDR scene contains unsupported or duplicate geometry chunks.");
+      }
+    }
+  }
+  std::map<std::uint64_t, std::vector<std::uint32_t>> slots_by_chunk;
+  std::map<AssetId, std::uint64_t> geometry_by_mesh;
+  if (const auto *meshes = payload.meshes()) {
+    result.stats.logical_geometry_count = meshes->size();
+    for (const auto *mesh : *meshes) {
+      if (mesh->id() == kInvalidAssetId ||
+          !geometry_by_mesh.emplace(mesh->id(), mesh->geometry_chunk_id()).second) {
+        throw std::runtime_error("QDR scene contains an invalid or duplicate mesh asset id.");
+      }
+      const auto &chunk = require_geometry_chunk(chunks, mesh->geometry_chunk_id());
+      if (!slots_by_chunk.contains(chunk.id)) {
+        const auto bytes = chunk.bytes();
+        if constexpr (kRetired) {
+          flatbuffers::Verifier verifier(
+              reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size());
+          if (!verifier.VerifyBuffer<usage10::GeometryPayload>("QDRG")) {
+            throw std::runtime_error("Retired QDR geometry FlatBuffer is invalid.");
+          }
+          const auto *geometry = flatbuffers::GetRoot<usage10::GeometryPayload>(bytes.data());
+          slots_by_chunk.emplace(chunk.id, geometry_material_slots(*geometry, scene_schema_version));
+        } else {
+          slots_by_chunk.emplace(chunk.id, geometry_material_slots(
+              *verify_geometry_payload(bytes), scene_schema_version));
+        }
+        ++result.stats.unique_geometry_decoded_count;
+      }
+    }
+  }
+  std::map<AssetId, bool> renderable_curves;
+  if (const auto *curves = payload.curves()) {
+    if (curves->size() != 0u && scene_schema_version < 8u) {
+      throw std::runtime_error("QDR curve assets require scene schema 8.");
+    }
+    for (const auto *curve : *curves) {
+      const auto *bytes = curve->authored_payload();
+      if (curve->id() == kInvalidAssetId || bytes == nullptr || bytes->size() == 0u ||
+          renderable_curves.contains(curve->id())) {
+        throw std::runtime_error("QDR scene contains an invalid or duplicate curve asset.");
+      }
+      auto decoded = modeling::deserialize_curve_document(
+          std::as_bytes(std::span(bytes->data(), bytes->size())));
+      if (!decoded.ok()) {
+        throw std::runtime_error("QDR curve asset is invalid: " + decoded.error_message());
+      }
+      renderable_curves.emplace(curve->id(), decoded.value().points().size() >= 2u);
+    }
+  }
+  result.stats.geometry_decode_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - geometry_started).count();
+
+  std::set<ProjectAssetId> used_project;
+  std::set<AssetId> used_embedded;
+  const auto check_reference = [&](const MaterialReference &reference, bool slot) {
+    if ((slot && !reference.valid()) ||
+        (reference.embedded() && !material_ids.contains(reference.embedded_asset()))) {
+      throw std::runtime_error("QDR scene material binding references a missing material asset.");
+    }
+  };
+  const auto collect_reference = [&](const MaterialReference &reference) {
+    if (reference.project_owned()) {
+      used_project.insert(reference.project_asset());
+    } else if (reference.embedded()) {
+      used_embedded.insert(reference.embedded_asset());
+    }
+  };
+  std::map<EntityId, EntityId> parents;
+  std::set<EditorObjectId> editor_ids;
+  std::set<std::string> uuids;
+  std::set<EntityId> definitions;
+  std::vector<std::pair<EntityId, EntityId>> occurrences;
+  if (const auto *entities = payload.entities()) {
+    for (const auto *entity : *entities) {
+      const std::string uuid = string_from_fb(entity->uuid());
+      if (entity->id() == kInvalidEntityId ||
+          !parents.emplace(entity->id(), entity->parent()).second ||
+          (!uuid.empty() && (!ProjectAssetId::parse(uuid).has_value() ||
+                            !uuids.insert(uuid).second)) ||
+          (entity->editor_object_id() != kInvalidEditorObjectId &&
+           !editor_ids.insert(entity->editor_object_id()).second)) {
+        throw std::runtime_error("QDR scene contains an invalid or duplicate entity identity.");
+      }
+      if (static_cast<unsigned>(entity->kind()) > (kRetired ? 4u : 5u)) {
+        throw std::runtime_error("QDR scene contains an unknown entity kind.");
+      }
+      if (entity->instance_definition() != nullptr) {
+        definitions.insert(entity->id());
+      }
+      if (const auto *instance = entity->instance_occurrence()) {
+        occurrences.emplace_back(entity->id(), instance->definition());
+      }
+      MaterialComponent material;
+      if (const auto *stored = entity->material()) {
+        material = decode_material_component(*stored);
+        check_reference(material.material, false);
+        for (const auto &[slot, reference] : material.material_slots) {
+          (void)slot;
+          check_reference(reference, true);
+        }
+      }
+      if (const auto *mesh = entity->mesh()) {
+        const auto geometry = geometry_by_mesh.find(mesh->mesh());
+        if (geometry == geometry_by_mesh.end()) {
+          throw std::runtime_error("QDR entity references a missing mesh asset.");
+        }
+        for (const auto slot : slots_by_chunk.at(geometry->second)) {
+          collect_reference(material.material_for_slot(slot));
+        }
+      }
+      if (const auto *curve = entity->curve()) {
+        const auto found = renderable_curves.find(curve->curve());
+        if (found == renderable_curves.end() || !curve_component_is_valid({
+                .curve = curve->curve(), .solidify = curve->solidify(),
+                .solidify_resolution = curve->solidify_resolution(),
+                .solidify_radius = curve->solidify_radius()})) {
+          throw std::runtime_error("QDR entity contains an invalid curve reference.");
+        }
+        if (curve->solidify() && found->second) {
+          collect_reference(material.material_for_slot(0u));
+        }
+      }
+    }
+  }
+  std::set<EntityId> checked;
+  for (const auto &[entity, parent] : parents) {
+    (void)parent;
+    std::set<EntityId> path;
+    EntityId current = entity;
+    while (current != kInvalidEntityId && !checked.contains(current)) {
+      const auto found = parents.find(current);
+      if (found == parents.end() || !path.insert(current).second) {
+        throw std::runtime_error("QDR scene contains an invalid entity hierarchy.");
+      }
+      current = found->second;
+    }
+    checked.insert(path.begin(), path.end());
+  }
+  for (const auto &[entity, definition] : occurrences) {
+    if (entity == definition || !definitions.contains(definition)) {
+      throw std::runtime_error("QDR scene contains an invalid instance reference.");
+    }
+  }
+  if constexpr (kRetired) {
+    std::set<EntityId> roots;
+    for (const EntityId root : *payload.root_entities()) {
+      const auto found = parents.find(root);
+      if (found == parents.end() || found->second != kInvalidEntityId ||
+          !roots.insert(root).second) {
+        throw std::runtime_error("Retired QDR scene contains an invalid root-entity list.");
+      }
+    }
+    for (const auto &[entity, parent] : parents) {
+      if (parent == kInvalidEntityId && !roots.contains(entity)) {
+        throw std::runtime_error("Retired QDR scene root-entity list is incomplete.");
+      }
+    }
+  }
+  result.material_ids.assign(used_project.begin(), used_project.end());
+  result.embedded_material_ids.assign(used_embedded.begin(), used_embedded.end());
+  return result;
+}
+
 } // namespace
 
 QdrSceneBinaryEncodeResult
@@ -2865,6 +3193,55 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
                                         metadata_started)
                                         .count();
   return result;
+}
+
+QdrSceneBinaryMaterialUsageDecodeResult decode_qdr_scene_binary_material_usage(
+    const quader_io::QdrBinaryContainerReadResult &container) {
+  QDR_PROFILE_FUNCTION();
+  if (!container.ok) {
+    throw std::runtime_error(container.message.empty()
+                                 ? "QDR binary container is invalid."
+                                 : container.message);
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto &metadata = require_scene_metadata_chunk(container);
+  bool retired_geometry = false;
+  for (const auto &chunk : container.chunks) {
+    retired_geometry = retired_geometry ||
+        (chunk.type == static_cast<std::uint32_t>(quader_io::QdrBinaryChunkType::Geometry) &&
+         chunk.schema_version == 2u);
+  }
+  QdrSceneBinaryMaterialUsageDecodeResult result;
+  if (metadata.schema_version == 10u && retired_geometry) {
+    const auto bytes = metadata.bytes();
+    flatbuffers::Verifier verifier(
+        reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size());
+    if (!usage10::VerifyScenePayloadBuffer(verifier)) {
+      throw std::runtime_error("Retired QDR scene metadata FlatBuffer is invalid.");
+    }
+    result = collect_scene_material_usage(
+        *usage10::GetScenePayload(bytes.data()), container, metadata.schema_version);
+  } else {
+    // Keep the established current-format metadata, identity, hierarchy and
+    // dormant-reference validation while extracting a narrower set of usage.
+    const auto validation = decode_qdr_scene_binary_dependencies(container);
+    if (!validation.fully_validated) {
+      throw std::runtime_error(validation.validation_error);
+    }
+    result = collect_scene_material_usage(
+        *verify_scene_payload(metadata.bytes()), container, metadata.schema_version);
+  }
+  result.stats.metadata_access_ms = std::max(0.0,
+      std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - started).count() -
+      result.stats.geometry_decode_ms);
+  return result;
+}
+
+std::vector<std::uint32_t> decode_qdr_geometry_material_slots(
+    std::span<const std::byte> bytes, std::uint16_t scene_schema_version) {
+  return geometry_material_slots(*verify_geometry_payload(bytes),
+                                  scene_schema_version);
 }
 
 } // namespace quader

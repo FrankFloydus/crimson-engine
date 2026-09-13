@@ -177,11 +177,12 @@ protected:
 
   QuaderApiResult<QuaderModelingObjectRef>
   create_box(std::string name, ProjectAssetId material = deletion_material_id()) {
-    const auto selected = editor_.project_assets().set_active_material(material);
-    EXPECT_TRUE(selected.ok()) << selected.error_message();
-    return editor_.modeling().create_box(
-        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-        std::move(name));
+    return editor_.modeling().create_box({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = std::move(name),
+        .material = QuaderMaterialReference::project(material),
+    });
   }
 
   void save_active(std::string_view path = "Scenes/Saved.qdr") {
@@ -391,8 +392,8 @@ TEST_F(ProjectMaterialDeletionTests,
   const auto historical_recovery_path = historical_copies.value().front().path;
   ASSERT_NO_FATAL_FAILURE(save_active());
   ASSERT_TRUE(editor_.modeling().copy_selection().ok());
-  ASSERT_TRUE(editor_.project_assets().set_active_material(surviving_material_id()).ok());
-  ASSERT_TRUE(editor_.modeling().apply_active_material().ok());
+  ASSERT_TRUE(editor_.modeling().apply_material(
+      QuaderMaterialReference::project(surviving_material_id())).ok());
   const auto history = editor_.query().history();
 
   ASSERT_NO_FATAL_FAILURE(delete_folder());
@@ -403,7 +404,8 @@ TEST_F(ProjectMaterialDeletionTests,
   ASSERT_TRUE(used_after_undo.ok()) << used_after_undo.error_message();
   EXPECT_EQ(used_after_undo.value(), std::vector<QuaderMaterialReference>{
       QuaderMaterialReference::project(default_material_id())});
-  EXPECT_FALSE(editor_.project_assets().set_active_material(deletion_material_id()).ok());
+  EXPECT_FALSE(editor_.modeling().apply_material(
+      QuaderMaterialReference::project(deletion_material_id())).ok());
   EXPECT_FALSE(editor_.standard_material_documents().open(deletion_material_id()).ok());
 
   ASSERT_TRUE(editor_.modeling().paste_selection().ok());
@@ -444,7 +446,7 @@ TEST_F(ProjectMaterialDeletionTests,
 }
 
 TEST_F(ProjectMaterialDeletionTests, EmptyFoldersDeleteButRootAndDefaultAreProtected) {
-  ASSERT_TRUE(editor_.project_assets().set_active_material(surviving_material_id()).ok());
+  const auto surviving_bytes = deletion_read_bytes(root_ / "Materials/Keep/stone.qmat");
   ASSERT_TRUE(editor_.project_assets().create_material_folder("Materials", "Empty").ok());
   ASSERT_TRUE(editor_.project_assets().create_material_folder("Materials/Empty", "Nested").ok());
   const auto preview = editor_.project_assets().preview_delete_material_folder("Materials/Empty");
@@ -454,13 +456,11 @@ TEST_F(ProjectMaterialDeletionTests, EmptyFoldersDeleteButRootAndDefaultAreProte
   EXPECT_EQ(preview.value().folder_count, 2u);
   ASSERT_NO_FATAL_FAILURE(delete_folder("Materials/Empty"));
   EXPECT_FALSE(std::filesystem::exists(root_ / "Materials/Empty"));
-  const auto active_after_empty = editor_.project_assets().active_material();
-  ASSERT_TRUE(active_after_empty.ok());
-  EXPECT_EQ(active_after_empty.value().id, surviving_material_id());
+  EXPECT_NE(project_.material_catalog().find(surviving_material_id()), nullptr);
+  EXPECT_EQ(deletion_read_bytes(root_ / "Materials/Keep/stone.qmat"), surviving_bytes);
   ASSERT_NO_FATAL_FAILURE(delete_folder());
-  const auto active_after_unused = editor_.project_assets().active_material();
-  ASSERT_TRUE(active_after_unused.ok());
-  EXPECT_EQ(active_after_unused.value().id, surviving_material_id());
+  EXPECT_NE(project_.material_catalog().find(surviving_material_id()), nullptr);
+  EXPECT_EQ(deletion_read_bytes(root_ / "Materials/Keep/stone.qmat"), surviving_bytes);
   for (const std::string_view path : {"Materials", "", "Textures"}) {
     const auto protected_preview = editor_.project_assets().preview_delete_material_folder(path);
     ASSERT_TRUE(protected_preview.ok());
@@ -668,7 +668,6 @@ TEST_F(ProjectMaterialDeletionTests, UnreadableRegisteredSceneBlocksDeletionEven
 }
 
 TEST_F(ProjectMaterialDeletionTests, DraftRemainsUntilConfirmedSuccessfulDeletion) {
-  ASSERT_TRUE(editor_.project_assets().set_active_material(deletion_material_id()).ok());
   ASSERT_TRUE(editor_.standard_material_documents().open(deletion_material_id()).ok());
   ASSERT_TRUE(editor_.standard_material_documents().set_base_color({0.2f, 0.5f, 0.8f}).ok());
   const auto before = editor_.standard_material_documents().current();
@@ -692,8 +691,8 @@ TEST_F(ProjectMaterialDeletionTests, DraftRemainsUntilConfirmedSuccessfulDeletio
   EXPECT_TRUE(after_failure.value().dirty);
   ASSERT_NO_FATAL_FAILURE(delete_folder());
   EXPECT_FALSE(editor_.standard_material_documents().current().ok());
-  ASSERT_TRUE(editor_.project_assets().active_material().ok());
-  EXPECT_EQ(editor_.project_assets().active_material().value().id, default_material_id());
+  EXPECT_EQ(project_.material_catalog().find(deletion_material_id()), nullptr);
+  EXPECT_NE(project_.material_catalog().find(default_material_id()), nullptr);
   EXPECT_TRUE(std::filesystem::exists(root_ / "Textures/shared.png"));
 }
 
@@ -970,9 +969,9 @@ TEST_F(ProjectMaterialDeletionTests,
   ASSERT_TRUE(workspace.value().manifest.mark_materials_deleted(ids).ok());
   ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
   const auto replacement_manifest = deletion_read_bytes(manifest_);
-  ASSERT_TRUE(workspace.value().manifest
-                  .set_active_material(surviving_material_id())
-                  .ok());
+  const auto subsequently_deleted = ProjectAssetId::generate();
+  const std::array newer_ids{subsequently_deleted};
+  ASSERT_TRUE(workspace.value().manifest.mark_materials_deleted(newer_ids).ok());
   ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
   const auto newer_manifest = deletion_read_bytes(manifest_);
   ASSERT_NE(newer_manifest, replacement_manifest);
@@ -1009,8 +1008,7 @@ TEST_F(ProjectMaterialDeletionTests,
   ASSERT_TRUE(opened.ok()) << opened.error_message();
   ASSERT_NE(project_.manifest(), nullptr);
   EXPECT_TRUE(project_.manifest()->is_material_deleted(deletion_material_id()));
-  ASSERT_TRUE(project_.manifest()->active_material_id().has_value());
-  EXPECT_EQ(*project_.manifest()->active_material_id(), surviving_material_id());
+  EXPECT_TRUE(project_.manifest()->is_material_deleted(subsequently_deleted));
   EXPECT_EQ(deletion_read_bytes(manifest_), newer_manifest);
   EXPECT_FALSE(std::filesystem::exists(material_path));
   EXPECT_FALSE(std::filesystem::exists(transaction));

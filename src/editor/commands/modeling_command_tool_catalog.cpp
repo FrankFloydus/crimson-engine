@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/modeling_command_tool_catalog.hpp"
 
-#include "editor/commands/modeling/assign_material_tool.hpp"
 #include "editor/commands/modeling/clear_selection_tool.hpp"
 #include "editor/commands/modeling/copy_selection_tool.hpp"
 #include "editor/commands/modeling/delete_selection_tool.hpp"
@@ -167,14 +166,6 @@ command_tool_owns_host_action_id(std::string_view action_id) {
          instant_operation_catalog_owns_action_id(action_id);
 }
 
-[[nodiscard]] CommandToolDescriptor context_descriptor_from_host_action(
-    const quader_host_contract::HostActionDescriptor &action) {
-  if (action.id == std::string_view("apply_active_material")) {
-    return context_descriptor(action, true, "edit.apply_material", false);
-  }
-  return context_descriptor(action);
-}
-
 } // namespace
 
 std::span<const InstantCommandTool *const>
@@ -211,7 +202,6 @@ modeling_service_instant_command_tools() {
   static const CopySelectionTool kCopySelection;
   static const PasteSelectionTool kPasteSelection;
   static const RepeatLastActionTool kRepeatLastAction;
-  static const AssignMaterialTool kAssignMaterial;
   static const MirrorSelectionTool kMirrorX{ModelingMirrorAxis::X,
                                             "mirror_selection_x",
                                             "Mirror Selection Across X Axis"};
@@ -224,7 +214,7 @@ modeling_service_instant_command_tools() {
   static const FlipHorizontalTool kFlipHorizontal;
   static const FlipVerticalTool kFlipVertical;
 
-  static const std::array<const InstantCommandTool *, 13> kTools{{
+  static const std::array<const InstantCommandTool *, 12> kTools{{
       &kSelectAll,
       &kInvertSelection,
       &kClearSelection,
@@ -232,7 +222,6 @@ modeling_service_instant_command_tools() {
       &kCopySelection,
       &kPasteSelection,
       &kRepeatLastAction,
-      &kAssignMaterial,
       &kMirrorX,
       &kMirrorY,
       &kMirrorZ,
@@ -270,7 +259,7 @@ std::span<const ContextActionTool *const> modeling_context_action_tools() {
             continue;
           }
           result.push_back(std::make_unique<CatalogContextActionTool>(
-              context_descriptor_from_host_action(action)));
+              context_descriptor(action)));
         }
         return result;
       }();

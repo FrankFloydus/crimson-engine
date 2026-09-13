@@ -1,0 +1,252 @@
+// ////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+// ////////////////////////////////////////////////////////////////////////////
+
+// Read-only material-usage schema from commit 42d4b430 (metadata 10, geometry 2).
+// General opening and dependency validation deliberately do not use this dialect.
+namespace quader.qdr.usage_schema10.fb;
+
+enum EntityKind : ubyte {
+  Empty = 0,
+  Mesh = 1,
+  Generic = 2,
+  Instance = 3,
+  Curve = 4
+}
+
+enum MeshCollisionType : ubyte {
+  Box = 0,
+  Sphere = 1,
+  Cylinder = 2,
+  ConvexHull = 3,
+  Mesh = 4
+}
+
+enum MeshPhysicsBodyType : ubyte {
+  StaticBody = 0,
+  RigidBody = 1
+}
+
+enum TextureColorSpace : ubyte {
+  Linear = 0,
+  Srgb = 1
+}
+
+enum GeometryKind : ubyte {
+  CompiledMesh = 0,
+  AuthoredPolygon = 1
+}
+
+enum ProjectAssetKind : ubyte {
+  Unknown = 0,
+  Material = 1,
+  Texture = 2,
+  Model = 3
+}
+
+struct Vec2 {
+  x:float;
+  y:float;
+}
+
+struct Vec3 {
+  x:float;
+  y:float;
+  z:float;
+}
+
+struct MeshVertex {
+  position:Vec3;
+  normal:Vec3;
+  uv:Vec2;
+  rgba:uint;
+}
+
+struct MeshPrimitive {
+  index_offset:uint;
+  index_count:uint;
+  material_slot:uint;
+}
+
+struct MeshTextureMappingVertex {
+  carrier_00:float;
+  carrier_01:float;
+  carrier_10:float;
+  carrier_11:float;
+  geometric_normal:Vec3;
+}
+
+struct MaterialSlotBinding {
+  slot:uint;
+  material_id:ulong;
+}
+
+table ProjectMaterialSlotBinding {
+  slot:uint;
+  project_material_id:string;
+}
+
+table GeometryPayload {
+  kind:GeometryKind = CompiledMesh;
+  mesh_vertices:[MeshVertex];
+  mesh_indices:[uint];
+  mesh_primitives:[MeshPrimitive];
+  authored_payload:[ubyte];
+  mesh_texture_mapping:[MeshTextureMappingVertex];
+}
+
+table MeshAsset {
+  id:ulong;
+  name:string;
+  has_stable_cpu_topology:bool = true;
+  has_authored_polygon_document:bool = false;
+  geometry_chunk_id:ulong;
+}
+
+table CurveAsset {
+  id:ulong;
+  name:string;
+  authored_payload:[ubyte] (required);
+}
+
+table MaterialTextureTransform {
+  center:Vec2;
+  scale:Vec2;
+  offset:Vec2;
+  rotation_degrees:float = 0.0;
+}
+
+table MaterialAsset {
+  id:ulong;
+  name:string;
+  texture:ulong;
+  texture_transform:MaterialTextureTransform;
+}
+
+table TextureAsset {
+  id:ulong;
+  name:string;
+  color_space:TextureColorSpace = Srgb;
+  width:uint;
+  height:uint;
+  source_path:string;
+  generated:bool = false;
+}
+
+table TransformComponent {
+  position:Vec3;
+  rotation_euler:Vec3;
+  scale:Vec3;
+  custom_pivot:bool = false;
+}
+
+table TextureMappingComponent {
+  sampling_from_local:[float];
+}
+
+table VisibilityComponent {
+  visible:bool = true;
+  selectable:bool = true;
+}
+
+table LockComponent {
+  locked:bool = false;
+}
+
+table ModelingObjectComponent {
+  object_id:int = -1;
+  material_slot:uint;
+  sdk_owned:bool = false;
+  local_frame_version:uint = 0;
+}
+
+table MeshComponent {
+  mesh:ulong;
+  editor_only:bool = false;
+  double_sided:bool = false;
+  generate_collisions:bool = true;
+  collision_type:MeshCollisionType = Box;
+  display_collision:bool = false;
+  body_type:MeshPhysicsBodyType = StaticBody;
+}
+
+table CurveComponent {
+  curve:ulong;
+  solidify:bool = false;
+  solidify_resolution:int = 8;
+  solidify_radius:float = 0.1;
+}
+
+table MaterialComponent {
+  material:ulong;
+  material_slots:[MaterialSlotBinding];
+  project_material_id:string;
+  project_material_slots:[ProjectMaterialSlotBinding];
+}
+
+table InstanceDefinitionComponent {
+}
+
+table InstanceOccurrenceComponent {
+  definition:ulong;
+}
+
+table Entity {
+  id:ulong;
+  uuid:string;
+  editor_object_id:ulong;
+  name:string;
+  kind:EntityKind = Generic;
+  parent:ulong;
+  transform:TransformComponent;
+  visibility:VisibilityComponent;
+  lock:LockComponent;
+  modeling_object:ModelingObjectComponent;
+  mesh:MeshComponent;
+  material:MaterialComponent;
+  instance_definition:InstanceDefinitionComponent;
+  instance_occurrence:InstanceOccurrenceComponent;
+  layer_id:ulong;
+  texture_mapping:TextureMappingComponent;
+  curve:CurveComponent;
+}
+
+table SceneLayer {
+  id:ulong;
+  name:string;
+  visible:bool = true;
+  wireframe_color:Vec3;
+  locked:bool = false;
+}
+
+table ViewportCameraPose {
+  eye:Vec3;
+  target:Vec3;
+  up:Vec3;
+}
+
+table ProjectAssetDependency {
+  stable_id:string;
+  project_relative_path:string;
+  kind:ProjectAssetKind = Unknown;
+}
+
+table ScenePayload {
+  scene_id:ulong;
+  scene_name:string;
+  meshes:[MeshAsset];
+  materials:[MaterialAsset];
+  textures:[TextureAsset];
+  entities:[Entity];
+  root_entities:[ulong] (required);
+  project_asset_dependencies:[ProjectAssetDependency];
+  layers:[SceneLayer];
+  viewport_camera_pose:ViewportCameraPose;
+  curves:[CurveAsset];
+}
+
+root_type ScenePayload;
+file_identifier "QDRS";

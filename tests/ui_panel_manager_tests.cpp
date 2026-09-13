@@ -7,12 +7,17 @@
 #include <gtest/gtest.h>
 
 #include "ui/ui_continuous_edit_tracker.hpp"
-#include "ui/qt_active_material_panel.hpp"
+#include "ui/qt_face_texture_panel.hpp"
 #include "ui/ui_panel_manager.hpp"
 #include "ui/ui_settings.hpp"
 
 #include <array>
 #include <span>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <string_view>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -149,10 +154,61 @@ TEST(UIPanelManagerTests, FocusUsesThePanelContentsQtFocusProxy) {
   EXPECT_TRUE(persisted.is_panel_visible(UIPanelId::ToolSettings));
 }
 
-TEST(UIPanelManagerTests, ActiveMaterialDockCanCloseReopenFloatAndFocusBrowse) {
+TEST(UIPanelManagerTests, FaceTextureUsesTheSharedDockPanelContract) {
+  bool found = false;
+  for (UIPanelId id : kUiDockPanelIds) {
+    found = found || id == UIPanelId::FaceTexture;
+  }
+  EXPECT_TRUE(found);
+  EXPECT_EQ(kUiDockPanelIds.size(), 6U);
+  EXPECT_STREQ(ui_panel_stable_id(UIPanelId::FaceTexture), "face_texture");
+  EXPECT_STREQ(ui_panel_key(UIPanelId::FaceTexture), "Face Texture");
+  EXPECT_STREQ(ui_panel_localization_key(UIPanelId::FaceTexture),
+               "ui.panel.face_texture");
+  EXPECT_TRUE(ui_panel_default_visible(UIPanelId::FaceTexture));
+}
+
+TEST(UIPanelManagerTests, LegacyMaterialDockVisibilityMigratesWithoutLosingPreferences) {
+  const auto path = std::filesystem::temp_directory_path() /
+                    "quader-face-texture-settings-migration.ini";
+  for (std::string_view legacy_key : {"active_material", "Active Material"}) {
+    for (bool visible : {false, true}) {
+      SCOPED_TRACE(legacy_key);
+      SCOPED_TRACE(visible);
+      {
+        std::ofstream file(path, std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << "[Panels]\n" << legacy_key << '='
+             << (visible ? "true" : "false")
+             << "\ninspector=false\nconsole=true\n"
+             << "[Localization]\nLocale=it-IT\n"
+             << "[Interface]\nInterfaceScale=1.5\n";
+      }
+      UISettings settings = UISettings::load(path);
+      EXPECT_EQ(settings.is_panel_visible(UIPanelId::FaceTexture), visible);
+      EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Inspector));
+      EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Console));
+      EXPECT_EQ(settings.locale(), "it-IT");
+      EXPECT_FLOAT_EQ(settings.interface_scale(), 1.5F);
+      ASSERT_TRUE(settings.save(path));
+      std::ifstream persisted(path);
+      const std::string text((std::istreambuf_iterator<char>(persisted)),
+                             std::istreambuf_iterator<char>());
+      EXPECT_EQ(text.find("active_material="), std::string::npos);
+      EXPECT_EQ(text.find("Active Material="), std::string::npos);
+      EXPECT_NE(text.find(visible ? "face_texture=true" : "face_texture=false"),
+                std::string::npos);
+      EXPECT_EQ(UISettings::load(path).is_panel_visible(UIPanelId::FaceTexture),
+                visible);
+    }
+  }
+  std::filesystem::remove(path);
+}
+
+TEST(UIPanelManagerTests, FaceTextureDockCanCloseReopenFloatAndFocusCanvas) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char application_name[] = "quader-active-material-dock-tests";
+  char application_name[] = "quader-face-texture-dock-tests";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
@@ -160,9 +216,8 @@ TEST(UIPanelManagerTests, ActiveMaterialDockCanCloseReopenFloatAndFocusBrowse) {
 
   QMainWindow window;
   auto *dock = new QDockWidget(&window);
-  dock->setObjectName(QStringLiteral("dock_active_material"));
-  auto *panel = new QtActiveMaterialPanel(dock);
-  panel->set_presentation(std::nullopt, true);
+  dock->setObjectName(QStringLiteral("dock_face_texture"));
+  auto *panel = new QtFaceTexturePanel(dock);
   dock->setWidget(panel);
   window.addDockWidget(Qt::RightDockWidgetArea, dock);
   window.show();
@@ -170,35 +225,35 @@ TEST(UIPanelManagerTests, ActiveMaterialDockCanCloseReopenFloatAndFocusBrowse) {
   QCoreApplication::processEvents();
 
   UIPanelManager manager;
-  manager.add(UIPanelId::ActiveMaterial, *dock);
+  manager.add(UIPanelId::FaceTexture, *dock);
   std::optional<bool> last_presented;
   int presentation_changes = 0;
   manager.set_presentation_changed_callback(
       [&](UIPanelId id, bool presented) {
-        EXPECT_EQ(id, UIPanelId::ActiveMaterial);
+        EXPECT_EQ(id, UIPanelId::FaceTexture);
         last_presented = presented;
         ++presentation_changes;
       });
-  EXPECT_TRUE(manager.is_presented(UIPanelId::ActiveMaterial));
-  ASSERT_TRUE(manager.focus(UIPanelId::ActiveMaterial));
+  EXPECT_TRUE(manager.is_presented(UIPanelId::FaceTexture));
+  ASSERT_TRUE(manager.focus(UIPanelId::FaceTexture));
   QCoreApplication::processEvents();
-  auto *browse = panel->findChild<QPushButton *>(
-      QStringLiteral("activeMaterial.browse"));
-  ASSERT_NE(browse, nullptr);
-  EXPECT_EQ(window.focusWidget(), browse);
+  auto *canvas = panel->findChild<QWidget *>(
+      QStringLiteral("face_texture.canvas"));
+  ASSERT_NE(canvas, nullptr);
+  EXPECT_EQ(window.focusWidget(), canvas);
 
   dock->close();
-  EXPECT_FALSE(manager.is_visible(UIPanelId::ActiveMaterial));
+  EXPECT_FALSE(manager.is_visible(UIPanelId::FaceTexture));
   EXPECT_EQ(last_presented, std::optional<bool>(false));
   UISettings settings = UISettings::defaults();
   manager.write_settings(settings);
-  EXPECT_FALSE(settings.is_panel_visible(UIPanelId::ActiveMaterial));
-  ASSERT_TRUE(manager.set_visible(UIPanelId::ActiveMaterial, true));
+  EXPECT_FALSE(settings.is_panel_visible(UIPanelId::FaceTexture));
+  ASSERT_TRUE(manager.set_visible(UIPanelId::FaceTexture, true));
   QCoreApplication::processEvents();
-  EXPECT_TRUE(manager.is_presented(UIPanelId::ActiveMaterial));
+  EXPECT_TRUE(manager.is_presented(UIPanelId::FaceTexture));
   EXPECT_EQ(last_presented, std::optional<bool>(true));
   const int stable_presentation_changes = presentation_changes;
-  EXPECT_FALSE(manager.set_visible(UIPanelId::ActiveMaterial, true));
+  EXPECT_FALSE(manager.set_visible(UIPanelId::FaceTexture, true));
   QCoreApplication::processEvents();
   EXPECT_EQ(presentation_changes, stable_presentation_changes);
 
@@ -209,10 +264,10 @@ TEST(UIPanelManagerTests, ActiveMaterialDockCanCloseReopenFloatAndFocusBrowse) {
   ASSERT_TRUE(window.restoreState(floating_layout, 1));
   QCoreApplication::processEvents();
   EXPECT_TRUE(dock->isFloating());
-  EXPECT_TRUE(manager.is_visible(UIPanelId::ActiveMaterial));
+  EXPECT_TRUE(manager.is_visible(UIPanelId::FaceTexture));
   manager.apply_settings(settings);
   EXPECT_FALSE(dock->isVisible());
-  EXPECT_FALSE(manager.is_presented(UIPanelId::ActiveMaterial));
+  EXPECT_FALSE(manager.is_presented(UIPanelId::FaceTexture));
 }
 
 } // namespace

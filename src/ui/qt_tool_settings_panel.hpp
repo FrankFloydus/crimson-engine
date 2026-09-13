@@ -20,8 +20,7 @@ class QuaderEditorApi;
 class QtUiScaleMetrics;
 
 /**
- * Presents active tool settings plus face and edge texture workflows as
- * retained dock content, independent of the active tool.
+ * Presents the active tool settings as retained dock content.
  * Call refresh from the host UI update path so activation, value changes, and
  * preview completion are reflected immediately.
  */
@@ -38,8 +37,6 @@ public:
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void refresh();
-  /** Refreshes both face sections behind owner and preference revision gates. */
-  void refresh_texture_settings();
   [[nodiscard]] bool has_active_target() const;
   /**
    * Returns whether a local numeric edit is still in progress or waiting to

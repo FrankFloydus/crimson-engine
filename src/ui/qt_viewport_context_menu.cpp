@@ -248,7 +248,6 @@ void QtViewportContextMenuPresenter::show(
 
   QMenu menu(&parent);
   std::vector<BoundContextCommand> bound_commands;
-  QAction *set_material_action = nullptr;
   QAction *edit_material_action = nullptr;
 
   const auto add_catalog_action = [&](QMenu &owner,
@@ -350,44 +349,16 @@ void QtViewportContextMenuPresenter::show(
           return submenu;
         };
 
-    const bool can_apply_current_material =
-        selection.has_selection &&
-        ((selection.mode == QuaderSelectionMode::Object &&
-          selection.selected_object_count > 0U) ||
-         (selection.mode == QuaderSelectionMode::Face &&
-          selection.selected_face_count > 0U));
     const auto add_material_actions = [&]() {
-      bool added = false;
-      if (can_apply_current_material) {
-        added = add_command_action(
-                    menu,
-                    "ui.viewport.context_menu.command.apply_current_material",
-                    "Apply Current Material", quader_command::kApplyMaterial,
-                    quader_command::kApplyMaterial.string(), true) != nullptr;
+      if (!material_under_mouse.has_value() || !open_material_editor) {
+        return false;
       }
-      if (!material_under_mouse.has_value()) {
-        return added;
-      }
-      const std::string sample_shortcut =
-          editor.commands().shortcut_for("viewport.material.sample_face");
-      set_material_action = menu.addAction(with_shortcut(
-          QString::fromStdString(localization.text(
-              "ui.viewport.context_menu.command.set_material_under_mouse",
-              "Set Material under Mouse as Active")),
-          sample_shortcut));
-      set_material_action->setObjectName(
-          QStringLiteral("viewport.material.sample_face"));
-      added = true;
-
-      if (open_material_editor) {
-        edit_material_action =
-            menu.addAction(QString::fromStdString(localization.text(
-                "ui.viewport.context_menu.command.edit_material_under_mouse",
-                "Edit Material under Mouse")));
-        edit_material_action->setObjectName(
-            QStringLiteral("viewport.material.edit_under_mouse"));
-      }
-      return added;
+      edit_material_action = menu.addAction(QString::fromStdString(localization.text(
+          "ui.viewport.context_menu.command.edit_material_under_mouse",
+          "Edit Material under Mouse")));
+      edit_material_action->setObjectName(
+          QStringLiteral("viewport.material.edit_under_mouse"));
+      return true;
     };
 
     if (!target_hit) {
@@ -463,7 +434,7 @@ void QtViewportContextMenuPresenter::show(
           "Center View on Selection", quader_command::kViewportFrameSelection,
           "viewport.frame_selection");
 
-      if (can_apply_current_material || material_under_mouse.has_value()) {
+      if (material_under_mouse.has_value() && open_material_editor) {
         add_separator_after_content(menu);
         (void)add_material_actions();
       }
@@ -512,28 +483,6 @@ void QtViewportContextMenuPresenter::show(
     return;
   }
 
-  if (selected_action == set_material_action) {
-    if (!material_under_mouse.has_value()) {
-      return;
-    }
-    const QuaderApiVoidResult result =
-        editor.project_assets().set_active_material(*material_under_mouse);
-    if (!runtime_binding.current()) {
-      return;
-    }
-    if (!result.ok()) {
-      const std::string message = result.error_message().empty()
-                                      ? "Operation failed."
-                                      : result.error_message();
-      LOG_ERROR("Material-under-mouse action failed: {}", message);
-      (void)editor.ui().notify({
-          .level = QuaderNotificationLevel::Error,
-          .message = message,
-      });
-      return;
-    }
-    return;
-  }
   if (selected_action == edit_material_action &&
       material_under_mouse.has_value() && open_material_editor) {
     open_material_editor(*material_under_mouse);

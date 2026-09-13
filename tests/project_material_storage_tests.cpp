@@ -4,6 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_editor_api.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
@@ -1089,7 +1090,7 @@ TEST(ProjectMaterialCatalogTests,
 }
 
 TEST(ProjectMaterialWorkspaceTests,
-     CreatesDefaultFilesAndPersistsActiveMaterialInManifestV2) {
+     CreatesDefaultFilesWithoutPersistingAnActiveMaterialInManifestV2) {
   ScopedMaterialTestDirectory temporary("create");
   const std::filesystem::path root =
       temporary.make_empty_project("MaterialProject");
@@ -1114,17 +1115,13 @@ TEST(ProjectMaterialWorkspaceTests,
                 std::filesystem::directory_iterator{}),
             1);
   ASSERT_EQ(project.material_catalog().entries().size(), 1u);
-  ASSERT_TRUE(project.active_material_id().has_value());
-  EXPECT_EQ(project.active_material_id()->str(),
+  EXPECT_EQ(project.material_catalog().entries().front().material.id.str(),
             kDefaultProjectMaterialId);
   ASSERT_NE(project.manifest(), nullptr);
-  ASSERT_TRUE(project.manifest()->active_material_id().has_value());
-  EXPECT_EQ(project.manifest()->active_material_id(),
-            project.active_material_id());
 
   const std::string manifest_text = read_text(project.manifest_path());
   EXPECT_NE(manifest_text.find("\"version\": 2"), std::string::npos);
-  EXPECT_NE(manifest_text.find("\"activeMaterial\""),
+  EXPECT_EQ(manifest_text.find("\"activeMaterial\""),
             std::string::npos);
 
   const std::string packaged_albedo = read_text(
@@ -1185,9 +1182,9 @@ TEST(ProjectMaterialWorkspaceTests,
   const ProjectSessionResult opened =
       project.open(created.value().manifest_path);
   ASSERT_TRUE(opened.ok) << opened.message;
-  ASSERT_TRUE(project.active_material_id().has_value());
-  EXPECT_EQ(project.active_material_id()->str(),
-            kDefaultProjectMaterialId);
+  EXPECT_NE(project.material_catalog().find(
+                *ProjectAssetId::parse(kDefaultProjectMaterialId)),
+            nullptr);
   EXPECT_TRUE(std::filesystem::is_regular_file(
       root / "Materials" / "default_material.qmat"));
   EXPECT_TRUE(std::filesystem::is_regular_file(
@@ -1251,29 +1248,31 @@ TEST(ProjectMaterialWorkspaceTests,
   EXPECT_EQ(read_text(image_material_path), kNamedImageV3Material);
   EXPECT_FALSE(project.has_dirty_material());
 
-  const ProjectSessionResult selected = project.set_active_material(image_id);
-  ASSERT_TRUE(selected.ok) << selected.message;
   ASSERT_TRUE(project.close().ok);
   const ProjectSessionResult reopened = project.open(manifest);
   ASSERT_TRUE(reopened.ok) << reopened.message;
   EXPECT_TRUE(reopened.warnings.empty());
-  EXPECT_EQ(project.active_material_id(), image_id);
+  const auto *reopened_image_material = project.material_catalog().find(image_id);
+  ASSERT_NE(reopened_image_material, nullptr);
+  EXPECT_EQ(reopened_image_material->material.name, "Branch Image");
+  EXPECT_EQ(reopened_image_material->path.portable_string(),
+            "Materials/branch_image.qmat");
   EXPECT_EQ(read_text(default_material_path), default_source);
   EXPECT_EQ(read_text(image_material_path), kNamedImageV3Material);
 }
 
 TEST(ProjectMaterialWorkspaceTests,
-     ActiveMaterialChangeIsManifestTransactionalAndRestorable) {
-  ScopedMaterialTestDirectory temporary("active");
+     LegacyActiveMaterialIsIgnoredAndOmittedFromSubsequentManifestSaves) {
+  ScopedMaterialTestDirectory temporary("legacy-active");
   const std::filesystem::path root =
-      temporary.make_empty_project("ActiveMaterial");
+      temporary.make_empty_project("LegacyMaterial");
   ProjectSession project;
   project.set_resource_root(source_resource_root());
   ASSERT_TRUE(project.create(root).ok);
   ASSERT_TRUE(project.close().ok);
 
   ProjectIoResult<ProjectWorkspaceStorage> workspace =
-      ProjectManifestStore::open(root / "ActiveMaterial.qproj");
+      ProjectManifestStore::open(root / "LegacyMaterial.qproj");
   ASSERT_TRUE(workspace.ok()) << workspace.error().message;
   const ProjectMaterialDocument alternate = material_definition(
       "80e21b14-60fd-4855-8b4f-1877ce16b0f0", "Alternate");
@@ -1281,40 +1280,41 @@ TEST(ProjectMaterialWorkspaceTests,
                   workspace.value().file_system,
                   project_path("Materials/alternate.qmat"), alternate)
                   .ok());
-  ASSERT_TRUE(project.open(workspace.value().manifest_path).ok);
-  ASSERT_EQ(project.active_material_id(),
-            ProjectAssetId::parse(kDefaultProjectMaterialId));
-  EXPECT_FALSE(project.has_dirty_scenes());
+  const auto manifest = workspace.value().manifest_path;
+  const auto legacy_manifest = replace_once(
+      read_text(manifest), "\"workspace\": {",
+      "\"workspace\": {\n    \"activeMaterial\": \"" +
+          std::string(alternate.id.str()) + "\",");
+  write_text(manifest, legacy_manifest);
+  ASSERT_TRUE(project.open(manifest).ok);
+  ASSERT_NE(project.material_catalog().find(alternate.id), nullptr);
+  EXPECT_EQ(project.material_catalog().find(alternate.id)->material.name,
+            "Alternate");
 
-  const std::filesystem::path manifest = project.manifest_path();
-  std::filesystem::path backup = manifest;
-  backup += ".backup";
-  std::error_code error;
-  std::filesystem::rename(manifest, backup, error);
-  ASSERT_FALSE(error) << error.message();
-  ASSERT_TRUE(std::filesystem::create_directory(manifest, error));
-  ASSERT_FALSE(error) << error.message();
-  const ProjectSessionResult rejected =
-      project.set_active_material(alternate.id);
-  EXPECT_FALSE(rejected.ok);
-  EXPECT_EQ(project.active_material_id(),
-            ProjectAssetId::parse(kDefaultProjectMaterialId));
-  std::filesystem::remove(manifest, error);
-  ASSERT_FALSE(error) << error.message();
-  std::filesystem::rename(backup, manifest, error);
-  ASSERT_FALSE(error) << error.message();
+  QuaderEditorApi editor(project);
+  if (!editor.scene_documents().has_active_scene()) {
+    ASSERT_TRUE(editor.scene_documents().new_scene().ok());
+  }
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Default after legacy selection").ok());
+  const auto used = editor.materials().used_materials(
+      QuaderMaterialUsageScope::ActiveScene);
+  ASSERT_TRUE(used.ok()) << used.error_message();
+  ASSERT_EQ(used.value().size(), 1u);
+  EXPECT_EQ(used.value().front(), QuaderMaterialReference::project(
+      *ProjectAssetId::parse(kDefaultProjectMaterialId)));
 
-  const ProjectSessionResult selected =
-      project.set_active_material(alternate.id);
-  ASSERT_TRUE(selected.ok) << selected.message;
-  EXPECT_TRUE(selected.changed);
-  EXPECT_EQ(project.active_material_id(), alternate.id);
-  EXPECT_FALSE(project.has_dirty_scenes());
-
-  ProjectSession reopened;
-  reopened.set_resource_root(source_resource_root());
-  ASSERT_TRUE(reopened.open(manifest).ok);
-  EXPECT_EQ(reopened.active_material_id(), alternate.id);
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(*project.workspace()).ok());
+  const auto saved_manifest = read_text(manifest);
+  EXPECT_EQ(saved_manifest.find("\"activeMaterial\""), std::string::npos);
+  EXPECT_NE(saved_manifest.find("\"version\": 2"), std::string::npos);
+  ASSERT_TRUE(project.close(true).ok);
+  ASSERT_TRUE(project.open(manifest).ok);
+  EXPECT_NE(project.material_catalog().find(alternate.id), nullptr);
+  EXPECT_NE(project.material_catalog().find(
+                *ProjectAssetId::parse(kDefaultProjectMaterialId)),
+            nullptr);
 }
 
 TEST(ProjectMaterialWorkspaceTests,

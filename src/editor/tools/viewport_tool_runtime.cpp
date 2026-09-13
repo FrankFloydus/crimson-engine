@@ -277,8 +277,6 @@ bool ViewportToolRuntime::handle_shortcut(const ViewportShortcut &shortcut,
   case ViewportShortcutKind::FlipHorizontal:
   case ViewportShortcutKind::FlipVertical:
     return state.selection_mode == ViewportSelectionMode::Object;
-  case ViewportShortcutKind::ApplyMaterial:
-    return true;
   case ViewportShortcutKind::None:
     return false;
   }

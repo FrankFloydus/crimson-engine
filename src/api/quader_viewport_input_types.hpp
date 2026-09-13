@@ -159,7 +159,6 @@ enum class ViewportShortcutKind {
     FlipMeshNormals,
     FlipHorizontal,
     FlipVertical,
-    ApplyMaterial,
     AddPopup,
     ShadingPopup,
 };
@@ -191,8 +190,6 @@ enum class ViewportInputActionKind {
     LinearArrayDecreaseCopies,
     RadialArrayIncreaseCopies,
     RadialArrayDecreaseCopies,
-    SampleFaceMaterial,
-    ApplyActiveMaterialToSelection,
     ApplyFaceMaterialToMesh,
     TransferFaceTexture,
     CycleSelectionDepth,

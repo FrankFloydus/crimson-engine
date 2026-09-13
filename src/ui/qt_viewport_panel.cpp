@@ -38,6 +38,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_numeric_format.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
 #include "ui/qt_viewport_edge_length_hud.hpp"
@@ -453,7 +454,8 @@ private:
 } // namespace
 
 bool qt_event_target_belongs_to_tool_settings(const QObject *target) {
-  return qt_object_belongs_to_tool_settings_panel(target);
+  return qt_object_belongs_to_tool_settings_panel(target) ||
+         qt_object_belongs_to_face_texture_panel(target);
 }
 
 double viewport_monotonic_time_seconds() {
@@ -465,7 +467,8 @@ double viewport_monotonic_time_seconds() {
 bool qt_event_target_belongs_to_tool_settings(
     const QObject *target, const QPoint &global_position) {
   return qt_event_target_belongs_to_tool_settings(target) ||
-         qt_object_belongs_to_tool_settings_panel(target, global_position);
+         qt_object_belongs_to_tool_settings_panel(target, global_position) ||
+         qt_object_belongs_to_face_texture_panel(target, global_position);
 }
 
 QtViewportPanel::QtViewportPanel(QWidget *parent)

@@ -67,6 +67,8 @@ constexpr std::string_view kSelectionKeywords[]{"selection", "select"};
 constexpr std::string_view kNormalKeywords[]{"normal", "orientation"};
 constexpr std::string_view kShadingKeywords[]{"shade", "surface"};
 constexpr std::string_view kTextureKeywords[]{"texture", "uv"};
+constexpr std::string_view kMirrorFaceUvKeywords[]{
+    "texture", "uv", "mirror", "face", "flip"};
 constexpr std::string_view kSearchKeywords[]{"search", "command", "palette", "finder"};
 constexpr std::string_view kViewportInfoKeywords[]{
     "info", "stats", "statistics", "performance"};
@@ -392,8 +394,6 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Group::Duplication, 540u, kMenuViewportToolbarPalette,
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, {}, "tool_settings"),
-    presentation(quader_command::kApplyMaterial, Domain::Object,
-                 Group::Materials, 600u, kMenuViewportHierarchyPalette),
     presentation(quader_command::kSceneHideSelection, Domain::Object,
                  Group::Visibility, 700u,
                  kMenuViewportHierarchyLayersPalette),
@@ -681,11 +681,11 @@ constexpr CommandPresentationDescriptor kCatalog[]{
     presentation(quader_command::kModelingTextureFlipFaceHorizontal,
                  Domain::UV, Group::Texture, 660u, kPalette,
                  Palette::Searchable, Activation::Immediate, Danger::None,
-                 {}, kTextureKeywords),
+                 {}, kMirrorFaceUvKeywords),
     presentation(quader_command::kModelingTextureFlipFaceVertical,
                  Domain::UV, Group::Texture, 670u, kPalette,
                  Palette::Searchable, Activation::Immediate, Danger::None,
-                 {}, kTextureKeywords),
+                 {}, kMirrorFaceUvKeywords),
     presentation(quader_command::kModelingTextureFitBoth, Domain::UV,
                  Group::Texture, 680u, kMenuPalette,
                  Palette::Searchable, Activation::Immediate, Danger::None,

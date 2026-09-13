@@ -151,6 +151,16 @@ public:
                        ? project_owner->material_texture_revision()
                        : std::uint64_t{0};
           });
+      scene.modeling().set_face_texture_material_transform_provider(
+          [lifetime, project_owner](MaterialReference material) {
+            if (lifetime.expired() || project_owner == nullptr || !material.project_owned()) {
+              return StandardMaterialTextureTransform{};
+            }
+            const auto *entry = project_owner->material_catalog().find(
+                project_owner->canonical_material_id(material.project_asset()));
+            const auto *standard = entry != nullptr ? entry->material.standard_material() : nullptr;
+            return standard != nullptr ? standard->texture_transform : StandardMaterialTextureTransform{};
+          });
     }
 
     void install_tool_hooks() {

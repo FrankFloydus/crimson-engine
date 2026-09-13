@@ -26,6 +26,12 @@ struct QtAuxiliaryWindowState {
   int material_browser_tile_size = 128;
   bool material_browser_sidebar_visible = true;
   int material_browser_sidebar_width = 200;
+  bool face_texture_browser_grid_mode = true;
+  int face_texture_browser_tile_size = 64;
+  bool face_texture_browser_sidebar_visible = true;
+  int face_texture_browser_sidebar_width = 120;
+  QByteArray face_texture_splitter_state;
+  bool face_texture_layout_migrated = false;
   QByteArray standard_material_editor_geometry;
   int standard_material_preview_mesh = 0;
   int standard_material_preview_shading = 2;

@@ -675,26 +675,18 @@ void expect_same_revisions(const QuaderRevisionStamp &actual,
 }
 
 TEST(ProjectMaterialPublicApiTests,
-     CatalogPreviewActivationEventsAndPersistenceUseProjectIdentity) {
+     CatalogPreviewEventsAndPersistenceUseProjectIdentity) {
   ProjectMaterialBehaviorHarness harness("public-api");
   std::vector<QuaderEvent> catalog_events;
-  std::vector<QuaderEvent> active_events;
   const QuaderEventSubscription catalog_subscription =
       harness.editor().events().subscribe(
           quader_event::kProjectAssetsChanged,
           [&](const QuaderEvent &event) { catalog_events.push_back(event); });
-  const QuaderEventSubscription active_subscription =
-      harness.editor().events().subscribe(
-          quader_event::kActiveProjectMaterialChanged,
-          [&](const QuaderEvent &event) { active_events.push_back(event); });
   ASSERT_TRUE(catalog_subscription.valid());
-  ASSERT_TRUE(active_subscription.valid());
 
   harness.create();
   ASSERT_EQ(catalog_events.size(), 1u);
-  ASSERT_TRUE(catalog_events.back().project_asset_id.has_value());
-  EXPECT_EQ(catalog_events.back().project_asset_id,
-            ProjectAssetId::parse(kDefaultProjectMaterialId));
+  EXPECT_FALSE(catalog_events.back().project_asset_id.has_value());
 
   const std::string preview_text =
       "ALBEDO_PREVIEW_BYTES_FOR_PUBLIC_PROJECT_MATERIAL_API";
@@ -725,30 +717,12 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_GT(materials.value()[0].qmat_size_bytes, 0u);
   EXPECT_EQ(materials.value()[1].name, kDefaultProjectMaterialName);
 
-  const QuaderApiResult<QuaderProjectMaterialInfo> initial_active =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(initial_active.ok()) << initial_active.error_message();
-  EXPECT_EQ(initial_active.value().id,
-            project_asset_id(kDefaultProjectMaterialId));
   EXPECT_FALSE(harness.editor().project().dirty());
-
-  const QuaderApiVoidResult activated =
-      harness.editor().project_assets().set_active_material(amber.material.id);
-  ASSERT_TRUE(activated.ok()) << activated.error_message();
-  EXPECT_TRUE(activated.changed());
-  EXPECT_FALSE(harness.editor().project().dirty());
-  ASSERT_EQ(active_events.size(), 1u);
-  EXPECT_EQ(active_events.back().project_asset_id, amber.material.id);
   const std::filesystem::path canonical_root =
       std::filesystem::canonical(harness.root());
-  EXPECT_EQ(active_events.back().project_root,
+  EXPECT_EQ(catalog_events.back().project_root,
             std::optional<std::string>(canonical_root.string()));
-
-  const QuaderApiVoidResult unchanged =
-      harness.editor().project_assets().set_active_material(amber.material.id);
-  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
-  EXPECT_FALSE(unchanged.changed());
-  EXPECT_EQ(active_events.size(), 1u);
+  const auto manifest_before = read_bytes(harness.manifest_path());
 
   const QuaderApiResult<QuaderProjectMaterialPreview> preview =
       harness.editor().project_assets().material_preview(amber.material.id);
@@ -757,26 +731,21 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_NE(preview.value().content_revision, 0u);
 
   const ProjectAssetId missing = ProjectAssetId::generate();
-  const QuaderApiVoidResult rejected =
-      harness.editor().project_assets().set_active_material(missing);
-  EXPECT_FALSE(rejected.ok());
-  EXPECT_EQ(active_events.size(), 1u);
+  EXPECT_FALSE(harness.editor().project_assets().material_preview(missing).ok());
+  EXPECT_EQ(read_bytes(harness.manifest_path()), manifest_before);
+  EXPECT_EQ(catalog_events.size(), 3u);
 
   ASSERT_TRUE(harness.editor().project().close().ok());
-  ASSERT_TRUE(
-      harness.editor().project().open(harness.manifest_path()).ok());
-  const QuaderApiResult<QuaderProjectMaterialInfo> restored =
-      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(harness.editor().project().open(harness.manifest_path()).ok());
+  const auto restored = harness.editor().project_assets().materials();
   ASSERT_TRUE(restored.ok()) << restored.error_message();
-  EXPECT_EQ(restored.value().id, amber.material.id);
+  ASSERT_EQ(restored.value().size(), 2u);
+  EXPECT_EQ(restored.value().front().id, amber.material.id);
 
   QuaderStandaloneEditor standalone = create_standalone_editor();
   EXPECT_FALSE(standalone.editor().project_assets().materials().ok());
-  EXPECT_FALSE(standalone.editor().project_assets().active_material().ok());
-  EXPECT_FALSE(standalone.editor()
-                   .project_assets()
-                   .set_active_material(amber.material.id)
-                   .ok());
+  EXPECT_FALSE(standalone.editor().project_assets()
+                   .material_preview(amber.material.id).ok());
 }
 
 TEST(ProjectMaterialPublicApiTests,
@@ -796,9 +765,7 @@ TEST(ProjectMaterialPublicApiTests,
   ASSERT_TRUE(draft_before.value().dirty);
   const QuaderHistorySnapshot history_before =
       harness.editor().query().history();
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_before =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_before.ok()) << active_before.error_message();
+  const auto manifest_before = read_bytes(harness.manifest_path());
   const bool dirty_before = harness.editor().project().dirty();
 
   const std::vector<std::byte> original =
@@ -820,17 +787,11 @@ TEST(ProjectMaterialPublicApiTests,
   write_text(invalid_source, "not an encoded image");
 
   std::vector<QuaderEvent> assets_events;
-  std::vector<QuaderEvent> active_events;
   const QuaderEventSubscription assets_subscription =
       harness.editor().events().subscribe(
           quader_event::kProjectAssetsChanged,
           [&](const QuaderEvent &event) { assets_events.push_back(event); });
-  const QuaderEventSubscription active_subscription =
-      harness.editor().events().subscribe(
-          quader_event::kActiveProjectMaterialChanged,
-          [&](const QuaderEvent &event) { active_events.push_back(event); });
   ASSERT_TRUE(assets_subscription.valid());
-  ASSERT_TRUE(active_subscription.valid());
 
   const std::array sources{first_source, invalid_source, second_source,
                            first_source};
@@ -843,8 +804,7 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_EQ(imported.value().failed.front().source_path, invalid_source);
   EXPECT_FALSE(imported.value().failed.front().error_message.empty());
   ASSERT_EQ(assets_events.size(), 1u);
-  EXPECT_EQ(assets_events.front().project_asset_id, active_before.value().id);
-  EXPECT_TRUE(active_events.empty());
+  EXPECT_FALSE(assets_events.front().project_asset_id.has_value());
 
   std::vector<ProjectAssetId> imported_ids;
   imported_ids.reserve(imported.value().imported.size());
@@ -903,10 +863,7 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_NE(imported.value().imported[0].material.project_relative_path,
             imported.value().imported[2].material.project_relative_path);
 
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_after =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_after.ok()) << active_after.error_message();
-  EXPECT_EQ(active_after.value().id, active_before.value().id);
+  EXPECT_EQ(read_bytes(harness.manifest_path()), manifest_before);
   const QuaderApiResult<QuaderStandardMaterialDocumentInfo> draft_after =
       harness.editor().standard_material_documents().current();
   ASSERT_TRUE(draft_after.ok()) << draft_after.error_message();
@@ -938,10 +895,8 @@ TEST(ProjectMaterialPublicApiTests,
     ASSERT_TRUE(preview.ok()) << preview.error_message();
     EXPECT_EQ(preview.value().encoded_bytes, original);
   }
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_after_reopen =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_after_reopen.ok()) << active_after_reopen.error_message();
-  EXPECT_EQ(active_after_reopen.value().id, active_before.value().id);
+  EXPECT_NE(harness.project().material_catalog().find(
+                project_asset_id(kDefaultProjectMaterialId)), nullptr);
 }
 
 TEST(ProjectMaterialPublicApiTests,
@@ -1184,9 +1139,7 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_FALSE(empty.changed());
   const std::size_t catalog_size_before =
       harness.project().material_catalog().entries().size();
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_before =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_before.ok()) << active_before.error_message();
+  const auto manifest_before = read_bytes(harness.manifest_path());
   const QuaderHistorySnapshot history_before =
       harness.editor().query().history();
 
@@ -1212,10 +1165,7 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_EQ(assets_events, 0u);
   EXPECT_EQ(harness.project().material_catalog().entries().size(),
             catalog_size_before);
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_after =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_after.ok()) << active_after.error_message();
-  EXPECT_EQ(active_after.value().id, active_before.value().id);
+  EXPECT_EQ(read_bytes(harness.manifest_path()), manifest_before);
   EXPECT_FALSE(harness.editor().project().dirty());
   expect_same_history(harness.editor().query().history(), history_before);
 }
@@ -1234,9 +1184,7 @@ TEST(ProjectMaterialPublicApiTests,
       harness.editor().standard_material_documents().current();
   ASSERT_TRUE(draft_before.ok()) << draft_before.error_message();
   ASSERT_TRUE(draft_before.value().dirty);
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_before =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_before.ok()) << active_before.error_message();
+  const auto manifest_before = read_bytes(harness.manifest_path());
   const QuaderHistorySnapshot history_before =
       harness.editor().query().history();
   const bool dirty_before = harness.editor().project().dirty();
@@ -1254,17 +1202,11 @@ TEST(ProjectMaterialPublicApiTests,
       regular_files_below(harness.root() / "Textures");
 
   std::size_t assets_events = 0u;
-  std::size_t active_events = 0u;
   const QuaderEventSubscription assets_subscription =
       harness.editor().events().subscribe(
           quader_event::kProjectAssetsChanged,
           [&](const QuaderEvent &) { ++assets_events; });
-  const QuaderEventSubscription active_subscription =
-      harness.editor().events().subscribe(
-          quader_event::kActiveProjectMaterialChanged,
-          [&](const QuaderEvent &) { ++active_events; });
   ASSERT_TRUE(assets_subscription.valid());
-  ASSERT_TRUE(active_subscription.valid());
 
   const std::filesystem::path source =
       source_resource_root() / "materials" / "default" /
@@ -1277,17 +1219,13 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_TRUE(result.value().imported.empty());
   EXPECT_TRUE(result.value().failed.empty());
   EXPECT_EQ(assets_events, 0u);
-  EXPECT_EQ(active_events, 0u);
   EXPECT_EQ(regular_files_below(harness.root() / "Materials"),
             materials_before);
   EXPECT_EQ(regular_files_below(harness.root() / "Textures"),
             textures_before);
   EXPECT_EQ(read_bytes(default_qmat), default_qmat_bytes);
 
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_after =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_after.ok()) << active_after.error_message();
-  EXPECT_EQ(active_after.value().id, active_before.value().id);
+  EXPECT_EQ(read_bytes(harness.manifest_path()), manifest_before);
   const QuaderApiResult<QuaderStandardMaterialDocumentInfo> draft_after =
       harness.editor().standard_material_documents().current();
   ASSERT_TRUE(draft_after.ok()) << draft_after.error_message();
@@ -1310,7 +1248,8 @@ TEST(ProjectMaterialPublicApiTests,
 }
 
 TEST(ProjectMaterialBehaviorTests,
-     NewBoxAndMeshResolveTheActiveProjectMaterialAtInvocation) {
+     NewBoxAndMeshUseExplicitMaterialsWithoutChangingCreationDefaults) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("new-object-material");
   harness.create();
   const InstalledMaterial amber{
@@ -1326,44 +1265,48 @@ TEST(ProjectMaterialBehaviorTests,
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
 
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
+  requested_material_id = amber.material.id;
   const QuaderApiResult<QuaderModelingObjectRef> box =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f},
-           .max = {1.0f, 1.0f, 1.0f}},
-          "Amber Box");
+      harness.editor().modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}}, .name = "Amber Box",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(box.ok()) << box.error_message();
   expect_primary_material(harness.project(), box.value().entity,
                           amber.material.id);
 
   const QuaderApiResult<QuaderModelingObjectRef> mesh =
-      harness.editor().modeling().create_mesh(
-          QuaderPolygonDocumentInternalAccess::from_backend(
+      harness.editor().modeling().create_mesh(QuaderPolygonDocumentInternalAccess::from_backend(
               triangle_document()),
-          {.name = "Amber Mesh"});
+          {.name = "Amber Mesh",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(mesh.ok()) << mesh.error_message();
   expect_primary_material(harness.project(), mesh.value().entity,
                           amber.material.id);
 
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(blue.material.id)
-                  .ok());
+  requested_material_id = blue.material.id;
   const QuaderApiResult<QuaderModelingObjectRef> second_box =
-      harness.editor().modeling().create_box(
-          {.min = {2.0f, -1.0f, -1.0f},
-           .max = {4.0f, 1.0f, 1.0f}},
-          "Blue Box");
+      harness.editor().modeling().create_box({.bounds = {.min = {2.0f, -1.0f, -1.0f},
+           .max = {4.0f, 1.0f, 1.0f}}, .name = "Blue Box",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(second_box.ok()) << second_box.error_message();
   expect_primary_material(harness.project(), second_box.value().entity,
                           blue.material.id);
+  const auto default_box = harness.editor().modeling().create_box(
+      {.min = {5.0f, -1.0f, -1.0f}, .max = {7.0f, 1.0f, 1.0f}},
+      "Default Box");
+  ASSERT_TRUE(default_box.ok()) << default_box.error_message();
+  expect_primary_material(harness.project(), default_box.value().entity,
+                          project_asset_id(kDefaultProjectMaterialId));
+  const auto default_mesh = harness.editor().modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(triangle_document()));
+  ASSERT_TRUE(default_mesh.ok()) << default_mesh.error_message();
+  expect_primary_material(harness.project(), default_mesh.value().entity,
+                          project_asset_id(kDefaultProjectMaterialId));
 }
 
 TEST(ProjectMaterialBehaviorTests,
      ObjectApplyIsOneUndoTransactionAndRedoCapturesOriginalMaterial) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("object-apply");
   harness.create();
   const InstalledMaterial amber{
@@ -1378,28 +1321,20 @@ TEST(ProjectMaterialBehaviorTests,
   };
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
+  requested_material_id = amber.material.id;
 
   const QuaderApiResult<QuaderModelingObjectRef> first =
-      harness.editor().modeling().create_box(
-          {.min = {-3.0f, -1.0f, -1.0f},
-           .max = {-1.0f, 1.0f, 1.0f}},
-          "First");
+      harness.editor().modeling().create_box({.bounds = {.min = {-3.0f, -1.0f, -1.0f},
+           .max = {-1.0f, 1.0f, 1.0f}}, .name = "First",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   const QuaderApiResult<QuaderModelingObjectRef> second =
-      harness.editor().modeling().create_box(
-          {.min = {1.0f, -1.0f, -1.0f},
-           .max = {3.0f, 1.0f, 1.0f}},
-          "Second");
+      harness.editor().modeling().create_box({.bounds = {.min = {1.0f, -1.0f, -1.0f},
+           .max = {3.0f, 1.0f, 1.0f}}, .name = "Second",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(first.ok()) << first.error_message();
   ASSERT_TRUE(second.ok()) << second.error_message();
 
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(blue.material.id)
-                  .ok());
+  requested_material_id = blue.material.id;
   ASSERT_TRUE(harness.editor()
                   .selection()
                   .set_mode(QuaderSelectionMode::Object)
@@ -1409,7 +1344,7 @@ TEST(ProjectMaterialBehaviorTests,
                   .select_objects({first.value(), second.value()})
                   .ok());
   const QuaderApiVoidResult applied =
-      harness.editor().modeling().apply_active_material();
+      harness.editor().modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   EXPECT_TRUE(applied.changed());
   for (const QuaderModelingObjectRef object : {first.value(), second.value()}) {
@@ -1422,18 +1357,14 @@ TEST(ProjectMaterialBehaviorTests,
     expect_all_face_slots(harness.project(), object.entity, 0u);
   }
 
-  EXPECT_EQ(harness.editor().query().history().undo_label, "Apply Material");
+  EXPECT_EQ(harness.editor().query().history().undo_label, "Assign Material");
   ASSERT_TRUE(harness.editor().history().undo().ok());
   expect_primary_material(harness.project(), first.value().entity,
                           amber.material.id);
   expect_primary_material(harness.project(), second.value().entity,
                           amber.material.id);
 
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(
-                      project_asset_id(kDefaultProjectMaterialId))
-                  .ok());
+  requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ASSERT_TRUE(harness.editor().history().redo().ok());
   expect_primary_material(harness.project(), first.value().entity,
                           blue.material.id);
@@ -1442,7 +1373,8 @@ TEST(ProjectMaterialBehaviorTests,
 }
 
 TEST(ProjectMaterialBehaviorTests,
-     ActiveMaterialAddsAndReplacesSolidifiedCurveMaterialsWithMeshes) {
+     ExplicitMaterialAddsAndReplacesSolidifiedCurveMaterialsWithMeshes) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("solid-curve-object-apply");
   harness.create();
   const InstalledMaterial amber{
@@ -1458,12 +1390,10 @@ TEST(ProjectMaterialBehaviorTests,
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
   auto &editor = harness.editor();
-  ASSERT_TRUE(editor.project_assets().set_active_material(amber.material.id)
-                  .ok());
+  requested_material_id = amber.material.id;
 
-  const auto mesh = editor.modeling().create_box(
-      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      "Pipe Companion");
+  const auto mesh = editor.modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, .name = "Pipe Companion",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(mesh.ok()) << mesh.error_message();
   const auto curve = editor.modeling().create_curve({
       .points = {{.position = {0.0f, 0.0f, 0.0f}},
@@ -1475,7 +1405,7 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
   const QuaderHistorySnapshot history_before_solidify = editor.query().history();
   const QuaderApiVoidResult dormant_apply =
-      editor.commands().execute(quader_command::kApplyMaterial);
+      editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   EXPECT_FALSE(dormant_apply.ok());
   EXPECT_FALSE(dormant_apply.changed());
   EXPECT_EQ(scene_material(harness.project(), curve.value().entity), nullptr);
@@ -1495,7 +1425,7 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_EQ(scene_material(harness.project(), curve.value().entity), nullptr);
 
   const QuaderApiVoidResult added =
-      editor.commands().execute(quader_command::kApplyMaterial);
+      editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(added.ok()) << added.error_message();
   ASSERT_TRUE(added.changed());
   expect_primary_material(harness.project(), curve.value().entity,
@@ -1507,15 +1437,14 @@ TEST(ProjectMaterialBehaviorTests,
   expect_primary_material(harness.project(), curve.value().entity,
                           amber.material.id);
 
-  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id)
-                  .ok());
+  requested_material_id = blue.material.id;
   ASSERT_TRUE(editor.selection().select_objects(
       {mesh.value().entity, curve.value().entity}, curve.value().entity).ok());
   const ModelingSelectionExport selection_before =
       exact_selection(harness.project());
   const auto scene_selection_before = scene_selection_identity(editor);
   const QuaderApiVoidResult replaced =
-      editor.commands().execute(quader_command::kApplyMaterial);
+      editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(replaced.ok()) << replaced.error_message();
   ASSERT_TRUE(replaced.changed());
   expect_primary_material(harness.project(), mesh.value().entity,
@@ -1540,10 +1469,7 @@ TEST(ProjectMaterialBehaviorTests,
                           amber.material.id);
   expect_same_selection_identity(exact_selection(harness.project()),
                                  selection_before);
-  ASSERT_TRUE(editor.project_assets()
-                  .set_active_material(
-                      project_asset_id(kDefaultProjectMaterialId))
-                  .ok());
+  requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ASSERT_TRUE(editor.history().redo().ok());
   expect_primary_material(harness.project(), mesh.value().entity,
                           blue.material.id);
@@ -1555,6 +1481,7 @@ TEST(ProjectMaterialBehaviorTests,
 
 TEST(ProjectMaterialBehaviorTests,
      GroupApplyIncludesSolidifiedCurvesAndRejectsProtectedDescendants) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("solid-curve-group-apply");
   harness.create();
   const InstalledMaterial amber{
@@ -1570,11 +1497,9 @@ TEST(ProjectMaterialBehaviorTests,
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
   auto &editor = harness.editor();
-  ASSERT_TRUE(editor.project_assets().set_active_material(amber.material.id)
-                  .ok());
-  const auto mesh = editor.modeling().create_box(
-      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      "Grouped Pipe Mesh");
+  requested_material_id = amber.material.id;
+  const auto mesh = editor.modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, .name = "Grouped Pipe Mesh",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   const auto curve = editor.modeling().create_curve({
       .points = {{.position = {0.0f, 2.0f, 0.0f}},
                  {.position = {4.0f, 2.0f, 0.0f}}},
@@ -1586,7 +1511,7 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
   ASSERT_TRUE(
       editor.tools().set_setting("curve", "curve.solidify", true).ok());
-  ASSERT_TRUE(editor.commands().execute(quader_command::kApplyMaterial).ok());
+  ASSERT_TRUE(editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id)).ok());
   ASSERT_TRUE(editor.selection().select_objects(
       {mesh.value().entity, curve.value().entity}, curve.value().entity).ok());
   const auto group = editor.scene().group_selection("Pipe Material Group");
@@ -1595,13 +1520,12 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
   const ProjectMaterialFixture fixture(harness.project());
   ASSERT_TRUE(fixture.set_visible(curve.value().entity, false));
-  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id)
-                  .ok());
+  requested_material_id = blue.material.id;
 
   ASSERT_TRUE(fixture.set_locked(curve.value().entity, true));
   const QuaderHistorySnapshot history_before_locked = editor.query().history();
   const QuaderApiVoidResult locked =
-      editor.commands().execute(quader_command::kApplyMaterial);
+      editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   EXPECT_FALSE(locked.ok());
   EXPECT_FALSE(locked.changed());
   expect_primary_material(harness.project(), mesh.value().entity,
@@ -1615,7 +1539,7 @@ TEST(ProjectMaterialBehaviorTests,
       exact_selection(harness.project());
   const auto scene_selection_before = scene_selection_identity(editor);
   const QuaderApiVoidResult applied =
-      editor.commands().execute(quader_command::kApplyMaterial);
+      editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   ASSERT_TRUE(applied.changed());
   expect_primary_material(harness.project(), mesh.value().entity,
@@ -1644,8 +1568,9 @@ TEST(ProjectMaterialBehaviorTests,
 
 TEST(ProjectMaterialBehaviorTests,
      GroupApplyIncludesNestedHiddenMeshesAndRestoresExactSelection) {
-  // The direct API, public command, and tool-dispatch history routes share the
-  // same group target policy and must restore their scene-owned selection.
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
+  // Nested, disjoint and overlapping group selections restore their exact
+  // scene-owned selection through explicit material assignment.
   for (int route = 0; route < 3; ++route) {
     SCOPED_TRACE(route);
     ProjectMaterialBehaviorHarness harness("group-apply-history");
@@ -1657,9 +1582,8 @@ TEST(ProjectMaterialBehaviorTests,
     const std::array installed{blue};
     harness.install_and_reopen(installed);
     auto &editor = harness.editor();
-    const auto unrelated = editor.modeling().create_box(
-        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-        "Unrelated Mesh");
+    const auto unrelated = editor.modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, .name = "Unrelated Mesh",
+           .material = QuaderMaterialReference::project(requested_material_id)});
     ASSERT_TRUE(unrelated.ok()) << unrelated.error_message();
     const auto unrelated_before =
         *authored_document(harness.project(), unrelated.value().entity);
@@ -1673,12 +1597,12 @@ TEST(ProjectMaterialBehaviorTests,
           .scale = {-1.25f, 0.75f}, .shift_uv = {0.2f, -0.4f},
           .rotation_degrees = 23.0f};
     }
-    const auto first = editor.modeling().create_mesh(
-        QuaderPolygonDocumentInternalAccess::from_backend(seed),
-        {.name = "First Group Mesh"});
-    const auto second = editor.modeling().create_mesh(
-        QuaderPolygonDocumentInternalAccess::from_backend(seed),
-        {.name = "Hidden Group Mesh"});
+    const auto first = editor.modeling().create_mesh(QuaderPolygonDocumentInternalAccess::from_backend(seed),
+          {.name = "First Group Mesh",
+           .material = QuaderMaterialReference::project(requested_material_id)});
+    const auto second = editor.modeling().create_mesh(QuaderPolygonDocumentInternalAccess::from_backend(seed),
+          {.name = "Hidden Group Mesh",
+           .material = QuaderMaterialReference::project(requested_material_id)});
     ASSERT_TRUE(first.ok()) << first.error_message();
     ASSERT_TRUE(second.ok()) << second.error_message();
     ASSERT_TRUE(editor.selection().select_objects({first.value(), second.value()}).ok());
@@ -1687,9 +1611,9 @@ TEST(ProjectMaterialBehaviorTests,
     const auto outer = editor.scene().group_selection("Outer Material Group");
     ASSERT_TRUE(outer.ok()) << outer.error_message();
     ASSERT_TRUE(editor.selection().clear().ok());
-    const auto third = editor.modeling().create_mesh(
-        QuaderPolygonDocumentInternalAccess::from_backend(seed),
-        {.name = "Second Group Mesh"});
+    const auto third = editor.modeling().create_mesh(QuaderPolygonDocumentInternalAccess::from_backend(seed),
+          {.name = "Second Group Mesh",
+           .material = QuaderMaterialReference::project(requested_material_id)});
     ASSERT_TRUE(third.ok()) << third.error_message();
     const auto other_group = editor.scene().group_selection("Second Material Group");
     ASSERT_TRUE(other_group.ok()) << other_group.error_message();
@@ -1716,18 +1640,16 @@ TEST(ProjectMaterialBehaviorTests,
     ASSERT_TRUE(selected.ok()) << selected.error_message();
     ASSERT_TRUE(editor.query().entity(primary)->active);
     ASSERT_EQ(editor.selection().summary().selected_object_count, groups.size());
-    ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+    requested_material_id = blue.material.id;
     const auto selection_before = exact_selection(harness.project());
     const auto scene_selection_before = scene_selection_identity(editor);
     const auto selection_revision = editor.selection().summary().selection_revision;
     const auto history_before = editor.query().history();
-    const auto applied = route == 0 ? editor.modeling().apply_active_material()
-        : (route == 1 ? editor.commands().execute(quader_command::kApplyMaterial)
-                      : editor.modeling().execute_tool("assign_material"));
+    const auto applied = editor.modeling().apply_material(
+        QuaderMaterialReference::project(requested_material_id));
     ASSERT_TRUE(applied.ok()) << applied.error_message();
     ASSERT_TRUE(applied.changed());
-    EXPECT_EQ(editor.query().history().undo_label,
-              route == 0 ? "Apply Material" : "Assign Material");
+    EXPECT_EQ(editor.query().history().undo_label, "Assign Material");
     EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
     EXPECT_EQ(editor.selection().summary().selection_revision, selection_revision);
     expect_same_selection_identity(exact_selection(harness.project()), selection_before);
@@ -1765,21 +1687,18 @@ TEST(ProjectMaterialBehaviorTests,
     EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
     expect_meshes(false);
 
-    ASSERT_TRUE(editor.project_assets().set_active_material(
-        project_asset_id(kDefaultProjectMaterialId)).ok());
+    requested_material_id = project_asset_id(kDefaultProjectMaterialId);
     ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Group);
     EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
     expect_meshes(true);
-    ASSERT_TRUE(editor.project_assets().active_material().ok());
-    EXPECT_EQ(editor.project_assets().active_material().value().id,
-              project_asset_id(kDefaultProjectMaterialId));
   }
 }
 
 TEST(ProjectMaterialBehaviorTests,
      GroupApplyNoOpAndProtectedTargetsPreserveRedoAndRevisions) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("group-apply-protected");
   harness.create();
   const InstalledMaterial blue{
@@ -1789,38 +1708,36 @@ TEST(ProjectMaterialBehaviorTests,
   const std::array installed{blue};
   harness.install_and_reopen(installed);
   auto &editor = harness.editor();
-  const auto first = editor.modeling().create_box(
-      {.min = {-3.0f, -1.0f, -1.0f}, .max = {-1.0f, 1.0f, 1.0f}}, "First");
+  const auto first = editor.modeling().create_box({.bounds = {.min = {-3.0f, -1.0f, -1.0f}, .max = {-1.0f, 1.0f, 1.0f}}, .name = "First",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(first.ok()) << first.error_message();
   const auto first_group = editor.scene().group_selection("First Group");
   ASSERT_TRUE(first_group.ok()) << first_group.error_message();
   ASSERT_TRUE(editor.selection().clear().ok());
-  const auto second = editor.modeling().create_box(
-      {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}}, "Second");
+  const auto second = editor.modeling().create_box({.bounds = {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}}, .name = "Second",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(second.ok()) << second.error_message();
   const auto second_group = editor.scene().group_selection("Second Group");
   ASSERT_TRUE(second_group.ok()) << second_group.error_message();
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
   ASSERT_TRUE(editor.selection().select_objects(
       {first_group.value().id, second_group.value().id}, second_group.value().id).ok());
-  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
-  const auto applied = editor.commands().execute(quader_command::kApplyMaterial);
+  requested_material_id = blue.material.id;
+  const auto applied = editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   ASSERT_TRUE(applied.changed());
   ASSERT_TRUE(editor.history().undo().ok());
   ASSERT_TRUE(editor.query().history().can_redo);
-  ASSERT_TRUE(editor.project_assets().set_active_material(
-      project_asset_id(kDefaultProjectMaterialId)).ok());
+  requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   const auto first_before = *authored_document(harness.project(), first.value().entity);
   const auto second_before = *authored_document(harness.project(), second.value().entity);
-  const auto expect_unchanged_apply = [&](bool success, bool command) {
+  const auto expect_unchanged_apply = [&](bool success) {
     const auto revisions = editor.query().revisions();
     const auto history = editor.query().history();
     const auto selection = exact_selection(harness.project());
     const auto scene_selection = scene_selection_identity(editor);
-    const auto result = command
-        ? editor.modeling().execute_tool("assign_material")
-        : editor.modeling().apply_active_material();
+    const auto result = editor.modeling().apply_material(
+        QuaderMaterialReference::project(requested_material_id));
     EXPECT_EQ(result.ok(), success) << result.error_message();
     EXPECT_FALSE(result.changed());
     expect_same_revisions(editor.query().revisions(), revisions);
@@ -1836,21 +1753,18 @@ TEST(ProjectMaterialBehaviorTests,
                               project_asset_id(kDefaultProjectMaterialId));
     }
   };
-  expect_unchanged_apply(true, false);
-  expect_unchanged_apply(true, true);
+  expect_unchanged_apply(true);
 
-  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+  requested_material_id = blue.material.id;
   const ProjectMaterialFixture fixture(harness.project());
   // Setting flags after selection exercises execution preflight, including a
   // protected root that the shared selected-root helper would otherwise skip.
   for (const EntityId target : {first_group.value().id, second.value().entity}) {
     ASSERT_TRUE(fixture.set_locked(target, true));
-    expect_unchanged_apply(false, false);
-    expect_unchanged_apply(false, true);
+    expect_unchanged_apply(false);
     ASSERT_TRUE(fixture.set_locked(target, false));
     ASSERT_TRUE(fixture.set_selectable(target, false));
-    expect_unchanged_apply(false, false);
-    expect_unchanged_apply(false, true);
+    expect_unchanged_apply(false);
     ASSERT_TRUE(fixture.set_selectable(target, true));
   }
   ASSERT_TRUE(editor.query().history().can_redo);
@@ -1861,7 +1775,7 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_NE(root, entities.end());
   ASSERT_TRUE(editor.selection().select_objects_for_inspection(
       {root->id, second_group.value().id}, second_group.value().id).ok());
-  expect_unchanged_apply(false, false);
+  expect_unchanged_apply(false);
 
   const auto read_only = editor.scene().create_entity({
       .name = "Read-only Mesh", .kind = QuaderEntityKind::Mesh,
@@ -1871,33 +1785,35 @@ TEST(ProjectMaterialBehaviorTests,
       editor.query().entity(first.value().entity)->mesh));
   ASSERT_TRUE(editor.selection().select_objects(
       {first_group.value().id, second_group.value().id}, second_group.value().id).ok());
-  expect_unchanged_apply(false, false);
+  expect_unchanged_apply(false);
 
   const auto empty = editor.scene().create_entity(
       {.name = "Empty Material Group", .kind = QuaderEntityKind::Empty});
   ASSERT_TRUE(empty.ok()) << empty.error_message();
   ASSERT_TRUE(editor.selection().select_object(empty.value().id).ok());
-  expect_unchanged_apply(false, false);
+  expect_unchanged_apply(false);
   ASSERT_TRUE(editor.selection().clear().ok());
-  expect_unchanged_apply(false, false);
-  expect_unchanged_apply(false, true);
+  expect_unchanged_apply(false);
 }
 
 TEST(ProjectMaterialBehaviorTests,
      GroupApplyPublicationFailureRollsBackAllDescendantsAtomically) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("group-apply-rollback");
   harness.create();
   auto &editor = harness.editor();
   auto document = texture_transfer_quad();
   document.faces.front().material_slot = 3u;
-  const auto first = editor.modeling().create_mesh(
-      QuaderPolygonDocumentInternalAccess::from_backend(document), {.name = "First"});
+  const auto first = editor.modeling().create_mesh(QuaderPolygonDocumentInternalAccess::from_backend(document),
+          {.name = "First",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(first.ok()) << first.error_message();
   const auto first_group = editor.scene().group_selection("First Group");
   ASSERT_TRUE(first_group.ok()) << first_group.error_message();
   ASSERT_TRUE(editor.selection().clear().ok());
-  const auto second = editor.modeling().create_mesh(
-      QuaderPolygonDocumentInternalAccess::from_backend(document), {.name = "Second"});
+  const auto second = editor.modeling().create_mesh(QuaderPolygonDocumentInternalAccess::from_backend(document),
+          {.name = "Second",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(second.ok()) << second.error_message();
   const auto second_group = editor.scene().group_selection("Second Group");
   ASSERT_TRUE(second_group.ok()) << second_group.error_message();
@@ -1924,7 +1840,7 @@ TEST(ProjectMaterialBehaviorTests,
   for (const auto failure : kFailures) {
     SCOPED_TRACE(static_cast<int>(failure));
     ASSERT_TRUE(fixture.set_projection_failure(failure));
-    const auto result = editor.commands().execute(quader_command::kApplyMaterial);
+    const auto result = editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
     EXPECT_FALSE(result.ok());
     EXPECT_FALSE(result.changed());
     ASSERT_TRUE(fixture.set_projection_failure(ProjectionFailurePoint::None));
@@ -1938,7 +1854,7 @@ TEST(ProjectMaterialBehaviorTests,
       EXPECT_EQ(*scene_material(harness.project(), object.entity), material_before);
     }
   }
-  const auto applied = editor.commands().execute(quader_command::kApplyMaterial);
+  const auto applied = editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   ASSERT_TRUE(applied.changed());
   for (const auto object : {first.value(), second.value()}) {
@@ -1951,6 +1867,7 @@ TEST(ProjectMaterialBehaviorTests,
 
 TEST(ProjectMaterialBehaviorTests,
      GroupApplyRequiresExplicitInstanceMeshEditScope) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("group-apply-instance-scope");
   harness.create();
   const InstalledMaterial blue{
@@ -1960,15 +1877,15 @@ TEST(ProjectMaterialBehaviorTests,
   const std::array installed{blue};
   harness.install_and_reopen(installed);
   auto &editor = harness.editor();
-  const auto member = editor.modeling().create_box(
-      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Instance Member");
+  const auto member = editor.modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, .name = "Instance Member",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(member.ok()) << member.error_message();
   const auto instance = editor.modeling().create_instance_from_selection();
   ASSERT_TRUE(instance.ok()) << instance.error_message();
   const EntityId occurrence = instance.value().occurrence.root.id;
   ASSERT_TRUE(editor.selection().clear().ok());
-  const auto ordinary = editor.modeling().create_box(
-      {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}}, "Ordinary Member");
+  const auto ordinary = editor.modeling().create_box({.bounds = {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}}, .name = "Ordinary Member",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(ordinary.ok()) << ordinary.error_message();
   ASSERT_TRUE(editor.selection().select_objects(
       {ordinary.value().entity, occurrence}, ordinary.value().entity).ok());
@@ -1976,13 +1893,13 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(group.ok()) << group.error_message();
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
   ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
-  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+  requested_material_id = blue.material.id;
   const auto member_before = *authored_document(harness.project(), member.value().entity);
   const auto ordinary_before = *authored_document(harness.project(), ordinary.value().entity);
   const auto revisions = editor.query().revisions();
   const auto history = editor.query().history();
   const auto selection = scene_selection_identity(editor);
-  const auto rejected = editor.modeling().apply_active_material();
+  const auto rejected = editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   EXPECT_FALSE(rejected.ok());
   EXPECT_FALSE(rejected.changed());
   expect_same_revisions(editor.query().revisions(), revisions);
@@ -2005,7 +1922,7 @@ TEST(ProjectMaterialBehaviorTests,
   const auto scope_revisions = editor.query().revisions();
   const auto scope_history = editor.query().history();
   const auto scope_selection = scene_selection_identity(editor);
-  const auto in_scope_group = editor.modeling().apply_active_material();
+  const auto in_scope_group = editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   EXPECT_FALSE(in_scope_group.ok());
   EXPECT_FALSE(in_scope_group.changed());
   expect_same_revisions(editor.query().revisions(), scope_revisions);
@@ -2015,7 +1932,7 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
   const auto selected = editor.selection().select_object(member.value());
   ASSERT_TRUE(selected.ok()) << selected.error_message();
-  const auto applied = editor.modeling().apply_active_material();
+  const auto applied = editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   ASSERT_TRUE(applied.changed());
   EXPECT_TRUE(editor.modeling().can_exit_instance_edit());
@@ -2029,6 +1946,7 @@ TEST(ProjectMaterialBehaviorTests,
 
 TEST(ProjectMaterialBehaviorTests,
      DirectHoverTargetsAssignFaceOrWholeMeshWithoutChangingSelection) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("direct-hover-material-targets");
   harness.create();
   const InstalledMaterial amber{
@@ -2043,18 +1961,13 @@ TEST(ProjectMaterialBehaviorTests,
   };
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
+  requested_material_id = amber.material.id;
   const QuaderApiResult<QuaderModelingObjectRef> target =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-          "Hover Target");
+      harness.editor().modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, .name = "Hover Target",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   const QuaderApiResult<QuaderModelingObjectRef> selected =
-      harness.editor().modeling().create_box(
-          {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}},
-          "Unrelated Selection");
+      harness.editor().modeling().create_box({.bounds = {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}}, .name = "Unrelated Selection",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(target.ok()) << target.error_message();
   ASSERT_TRUE(selected.ok()) << selected.error_message();
   const quader_poly::Document *document =
@@ -2071,14 +1984,11 @@ TEST(ProjectMaterialBehaviorTests,
       harness.editor().selection().select_object(selected.value()).ok());
   const ModelingSelectionExport selection_before =
       exact_selection(harness.project());
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(blue.material.id)
-                  .ok());
+  requested_material_id = blue.material.id;
 
   const QuaderApiVoidResult face_applied =
-      harness.editor().modeling().apply_active_material_to_face(
-          target.value().modeling_object_id, first_face);
+      harness.editor().modeling().apply_material_to_face(
+          target.value().modeling_object_id, first_face, QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(face_applied.ok()) << face_applied.error_message();
   EXPECT_TRUE(face_applied.changed());
   EXPECT_EQ(harness.editor().query().history().undo_label,
@@ -2100,8 +2010,8 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(harness.editor().history().redo().ok());
   ASSERT_TRUE(harness.editor().history().undo().ok());
   const QuaderApiVoidResult mesh_applied =
-      harness.editor().modeling().apply_active_material_to_mesh(
-          target.value().modeling_object_id, first_face);
+      harness.editor().modeling().apply_material_to_mesh(
+          target.value().modeling_object_id, first_face, QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(mesh_applied.ok()) << mesh_applied.error_message();
   EXPECT_TRUE(mesh_applied.changed());
   EXPECT_EQ(harness.editor().query().history().undo_label,
@@ -2122,6 +2032,7 @@ TEST(ProjectMaterialBehaviorTests,
 
 TEST(ProjectMaterialBehaviorTests,
      FaceTextureTransferContinuesMaterialAndAttributesWithExactHistory) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("face-texture-transfer");
   harness.create();
   const InstalledMaterial amber{
@@ -2135,10 +2046,10 @@ TEST(ProjectMaterialBehaviorTests,
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
   auto &editor = harness.editor();
-  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
-  const auto source = editor.modeling().create_mesh(
-      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()),
-      {.name = "Texture Source"});
+  requested_material_id = blue.material.id;
+  const auto source = editor.modeling().create_mesh(QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()),
+          {.name = "Texture Source",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   auto target_topology = texture_transfer_quad(true);
   const std::array extra_vertices{
       quader_poly::add_vertex(target_topology, {5.0f, 0.0f, 0.0f}),
@@ -2147,17 +2058,17 @@ TEST(ProjectMaterialBehaviorTests,
   };
   ASSERT_NE(quader_poly::add_face(target_topology, extra_vertices),
             quader_poly::kInvalidElementId);
-  const auto target = editor.modeling().create_mesh(
-      QuaderPolygonDocumentInternalAccess::from_backend(target_topology),
-      {.name = "Unselected Texture Target"});
+  const auto target = editor.modeling().create_mesh(QuaderPolygonDocumentInternalAccess::from_backend(target_topology),
+          {.name = "Unselected Texture Target",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(target.ok()) << target.error_message();
   const QuaderElementId source_face = 1;
   const QuaderElementId target_face = 1;
-  ASSERT_TRUE(editor.project_assets().set_active_material(amber.material.id).ok());
-  ASSERT_TRUE(editor.modeling().apply_active_material_to_face(
-      source.value().modeling_object_id, source_face).ok());
-  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+  requested_material_id = amber.material.id;
+  ASSERT_TRUE(editor.modeling().apply_material_to_face(
+      source.value().modeling_object_id, source_face, QuaderMaterialReference::project(requested_material_id)).ok());
+  requested_material_id = blue.material.id;
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(source.value(), source_face).ok());
   ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::ScaleX, 1.25).ok());
@@ -2186,7 +2097,6 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_EQ(material_after.material_for_slot(transferred.material_slot),
             MaterialReference::project(amber.material.id));
   EXPECT_EQ(material_after.material, material_before.material);
-  EXPECT_EQ(editor.project_assets().active_material().value().id, blue.material.id);
   auto expected_target = target_before;
   expected_target.faces.front().uvs = transferred.uvs;
   expected_target.faces.front().texture_transform = transferred.texture_transform;
@@ -2217,16 +2127,15 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_before);
   EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
   expect_same_selection_identity(exact_selection(harness.project()), selection_before);
-  ASSERT_TRUE(editor.project_assets().set_active_material(
-      project_asset_id(kDefaultProjectMaterialId)).ok());
+  requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ASSERT_TRUE(editor.history().redo().ok());
   expect_same_authored_document(
       *authored_document(harness.project(), target.value().entity), target_after);
   EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_after);
   expect_same_selection_identity(exact_selection(harness.project()), selection_before);
 
-  const auto transient = editor.modeling().create_box(
-      {.min = {8.0f, 0.0f, 0.0f}, .max = {9.0f, 1.0f, 1.0f}}, "Redo Guard");
+  const auto transient = editor.modeling().create_box({.bounds = {.min = {8.0f, 0.0f, 0.0f}, .max = {9.0f, 1.0f, 1.0f}}, .name = "Redo Guard",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(transient.ok());
   ASSERT_TRUE(editor.history().undo().ok());
   const auto history_before_no_op = editor.query().history();
@@ -2948,12 +2857,12 @@ TEST(ProjectMaterialBehaviorTests,
 
 TEST(ProjectMaterialBehaviorTests,
      DirectHoverTargetsCanAssignWhenTheFaceHasNoCurrentMaterial) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("direct-hover-missing-material");
   harness.create();
   const QuaderApiResult<QuaderModelingObjectRef> box =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-          "Hover Target Without Material");
+      harness.editor().modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, .name = "Hover Target Without Material",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(box.ok()) << box.error_message();
   const quader_poly::Document *document =
       authored_document(harness.project(), box.value().entity);
@@ -2967,8 +2876,8 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(fixture.clear_material(box.value().entity));
 
   const QuaderApiVoidResult face_applied =
-      harness.editor().modeling().apply_active_material_to_face(
-          box.value().modeling_object_id, face);
+      harness.editor().modeling().apply_material_to_face(
+          box.value().modeling_object_id, face, QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(face_applied.ok()) << face_applied.error_message();
   ASSERT_TRUE(face_applied.changed());
   const auto face_material =
@@ -2983,8 +2892,8 @@ TEST(ProjectMaterialBehaviorTests,
             slots_before);
 
   const QuaderApiVoidResult mesh_applied =
-      harness.editor().modeling().apply_active_material_to_mesh(
-          box.value().modeling_object_id, face);
+      harness.editor().modeling().apply_material_to_mesh(
+          box.value().modeling_object_id, face, QuaderMaterialReference::project(requested_material_id));
   ASSERT_TRUE(mesh_applied.ok()) << mesh_applied.error_message();
   ASSERT_TRUE(mesh_applied.changed());
   expect_primary_material(harness.project(), box.value().entity,
@@ -2997,14 +2906,14 @@ TEST(ProjectMaterialBehaviorTests,
 }
 
 TEST(ProjectMaterialBehaviorTests,
-     PublicApplyMaterialCommandIsAvailableInObjectMode) {
+     ImplicitApplyMaterialCommandIsRetiredWhileExplicitAssignmentWorks) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("public-object-apply");
   harness.create();
   const QuaderApiResult<QuaderModelingObjectRef> box =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f},
-           .max = {1.0f, 1.0f, 1.0f}},
-          "Command Box");
+      harness.editor().modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}}, .name = "Command Box",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(harness.editor().selection().select_object(box.value()).ok());
 
@@ -3012,18 +2921,166 @@ TEST(ProjectMaterialBehaviorTests,
       harness.editor().commands().available();
   const auto descriptor = std::find_if(
       commands.begin(), commands.end(), [](const QuaderCommandDescriptor &item) {
-        return item.id == quader_command::kApplyMaterial.string();
+        return item.id == "edit.apply_material";
       });
-  ASSERT_NE(descriptor, commands.end());
-  EXPECT_TRUE(descriptor->enabled);
+  EXPECT_EQ(descriptor, commands.end());
 
   const QuaderApiVoidResult applied =
-      harness.editor().commands().execute(quader_command::kApplyMaterial);
+      harness.editor().modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   EXPECT_TRUE(applied.ok()) << applied.error_message();
 }
 
 TEST(ProjectMaterialBehaviorTests,
+     SelectedFaceAssignmentRejectsStaleTargetsAndPreservesNoOpRedo) {
+  ProjectMaterialBehaviorHarness harness("selected-face-assignment");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber", {1.0f, 0.5f, 0.1f}),
+  };
+  harness.install_and_reopen(std::array{amber});
+  auto &editor = harness.editor();
+  const auto reference = QuaderMaterialReference::project(amber.material.id);
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Faces");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const auto initial = *authored_document(harness.project(), box.value().entity);
+  ASSERT_GE(initial.faces.size(), 3u);
+  const auto first_face = initial.faces[0].id;
+  const auto second_face = initial.faces[1].id;
+  const auto scene_id = editor.modeling().face_texture_settings_revision().scene_session_id;
+  const auto object_history = editor.query().history();
+  EXPECT_FALSE(editor.modeling().apply_material_to_selected_faces(
+      reference, scene_id, editor.modeling().face_texture_settings().selection_token).ok());
+  expect_same_history(editor.query().history(), object_history);
+  expect_primary_material(harness.project(), box.value().entity,
+                          project_asset_id(kDefaultProjectMaterialId));
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), first_face).ok());
+  const auto first_token = editor.modeling().face_texture_settings().selection_token;
+  ASSERT_TRUE(editor.selection().select_face(box.value(), second_face).ok());
+  const auto history_before_stale = editor.query().history();
+  const auto selection_before_stale = exact_selection(harness.project());
+  const auto material_before_stale = *scene_material(harness.project(), box.value().entity);
+  EXPECT_FALSE(editor.modeling().apply_material_to_selected_faces(
+      reference, scene_id, first_token).ok());
+  expect_same_history(editor.query().history(), history_before_stale);
+  expect_same_authored_document(
+      *authored_document(harness.project(), box.value().entity), initial);
+  EXPECT_EQ(*scene_material(harness.project(), box.value().entity), material_before_stale);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before_stale);
+
+  ASSERT_TRUE(editor.selection().select_face(
+      box.value(), first_face, QuaderSelectionEdit::Add).ok());
+  const auto selection = editor.modeling().face_texture_settings();
+  ASSERT_EQ(selection.selected_face_count, 2u);
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_locked(box.value().entity, true));
+  const auto locked_history = editor.query().history();
+  EXPECT_FALSE(editor.modeling().apply_material_to_selected_faces(
+      reference, scene_id, selection.selection_token).ok());
+  expect_same_history(editor.query().history(), locked_history);
+  expect_same_authored_document(
+      *authored_document(harness.project(), box.value().entity), initial);
+  ASSERT_TRUE(fixture.set_locked(box.value().entity, false));
+  const auto unlocked_selection = editor.modeling().face_texture_settings();
+  const auto assigned = editor.modeling().apply_material_to_selected_faces(
+      reference, scene_id, unlocked_selection.selection_token);
+  ASSERT_TRUE(assigned.ok()) << assigned.error_message();
+  ASSERT_TRUE(assigned.changed());
+  EXPECT_EQ(editor.query().history().undo_label, "Assign Material");
+  for (const auto face : {first_face, second_face}) {
+    const auto material = editor.modeling().project_material_for_face(
+        box.value().modeling_object_id, face);
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    EXPECT_EQ(material.value().id, amber.material.id);
+  }
+  const auto untouched = editor.modeling().project_material_for_face(
+      box.value().modeling_object_id, initial.faces[2].id);
+  ASSERT_TRUE(untouched.ok()) << untouched.error_message();
+  EXPECT_EQ(untouched.value().id, project_asset_id(kDefaultProjectMaterialId));
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), box.value().entity), initial);
+  const auto redo_before = editor.query().history();
+  ASSERT_TRUE(redo_before.can_redo);
+  const auto unchanged = editor.modeling().apply_material_to_selected_faces(
+      QuaderMaterialReference::project(project_asset_id(kDefaultProjectMaterialId)),
+      scene_id, editor.modeling().face_texture_settings().selection_token);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  expect_same_history(editor.query().history(), redo_before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(editor.modeling().project_material_for_face(
+      box.value().modeling_object_id, first_face).value().id, amber.material.id);
+
+  const auto captured_token = editor.modeling().face_texture_settings().selection_token;
+  ASSERT_TRUE(editor.scene_documents().new_scene().ok());
+  const auto replacement_history = editor.query().history();
+  EXPECT_FALSE(editor.modeling().apply_material_to_selected_faces(
+      reference, scene_id, captured_token).ok());
+  expect_same_history(editor.query().history(), replacement_history);
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  const auto replacement_id = editor.modeling().face_texture_settings_revision().scene_session_id;
+  EXPECT_FALSE(editor.modeling().apply_material_to_selected_faces(
+      reference, replacement_id, editor.modeling().face_texture_settings().selection_token).ok());
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     SameFaceMaterialKeepsExistingAliasSlotAndRedoHistory) {
+  ProjectMaterialBehaviorHarness harness("face-material-alias-no-op");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber", {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue", {0.1f, 0.2f, 1.0f}),
+  };
+  harness.install_and_reopen(std::array{amber, blue});
+  auto &editor = harness.editor();
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Alias Face");
+  ASSERT_TRUE(box.ok());
+  const auto face = authored_document(harness.project(), box.value().entity)->faces.front().id;
+  MaterialComponent aliases{
+      .material = MaterialReference::project(project_asset_id(kDefaultProjectMaterialId)),
+      .material_slots = {{3u, MaterialReference::project(amber.material.id)},
+                         {7u, MaterialReference::project(amber.material.id)}}};
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(box.value().entity, aliases));
+  ASSERT_TRUE(editor.modeling().assign_material_slot_to_face(box.value(), face, 7u).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), face).ok());
+  ASSERT_TRUE(editor.modeling().apply_material(
+      QuaderMaterialReference::project(blue.material.id)).ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto document_before = *authored_document(harness.project(), box.value().entity);
+  const auto history_before = editor.query().history();
+  const auto revisions_before = editor.query().revisions();
+  ASSERT_TRUE(history_before.can_redo);
+  const auto scene_id = editor.modeling().face_texture_settings_revision().scene_session_id;
+  const auto unchanged = editor.modeling().apply_material_to_selected_faces(
+      QuaderMaterialReference::project(amber.material.id), scene_id,
+      editor.modeling().face_texture_settings().selection_token);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  const auto direct = editor.modeling().apply_material_to_face(
+      box.value().modeling_object_id, face, QuaderMaterialReference::project(amber.material.id));
+  ASSERT_TRUE(direct.ok()) << direct.error_message();
+  EXPECT_FALSE(direct.changed());
+  expect_same_history(editor.query().history(), history_before);
+  expect_same_revisions(editor.query().revisions(), revisions_before);
+  expect_same_authored_document(
+      *authored_document(harness.project(), box.value().entity), document_before);
+  EXPECT_EQ(*scene_material(harness.project(), box.value().entity), aliases);
+}
+
+TEST(ProjectMaterialBehaviorTests,
      FaceTexturePixelShiftUsesImageAxesAndPreservesMappingOnReplacement) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-texture-shift-test";
@@ -3051,10 +3108,9 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(imported.value().failed.empty());
   const ProjectAssetId wide = imported.value().imported[0].material.id;
   const ProjectAssetId replacement = imported.value().imported[1].material.id;
-  ASSERT_TRUE(harness.editor().project_assets().set_active_material(wide).ok());
-  const auto box = harness.editor().modeling().create_box(
-      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      "Pixel Shift Face");
+  requested_material_id = wide;
+  const auto box = harness.editor().modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, .name = "Pixel Shift Face",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(box.ok()) << box.error_message();
   const quader_poly::Document *initial =
       authored_document(harness.project(), box.value().entity);
@@ -3116,6 +3172,7 @@ TEST(ProjectMaterialBehaviorTests,
 
 TEST(ProjectMaterialBehaviorTests,
      TextureImagesShareImmutableSnapshotsAndRefreshAfterMaterialSaveAndReopen) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-texture-cache-test";
@@ -3158,10 +3215,9 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_EQ(albedo_info.value().absolute_path,
             harness.root() / "Textures" / "original.png");
 
-  ASSERT_TRUE(harness.editor().project_assets().set_active_material(material).ok());
-  const auto box = harness.editor().modeling().create_box(
-      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      "Texture Cache Face");
+  requested_material_id = material;
+  const auto box = harness.editor().modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, .name = "Texture Cache Face",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(box.ok()) << box.error_message();
   const quader_poly::Document *document =
       authored_document(harness.project(), box.value().entity);
@@ -3234,6 +3290,7 @@ TEST(ProjectMaterialBehaviorTests,
 
 TEST(ProjectMaterialBehaviorTests,
      FaceApplyReusesLowestSlotAndObjectApplyClearsFaceOverrides) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("face-apply");
   harness.create();
   const InstalledMaterial amber{
@@ -3248,15 +3305,11 @@ TEST(ProjectMaterialBehaviorTests,
   };
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
+  requested_material_id = amber.material.id;
   const QuaderApiResult<QuaderModelingObjectRef> box =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f},
-           .max = {1.0f, 1.0f, 1.0f}},
-          "Face Material Box");
+      harness.editor().modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}}, .name = "Face Material Box",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(box.ok()) << box.error_message();
   const quader_poly::Document *initial =
       authored_document(harness.project(), box.value().entity);
@@ -3265,10 +3318,7 @@ TEST(ProjectMaterialBehaviorTests,
   const quader_poly::ElementId first_face = initial->faces[0].id;
   const quader_poly::ElementId second_face = initial->faces[1].id;
 
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(blue.material.id)
-                  .ok());
+  requested_material_id = blue.material.id;
   ASSERT_TRUE(harness.editor()
                   .selection()
                   .set_mode(QuaderSelectionMode::Face)
@@ -3277,7 +3327,7 @@ TEST(ProjectMaterialBehaviorTests,
                   .selection()
                   .select_face(box.value(), first_face)
                   .ok());
-  ASSERT_TRUE(harness.editor().modeling().apply_active_material().ok());
+  ASSERT_TRUE(harness.editor().modeling().apply_material(QuaderMaterialReference::project(requested_material_id)).ok());
 
   const MaterialComponent *after_first =
       scene_material(harness.project(), box.value().entity);
@@ -3298,7 +3348,7 @@ TEST(ProjectMaterialBehaviorTests,
                   .selection()
                   .select_face(box.value(), second_face)
                   .ok());
-  ASSERT_TRUE(harness.editor().modeling().apply_active_material().ok());
+  ASSERT_TRUE(harness.editor().modeling().apply_material(QuaderMaterialReference::project(requested_material_id)).ok());
   const MaterialComponent *after_second =
       scene_material(harness.project(), box.value().entity);
   ASSERT_NE(after_second, nullptr);
@@ -3317,16 +3367,13 @@ TEST(ProjectMaterialBehaviorTests,
 
   const ProjectAssetId built_in =
       project_asset_id(kDefaultProjectMaterialId);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(built_in)
-                  .ok());
+  requested_material_id = built_in;
   ASSERT_TRUE(harness.editor()
                   .selection()
                   .set_mode(QuaderSelectionMode::Object)
                   .ok());
   ASSERT_TRUE(harness.editor().selection().select_object(box.value()).ok());
-  ASSERT_TRUE(harness.editor().modeling().apply_active_material().ok());
+  ASSERT_TRUE(harness.editor().modeling().apply_material(QuaderMaterialReference::project(requested_material_id)).ok());
   expect_primary_material(harness.project(), box.value().entity, built_in);
   const MaterialComponent *object_applied =
       scene_material(harness.project(), box.value().entity);
@@ -3342,10 +3389,7 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(undone->material_slots.contains(1u));
   EXPECT_EQ(undone->material_slots.at(1u).project_asset(), blue.material.id);
 
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
+  requested_material_id = amber.material.id;
   ASSERT_TRUE(harness.editor().history().redo().ok());
   expect_primary_material(harness.project(), box.value().entity, built_in);
 
@@ -3354,7 +3398,7 @@ TEST(ProjectMaterialBehaviorTests,
                   .set_mode(QuaderSelectionMode::Vertex)
                   .ok());
   const QuaderApiVoidResult vertex_rejected =
-      harness.editor().modeling().apply_active_material();
+      harness.editor().modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
   EXPECT_FALSE(vertex_rejected.ok());
   EXPECT_NE(vertex_rejected.error_message().find("object, group, or face"),
             std::string::npos);
@@ -3362,11 +3406,12 @@ TEST(ProjectMaterialBehaviorTests,
                   .selection()
                   .set_mode(QuaderSelectionMode::Edge)
                   .ok());
-  EXPECT_FALSE(harness.editor().modeling().apply_active_material().ok());
+  EXPECT_FALSE(harness.editor().modeling().apply_material(QuaderMaterialReference::project(requested_material_id)).ok());
 }
 
 TEST(ProjectMaterialBehaviorTests,
      FaceMaterialCanNormalizeOnlyItsMeshWithExactUndoAndRedo) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("face-material-to-mesh");
   harness.create();
   const InstalledMaterial amber{
@@ -3381,21 +3426,16 @@ TEST(ProjectMaterialBehaviorTests,
   };
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
+  requested_material_id = amber.material.id;
 
   const QuaderApiResult<QuaderModelingObjectRef> target =
-      harness.editor().modeling().create_box(
-          {.min = {-3.0f, -1.0f, -1.0f},
-           .max = {-1.0f, 1.0f, 1.0f}},
-          "Target");
+      harness.editor().modeling().create_box({.bounds = {.min = {-3.0f, -1.0f, -1.0f},
+           .max = {-1.0f, 1.0f, 1.0f}}, .name = "Target",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   const QuaderApiResult<QuaderModelingObjectRef> other =
-      harness.editor().modeling().create_box(
-          {.min = {1.0f, -1.0f, -1.0f},
-           .max = {3.0f, 1.0f, 1.0f}},
-          "Other");
+      harness.editor().modeling().create_box({.bounds = {.min = {1.0f, -1.0f, -1.0f},
+           .max = {3.0f, 1.0f, 1.0f}}, .name = "Other",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(target.ok()) << target.error_message();
   ASSERT_TRUE(other.ok()) << other.error_message();
   const quader_poly::Document *target_document =
@@ -3409,10 +3449,7 @@ TEST(ProjectMaterialBehaviorTests,
   const quader_poly::ElementId sampled_face = target_document->faces[0].id;
   const quader_poly::ElementId other_face = other_document->faces[0].id;
 
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(blue.material.id)
-                  .ok());
+  requested_material_id = blue.material.id;
   ASSERT_TRUE(harness.editor()
                   .selection()
                   .set_mode(QuaderSelectionMode::Face)
@@ -3421,7 +3458,7 @@ TEST(ProjectMaterialBehaviorTests,
                   .selection()
                   .select_face(target.value(), sampled_face)
                   .ok());
-  ASSERT_TRUE(harness.editor().modeling().apply_active_material().ok());
+  ASSERT_TRUE(harness.editor().modeling().apply_material(QuaderMaterialReference::project(requested_material_id)).ok());
   target_document =
       authored_document(harness.project(), target.value().entity);
   ASSERT_NE(target_document, nullptr);
@@ -3431,10 +3468,7 @@ TEST(ProjectMaterialBehaviorTests,
             0u)
       << "the sampled material must resolve through a nonzero override slot";
 
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
+  requested_material_id = amber.material.id;
   ASSERT_TRUE(harness.editor()
                   .selection()
                   .select_face(other.value(), other_face)
@@ -3498,18 +3532,13 @@ TEST(ProjectMaterialBehaviorTests,
   expect_same_selection_identity(selection_after_apply, selection_before);
   EXPECT_EQ(selection_after_apply.summary.selection_revision,
             selection_before.summary.selection_revision);
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_after_apply =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_after_apply.ok()) << active_after_apply.error_message();
-  EXPECT_EQ(active_after_apply.value().id, amber.material.id);
   EXPECT_EQ(harness.editor().query().history().undo_label,
             "Apply Face Material to Mesh");
 
   const QuaderApiResult<QuaderModelingObjectRef> transient =
-      harness.editor().modeling().create_box(
-          {.min = {5.0f, -1.0f, -1.0f},
-           .max = {7.0f, 1.0f, 1.0f}},
-          "Transient Redo Guard");
+      harness.editor().modeling().create_box({.bounds = {.min = {5.0f, -1.0f, -1.0f},
+           .max = {7.0f, 1.0f, 1.0f}}, .name = "Transient Redo Guard",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(transient.ok()) << transient.error_message();
   ASSERT_TRUE(harness.editor().history().undo().ok());
   EXPECT_FALSE(harness.project()
@@ -3558,10 +3587,7 @@ TEST(ProjectMaterialBehaviorTests,
                                  selection_before);
 
   const ProjectAssetId built_in = project_asset_id(kDefaultProjectMaterialId);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(built_in)
-                  .ok());
+  requested_material_id = built_in;
   ASSERT_TRUE(harness.editor().history().redo().ok());
   expect_primary_material(harness.project(), target.value().entity,
                           blue.material.id);
@@ -3570,23 +3596,19 @@ TEST(ProjectMaterialBehaviorTests,
       scene_material(harness.project(), target.value().entity);
   ASSERT_NE(redone, nullptr);
   EXPECT_TRUE(redone->material_slots.empty());
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_after_redo =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_after_redo.ok()) << active_after_redo.error_message();
-  EXPECT_EQ(active_after_redo.value().id, built_in);
   expect_same_selection_identity(exact_selection(harness.project()),
                                  selection_before);
 }
 
 TEST(ProjectMaterialBehaviorTests,
      FaceProjectMaterialRejectsNonProjectAndNonEditableTargetsWithoutHistory) {
+  ProjectAssetId requested_material_id = project_asset_id(kDefaultProjectMaterialId);
   ProjectMaterialBehaviorHarness harness("face-material-rejections");
   harness.create();
   const QuaderApiResult<QuaderModelingObjectRef> box =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f},
-           .max = {1.0f, 1.0f, 1.0f}},
-          "Rejected Target");
+      harness.editor().modeling().create_box({.bounds = {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}}, .name = "Rejected Target",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(box.ok()) << box.error_message();
   const quader_poly::Document *document =
       authored_document(harness.project(), box.value().entity);
@@ -3597,10 +3619,9 @@ TEST(ProjectMaterialBehaviorTests,
       slots_before =
       face_slot_snapshot(harness.project(), box.value().entity);
   const QuaderApiResult<QuaderModelingObjectRef> transient =
-      harness.editor().modeling().create_box(
-          {.min = {4.0f, -1.0f, -1.0f},
-           .max = {6.0f, 1.0f, 1.0f}},
-          "Rejected Redo Guard");
+      harness.editor().modeling().create_box({.bounds = {.min = {4.0f, -1.0f, -1.0f},
+           .max = {6.0f, 1.0f, 1.0f}}, .name = "Rejected Redo Guard",
+           .material = QuaderMaterialReference::project(requested_material_id)});
   ASSERT_TRUE(transient.ok()) << transient.error_message();
   ASSERT_TRUE(harness.editor().history().undo().ok());
   const QuaderHistorySnapshot history_before =
@@ -3662,13 +3683,13 @@ TEST(ProjectMaterialBehaviorTests,
                    .ok());
   EXPECT_FALSE(harness.editor()
                    .modeling()
-                   .apply_active_material_to_mesh(
-                       box.value().modeling_object_id, face)
+                   .apply_material_to_mesh(
+                       box.value().modeling_object_id, face, QuaderMaterialReference::project(requested_material_id))
                    .ok());
   EXPECT_FALSE(harness.editor()
                    .modeling()
-                   .apply_active_material_to_face(
-                       box.value().modeling_object_id, face)
+                   .apply_material_to_face(
+                       box.value().modeling_object_id, face, QuaderMaterialReference::project(requested_material_id))
                    .ok());
   ASSERT_TRUE(fixture.set_visible(box.value().entity, true));
 
@@ -3685,13 +3706,13 @@ TEST(ProjectMaterialBehaviorTests,
                    .ok());
   EXPECT_FALSE(harness.editor()
                    .modeling()
-                   .apply_active_material_to_mesh(
-                       box.value().modeling_object_id, face)
+                   .apply_material_to_mesh(
+                       box.value().modeling_object_id, face, QuaderMaterialReference::project(requested_material_id))
                    .ok());
   EXPECT_FALSE(harness.editor()
                    .modeling()
-                   .apply_active_material_to_face(
-                       box.value().modeling_object_id, face)
+                   .apply_material_to_face(
+                       box.value().modeling_object_id, face, QuaderMaterialReference::project(requested_material_id))
                    .ok());
   ASSERT_TRUE(fixture.set_locked(box.value().entity, false));
 
@@ -3890,21 +3911,19 @@ TEST(ProjectMaterialReferenceBehaviorTests,
   };
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
 
   const QuaderApiResult<QuaderModelingObjectRef> first =
-      harness.editor().modeling().create_box(
-          {.min = {-3.0f, -1.0f, -1.0f},
-           .max = {-1.0f, 1.0f, 1.0f}},
-          "First Material Reference Mesh");
+      harness.editor().modeling().create_box({
+          .bounds = {.min = {-3.0f, -1.0f, -1.0f}, .max = {-1.0f, 1.0f, 1.0f}},
+          .name = "First Material Reference Mesh",
+          .material = QuaderMaterialReference::project(amber.material.id),
+      });
   const QuaderApiResult<QuaderModelingObjectRef> second =
-      harness.editor().modeling().create_box(
-          {.min = {1.0f, -1.0f, -1.0f},
-           .max = {3.0f, 1.0f, 1.0f}},
-          "Second Material Reference Mesh");
+      harness.editor().modeling().create_box({
+          .bounds = {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}},
+          .name = "Second Material Reference Mesh",
+          .material = QuaderMaterialReference::project(amber.material.id),
+      });
   ASSERT_TRUE(first.ok()) << first.error_message();
   ASSERT_TRUE(second.ok()) << second.error_message();
 
@@ -3973,9 +3992,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
           face_slot_snapshot(harness.project(), first.value().entity);
   const ModelingSelectionExport selection_before =
       exact_selection(harness.project());
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_before =
-      harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active_before.ok()) << active_before.error_message();
+  const auto manifest_before = read_bytes(harness.manifest_path());
 
   const QuaderApiVoidResult replaced =
       harness.editor().materials().replace_material_references(
@@ -4000,9 +4017,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
             first_slots_before);
   expect_same_selection_identity(exact_selection(harness.project()),
                                  selection_before);
-  ASSERT_TRUE(harness.editor().project_assets().active_material().ok());
-  EXPECT_EQ(harness.editor().project_assets().active_material().value().id,
-            active_before.value().id);
+  EXPECT_EQ(read_bytes(harness.manifest_path()), manifest_before);
   const auto draft_after_replace =
       harness.editor().standard_material_documents().current_revision();
   ASSERT_TRUE(draft_after_replace.ok())
@@ -4455,15 +4470,12 @@ TEST(ProjectMaterialReferenceBehaviorTests,
   };
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
   const QuaderApiResult<QuaderModelingObjectRef> member =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f},
-           .max = {1.0f, 1.0f, 1.0f}},
-          "Nested Instance Material Member");
+      harness.editor().modeling().create_box({
+          .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+          .name = "Nested Instance Material Member",
+          .material = QuaderMaterialReference::project(amber.material.id),
+      });
   ASSERT_TRUE(member.ok()) << member.error_message();
   const QuaderApiResult<QuaderEntityRef> inner_group =
       harness.editor().scene().group_selection("Inner Material Group");
@@ -4572,15 +4584,12 @@ TEST(ProjectMaterialReferenceBehaviorTests,
   };
   const std::array installed{amber, blue};
   harness.install_and_reopen(installed);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
   const QuaderApiResult<QuaderModelingObjectRef> member =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f},
-           .max = {1.0f, 1.0f, 1.0f}},
-          "Linked Face Material Member");
+      harness.editor().modeling().create_box({
+          .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+          .name = "Linked Face Material Member",
+          .material = QuaderMaterialReference::project(amber.material.id),
+      });
   ASSERT_TRUE(member.ok()) << member.error_message();
   const QuaderApiResult<QuaderInstanceCreateResult> instance =
       harness.editor().modeling().create_instance_from_selection();
@@ -4811,11 +4820,9 @@ TEST(ProjectMaterialPersistenceTests,
   // assignments and persistence below exercise the public editor workflow.
   ASSERT_TRUE(ProjectMaterialFixture(harness.project()).clear_material(entity));
   for (std::size_t index = 0u; index < installed.size(); ++index) {
-    ASSERT_TRUE(editor.project_assets()
-                    .set_active_material(installed[index].material.id)
-                    .ok());
-    const auto assigned = editor.modeling().apply_active_material_to_face(
-        box.value().modeling_object_id, original_slots[index].first);
+    const auto assigned = editor.modeling().apply_material_to_face(
+        box.value().modeling_object_id, original_slots[index].first,
+        QuaderMaterialReference::project(installed[index].material.id));
     ASSERT_TRUE(assigned.ok()) << assigned.error_message();
     ASSERT_TRUE(assigned.changed());
   }
@@ -4895,16 +4902,13 @@ TEST(ProjectMaterialPersistenceTests,
   };
   const std::array installed{amber};
   harness.install_and_reopen(installed);
-  ASSERT_TRUE(harness.editor()
-                  .project_assets()
-                  .set_active_material(amber.material.id)
-                  .ok());
 
   const QuaderApiResult<QuaderModelingObjectRef> box =
-      harness.editor().modeling().create_box(
-          {.min = {-1.0f, -1.0f, -1.0f},
-           .max = {1.0f, 1.0f, 1.0f}},
-          "Persisted Project Material");
+      harness.editor().modeling().create_box({
+          .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+          .name = "Persisted Project Material",
+          .material = QuaderMaterialReference::project(amber.material.id),
+      });
   ASSERT_TRUE(box.ok()) << box.error_message();
   const SceneSessionId scene_id =
       harness.editor().scene_documents().active_scene_id().value();

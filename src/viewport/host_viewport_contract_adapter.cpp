@@ -114,8 +114,6 @@ constexpr std::uint32_t kMaterialSourceSelectionModes =
     viewport_selection_mode_mask(ViewportSelectionMode::Face) |
     viewport_selection_mode_mask(ViewportSelectionMode::Object) |
     viewport_selection_mode_mask(ViewportSelectionMode::Group);
-constexpr std::uint32_t kMaterialTargetSelectionModes =
-    kMaterialSourceSelectionModes;
 
 } // namespace
 
@@ -137,7 +135,7 @@ std::string viewport_grid_preset_target_id(int preset) {
 
 std::span<const ViewportShortcutTargetDescriptor>
 viewport_shortcut_target_catalog() {
-  static const std::array<ViewportShortcutTargetDescriptor, 34> kDescriptors{{
+  static const std::array<ViewportShortcutTargetDescriptor, 33> kDescriptors{{
       {"new_scene", quader_command::kSceneDocumentNew.string(),
        viewport_target_shortcut(ViewportShortcutKind::None,
                                 ViewportShortcutContext::Global)},
@@ -200,9 +198,6 @@ viewport_shortcut_target_catalog() {
       {"merge_vertices_at_center",
        {},
        viewport_target_shortcut(ViewportShortcutKind::MergeCenter)},
-      {"apply_active_material",
-       {},
-       viewport_target_shortcut(ViewportShortcutKind::ApplyMaterial)},
       {"invert_mesh",
        {},
        viewport_target_shortcut(ViewportShortcutKind::FlipMeshNormals)},
@@ -405,37 +400,6 @@ viewport_input_action_binding_catalog() {
               viewport_selection_mode_mask(ViewportSelectionMode::Object),
           .weight = 30,
           .action = ViewportInputActionKind::RemoveSelectionDepth,
-      },
-      {
-          .target_id = viewport_input_action_target_id("material.sample_face"),
-          .action_id = "viewport.material.sample_face",
-          .label = "Set Active Material from Clicked Face",
-          .localization_key =
-              "keybindings.target.viewport.material.sample_face.label",
-          .context = ViewportInputBindingContext::Viewport,
-          .shortcut = "Shift+RightMouseClick",
-          .when = "viewportFocus && !textInputActive && !navigation.active && "
-                  "!modalTool.active && !activeTool.ownsViewport && "
-                  "!transformDrag.active && !operationPreview.active",
-          .selection_mode_mask = kMaterialSourceSelectionModes,
-          .weight = 30,
-          .action = ViewportInputActionKind::SampleFaceMaterial,
-      },
-      {
-          .target_id = viewport_input_action_target_id(
-              "material.apply_active_to_selection"),
-          .action_id = "viewport.material.apply_active_to_selection",
-          .label = "Apply Active Material Under Mouse",
-          .localization_key = "keybindings.target.viewport.material."
-                              "apply_active_to_selection.label",
-          .context = ViewportInputBindingContext::Viewport,
-          .shortcut = "Ctrl+RightMouseClick",
-          .when = "viewportFocus && !textInputActive && !navigation.active && "
-                  "!modalTool.active && !activeTool.ownsViewport && "
-                  "!transformDrag.active && !operationPreview.active",
-          .selection_mode_mask = kMaterialTargetSelectionModes,
-          .weight = 30,
-          .action = ViewportInputActionKind::ApplyActiveMaterialToSelection,
       },
       {
           .target_id =
@@ -1019,7 +983,6 @@ bool viewport_shortcuts_match(const ViewportShortcut &lhs,
   case ViewportShortcutKind::FlipMeshNormals:
   case ViewportShortcutKind::FlipHorizontal:
   case ViewportShortcutKind::FlipVertical:
-  case ViewportShortcutKind::ApplyMaterial:
     return true;
   }
   return false;

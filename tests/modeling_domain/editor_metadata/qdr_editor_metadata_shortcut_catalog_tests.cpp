@@ -96,7 +96,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_TRUE(shortcuts.size() == 42U);
+	EXPECT_TRUE(shortcuts.size() == 41U);
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
 		EXPECT_FALSE(shortcut.id.empty());
@@ -133,19 +133,13 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveTo
 	}
 }
 
-TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogIncludesActiveMaterialAssignment) {
-	const qhc::HostShortcutDescriptor& apply_active_material = require_shortcut("apply_active_material");
-        EXPECT_TRUE(apply_active_material.context ==
-                    qhc::HostShortcutContext::Viewport);
-        EXPECT_TRUE(same_text(apply_active_material.key, "T"));
-	EXPECT_FALSE(apply_active_material.primary_modifier);
-	EXPECT_TRUE(apply_active_material.shift);
-        EXPECT_TRUE(apply_active_material.target_kind ==
-                    qhc::HostShortcutTargetKind::Action);
-        EXPECT_TRUE(same_text(apply_active_material.target_id, "apply_active_material"));
-        EXPECT_TRUE(apply_active_material.registration_policy ==
-                    qhc::HostShortcutRegistrationPolicy::QuaderLocal);
-        EXPECT_TRUE(qhc::find_action_descriptor("apply_active_material") != nullptr);
+TEST(QdrEditorMetadataShortcutCatalogTests,
+     HostContractShortcutCatalogRetiresImplicitMaterialAssignment) {
+  for (const auto &shortcut : qhc::shortcut_catalog()) {
+    EXPECT_FALSE(same_text(shortcut.id, "apply_active_material"));
+    EXPECT_FALSE(same_text(shortcut.target_id, "apply_active_material"));
+  }
+  EXPECT_EQ(qhc::find_action_descriptor("apply_active_material"), nullptr);
 }
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogHasNoDuplicateDefaultStrokes) {

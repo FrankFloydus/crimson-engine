@@ -12,6 +12,7 @@
 #include <QIconEngine>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPainterPathStroker>
 #include <QPalette>
 #include <QPixmap>
 #include <QPixmapCache>
@@ -399,6 +400,17 @@ QPainterPath scalable_glyph_path(QtScalableGlyph glyph) {
     return material_lock_path(false);
   case QtScalableGlyph::MaterialLockOpen:
     return material_lock_path(true);
+  case QtScalableGlyph::Close: {
+    QPainterPath diagonals;
+    diagonals.moveTo(4.0, 4.0);
+    diagonals.lineTo(20.0, 20.0);
+    diagonals.moveTo(20.0, 4.0);
+    diagonals.lineTo(4.0, 20.0);
+    QPainterPathStroker stroke;
+    stroke.setWidth(3.5);
+    stroke.setCapStyle(Qt::RoundCap);
+    return stroke.createStroke(diagonals);
+  }
   }
   return {};
 }

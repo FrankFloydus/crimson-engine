@@ -643,7 +643,7 @@ TEST(QtUiScaleMetricsTests,
 }
 
 TEST(QtUiScaleMetricsTests,
-     SvgAuthoredMaterialGlyphsRenderAsScalablePainterGeometry) {
+     MonochromeGlyphsRenderAsScalablePainterGeometry) {
   if (QCoreApplication::instance() != nullptr) {
     GTEST_SKIP() << "This test owns the QApplication lifecycle";
   }
@@ -657,7 +657,8 @@ TEST(QtUiScaleMetricsTests,
            quader::QtScalableGlyph::MaterialVisibility,
            quader::QtScalableGlyph::MaterialVisibilityOff,
            quader::QtScalableGlyph::MaterialLock,
-           quader::QtScalableGlyph::MaterialLockOpen}) {
+           quader::QtScalableGlyph::MaterialLockOpen,
+           quader::QtScalableGlyph::Close}) {
     const QIcon icon =
         quader::qt_scalable_glyph_icon(glyph, QColor(0xad, 0x80, 0xf4));
     ASSERT_FALSE(icon.isNull());
@@ -677,6 +678,44 @@ TEST(QtUiScaleMetricsTests,
       }
     }
     EXPECT_GT(visible_pixels, 1000u);
+  }
+}
+
+TEST(QtUiScaleMetricsTests, CloseGlyphRetainsItsRequestedColorAtSmallSizes) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_small_close_glyph_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  for (const QColor &foreground :
+       {QColor(228, 230, 237), QColor(25, 25, 25), QColor(255, 255, 0)}) {
+    const QIcon icon = quader::qt_scalable_glyph_icon(
+        quader::QtScalableGlyph::Close, foreground);
+    for (const int extent : {12, 18, 24}) {
+      for (const qreal dpr : {1.0, 1.25, 2.0, 4.0}) {
+        const QPixmap pixmap = icon.pixmap(QSize(extent, extent), dpr);
+        ASSERT_FALSE(pixmap.isNull());
+        EXPECT_DOUBLE_EQ(pixmap.devicePixelRatio(), dpr);
+        const QImage image = pixmap.toImage();
+        int opaque_pixels = 0;
+        int transparent_pixels = 0;
+        for (int y = 0; y < image.height(); ++y) {
+          for (int x = 0; x < image.width(); ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            if (pixel.alpha() == 255) {
+              ++opaque_pixels;
+              EXPECT_EQ(pixel, foreground);
+            } else if (pixel.alpha() == 0) {
+              ++transparent_pixels;
+            }
+          }
+        }
+        EXPECT_GT(opaque_pixels, 0) << "the small close glyph must stay readable";
+        EXPECT_GT(transparent_pixels, opaque_pixels)
+            << "the diagonals must retain a clear, open silhouette";
+      }
+    }
   }
 }
 

@@ -5,8 +5,10 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_tree_relationship_presentation.hpp"
 
+#include <QAccessibilityHints>
 #include <QAction>
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -32,6 +34,7 @@
 #include <QLocale>
 #include <QMenu>
 #include <QMimeData>
+#include <QPainter>
 #include <QPointer>
 #include <QPushButton>
 #include <QScopedValueRollback>
@@ -43,6 +46,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QStyleHints>
 #include <QTableView>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -69,6 +73,70 @@ constexpr auto kFolderDragMime = "application/x-quader-material-browser-folder";
 constexpr int kFolderPathRole = Qt::UserRole;
 constexpr std::uint64_t kPreviewIconCacheBudgetBytes =
     96ULL * 1024ULL * 1024ULL;
+
+/// A passive condition badge; its child remove button owns all interaction.
+class UsageFilterBadge final : public QWidget {
+public:
+  using QWidget::QWidget;
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    radius_ = metrics.px(5.0);
+    update();
+  }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    const QStyleHints *hints = QGuiApplication::styleHints();
+    const QAccessibilityHints *accessibility =
+        hints != nullptr ? hints->accessibility() : nullptr;
+    // The application theme leaves its resolve mask empty for the live
+    // platform palette; do not tint that accessibility fallback either.
+    const bool high_contrast =
+        QGuiApplication::palette().resolveMask() == 0 ||
+        (accessibility != nullptr && accessibility->contrastPreference() ==
+                                         Qt::ContrastPreference::HighContrast);
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF bounds = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    painter.setPen(high_contrast ? QPen(palette().color(QPalette::WindowText))
+                                : QPen(Qt::NoPen));
+    painter.setBrush(palette().color(QPalette::Window));
+    painter.drawRoundedRect(bounds, radius_, radius_);
+    if (!high_contrast) {
+      QColor tint = palette().color(QPalette::Accent);
+      tint.setAlphaF(0.16);
+      painter.setBrush(tint);
+      painter.drawRoundedRect(bounds, radius_, radius_);
+    }
+  }
+
+private:
+  qreal radius_ = 5.0;
+};
+
+void show_popup_below(QWidget &popup, QWidget &anchor) {
+  popup.adjustSize();
+  const QPoint below = anchor.mapToGlobal(QPoint(0, anchor.height()));
+  QPoint position = below;
+  QScreen *popup_screen = QGuiApplication::screenAt(below);
+  if (popup_screen == nullptr) {
+    popup_screen = anchor.screen();
+  }
+  if (popup_screen != nullptr) {
+    const QRect available = popup_screen->availableGeometry();
+    const int maximum_x =
+        std::max(available.left(), available.right() - popup.width() + 1);
+    position.setX(std::clamp(position.x(), available.left(), maximum_x));
+    if (position.y() + popup.height() - 1 > available.bottom()) {
+      position.setY(anchor.mapToGlobal(QPoint(0, 0)).y() - popup.height());
+    }
+    const int maximum_y =
+        std::max(available.top(), available.bottom() - popup.height() + 1);
+    position.setY(std::clamp(position.y(), available.top(), maximum_y));
+  }
+  popup.move(position);
+  popup.show();
+}
 
 qreal normalized_device_pixel_ratio(qreal value) {
   return std::isfinite(value) && value >= 1.0 ? value : 1.0;
@@ -584,9 +652,11 @@ bool QtMaterialBrowserProxyModel::accepts_row(
            .contains(search_text_)) {
     return false;
   }
-  if (!include_usage || !usage_complete_ ||
-      usage_mode_ == QtMaterialBrowserUsageMode::All) {
+  if (!include_usage || usage_mode_ == QtMaterialBrowserUsageMode::All) {
     return true;
+  }
+  if (!usage_complete_ && usage_mode_ == QtMaterialBrowserUsageMode::NotUsed) {
+    return false;
   }
   const QString stable_id =
       source_index.data(QtMaterialBrowserModel::StableIdRole).toString();
@@ -638,33 +708,56 @@ bool QtMaterialBrowserProxyModel::lessThan(
   return compare_name_then_path(source_left, source_right);
 }
 
-QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
-    : QMainWindow(parent, Qt::Tool) {
-  setObjectName(QStringLiteral("materialBrowser.window"));
+QtMaterialBrowserWindow::QtMaterialBrowserWindow(
+    QWidget *parent, QtMaterialBrowserHost host)
+    : QMainWindow(parent, host == QtMaterialBrowserHost::Windowed ? Qt::Tool
+                                                                 : Qt::Widget),
+      host_(host),
+      purpose_(host == QtMaterialBrowserHost::Embedded
+                   ? QtMaterialBrowserPurpose::FaceAssignment
+                   : QtMaterialBrowserPurpose::Management) {
+  // QMainWindow promotes its constructor flags to a top-level window. Clear
+  // that promotion before constructing the embedded browser's child controls.
+  if (host_ == QtMaterialBrowserHost::Embedded) {
+    setWindowFlags(Qt::Widget);
+  }
+  setObjectName(host_ == QtMaterialBrowserHost::Embedded
+                    ? QStringLiteral("materialBrowser.embedded")
+                    : QStringLiteral("materialBrowser.window"));
   setAttribute(Qt::WA_DeleteOnClose, false);
-  setWindowFlag(Qt::WindowMaximizeButtonHint, true);
-  resize(760, 520);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    setWindowFlag(Qt::WindowMaximizeButtonHint, true);
+    resize(760, 520);
+  }
 
   auto *central_widget = new QWidget(this);
   setCentralWidget(central_widget);
   auto *root_layout = new QVBoxLayout(central_widget);
+  if (host_ == QtMaterialBrowserHost::Embedded) {
+    root_layout->setContentsMargins(6, 6, 6, 6);
+  }
   auto *toolbar = new QHBoxLayout();
+  auto *view_toolbar = toolbar;
   folders_button_ = new QToolButton(central_widget);
   folders_button_->setObjectName(QStringLiteral("materialBrowser.folders"));
   folders_button_->setCheckable(true);
   folders_button_->setChecked(true);
-  folders_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  folders_button_->setToolButtonStyle(
+      host_ == QtMaterialBrowserHost::Embedded ? Qt::ToolButtonIconOnly
+                                              : Qt::ToolButtonTextBesideIcon);
   folders_button_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
   toolbar->addWidget(folders_button_);
   search_ = new QLineEdit(central_widget);
   search_->setObjectName(QStringLiteral("materialBrowser.search"));
   search_->setClearButtonEnabled(true);
+  search_->setMinimumWidth(0);
   toolbar->addWidget(search_, 1);
 
   filter_button_ = new QToolButton(central_widget);
   filter_button_->setObjectName(QStringLiteral("materialBrowser.filter"));
   filter_button_->setCheckable(true);
   filter_button_->setAutoRaise(true);
+  filter_button_->setFocusPolicy(Qt::StrongFocus);
   filter_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
   filter_button_->setIcon(
       QIcon(QStringLiteral(":/quader/icons/material_filter.png")));
@@ -675,20 +768,67 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   grid_button_ = new QToolButton(central_widget);
   grid_button_->setObjectName(QStringLiteral("materialBrowser.grid"));
   grid_button_->setCheckable(true);
-  grid_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-  toolbar->addWidget(grid_button_);
+  grid_button_->setToolButtonStyle(
+      host_ == QtMaterialBrowserHost::Embedded ? Qt::ToolButtonIconOnly
+                                              : Qt::ToolButtonTextBesideIcon);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    view_toolbar->addWidget(grid_button_);
+  } else {
+    grid_button_->hide();
+  }
   list_button_ = new QToolButton(central_widget);
   list_button_->setObjectName(QStringLiteral("materialBrowser.list"));
   list_button_->setCheckable(true);
-  list_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-  toolbar->addWidget(list_button_);
+  list_button_->setToolButtonStyle(
+      host_ == QtMaterialBrowserHost::Embedded ? Qt::ToolButtonIconOnly
+                                              : Qt::ToolButtonTextBesideIcon);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    view_toolbar->addWidget(list_button_);
+  } else {
+    list_button_->hide();
+  }
   refresh_view_mode_icons();
   auto *view_group = new QButtonGroup(central_widget);
   view_group->setExclusive(true);
   view_group->addButton(grid_button_);
   view_group->addButton(list_button_);
 
-  tile_slider_ = new QSlider(Qt::Horizontal, central_widget);
+  if (host_ == QtMaterialBrowserHost::Embedded) {
+    import_tool_button_ = new QToolButton(central_widget);
+    import_tool_button_->setObjectName(QStringLiteral("materialBrowser.importTool"));
+    import_tool_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    import_tool_button_->setAutoRaise(true);
+    import_tool_button_->setIcon(
+        QIcon(QStringLiteral(":/quader/icons/material_import.png")));
+    import_tool_button_->setIconSize(QSize(20, 20));
+    import_tool_button_->setFixedSize(QSize(28, 28));
+    toolbar->addWidget(import_tool_button_);
+    thumbnail_size_button_ = new QToolButton(central_widget);
+    thumbnail_size_button_->setObjectName(QStringLiteral("materialBrowser.thumbnailSize"));
+    thumbnail_size_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    thumbnail_size_button_->setAutoRaise(true);
+    thumbnail_size_button_->setIcon(
+        QIcon(QStringLiteral(":/quader/icons/material_thumbnail_size.png")));
+    thumbnail_size_button_->setIconSize(QSize(20, 20));
+    thumbnail_size_button_->setFixedSize(QSize(28, 28));
+    toolbar->addWidget(thumbnail_size_button_);
+    auto *popup = new QFrame(this, Qt::Popup | Qt::FramelessWindowHint);
+    thumbnail_size_popup_ = popup;
+    popup->setObjectName(QStringLiteral("materialBrowser.thumbnailSizePopup"));
+    popup->setFrameShape(QFrame::StyledPanel);
+    popup->setFrameShadow(QFrame::Raised);
+    auto *popup_layout = new QVBoxLayout(popup);
+    thumbnail_size_value_ = new QLabel(popup);
+    popup_layout->addWidget(thumbnail_size_value_);
+    tile_slider_ = new QSlider(Qt::Horizontal, popup);
+    popup_layout->addWidget(tile_slider_);
+    auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), popup);
+    escape->setContext(Qt::WidgetWithChildrenShortcut);
+    QObject::connect(escape, &QShortcut::activated, popup, &QWidget::close);
+    popup->hide();
+  } else {
+    tile_slider_ = new QSlider(Qt::Horizontal, central_widget);
+  }
   tile_slider_->setObjectName(QStringLiteral("materialBrowser.tileSize"));
   tile_slider_->setRange(0, static_cast<int>(kTileSizes.size()) - 1);
   tile_slider_->setSingleStep(1);
@@ -697,8 +837,42 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   tile_slider_->setTickPosition(QSlider::TicksBelow);
   tile_slider_->setValue(tile_index_for_size(kDefaultTileSize));
   tile_slider_->setFixedWidth(150);
-  toolbar->addWidget(tile_slider_);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    view_toolbar->addWidget(tile_slider_);
+  }
   root_layout->addLayout(toolbar);
+  active_filters_ = new QWidget(central_widget);
+  active_filters_->setObjectName(QStringLiteral("materialBrowser.activeFilters"));
+  auto *active_filters_layout = new QHBoxLayout(active_filters_);
+  filtered_by_ = new QLabel(active_filters_);
+  filtered_by_->setObjectName(QStringLiteral("materialBrowser.filteredBy"));
+  filtered_by_->setTextFormat(Qt::PlainText);
+  active_filters_layout->addWidget(filtered_by_);
+  usage_chip_ = new UsageFilterBadge(active_filters_);
+  usage_chip_->setObjectName(QStringLiteral("materialBrowser.usageChip"));
+  auto *usage_chip_layout = new QHBoxLayout(usage_chip_);
+  usage_chip_label_ = new QLabel(usage_chip_);
+  usage_chip_label_->setObjectName(QStringLiteral("materialBrowser.usageChipLabel"));
+  usage_chip_label_->setTextFormat(Qt::PlainText);
+  usage_chip_layout->addWidget(usage_chip_label_);
+  usage_chip_remove_ = new QToolButton(usage_chip_);
+  usage_chip_remove_->setObjectName(QStringLiteral("materialBrowser.usageChipRemove"));
+  usage_chip_remove_->setAutoRaise(true);
+  usage_chip_remove_->setFocusPolicy(Qt::StrongFocus);
+  usage_chip_remove_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  usage_chip_layout->addWidget(usage_chip_remove_);
+  active_filters_layout->addWidget(usage_chip_);
+  active_filters_layout->addStretch(1);
+  active_filters_->hide();
+  root_layout->addWidget(active_filters_);
+  refresh_usage_badge_style();
+  usage_status_ = new QLabel(central_widget);
+  usage_status_->setObjectName(QStringLiteral("materialBrowser.usageStatus"));
+  usage_status_->setWordWrap(true);
+  usage_status_->setTextFormat(Qt::PlainText);
+  usage_status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  usage_status_->hide();
+  root_layout->addWidget(usage_status_);
 
   model_ = new QtMaterialBrowserModel(central_widget);
   proxy_ = new QtMaterialBrowserProxyModel(central_widget);
@@ -785,16 +959,18 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   splitter_->setSizes({sidebar_width_, 540});
   root_layout->addWidget(splitter_, 1);
 
-  auto *footer = new QHBoxLayout();
-  footer->addStretch(1);
-  import_button_ = new QPushButton(central_widget);
-  import_button_->setObjectName(QStringLiteral("materialBrowser.import"));
-  footer->addWidget(import_button_);
-  accept_button_ = new QPushButton(central_widget);
-  accept_button_->setObjectName(QStringLiteral("materialBrowser.accept"));
-  accept_button_->setEnabled(false);
-  footer->addWidget(accept_button_);
-  root_layout->addLayout(footer);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    auto *footer = new QHBoxLayout();
+    footer->addStretch(1);
+    import_button_ = new QPushButton(central_widget);
+    import_button_->setObjectName(QStringLiteral("materialBrowser.import"));
+    footer->addWidget(import_button_);
+    accept_button_ = new QPushButton(central_widget);
+    accept_button_->setObjectName(QStringLiteral("materialBrowser.accept"));
+    accept_button_->setEnabled(false);
+    footer->addWidget(accept_button_);
+    root_layout->addLayout(footer);
+  }
 
   QObject::connect(search_, &QLineEdit::textChanged, this,
                    [this](const QString &text) {
@@ -819,11 +995,30 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
                        presentation_state_changed_();
                      }
                    });
-  QObject::connect(import_button_, &QPushButton::clicked, this, [this]() {
-    if (purpose_ == QtMaterialBrowserPurpose::ActiveMaterial && import_textures_) {
+  const auto import_textures = [this]() {
+    if (purpose_ != QtMaterialBrowserPurpose::Picker && import_textures_) {
       import_textures_(selected_folder());
     }
-  });
+  };
+  if (import_button_ != nullptr) {
+    QObject::connect(import_button_, &QPushButton::clicked, this, import_textures);
+  }
+  if (import_tool_button_ != nullptr) {
+    QObject::connect(import_tool_button_, &QToolButton::clicked, this, import_textures);
+    QObject::connect(thumbnail_size_button_, &QToolButton::clicked, this,
+                     [this]() { show_thumbnail_size_popup(); });
+  }
+  QObject::connect(usage_chip_remove_, &QToolButton::clicked, this,
+                   [this]() {
+                     const QPointer<QtMaterialBrowserWindow> guard(this);
+                     if (filter_popup_) {
+                       filter_popup_->close();
+                     }
+                     apply_usage_mode(QtMaterialBrowserUsageMode::All);
+                     if (guard) {
+                       guard->filter_button_->setFocus(Qt::OtherFocusReason);
+                     }
+                   });
   QObject::connect(folders_button_, &QToolButton::toggled, this,
                    [this](bool visible) { set_sidebar_visible(visible, true); });
   QObject::connect(splitter_, &QSplitter::splitterMoved, this,
@@ -850,19 +1045,19 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
     show_folder_menu(position);
   });
   QObject::connect(grid_view_, &QListView::clicked, this,
-                   [this](const QModelIndex &index) { activate_index(index); });
+                   [this](const QModelIndex &index) { assign_index(index); });
   QObject::connect(list_view_, &QTableView::clicked, this,
-                   [this](const QModelIndex &index) { activate_index(index); });
+                   [this](const QModelIndex &index) { assign_index(index); });
   QObject::connect(grid_view_, &QListView::activated, this,
                    [this, keyboard_grid](const QModelIndex &index) {
                      if (keyboard_grid->keyboard_activation_in_progress()) {
-                       activate_index(index);
+                       assign_index(index);
                      }
                    });
   QObject::connect(list_view_, &QTableView::activated, this,
                    [this, keyboard_list](const QModelIndex &index) {
                      if (keyboard_list->keyboard_activation_in_progress()) {
-                       activate_index(index);
+                       assign_index(index);
                      }
                    });
   QObject::connect(grid_view_, &QListView::doubleClicked, this,
@@ -889,8 +1084,10 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
                    });
   QObject::connect(selection, &QItemSelectionModel::selectionChanged, this,
                    [this]() { ++action_eligibility_revision_; });
-  QObject::connect(accept_button_, &QPushButton::clicked, this,
-                   [this]() { accept_selected_material(); });
+  if (accept_button_ != nullptr) {
+    QObject::connect(accept_button_, &QPushButton::clicked, this,
+                     [this]() { accept_selected_material(); });
+  }
 
   rebuild_folder_tree();
   set_labels(labels_);
@@ -905,6 +1102,9 @@ QtMaterialBrowserWindow::~QtMaterialBrowserWindow() {
   // dismissal callback are still intact.
   if (filter_popup_) {
     delete filter_popup_.data();
+  }
+  if (thumbnail_size_popup_) {
+    delete thumbnail_size_popup_.data();
   }
 }
 
@@ -928,10 +1128,21 @@ void QtMaterialBrowserWindow::set_labels(QtMaterialBrowserLabels labels) {
   if (folder_tree_->topLevelItemCount() > 0) {
     folder_tree_->topLevelItem(0)->setText(0, labels_.all);
   }
-  import_button_->setText(labels_.import_textures);
-  import_button_->setAccessibleName(labels_.import_textures);
-  accept_button_->setText(labels_.accept);
-  accept_button_->setAccessibleName(labels_.accept);
+  if (import_button_ != nullptr) {
+    import_button_->setText(labels_.import_textures);
+    import_button_->setAccessibleName(labels_.import_textures);
+  }
+  if (import_tool_button_ != nullptr) {
+    import_tool_button_->setToolTip(labels_.import_textures);
+    import_tool_button_->setAccessibleName(labels_.import_textures);
+    thumbnail_size_button_->setToolTip(labels_.tile_size);
+    thumbnail_size_button_->setAccessibleName(labels_.tile_size);
+  }
+  if (accept_button_ != nullptr) {
+    accept_button_->setText(labels_.accept);
+    accept_button_->setAccessibleName(labels_.accept);
+  }
+  refresh_usage_presentation();
   update_tile_size_text();
   model_->set_labels(labels_);
   update_purpose_presentation();
@@ -972,7 +1183,7 @@ void QtMaterialBrowserWindow::set_materials(
       selected_material.valid() ? selected_material : previous_current;
   bool restored_current_without_expanding_selection = false;
   if (items_changed && requested_current.valid() &&
-      purpose_ == QtMaterialBrowserPurpose::ActiveMaterial &&
+      purpose_ != QtMaterialBrowserPurpose::Picker &&
       !grid_view_->selectionModel()
            ->selectedRows(QtMaterialBrowserModel::NameColumn)
            .isEmpty()) {
@@ -994,9 +1205,17 @@ void QtMaterialBrowserWindow::set_materials(
   update_accept_enabled();
 }
 
-void QtMaterialBrowserWindow::set_active_material(
-    QuaderMaterialReference active_material) {
-  select_material(active_material);
+void QtMaterialBrowserWindow::set_selected_material(
+    QuaderMaterialReference material) {
+  select_material(material);
+}
+
+void QtMaterialBrowserWindow::set_assignment_available(bool available) {
+  if (assignment_available_ == available) {
+    return;
+  }
+  assignment_available_ = available;
+  update_accept_enabled();
 }
 
 void QtMaterialBrowserWindow::clear_materials() {
@@ -1033,6 +1252,8 @@ void QtMaterialBrowserWindow::set_project_generation(std::uint64_t generation) {
     filter_popup_->close();
   }
   project_generation_ = generation;
+  assignment_available_ = false;
+  dependency_revision_ = 0;
   ++action_eligibility_revision_;
   usage_snapshot_ = {
       .project_generation = generation,
@@ -1044,7 +1265,11 @@ void QtMaterialBrowserWindow::set_project_generation(std::uint64_t generation) {
   filter_button_->setChecked(false);
   static_cast<MaterialFolderTree *>(folder_tree_)->generation = generation;
   model_->set_drag_context(generation,
-      purpose_ == QtMaterialBrowserPurpose::ActiveMaterial);
+      purpose_ != QtMaterialBrowserPurpose::Picker);
+  refresh_usage_presentation();
+  if (thumbnail_size_popup_) {
+    thumbnail_size_popup_->close();
+  }
   clear_materials();
 }
 
@@ -1053,6 +1278,14 @@ void QtMaterialBrowserWindow::set_material_usage(
   if (snapshot.project_generation != project_generation_) {
     return;
   }
+  QStringList errors;
+  for (const QString &error : snapshot.errors) {
+    const QString trimmed = error.trimmed();
+    if (!trimmed.isEmpty() && !errors.contains(trimmed)) {
+      errors.push_back(trimmed);
+    }
+  }
+  snapshot.errors = std::move(errors);
   if (usage_snapshot_ == snapshot) {
     return;
   }
@@ -1071,10 +1304,15 @@ void QtMaterialBrowserWindow::set_material_usage(
                                 usage_snapshot_.complete);
   refresh_content_page();
   update_accept_enabled();
-  if (!usage_snapshot_.complete && !usage_snapshot_.error.isEmpty() &&
-      usage_inspection_error_) {
-    usage_inspection_error_(usage_snapshot_.error);
+  refresh_usage_presentation();
+}
+
+void QtMaterialBrowserWindow::set_dependency_revision(std::uint64_t revision) {
+  if (dependency_revision_ == revision) {
+    return;
   }
+  dependency_revision_ = revision;
+  ++action_eligibility_revision_;
 }
 
 void QtMaterialBrowserWindow::set_protected_material(
@@ -1126,14 +1364,16 @@ QuaderMaterialReference QtMaterialBrowserWindow::selected_material() const {
   return item != nullptr ? item->reference : QuaderMaterialReference{};
 }
 
-void QtMaterialBrowserWindow::set_activate_material_callback(
-    ActivateMaterialCallback callback) {
-  activate_material_ = std::move(callback);
+void QtMaterialBrowserWindow::set_assign_material_callback(
+    AssignMaterialCallback callback) {
+  assign_material_ = std::move(callback);
+  update_accept_enabled();
 }
 
 void QtMaterialBrowserWindow::set_open_material_callback(
     OpenMaterialCallback callback) {
   open_material_ = std::move(callback);
+  ++action_eligibility_revision_;
 }
 
 void QtMaterialBrowserWindow::set_accept_material_callback(
@@ -1175,11 +1415,6 @@ void QtMaterialBrowserWindow::set_material_action_callback(
   ++action_eligibility_revision_;
 }
 
-void QtMaterialBrowserWindow::set_usage_inspection_error_callback(
-    UsageInspectionErrorCallback callback) {
-  usage_inspection_error_ = std::move(callback);
-}
-
 void QtMaterialBrowserWindow::set_presentation_state_changed_callback(
     PresentationStateChangedCallback callback) {
   presentation_state_changed_ = std::move(callback);
@@ -1196,6 +1431,13 @@ void QtMaterialBrowserWindow::apply_ui_scale(
   filter_button_->setIconSize(metrics.size(QSize(20, 20)));
   filter_button_->setFixedSize(metrics.size(QSize(28, 28)));
   tile_slider_->setFixedWidth(metrics.px(150));
+  refresh_usage_badge_style();
+  for (QToolButton *button : {import_tool_button_, thumbnail_size_button_}) {
+    if (button != nullptr) {
+      button->setIconSize(metrics.size(QSize(20, 20)));
+      button->setFixedSize(metrics.size(QSize(28, 28)));
+    }
+  }
   apply_tile_metrics(tile_size());
   grid_view_->doItemsLayout();
   grid_view_->viewport()->update();
@@ -1248,6 +1490,15 @@ bool QtMaterialBrowserWindow::event(QEvent *event) {
     } else if (event->type() == QEvent::PaletteChange ||
                event->type() == QEvent::ApplicationPaletteChange) {
       refresh_view_mode_icons();
+    } else if (event->type() == QEvent::ActivationChange) {
+      refresh_usage_badge_style();
+    } else if (event->type() == QEvent::Hide) {
+      if (filter_popup_) {
+        filter_popup_->close();
+      }
+      if (thumbnail_size_popup_) {
+        thumbnail_size_popup_->close();
+      }
     }
   }
   return handled;
@@ -1258,6 +1509,13 @@ void QtMaterialBrowserWindow::refresh_view_mode_icons() {
     filter_button_->setIcon(
         QIcon(QStringLiteral(":/quader/icons/material_filter.png")));
   }
+  if (import_tool_button_ != nullptr) {
+    import_tool_button_->setIcon(
+        QIcon(QStringLiteral(":/quader/icons/material_import.png")));
+    thumbnail_size_button_->setIcon(
+        QIcon(QStringLiteral(":/quader/icons/material_thumbnail_size.png")));
+  }
+  refresh_usage_badge_style();
   if (grid_button_ != nullptr) {
     grid_button_->setIcon(style()->standardIcon(
         QStyle::SP_FileDialogListView, nullptr, this));
@@ -1282,6 +1540,9 @@ void QtMaterialBrowserWindow::closeEvent(QCloseEvent *event) {
   if (filter_popup_) {
     filter_popup_->close();
   }
+  if (thumbnail_size_popup_) {
+    thumbnail_size_popup_->close();
+  }
   if (presentation_state_changed_) {
     presentation_state_changed_();
   }
@@ -1289,14 +1550,20 @@ void QtMaterialBrowserWindow::closeEvent(QCloseEvent *event) {
 }
 
 void QtMaterialBrowserWindow::showEvent(QShowEvent *event) {
-  // Search is deliberately session-transient: each reopening starts unfiltered.
-  search_->clear();
+  // Floating browser search is session-transient; the dock retains its filter
+  // when a tab switch or layout restoration temporarily hides its host.
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    search_->clear();
+  }
   QMainWindow::showEvent(event);
   refresh_preview_raster_context();
 }
 
 void QtMaterialBrowserWindow::set_view_mode(QtMaterialBrowserViewMode mode,
                                             bool notify) {
+  if (host_ == QtMaterialBrowserHost::Embedded) {
+    mode = QtMaterialBrowserViewMode::Grid;
+  }
   const bool changed = view_mode_ != mode;
   view_mode_ = mode;
   {
@@ -1305,7 +1572,9 @@ void QtMaterialBrowserWindow::set_view_mode(QtMaterialBrowserViewMode mode,
     grid_button_->setChecked(mode == QtMaterialBrowserViewMode::Grid);
     list_button_->setChecked(mode == QtMaterialBrowserViewMode::List);
   }
-  tile_slider_->setVisible(mode == QtMaterialBrowserViewMode::Grid);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    tile_slider_->setVisible(mode == QtMaterialBrowserViewMode::Grid);
+  }
   refresh_content_page();
   if (notify && changed && presentation_state_changed_) {
     presentation_state_changed_();
@@ -1358,6 +1627,9 @@ void QtMaterialBrowserWindow::update_tile_size_text() {
   const QString text = labels_.tile_size_value.arg(value);
   tile_slider_->setToolTip(text);
   tile_slider_->setAccessibleName(text);
+  if (thumbnail_size_value_ != nullptr) {
+    thumbnail_size_value_->setText(text);
+  }
 }
 
 void QtMaterialBrowserWindow::refresh_content_page() {
@@ -1366,10 +1638,14 @@ void QtMaterialBrowserWindow::refresh_content_page() {
   }
   if (proxy_->rowCount() == 0) {
     const bool usage_removed_results =
-        purpose_ == QtMaterialBrowserPurpose::ActiveMaterial &&
+        purpose_ != QtMaterialBrowserPurpose::Picker &&
         usage_mode_ != QtMaterialBrowserUsageMode::All &&
         proxy_->has_non_usage_match();
-    const QString text = usage_removed_results
+    const QString text = usage_mode_ == QtMaterialBrowserUsageMode::NotUsed &&
+                                 !usage_snapshot_.complete &&
+                                 purpose_ != QtMaterialBrowserPurpose::Picker
+                             ? labels_.usage_incomplete
+                         : usage_removed_results
                              ? labels_.filtered_empty
                          : !search_->text().trimmed().isEmpty()
                              ? labels_.no_results
@@ -1388,9 +1664,19 @@ void QtMaterialBrowserWindow::refresh_content_page() {
 
 void QtMaterialBrowserWindow::update_purpose_presentation() {
   const bool normal =
-      purpose_ == QtMaterialBrowserPurpose::ActiveMaterial;
+      purpose_ != QtMaterialBrowserPurpose::Picker;
   setWindowTitle(normal ? labels_.window_title : labels_.picker_window_title);
-  import_button_->setVisible(normal);
+  if (import_button_ != nullptr) {
+    import_button_->setVisible(normal);
+  }
+  if (import_tool_button_ != nullptr) {
+    import_tool_button_->setVisible(normal);
+  }
+  if (accept_button_ != nullptr) {
+    accept_button_->setVisible(!normal);
+    accept_button_->setText(labels_.accept);
+    accept_button_->setAccessibleName(labels_.accept);
+  }
   filter_button_->setVisible(normal);
   proxy_->set_usage_mode(normal ? usage_mode_
                                 : QtMaterialBrowserUsageMode::All);
@@ -1404,6 +1690,7 @@ void QtMaterialBrowserWindow::update_purpose_presentation() {
   folder_tree_->setAcceptDrops(normal);
   static_cast<MaterialFolderTree *>(folder_tree_)->organization_enabled = normal;
   model_->set_drag_context(project_generation_, normal);
+  refresh_usage_presentation();
   refresh_content_page();
   update_accept_enabled();
 }
@@ -1414,7 +1701,11 @@ void QtMaterialBrowserWindow::update_accept_enabled() {
   }
   const QtMaterialBrowserItem *item =
       item_for_index(grid_view_->selectionModel()->currentIndex());
-  accept_button_->setEnabled(item != nullptr && item->valid());
+  const bool accepts = purpose_ == QtMaterialBrowserPurpose::Picker;
+  const bool enabled = accepts && item != nullptr && item->valid();
+  if (accept_button_->isEnabled() != enabled) {
+    accept_button_->setEnabled(enabled);
+  }
 }
 
 void QtMaterialBrowserWindow::select_material(
@@ -1547,15 +1838,96 @@ void QtMaterialBrowserWindow::rebuild_folder_tree() {
 void QtMaterialBrowserWindow::apply_usage_mode(
     QtMaterialBrowserUsageMode mode) {
   usage_mode_ = mode;
-  proxy_->set_usage_mode(purpose_ == QtMaterialBrowserPurpose::ActiveMaterial
+  proxy_->set_usage_mode(purpose_ != QtMaterialBrowserPurpose::Picker
                              ? mode
                              : QtMaterialBrowserUsageMode::All);
   {
     const QSignalBlocker blocker(filter_button_);
     filter_button_->setChecked(mode != QtMaterialBrowserUsageMode::All);
   }
+  refresh_usage_presentation();
   refresh_content_page();
   update_accept_enabled();
+}
+
+void QtMaterialBrowserWindow::show_thumbnail_size_popup() {
+  if (!thumbnail_size_popup_ || thumbnail_size_button_ == nullptr) {
+    return;
+  }
+  if (thumbnail_size_popup_->isVisible()) {
+    thumbnail_size_popup_->close();
+    return;
+  }
+  if (filter_popup_) {
+    filter_popup_->close();
+  }
+  if (QLayout *layout = thumbnail_size_popup_->layout()) {
+    layout->setContentsMargins(ui_scale_metrics_.margins(QMargins(8, 8, 8, 8)));
+    layout->setSpacing(ui_scale_metrics_.px(6));
+  }
+  show_popup_below(*thumbnail_size_popup_, *thumbnail_size_button_);
+  tile_slider_->setFocus(Qt::PopupFocusReason);
+}
+
+void QtMaterialBrowserWindow::refresh_usage_presentation() {
+  const bool browsing = purpose_ != QtMaterialBrowserPurpose::Picker;
+  const QString chip_text = usage_mode_ == QtMaterialBrowserUsageMode::Used
+                                ? labels_.filter_used : labels_.filter_not_used;
+  if (usage_chip_label_->text() != chip_text) {
+    usage_chip_label_->setText(chip_text);
+  }
+  if (filtered_by_->text() != labels_.filtered_by) {
+    filtered_by_->setText(labels_.filtered_by);
+  }
+  const QString remove_label = labels_.remove_usage_filter.arg(chip_text);
+  if (usage_chip_remove_->toolTip() != remove_label) {
+    usage_chip_remove_->setToolTip(remove_label);
+  }
+  if (usage_chip_remove_->accessibleName() != remove_label) {
+    usage_chip_remove_->setAccessibleName(remove_label);
+  }
+  const bool show_chip = browsing && host_ == QtMaterialBrowserHost::Embedded &&
+                         usage_mode_ != QtMaterialBrowserUsageMode::All;
+  if (active_filters_->isHidden() == show_chip) {
+    active_filters_->setVisible(show_chip);
+  }
+  const QString filter_tooltip =
+      show_chip ? labels_.filter_active.arg(labels_.filter) : labels_.filter;
+  if (filter_button_->toolTip() != filter_tooltip) {
+    filter_button_->setToolTip(filter_tooltip);
+  }
+  if (filter_button_->accessibleDescription() != filter_tooltip) {
+    filter_button_->setAccessibleDescription(filter_tooltip);
+  }
+  QStringList messages = usage_snapshot_.errors;
+  if (!usage_snapshot_.complete &&
+      (usage_snapshot_.revision != 0 || usage_mode_ != QtMaterialBrowserUsageMode::All)) {
+    messages.prepend(labels_.usage_incomplete);
+  }
+  messages.removeDuplicates();
+  const QString status = browsing ? messages.join(QLatin1Char('\n')) : QString{};
+  if (usage_status_->text() != status) {
+    usage_status_->setText(status);
+  }
+  if (usage_status_->isHidden() == !status.isEmpty()) {
+    usage_status_->setVisible(!status.isEmpty());
+  }
+}
+
+void QtMaterialBrowserWindow::refresh_usage_badge_style() {
+  if (usage_chip_remove_ == nullptr) {
+    return;
+  }
+  active_filters_->layout()->setContentsMargins(0, 0, 0, 0);
+  active_filters_->layout()->setSpacing(ui_scale_metrics_.px(6));
+  usage_chip_->layout()->setContentsMargins(
+      ui_scale_metrics_.margins(QMargins(7, 2, 2, 2)));
+  usage_chip_->layout()->setSpacing(ui_scale_metrics_.px(3));
+  usage_chip_remove_->setFixedSize(ui_scale_metrics_.size(QSize(20, 20)));
+  usage_chip_remove_->setIconSize(ui_scale_metrics_.size(QSize(12, 12)));
+  usage_chip_remove_->setIcon(qt_scalable_glyph_icon(
+      QtScalableGlyph::Close, palette().color(QPalette::WindowText)));
+  static_cast<UsageFilterBadge *>(usage_chip_)->apply_ui_scale(ui_scale_metrics_);
 }
 
 void QtMaterialBrowserWindow::show_filter_popup() {
@@ -1568,16 +1940,28 @@ void QtMaterialBrowserWindow::show_filter_popup() {
     guard->filter_button_->setChecked(
         guard->usage_mode_ != QtMaterialBrowserUsageMode::All);
   };
-  if (purpose_ != QtMaterialBrowserPurpose::ActiveMaterial) {
+  if (purpose_ == QtMaterialBrowserPurpose::Picker) {
     restore_button_state();
     return;
   }
   if (filter_popup_) {
-    filter_popup_->close();
-    restore_button_state();
-    return;
+    if (filter_popup_->isVisible()) {
+      filter_popup_->close();
+      restore_button_state();
+      return;
+    }
+    // A choice closes immediately, but Qt deletes the native popup later.
+    // Keep it tracked until then so browser teardown retires it safely; an
+    // immediate reopen can dispose it before constructing its replacement.
+    delete filter_popup_.data();
+    if (!guard) {
+      return;
+    }
   }
 
+  if (thumbnail_size_popup_) {
+    thumbnail_size_popup_->close();
+  }
   const std::uint64_t generation = project_generation_;
   const std::uint64_t usage_revision = usage_snapshot_.revision;
   auto *popup = new QFrame(this, Qt::Popup | Qt::FramelessWindowHint);
@@ -1598,6 +1982,10 @@ void QtMaterialBrowserWindow::show_filter_popup() {
   used->setObjectName(QStringLiteral("materialBrowser.filterUsed"));
   auto *not_used = new QCheckBox(labels_.filter_not_used, popup);
   not_used->setObjectName(QStringLiteral("materialBrowser.filterNotUsed"));
+  not_used->setEnabled(usage_snapshot_.complete);
+  if (!usage_snapshot_.complete) {
+    not_used->setToolTip(labels_.usage_incomplete);
+  }
   auto *group = new QButtonGroup(popup);
   group->setExclusive(true);
   group->addButton(used);
@@ -1607,79 +1995,84 @@ void QtMaterialBrowserWindow::show_filter_popup() {
   layout->addWidget(used);
   layout->addWidget(not_used);
 
-  auto *button_layout = new QHBoxLayout();
-  button_layout->setContentsMargins(0, 0, 0, 0);
-  auto *clear = new QPushButton(labels_.filter_clear, popup);
-  auto *cancel = new QPushButton(labels_.filter_cancel, popup);
-  auto *apply = new QPushButton(labels_.filter_apply, popup);
-  clear->setObjectName(QStringLiteral("materialBrowser.filterClear"));
-  apply->setObjectName(QStringLiteral("materialBrowser.filterApply"));
-  cancel->setObjectName(QStringLiteral("materialBrowser.filterCancel"));
-  button_layout->addWidget(clear);
-  button_layout->addStretch(1);
-  button_layout->addWidget(cancel);
-  button_layout->addWidget(apply);
-  layout->addLayout(button_layout);
-
-  QObject::connect(clear, &QPushButton::clicked, popup,
-                   [group, used, not_used]() {
-                     group->setExclusive(false);
-                     used->setChecked(false);
-                     not_used->setChecked(false);
-                     group->setExclusive(true);
-                   });
-  QObject::connect(cancel, &QPushButton::clicked, popup, &QWidget::close);
-
   const QPointer<QWidget> popup_guard(popup);
-  QObject::connect(apply, &QPushButton::clicked, popup,
-                   [guard, popup_guard, generation, usage_revision, used,
-                    not_used]() {
-    if (!popup_guard) {
-      return;
+  const auto dismiss_embedded_popup = [guard, popup_guard]() {
+    if (popup_guard) {
+      popup_guard->close();
     }
-    if (guard && guard->filter_popup_ == popup_guard &&
-        generation == guard->project_generation_ &&
-        usage_revision == guard->usage_snapshot_.revision &&
-        guard->purpose_ == QtMaterialBrowserPurpose::ActiveMaterial) {
-      const QtMaterialBrowserUsageMode staged_mode =
-          used->isChecked() ? QtMaterialBrowserUsageMode::Used
-          : not_used->isChecked() ? QtMaterialBrowserUsageMode::NotUsed
-                                  : QtMaterialBrowserUsageMode::All;
-      guard->apply_usage_mode(staged_mode);
+    if (guard && guard->filter_popup_ == popup_guard) {
+      guard->filter_button_->setFocus(Qt::PopupFocusReason);
     }
-    popup_guard->close();
-  });
+  };
+  const auto apply_choice =
+      [guard, popup_guard, generation, usage_revision](QtMaterialBrowserUsageMode mode) {
+        if (guard && popup_guard && guard->filter_popup_ == popup_guard &&
+            popup_guard->isVisible() &&
+            generation == guard->project_generation_ &&
+            usage_revision == guard->usage_snapshot_.revision &&
+            guard->purpose_ != QtMaterialBrowserPurpose::Picker) {
+          guard->apply_usage_mode(mode);
+        }
+      };
+  if (host_ == QtMaterialBrowserHost::Embedded) {
+    QObject::connect(used, &QCheckBox::clicked, popup,
+                     [apply_choice, dismiss_embedded_popup]() {
+                       apply_choice(QtMaterialBrowserUsageMode::Used);
+                       dismiss_embedded_popup();
+                     });
+    QObject::connect(not_used, &QCheckBox::clicked, popup,
+                     [apply_choice, dismiss_embedded_popup]() {
+                       apply_choice(QtMaterialBrowserUsageMode::NotUsed);
+                       dismiss_embedded_popup();
+                     });
+  } else {
+    auto *button_layout = new QHBoxLayout();
+    button_layout->setContentsMargins(0, 0, 0, 0);
+    auto *clear = new QPushButton(labels_.filter_clear, popup);
+    auto *cancel = new QPushButton(labels_.filter_cancel, popup);
+    auto *apply = new QPushButton(labels_.filter_apply, popup);
+    clear->setObjectName(QStringLiteral("materialBrowser.filterClear"));
+    apply->setObjectName(QStringLiteral("materialBrowser.filterApply"));
+    cancel->setObjectName(QStringLiteral("materialBrowser.filterCancel"));
+    button_layout->addWidget(clear);
+    button_layout->addStretch(1);
+    button_layout->addWidget(cancel);
+    button_layout->addWidget(apply);
+    layout->addLayout(button_layout);
+    QObject::connect(clear, &QPushButton::clicked, popup,
+                     [group, used, not_used]() {
+                       group->setExclusive(false);
+                       used->setChecked(false);
+                       not_used->setChecked(false);
+                       group->setExclusive(true);
+                     });
+    QObject::connect(cancel, &QPushButton::clicked, popup, &QWidget::close);
+    QObject::connect(apply, &QPushButton::clicked, popup,
+                     [apply_choice, popup_guard, used, not_used]() {
+                       apply_choice(used->isChecked()
+                                        ? QtMaterialBrowserUsageMode::Used
+                                    : not_used->isChecked()
+                                        ? QtMaterialBrowserUsageMode::NotUsed
+                                        : QtMaterialBrowserUsageMode::All);
+                       if (popup_guard) {
+                         popup_guard->close();
+                       }
+                     });
+  }
   auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), popup);
   escape->setContext(Qt::WidgetWithChildrenShortcut);
-  QObject::connect(escape, &QShortcut::activated, popup, &QWidget::close);
+  if (host_ == QtMaterialBrowserHost::Embedded) {
+    QObject::connect(escape, &QShortcut::activated, popup,
+                     dismiss_embedded_popup);
+  } else {
+    QObject::connect(escape, &QShortcut::activated, popup, &QWidget::close);
+  }
   QObject::connect(popup, &QObject::destroyed, this,
                    [restore_button_state]() { restore_button_state(); });
 
   restore_button_state();
   popup->setMinimumWidth(ui_scale_metrics_.px(240));
-  popup->adjustSize();
-  const QPoint below = filter_button_->mapToGlobal(
-      QPoint(0, filter_button_->height()));
-  QPoint position = below;
-  QScreen *popup_screen = QGuiApplication::screenAt(below);
-  if (popup_screen == nullptr) {
-    popup_screen = filter_button_->screen();
-  }
-  if (popup_screen != nullptr) {
-    const QRect available = popup_screen->availableGeometry();
-    const int maximum_x =
-        std::max(available.left(), available.right() - popup->width() + 1);
-    position.setX(std::clamp(position.x(), available.left(), maximum_x));
-    if (position.y() + popup->height() - 1 > available.bottom()) {
-      position.setY(filter_button_->mapToGlobal(QPoint(0, 0)).y() -
-                    popup->height());
-    }
-    const int maximum_y =
-        std::max(available.top(), available.bottom() - popup->height() + 1);
-    position.setY(std::clamp(position.y(), available.top(), maximum_y));
-  }
-  popup->move(position);
-  popup->show();
+  show_popup_below(*popup, *filter_button_);
   (usage_mode_ == QtMaterialBrowserUsageMode::NotUsed ? not_used : used)
       ->setFocus(Qt::PopupFocusReason);
 }
@@ -1727,7 +2120,7 @@ bool QtMaterialBrowserWindow::is_protected_material(
 
 void QtMaterialBrowserWindow::show_material_menu(
     const QModelIndex &target_index, const QPoint &global_position) {
-  if (purpose_ != QtMaterialBrowserPurpose::ActiveMaterial) {
+  if (purpose_ == QtMaterialBrowserPurpose::Picker) {
     return;
   }
   const QtMaterialBrowserItem *target_item = item_for_index(target_index);
@@ -1743,7 +2136,7 @@ void QtMaterialBrowserWindow::show_material_menu(
   const QStringList selected_ids = selected_material_ids();
   const QString destination = selected_folder();
   const std::uint64_t generation = project_generation_;
-  const std::uint64_t dependency_revision = usage_snapshot_.revision;
+  const std::uint64_t dependency_revision = dependency_revision_;
   const std::uint64_t presentation_revision = material_presentation_revision_;
   const std::uint64_t action_eligibility_revision =
       action_eligibility_revision_;
@@ -1782,6 +2175,7 @@ void QtMaterialBrowserWindow::show_material_menu(
 
   QPointer<QMenu> menu = new QMenu(this);
   menu->setObjectName(QStringLiteral("materialBrowser.contextMenu"));
+  QPointer<QAction> edit_material;
   QPointer<QAction> copy_texture_name;
   QPointer<QAction> copy_texture_path;
   QPointer<QAction> open_file_location;
@@ -1799,6 +2193,10 @@ void QtMaterialBrowserWindow::show_material_menu(
     return action;
   };
   if (target_item != nullptr) {
+    edit_material = add_action(labels_.edit_material,
+                               QStringLiteral("materialBrowser.action.editMaterial"));
+    edit_material->setEnabled(static_cast<bool>(open_material_) &&
+                               target_item->valid() && target_item->available);
     copy_texture_name =
         add_action(labels_.copy_texture_name,
                    QStringLiteral("materialBrowser.action.copyTextureName"));
@@ -1849,8 +2247,11 @@ void QtMaterialBrowserWindow::show_material_menu(
   QAction *chosen = menu->exec(global_position);
   QtMaterialBrowserAction action = QtMaterialBrowserAction::CopyTextureName;
   bool recognized_action = true;
+  bool edit_requested = false;
   if (!menu || chosen == nullptr) {
     recognized_action = false;
+  } else if (chosen == edit_material.data()) {
+    edit_requested = true;
   } else if (chosen == copy_texture_name.data()) {
     action = QtMaterialBrowserAction::CopyTextureName;
   } else if (chosen == copy_texture_path.data()) {
@@ -1882,10 +2283,10 @@ void QtMaterialBrowserWindow::show_material_menu(
       [&guard, generation, dependency_revision, presentation_revision,
        action_eligibility_revision, target_id, selected_ids, destination]() {
     if (!guard || generation != guard->project_generation_ ||
-        dependency_revision != guard->usage_snapshot_.revision ||
+        dependency_revision != guard->dependency_revision_ ||
         presentation_revision != guard->material_presentation_revision_ ||
         action_eligibility_revision != guard->action_eligibility_revision_ ||
-        guard->purpose_ != QtMaterialBrowserPurpose::ActiveMaterial ||
+        guard->purpose_ == QtMaterialBrowserPurpose::Picker ||
         guard->selected_material_ids() != selected_ids ||
         guard->selected_folder() != destination) {
       return false;
@@ -1898,8 +2299,17 @@ void QtMaterialBrowserWindow::show_material_menu(
             guard->grid_view_->selectionModel()->currentIndex());
     return current != nullptr && current->stable_id == target_id;
   };
-  if (!recognized_action || !context_is_current() ||
-      !guard->material_action_) {
+  if (!recognized_action || !context_is_current()) {
+    return;
+  }
+  if (edit_requested) {
+    const OpenMaterialCallback callback = guard->open_material_;
+    if (callback) {
+      callback(target);
+    }
+    return;
+  }
+  if (!guard->material_action_) {
     return;
   }
 
@@ -1949,7 +2359,7 @@ void QtMaterialBrowserWindow::show_material_menu(
 }
 
 void QtMaterialBrowserWindow::show_folder_menu(const QPoint &position) {
-  if (purpose_ != QtMaterialBrowserPurpose::ActiveMaterial) {
+  if (purpose_ == QtMaterialBrowserPurpose::Picker) {
     return;
   }
   if (auto *item = folder_tree_->itemAt(position)) {
@@ -1987,7 +2397,7 @@ void QtMaterialBrowserWindow::show_folder_menu(const QPoint &position) {
         return guard && generation == guard->project_generation_ &&
                action_eligibility_revision ==
                    guard->action_eligibility_revision_ &&
-               guard->purpose_ == QtMaterialBrowserPurpose::ActiveMaterial &&
+               guard->purpose_ != QtMaterialBrowserPurpose::Picker &&
                guard->selected_folder() == folder;
       };
   if (action == FolderAction::None || !context_is_current()) {
@@ -2036,7 +2446,7 @@ void QtMaterialBrowserWindow::show_folder_menu(const QPoint &position) {
 bool QtMaterialBrowserWindow::receive_folder_drop(const QMimeData *data,
                                                   const QString &destination,
                                                   bool execute) {
-  if (data == nullptr || purpose_ != QtMaterialBrowserPurpose::ActiveMaterial ||
+  if (data == nullptr || purpose_ == QtMaterialBrowserPurpose::Picker ||
       normalized_folder(destination).isEmpty()) {
     return false;
   }
@@ -2110,18 +2520,22 @@ const QtMaterialBrowserItem *QtMaterialBrowserWindow::item_for_index(
   return &model_->items()[static_cast<std::size_t>(source_index.row())];
 }
 
-void QtMaterialBrowserWindow::activate_index(const QModelIndex &index) {
+void QtMaterialBrowserWindow::assign_index(const QModelIndex &index) {
   const QtMaterialBrowserItem *item = item_for_index(index);
-  if (purpose_ != QtMaterialBrowserPurpose::ActiveMaterial ||
-      item == nullptr || !item->valid() || !activate_material_) {
+  if (host_ != QtMaterialBrowserHost::Embedded ||
+      purpose_ != QtMaterialBrowserPurpose::FaceAssignment ||
+      !assignment_available_ || item == nullptr || !item->valid() ||
+      !assign_material_) {
     return;
   }
-  activate_material_(item->reference);
+  const QuaderMaterialReference reference = item->reference;
+  const AssignMaterialCallback callback = assign_material_;
+  callback(reference);
 }
 
 void QtMaterialBrowserWindow::open_index(const QModelIndex &index) {
   const QtMaterialBrowserItem *item = item_for_index(index);
-  if (purpose_ != QtMaterialBrowserPurpose::ActiveMaterial ||
+  if (purpose_ == QtMaterialBrowserPurpose::Picker ||
       item == nullptr || !item->valid() || !open_material_) {
     return;
   }
@@ -2134,14 +2548,19 @@ void QtMaterialBrowserWindow::accept_selected_material() {
   if (item == nullptr || !item->valid()) {
     return;
   }
-  if (purpose_ == QtMaterialBrowserPurpose::ActiveMaterial) {
-    if (activate_material_) {
-      activate_material_(item->reference);
+  if (purpose_ == QtMaterialBrowserPurpose::FaceAssignment) {
+    assign_index(grid_view_->selectionModel()->currentIndex());
+  } else if (purpose_ == QtMaterialBrowserPurpose::Picker) {
+    const QuaderMaterialReference reference = item->reference;
+    const AcceptMaterialCallback callback = accept_material_;
+    QPointer<QtMaterialBrowserWindow> guard(this);
+    if (callback) {
+      callback(reference);
     }
-  } else if (accept_material_) {
-    accept_material_(item->reference);
+    if (guard) {
+      guard->close();
+    }
   }
-  close();
 }
 
 } // namespace quader

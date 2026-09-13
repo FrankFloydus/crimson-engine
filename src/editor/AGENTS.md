@@ -23,6 +23,7 @@ file except through prior written authorization from Francesco Di Blasi.
 | Live material albedo drafts | `material/standard_material_edit_session_service.*`, `render/standard_material_render_snapshot_adapter.*` |
 | Material folders and permanent deletion | `material/project_material_organization_service.*`, `material/project_material_deletion_service.*` |
 | Saved/live scene and material dependencies | `material/project_asset_dependency_service.*` |
+| Retained actual project-wide surface material usage | `material/project_material_usage_service.*` |
 
 - `ModelingSessionService` adapts the portable core; it must not become another modeling owner.
 - Structural actions must preserve scene state, SDK bindings, component selection, and chronological

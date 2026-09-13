@@ -210,11 +210,10 @@ TEST_F(ProjectMaterialOrganizationTests,
 }
 
 TEST_F(ProjectMaterialOrganizationTests,
-       BatchMovesPreserveDirtyDraftPendingTextureAndActiveIdentity) {
+       BatchMovesPreserveDirtyDraftPendingTextureAndMaterialIdentity) {
   folder("Materials", "Target");
   const auto first = import_image("Materials", "oak.png");
   const auto second = import_image("Materials", "stone.png");
-  ASSERT_TRUE(editor_.project_assets().set_active_material(first).ok());
   auto &draft = project_.standard_material_editor();
   ASSERT_TRUE(draft.open(first).ok);
   ASSERT_TRUE(draft.set_name("Unsaved name").ok);
@@ -235,7 +234,8 @@ TEST_F(ProjectMaterialOrganizationTests,
   EXPECT_TRUE(draft.current()->dirty);
   EXPECT_EQ(draft.current()->path->portable_string(), "Materials/Target/oak.qmat");
   EXPECT_GT(draft.current()->draft_revision, before.draft_revision);
-  EXPECT_EQ(project_.active_material_id(), first);
+  ASSERT_NE(project_.material_catalog().find(first), nullptr);
+  EXPECT_EQ(project_.material_catalog().find(first)->material.id, first);
   ASSERT_TRUE(draft.save().ok);
   EXPECT_EQ(project_.material_catalog().find(first)->material.name, "Unsaved name");
   EXPECT_FALSE(std::filesystem::exists(root_ / "Materials/oak.qmat"));

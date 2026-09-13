@@ -776,10 +776,8 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
   if (!scanned.ok()) {
     return fail_with_rollback(scanned.error().message);
   }
-  const bool activate = save_as || !current_->snapshot.path.has_value();
   ProjectSessionResult installed = project_->install_material_catalog(
-      scanned.take_value(), activate ? std::optional(document.id)
-                                     : std::nullopt);
+      scanned.take_value());
   if (!installed.ok) {
     return fail_with_rollback(installed.message);
   }

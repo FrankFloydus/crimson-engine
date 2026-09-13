@@ -9,6 +9,7 @@
 #include "support/guardrail_file_scan.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <set>
@@ -230,9 +231,45 @@ bool is_documentation_only_example(const std::string &source) {
 
 bool allowed_public_behavior_harness_use(std::string_view relative,
                                          std::string_view line) {
-  (void)relative;
-  (void)line;
-  return false;
+  if (relative == "tests/face_texture_mirror_api_tests.cpp") {
+    // BehaviorScenario snapshots omit authored corner UVs, normals and
+    // occurrence sampling. This fixture inspects their published mesh and
+    // injects publication failures to verify exact rollback. Its one native
+    // sampling setter establishes the occurrence fixture; all material/UV,
+    // selection and history actions still enter through QuaderEditorApi.
+    const std::string trimmed = trim(std::string(line));
+    const std::array<std::string_view, 8> fixture_access{
+        "#include \"api/quader_api_session_internal_access.hpp\"",
+        "#include \"editor/modeling/services/modeling_session_service.hpp\"",
+        "SceneSession session;",
+        "QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};",
+        "auto mesh = session.modeling().compile_object_mesh(object.modeling_object_id);",
+        "ASSERT_TRUE(session.scene().set_texture_mapping(object.entity,",
+        "session.modeling().set_modeling_sdk_projection_failure_for_tests(point);",
+        "session.modeling().set_modeling_sdk_projection_failure_for_tests(",
+    };
+    return std::find(fixture_access.begin(), fixture_access.end(), trimmed) !=
+           fixture_access.end();
+  }
+  if (relative != "tests/face_texture_canvas_api_tests.cpp") {
+    return false;
+  }
+  // The canvas API fixture owns a standalone session and observes publication
+  // counters/failures. Editing, selection and history still use the public API.
+  const std::string trimmed = trim(std::string(line));
+  const std::array<std::string_view, 9> fixture_access{
+      "#include \"api/quader_api_session_internal_access.hpp\"",
+      "#include \"editor/modeling/services/modeling_session_service.hpp\"",
+      "SceneSession session;",
+      "QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};",
+      "harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(point);",
+      "harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(ModelingSdkProjectionFailurePoint::None);",
+      "harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(",
+      "const auto before = harness.session.modeling().modeling_sdk_projection_stats_for_tests();",
+      "const auto after = harness.session.modeling().modeling_sdk_projection_stats_for_tests();",
+  };
+  return std::find(fixture_access.begin(), fixture_access.end(), trimmed) !=
+         fixture_access.end();
 }
 
 std::vector<std::string_view> ui_mutating_owner_api_tokens() {
@@ -456,9 +493,6 @@ TEST(ProgrammaticApiGuardrailTests,
        "kEditRepeatLastAction",
        {"kHistoryRepeatLastAction"}},
       {"edit.delete", "kDeleteSelection", {"kModelingDeleteSelection"}},
-      {"edit.apply_material",
-       "kApplyMaterial",
-       {"kModelingApplyActiveMaterial"}},
   };
 
   std::set<std::string> expected_duplicate_ids;
@@ -1419,7 +1453,7 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations
       "modeling.select_all(",
       "modeling.clear_selection(",
       "modeling.delete_component_selection(",
-      "modeling.apply_active_material(",
+      "modeling.apply_material(",
       "context.modeling.execute_instant_operation(",
       "context.modeling.execute_context_action(",
       "context.modeling.commit_active_operation_preview(",
@@ -1443,7 +1477,7 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations
       "context.modeling.select_all(",
       "context.modeling.clear_selection(",
       "context.modeling.delete_component_selection(",
-      "context.modeling.apply_active_material(",
+      "context.modeling.apply_material(",
   };
 
   for (const std::filesystem::path &root :
@@ -2587,9 +2621,9 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_NE(editor_api.find("QuaderProjectAssetsApi &project_assets()"),
             std::string::npos);
   EXPECT_NE(project_assets_api.find("materials() const"), std::string::npos);
-  EXPECT_NE(project_assets_api.find("active_material() const"),
+  EXPECT_EQ(project_assets_api.find("active_material() const"),
             std::string::npos);
-  EXPECT_NE(project_assets_api.find("set_active_material("),
+  EXPECT_EQ(project_assets_api.find("set_active_material("),
             std::string::npos);
   EXPECT_NE(project_assets_api.find("material_preview("),
             std::string::npos);
@@ -2606,13 +2640,15 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_NE(ui_system.find(
                 "editor_->project_assets().material_presentation_revision()"),
             std::string::npos);
-  EXPECT_NE(ui_system.find("editor_->project_assets().active_material()"),
+  EXPECT_EQ(ui_system.find("editor_->project_assets().active_material()"),
             std::string::npos);
-  EXPECT_NE(ui_system.find("editor_->project_assets().set_active_material("),
+  EXPECT_EQ(ui_system.find("editor_->project_assets().set_active_material("),
             std::string::npos);
   EXPECT_NE(
       ui_system.find("editor_->project_assets().import_textures_as_materials("),
       std::string::npos);
+  EXPECT_NE(ui_system.find("editor_->modeling().apply_material_to_selected_faces("),
+            std::string::npos);
   EXPECT_EQ(ui_system.find("material_catalog()"), std::string::npos);
   EXPECT_EQ(browser.find("ProjectSession"), std::string::npos);
   EXPECT_EQ(browser.find("AssetRegistry"), std::string::npos);
@@ -2623,6 +2659,8 @@ TEST(ProgrammaticApiGuardrailTests,
   const std::filesystem::path root = source_root();
   const std::string editor_api =
       read_file(root / "src/api/quader_editor_api.hpp");
+  const std::string api_types =
+      read_file(root / "src/api/quader_api_types.hpp");
   const std::string materials_api =
       read_file(root / "src/api/quader_materials_api.hpp");
   const std::string materials_api_source =
@@ -2639,9 +2677,14 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_NE(editor_api.find("const QuaderMaterialsApi &materials() const"),
             std::string::npos);
 
-  for (std::string_view typed_surface : {
+  for (std::string_view reference_type : {
            "enum class QuaderMaterialReferenceKind",
            "struct QuaderMaterialReference final",
+       }) {
+    EXPECT_NE(api_types.find(reference_type), std::string::npos)
+        << reference_type;
+  }
+  for (std::string_view typed_surface : {
            "enum class QuaderMaterialUsageScope",
            "class QuaderMaterialsApi final",
            "used_materials(QuaderMaterialUsageScope scope) const",

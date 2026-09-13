@@ -32,6 +32,13 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 - Dependency records contain stable `ProjectAssetId`, kind, and project-relative path. Project
   sessions populate them from referenced materials and validate them against the project catalog.
   `ProjectAssetResolver`/`ProjectFileSystem` own resolution and containment.
+- Material usage is a separate read-only projection: actual authored face slots, nonempty
+  compiled primitives, and solid curves. It validates topology through the SDK and reuses
+  slots for shared geometry chunks without compiling render geometry. Its isolated
+  [schema-10 usage dialect](schema/qdr_scene_usage_schema10.fbs) is preserved from commit
+  `42d4b430` and accepts only the retired metadata-10/geometry-2 wire format for this purpose.
+  Usage completeness never establishes that a scene can be opened, rewritten, or safely
+  inspected by the conservative deletion dependency reader.
 
 ## Compatibility that must survive
 

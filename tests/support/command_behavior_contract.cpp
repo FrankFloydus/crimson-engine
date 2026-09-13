@@ -162,9 +162,6 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kUngroupSelection, Fixture::GroupSelection,
                kSceneMutationDomains, Outcome::ChangeRequired,
                UndoRepeat::Undoable),
-      contract(quader_command::kApplyMaterial,
-               Fixture::SingleFaceSelection, kTopologyDomains,
-               Outcome::SuccessRequired, UndoRepeat::UndoableAndRepeatable),
       contract(quader_command::kUiSearchCommands, Fixture::ExternalRuntime,
                Domain::ExternalRuntime, Outcome::MayReject, UndoRepeat::None,
                kExternal),
@@ -619,11 +616,11 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                UndoRepeat::UndoableAndRepeatable),
       contract(quader_command::kModelingTextureFlipFaceHorizontal,
                Fixture::TextureFaceSelection,
-               kTextureDomains | Domain::Overlay, Outcome::ChangeRequired,
+               kTextureDomains, Outcome::ChangeRequired,
                UndoRepeat::UndoableAndRepeatable),
       contract(quader_command::kModelingTextureFlipFaceVertical,
                Fixture::TextureFaceSelection,
-               kTextureDomains | Domain::Overlay, Outcome::ChangeRequired,
+               kTextureDomains, Outcome::ChangeRequired,
                UndoRepeat::UndoableAndRepeatable),
       contract(quader_command::kModelingTextureFitBoth,
                Fixture::TextureFaceSelection,
@@ -784,9 +781,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 216U);
-#else
   static_assert(std::size(kContracts) == 215U);
+#else
+  static_assert(std::size(kContracts) == 214U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

@@ -29,29 +29,19 @@ public:
   DispatchedModelingToolHistoryCommand(
       ModelingSessionService &modeling, EditorSelectionService &selection,
       const ModelingCommandDispatcher &dispatcher, std::string tool_id,
-      std::string label, MaterialReference active_material)
+      std::string label)
       : ModelingMementoCommand(modeling, std::move(label)),
         selection_(selection), dispatcher_(dispatcher),
-        tool_id_(std::move(tool_id)), active_material_(active_material) {}
+        tool_id_(std::move(tool_id)) {}
 
 private:
-  ModelingSessionMemento capture_before_memento() override {
-    return modeling().capture_history_memento(tool_id_ == "assign_material");
-  }
-
-  ModelingSessionMemento capture_after_memento() override {
-    return modeling().capture_history_memento(tool_id_ == "assign_material");
-  }
-
   ModelingCommandResult execute_initial() override {
-    return dispatcher_.execute(tool_id_, modeling(), &selection_,
-                               active_material_);
+    return dispatcher_.execute(tool_id_, modeling(), &selection_);
   }
 
     EditorSelectionService& selection_;
     const ModelingCommandDispatcher& dispatcher_;
     std::string tool_id_;
-    MaterialReference active_material_;
 };
 
 /**
@@ -77,9 +67,9 @@ class ViewportModelingToolHistoryCommand final : public ModelingMementoCommand {
 public:
   ViewportModelingToolHistoryCommand(ModelingSessionService &modeling,
                                     ModelingViewportTool tool, std::string label,
-                                    MaterialReference active_material)
+                                    MaterialReference creation_material)
       : ModelingMementoCommand(modeling, std::move(label)), tool_(tool),
-        active_material_(active_material) {}
+        creation_material_(creation_material) {}
 
 private:
   ModelingSessionMemento capture_before_memento() override {
@@ -104,7 +94,7 @@ private:
       result = modeling().commit_knife_tool();
       break;
     case ModelingViewportTool::Poly:
-      result = modeling().commit_poly_tool(active_material_);
+      result = modeling().commit_poly_tool(creation_material_);
       break;
     case ModelingViewportTool::Mirror:
       result = modeling().finalize_mirror_tool();
@@ -119,7 +109,7 @@ private:
   }
 
   ModelingViewportTool tool_;
-  MaterialReference active_material_;
+  MaterialReference creation_material_;
 };
 
 ModelingCommandResult from_command_result(CommandResult result) {
@@ -142,7 +132,6 @@ std::string command_label(const CommandTool *tool, std::string_view tool_id) {
 ModelingCommandResult ModelingCommandExecutionService::execute(
     EditorHistoryService &history, ModelingSessionService &modeling,
     EditorSelectionService &selection, std::string_view tool_id,
-    MaterialReference active_material,
     SceneStructuralLifecycleService *structural_lifecycle) {
   const CommandTool *tool = dispatcher_.find(tool_id);
   if (tool == nullptr) {
@@ -196,7 +185,7 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
   }
 
   const ModelingCommandAvailability available =
-      dispatcher_.availability(tool_id, modeling, &selection, active_material);
+      dispatcher_.availability(tool_id, modeling, &selection);
   if (!available.enabled) {
     return {
         .ok = false,
@@ -208,13 +197,13 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
 
   if (tool->history_policy().mode !=
       ModelingCommandHistoryMode::ModelingUndoRedo) {
-    return dispatcher_.execute(*tool, modeling, &selection, active_material);
+    return dispatcher_.execute(*tool, modeling, &selection);
   }
 
   return from_command_result(
       history.execute(std::make_unique<DispatchedModelingToolHistoryCommand>(
           modeling, selection, dispatcher_, std::string(tool_id),
-          command_label(tool, tool_id), active_material)));
+          command_label(tool, tool_id))));
 }
 
 ModelingCommandResult ModelingCommandExecutionService::execute_untracked(
@@ -235,7 +224,7 @@ ModelingCommandResult ModelingCommandExecutionService::begin_preview(
     SceneStructuralLifecycleService *structural_lifecycle) {
   if (action_id == std::string_view("delete_selection") ||
       action_id == std::string_view("duplicate_meshes")) {
-    return execute(history, modeling, selection, action_id, {},
+    return execute(history, modeling, selection, action_id,
                    structural_lifecycle);
   }
 
@@ -285,7 +274,7 @@ ModelingCommandResult ModelingCommandExecutionService::cancel_preview(
 ModelingCommandResult ModelingCommandExecutionService::commit_viewport_tool(
     EditorHistoryService &history, ModelingSessionService &modeling,
     ModelingViewportTool tool, std::string label,
-    MaterialReference active_material) {
+    MaterialReference creation_material) {
   switch (tool) {
   case ModelingViewportTool::InsertEdgeLoop:
   case ModelingViewportTool::Cut:
@@ -303,13 +292,12 @@ ModelingCommandResult ModelingCommandExecutionService::commit_viewport_tool(
   }
   return from_command_result(
       history.execute(std::make_unique<ViewportModelingToolHistoryCommand>(
-          modeling, tool, std::move(label), active_material)));
+          modeling, tool, std::move(label), creation_material)));
 }
 
 ModelingCommandAvailability ModelingCommandExecutionService::availability(
     ModelingSessionService &modeling, std::string_view tool_id,
     EditorSelectionService *selection,
-    MaterialReference active_material,
     SceneStructuralLifecycleService *structural_lifecycle) const {
   if (tool_id == std::string_view("delete_selection") &&
       selection != nullptr && selection->has_sub_selection()) {
@@ -334,8 +322,7 @@ ModelingCommandAvailability ModelingCommandExecutionService::availability(
           modeling.has_selected_scene_aware_delete_root())) {
     return ModelingCommandAvailability::available();
   }
-  return dispatcher_.availability(tool_id, modeling, selection,
-                                  active_material);
+  return dispatcher_.availability(tool_id, modeling, selection);
 }
 
 ModelingCommandHistoryPolicy ModelingCommandExecutionService::history_policy(

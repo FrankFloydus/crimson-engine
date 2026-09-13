@@ -273,10 +273,7 @@ constexpr std::string_view unobstructed_editor_command_keybinding_context() {
 
 bool is_material_viewport_action(
     const QuaderKeybindingActionKey &action) {
-  return action.action_id == "viewport.material.sample_face" ||
-         action.action_id ==
-             "viewport.material.apply_active_to_selection" ||
-         action.action_id == "viewport.material.apply_face_to_mesh" ||
+  return action.action_id == "viewport.material.apply_face_to_mesh" ||
          action.action_id == "viewport.material.transfer_face_texture";
 }
 
@@ -354,7 +351,6 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
          command_id == quader_command::kDuplicateSelection.string() ||
          command_id == quader_command::kGroupSelection.string() ||
          command_id == quader_command::kUngroupSelection.string() ||
-         command_id == quader_command::kApplyMaterial.string() ||
          command_id == quader_command::kSceneHideSelection.string() ||
          command_id ==
              quader_command::kSceneUnhideHiddenObjects.string();
@@ -618,9 +614,6 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kUngroupSelection)) {
     return "Ungroup Selection";
   }
-  if (is(quader_command::kApplyMaterial)) {
-    return "Apply Active Material to Selection";
-  }
   if (is(quader_command::kModelingCopyPivotFromActive)) {
     return "Copy Pivot from Active Object";
   }
@@ -804,9 +797,6 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kUngroupSelection.string()) {
-    return stable();
-  }
-  if (command_id == quader_command::kApplyMaterial.string()) {
     return stable();
   }
 
@@ -2360,16 +2350,6 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_command(
       quader_command::kUngroupSelection, "Ungroup Selection",
       [this] { return api_.scene().ungroup_selection(); }, "Shift+Ctrl+G");
-  register_modeling_tool_public_command(quader_command::kApplyMaterial,
-                                        "assign_material",
-                                        "Apply Material");
-  // The contextual host action is Face-only; the public assign-material tool
-  // also targets selected mesh and solidified-Curve surfaces, including group
-  // descendants, while normalizing whole-mesh face slots.
-  keybinding_target_catalog_.set_selection_modes(
-      quader_command::kApplyMaterial.string(),
-      kSelectionModeObject | kSelectionModeFace | kSelectionModeGroup,
-      unobstructed_editor_command_keybinding_context());
   register_command(
       quader_command::kModelingSnapMeshesToFloor,
       "Snap Meshes to Floor",

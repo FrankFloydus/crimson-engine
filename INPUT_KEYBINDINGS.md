@@ -117,6 +117,8 @@ Tool IDs used by input contexts come from the same descriptor catalog as tool ac
 - Persist only action groups whose effective mapping differs from defaults. Legacy target-level JSON
   remains loadable: latest assignment wins within a group, and stored `when` text is rebound to the
   current app-owned scope. Loading normalizes in memory without rewriting the legacy file.
+  Retired implicit-material assignments and removals are discarded by exact target ID; other
+  unknown targets remain errors, preserving strict validation of unrelated overrides.
 - Retained menus/tooltips refresh on keybinding commits/revisions, outside the frame loop. They must
   not enumerate the complete catalog or repeat unchanged Qt setters every frame.
 - Operation hints declare typed commands and gesture labels at the tool owner. The shared status

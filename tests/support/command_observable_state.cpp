@@ -1347,14 +1347,6 @@ std::string capture_assets(const CaptureData &data) {
                   serialized[index]);
     }
   }
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_material =
-      data.editor.project_assets().active_material();
-  writer.line("project_assets.active_available",
-              bool_text(active_material.ok()));
-  if (active_material.ok()) {
-    writer.line("project_assets.active",
-                project_material_text(active_material.value()));
-  }
   return std::move(writer).finish();
 }
 

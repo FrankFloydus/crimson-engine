@@ -16,11 +16,10 @@
 namespace quader {
 namespace {
 
-constexpr std::array<std::string_view, 13> kEventNames{
+constexpr std::array<std::string_view, 12> kEventNames{
     quader_event::kProjectOpened,
     quader_event::kProjectClosed,
     quader_event::kProjectAssetsChanged,
-    quader_event::kActiveProjectMaterialChanged,
     quader_event::kSceneOpened,
     quader_event::kActiveSceneChanged,
     quader_event::kSceneDirtyChanged,

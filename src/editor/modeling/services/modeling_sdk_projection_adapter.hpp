@@ -8,6 +8,7 @@
 
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/modeling_face_texture_settings.hpp"
+#include "editor/modeling/modeling_face_texture_canvas.hpp"
 #include "editor/modeling/modeling_uv_peel.hpp"
 #include "editor/modeling/operations/editor_operation.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
@@ -66,6 +67,7 @@ struct ModelingSdkProjectionStats {
   std::uint64_t preview_publication_count = 0;
   std::uint64_t selection_summary_build_count = 0;
   std::uint64_t face_texture_summary_build_count = 0;
+  std::uint64_t face_texture_canvas_build_count = 0;
   std::uint64_t uv_peel_summary_build_count = 0;
   std::uint64_t uv_peel_preparation_count = 0;
   std::uint64_t full_scene_reset_count = 0;
@@ -463,6 +465,14 @@ public:
   [[nodiscard]] ModelingSelectionExport export_selection() const;
   [[nodiscard]] ModelingSelectedFaceTextureSnapshot
   selected_face_texture_settings(bool include_whole_meshes = false) const;
+  [[nodiscard]] modeling::Result<modeling::FaceTextureCanvasChart>
+  face_texture_canvas(const ModelingFaceTextureTransferTarget &target) const;
+  [[nodiscard]] ModelingCommandResult refresh_face_texture_gesture(
+      const ModelingFaceTextureTransferTarget &target,
+      const modeling::FaceTextureCanvasMap &map);
+  [[nodiscard]] bool face_texture_gesture_active() const noexcept;
+  void set_face_texture_gesture_selection_cancel_handler(
+      std::function<ModelingCommandResult()> handler);
   [[nodiscard]] ModelingCommandResult apply_face_texture_updates(
       std::span<const ModelingFaceTextureUpdateBatch> batches);
   [[nodiscard]] ModelingCommandResult apply_face_texture_action(

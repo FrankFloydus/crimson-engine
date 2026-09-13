@@ -5180,6 +5180,72 @@ public:
                                       "Transfer face texture failed.");
   }
 
+  [[nodiscard]] modeling::Result<modeling::FaceTextureCanvasChart>
+  face_texture_canvas(const ModelingFaceTextureTransferTarget &target) const {
+    ++stats_.face_texture_canvas_build_count;
+    const auto object = sdk_object(target.modeling_object_id);
+    if (!object.has_value()) {
+      return modeling::Result<modeling::FaceTextureCanvasChart>::failure(
+          {.code = modeling::ErrorCode::InvalidId,
+           .message = "The face texture target is no longer live."});
+    }
+    auto document = face_texture_gesture_active()
+        ? session_.preview_document_copy(session_.preview_summary().id, *object)
+        : session_.document_copy(*object);
+    if (!document.ok()) {
+      return modeling::Result<modeling::FaceTextureCanvasChart>::failure(document.error());
+    }
+    return modeling::query_face_texture_canvas({
+        .key = static_cast<std::uint64_t>(target.modeling_object_id),
+        .document = &document.value(),
+        .face = target.face,
+        .world_from_local = to_sdk(target.world_from_local),
+        .sampling_from_local = to_sdk(target.sampling_from_local)});
+  }
+
+  [[nodiscard]] bool face_texture_gesture_active() const noexcept {
+    return preview_active() && active_preview_operation_id_ == "face_texture_gesture";
+  }
+
+  void set_face_texture_gesture_selection_cancel_handler(
+      std::function<ModelingCommandResult()> handler) {
+    face_texture_gesture_selection_cancel_handler_ = std::move(handler);
+  }
+
+  [[nodiscard]] ModelingCommandResult refresh_face_texture_gesture(
+      const ModelingFaceTextureTransferTarget &target,
+      const modeling::FaceTextureCanvasMap &map) {
+    if (preview_active() && !face_texture_gesture_active()) {
+      return failure("Apply or cancel the active preview before editing textures.");
+    }
+    const auto object = sdk_object(target.modeling_object_id);
+    if (!object.has_value()) return failure("The face texture target is no longer live.");
+    const auto preview = session_.preview_summary();
+    if (preview.active && !preflight_preview_mutation(preview.id)) {
+      return failure("Texture preview participants changed outside the gesture.");
+    }
+    const std::array<ObjectId, 1> objects{*object};
+    auto document = preview.active
+        ? session_.preview_base_document_copy(preview.id, *object)
+        : session_.document_copy(*object);
+    if (!document.ok()) return failure(document.error_message());
+    auto prepared = modeling::prepare_face_texture_canvas({
+        .key = static_cast<std::uint64_t>(target.modeling_object_id),
+        .document = &document.value(),
+        .face = target.face,
+        .world_from_local = to_sdk(target.world_from_local),
+        .sampling_from_local = to_sdk(target.sampling_from_local)}, map);
+    if (!prepared.ok()) return failure(prepared.error_message());
+    PreparedMeshPreviewBatch batch;
+    batch.changed = prepared.value().receipt.changed;
+    batch.updates.push_back({.object = *object,
+                             .document = std::move(prepared.value().document),
+                             .receipt = std::move(prepared.value().receipt)});
+    return preview.active
+        ? update_prepared_mesh_preview_transaction(std::move(batch), "Edit face texture failed.", true)
+        : begin_prepared_mesh_preview_transaction(objects, std::move(batch), "face_texture_gesture");
+  }
+
   [[nodiscard]] ModelingSelectedUvPeelSnapshot selected_uv_peel_edges() const {
     ++stats_.uv_peel_summary_build_count;
     ModelingSelectedUvPeelSnapshot result;
@@ -8271,6 +8337,13 @@ private:
   [[nodiscard]] PreviewSelectionEditState
   suspend_operation_preview_for_selection_edit() {
     PreviewSelectionEditState state;
+    if (face_texture_gesture_active() && face_texture_gesture_selection_cancel_handler_) {
+      const auto canceled = face_texture_gesture_selection_cancel_handler_();
+      state.ok = canceled.ok;
+      state.active = !canceled.ok;
+      state.message = canceled.message;
+      return state;
+    }
     if (uv_peel_selection_edit_in_progress_) {
       return state;
     }
@@ -12557,6 +12630,7 @@ private:
   AssetId curve_preview_asset_id_ = kInvalidAssetId;
   CurvePreviewSharingProof curve_preview_sharing_proof_;
   bool preview_changed_ = false;
+  std::function<ModelingCommandResult()> face_texture_gesture_selection_cancel_handler_;
   std::function<ModelingCommandResult()> uv_peel_preview_selection_refresh_handler_;
   std::function<void()> uv_peel_preview_before_selection_suspend_;
   std::function<void()> uv_peel_preview_after_selection_suspend_;
@@ -12957,6 +13031,27 @@ ModelingCommandResult ModelingSdkProjectionAdapter::transfer_face_texture(
     const ModelingFaceTextureTransferTarget &target,
     std::uint32_t target_material_slot) {
   return impl_->transfer_face_texture(source, target, target_material_slot);
+}
+
+modeling::Result<modeling::FaceTextureCanvasChart>
+ModelingSdkProjectionAdapter::face_texture_canvas(
+    const ModelingFaceTextureTransferTarget &target) const {
+  return impl_->face_texture_canvas(target);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::refresh_face_texture_gesture(
+    const ModelingFaceTextureTransferTarget &target,
+    const modeling::FaceTextureCanvasMap &map) {
+  return impl_->refresh_face_texture_gesture(target, map);
+}
+
+bool ModelingSdkProjectionAdapter::face_texture_gesture_active() const noexcept {
+  return impl_->face_texture_gesture_active();
+}
+
+void ModelingSdkProjectionAdapter::set_face_texture_gesture_selection_cancel_handler(
+    std::function<ModelingCommandResult()> handler) {
+  impl_->set_face_texture_gesture_selection_cancel_handler(std::move(handler));
 }
 
 ModelingSelectedUvPeelSnapshot

@@ -386,12 +386,26 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - TextureMappingComponent preserves occurrence-specific sampling without changing shared geometry.
   Materializing base UVs first inverts retained FaceTextureTransform; otherwise the edit is applied
   twice. Rotation numeric gestures use a captured per-face baseline, not accumulated displayed deltas.
+- Face Texture canvas gestures retain one planar chart and prepare every candidate from the
+  original UVs. Shared preview cancellation/commit must route through its gesture owner to clear
+  presentation state and dirty checkpoints; selection/scene replacement cannot leave a hidden
+  UV preview. Width/height scale the corresponding texture axis even after rotation, preserving
+  the opposite repeat length. Contracts: [canvas workflows](tests/face_texture_canvas_api_tests.cpp),
+  [gesture math](tests/face_texture_gesture_math_tests.cpp), [Qt canvas](tests/qt_face_texture_canvas_tests.cpp).
 - Texture scale clicks double/halve signed magnitudes between exact `1/8192` and `1024`;
   four-decimal display rounding must never feed the next step. Align Grid resets world-axis
   mapping to `0.125` map units per texel, zero shift/rotation, using each texture's dimensions
   (64-pixel fallback), independently of snap spacing and face size. Keep occurrence compensation.
   Owner/tests: [texture actions](src/sdk/core/modeling/src/face_texture_actions.cpp),
   [SDK texture workflows](tests/sdk/modeling_sdk_consumer_tests.cpp).
+- Flip Face UVs retains the legacy `FlipFaceHorizontal/Vertical` IDs but mirrors effective
+  U/V coordinates using `min + max - coordinate`, leaving geometry and scalar settings intact.
+  Treat as One uses the union of existing selected UV charts, without active-face reprojection.
+  Solve the mirrored coordinates back through the original transform and occurrence sampling;
+  preserve adjacent faces and return a publication no-op for a collapsed axis. Separate
+  Flip Texture actions retain scale-sign semantics. Contracts:
+  [native mirror workflows](tests/face_texture_mirror_api_tests.cpp),
+  [portable texture actions](src/sdk/core/modeling/src/face_texture_actions.cpp).
 - Face/View alignment retains settings but uses the same image-axis texel units as Grid:
   rotate/scale the generated chart, normalize by image width/height, then add UV shift.
   Subsequent rotation must use image-axis units too. Numeric rotation shares action preparation

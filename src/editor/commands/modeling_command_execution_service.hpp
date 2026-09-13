@@ -7,6 +7,7 @@
 #pragma once
 
 #include "editor/history/editor_history_service.hpp"
+#include "assets/material_reference.hpp"
 #include "editor/commands/modeling_command_dispatcher.hpp"
 
 #include <string>
@@ -28,7 +29,6 @@ public:
                                 ModelingSessionService &modeling,
                                 EditorSelectionService &selection,
                                 std::string_view tool_id,
-                                MaterialReference active_material = {},
                                 SceneStructuralLifecycleService *
                                     structural_lifecycle = nullptr);
 
@@ -55,14 +55,13 @@ public:
   ModelingCommandResult commit_viewport_tool(
       EditorHistoryService &history, ModelingSessionService &modeling,
       ModelingViewportTool tool, std::string label,
-      MaterialReference active_material = {});
+      MaterialReference creation_material = {});
 
   ModelingCommandResult cancel_preview(ModelingSessionService &modeling);
 
   [[nodiscard]] ModelingCommandAvailability
   availability(ModelingSessionService &modeling, std::string_view tool_id,
                EditorSelectionService *selection = nullptr,
-               MaterialReference active_material = {},
                SceneStructuralLifecycleService *structural_lifecycle =
                    nullptr) const;
 

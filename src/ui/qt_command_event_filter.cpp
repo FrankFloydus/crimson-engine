@@ -14,6 +14,7 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 
 #include <QAbstractButton>
@@ -498,7 +499,8 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       reset_pending_chord();
     }
     const bool native_tool_settings_editor_focused =
-        qt_object_belongs_to_tool_settings_panel(focus_widget) &&
+        (qt_object_belongs_to_tool_settings_panel(focus_widget) ||
+         qt_object_belongs_to_face_texture_panel(focus_widget)) &&
         (text_input_active || focused_combo_box(focus_widget) != nullptr);
     if (outliner_focused) {
       // Hover can transfer command ownership without a Qt focus event. Clear

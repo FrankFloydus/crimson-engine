@@ -42,7 +42,6 @@ inline constexpr QuaderCommandId kEditExitInstanceEdit{
     "edit.exit_instance_edit"};
 inline constexpr QuaderCommandId kGroupSelection{"edit.group"};
 inline constexpr QuaderCommandId kUngroupSelection{"edit.ungroup"};
-inline constexpr QuaderCommandId kApplyMaterial{"edit.apply_material"};
 
 inline constexpr QuaderCommandId kUiSearchCommands{"ui.search_commands"};
 
@@ -356,9 +355,6 @@ inline constexpr QuaderCommandId kModelingTextureJustifyBottom{
     "modeling.texture.justify_bottom"};
 inline constexpr QuaderCommandId kModelingTextureJustifyCenter{
     "modeling.texture.justify_center"};
-/// Deprecated compatibility spelling. Use kApplyMaterial for new C++ callers.
-inline constexpr QuaderCommandId kModelingApplyActiveMaterial{
-    "edit.apply_material"};
 inline constexpr QuaderCommandId kModelingApplyActivePreview{
     "modeling.apply_active_preview"};
 inline constexpr QuaderCommandId kModelingCancelActivePreview{
@@ -439,7 +435,6 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kEditExitInstanceEdit,
     kGroupSelection,
     kUngroupSelection,
-    kApplyMaterial,
     kUiSearchCommands,
 #ifndef NDEBUG
     kDevCopySelectionJson,

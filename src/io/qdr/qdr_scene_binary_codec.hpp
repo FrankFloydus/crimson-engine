@@ -63,6 +63,14 @@ struct QdrSceneBinaryDependencyDecodeResult final {
   QdrSceneBinaryDecodeStats stats;
 };
 
+/// Validated face-slot usage, including the isolated retired schema-10 dialect.
+struct QdrSceneBinaryMaterialUsageDecodeResult final {
+  std::string scene_name;
+  std::vector<ProjectAssetId> material_ids;
+  std::vector<AssetId> embedded_material_ids;
+  QdrSceneBinaryDecodeStats stats;
+};
+
 [[nodiscard]] QdrSceneBinaryEncodeResult
 encode_qdr_scene_binary(const QdrProjectWriteSnapshot &snapshot);
 [[nodiscard]] QdrSceneBinaryEncodeResult encode_qdr_scene_binary(
@@ -76,5 +84,13 @@ encode_qdr_scene_binary(const QdrProjectWriteSnapshot &snapshot);
 [[nodiscard]] QdrSceneBinaryDependencyDecodeResult
 decode_qdr_scene_binary_dependencies(
     const quader_io::QdrBinaryContainerReadResult &container);
+
+[[nodiscard]] QdrSceneBinaryMaterialUsageDecodeResult
+decode_qdr_scene_binary_material_usage(
+    const quader_io::QdrBinaryContainerReadResult &container);
+
+[[nodiscard]] std::vector<std::uint32_t>
+decode_qdr_geometry_material_slots(std::span<const std::byte> bytes,
+                                   std::uint16_t scene_schema_version);
 
 } // namespace quader

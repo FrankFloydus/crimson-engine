@@ -802,7 +802,6 @@ bool ViewportInputRouter::handle_shortcut(const ViewportShortcut &shortcut,
   case ViewportShortcutKind::MergeActive:
   case ViewportShortcutKind::MergeCenter:
   case ViewportShortcutKind::MirrorAxis:
-  case ViewportShortcutKind::ApplyMaterial:
     return true;
   case ViewportShortcutKind::None:
     return false;

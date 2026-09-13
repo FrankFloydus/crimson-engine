@@ -194,7 +194,6 @@ endif()
 set(QUADER_MODELING_TOOL_SOURCES
     src/editor/commands/modeling_command_dispatcher.cpp
     src/editor/commands/modeling_command_tool_catalog.cpp
-    src/editor/commands/modeling/assign_material_tool.cpp
     src/editor/commands/modeling/clear_selection_tool.cpp
     src/editor/commands/modeling/commit_box_preview_command.cpp
     src/editor/commands/modeling/scene_aware_delete_selection_command.cpp
@@ -265,6 +264,7 @@ add_library(quader_modeling STATIC
     src/editor/modeling/services/modeling_session_services.cpp
     src/editor/modeling/services/modeling_session_service.cpp
     src/editor/modeling/services/face_texture_edit_context.cpp
+    src/editor/modeling/services/face_texture_gesture_math.cpp
     src/editor/modeling/services/uv_peel_edit_context.cpp
     src/editor/modeling/services/modeling_transform_drag_service.cpp
     src/editor/modeling/runtime_state/modal_tool_runtime.cpp
@@ -415,6 +415,8 @@ add_library(quader_project_qdr_io STATIC
 set(QUADER_QDR_GENERATED_DIR "${QUADER_GENERATED_DIR}/qdr")
 set(QUADER_QDR_GENERATED_HEADER
     "${QUADER_QDR_GENERATED_DIR}/qdr_scene_generated.h")
+set(QUADER_QDR_USAGE_SCHEMA10_GENERATED_HEADER
+    "${QUADER_QDR_GENERATED_DIR}/qdr_scene_usage_schema10_generated.h")
 add_custom_command(
     OUTPUT "${QUADER_QDR_GENERATED_HEADER}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${QUADER_QDR_GENERATED_DIR}"
@@ -423,8 +425,17 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/io/qdr/schema/qdr_scene.fbs"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/io/qdr/schema/qdr_scene.fbs"
     VERBATIM)
+add_custom_command(
+    OUTPUT "${QUADER_QDR_USAGE_SCHEMA10_GENERATED_HEADER}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${QUADER_QDR_GENERATED_DIR}"
+    COMMAND flatbuffers::flatc --cpp --scoped-enums
+            -o "${QUADER_QDR_GENERATED_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/io/qdr/schema/qdr_scene_usage_schema10.fbs"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/io/qdr/schema/qdr_scene_usage_schema10.fbs"
+    VERBATIM)
 add_custom_target(quader_qdr_flatbuffers_generated
-    DEPENDS "${QUADER_QDR_GENERATED_HEADER}")
+    DEPENDS "${QUADER_QDR_GENERATED_HEADER}"
+            "${QUADER_QDR_USAGE_SCHEMA10_GENERATED_HEADER}")
 add_dependencies(quader_project_qdr_io quader_qdr_flatbuffers_generated)
 
 if(TARGET zstd::libzstd_shared)
@@ -489,6 +500,7 @@ add_library(quader_project_session STATIC
     src/editor/material/project_material_import_service.cpp
     src/editor/material/project_material_organization_service.cpp
     src/editor/material/project_material_deletion_service.cpp
+    src/editor/material/project_material_usage_service.cpp
     src/editor/material/project_material_persistence.cpp
     src/editor/material/standard_material_edit_session_service.cpp
     src/editor/render/standard_material_render_snapshot_adapter.cpp
@@ -900,14 +912,18 @@ target_link_libraries(quader_editor_viewport
 target_compile_features(quader_editor_viewport PUBLIC cxx_std_20)
 
 set(QUADER_MATERIAL_BROWSER_ICON_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_filter.png")
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_filter.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_import.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_thumbnail_size.png")
 
 add_library(quader_ui STATIC
     src/ui/console_panel.cpp
     src/ui/inspector_panel.cpp
     src/ui/layer_panel.cpp
     src/ui/outliner_panel.cpp
-    src/ui/qt_active_material_panel.cpp
+    src/ui/qt_face_texture_panel.cpp
+    src/ui/qt_face_texture_canvas.cpp
+    src/ui/qt_face_texture_controls.cpp
     src/ui/qt_application_cursor.cpp
     src/ui/qt_application_theme.cpp
     src/ui/qt_command_event_filter.cpp
@@ -1534,6 +1550,9 @@ if(QUADER_BUILD_TESTS)
         tests/radial_array_instance_tests.cpp
         tests/uv_instance_preview_tests.cpp
         tests/uv_native_sampling_tests.cpp
+        tests/face_texture_gesture_math_tests.cpp
+        tests/face_texture_canvas_api_tests.cpp
+        tests/face_texture_mirror_api_tests.cpp
         tests/uv_transform_acceptance_tests.cpp
         tests/mesh_quad_uv_interpolation_tests.cpp
         tests/local_stress_tests.cpp
@@ -1554,13 +1573,13 @@ if(QUADER_BUILD_TESTS)
         tests/outliner_panel_tests.cpp
         tests/retained_ui_presenter_tests.cpp
         tests/ui_panel_manager_tests.cpp
-        tests/qt_active_material_panel_tests.cpp
         tests/qt_auxiliary_window_state_tests.cpp
         tests/qt_application_theme_tests.cpp
         tests/qt_command_event_filter_tests.cpp
         tests/qt_command_palette_tests.cpp
         tests/qt_input_adapter_tests.cpp
         tests/qt_material_browser_window_tests.cpp
+        tests/qt_face_texture_canvas_tests.cpp
         tests/qt_material_find_replace_dialog_tests.cpp
         tests/qt_material_preview_surface_tests.cpp
         tests/qt_standard_material_preview_image_cache_tests.cpp
@@ -1592,6 +1611,7 @@ if(QUADER_BUILD_TESTS)
         tests/io_qdr_tests.cpp
         tests/inspector_material_tests.cpp
         tests/project_material_behavior_tests.cpp
+        tests/project_material_usage_tests.cpp
         tests/project_asset_dependency_tests.cpp
         tests/project_material_organization_tests.cpp
         tests/project_material_deletion_tests.cpp
@@ -1613,6 +1633,7 @@ if(QUADER_BUILD_TESTS)
         tests/curve_solid_render_tests.cpp
         tests/qdr_binary_container_tests.cpp
         tests/qdr_binary_scene_codec_tests.cpp
+        tests/qdr_material_usage_tests.cpp
         tests/modeling_session_service_split_tests.cpp
         tests/modeling_legacy_local_frame_upgrade_tests.cpp
         tests/modeling_tool_catalog_tests.cpp

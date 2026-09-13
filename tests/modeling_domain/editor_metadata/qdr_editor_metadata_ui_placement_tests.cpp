@@ -104,10 +104,10 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
 	EXPECT_TRUE(qhc::find_ui_group_descriptor("operation_settings") != nullptr);
 
 	const std::span<const qhc::HostInteractionDescriptor> interactions = qhc::interaction_catalog();
-	EXPECT_TRUE(interactions.size() == 43U);
+	EXPECT_TRUE(interactions.size() == 42U);
         EXPECT_TRUE(has_interaction_kind(
             "open_editor", qhc::HostInteractionKind::EditorAction));
-        EXPECT_TRUE(has_interaction_kind(
+        EXPECT_FALSE(has_interaction_kind(
             "apply_active_material", qhc::HostInteractionKind::EditorAction));
         EXPECT_TRUE(has_interaction_kind(
             "save_scene_as", qhc::HostInteractionKind::EditorAction));

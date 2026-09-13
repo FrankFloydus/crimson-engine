@@ -1231,7 +1231,7 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Inspector));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::ToolSettings));
-  EXPECT_TRUE(settings.is_panel_visible(UIPanelId::ActiveMaterial));
+  EXPECT_TRUE(settings.is_panel_visible(UIPanelId::FaceTexture));
   EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Console));
   EXPECT_TRUE(settings.navigation_gizmo_visible());
   EXPECT_TRUE(settings.vsync_enabled());
@@ -1274,7 +1274,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   settings.set_panel_visible(UIPanelId::Inspector, false);
   settings.set_panel_visible(UIPanelId::Layers, false);
   settings.set_panel_visible(UIPanelId::ToolSettings, false);
-  settings.set_panel_visible(UIPanelId::ActiveMaterial, false);
+  settings.set_panel_visible(UIPanelId::FaceTexture, false);
   settings.set_panel_visible(UIPanelId::Console, true);
   settings.set_navigation_gizmo_visible(false);
   settings.set_interface_scale(1.75F);
@@ -1288,7 +1288,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
   EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
   EXPECT_NE(saved_text.find("tool_settings=false"), std::string::npos);
-  EXPECT_NE(saved_text.find("active_material=false"), std::string::npos);
+  EXPECT_NE(saved_text.find("face_texture=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
@@ -1306,11 +1306,44 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ToolSettings));
-  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ActiveMaterial));
+  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::FaceTexture));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
   EXPECT_FLOAT_EQ(loaded.interface_scale(), 1.75F);
 
+  std::filesystem::remove(path);
+}
+
+TEST(UISettingsTests, MigratesLegacyMaterialDockVisibilityToFaceTexture) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "quader_ui_settings_face_texture_migration.ini";
+  for (const std::string_view legacy_key : {"active_material", "Active Material"}) {
+    for (const bool visible : {false, true}) {
+      SCOPED_TRACE(legacy_key);
+      SCOPED_TRACE(visible);
+      {
+        std::ofstream file(path, std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << "[Panels]\nOutliner=false\nConsole=true\n" << legacy_key
+             << '=' << (visible ? "true" : "false") << '\n';
+      }
+      UISettings loaded = UISettings::load(path);
+      EXPECT_EQ(loaded.is_panel_visible(UIPanelId::FaceTexture), visible);
+      EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
+      EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
+      ASSERT_TRUE(loaded.save(path));
+      std::ifstream saved(path);
+      ASSERT_TRUE(saved.is_open());
+      const std::string text{std::istreambuf_iterator<char>(saved),
+                             std::istreambuf_iterator<char>()};
+      EXPECT_NE(text.find(visible ? "face_texture=true" : "face_texture=false"),
+                std::string::npos);
+      EXPECT_EQ(text.find("active_material="), std::string::npos);
+      EXPECT_EQ(text.find("Active Material="), std::string::npos);
+      EXPECT_EQ(UISettings::load(path).is_panel_visible(UIPanelId::FaceTexture),
+                visible);
+    }
+  }
   std::filesystem::remove(path);
 }
 
@@ -1335,8 +1368,8 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ToolSettings));
-  EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::ActiveMaterial))
-      << "older settings should show the newly introduced dock";
+  EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::FaceTexture))
+      << "settings without a saved material dock preserve the visible default";
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
 
   ASSERT_TRUE(loaded.save(path));
@@ -10474,7 +10507,7 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
     ViewportShortcut shortcut;
   };
 
-  const std::array<ShortcutCase, 23> shortcuts{{
+  const std::array<ShortcutCase, 22> shortcuts{{
       {"Ctrl+A select all",
        test_router_shortcut(ViewportShortcutKind::SelectAll,
                             ViewportShortcutContext::Global)},
@@ -10523,8 +10556,6 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
        test_router_shortcut(ViewportShortcutKind::FlipHorizontal)},
       {"Shift+V flip vertical",
        test_router_shortcut(ViewportShortcutKind::FlipVertical)},
-      {"Shift+T apply material",
-       test_router_shortcut(ViewportShortcutKind::ApplyMaterial)},
   }};
 
   for (const ShortcutCase &shortcut_case : shortcuts) {
@@ -23521,7 +23552,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_TRUE(command.changed);
   EXPECT_EQ(scene.entities().size(), entity_count_before_flip);
 
-  command = service.apply_active_material(7u);
+  command = service.apply_material_slot(7u);
   ASSERT_TRUE(command.ok) << command.message;
   EXPECT_TRUE(command.changed);
 }

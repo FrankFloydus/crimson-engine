@@ -29,6 +29,7 @@ class StandardMaterialEditSessionService;
 class ProjectClipboardService;
 class ProjectAutosaveService;
 class ProjectAssetDependencyService;
+class ProjectMaterialUsageService;
 class ProjectMaterialDeletionService;
 
 /// Owns one heap-stable scene document resident in the project workspace.
@@ -100,13 +101,12 @@ public:
   [[nodiscard]] const ProjectAutosaveService &autosave() const noexcept;
   [[nodiscard]] ProjectAssetDependencyService &dependencies() noexcept;
   [[nodiscard]] const ProjectAssetDependencyService &dependencies() const noexcept;
+  [[nodiscard]] ProjectMaterialUsageService &material_usage() noexcept;
+  [[nodiscard]] const ProjectMaterialUsageService &material_usage() const noexcept;
   [[nodiscard]] ProjectSessionResult close_scene(SceneSessionId id,
                                                  bool discard_dirty = false);
-  [[nodiscard]] ProjectSessionResult
-  set_active_material(ProjectAssetId material_id);
   [[nodiscard]] ProjectSessionResult install_material_catalog(
-      ProjectMaterialCatalog material_catalog,
-      std::optional<ProjectAssetId> active_material = std::nullopt);
+      ProjectMaterialCatalog material_catalog);
 
   void set_resource_root(std::filesystem::path resource_root);
   // Applies the user policy to every resident scene and future scene sessions.
@@ -136,8 +136,6 @@ public:
   [[nodiscard]] const ProjectMaterialCatalog &material_catalog() const noexcept {
     return material_catalog_;
   }
-  [[nodiscard]] std::optional<ProjectAssetId>
-  active_material_id() const noexcept;
   /// Resolves persistent deletion without exposing project IO to consumers.
   [[nodiscard]] ProjectAssetId
   canonical_material_id(ProjectAssetId material_id) const;
@@ -242,6 +240,7 @@ private:
   std::unique_ptr<ProjectClipboardService> clipboard_;
   std::unique_ptr<ProjectAutosaveService> autosave_;
   std::unique_ptr<ProjectAssetDependencyService> dependencies_;
+  std::unique_ptr<ProjectMaterialUsageService> material_usage_;
   std::filesystem::path resource_root_;
   std::filesystem::path empty_path_;
   RecentSceneStore recent_scene_store_;

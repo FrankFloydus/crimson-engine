@@ -24,8 +24,6 @@ inline constexpr std::string_view kProjectOpened = "project.opened";
 inline constexpr std::string_view kProjectClosed = "project.closed";
 inline constexpr std::string_view kProjectAssetsChanged =
     "project.assets_changed";
-inline constexpr std::string_view kActiveProjectMaterialChanged =
-    "project.active_material_changed";
 inline constexpr std::string_view kSceneOpened = "scene.opened";
 inline constexpr std::string_view kActiveSceneChanged =
     "scene.active_changed";

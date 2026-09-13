@@ -453,11 +453,11 @@ TEST_F(QtOperationInputHintTests,
                                QStringLiteral("MMB"),
                                QStringLiteral("Shift + MMB"),
                                QStringLiteral("Alt + MMB"),
-                               QStringLiteral("RMB"),
-                               QStringLiteral("Shift + RMB"),
-                               QStringLiteral("Ctrl + RMB")}) {
+                               QStringLiteral("RMB")}) {
     EXPECT_TRUE(contains_badge(widget, badge)) << badge.toStdString();
   }
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Shift + RMB")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Ctrl + RMB")));
   for (const auto &hint : widget.hints()) {
     EXPECT_FALSE(hint.badge.contains(QStringLiteral("Mouse")));
   }

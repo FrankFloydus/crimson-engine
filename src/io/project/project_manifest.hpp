@@ -47,7 +47,6 @@ public:
       std::vector<ProjectSceneCatalogEntry> scenes,
       std::vector<ProjectRelativePath> open_scene_paths,
       std::optional<ProjectRelativePath> active_scene_path,
-      std::optional<ProjectAssetId> active_material_id = std::nullopt,
       std::vector<ProjectAssetId> deleted_material_ids = {});
 
   [[nodiscard]] const ProjectId &id() const noexcept { return id_; }
@@ -62,10 +61,6 @@ public:
   [[nodiscard]] const std::optional<ProjectRelativePath> &
   active_scene_path() const noexcept {
     return active_scene_path_;
-  }
-  [[nodiscard]] const std::optional<ProjectAssetId> &
-  active_material_id() const noexcept {
-    return active_material_id_;
   }
   /// Sorted persistent identities whose effective material is always Default.
   [[nodiscard]] std::span<const ProjectAssetId>
@@ -95,8 +90,6 @@ public:
   [[nodiscard]] ProjectIoResult<void> set_workspace(
       std::vector<ProjectRelativePath> open_scene_paths,
       std::optional<ProjectRelativePath> active_scene_path);
-  [[nodiscard]] ProjectIoResult<void>
-  set_active_material(std::optional<ProjectAssetId> material_id);
 
 private:
   void rebuild_scene_indexes();
@@ -109,7 +102,6 @@ private:
   std::unordered_map<std::wstring, std::size_t> scene_index_by_path_;
   std::vector<ProjectRelativePath> open_scene_paths_;
   std::optional<ProjectRelativePath> active_scene_path_;
-  std::optional<ProjectAssetId> active_material_id_;
   std::vector<ProjectAssetId> deleted_material_ids_;
 };
 

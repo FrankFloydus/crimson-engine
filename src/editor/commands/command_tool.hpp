@@ -7,7 +7,6 @@
 #pragma once
 
 #include "core/public_command_targets.hpp"
-#include "assets/material_reference.hpp"
 #include "editor/commands/command_tool_descriptor.hpp"
 #include "editor/modeling/modeling_result_types.hpp"
 
@@ -26,7 +25,6 @@ class EditorSelectionService;
 struct ModelingCommandExecutionContext {
     ModelingSessionService& modeling;
     EditorSelectionService* selection = nullptr;
-    MaterialReference active_material;
 };
 
 /**

@@ -5794,11 +5794,11 @@ TEST_F(CurveModelingProjectionTests,
       editor_.tools().set_setting("curve", "curve.solidify", true).ok());
 
   const ModelingCommandResult missing_reference =
-      session_.modeling().active_material_selection_status(false);
+      session_.modeling().material_selection_status(false);
   EXPECT_FALSE(missing_reference.ok);
   EXPECT_FALSE(missing_reference.changed);
   EXPECT_FALSE(missing_reference.message.empty());
-  EXPECT_TRUE(session_.modeling().active_material_selection_status(true).ok);
+  EXPECT_TRUE(session_.modeling().material_selection_status(true).ok);
 }
 
 TEST_F(CurveModelingProjectionTests,

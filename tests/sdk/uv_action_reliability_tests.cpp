@@ -84,7 +84,8 @@ TEST(UvActionReliabilityTests, LocalUvActionsPreserveUnrelatedCollapsedAuthoredF
   const auto before = serialize_qdr_authored_topology(document).or_throw();
   const std::array target{quad_target(document)};
   for (const auto action : {FaceTextureAction::ShiftLeft, FaceTextureAction::FitBoth,
-                            FaceTextureAction::AlignToFace, FaceTextureAction::ProjectCube}) {
+                            FaceTextureAction::AlignToFace, FaceTextureAction::ProjectCube,
+                            FaceTextureAction::FlipFaceHorizontal, FaceTextureAction::FlipFaceVertical}) {
     SCOPED_TRACE(static_cast<int>(action));
     const auto prepared = prepare_face_texture_action(target, {.action = action});
     ASSERT_TRUE(prepared.ok()) << prepared.error_message();
@@ -92,10 +93,6 @@ TEST(UvActionReliabilityTests, LocalUvActionsPreserveUnrelatedCollapsedAuthoredF
     ASSERT_EQ(prepared.value().documents.size(), 1U);
     expect_collapsed_face_preserved(document, prepared.value().documents.front().document);
   }
-  EXPECT_EQ(serialize_qdr_authored_topology(document).or_throw(), before);
-  const auto reflected = prepare_face_texture_action(
-      target, {.action = FaceTextureAction::FlipFaceHorizontal});
-  EXPECT_FALSE(reflected.ok());
   EXPECT_EQ(serialize_qdr_authored_topology(document).or_throw(), before);
 }
 

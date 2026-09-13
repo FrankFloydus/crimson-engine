@@ -169,7 +169,7 @@ HostActionDescriptor tool_action(
 
 std::span<const HostActionDescriptor> action_descriptors()
 {
-  static const std::array<HostActionDescriptor, 44> kDescriptors{{
+  static const std::array<HostActionDescriptor, 43> kDescriptors{{
       operation_action("invert_mesh", "Flip Selected Mesh Normals", "flip_face_normals",
                        action_availability(HostSelectionMode::Object, 0, 0,
                                            HostActiveSelectionKind::None, false,
@@ -273,12 +273,6 @@ std::span<const HostActionDescriptor> action_descriptors()
       tool_action("poly_tool", "Polygon Tool", "poly",
                   action_availability(HostSelectionMode::Object, 0, 0,
                                       HostActiveSelectionKind::None, false)),
-      operation_action(
-          "apply_active_material", "Apply Active Material to Selected Faces",
-          "assign_material",
-          action_availability(HostSelectionMode::Face, 0, 0,
-                              HostActiveSelectionKind::None, false, 0, 1),
-          HostPreviewKind::None, false),
       operation_action("bevel_edges", "Bevel Selected Edges", "edge_bevel",
                        action_availability(HostSelectionMode::Edge, 0, 1,
                                            HostActiveSelectionKind::None,
@@ -584,7 +578,7 @@ std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 
 std::span<const HostInteractionDescriptor> interaction_descriptors()
 {
-  static constexpr std::array<HostInteractionDescriptor, 43> kDescriptors{{
+  static constexpr std::array<HostInteractionDescriptor, 42> kDescriptors{{
       {"open_editor", "Open Editor", HostInteractionKind::EditorAction},
       {"new_scene", "New Scene", HostInteractionKind::EditorAction},
       {"open_scene", "Open Scene", HostInteractionKind::EditorAction},
@@ -601,8 +595,6 @@ std::span<const HostInteractionDescriptor> interaction_descriptors()
       {"select_all", "Select All", HostInteractionKind::EditorAction},
       {"copy_meshes", "Copy Meshes", HostInteractionKind::EditorAction},
       {"duplicate_selection", "Duplicate Selection",
-       HostInteractionKind::EditorAction},
-      {"apply_active_material", "Apply Active Material",
        HostInteractionKind::EditorAction},
       {"invert_selection", "Invert Selection",
        HostInteractionKind::EditorAction},
@@ -742,7 +734,7 @@ shortcut(std::string_view id, HostShortcutContext context, std::string_view key,
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-  static const std::array<HostShortcutDescriptor, 42> kDescriptors{{
+  static const std::array<HostShortcutDescriptor, 41> kDescriptors{{
       shortcut("undo", HostShortcutContext::Global, "Z", true, false, false,
                HostShortcutTargetKind::EditorAction, "undo"),
       shortcut("redo_shift_z", HostShortcutContext::Global, "Z", true, false,
@@ -788,9 +780,6 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
       shortcut("merge_vertices_at_center", HostShortcutContext::Viewport, "M",
                false, false, true, HostShortcutTargetKind::Action,
                "merge_vertices_at_center", true),
-      shortcut("apply_active_material", HostShortcutContext::Viewport, "T",
-               false, false, true, HostShortcutTargetKind::Action,
-               "apply_active_material"),
       shortcut("focus_all_home", HostShortcutContext::Viewport, "Home", false,
                false, false, HostShortcutTargetKind::ViewportAction,
                "focus_all"),

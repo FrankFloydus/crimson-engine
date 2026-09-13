@@ -181,6 +181,40 @@ struct QuaderProjectMaterialDependencyRevision {
       const QuaderProjectMaterialDependencyRevision &) = default;
 };
 
+/// One source that prevents a reliable project-wide unused classification.
+struct QuaderProjectMaterialUsageIssue final {
+  SceneId scene_id;
+  std::optional<SceneSessionId> session_id;
+  std::string project_relative_path;
+  std::string scene_name;
+  std::string message;
+
+  friend bool operator==(const QuaderProjectMaterialUsageIssue &,
+                         const QuaderProjectMaterialUsageIssue &) = default;
+};
+
+/// Actual assigned face materials; live documents replace their saved versions.
+struct QuaderProjectMaterialUsageSnapshot {
+  ProjectId project_id;
+  std::uint64_t project_generation = 0u;
+  std::uint64_t revision = 0u;
+  bool complete = false;
+  // Embedded references are scoped to the currently active scene catalog.
+  std::vector<QuaderMaterialReference> used_materials;
+  std::vector<QuaderProjectMaterialUsageIssue> issues;
+};
+
+/// Cheap owner-gated usage stamp; unchanged reads perform no entity or file scans.
+struct QuaderProjectMaterialUsageRevision {
+  ProjectId project_id;
+  std::uint64_t project_generation = 0u;
+  std::uint64_t revision = 0u;
+  bool complete = false;
+
+  friend bool operator==(const QuaderProjectMaterialUsageRevision &,
+                         const QuaderProjectMaterialUsageRevision &) = default;
+};
+
 /// One project material created from an imported texture source.
 struct QuaderProjectMaterialImportSuccess {
   std::filesystem::path source_path;
@@ -206,9 +240,6 @@ public:
 
   [[nodiscard]] QuaderApiResult<std::vector<QuaderProjectMaterialInfo>>
   materials() const;
-  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialInfo>
-  active_material() const;
-  QuaderApiVoidResult set_active_material(ProjectAssetId material_id);
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialPreview>
   material_preview(ProjectAssetId material_id) const;
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialTextureInfo>
@@ -242,6 +273,11 @@ public:
   material_dependency_revision() const;
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialDependencySnapshot>
   material_dependencies(bool refresh_files = false) const;
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialUsageRevision>
+  material_usage_revision() const;
+  /// Inspection failures are source issues, not failed material assignments.
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialUsageSnapshot>
+  material_usage(bool refresh_files = false) const;
   [[nodiscard]] QuaderApiResult<QuaderMaterialFolderDeletionPreview>
   preview_delete_material_folder(std::string_view folder) const;
   /// Rejects an obsolete preview instead of applying an unreviewed deletion.
@@ -259,7 +295,6 @@ public:
 private:
   void attach_events(QuaderEventsApi &events) { events_ = &events; }
   void publish_assets_changed();
-  void publish_active_material_changed();
 
   friend class QuaderProjectAssetsApiInternalAccess;
   QuaderApiSession session_;

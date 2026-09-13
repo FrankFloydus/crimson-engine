@@ -320,7 +320,7 @@ const std::vector<IncludeException> &allowed_include_exceptions() {
        "editor/projection/mesh_projection_service.hpp",
        "binary QDR hydration still rebuilds compiled mesh payloads through "
        "editor projection"},
-      {"src/ui/qt_tool_settings_panel.cpp",
+      {"src/ui/qt_settings_control_widgets.hpp",
        "quader/modeling/neutral/polygon/face_texture_scale_steps.hpp",
        "texture scale arrows share the modeling owner's stateless scalar "
        "stepping rule; this header exposes no document or topology access"},

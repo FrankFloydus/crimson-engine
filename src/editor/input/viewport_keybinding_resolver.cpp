@@ -147,12 +147,6 @@ void mark_action_pressed(ViewportInputFrame &input,
     input.radial_array_events.push_back({
         ViewportRadialArrayInputEventKind::ToggleInstances});
     break;
-  case ViewportInputActionKind::SampleFaceMaterial:
-    input.sample_face_material_pressed = true;
-    break;
-  case ViewportInputActionKind::ApplyActiveMaterialToSelection:
-    input.apply_active_material_to_selection_pressed = true;
-    break;
   case ViewportInputActionKind::ApplyFaceMaterialToMesh:
     input.apply_face_material_to_mesh_pressed = true;
     break;
@@ -311,14 +305,6 @@ bool resolve_action(QuaderEditorApi &editor, const ViewportToolState &state,
   return editor.commands().resolve_viewport_input_action(
       chord, state, input.viewport_focused, input.text_input_active, action,
       keybinding_context(input));
-}
-
-bool is_material_action(ViewportInputActionKind action) {
-  return action == ViewportInputActionKind::SampleFaceMaterial ||
-         action ==
-             ViewportInputActionKind::ApplyActiveMaterialToSelection ||
-         action == ViewportInputActionKind::ApplyFaceMaterialToMesh ||
-         action == ViewportInputActionKind::TransferFaceTexture;
 }
 
 bool is_mouse_click(const QuaderInputChord &chord) {
@@ -632,38 +618,6 @@ void record_selection_click_provenance(
       .primary = chord.primary, .shift = chord.shift, .alt = chord.alt};
 }
 
-bool apply_active_material_needs_double_click_delay(
-    QuaderEditorApi &editor, const ViewportToolState &state,
-    const ViewportInputFrame &input, const QuaderInputChord &chord) {
-  if (!is_mouse_click(chord)) {
-    return false;
-  }
-  const std::optional<ViewportInputActionKind> paired_action =
-      paired_mouse_double_click_action(editor, state, input, chord);
-  return paired_action == ViewportInputActionKind::ApplyFaceMaterialToMesh;
-}
-
-void record_material_action_provenance(
-    QuaderEditorApi &editor, const ViewportToolState &state,
-    ViewportInputFrame &input, const QuaderInputChord &chord,
-    ViewportInputActionKind action) {
-  if (!is_material_action(action)) {
-    return;
-  }
-
-  if (action ==
-      ViewportInputActionKind::ApplyActiveMaterialToSelection) {
-    const bool requires_delay =
-        apply_active_material_needs_double_click_delay(editor, state, input,
-                                                       chord);
-    input.apply_active_material_delay_for_double_click =
-        input.apply_active_material_to_selection_pressed
-            ? input.apply_active_material_delay_for_double_click &&
-                  requires_delay
-            : requires_delay;
-  }
-}
-
 void log_command_failure(std::string_view source,
                          const QuaderApiVoidResult &result) {
   if (!result.ok) {
@@ -738,9 +692,6 @@ void ViewportKeybindingResolver::resolve(
   input.transform_vertex_snap_down = false;
   input.linear_array_copy_delta = 0;
   input.radial_array_events.clear();
-  input.sample_face_material_pressed = false;
-  input.apply_active_material_to_selection_pressed = false;
-  input.apply_active_material_delay_for_double_click = false;
   input.apply_face_material_to_mesh_pressed = false;
   input.transfer_face_texture_pressed = false;
   input.transfer_face_texture_pointer_reserved = false;
@@ -894,8 +845,6 @@ void ViewportKeybindingResolver::resolve(
                   }
                 }
               } else {
-                record_material_action_provenance(editor, state, input,
-                                                  candidate, action);
                 record_face_texture_transfer_trigger(input, action, candidate,
                                                      pointer_edge);
                 record_curve_conversion_trigger(input, action, candidate,

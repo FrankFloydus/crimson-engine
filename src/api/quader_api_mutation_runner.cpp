@@ -275,17 +275,9 @@ bool QuaderApiMutationRunner::can_run_tracked_modeling_tool(
   if (session.native_tools().blocks_modeling_content_mutation()) {
     return false;
   }
-  MaterialReference active_material;
-  if (ProjectSession *project =
-          QuaderApiSessionInternalAccess::project_session(session_)) {
-    if (const std::optional<ProjectAssetId> id =
-            project->active_material_id()) {
-      active_material = MaterialReference::project(*id);
-    }
-  }
   return modeling_commands_
       .availability(session.modeling(), tool_id, &session.selection(),
-                    active_material, &session.structural_lifecycle())
+                    &session.structural_lifecycle())
       .enabled;
 }
 
@@ -299,17 +291,8 @@ QuaderApiMutationRunner::run_tracked_modeling_tool(std::string_view tool_id) {
     return modeling_content_blocked_status("editing modeling content.");
   }
   SceneSession &session = scene_session();
-  MaterialReference active_material;
-  if (ProjectSession *project =
-          QuaderApiSessionInternalAccess::project_session(session_)) {
-    if (const std::optional<ProjectAssetId> id =
-            project->active_material_id()) {
-      active_material = MaterialReference::project(*id);
-    }
-  }
   return status_from(modeling_commands_.execute(history(), session.modeling(),
                                                  session.selection(), tool_id,
-                                                 active_material,
                                                  &session.structural_lifecycle()),
                      QuaderMutationKind::Modeling, tool_id);
 }

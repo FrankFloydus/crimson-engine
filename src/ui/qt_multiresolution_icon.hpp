@@ -13,12 +13,13 @@
 
 namespace quader {
 
-/** Repository SVG glyph identities rendered as resolution-independent paths. */
+/** Repository glyph identities rendered as resolution-independent paths. */
 enum class QtScalableGlyph {
   MaterialVisibility,
   MaterialVisibilityOff,
   MaterialLock,
   MaterialLockOpen,
+  Close,
 };
 
 // The current authored toolbar and layer raster sources are 96 pixels. This
@@ -55,7 +56,7 @@ qt_multiresolution_icon_dpr_cache_identity(qreal device_pixel_ratio);
 [[nodiscard]] QIcon qt_multiresolution_icon(const QImage &source,
                                             const QColor &tint);
 
-/** Renders the repository's SVG-authored monochrome glyphs as QPainter paths. */
+/** Renders the repository's monochrome glyphs as QPainter paths. */
 [[nodiscard]] QIcon qt_scalable_glyph_icon(QtScalableGlyph glyph,
                                            const QColor &color);
 

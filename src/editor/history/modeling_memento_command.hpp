@@ -462,20 +462,14 @@ private:
     ModelingFlipOrientation orientation_;
 };
 
-/**
- * Applies Apply Active Material History Command behavior as a command in the editor coordination layer.
- */
-class ApplyActiveMaterialHistoryCommand final : public ModelingMementoCommand {
+/// Assigns an explicit material through the existing modeling transaction history.
+class ApplyMaterialHistoryCommand final : public ModelingMementoCommand {
 public:
-  explicit ApplyActiveMaterialHistoryCommand(ModelingSessionService &modeling,
-                                             std::uint32_t material_slot = 0)
-      : ModelingMementoCommand(modeling, "Apply Material"),
-        material_slot_(material_slot) {}
-
-  ApplyActiveMaterialHistoryCommand(ModelingSessionService &modeling,
-                                    MaterialReference material)
-      : ModelingMementoCommand(modeling, "Apply Material"),
-        material_(material) {}
+  ApplyMaterialHistoryCommand(ModelingSessionService &modeling,
+                              MaterialReference material,
+                              std::optional<std::uint64_t> face_selection_token = {})
+      : ModelingMementoCommand(modeling, "Assign Material"),
+        material_(material), face_selection_token_(face_selection_token) {}
 
 private:
   ModelingSessionMemento capture_before_memento() override {
@@ -487,20 +481,21 @@ private:
   }
 
   ModelingCommandResult execute_initial() override {
-    return material_.valid()
-               ? modeling().apply_active_material(material_)
-               : modeling().apply_active_material(material_slot_);
+    return face_selection_token_.has_value()
+               ? modeling().apply_material_to_selected_faces(
+                     material_, *face_selection_token_)
+               : modeling().apply_material(material_);
   }
 
-  std::uint32_t material_slot_ = 0;
   MaterialReference material_;
+  std::optional<std::uint64_t> face_selection_token_;
 };
 
 /**
- * Applies the active material directly to geometry identified by a viewport
+ * Applies an explicit material directly to geometry identified by a viewport
  * face hit without changing or consulting the editor selection.
  */
-class ApplyActiveMaterialToTargetHistoryCommand final
+class ApplyMaterialToTargetHistoryCommand final
     : public ModelingMementoCommand {
 public:
   /** Selects whether targeted material application affects one face or its whole mesh. */
@@ -509,7 +504,7 @@ public:
     Face,
   };
 
-  ApplyActiveMaterialToTargetHistoryCommand(
+  ApplyMaterialToTargetHistoryCommand(
       ModelingSessionService &modeling, int modeling_object_id, int face_id,
       MaterialReference material, Scope scope)
       : ModelingMementoCommand(

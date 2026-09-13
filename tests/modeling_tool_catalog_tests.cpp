@@ -15,7 +15,6 @@
 #include "editor/commands/context_operation_command_tool.hpp"
 #include "editor/commands/instant_operation_command_tool.hpp"
 #include "editor/commands/preview_operation_command_tool.hpp"
-#include "editor/commands/modeling/assign_material_tool.hpp"
 #include "editor/commands/modeling/delete_selection_tool.hpp"
 #include "editor/commands/modeling/flip_horizontal_tool.hpp"
 #include "editor/commands/modeling/mirror_selection_tool.hpp"
@@ -90,7 +89,6 @@ TEST(ModelingToolCatalogTests, CommandFamiliesExposeTheApprovedHierarchy) {
     static_assert(std::is_base_of_v<PreviewCommandTool, PreviewOperationCommandTool>);
 
     static_assert(std::is_base_of_v<CustomInstantCommandTool, SelectAllTool>);
-    static_assert(std::is_base_of_v<CustomInstantCommandTool, AssignMaterialTool>);
     static_assert(std::is_base_of_v<CustomInstantCommandTool, DeleteSelectionTool>);
     static_assert(std::is_base_of_v<RuntimeCommandTool, MirrorSelectionTool>);
     static_assert(std::is_base_of_v<RuntimeCommandTool, FlipHorizontalTool>);
@@ -143,12 +141,8 @@ TEST(ModelingToolCatalogTests, PublicCommandBridgeMetadataLivesOnCommandDescript
   EXPECT_TRUE(duplicate->public_command_id().empty());
   EXPECT_TRUE(duplicate->registers_public_command());
 
-  const CommandTool *apply_active_material =
-      find_modeling_command_tool("apply_active_material");
-  ASSERT_NE(apply_active_material, nullptr);
-  EXPECT_EQ(apply_active_material->public_command_id(),
-            quader_command::kApplyMaterial.string());
-  EXPECT_FALSE(apply_active_material->registers_public_command());
+  EXPECT_EQ(find_modeling_command_tool("apply_active_material"), nullptr);
+  EXPECT_EQ(find_modeling_command_tool("assign_material"), nullptr);
 
   const CommandTool *combine_meshes =
       find_modeling_command_tool("combine_meshes");
@@ -207,7 +201,7 @@ TEST(ModelingToolCatalogTests, HostOperationActionIdsResolveToCommandTools) {
     EXPECT_EQ(modeling_context_action_tools().size(), expected_context_actions);
     EXPECT_EQ(modeling_preview_command_tools().size(),
               expected_preview_actions);
-    EXPECT_NE(find_modeling_context_action_tool("apply_active_material"),
+    EXPECT_EQ(find_modeling_context_action_tool("apply_active_material"),
               nullptr);
 }
 

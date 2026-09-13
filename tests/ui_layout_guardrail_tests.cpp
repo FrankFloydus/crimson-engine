@@ -63,8 +63,13 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_settings_controller.cpp",
       "src/ui/qt_tool_settings_panel.hpp",
       "src/ui/qt_tool_settings_panel.cpp",
-      "src/ui/qt_active_material_panel.hpp",
-      "src/ui/qt_active_material_panel.cpp",
+      "src/ui/qt_face_texture_panel.hpp",
+      "src/ui/qt_face_texture_panel.cpp",
+      "src/ui/qt_face_texture_canvas.hpp",
+      "src/ui/qt_face_texture_canvas.cpp",
+      "src/ui/qt_face_texture_controls.hpp",
+      "src/ui/qt_face_texture_controls.cpp",
+      "src/ui/qt_settings_control_widgets.hpp",
       "src/ui/qt_viewport_context_menu.hpp",
       "src/ui/qt_viewport_context_menu.cpp",
       "src/ui/qt_navigation_gizmo.hpp",
@@ -383,7 +388,7 @@ TEST(UiLayoutGuardrailTests,
   for (std::string_view panel : {"UIPanelId::Outliner", "UIPanelId::Inspector",
                                  "UIPanelId::Layers",
                                  "UIPanelId::ToolSettings",
-                                 "UIPanelId::ActiveMaterial",
+                                 "UIPanelId::FaceTexture",
                                  "UIPanelId::Console"}) {
     EXPECT_EQ(count_occurrences(create_docks_body, panel), 1u) << panel;
   }
@@ -1011,6 +1016,8 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_tool_settings_panel.hpp");
   const std::string tool =
       read_source_file("src/ui/qt_tool_settings_panel.cpp");
+  const std::string control_widgets =
+      read_source_file("src/ui/qt_settings_control_widgets.hpp");
   const std::string number_slider_header =
       read_source_file("src/ui/qt_tool_settings_number_slider.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
@@ -1056,9 +1063,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool_header,
                   "class QtToolSettingsPanel final : public QWidget");
   expect_contains(tool, "ui_panel_stable_id(UIPanelId::ToolSettings)");
-  expect_contains(tool,
-                  "class QtToolSettingsSection final : public QWidget");
-  expect_contains(tool, "new QToolButton(this)");
+  expect_contains(tool, "#include \"ui/qt_settings_control_widgets.hpp\"");
+  expect_contains(tool, "new QtSettingsSection(");
+  expect_contains(control_widgets,
+                  "class QtSettingsSection final : public QWidget");
+  expect_contains(control_widgets, "new QToolButton(this)");
   expect_contains(tool,
                   "QStringLiteral(\"tool_settings.section.description\")");
   expect_contains(tool,
@@ -1173,18 +1182,20 @@ TEST(UiLayoutGuardrailTests,
 TEST(UiLayoutGuardrailTests,
      TextureSettingsRetainMixedControlsBehindOwnerRevisionGate) {
   const std::string header =
-      read_source_file("src/ui/qt_tool_settings_panel.hpp");
+      read_source_file("src/ui/qt_face_texture_controls.hpp");
   const std::string panel =
-      read_source_file("src/ui/qt_tool_settings_panel.cpp");
-  expect_contains(header, "void refresh_texture_settings()");
+      read_source_file("src/ui/qt_face_texture_controls.cpp");
+  const std::string widgets =
+      read_source_file("src/ui/qt_settings_control_widgets.hpp");
+  expect_contains(header, "void refresh()");
   expect_contains(panel,
-                  "QStringLiteral(\"tool_settings.section.texture\")");
+                  "QStringLiteral(\"face_texture.section.texture\")");
   expect_contains(panel,
-                  "QStringLiteral(\"tool_settings.section.edit_texture\")");
-  expect_contains(panel,
-                  "class QtTextureNumberSpinBox final : public QtDoubleSpinBox");
-  expect_contains(panel, "QStringLiteral(\"--\")");
-  expect_missing(panel, "setSpecialValueText(");
+                  "QStringLiteral(\"face_texture.section.edit_texture\")");
+  expect_contains(widgets,
+                  "class QtMixedNumberSpinBox final : public QtDoubleSpinBox");
+  expect_contains(widgets, "QStringLiteral(\"--\")");
+  expect_missing(widgets, "setSpecialValueText(");
   expect_contains(panel, "editor_->modeling().set_face_texture_setting(");
   expect_contains(panel, ".selection_token = binding.selection_token");
   expect_contains(panel, ".merge_key = binding.merge_key");
@@ -1196,7 +1207,7 @@ TEST(UiLayoutGuardrailTests,
 
   const std::string refresh = std::string(source_slice(
       panel, "  void refresh_texture_settings(bool force = false)",
-      "  [[nodiscard]] bool has_active_target() const"));
+      "  void build_texture_actions()"));
   const std::size_t revision = refresh.find("face_texture_settings_revision()");
   const std::size_t gate = refresh.find("*texture_revision_ == revision");
   const std::size_t summary = refresh.find("face_texture_settings()");
@@ -1292,7 +1303,7 @@ TEST(UiLayoutGuardrailTests,
 
   const std::string frame = source_slice(
       ui, "    const ToolSettingsPresentationStamp stamp{",
-      "    const QuaderFaceTextureRevision revision =");
+      "  if (panel_presented(UIPanelId::FaceTexture))");
   const auto gate = frame.find("tool_settings_presenter_.needs_refresh(stamp)");
   const auto refresh = frame.find("tool_settings_panel_->refresh()");
   ASSERT_NE(gate, std::string::npos);
@@ -2075,23 +2086,23 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui, "mix_toolbar(texture_toolbar_)");
   expect_contains(menu, "QStringLiteral(\"toolbar_texture\")");
 
-  const std::size_t face_stamp = ui.find(
-      "const FaceTexturePresentationStamp texture_stamp{");
-  const std::size_t face_gate = ui.find(
-      "if (face_texture_presenter_.needs_refresh(texture_stamp))");
-  const std::size_t face_refresh = ui.find(
-      "tool_settings_panel_->refresh_texture_settings()");
-  ASSERT_NE(face_stamp, std::string::npos);
-  ASSERT_NE(face_gate, std::string::npos);
-  ASSERT_NE(face_refresh, std::string::npos);
-  EXPECT_LT(face_stamp, face_gate);
-  EXPECT_LT(face_gate, face_refresh);
-  const std::string face_sync = ui.substr(face_stamp, face_refresh - face_stamp);
+  const std::string face_sync = source_slice(
+      ui, "  if (panel_presented(UIPanelId::FaceTexture))",
+      "    QDR_PROFILE_SCOPE(\"UI synchronize status bar\")");
+  expect_contains(face_sync, "face_texture_panel_->refresh()");
   expect_missing(face_sync, "numeric_interaction_active");
   expect_missing(face_sync, "active_settings()");
   expect_missing(face_sync, "dock->raise()");
-  expect_contains(face_sync, ".keybindings_revision = keybindings_revision");
-  expect_contains(face_sync, ".rotation_step = rotation_step");
+  const std::string controls =
+      read_source_file("src/ui/qt_face_texture_controls.cpp");
+  const auto revision_gate = controls.find("*texture_revision_ == revision");
+  const auto settings_query = controls.find("face_texture_settings()");
+  ASSERT_NE(revision_gate, std::string::npos);
+  ASSERT_NE(settings_query, std::string::npos);
+  EXPECT_LT(revision_gate, settings_query);
+  expect_contains(controls,
+                  "texture_keybindings_revision_ == keybindings_revision");
+  expect_contains(controls, "texture_rotation_step_ == rotation_step");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -3124,29 +3135,24 @@ TEST(UiLayoutGuardrailTests,
       interaction_controller,
       "void ViewportInteractionController::handle_material_interactions(",
       "void ViewportInteractionController::cancel_pending_material_interaction(");
-  EXPECT_GE(count_occurrences(material_interactions,
-                              "if (!runtime_binding.current())"),
-            7u);
-  const std::size_t material_query =
-      material_interactions.find("project_material_for_face(");
-  const std::size_t material_query_gate = material_interactions.find(
-      "if (!runtime_binding.current())", material_query);
-  const std::size_t material_query_result_use =
-      material_interactions.find("if (!material.ok())", material_query);
-  ASSERT_NE(material_query, std::string::npos);
-  ASSERT_NE(material_query_gate, std::string::npos);
-  ASSERT_NE(material_query_result_use, std::string::npos);
-  EXPECT_LT(material_query, material_query_gate);
-  EXPECT_LT(material_query_gate, material_query_result_use);
   for (const std::string_view mutation : {
            "transfer_face_texture_to_face(",
            "apply_face_material_to_mesh(",
-           "set_active_material(",
-           "apply_active_material_to_face(",
-           "apply_active_material_to_mesh(",
        }) {
-    expect_contains(material_interactions, mutation);
+    const auto call = material_interactions.find(mutation);
+    const auto gate = material_interactions.find(
+        "if (!runtime_binding.current())", call);
+    const auto presentation = material_interactions.find(
+        "log_material_interaction_failure(", call);
+    ASSERT_NE(call, std::string::npos);
+    ASSERT_NE(gate, std::string::npos);
+    ASSERT_NE(presentation, std::string::npos);
+    EXPECT_LT(call, gate);
+    EXPECT_LT(gate, presentation);
   }
+  expect_missing(material_interactions, "set_active_material(");
+  expect_missing(material_interactions, "apply_active_material_to_face(");
+  expect_missing(material_interactions, "apply_active_material_to_mesh(");
   const std::size_t after_active_tool_call =
       input.find("interaction_controller_.handle_after_active_tool(");
   const std::size_t after_active_tool_gate = input.find(
@@ -3612,10 +3618,9 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(presenter, "QApplication::setStyleSheet(");
   expect_contains(presenter,
                   "quader_command::kViewportFrameSelection");
-  expect_contains(presenter, "\"viewport.material.sample_face\"");
-  expect_contains(presenter,
-                  "editor.project_assets().set_active_material(");
-  EXPECT_EQ(count_occurrences(presenter, "set_active_material("), 1u);
+  expect_missing(presenter, "\"viewport.material.sample_face\"");
+  expect_missing(presenter, "editor.project_assets().set_active_material(");
+  expect_missing(presenter, "kApplyMaterial");
   expect_contains(presenter,
                   "open_material_editor(*material_under_mouse)");
   expect_missing(presenter, "show_material_browser");
@@ -4123,78 +4128,108 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     ActiveMaterialDockReusesEventGatedPreviewsAndTheExistingBrowser) {
+     MaterialUsageRefreshKeepsInspectionSeparateFromAssignmentAndDeletion) {
+  const std::string source = read_source_file("src/ui/ui_system.cpp");
+  const auto refresh = source_slice(
+      source, "void UISystem::refresh_material_browser_usage()",
+      "void UISystem::invalidate_material_presentation_cache()");
+  const auto gate = refresh.find("material_browser_usage_revision_ == observed.value()");
+  const auto snapshot = refresh.find("project_assets().material_usage()");
+  ASSERT_NE(gate, std::string_view::npos);
+  ASSERT_NE(snapshot, std::string_view::npos);
+  EXPECT_LT(gate, snapshot);
+  expect_contains(refresh.substr(gate, snapshot - gate), "return;");
+  expect_contains(refresh, "set_dependency_revision(");
+  expect_missing(refresh, "material_dependencies(");
+  expect_missing(refresh, "present_status_notification(");
+  expect_missing(refresh, "apply_material_to_selected_faces(");
+  expect_missing(source, "set_usage_inspection_error_callback(");
+}
+
+TEST(UiLayoutGuardrailTests,
+     FaceTextureDockSharesRetainedBrowserCatalogAndRevisionGatedMaterialImages) {
   const std::string ui = read_source_file("src/ui/ui_system.cpp");
   const std::string panel =
-      read_source_file("src/ui/qt_active_material_panel.cpp");
+      read_source_file("src/ui/qt_face_texture_panel.cpp");
   const std::string docks = source_slice(
       ui, "void UISystem::create_docks()", "QDockWidget &UISystem::create_dock(");
-  expect_contains(docks, "UIPanelId::ActiveMaterial, *active_material_panel_");
-  expect_contains(docks, "set_browse_material_callback(");
-  expect_contains(docks, "[this]() { show_material_browser(); }");
+  expect_contains(docks, "UIPanelId::FaceTexture, *face_texture_panel_");
   const auto split = docks.find(
-      "splitDockWidget(&inspector, &active_material, Qt::Vertical)");
+      "splitDockWidget(&inspector, &face_texture, Qt::Vertical)");
   const auto tabify = docks.find(
       "tabifyDockWidget(&inspector, &tool_settings)");
   ASSERT_NE(split, std::string::npos);
   ASSERT_NE(tabify, std::string::npos);
-  EXPECT_LT(split, tabify)
-      << "split before tabifying so the new dock is below Tool Settings";
+  EXPECT_LT(split, tabify);
   expect_contains(docks, "panels_.set_presentation_changed_callback(");
   expect_contains(docks, "project_workspace_refresh_signal_->store(");
 
   const std::string workspace = source_slice(
       ui, "void UISystem::refresh_project_workspace(",
-      "void UISystem::refresh_active_material_panel(");
+      "void UISystem::refresh_face_texture_material(");
   const auto event_gate = workspace.find(
       "project_workspace_refresh_signal_->exchange(");
-  const auto active_query = workspace.find(
-      "editor_->project_assets().active_material()");
-  const auto panel_refresh = workspace.find("refresh_active_material_panel(");
   ASSERT_NE(event_gate, std::string::npos);
-  ASSERT_NE(active_query, std::string::npos);
-  ASSERT_NE(panel_refresh, std::string::npos);
-  EXPECT_LT(event_gate, active_query);
-  EXPECT_LT(active_query, panel_refresh);
+  expect_contains(workspace, "refresh_material_browser_usage();");
+
+  const std::string browser_refresh = source_slice(
+      ui, "void UISystem::refresh_material_browser_usage()",
+      "void UISystem::invalidate_material_presentation_cache()");
+  const auto catalog_gate = browser_refresh.find(
+      "material_browser_catalog_signature_ !=");
+  const auto allocation = browser_refresh.find(
+      "std::vector<QtMaterialPresentationItem> project_materials");
+  const auto setter = browser_refresh.find("browser->set_materials(project_materials)");
+  ASSERT_NE(catalog_gate, std::string::npos);
+  ASSERT_NE(allocation, std::string::npos);
+  ASSERT_NE(setter, std::string::npos);
+  EXPECT_LT(catalog_gate, allocation);
+  EXPECT_LT(allocation, setter);
   expect_contains(workspace,
-                  "active_material_panel_visible || material_browser_visible");
-  EXPECT_EQ(count_occurrences(workspace,
-                             "project_assets().active_material()"), 1u);
+                  "material_browser_visible || face_texture_panel_visible");
+  expect_contains(browser_refresh,
+                  "{material_browser_window_, &face_texture_panel_->browser()}");
+  expect_missing(workspace, "project_assets().active_material()");
 
   const std::string refresh = source_slice(
-      ui, "void UISystem::refresh_active_material_panel(",
-      "void UISystem::invalidate_material_presentation_cache()");
+      ui, "void UISystem::refresh_face_texture_material(",
+      "void UISystem::configure_material_browser(");
   const auto visible_gate = refresh.find("!panel_presented(");
   const auto revision_gate = refresh.find(
-      "if (!active_material_panel_presenter_.needs_refresh(stamp))");
+      "if (!face_texture_panel_presenter_.needs_refresh(stamp))");
   const auto presentation = refresh.find("material_presentation_for(");
-  const auto setter = refresh.find("->set_presentation(");
   const auto publish =
-      refresh.find("active_material_panel_presenter_.mark_presented(stamp)");
+      refresh.find("face_texture_panel_presenter_.mark_presented(stamp)");
   ASSERT_NE(visible_gate, std::string::npos);
   ASSERT_NE(revision_gate, std::string::npos);
   ASSERT_NE(presentation, std::string::npos);
-  ASSERT_NE(setter, std::string::npos);
   ASSERT_NE(publish, std::string::npos);
   EXPECT_LT(visible_gate, revision_gate);
   EXPECT_LT(revision_gate, presentation);
-  EXPECT_LT(revision_gate, setter);
-  EXPECT_LT(setter, publish);
-  expect_contains(refresh, ".reference = active_reference");
+  EXPECT_LT(presentation, publish);
+  expect_contains(refresh, "->set_material_presentation(");
+  expect_contains(refresh, ".reference = reference");
   expect_contains(refresh, "material_presentation_catalog_revision_");
-  expect_missing(refresh, "active_material_panel_refresh_valid_");
   expect_missing(refresh, ".material_preview(");
   expect_missing(refresh, "make_qt_material_thumbnail(");
+  expect_contains(ui,
+                  "configure_material_browser(*material_browser_window_)");
+  expect_contains(ui,
+                  "configure_material_browser(face_texture_panel_->browser())");
+  expect_contains(ui, "apply_material_to_selected_faces(");
 
   const std::string frame = source_slice(
       ui, "void UISystem::refresh(", "void UISystem::process_viewport_input(");
-  expect_missing(frame, "refresh_active_material_panel(");
+  const auto frame_catalog = frame.find("refresh_material_presentation_cache();");
+  const auto frame_usage = frame.find("refresh_material_browser_usage();");
+  ASSERT_NE(frame_catalog, std::string::npos);
+  ASSERT_NE(frame_usage, std::string::npos);
+  EXPECT_LT(frame_catalog, frame_usage);
   expect_missing(frame, "project_assets().active_material()");
   expect_missing(frame, "commands().available()");
   expect_missing(panel, "project_assets()");
   expect_missing(panel, "commands()");
   expect_missing(panel, "setWindowFlag(Qt::Tool");
-  expect_contains(panel, "qt_material_preview_pixmap(");
 
   const std::string cache = source_slice(
       ui, "void UISystem::refresh_material_presentation_cache(",

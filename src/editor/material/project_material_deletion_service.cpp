@@ -8,6 +8,7 @@
 
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/project_asset_dependency_service.hpp"
+#include "editor/material/project_material_usage_service.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "io/project/project_bridge_notifications.hpp"
 #include "io/project/project_material_reference_resolver.hpp"
@@ -1014,6 +1015,7 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_preview(
     project_->material_catalog_ = std::move(candidate_catalog);
     project_->invalidate_material_textures();
     project_->dependencies().invalidate();
+    project_->material_usage().invalidate();
     for (auto &replacement : live) {
       if (replacement.scene->saved()) {
         replacement.scene->session->mark_clean_after_external_reference_update(

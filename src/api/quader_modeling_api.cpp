@@ -11,6 +11,7 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_query_api.hpp"
+#include "assets/default_material_catalog.hpp"
 #include "api/quader_selection_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "diagnostics/profile.hpp"
@@ -20,6 +21,7 @@
 #include "editor/history/face_texture_settings_history_command.hpp"
 #include "editor/history/face_texture_action_history_command.hpp"
 #include "editor/history/face_texture_transfer_history_command.hpp"
+#include "editor/history/face_texture_gesture_history_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/uv_peel_history_command.hpp"
 #include "editor/placement/snap_vertices_to_floor_history_command.hpp"
@@ -38,6 +40,7 @@
 #include "io/project/project_material_reference_resolver.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -182,15 +185,35 @@ QuaderEntityRef instance_entity_ref(const SceneSession &session,
   };
 }
 
-MaterialReference active_project_material(QuaderApiSession session) {
-  ProjectSession *project =
+MaterialReference default_project_material(QuaderApiSession session) {
+  const ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(session);
-  if (project == nullptr) {
-    return {};
+  return project != nullptr && project->manifest() != nullptr
+             ? MaterialReference::project(
+                   *ProjectAssetId::parse(kDefaultProjectMaterialId))
+             : MaterialReference{};
+}
+
+MaterialReference native_material_reference(QuaderMaterialReference material) {
+  return material.project_owned()
+             ? MaterialReference::project(material.project_asset)
+             : MaterialReference(material.embedded_asset);
+}
+
+bool assignment_material_exists(QuaderApiSession api_session,
+                                QuaderMaterialReference material) {
+  if (!material.valid()) {
+    return false;
   }
-  const std::optional<ProjectAssetId> id = project->active_material_id();
-  return id.has_value() ? MaterialReference::project(*id)
-                        : MaterialReference{};
+  if (material.embedded()) {
+    return scene_session(api_session).assets().material(material.embedded_asset) !=
+           nullptr;
+  }
+  const ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(api_session);
+  return project != nullptr && project->manifest() != nullptr &&
+         !project->manifest()->is_material_deleted(material.project_asset) &&
+         project->material_catalog().find(material.project_asset) != nullptr;
 }
 
 QuaderApiResult<QuaderModelingObjectRef>
@@ -1363,12 +1386,19 @@ QuaderModelingApi::QuaderModelingApi(QuaderApiSession session,
 
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_box(const QuaderCreateBoxArgs &args) {
+  if (args.material.has_value() &&
+      (!mutations_.available() || !assignment_material_exists(session_, *args.material))) {
+    return result_from_create(
+        invalid_api_status(session_, "The requested material is unavailable."), {});
+  }
   auto command = std::make_unique<CreateBoxFromBoundsHistoryCommand>(
       scene_session(session_).modeling(),
       ModelingCreateBoxRequest{
           .bounds = to_modeling_bounds(args.bounds),
           .name = args.name,
-          .material = active_project_material(session_),
+          .material = args.material.has_value()
+                          ? native_material_reference(*args.material)
+                          : default_project_material(session_),
       });
   CreateBoxFromBoundsHistoryCommand *create_command = command.get();
   QuaderApiVoidResult status =
@@ -1408,10 +1438,9 @@ QuaderModelingApi::create_box_mesh(QuaderBounds bounds, std::string name) {
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::commit_box_preview(std::string name,
                                       AssetId default_material) {
-  MaterialReference material = active_project_material(session_);
-  if (!material.valid() && default_material != kInvalidAssetId) {
-    material = MaterialReference(default_material);
-  }
+  const MaterialReference material = default_material != kInvalidAssetId
+      ? MaterialReference(default_material)
+      : default_project_material(session_);
   auto command = std::make_unique<CommitBoxPreviewCommand>(
       scene_session(session_).modeling(), scene_session(session_).scene(),
       scene_session(session_).assets(), std::move(name), material);
@@ -1430,11 +1459,18 @@ QuaderModelingApi::commit_box_preview(std::string name,
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
                                QuaderCreateMeshArgs args) {
+  if (args.material.has_value() &&
+      (!mutations_.available() || !assignment_material_exists(session_, *args.material))) {
+    return result_from_create(
+        invalid_api_status(session_, "The requested material is unavailable."), {});
+  }
   ModelingCreateMeshRequest request;
   request.document = QuaderPolygonDocumentInternalAccess::to_backend(document);
   request.name = std::move(args.name);
   request.material_slot = args.material_slot;
-  request.material = active_project_material(session_);
+  request.material = args.material.has_value()
+                         ? native_material_reference(*args.material)
+                         : default_project_material(session_);
   auto command = std::make_unique<CreateMeshHistoryCommand>(
       scene_session(session_).modeling(), std::move(request));
   CreateMeshHistoryCommand *create_command = command.get();
@@ -2432,38 +2468,68 @@ QuaderInstanceEditState QuaderModelingApi::instance_edit_state() const {
 }
 
 QuaderApiVoidResult
-QuaderModelingApi::apply_active_material(std::uint32_t material_slot) {
-  const MaterialReference material = active_project_material(session_);
-  if (material.valid()) {
-    return mutations_.run_modeling_command(
-        std::make_unique<ApplyActiveMaterialHistoryCommand>(
-            scene_session(session_).modeling(), material),
-        "Apply Active Material");
+QuaderModelingApi::apply_material(QuaderMaterialReference material) {
+  if (!mutations_.available() || !assignment_material_exists(session_, material)) {
+    return invalid_api_status(session_, "The requested material is unavailable.");
   }
   return mutations_.run_modeling_command(
-      std::make_unique<ApplyActiveMaterialHistoryCommand>(
-          scene_session(session_).modeling(), material_slot),
-      "Apply Active Material");
+      std::make_unique<ApplyMaterialHistoryCommand>(
+          scene_session(session_).modeling(), native_material_reference(material)),
+      "Assign Material");
 }
 
-QuaderApiVoidResult QuaderModelingApi::apply_active_material_to_mesh(
-    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+QuaderApiVoidResult QuaderModelingApi::apply_material_to_selected_faces(
+    QuaderMaterialReference material, SceneSessionId scene_session_id,
+    std::uint64_t selection_token) {
+  if (!mutations_.available() ||
+      scene_session_id != mutations_.scene_session_id()) {
+    return invalid_api_status(session_, "The scene changed before material assignment.");
+  }
+  if (!assignment_material_exists(session_, material)) {
+    return invalid_api_status(session_, "The requested material is unavailable.");
+  }
+  const ModelingSelectionSummary selected =
+      scene_session(session_).modeling().selection_summary();
+  if (selected.mode != ModelingSelectionMode::Face || selected.selected_face_count == 0u) {
+    return invalid_api_status(session_, "Select one or more faces before assigning material.");
+  }
+  if (selection_token == 0u || selection_token !=
+      scene_session(session_).modeling().face_texture_settings().selection_token) {
+    return invalid_api_status(session_, "The face selection changed before material assignment.");
+  }
   return mutations_.run_modeling_command(
-      std::make_unique<ApplyActiveMaterialToTargetHistoryCommand>(
-          scene_session(session_).modeling(), object_id, face_id,
-          active_project_material(session_),
-          ApplyActiveMaterialToTargetHistoryCommand::Scope::Mesh),
-      "Apply Active Material to Mesh");
+      std::make_unique<ApplyMaterialHistoryCommand>(
+          scene_session(session_).modeling(), native_material_reference(material),
+          selection_token),
+      "Assign Face Material");
 }
 
-QuaderApiVoidResult QuaderModelingApi::apply_active_material_to_face(
-    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+QuaderApiVoidResult QuaderModelingApi::apply_material_to_mesh(
+    QuaderModelingObjectId object_id, QuaderElementId face_id,
+    QuaderMaterialReference material) {
+  if (!mutations_.available() || !assignment_material_exists(session_, material)) {
+    return invalid_api_status(session_, "The requested material is unavailable.");
+  }
   return mutations_.run_modeling_command(
-      std::make_unique<ApplyActiveMaterialToTargetHistoryCommand>(
+      std::make_unique<ApplyMaterialToTargetHistoryCommand>(
           scene_session(session_).modeling(), object_id, face_id,
-          active_project_material(session_),
-          ApplyActiveMaterialToTargetHistoryCommand::Scope::Face),
-      "Apply Active Material to Face");
+          native_material_reference(material),
+          ApplyMaterialToTargetHistoryCommand::Scope::Mesh),
+      "Assign Material to Mesh");
+}
+
+QuaderApiVoidResult QuaderModelingApi::apply_material_to_face(
+    QuaderModelingObjectId object_id, QuaderElementId face_id,
+    QuaderMaterialReference material) {
+  if (!mutations_.available() || !assignment_material_exists(session_, material)) {
+    return invalid_api_status(session_, "The requested material is unavailable.");
+  }
+  return mutations_.run_modeling_command(
+      std::make_unique<ApplyMaterialToTargetHistoryCommand>(
+          scene_session(session_).modeling(), object_id, face_id,
+          native_material_reference(material),
+          ApplyMaterialToTargetHistoryCommand::Scope::Face),
+      "Assign Material to Face");
 }
 
 QuaderApiResult<QuaderFaceProjectMaterial>
@@ -2497,10 +2563,10 @@ QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_mesh(
           ProjectMaterialReferenceResolver::canonical_material_id(
               *project->manifest(), source.material);
       return mutations_.run_modeling_command(
-          std::make_unique<ApplyActiveMaterialToTargetHistoryCommand>(
+          std::make_unique<ApplyMaterialToTargetHistoryCommand>(
               scene_session(session_).modeling(), object_id, face_id,
               MaterialReference::project(canonical),
-              ApplyActiveMaterialToTargetHistoryCommand::Scope::Mesh),
+              ApplyMaterialToTargetHistoryCommand::Scope::Mesh),
           "Apply Face Material to Mesh");
     }
   }
@@ -2583,6 +2649,84 @@ QuaderFaceTextureSettings QuaderModelingApi::face_texture_settings() const {
         "Apply or cancel the active tool before editing texture settings.";
   }
   return result;
+}
+
+QuaderFaceTextureCanvas QuaderModelingApi::face_texture_canvas() const {
+  if (!mutations_.available()) return {};
+  const auto native = scene_session(session_).modeling().face_texture_canvas();
+  ProjectAssetId material_id = native.material.project_owned()
+      ? native.material.project_asset() : ProjectAssetId{};
+  const ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session_);
+  if (native.material.project_owned() && project != nullptr && project->manifest() != nullptr) {
+    material_id = ProjectMaterialReferenceResolver::canonical_material_id(
+        *project->manifest(), material_id);
+  }
+  QuaderFaceTextureCanvas result{
+      .selected_face_count = native.selected_face_count,
+      .editable = native.editable && !scene_session(session_).native_tools().has_pending_tool(),
+      .disabled_reason = native.disabled_reason,
+      .selection_token = native.selection_token,
+      .object_id = native.target.modeling_object_id,
+      .face_id = native.target.face.valid()
+          ? static_cast<QuaderElementId>(native.target.face.index) : kInvalidQuaderElementId,
+      .uv_from_plane = native.chart.map.uv_from_plane,
+      .uv_offset = {native.chart.map.uv_offset[0], native.chart.map.uv_offset[1]},
+      .material_id = material_id,
+      .embedded_material = native.material.embedded() ? native.material.embedded_asset() : kInvalidAssetId,
+      .texture_extent = native.texture_extent,
+      .texture_available = native.texture_available,
+      .repeat_width = native.repeat_width,
+      .repeat_height = native.repeat_height,
+      .gesture_active = native.gesture_active,
+  };
+  result.outline.reserve(native.chart.outline.size());
+  for (const auto &point : native.chart.outline) {
+    result.outline.push_back({static_cast<float>(point[0]), static_cast<float>(point[1])});
+  }
+  return result;
+}
+
+QuaderApiVoidResult QuaderModelingApi::begin_face_texture_gesture(
+    const QuaderFaceTextureGestureBegin &request) {
+  if (!mutations_.can_mutate_modeling_content()) {
+    return mutations_.modeling_content_blocked_status("starting a face texture gesture.");
+  }
+  ModelingFaceTextureGestureKind kind;
+  switch (request.kind) {
+  case QuaderFaceTextureGestureKind::Translate: kind = ModelingFaceTextureGestureKind::Translate; break;
+  case QuaderFaceTextureGestureKind::ScaleWidth: kind = ModelingFaceTextureGestureKind::ScaleWidth; break;
+  case QuaderFaceTextureGestureKind::ScaleHeight: kind = ModelingFaceTextureGestureKind::ScaleHeight; break;
+  case QuaderFaceTextureGestureKind::Rotate: kind = ModelingFaceTextureGestureKind::Rotate; break;
+  default: return invalid_api_status(session_, "Unknown face texture gesture.");
+  }
+  return mutations_.run_modeling_result(
+      scene_session(session_).modeling().begin_face_texture_gesture({
+          .kind = kind, .selection_token = request.selection_token,
+          .start = request.start, .pivot = request.pivot}), "Begin Face Texture Gesture");
+}
+
+QuaderApiVoidResult QuaderModelingApi::update_face_texture_gesture(
+    const QuaderFaceTextureGestureUpdate &request) {
+  if (!mutations_.available()) return invalid_api_status(session_, "No scene is active.");
+  auto &session = scene_session(session_);
+  return mutations_.run_modeling_result(session.modeling().update_face_texture_gesture({
+      .current = request.current, .precision = request.precision, .snap = request.snap,
+      .grid_step = viewport_grid_world_size_from_contract(session.viewport_workspace().grid_preset()),
+      .rotation_step = session.modeling().face_texture_rotation_step()}), "Update Face Texture Gesture");
+}
+
+QuaderApiVoidResult QuaderModelingApi::commit_face_texture_gesture() {
+  if (!mutations_.available()) return invalid_api_status(session_, "No scene is active.");
+  return mutations_.run_modeling_command(
+      std::make_unique<FaceTextureGestureHistoryCommand>(scene_session(session_).modeling()),
+      "Edit Face Texture");
+}
+
+QuaderApiVoidResult QuaderModelingApi::cancel_face_texture_gesture() {
+  if (!mutations_.available()) return invalid_api_status(session_, "No scene is active.");
+  return mutations_.run_modeling_result(scene_session(session_).modeling().cancel_face_texture_gesture(),
+                                         "Cancel Face Texture Gesture");
 }
 
 QuaderApiVoidResult QuaderModelingApi::set_face_texture_setting(

@@ -61,6 +61,7 @@ struct QtMaterialBrowserLabels final {
   QString empty_catalog = QStringLiteral("No materials in this project");
   QString no_results = QStringLiteral("No materials match this search");
   QString accept = QStringLiteral("Accept");
+  QString assign = QStringLiteral("Assign");
   QString picker_window_title = QStringLiteral("Replace Material Browser");
   QString folders = QStringLiteral("Folders");
   QString all = QStringLiteral("All");
@@ -92,23 +93,33 @@ struct QtMaterialBrowserLabels final {
   QString delete_material = QStringLiteral("Delete");
   QString rename_material_title = QStringLiteral("Rename Material");
   QString material_name = QStringLiteral("Material name");
+  QString edit_material = QStringLiteral("Edit Material");
+  QString usage_incomplete =
+      QStringLiteral("Material usage is incomplete; Not Used is unavailable.");
+  QString clear_usage_filter = QStringLiteral("Clear usage filter");
+  QString filtered_by = QStringLiteral("Filtered by:");
+  QString filter_active = QStringLiteral("%1 (1 active)");
+  QString remove_usage_filter = QStringLiteral("Remove %1 filter");
 };
 
 enum class QtMaterialBrowserViewMode : std::uint8_t { Grid, List };
 enum class QtMaterialBrowserUsageMode : std::uint8_t { All, Used, NotUsed };
-/** Distinguishes active-material browsing from a modal material-picking workflow. */
+/** Chooses window chrome without changing the shared browser presentation. */
+enum class QtMaterialBrowserHost : std::uint8_t { Windowed, Embedded };
+/** Separates local browsing, explicit face assignment, and modal picking. */
 enum class QtMaterialBrowserPurpose : std::uint8_t {
-  ActiveMaterial,
+  Management,
+  FaceAssignment,
   Picker,
 };
 
-/** Immutable dependency presentation delivered only when its revision changes. */
+/** Immutable project material usage supplied only when its revision changes. */
 struct QtMaterialBrowserUsageSnapshot final {
   std::uint64_t project_generation = 0;
   std::uint64_t revision = 0;
   bool complete = false;
   std::vector<QuaderMaterialReference> used_materials;
-  QString error;
+  QStringList errors;
 
   bool operator==(const QtMaterialBrowserUsageSnapshot &) const = default;
 };
@@ -239,11 +250,11 @@ private:
 
 /**
  * Retained stock-Qt material browser. It presents immutable API snapshots and
- * emits only semantic material activation, opening, and import intent.
+ * emits only semantic material assignment, opening, and import intent.
  */
 class QtMaterialBrowserWindow final : public QMainWindow {
 public:
-  using ActivateMaterialCallback =
+  using AssignMaterialCallback =
       std::function<void(QuaderMaterialReference)>;
   using OpenMaterialCallback = std::function<void(QuaderMaterialReference)>;
   using AcceptMaterialCallback = std::function<void(QuaderMaterialReference)>;
@@ -257,10 +268,11 @@ public:
       std::vector<QuaderMaterialReference>, QString, std::uint64_t)>;
   using MaterialActionCallback =
       std::function<void(QtMaterialBrowserActionRequest)>;
-  using UsageInspectionErrorCallback = std::function<void(QString)>;
   using PresentationStateChangedCallback = std::function<void()>;
 
-  explicit QtMaterialBrowserWindow(QWidget *parent = nullptr);
+  explicit QtMaterialBrowserWindow(
+      QWidget *parent = nullptr,
+      QtMaterialBrowserHost host = QtMaterialBrowserHost::Windowed);
   ~QtMaterialBrowserWindow() override;
 
   QtMaterialBrowserWindow(const QtMaterialBrowserWindow &) = delete;
@@ -269,10 +281,13 @@ public:
   void set_labels(QtMaterialBrowserLabels labels);
   void set_materials(std::vector<QtMaterialBrowserItem> materials,
                      QuaderMaterialReference selected_material = {});
-  void set_active_material(QuaderMaterialReference active_material);
+  void set_selected_material(QuaderMaterialReference material);
+  void set_assignment_available(bool available);
+  [[nodiscard]] QtMaterialBrowserHost host() const noexcept { return host_; }
   void set_folders(std::vector<QString> project_relative_folders);
   void set_project_generation(std::uint64_t generation);
   void set_material_usage(QtMaterialBrowserUsageSnapshot snapshot);
+  void set_dependency_revision(std::uint64_t revision);
   [[nodiscard]] QtMaterialBrowserUsageMode usage_mode() const noexcept {
     return usage_mode_;
   }
@@ -287,7 +302,7 @@ public:
     return purpose_;
   }
   [[nodiscard]] QuaderMaterialReference selected_material() const;
-  void set_activate_material_callback(ActivateMaterialCallback callback);
+  void set_assign_material_callback(AssignMaterialCallback callback);
   void set_open_material_callback(OpenMaterialCallback callback);
   void set_accept_material_callback(AcceptMaterialCallback callback);
   void set_import_textures_callback(ImportTexturesCallback callback);
@@ -297,8 +312,6 @@ public:
   void set_move_folder_callback(MoveFolderCallback callback);
   void set_move_materials_callback(MoveMaterialsCallback callback);
   void set_material_action_callback(MaterialActionCallback callback);
-  void set_usage_inspection_error_callback(
-      UsageInspectionErrorCallback callback);
   void set_presentation_state_changed_callback(
       PresentationStateChangedCallback callback);
 
@@ -331,12 +344,15 @@ private:
   void select_material(const QuaderMaterialReference &reference);
   [[nodiscard]] const QtMaterialBrowserItem *
   item_for_index(const QModelIndex &proxy_index) const;
-  void activate_index(const QModelIndex &index);
+  void assign_index(const QModelIndex &index);
   void open_index(const QModelIndex &index);
   void accept_selected_material();
   void rebuild_folder_tree();
   void show_folder_menu(const QPoint &position);
   void show_filter_popup();
+  void show_thumbnail_size_popup();
+  void refresh_usage_presentation();
+  void refresh_usage_badge_style();
   void show_material_menu(const QModelIndex &target,
                           const QPoint &global_position);
   void set_sidebar_visible(bool visible, bool notify);
@@ -355,6 +371,16 @@ private:
   QLineEdit *search_ = nullptr;
   QToolButton *filter_button_ = nullptr;
   QPointer<QWidget> filter_popup_;
+  QPointer<QWidget> thumbnail_size_popup_;
+  QToolButton *thumbnail_size_button_ = nullptr;
+  QToolButton *import_tool_button_ = nullptr;
+  QLabel *thumbnail_size_value_ = nullptr;
+  QWidget *active_filters_ = nullptr;
+  QLabel *filtered_by_ = nullptr;
+  QWidget *usage_chip_ = nullptr;
+  QLabel *usage_chip_label_ = nullptr;
+  QToolButton *usage_chip_remove_ = nullptr;
+  QLabel *usage_status_ = nullptr;
   QToolButton *grid_button_ = nullptr;
   QToolButton *list_button_ = nullptr;
   QSlider *tile_slider_ = nullptr;
@@ -369,9 +395,10 @@ private:
   QPushButton *accept_button_ = nullptr;
   QtMaterialBrowserLabels labels_;
   QtMaterialBrowserViewMode view_mode_ = QtMaterialBrowserViewMode::Grid;
-  QtMaterialBrowserPurpose purpose_ =
-      QtMaterialBrowserPurpose::ActiveMaterial;
-  ActivateMaterialCallback activate_material_;
+  QtMaterialBrowserHost host_ = QtMaterialBrowserHost::Windowed;
+  QtMaterialBrowserPurpose purpose_ = QtMaterialBrowserPurpose::Management;
+  bool assignment_available_ = false;
+  AssignMaterialCallback assign_material_;
   OpenMaterialCallback open_material_;
   AcceptMaterialCallback accept_material_;
   ImportTexturesCallback import_textures_;
@@ -381,13 +408,13 @@ private:
   MoveFolderCallback move_folder_;
   MoveMaterialsCallback move_materials_;
   MaterialActionCallback material_action_;
-  UsageInspectionErrorCallback usage_inspection_error_;
   std::vector<QString> folders_;
   QtMaterialBrowserUsageSnapshot usage_snapshot_;
   QuaderMaterialReference protected_material_;
   QtMaterialBrowserUsageMode usage_mode_ = QtMaterialBrowserUsageMode::All;
   std::uint64_t project_generation_ = 0;
   std::uint64_t material_presentation_revision_ = 0;
+  std::uint64_t dependency_revision_ = 0;
   std::uint64_t action_eligibility_revision_ = 0;
   int sidebar_width_ = 200;
   bool material_paste_available_ = false;

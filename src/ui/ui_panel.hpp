@@ -21,7 +21,7 @@ enum class UIPanelId {
   Console,
   Layers,
   ToolSettings,
-  ActiveMaterial,
+  FaceTexture,
   Count,
 };
 
@@ -32,7 +32,7 @@ inline constexpr std::array<UIPanelId, 6> kUiDockPanelIds = {
     UIPanelId::Inspector,
     UIPanelId::Layers,
     UIPanelId::ToolSettings,
-    UIPanelId::ActiveMaterial,
+    UIPanelId::FaceTexture,
     UIPanelId::Console,
 };
 
@@ -50,8 +50,8 @@ inline const char *ui_panel_key(UIPanelId id) {
     return "Layers";
   case UIPanelId::ToolSettings:
     return "Tool Settings";
-  case UIPanelId::ActiveMaterial:
-    return "Active Material";
+  case UIPanelId::FaceTexture:
+    return "Face Texture";
   case UIPanelId::Count:
     break;
   }
@@ -72,8 +72,8 @@ inline const char *ui_panel_stable_id(UIPanelId id) {
     return "layers";
   case UIPanelId::ToolSettings:
     return "tool_settings";
-  case UIPanelId::ActiveMaterial:
-    return "active_material";
+  case UIPanelId::FaceTexture:
+    return "face_texture";
   case UIPanelId::Count:
     break;
   }
@@ -87,7 +87,7 @@ inline bool ui_panel_default_visible(UIPanelId id) {
   case UIPanelId::Inspector:
   case UIPanelId::Layers:
   case UIPanelId::ToolSettings:
-  case UIPanelId::ActiveMaterial:
+  case UIPanelId::FaceTexture:
     return true;
   case UIPanelId::Console:
     return false;
@@ -111,8 +111,8 @@ inline const char *ui_panel_localization_key(UIPanelId id) {
     return "ui.panel.layers";
   case UIPanelId::ToolSettings:
     return "ui.panel.tool_settings";
-  case UIPanelId::ActiveMaterial:
-    return "ui.panel.active_material";
+  case UIPanelId::FaceTexture:
+    return "ui.panel.face_texture";
   case UIPanelId::Count:
     break;
   }

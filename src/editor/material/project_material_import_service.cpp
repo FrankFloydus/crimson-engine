@@ -236,7 +236,7 @@ ProjectMaterialImportService::import_textures_as_materials(
   }
 
   ProjectSessionResult installed = project_->install_material_catalog(
-      scanned.take_value(), std::nullopt);
+      scanned.take_value());
   if (!installed.ok) {
     report.message = with_rollback_diagnostic(installed.message, rollback, 0u);
     return report;

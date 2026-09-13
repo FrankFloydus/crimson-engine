@@ -41,6 +41,10 @@ int parse_bounded_integer(std::string_view value, int minimum, int maximum,
 }
 
 std::optional<UIPanelId> panel_settings_id(std::string_view key) {
+  // Read the retired dock key once; saves use the Face Texture identity.
+  if (key == "active_material" || key == "Active Material") {
+    return UIPanelId::FaceTexture;
+  }
   for (UIPanelId id : kUiDockPanelIds) {
     if (key == ui_panel_stable_id(id) || key == ui_panel_key(id)) {
       return id;
@@ -179,8 +183,8 @@ bool UISettings::is_panel_visible(UIPanelId id) const {
     return layers_visible_;
   case UIPanelId::ToolSettings:
     return tool_settings_visible_;
-  case UIPanelId::ActiveMaterial:
-    return active_material_visible_;
+  case UIPanelId::FaceTexture:
+    return face_texture_visible_;
   case UIPanelId::Count:
     break;
   }
@@ -206,8 +210,8 @@ void UISettings::set_panel_visible(UIPanelId id, bool visible) {
   case UIPanelId::ToolSettings:
     tool_settings_visible_ = visible;
     break;
-  case UIPanelId::ActiveMaterial:
-    active_material_visible_ = visible;
+  case UIPanelId::FaceTexture:
+    face_texture_visible_ = visible;
     break;
   case UIPanelId::Count:
     break;

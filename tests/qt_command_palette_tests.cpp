@@ -162,9 +162,9 @@ TEST(QtCommandPaletteTests,
       {quader_command::kModelingTextureShiftUp, "Shift Texture Up"},
       {quader_command::kModelingTextureShiftDown, "Shift Texture Down"},
       {quader_command::kModelingTextureFlipFaceHorizontal,
-       "Flip Face Horizontally"},
+       "Flip Face UVs H"},
       {quader_command::kModelingTextureFlipFaceVertical,
-       "Flip Face Vertically"},
+       "Flip Face UVs V"},
   }};
   for (const PaletteOnlyUvCommand &expected : kPaletteOnlyUvCommands) {
     search->setText(QString::fromUtf8(expected.command_id.string().data(),
@@ -234,6 +234,9 @@ TEST(QtCommandPaletteTests,
   ASSERT_TRUE(box.ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+  editor.preferences().set_runtime_hooks({
+      .rotation_snap_degrees = [] { return 0.0; },
+  });
   LocalizationService localization = loaded_localization();
   QtCommandPalette palette(editor.commands(), localization);
   palette.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -249,11 +252,11 @@ TEST(QtCommandPaletteTests,
   int local_announcements = 0;
   status->set_error_sound_callback([&] { ++local_announcements; });
   search->setText(QString::fromStdString(
-      std::string(quader_command::kModelingTextureFlipFaceHorizontal.string())));
-  auto *flip = find_command_item(*results,
-      quader_command::kModelingTextureFlipFaceHorizontal.string());
-  ASSERT_NE(flip, nullptr);
-  results->setCurrentItem(flip);
+      std::string(quader_command::kModelingTextureRotateClockwise.string())));
+  auto *rotate = find_command_item(*results,
+      quader_command::kModelingTextureRotateClockwise.string());
+  ASSERT_NE(rotate, nullptr);
+  results->setCurrentItem(rotate);
   send_key(*search, Qt::Key_Return);
   run_next_event_turn();
   ASSERT_TRUE(editor.commands().last_status().has_value());

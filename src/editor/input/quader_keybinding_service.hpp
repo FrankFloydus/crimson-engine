@@ -1198,6 +1198,13 @@ public:
         if (target_id.empty()) {
           return "Removal keybinding must include a command id.";
         }
+        // Retired implicit-material targets must not invalidate unrelated
+        // overrides. Match exact IDs, including their removal entries.
+        if (target_id == "edit.apply_material" ||
+            target_id == "viewport.material.sample_face" ||
+            target_id == "viewport.material.apply_active_to_selection") {
+          continue;
+        }
         if (!has_target(target_id)) {
           return "Keybinding entry references an unknown command id: " +
                  target_id;

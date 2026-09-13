@@ -18,6 +18,7 @@
 #include <QDataStream>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFrame>
@@ -32,6 +33,7 @@
 #include <QMetaObject>
 #include <QMenu>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QPalette>
 #include <QPainter>
 #include <QPixmap>
@@ -582,7 +584,7 @@ TEST(QtMaterialBrowserWindowTests,
                                   QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
     view->selectionModel()->setCurrentIndex(view->model()->index(1, 0), QItemSelectionModel::NoUpdate);
     EXPECT_EQ(window.selected_material(), materials[1].reference);
-    window.set_active_material(materials[1].reference);
+    window.set_selected_material(materials[1].reference);
     EXPECT_EQ(view->selectionModel()->selectedRows().size(), 2);
     std::unique_ptr<QMimeData> mime(view->model()->mimeData(view->selectionModel()->selectedIndexes()));
     ASSERT_NE(mime, nullptr);
@@ -634,7 +636,7 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(grid->selectionModel()->selectedRows().size(), 1);
   EXPECT_FALSE(drop_on_folder(*tree, *destination, folder_mime));
   EXPECT_EQ(folder_moves, 2);
-  window.set_purpose(QtMaterialBrowserPurpose::ActiveMaterial);
+  window.set_purpose(QtMaterialBrowserPurpose::Management);
   window.set_project_generation(28);
   window.set_folders({QStringLiteral("Materials/Dev/Wood"), QStringLiteral("Materials/Other")});
   destination = folder_item(*tree, QStringLiteral("Materials/Other"));
@@ -644,7 +646,7 @@ TEST(QtMaterialBrowserWindowTests,
 }
 
 TEST(QtMaterialBrowserWindowTests,
-     UsageProxyCombinesFolderAndSearchAndFailsOpenWhenIncomplete) {
+     UsageProxyCombinesPredicatesAndUsesOnlyConfirmedIncompleteResults) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char name[] = "quader-material-usage-proxy-tests";
@@ -683,10 +685,16 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_TRUE(proxy.has_non_usage_match());
 
   proxy.set_used_material_ids({used_in_dev.stable_id}, false);
-  ASSERT_EQ(proxy.rowCount(), 1)
-      << "an incomplete dependency snapshot must suspend usage filtering";
+  EXPECT_EQ(proxy.rowCount(), 0)
+      << "incomplete inspection cannot establish that a material is unused";
+  proxy.set_usage_mode(QtMaterialBrowserUsageMode::Used);
+  ASSERT_EQ(proxy.rowCount(), 1);
   EXPECT_EQ(proxy.index(0, 0).data().toString(), QStringLiteral("Brick"));
   proxy.set_search_text({});
+  ASSERT_EQ(proxy.rowCount(), 1)
+      << "confirmed used IDs remain valid when another scene is unreadable";
+  EXPECT_EQ(proxy.index(0, 0).data().toString(), QStringLiteral("Brick"));
+  proxy.set_usage_mode(QtMaterialBrowserUsageMode::All);
   EXPECT_EQ(proxy.rowCount(), 2);
 }
 
@@ -791,11 +799,9 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_FALSE(filter->isChecked());
   EXPECT_EQ(grid->model()->rowCount(), 2);
 
-  int inspection_errors = 0;
-  window.set_usage_inspection_error_callback([&](const QString &error) {
-    EXPECT_EQ(error, QStringLiteral("Unreadable scene"));
-    ++inspection_errors;
-  });
+  auto *usage_status = window.findChild<QLabel *>(
+      QStringLiteral("materialBrowser.usageStatus"));
+  ASSERT_NE(usage_status, nullptr);
   window.set_material_usage({
       .project_generation = 41,
       .revision = 2,
@@ -824,14 +830,16 @@ TEST(QtMaterialBrowserWindowTests,
       .project_generation = 41,
       .revision = 3,
       .complete = false,
-      .error = QStringLiteral("Unreadable scene"),
+      .errors = {QStringLiteral("Unreadable scene")},
   };
   window.set_material_usage(incomplete);
-  EXPECT_EQ(grid->model()->rowCount(), 2);
-  EXPECT_EQ(inspection_errors, 1);
+  EXPECT_EQ(grid->model()->rowCount(), 0);
+  EXPECT_TRUE(usage_status->text().contains(QStringLiteral("Unreadable scene")));
+  EXPECT_FALSE(usage_status->isHidden());
+  const QString retained_error = usage_status->text();
   window.set_material_usage(incomplete);
-  EXPECT_EQ(inspection_errors, 1)
-      << "one dependency revision reports its error only once";
+  EXPECT_EQ(usage_status->text(), retained_error)
+      << "unchanged errors retain a single inline status";
 
   window.set_material_usage({
       .project_generation = 41,
@@ -839,10 +847,11 @@ TEST(QtMaterialBrowserWindowTests,
       .complete = true,
   });
   EXPECT_EQ(grid->model()->rowCount(), 0);
+  EXPECT_TRUE(usage_status->isHidden());
   window.set_purpose(QtMaterialBrowserPurpose::Picker);
   EXPECT_TRUE(filter->isHidden());
   EXPECT_EQ(grid->model()->rowCount(), 2);
-  window.set_purpose(QtMaterialBrowserPurpose::ActiveMaterial);
+  window.set_purpose(QtMaterialBrowserPurpose::Management);
   EXPECT_EQ(grid->model()->rowCount(), 0);
   EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used);
 
@@ -852,7 +861,520 @@ TEST(QtMaterialBrowserWindowTests,
 }
 
 TEST(QtMaterialBrowserWindowTests,
-     CatalogRefreshKeepsRestoredBatchSeparateFromNewActiveMaterial) {
+     EmbeddedUsagePopupAppliesImmediatelyAndChipPreservesFolderAndSearch) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-embedded-material-usage-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  owner.resize(340, 520);
+  QtMaterialBrowserWindow browser(&owner, QtMaterialBrowserHost::Embedded);
+  browser.resize(340, 520);
+  browser.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 64,
+                                     false, 120);
+  const auto used = folder_material(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", QStringLiteral("Oak Used"),
+      QStringLiteral("Materials/Wood/oak_used.qmat"));
+  const auto unused = folder_material(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", QStringLiteral("Oak Unused"),
+      QStringLiteral("Materials/Wood/oak_unused.qmat"));
+  const auto elsewhere = folder_material(
+      "cccccccc-cccc-cccc-cccc-cccccccccccc", QStringLiteral("Oak Elsewhere"),
+      QStringLiteral("Materials/Other/oak.qmat"));
+  browser.set_project_generation(41);
+  int assignments = 0;
+  browser.set_assign_material_callback(
+      [&](QuaderMaterialReference) { ++assignments; });
+  browser.set_assignment_available(true);
+  browser.set_folders({QStringLiteral("Materials/Wood"),
+                       QStringLiteral("Materials/Other")});
+  browser.set_materials({used, unused, elsewhere});
+  browser.set_selected_folder(QStringLiteral("Materials/Wood"));
+  browser.set_material_usage({
+      .project_generation = 41,
+      .revision = 1,
+      .complete = true,
+      .used_materials = {used.reference, elsewhere.reference},
+  });
+
+  auto *search = browser.findChild<QLineEdit *>(
+      QStringLiteral("materialBrowser.search"));
+  auto *filter = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  auto *chip = browser.findChild<QWidget *>(
+      QStringLiteral("materialBrowser.usageChip"));
+  auto *chip_label = browser.findChild<QLabel *>(
+      QStringLiteral("materialBrowser.usageChipLabel"));
+  auto *chip_remove = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.usageChipRemove"));
+  auto *active_filters = browser.findChild<QWidget *>(
+      QStringLiteral("materialBrowser.activeFilters"));
+  auto *filtered_by = browser.findChild<QLabel *>(
+      QStringLiteral("materialBrowser.filteredBy"));
+  auto *grid = browser.findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  auto *empty = browser.findChild<QLabel *>(
+      QStringLiteral("materialBrowser.empty"));
+  auto *status = browser.findChild<QLabel *>(
+      QStringLiteral("materialBrowser.usageStatus"));
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(filter, nullptr);
+  ASSERT_NE(chip, nullptr);
+  ASSERT_NE(chip_label, nullptr);
+  ASSERT_NE(chip_remove, nullptr);
+  ASSERT_NE(active_filters, nullptr);
+  ASSERT_NE(filtered_by, nullptr);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(empty, nullptr);
+  ASSERT_NE(status, nullptr);
+  search->setText(QStringLiteral("oak"));
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+  EXPECT_FALSE(chip->isVisible());
+  EXPECT_TRUE(active_filters->isHidden());
+  EXPECT_TRUE(status->isHidden());
+  owner.show();
+  browser.show();
+  application.processEvents();
+
+  filter->click();
+  auto *popup = browser.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  EXPECT_EQ(popup->findChild<QPushButton *>(
+                QStringLiteral("materialBrowser.filterApply")),
+            nullptr);
+  EXPECT_EQ(popup->findChild<QPushButton *>(
+                QStringLiteral("materialBrowser.filterCancel")),
+            nullptr);
+  auto *used_box = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  auto *not_used_box = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterNotUsed"));
+  ASSERT_NE(used_box, nullptr);
+  ASSERT_NE(not_used_box, nullptr);
+  used_box->click();
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  EXPECT_TRUE(used_box->isChecked());
+  EXPECT_FALSE(not_used_box->isChecked());
+  ASSERT_EQ(grid->model()->rowCount(), 1);
+  EXPECT_EQ(grid->model()->index(0, 0).data().toString(), used.name);
+  EXPECT_FALSE(chip->isHidden());
+  EXPECT_FALSE(active_filters->isHidden());
+  EXPECT_EQ(filtered_by->text(), QStringLiteral("Filtered by:"));
+  EXPECT_EQ(chip_label->text(), QStringLiteral("Used"));
+  EXPECT_EQ(chip_label->focusPolicy(), Qt::NoFocus);
+  EXPECT_EQ(qobject_cast<QAbstractButton *>(chip), nullptr);
+  EXPECT_FALSE(chip_remove->icon().isNull());
+  EXPECT_EQ(chip_remove->accessibleName(), QStringLiteral("Remove Used filter"));
+  EXPECT_TRUE(filter->isChecked());
+  EXPECT_TRUE(filter->toolTip().contains(QStringLiteral("1 active")));
+  EXPECT_FALSE(popup->isVisible());
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+  const QPointF label_position(chip_label->rect().center());
+  const QPointF label_global(chip_label->mapToGlobal(label_position.toPoint()));
+  QMouseEvent label_press(QEvent::MouseButtonPress, label_position, label_global,
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QMouseEvent label_release(QEvent::MouseButtonRelease, label_position, label_global,
+                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(chip_label, &label_press);
+  QCoreApplication::sendEvent(chip_label, &label_release);
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used)
+      << "the badge body describes the active condition without clearing it";
+
+  filter->click();
+  popup = browser.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  used_box = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  not_used_box = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterNotUsed"));
+  ASSERT_NE(used_box, nullptr);
+  ASSERT_NE(not_used_box, nullptr);
+  EXPECT_TRUE(used_box->isChecked());
+  EXPECT_FALSE(not_used_box->isChecked());
+
+  not_used_box->click();
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::NotUsed);
+  EXPECT_FALSE(used_box->isChecked());
+  EXPECT_TRUE(not_used_box->isChecked());
+  ASSERT_EQ(grid->model()->rowCount(), 1);
+  EXPECT_EQ(grid->model()->index(0, 0).data().toString(), unused.name);
+  EXPECT_EQ(chip_label->text(), QStringLiteral("Not Used"));
+  EXPECT_EQ(chip_remove->accessibleName(), QStringLiteral("Remove Not Used filter"));
+  EXPECT_FALSE(popup->isVisible());
+  application.processEvents();
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::NotUsed)
+      << "popup dismissal retains its immediate choice";
+
+  int presentation_changes = 0;
+  browser.set_presentation_state_changed_callback(
+      [&]() { ++presentation_changes; });
+  filter->click();
+  popup = browser.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  not_used_box = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterNotUsed"));
+  ASSERT_NE(not_used_box, nullptr);
+  EXPECT_TRUE(not_used_box->isChecked());
+  not_used_box->click();
+  EXPECT_FALSE(popup->isVisible())
+      << "choosing the current predicate also dismisses the popup";
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::NotUsed);
+  EXPECT_EQ(presentation_changes, 0);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+  const QtMaterialBrowserUsageSnapshot incomplete{
+      .project_generation = 41,
+      .revision = 2,
+      .complete = false,
+      .used_materials = {used.reference},
+      .errors = {QStringLiteral("Unreadable scene"),
+                 QStringLiteral("Unreadable scene"),
+                 QStringLiteral("Missing linked document")},
+  };
+  browser.set_material_usage(incomplete);
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::NotUsed);
+  EXPECT_EQ(grid->model()->rowCount(), 0);
+  EXPECT_EQ(empty->text(),
+            QtMaterialBrowserLabels{}.usage_incomplete);
+  EXPECT_FALSE(status->isHidden());
+  EXPECT_EQ(status->text().count(QStringLiteral("Unreadable scene")), 1);
+  EXPECT_EQ(status->text().count(QStringLiteral("Missing linked document")),
+            1);
+  const QString retained_status = status->text();
+  int catalog_resets = 0;
+  QObject::connect(grid->model(), &QAbstractItemModel::modelReset, &browser,
+                   [&]() { ++catalog_resets; });
+  browser.set_material_usage(incomplete);
+  EXPECT_EQ(status->text(), retained_status);
+  EXPECT_EQ(catalog_resets, 0);
+
+  filter->click();
+  popup = browser.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  used_box = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  not_used_box = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterNotUsed"));
+  ASSERT_NE(used_box, nullptr);
+  ASSERT_NE(not_used_box, nullptr);
+  EXPECT_TRUE(used_box->isEnabled());
+  EXPECT_FALSE(not_used_box->isEnabled());
+  used_box->click();
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  ASSERT_EQ(grid->model()->rowCount(), 1);
+  EXPECT_EQ(grid->model()->index(0, 0).data().toString(), used.name);
+  EXPECT_FALSE(popup->isVisible());
+  application.processEvents();
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+  chip_remove->click();
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::All);
+  EXPECT_FALSE(chip->isVisible());
+  EXPECT_TRUE(active_filters->isHidden());
+  EXPECT_FALSE(filter->isChecked());
+  EXPECT_FALSE(filter->toolTip().contains(QStringLiteral("1 active")));
+  EXPECT_EQ(owner.focusWidget(), filter);
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(search->text(), QStringLiteral("oak"));
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+  EXPECT_EQ(catalog_resets, 0);
+
+  browser.set_material_usage({
+      .project_generation = 40,
+      .revision = 99,
+      .complete = true,
+  });
+  EXPECT_EQ(status->text(), retained_status)
+      << "a stale project snapshot cannot replace current usage evidence";
+  browser.set_material_usage({
+      .project_generation = 41,
+      .revision = 3,
+      .complete = true,
+      .used_materials = {used.reference},
+  });
+  EXPECT_TRUE(status->isHidden());
+  EXPECT_EQ(assignments, 0)
+      << "usage, folder and search presentation never assigns a material";
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     EmbeddedUsageKeyboardDismissalAndStaleChoicesNeverAssign) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-embedded-filter-keyboard-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  owner.resize(380, 480);
+  QtMaterialBrowserWindow browser(&owner, QtMaterialBrowserHost::Embedded);
+  browser.resize(owner.size());
+  browser.set_project_generation(7);
+  const auto material = folder_material(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", QStringLiteral("Oak"),
+      QStringLiteral("Materials/oak.qmat"));
+  browser.set_materials({material});
+  browser.set_material_usage({
+      .project_generation = 7,
+      .revision = 1,
+      .complete = true,
+      .used_materials = {material.reference},
+  });
+  int assignments = 0;
+  browser.set_assign_material_callback(
+      [&](QuaderMaterialReference) { ++assignments; });
+  browser.set_assignment_available(true);
+  owner.show();
+  browser.show();
+  application.processEvents();
+
+  auto *filter = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  auto *remove = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.usageChipRemove"));
+  ASSERT_NE(filter, nullptr);
+  ASSERT_NE(remove, nullptr);
+  filter->click();
+  QPointer<QFrame> popup = browser.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  auto *used = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  ASSERT_NE(used, nullptr);
+  send_key(*used, Qt::Key_Space);
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  EXPECT_TRUE(popup.isNull() || !popup->isVisible());
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  EXPECT_EQ(owner.focusWidget(), filter);
+
+  filter->click();
+  popup = browser.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  used = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  ASSERT_NE(used, nullptr);
+  EXPECT_TRUE(used->isChecked());
+  send_key(*used, Qt::Key_Escape);
+  EXPECT_TRUE(popup.isNull() || !popup->isVisible());
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  EXPECT_TRUE(filter->isChecked());
+  EXPECT_EQ(owner.focusWidget(), filter);
+
+  remove->setFocus(Qt::TabFocusReason);
+  send_key(*remove, Qt::Key_Space);
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::All);
+  EXPECT_EQ(owner.focusWidget(), filter);
+
+  filter->click();
+  popup = browser.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  QPointer<QCheckBox> stale_used = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  ASSERT_NE(stale_used, nullptr);
+  browser.set_material_usage({
+      .project_generation = 7,
+      .revision = 2,
+      .complete = true,
+      .used_materials = {material.reference},
+  });
+  ASSERT_NE(stale_used, nullptr);
+  stale_used->click();
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::All)
+      << "queued intent from the previous usage revision is rejected";
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+  filter->click();
+  popup = browser.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  stale_used = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  ASSERT_NE(stale_used, nullptr);
+  browser.set_project_generation(8);
+  ASSERT_NE(stale_used, nullptr);
+  stale_used->click();
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::All)
+      << "a closed popup cannot apply its previous project's choice";
+  EXPECT_EQ(assignments, 0);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     EmbeddedUsageBadgeScalesAndRepaintsForLivePalettes) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-embedded-filter-render-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QtUiScaleApplicationController scale_controller(application);
+  const QPalette light_palette = QApplication::style()->standardPalette();
+
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  QtMaterialBrowserWindow browser(&owner, QtMaterialBrowserHost::Embedded);
+  browser.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 64,
+                                     false, 120);
+  browser.set_project_generation(1);
+  const auto material = folder_material(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", QStringLiteral("Oak"),
+      QStringLiteral("Materials/oak.qmat"));
+  browser.set_materials({material});
+  browser.set_material_usage({
+      .project_generation = 1,
+      .revision = 1,
+      .complete = true,
+      .used_materials = {material.reference},
+  });
+  owner.resize(380, 320);
+  browser.resize(owner.size());
+  owner.show();
+  browser.show();
+  application.processEvents();
+  auto *filter = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  ASSERT_NE(filter, nullptr);
+  filter->click();
+  auto *used = browser.findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  ASSERT_NE(used, nullptr);
+  used->click();
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+  auto *row = browser.findChild<QWidget *>(
+      QStringLiteral("materialBrowser.activeFilters"));
+  auto *filtered_by = browser.findChild<QLabel *>(
+      QStringLiteral("materialBrowser.filteredBy"));
+  auto *badge = browser.findChild<QWidget *>(
+      QStringLiteral("materialBrowser.usageChip"));
+  auto *label = browser.findChild<QLabel *>(
+      QStringLiteral("materialBrowser.usageChipLabel"));
+  auto *remove = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.usageChipRemove"));
+  ASSERT_NE(row, nullptr);
+  ASSERT_NE(filtered_by, nullptr);
+  ASSERT_NE(badge, nullptr);
+  ASSERT_NE(label, nullptr);
+  ASSERT_NE(remove, nullptr);
+  const QString screenshot_directory =
+      qEnvironmentVariable("QUADER_MATERIAL_FILTER_BADGE_SCREENSHOT_DIR");
+  if (!screenshot_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(screenshot_directory));
+  }
+
+  QColor dark_badge_background;
+  for (const QString &theme : {QStringLiteral("dark"), QStringLiteral("light"),
+                               QStringLiteral("high-contrast")}) {
+    SCOPED_TRACE(theme.toStdString());
+    QPalette palette = theme == QStringLiteral("dark")
+                           ? qt_obsidian_application_palette(light_palette)
+                           : light_palette;
+    const bool high_contrast = theme == QStringLiteral("high-contrast");
+    if (high_contrast) {
+      QApplication::setPalette(QPalette{});
+      palette.setColor(QPalette::Window, Qt::black);
+      palette.setColor(QPalette::WindowText, Qt::white);
+      palette.setColor(QPalette::Button, Qt::black);
+      palette.setColor(QPalette::ButtonText, Qt::white);
+      palette.setColor(QPalette::Base, Qt::black);
+      palette.setColor(QPalette::Text, Qt::white);
+      palette.setColor(QPalette::Accent, Qt::yellow);
+      browser.setPalette(palette);
+    } else {
+      palette.setColor(QPalette::Accent, QColor(110, 92, 185));
+      QApplication::setPalette(palette);
+      browser.setPalette(QPalette{});
+    }
+    for (const float factor : {1.0F, 1.5F, 2.0F}) {
+      SCOPED_TRACE(factor);
+      scale_controller.apply_factor(factor);
+      const QtUiScaleMetrics metrics = scale_controller.metrics();
+      browser.apply_ui_scale(metrics);
+      owner.resize(metrics.size(QSize(380, 320)));
+      browser.resize(owner.size());
+      // Live application-font changes invalidate nested layouts in successive
+      // event-loop turns. Let the badge, row and browser settle before capture.
+      for (int layout_turn = 0; layout_turn < 3; ++layout_turn) {
+        application.processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      }
+      EXPECT_EQ(remove->size(), metrics.size(QSize(20, 20)));
+      EXPECT_EQ(remove->iconSize(), metrics.size(QSize(12, 12)));
+      EXPECT_GE(remove->geometry().left(), label->geometry().right());
+      EXPECT_GE(label->width(), label->fontMetrics().horizontalAdvance(label->text()));
+      EXPECT_GE(filtered_by->width(),
+                filtered_by->fontMetrics().horizontalAdvance(filtered_by->text()));
+      EXPECT_EQ(label->palette().color(QPalette::WindowText),
+                browser.palette().color(QPalette::WindowText));
+      const QImage close_icon = remove->icon().pixmap(remove->iconSize()).toImage();
+      ASSERT_FALSE(close_icon.isNull());
+      bool visible_close = false;
+      for (int y = 0; y < close_icon.height(); ++y) {
+        for (int x = 0; x < close_icon.width(); ++x) {
+          const QColor pixel = close_icon.pixelColor(x, y);
+          if (pixel.alpha() == 255) {
+            visible_close = true;
+            EXPECT_EQ(pixel.rgb(), browser.palette().color(QPalette::WindowText).rgb());
+          }
+        }
+      }
+      EXPECT_TRUE(visible_close);
+
+      QImage badge_render(badge->size(), QImage::Format_ARGB32_Premultiplied);
+      badge_render.fill(Qt::transparent);
+      badge->render(&badge_render);
+      const QColor background = badge_render.pixelColor(
+          metrics.px(3), badge_render.height() / 2);
+      EXPECT_EQ(background.alpha(), 255);
+      if (high_contrast) {
+        EXPECT_EQ(background, palette.color(QPalette::Window))
+            << "high contrast must not blend an accent into system colors";
+      } else {
+        EXPECT_NE(background, palette.color(QPalette::Window));
+        if (factor == 1.0F && theme == QStringLiteral("dark")) {
+          dark_badge_background = background;
+        } else if (factor == 1.0F) {
+          EXPECT_NE(background, dark_badge_background)
+              << "an existing badge repaints when its palette changes";
+        }
+      }
+      if (!screenshot_directory.isEmpty()) {
+        QImage preview(browser.size(), QImage::Format_ARGB32_Premultiplied);
+        preview.fill(Qt::transparent);
+        browser.render(&preview);
+        const int bottom = row->mapTo(&browser, QPoint{}).y() + row->height() +
+                           metrics.px(8);
+        const QString filename = QStringLiteral("filter-badge-%1-%2.png")
+                                     .arg(theme)
+                                     .arg(qRound(factor * 100));
+        ASSERT_TRUE(preview.copy(0, 0, preview.width(), bottom)
+                        .save(QDir(screenshot_directory).filePath(filename)));
+      }
+      const qint64 retained_icon = remove->icon().cacheKey();
+      browser.apply_ui_scale(metrics);
+      EXPECT_EQ(remove->icon().cacheKey(), retained_icon)
+          << "reapplying an unchanged scale retains the icon";
+    }
+  }
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     CatalogRefreshKeepsRestoredBatchSeparateFromNewBrowserSelection) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char name[] = "quader-material-browser-selection-refresh-tests";
@@ -918,7 +1440,8 @@ TEST(QtMaterialBrowserWindowTests,
                 .toString(),
             oak_copy.stable_id);
   EXPECT_EQ(window.selected_material(), oak_copy.reference);
-  EXPECT_TRUE(accept->isEnabled());
+  EXPECT_FALSE(accept->isEnabled());
+  EXPECT_TRUE(accept->isHidden());
 }
 
 TEST(QtMaterialBrowserWindowTests,
@@ -944,6 +1467,7 @@ TEST(QtMaterialBrowserWindowTests,
       .revision = 12,
       .complete = true,
   });
+  window.set_dependency_revision(12);
   window.set_materials({oak}, oak.reference);
   window.set_material_paste_available(true);
   int first_callback_count = 0;
@@ -1073,6 +1597,70 @@ TEST(QtMaterialBrowserWindowTests,
   }
   EXPECT_TRUE(saw_filter);
 
+  for (const bool dismiss_with_escape : {false, true}) {
+    SCOPED_TRACE(dismiss_with_escape);
+    QWidget owner;
+    owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+    owner.resize(380, 480);
+    QPointer<QtMaterialBrowserWindow> browser =
+        new QtMaterialBrowserWindow(&owner, QtMaterialBrowserHost::Embedded);
+    browser->resize(owner.size());
+    browser->set_project_generation(5);
+    browser->set_material_usage({
+        .project_generation = 5,
+        .revision = 1,
+        .complete = true,
+    });
+    int assignments = 0;
+    browser->set_assign_material_callback(
+        [&](QuaderMaterialReference) { ++assignments; });
+    browser->set_assignment_available(true);
+    owner.show();
+    browser->show();
+    application.processEvents();
+    auto *filter = browser->findChild<QToolButton *>(
+        QStringLiteral("materialBrowser.filter"));
+    ASSERT_NE(filter, nullptr);
+    filter->click();
+    QPointer<QFrame> first_popup = browser->findChild<QFrame *>(
+        QStringLiteral("materialBrowser.filterPopup"));
+    ASSERT_NE(first_popup, nullptr);
+    QPointer<QCheckBox> previous_used = first_popup->findChild<QCheckBox *>(
+        QStringLiteral("materialBrowser.filterUsed"));
+    ASSERT_NE(previous_used, nullptr);
+    previous_used->click();
+    EXPECT_FALSE(first_popup->isVisible());
+    EXPECT_EQ(browser->usage_mode(), QtMaterialBrowserUsageMode::Used);
+
+    filter->click();
+    EXPECT_TRUE(first_popup.isNull())
+        << "immediate reopening retires the previous pending-delete popup";
+    EXPECT_TRUE(previous_used.isNull());
+    QPointer<QFrame> reopened_popup = browser->findChild<QFrame *>(
+        QStringLiteral("materialBrowser.filterPopup"));
+    ASSERT_NE(reopened_popup, nullptr);
+    auto *used = reopened_popup->findChild<QCheckBox *>(
+        QStringLiteral("materialBrowser.filterUsed"));
+    ASSERT_NE(used, nullptr);
+    EXPECT_TRUE(used->isChecked());
+    if (dismiss_with_escape) {
+      QKeyEvent press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+      QKeyEvent release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+      QCoreApplication::sendEvent(used, &press);
+      QCoreApplication::sendEvent(used, &release);
+    } else {
+      used->click();
+    }
+    EXPECT_FALSE(reopened_popup->isVisible());
+    EXPECT_EQ(browser->usage_mode(), QtMaterialBrowserUsageMode::Used);
+    delete browser.data();
+    EXPECT_TRUE(browser.isNull());
+    EXPECT_TRUE(reopened_popup.isNull())
+        << "browser destruction owns popup teardown before DeferredDelete runs";
+    EXPECT_EQ(assignments, 0);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  }
+
   const auto make_window = []() {
     QPointer<QtMaterialBrowserWindow> window =
         new QtMaterialBrowserWindow();
@@ -1159,6 +1747,151 @@ TEST(QtMaterialBrowserWindowTests,
 }
 
 TEST(QtMaterialBrowserWindowTests,
+     BothHostsEditMaterialsThroughStableContextMenuCallbacks) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-edit-context-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const auto host : {QtMaterialBrowserHost::Windowed,
+                          QtMaterialBrowserHost::Embedded}) {
+    SCOPED_TRACE(static_cast<int>(host));
+    QWidget owner;
+    owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+    owner.resize(720, 480);
+    QtMaterialBrowserWindow browser(&owner, host);
+    browser.setAttribute(Qt::WA_DontShowOnScreen, true);
+    browser.resize(720, 480);
+    const auto oak = folder_material(
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", QStringLiteral("Oak"),
+        QStringLiteral("Materials/oak.qmat"));
+    browser.set_project_generation(81);
+    browser.set_dependency_revision(12);
+    browser.set_material_usage({
+        .project_generation = 81,
+        .revision = 100,
+        .complete = true,
+    });
+    browser.set_materials({oak}, oak.reference);
+    browser.set_assignment_available(true);
+    int assignments = 0;
+    int opens = 0;
+    int replacement_opens = 0;
+    browser.set_assign_material_callback(
+        [&](QuaderMaterialReference) { ++assignments; });
+    browser.set_open_material_callback([&](QuaderMaterialReference reference) {
+      EXPECT_EQ(reference, oak.reference);
+      ++opens;
+    });
+    owner.show();
+    browser.show();
+    application.processEvents();
+    auto *grid = browser.findChild<QListView *>(
+        QStringLiteral("materialBrowser.gridView"));
+    ASSERT_NE(grid, nullptr);
+    const auto send_context_menu = [&]() {
+      const QPoint position =
+          grid->visualRect(grid->model()->index(0, 0)).center();
+      QContextMenuEvent event(QContextMenuEvent::Mouse, position,
+                              grid->viewport()->mapToGlobal(position));
+      QCoreApplication::sendEvent(grid->viewport(), &event);
+    };
+    const auto choose_edit = [](QMenu &menu, QAction &action) {
+      menu.setActiveAction(&action);
+      QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+      QApplication::sendEvent(&menu, &accept);
+    };
+
+    QTimer::singleShot(0, &browser, [&]() {
+      auto *menu = browser.findChild<QMenu *>(
+          QStringLiteral("materialBrowser.contextMenu"));
+      ASSERT_NE(menu, nullptr);
+      auto *edit = menu->findChild<QAction *>(
+          QStringLiteral("materialBrowser.action.editMaterial"));
+      ASSERT_NE(edit, nullptr);
+      EXPECT_EQ(edit->text(), QStringLiteral("Edit Material"));
+      ASSERT_TRUE(edit->isEnabled());
+      choose_edit(*menu, *edit);
+    });
+    send_context_menu();
+    EXPECT_EQ(opens, 1)
+        << "editing uses the existing open callback without an action owner";
+    EXPECT_EQ(assignments, 0);
+
+    QTimer::singleShot(0, &browser, [&]() {
+      auto *menu = browser.findChild<QMenu *>(
+          QStringLiteral("materialBrowser.contextMenu"));
+      ASSERT_NE(menu, nullptr);
+      auto *edit = menu->findChild<QAction *>(
+          QStringLiteral("materialBrowser.action.editMaterial"));
+      ASSERT_NE(edit, nullptr);
+      browser.set_material_usage({
+          .project_generation = 81,
+          .revision = 101,
+          .complete = true,
+          .used_materials = {oak.reference},
+      });
+      choose_edit(*menu, *edit);
+    });
+    send_context_menu();
+    EXPECT_EQ(opens, 2)
+        << "usage presentation changes do not change dependency identity";
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        grid, "doubleClicked", Qt::DirectConnection,
+        Q_ARG(QModelIndex, grid->currentIndex())));
+    EXPECT_EQ(opens, 3);
+    EXPECT_EQ(assignments, 0);
+
+    QTimer::singleShot(0, &browser, [&]() {
+      auto *menu = browser.findChild<QMenu *>(
+          QStringLiteral("materialBrowser.contextMenu"));
+      ASSERT_NE(menu, nullptr);
+      auto *edit = menu->findChild<QAction *>(
+          QStringLiteral("materialBrowser.action.editMaterial"));
+      ASSERT_NE(edit, nullptr);
+      browser.set_dependency_revision(13);
+      choose_edit(*menu, *edit);
+    });
+    send_context_menu();
+    EXPECT_EQ(opens, 3);
+
+    QTimer::singleShot(0, &browser, [&]() {
+      auto *menu = browser.findChild<QMenu *>(
+          QStringLiteral("materialBrowser.contextMenu"));
+      ASSERT_NE(menu, nullptr);
+      auto *edit = menu->findChild<QAction *>(
+          QStringLiteral("materialBrowser.action.editMaterial"));
+      ASSERT_NE(edit, nullptr);
+      browser.set_open_material_callback(
+          [&](QuaderMaterialReference) { ++replacement_opens; });
+      choose_edit(*menu, *edit);
+    });
+    send_context_menu();
+    EXPECT_EQ(opens, 3);
+    EXPECT_EQ(replacement_opens, 0)
+        << "a replacement callback cannot receive intent from an old menu";
+
+    QTimer::singleShot(0, &browser, [&]() {
+      auto *menu = browser.findChild<QMenu *>(
+          QStringLiteral("materialBrowser.contextMenu"));
+      ASSERT_NE(menu, nullptr);
+      auto *edit = menu->findChild<QAction *>(
+          QStringLiteral("materialBrowser.action.editMaterial"));
+      ASSERT_NE(edit, nullptr);
+      browser.set_project_generation(82);
+      choose_edit(*menu, *edit);
+    });
+    send_context_menu();
+    EXPECT_EQ(opens, 3);
+    EXPECT_EQ(replacement_opens, 0);
+    EXPECT_EQ(assignments, 0);
+  }
+}
+
+TEST(QtMaterialBrowserWindowTests,
      MaterialContextMenusPreserveBatchSelectionAndEmitStableIntent) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -1172,9 +1905,10 @@ TEST(QtMaterialBrowserWindowTests,
   window.set_project_generation(71);
   window.set_material_usage({
       .project_generation = 71,
-      .revision = 19,
+      .revision = 119,
       .complete = true,
   });
+  window.set_dependency_revision(19);
   auto default_material =
       folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                       QStringLiteral("Default Material"),
@@ -1257,7 +1991,12 @@ TEST(QtMaterialBrowserWindowTests,
     auto *menu = window.findChild<QMenu *>(
         QStringLiteral("materialBrowser.contextMenu"));
     ASSERT_NE(menu, nullptr);
-    const QList<QAction *> actions = menu->actions();
+    QList<QAction *> actions = menu->actions();
+    auto *edit = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.editMaterial"));
+    ASSERT_NE(edit, nullptr);
+    EXPECT_FALSE(edit->isEnabled());
+    EXPECT_TRUE(actions.removeOne(edit));
     ASSERT_EQ(actions.size(), 13);
     EXPECT_EQ(actions[0]->objectName(),
               QStringLiteral("materialBrowser.action.copyTextureName"));
@@ -1309,7 +2048,11 @@ TEST(QtMaterialBrowserWindowTests,
     auto *menu = window.findChild<QMenu *>(
         QStringLiteral("materialBrowser.contextMenu"));
     ASSERT_NE(menu, nullptr);
-    const QList<QAction *> actions = menu->actions();
+    QList<QAction *> actions = menu->actions();
+    auto *edit = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.editMaterial"));
+    ASSERT_NE(edit, nullptr);
+    EXPECT_TRUE(actions.removeOne(edit));
     ASSERT_EQ(actions.size(), 13);
     for (int index : {0, 1, 3, 4}) {
       EXPECT_FALSE(actions[index]->isEnabled());
@@ -1414,7 +2157,11 @@ TEST(QtMaterialBrowserWindowTests,
     auto *menu = window.findChild<QMenu *>(
         QStringLiteral("materialBrowser.contextMenu"));
     ASSERT_NE(menu, nullptr);
-    const QList<QAction *> actions = menu->actions();
+    QList<QAction *> actions = menu->actions();
+    auto *edit = menu->findChild<QAction *>(
+        QStringLiteral("materialBrowser.action.editMaterial"));
+    ASSERT_NE(edit, nullptr);
+    EXPECT_TRUE(actions.removeOne(edit));
     ASSERT_EQ(actions.size(), 13);
     for (int index : {0, 1, 3, 4}) {
       EXPECT_FALSE(actions[index]->isEnabled());
@@ -1453,11 +2200,7 @@ TEST(QtMaterialBrowserWindowTests,
     auto *copy = menu->findChild<QAction *>(
         QStringLiteral("materialBrowser.action.copy"));
     ASSERT_NE(copy, nullptr);
-    window.set_material_usage({
-        .project_generation = 71,
-        .revision = 20,
-        .complete = true,
-    });
+    window.set_dependency_revision(20);
     menu->setActiveAction(copy);
     QKeyEvent accept(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
     QApplication::sendEvent(menu, &accept);
@@ -1572,7 +2315,235 @@ TEST(QtMaterialBrowserWindowTests,
 }
 
 TEST(QtMaterialBrowserWindowTests,
-     PresentsFiltersActivatesAndRetainsOnlyLayoutPreferences) {
+     EmbeddedHostAssignsFromGridAndKeepsCompactToolbarAtDockWidth) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-embedded-material-browser-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  owner.resize(340, 520);
+  QtMaterialBrowserWindow browser(&owner, QtMaterialBrowserHost::Embedded);
+  browser.resize(340, 520);
+  browser.restore_presentation_state(QtMaterialBrowserViewMode::List, 64,
+                                     false, 120);
+  EXPECT_EQ(browser.host(), QtMaterialBrowserHost::Embedded);
+  EXPECT_EQ(browser.purpose(), QtMaterialBrowserPurpose::FaceAssignment);
+  EXPECT_EQ(browser.windowType(), Qt::Widget);
+  EXPECT_FALSE(browser.isWindow());
+  EXPECT_EQ(browser.view_mode(), QtMaterialBrowserViewMode::Grid)
+      << "old embedded List preferences migrate to its sole Grid view";
+
+  const auto oak = folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                                   QStringLiteral("Oak"),
+                                   QStringLiteral("Materials/Wood/oak.qmat"));
+  const auto steel = folder_material("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                                     QStringLiteral("Steel"),
+                                     QStringLiteral("Materials/steel.qmat"));
+  browser.set_project_generation(9);
+  browser.set_folders({QStringLiteral("Materials/Wood"),
+                       QStringLiteral("Materials/Empty")});
+  browser.set_materials({oak, steel}, oak.reference);
+  auto *grid = browser.findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  auto *list = browser.findChild<QTableView *>(
+      QStringLiteral("materialBrowser.listView"));
+  auto *import_button = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.importTool"));
+  auto *thumbnail_size = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.thumbnailSize"));
+  auto *search = browser.findChild<QLineEdit *>(
+      QStringLiteral("materialBrowser.search"));
+  auto *filter = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  auto *folders = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.folders"));
+  auto *grid_button = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.grid"));
+  auto *list_button = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.list"));
+  auto *slider = browser.findChild<QSlider *>(
+      QStringLiteral("materialBrowser.tileSize"));
+  auto *tree = browser.findChild<QTreeWidget *>(
+      QStringLiteral("materialBrowser.folderTree"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(list, nullptr);
+  EXPECT_EQ(browser.findChild<QPushButton *>(
+                QStringLiteral("materialBrowser.accept")),
+            nullptr);
+  EXPECT_EQ(browser.findChild<QPushButton *>(
+                QStringLiteral("materialBrowser.import")),
+            nullptr);
+  ASSERT_NE(import_button, nullptr);
+  ASSERT_NE(thumbnail_size, nullptr);
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(filter, nullptr);
+  ASSERT_NE(folders, nullptr);
+  ASSERT_NE(grid_button, nullptr);
+  ASSERT_NE(list_button, nullptr);
+  ASSERT_NE(slider, nullptr);
+  ASSERT_NE(tree, nullptr);
+  EXPECT_FALSE(import_button->isHidden());
+  EXPECT_FALSE(filter->isHidden());
+  EXPECT_TRUE(grid_button->isHidden());
+  EXPECT_TRUE(list_button->isHidden());
+  EXPECT_FALSE(slider->isVisible());
+  for (QToolButton *button : {filter, folders, import_button, thumbnail_size}) {
+    EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+    EXPECT_FALSE(button->icon().isNull());
+  }
+  EXPECT_TRUE(grid->dragEnabled());
+  EXPECT_TRUE(list->dragEnabled());
+  EXPECT_TRUE(tree->acceptDrops());
+  EXPECT_EQ(grid->selectionMode(), QAbstractItemView::ExtendedSelection);
+  EXPECT_EQ(grid->model(), list->model());
+  EXPECT_EQ(grid->selectionModel(), list->selectionModel());
+  int catalog_resets = 0;
+  QObject::connect(grid->model(), &QAbstractItemModel::modelReset, &browser,
+                   [&]() { ++catalog_resets; });
+  const QTreeWidgetItem *retained_folder = tree->topLevelItem(1);
+  browser.set_folders({QStringLiteral("Materials/Wood"),
+                       QStringLiteral("Materials/Empty")});
+  browser.set_materials({oak, steel}, oak.reference);
+  EXPECT_EQ(catalog_resets, 0);
+  EXPECT_EQ(tree->topLevelItem(1), retained_folder)
+      << "unchanged snapshots keep the retained folder tree and catalog";
+
+  int assignment_count = 0;
+  QuaderMaterialReference assigned;
+  browser.set_assign_material_callback(
+      [&](QuaderMaterialReference reference) {
+        assigned = reference;
+        ++assignment_count;
+      });
+  const auto click_current = [&]() {
+    EXPECT_TRUE(QMetaObject::invokeMethod(
+        grid, "clicked", Qt::DirectConnection,
+        Q_ARG(QModelIndex, grid->currentIndex())));
+  };
+  click_current();
+  send_key(*grid, Qt::Key_Return);
+  EXPECT_EQ(assignment_count, 0);
+
+  browser.set_assignment_available(true);
+  browser.set_selected_material(steel.reference);
+  EXPECT_EQ(assignment_count, 0)
+      << "programmatic highlighting never assigns a material";
+  click_current();
+  EXPECT_EQ(assignment_count, 1);
+  EXPECT_EQ(assigned, steel.reference);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      grid, "activated", Qt::DirectConnection,
+      Q_ARG(QModelIndex, grid->currentIndex())));
+  EXPECT_EQ(assignment_count, 1)
+      << "the platform activation following a mouse click is not duplicated";
+  send_key(*grid, Qt::Key_Return);
+  EXPECT_EQ(assignment_count, 2);
+  list_button->click();
+  EXPECT_EQ(browser.view_mode(), QtMaterialBrowserViewMode::Grid);
+  EXPECT_TRUE(grid_button->isHidden());
+  EXPECT_TRUE(list_button->isHidden());
+  EXPECT_FALSE(slider->isVisible());
+
+  QuaderMaterialReference opened;
+  browser.set_open_material_callback(
+      [&](QuaderMaterialReference reference) { opened = reference; });
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      grid, "doubleClicked", Qt::DirectConnection,
+      Q_ARG(QModelIndex, grid->currentIndex())));
+  EXPECT_EQ(opened, steel.reference);
+  EXPECT_EQ(assignment_count, 2);
+
+  browser.set_selected_folder(QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(grid->model()->rowCount(), 1);
+  QString imported_to;
+  browser.set_import_textures_callback(
+      [&](QString destination) { imported_to = std::move(destination); });
+  import_button->click();
+  EXPECT_EQ(imported_to, QStringLiteral("Materials/Wood"));
+  browser.set_selected_folder(QStringLiteral("Materials/Empty"));
+  EXPECT_EQ(grid->model()->rowCount(), 0);
+  send_key(*grid, Qt::Key_Return);
+  EXPECT_EQ(assignment_count, 2);
+  browser.set_selected_folder(QStringLiteral("Materials"));
+  browser.set_selected_material(oak.reference);
+  search->setText(QStringLiteral("oak"));
+  EXPECT_EQ(grid->model()->rowCount(), 1);
+
+  owner.show();
+  browser.show();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(search->text(), QStringLiteral("oak"));
+  EXPECT_LE(browser.minimumSizeHint().width(), 340);
+  const int toolbar_center_y =
+      search->mapTo(&browser, search->rect().center()).y();
+  for (QWidget *control : std::vector<QWidget *>{
+           folders, search, filter, import_button, thumbnail_size}) {
+    const QRect bounds(control->mapTo(&browser, QPoint{}), control->size());
+    EXPECT_TRUE(control->isVisible());
+    EXPECT_TRUE(browser.rect().contains(bounds))
+        << control->objectName().toStdString();
+    EXPECT_LE(std::abs(bounds.center().y() - toolbar_center_y), 1)
+        << "embedded tools share one row: "
+        << control->objectName().toStdString();
+  }
+  int presentation_changes = 0;
+  browser.set_presentation_state_changed_callback(
+      [&]() { ++presentation_changes; });
+  thumbnail_size->click();
+  QCoreApplication::processEvents();
+  auto *size_popup = browser.findChild<QWidget *>(
+      QStringLiteral("materialBrowser.thumbnailSizePopup"));
+  ASSERT_NE(size_popup, nullptr);
+  EXPECT_TRUE(size_popup->isVisible());
+  EXPECT_EQ(size_popup->findChild<QSlider *>(
+                QStringLiteral("materialBrowser.tileSize")),
+            slider);
+  EXPECT_TRUE(slider->isVisible());
+  slider->setValue(3);
+  EXPECT_EQ(browser.tile_size(), 128);
+  EXPECT_GT(presentation_changes, 0);
+  size_popup->close();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(browser.tile_size(), 128)
+      << "preview size changes apply immediately and survive popup dismissal";
+  thumbnail_size->click();
+  QCoreApplication::processEvents();
+  size_popup = browser.findChild<QWidget *>(
+      QStringLiteral("materialBrowser.thumbnailSizePopup"));
+  ASSERT_NE(size_popup, nullptr);
+  EXPECT_EQ(size_popup->findChild<QSlider *>(
+                QStringLiteral("materialBrowser.tileSize")),
+            slider);
+  EXPECT_EQ(slider->value(), 3);
+  size_popup->close();
+  QCoreApplication::processEvents();
+  click_current();
+  EXPECT_EQ(assignment_count, 3);
+  EXPECT_EQ(assigned, oak.reference);
+  EXPECT_TRUE(browser.isVisible());
+  browser.hide();
+  browser.show();
+  EXPECT_EQ(search->text(), QStringLiteral("oak"));
+
+  browser.set_assignment_available(false);
+  click_current();
+  EXPECT_EQ(assignment_count, 3);
+  browser.set_assignment_available(true);
+  browser.set_project_generation(10);
+  browser.set_materials({oak}, oak.reference);
+  click_current();
+  send_key(*grid, Qt::Key_Return);
+  EXPECT_EQ(assignment_count, 3)
+      << "a new project must wait for refreshed face-selection eligibility";
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     PresentsFiltersManagesAndRetainsOnlyLayoutPreferences) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-material-browser-tests";
@@ -1680,7 +2651,8 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(import_button->text(), QStringLiteral("Bring textures in…"));
   EXPECT_EQ(accept_button->text(), QStringLiteral("Choose"));
   EXPECT_EQ(accept_button->accessibleName(), QStringLiteral("Choose"));
-  EXPECT_TRUE(accept_button->isEnabled());
+  EXPECT_FALSE(accept_button->isEnabled());
+  EXPECT_TRUE(accept_button->isHidden());
 
   int import_count = 0;
   window->set_import_textures_callback(
@@ -1750,7 +2722,7 @@ TEST(QtMaterialBrowserWindowTests,
 
   QuaderMaterialReference activated;
   int activation_count = 0;
-  window->set_activate_material_callback(
+  window->set_assign_material_callback(
       [&activated, &activation_count](QuaderMaterialReference reference) {
         activated = reference;
         ++activation_count;
@@ -1758,11 +2730,11 @@ TEST(QtMaterialBrowserWindowTests,
   const QModelIndex zinc = grid->model()->index(1, 0);
   ASSERT_TRUE(QMetaObject::invokeMethod(
       grid, "clicked", Qt::DirectConnection, Q_ARG(QModelIndex, zinc)));
-  EXPECT_EQ(activated, zinc_reference);
-  EXPECT_EQ(activation_count, 1);
+  EXPECT_FALSE(activated.valid());
+  EXPECT_EQ(activation_count, 0);
   ASSERT_TRUE(QMetaObject::invokeMethod(
       grid, "activated", Qt::DirectConnection, Q_ARG(QModelIndex, zinc)));
-  EXPECT_EQ(activation_count, 1)
+  EXPECT_EQ(activation_count, 0)
       << "a platform mouse activation following clicked must not dispatch "
          "the material intent twice";
 
@@ -1770,17 +2742,17 @@ TEST(QtMaterialBrowserWindowTests,
   grid->selectionModel()->setCurrentIndex(
       zinc, QItemSelectionModel::ClearAndSelect);
   send_key(*grid, Qt::Key_Return);
-  EXPECT_EQ(activated, zinc_reference)
-      << "keyboard activation must dispatch the same intent as a click";
-  EXPECT_EQ(activation_count, 2);
+  EXPECT_FALSE(activated.valid())
+      << "management keyboard browsing must not assign a material";
+  EXPECT_EQ(activation_count, 0);
 
   activated = {};
   list->selectionModel()->setCurrentIndex(
       zinc, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
   send_key(*list, Qt::Key_Return);
-  EXPECT_EQ(activated, zinc_reference)
-      << "both material views must honor QAbstractItemView::activated";
-  EXPECT_EQ(activation_count, 3);
+  EXPECT_FALSE(activated.valid())
+      << "both management views keep material selection local";
+  EXPECT_EQ(activation_count, 0);
 
   QuaderMaterialReference opened;
   window->set_open_material_callback(
@@ -1931,21 +2903,22 @@ TEST(QtMaterialBrowserWindowTests,
       << "large tiles must remain reachable through vertical scrolling";
   EXPECT_GT(grid->horizontalScrollBar()->maximum(), 0)
       << "a narrow restored window must not clip a 512px tile permanently";
-  window->set_active_material(zinc_reference);
+  window->set_selected_material(zinc_reference);
   EXPECT_EQ(window->selected_material(), zinc_reference);
-  EXPECT_TRUE(accept_button->isEnabled());
+  EXPECT_FALSE(accept_button->isEnabled());
+  EXPECT_TRUE(accept_button->isHidden());
   accept_button->click();
-  EXPECT_EQ(activation_count, 4)
-      << "normal Accept must reaffirm the live active selection";
-  EXPECT_EQ(activated, zinc_reference);
-  EXPECT_FALSE(window->isVisible());
+  EXPECT_EQ(activation_count, 0)
+      << "a hidden management acceptance button must not assign";
+  EXPECT_FALSE(activated.valid());
+  EXPECT_TRUE(window->isVisible());
 
   window->show();
   QCoreApplication::processEvents();
   EXPECT_TRUE(window->close());
   EXPECT_FALSE(window->isVisible());
-  EXPECT_EQ(activation_count, 4)
-      << "closing with X must not roll back or redispatch live activation";
+  EXPECT_EQ(activation_count, 0)
+      << "closing with X must not assign a material";
   EXPECT_FALSE(window->testAttribute(Qt::WA_DeleteOnClose));
 
   window->clear_materials();
@@ -1979,7 +2952,7 @@ TEST(QtMaterialBrowserWindowTests,
   int picker_open_count = 0;
   int picker_accept_count = 0;
   QuaderMaterialReference picked;
-  picker->set_activate_material_callback(
+  picker->set_assign_material_callback(
       [&picker_activation_count](QuaderMaterialReference) {
         ++picker_activation_count;
       });

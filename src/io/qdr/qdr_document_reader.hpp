@@ -74,6 +74,29 @@ struct QdrProjectDependencyReadResult final {
   QdrProjectReadStats stats;
 };
 
+/// Actual surface assignments, decoded without constructing render geometry.
+/// Completeness describes this projection only, never general scene validity.
+struct QdrProjectMaterialUsageReadResult final {
+  bool ok = false;
+  bool complete = false;
+  std::string message;
+  std::vector<quader_io::QdrDiagnostic> diagnostics;
+  std::array<std::byte, 16> scene_uuid{};
+  std::string scene_name;
+  std::vector<ProjectAssetId> material_ids;
+  std::vector<AssetId> embedded_material_ids;
+  std::uint64_t source_byte_count = 0u;
+  std::uint64_t source_content_hash = 0u;
+  QdrProjectReadStats stats;
+};
+
+/// Slots present on authored faces or nonempty compiled primitives.
+struct QdrMeshMaterialSlotsReadResult final {
+  bool ok = false;
+  std::string message;
+  std::vector<std::uint32_t> material_slots;
+};
+
 /**
  * Owns QDR Document Reader behavior within the QDR document persistence layer.
  */
@@ -87,6 +110,13 @@ public:
   deserialize_project_dependencies(std::span<const std::byte> bytes);
   [[nodiscard]] static QdrProjectDependencyReadResult
   read_project_dependencies(const std::filesystem::path &path);
+  [[nodiscard]] static QdrProjectMaterialUsageReadResult
+  deserialize_project_material_usage(std::span<const std::byte> bytes);
+  [[nodiscard]] static QdrProjectMaterialUsageReadResult
+  read_project_material_usage(const std::filesystem::path &path);
+  [[nodiscard]] static QdrMeshMaterialSlotsReadResult
+  deserialize_mesh_material_slots(std::span<const std::byte> bytes,
+                                  std::uint16_t scene_schema_version = 14u);
 };
 
 } // namespace quader

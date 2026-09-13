@@ -22,6 +22,14 @@ file except through prior written authorization from Francesco Di Blasi.
   drags carry a project generation; mutations go through `QuaderProjectAssetsApi`, and refreshed
   owner snapshots supply the resulting tree. Permanent folder deletion requires the public
   dependency preview and its matching revision. Picker mode only browses folders.
+- `QtFaceTexturePanel` owns the single-face canvas and retained texture controls; Tool Settings
+  contains only active-tool settings. Both material-browser hosts reuse one implementation, but
+  only the embedded browser assigns explicit materials to selected faces. Canvas gestures use
+  the public modeling preview lifecycle; widget state never becomes UV or material truth.
+  Visible browsers receive revision-gated catalog and usage updates during normal refresh,
+  even after workspace events were consumed while hidden or the scene was already dirty.
+  A browser generation change invalidates its usage/dependency presentation stamps even when
+  the corresponding owner revisions are unchanged.
 - `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
   cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
 - `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system

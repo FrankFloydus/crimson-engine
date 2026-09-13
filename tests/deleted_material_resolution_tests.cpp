@@ -166,7 +166,8 @@ TEST_F(DeletedMaterialResolutionTests,
       QuaderMaterialUsageScope::ActiveScene);
   EXPECT_FALSE(rejected.ok());
   EXPECT_FALSE(rejected.changed());
-  EXPECT_FALSE(editor_.project_assets().set_active_material(deleted_a_).ok());
+  EXPECT_FALSE(editor_.modeling().apply_material(
+      QuaderMaterialReference::project(deleted_a_)).ok());
   EXPECT_FALSE(editor_.standard_material_documents().open(deleted_a_).ok());
 }
 
@@ -219,6 +220,65 @@ TEST_F(DeletedMaterialResolutionTests,
   ASSERT_TRUE(used.ok());
   ASSERT_EQ(used.value().size(), 1u);
   EXPECT_EQ(used.value().front(), QuaderMaterialReference::project(live_));
+}
+
+TEST_F(DeletedMaterialResolutionTests,
+       FaceTextureCanvasResolvesUndoneDeletedBindingToSavedDefault) {
+  const auto box = create_box();
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const auto *document = polygon(box.value().entity);
+  ASSERT_NE(document, nullptr);
+  ASSERT_FALSE(document->faces.empty());
+  const QuaderElementId face = document->faces.front().id;
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor_.selection().select_face(box.value(), face).ok());
+  const auto original_default = editor_.modeling().face_texture_canvas();
+  ASSERT_EQ(original_default.material_id, default_);
+
+  const auto opened = editor_.standard_material_documents().open(default_);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  const QuaderStandardMaterialTextureTransform transform{
+      .center = {0.25F, 0.75F}, .scale = {2.0F, -3.0F},
+      .offset = {0.375F, -0.5F}, .rotation_degrees = 37.0F};
+  ASSERT_TRUE(editor_.standard_material_documents().set_texture_transform(transform).ok());
+  ASSERT_TRUE(editor_.standard_material_documents().save().ok());
+  ASSERT_TRUE(editor_.standard_material_documents().close().ok());
+  const auto expected = editor_.modeling().face_texture_canvas();
+  ASSERT_TRUE(expected.editable) << expected.disabled_reason;
+  ASSERT_TRUE(expected.texture_available);
+  EXPECT_NE(expected.uv_from_plane, original_default.uv_from_plane);
+  const auto default_image = project_.material_texture_image(
+      default_, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(default_image, nullptr);
+
+  const MaterialComponent historical{.material = MaterialReference::project(deleted_a_)};
+  ASSERT_TRUE(ProjectMaterialFixture(project_).set_material(box.value().entity, historical));
+  const auto assigned = editor_.modeling().apply_material(
+      QuaderMaterialReference::project(live_));
+  ASSERT_TRUE(assigned.ok()) << assigned.error_message();
+  ASSERT_TRUE(assigned.changed());
+  EXPECT_EQ(editor_.modeling().face_texture_canvas().material_id, live_);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  ASSERT_NE(binding(box.value().entity), nullptr);
+  ASSERT_EQ(*binding(box.value().entity), historical);
+
+  const auto restored = editor_.modeling().face_texture_canvas();
+  EXPECT_EQ(restored.material_id, default_);
+  EXPECT_EQ(restored.selected_face_count, 1U);
+  EXPECT_EQ(restored.object_id, box.value().modeling_object_id);
+  EXPECT_EQ(restored.face_id, face);
+  EXPECT_TRUE(restored.editable) << restored.disabled_reason;
+  EXPECT_EQ(restored.texture_available, expected.texture_available);
+  EXPECT_FLOAT_EQ(restored.texture_extent.x, static_cast<float>(default_image->width));
+  EXPECT_FLOAT_EQ(restored.texture_extent.y, static_cast<float>(default_image->height));
+  EXPECT_EQ(project_.material_texture_image(restored.material_id,
+                                            StandardMaterialTextureSlot::Albedo), default_image);
+  EXPECT_EQ(restored.uv_from_plane, expected.uv_from_plane);
+  EXPECT_DOUBLE_EQ(restored.uv_offset.x, expected.uv_offset.x);
+  EXPECT_DOUBLE_EQ(restored.uv_offset.y, expected.uv_offset.y);
+  EXPECT_DOUBLE_EQ(restored.repeat_width, expected.repeat_width);
+  EXPECT_DOUBLE_EQ(restored.repeat_height, expected.repeat_height);
+  EXPECT_EQ(*binding(box.value().entity), historical);
 }
 
 TEST_F(DeletedMaterialResolutionTests,

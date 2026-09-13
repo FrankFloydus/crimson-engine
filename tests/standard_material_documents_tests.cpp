@@ -287,16 +287,15 @@ TEST(StandardMaterialDocumentsTests,
 }
 
 TEST(StandardMaterialDocumentsTests,
-     NewSaveAsActivatesNewAssetAndPreservesImportedSourceBytes) {
+     NewSaveAsRegistersNewAssetAndPreservesImportedSourceBytes) {
   StandardMaterialDocumentsHarness harness("new-save-as");
+  const auto manifest_before = read_bytes(harness.project().manifest_path());
   int opened_events = 0;
   int dirty_events = 0;
   int saved_events = 0;
   int assets_events = 0;
-  int active_events = 0;
   std::optional<QuaderEvent> saved_event;
   std::optional<QuaderEvent> assets_event;
-  std::optional<QuaderEvent> active_event;
   const auto opened_subscription = harness.editor().events().subscribe(
       quader_event::kStandardMaterialOpened,
       [&opened_events](const QuaderEvent &) { ++opened_events; });
@@ -315,17 +314,10 @@ TEST(StandardMaterialDocumentsTests,
         ++assets_events;
         assets_event = event;
       });
-  const auto active_subscription = harness.editor().events().subscribe(
-      quader_event::kActiveProjectMaterialChanged,
-      [&active_events, &active_event](const QuaderEvent &event) {
-        ++active_events;
-        active_event = event;
-      });
   ASSERT_TRUE(opened_subscription.valid());
   ASSERT_TRUE(dirty_subscription.valid());
   ASSERT_TRUE(saved_subscription.valid());
   ASSERT_TRUE(assets_subscription.valid());
-  ASSERT_TRUE(active_subscription.valid());
   const auto created =
       harness.editor().standard_material_documents().new_material();
   ASSERT_TRUE(created.ok()) << created.error_message();
@@ -392,7 +384,6 @@ TEST(StandardMaterialDocumentsTests,
       << "the first edit dirties the draft and Save As cleans it";
   EXPECT_EQ(saved_events, 1);
   EXPECT_EQ(assets_events, 1);
-  EXPECT_EQ(active_events, 1);
   const auto current =
       harness.editor().standard_material_documents().current();
   ASSERT_TRUE(current.ok());
@@ -402,13 +393,10 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_FALSE(current.value().dirty);
   ASSERT_TRUE(saved_event.has_value());
   ASSERT_TRUE(assets_event.has_value());
-  ASSERT_TRUE(active_event.has_value());
   EXPECT_EQ(saved_event->project_asset_id, current.value().id);
   EXPECT_EQ(assets_event->project_asset_id, current.value().id);
-  EXPECT_EQ(active_event->project_asset_id, current.value().id);
   EXPECT_TRUE(saved_event->project_id.has_value());
   EXPECT_TRUE(assets_event->project_id.has_value());
-  EXPECT_TRUE(active_event->project_id.has_value());
   ASSERT_TRUE(current.value().material.base_color_texture.has_value());
   ASSERT_TRUE(current.value().material.roughness_texture.has_value());
   ASSERT_TRUE(current.value().material.metallic_texture.has_value());
@@ -418,11 +406,17 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_EQ(current.value().material.roughness_texture->color_space,
             QuaderProjectTextureColorSpace::Linear);
 
-  const auto active = harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active.ok());
-  EXPECT_EQ(active.value().id, current.value().id);
-  EXPECT_EQ(harness.editor().project_assets().materials().value().size(), 2u);
+  const auto materials = harness.editor().project_assets().materials();
+  ASSERT_TRUE(materials.ok()) << materials.error_message();
+  EXPECT_EQ(materials.value().size(), 2u);
+  const auto registered = std::ranges::find(
+      materials.value(), current.value().id, &QuaderProjectMaterialInfo::id);
+  ASSERT_NE(registered, materials.value().end());
+  EXPECT_EQ(registered->name, current.value().name);
+  EXPECT_EQ(registered->project_relative_path,
+            current.value().path->portable_string());
   EXPECT_FALSE(harness.project().has_dirty_scenes());
+  EXPECT_EQ(read_bytes(harness.project().manifest_path()), manifest_before);
 
   for (const QuaderStandardMaterialTextureReference *texture :
        {&*current.value().material.base_color_texture,
@@ -563,10 +557,13 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_NE(current.value().id, *default_id);
   EXPECT_EQ(current.value().path, copy_path);
   EXPECT_EQ(read_bytes(default_path), original);
-  const auto active = harness.editor().project_assets().active_material();
-  ASSERT_TRUE(active.ok());
-  EXPECT_EQ(active.value().id, current.value().id);
-  EXPECT_EQ(harness.editor().project_assets().materials().value().size(), 2u);
+  const auto materials = harness.editor().project_assets().materials();
+  ASSERT_TRUE(materials.ok()) << materials.error_message();
+  EXPECT_EQ(materials.value().size(), 2u);
+  const auto registered = std::ranges::find(
+      materials.value(), current.value().id, &QuaderProjectMaterialInfo::id);
+  ASSERT_NE(registered, materials.value().end());
+  EXPECT_EQ(registered->project_relative_path, copy_path.portable_string());
 
   EXPECT_FALSE(harness.editor()
                    .standard_material_documents()

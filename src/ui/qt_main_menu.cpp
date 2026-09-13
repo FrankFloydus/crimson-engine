@@ -335,9 +335,6 @@ std::string menu_command_localization_key(QuaderCommandId command_id) {
   if (is(quader_command::kModelingFlipVertical)) {
     return "ui.menu.edit.flip_vertical";
   }
-  if (is(quader_command::kApplyMaterial)) {
-    return "modeling.action.apply_active_material.label";
-  }
   if (is(quader_command::kModelingUvPeel)) {
     return "command.modeling.uv_peel";
   }

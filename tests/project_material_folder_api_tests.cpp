@@ -77,12 +77,6 @@ protected:
                                })
                     .valid());
     ASSERT_TRUE(editor_.events()
-                    .subscribe(quader_event::kActiveProjectMaterialChanged,
-                               [this](const QuaderEvent &event) {
-                                 active_events_.push_back(event);
-                               })
-                    .valid());
-    ASSERT_TRUE(editor_.events()
                     .subscribe(quader_event::kStandardMaterialClosed,
                                [this](const QuaderEvent &event) {
                                  closed_material_events_.push_back(event);
@@ -144,7 +138,6 @@ protected:
 
   ScopedMaterialFolderDirectory temporary_;
   std::vector<QuaderEvent> assets_events_;
-  std::vector<QuaderEvent> active_events_;
   std::vector<QuaderEvent> closed_material_events_;
   ProjectSession project_;
   QuaderEditorApi editor_;
@@ -167,7 +160,6 @@ TEST_F(ProjectMaterialFolderApiTests,
                              "Materials/Dev/Empty"),
             snapshot.value().material_folders.end());
   ASSERT_EQ(assets_events_.size(), 2u);
-  EXPECT_TRUE(active_events_.empty());
   EXPECT_TRUE(assets_events_.front().project_id.has_value());
   EXPECT_EQ(assets_events_.front().project_name, "FolderApi");
   const auto stable_revision = assets.material_presentation_revision();
@@ -196,21 +188,18 @@ TEST_F(ProjectMaterialFolderApiTests,
   ASSERT_TRUE(second.id.valid());
   EXPECT_EQ(first.project_relative_path, "Materials/Dev/Wood/wood.qmat");
   EXPECT_EQ(second.project_relative_path, "Materials/Dev/Wood/wood_2.qmat");
-  ASSERT_TRUE(assets.set_active_material(first.id).ok());
   ASSERT_TRUE(editor_.standard_material_documents().open(first.id).ok());
   ASSERT_TRUE(editor_.standard_material_documents().set_name("Dirty Wood").ok());
   const auto draft = editor_.standard_material_documents().current();
   ASSERT_TRUE(draft.ok());
   ASSERT_TRUE(draft.value().dirty);
   assets_events_.clear();
-  active_events_.clear();
 
   const auto moved = assets.move_materials(std::array{first.id, second.id},
                                            "Materials/Moved");
   ASSERT_TRUE(moved.ok()) << moved.error_message();
   EXPECT_TRUE(moved.changed());
   EXPECT_EQ(assets_events_.size(), 1u);
-  EXPECT_TRUE(active_events_.empty());
   const auto renamed = assets.rename_material_folder("Materials/Moved", "Oak");
   ASSERT_TRUE(renamed.ok()) << renamed.error_message();
   EXPECT_TRUE(renamed.changed());
@@ -466,7 +455,6 @@ TEST_F(ProjectMaterialFolderApiTests,
   auto &scenes = editor_.scene_documents();
   const auto material = import_material("Materials", "usage");
   ASSERT_TRUE(material.id.valid());
-  ASSERT_TRUE(assets.set_active_material(material.id).ok());
 
   const auto initial = assets.material_dependency_revision();
   ASSERT_TRUE(initial.ok()) << initial.error_message();
@@ -482,8 +470,12 @@ TEST_F(ProjectMaterialFolderApiTests,
   }
   EXPECT_EQ(project_.dependencies().work_stats(), retained_work);
 
-  const auto box = editor_.modeling().create_box(
-      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Live Usage");
+  const auto box = editor_.modeling().create_box({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Live Usage",
+      .material = QuaderMaterialReference::project(material.id),
+  });
   ASSERT_TRUE(box.ok()) << box.error_message();
   const auto live = assets.material_dependency_revision();
   ASSERT_TRUE(live.ok()) << live.error_message();
@@ -701,7 +693,7 @@ TEST_F(ProjectMaterialFolderApiTests,
   EXPECT_FALSE(material_info(imported.id).has_value());
   EXPECT_FALSE(std::filesystem::exists(root() / "Materials/Disposable"));
   EXPECT_TRUE(std::filesystem::exists(root() / "Textures/wood.png"));
-  EXPECT_FALSE(assets.set_active_material(imported.id).ok());
+  EXPECT_TRUE(project_.manifest()->is_material_deleted(imported.id));
 }
 
 TEST_F(ProjectMaterialFolderApiTests,
@@ -711,9 +703,12 @@ TEST_F(ProjectMaterialFolderApiTests,
   ASSERT_TRUE(assets.create_material_folder("Materials", "Disposable").ok());
   const auto imported = import_material("Materials/Disposable");
   ASSERT_TRUE(imported.id.valid());
-  ASSERT_TRUE(assets.set_active_material(imported.id).ok());
-  const auto box = editor_.modeling().create_box(
-      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Saved Name");
+  const auto box = editor_.modeling().create_box({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Saved Name",
+      .material = QuaderMaterialReference::project(imported.id),
+  });
   ASSERT_TRUE(box.ok()) << box.error_message();
   const auto first_id = documents.active_scene_id();
   ASSERT_TRUE(first_id.has_value());
@@ -722,9 +717,12 @@ TEST_F(ProjectMaterialFolderApiTests,
   const auto second_scene = documents.new_scene();
   ASSERT_TRUE(second_scene.ok());
   ASSERT_TRUE(editor_.modeling()
-                  .create_box({.min = {-1.0f, -1.0f, -1.0f},
-                               .max = {1.0f, 1.0f, 1.0f}},
-                              "Closed Saved Box")
+                  .create_box({
+                      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                                 .max = {1.0f, 1.0f, 1.0f}},
+                      .name = "Closed Saved Box",
+                      .material = QuaderMaterialReference::project(imported.id),
+                  })
                   .ok());
   ASSERT_TRUE(documents.save_as(second_scene.value(),
                                relative_path("Scenes/Closed.qdr"))
@@ -757,15 +755,11 @@ TEST_F(ProjectMaterialFolderApiTests,
   EXPECT_EQ(preview.value().material_ids, std::vector{imported.id});
   EXPECT_FALSE(preview.value().affected_scenes.empty());
   assets_events_.clear();
-  active_events_.clear();
   const auto deleted = assets.delete_material_folder("Materials/Disposable",
                                                       preview.value().revision);
   ASSERT_TRUE(deleted.ok()) << deleted.error_message();
   EXPECT_TRUE(deleted.changed());
   EXPECT_EQ(assets_events_.size(), 1u);
-  ASSERT_EQ(active_events_.size(), 1u);
-  EXPECT_EQ(active_events_.front().project_asset_id,
-            ProjectAssetId::parse(kDefaultProjectMaterialId));
   EXPECT_EQ(closed_material_events_.size(), 1u);
   EXPECT_FALSE(editor_.standard_material_documents().current().ok());
   ASSERT_TRUE(documents.active_scene().has_value());

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_tools_api.hpp"
+#include "assets/default_material_catalog.hpp"
 #include "editor/metadata/operation_input_hint_catalog.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_mutation_runner.hpp"
@@ -18,6 +19,7 @@
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/operations/operation_schema.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/modeling_result_adapters.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -108,15 +110,16 @@ bool passive_curve_settings_available(const SceneSession &session) {
          session.curve().has_editable_existing_curve();
 }
 
-MaterialReference active_project_material(QuaderApiSession session) {
+MaterialReference default_project_material(QuaderApiSession session) {
   ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(session);
   if (project == nullptr) {
     return {};
   }
-  const std::optional<ProjectAssetId> id = project->active_material_id();
-  return id.has_value() ? MaterialReference::project(*id)
-                        : MaterialReference{};
+  return project->manifest() != nullptr
+             ? MaterialReference::project(
+                   *ProjectAssetId::parse(kDefaultProjectMaterialId))
+             : MaterialReference{};
 }
 
 ActiveToolSettingsSource
@@ -2110,10 +2113,9 @@ QuaderApiVoidResult QuaderToolsApi::reset_active_settings() {
 QuaderApiVoidResult QuaderToolsApi::accept_active_primitive(
     std::string name, AssetId default_material, bool snap_enabled) {
   SceneSession &session = scene_session(session_);
-  MaterialReference material = active_project_material(session_);
-  if (!material.valid() && default_material != kInvalidAssetId) {
-    material = MaterialReference(default_material);
-  }
+  const MaterialReference material = default_material != kInvalidAssetId
+      ? MaterialReference(default_material)
+      : default_project_material(session_);
   return api_status_from_command(
       session,
       session.native_tools().accept_active_primitive(std::move(name),
@@ -2402,7 +2404,7 @@ QuaderApiVoidResult QuaderToolsApi::commit_modeling_tool(ViewportToolId tool) {
   ModelingCommandResult result = execution.commit_viewport_tool(
       session.history(), session.modeling(), descriptor->modeling_tool,
       std::string(descriptor->label),
-      active_project_material(session_));
+      default_project_material(session_));
   return api_status_from_command(
       session, command_result_from_modeling(std::move(result)),
       QuaderMutationKind::Modeling, descriptor->label);

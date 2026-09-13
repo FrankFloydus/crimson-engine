@@ -609,7 +609,6 @@ void ViewportInteractionController::handle_material_interactions(
     return;
   }
   if (frame.input.transfer_face_texture_pressed) {
-    pending_apply_active_material_.reset();
     if (!before_tool.transfer_face_texture_requested ||
         material_input_blocked(frame) || frame.input_result.cancel_requested ||
         frame.input_result.camera_changed || tool_result.handled ||
@@ -641,182 +640,30 @@ void ViewportInteractionController::handle_material_interactions(
     return;
   }
 
-  const bool sample_face = frame.input.sample_face_material_pressed;
-  const bool apply_target =
-      frame.input.apply_active_material_to_selection_pressed &&
-      !frame.input.apply_face_material_to_mesh_pressed;
-  const bool apply_face_to_mesh =
-      frame.input.apply_face_material_to_mesh_pressed;
-
-  if (!sample_face && !apply_target && !apply_face_to_mesh &&
-      !pending_apply_active_material_.has_value()) {
+  if (!frame.input.apply_face_material_to_mesh_pressed) {
     return;
   }
-
-  // The native double-click sequence includes the first click. Always cancel
-  // that delayed single before evaluating whether the double is currently
-  // eligible, so a blocked or missed double can never apply later.
-  if (apply_face_to_mesh) {
-    cancel_pending_material_interaction();
-  }
-
-  const ViewportSelectionMode selection_mode =
-      frame.input_router.state().selection_mode;
-  const bool material_face_source_enabled =
-      material_face_source_gesture_mode(selection_mode);
-  if (material_interaction_blocked(frame, tool_result, before_tool)) {
-    cancel_pending_material_interaction();
+  if (material_interaction_blocked(frame, tool_result, before_tool) ||
+      !frame.input.viewport_hovered ||
+      !material_face_source_gesture_mode(
+          frame.input_router.state().selection_mode)) {
     return;
   }
-  if (pending_apply_active_material_.has_value() &&
-      pending_apply_active_material_->selection_mode != selection_mode) {
-    cancel_pending_material_interaction();
-  }
-
-  if (apply_face_to_mesh && frame.input.viewport_hovered &&
-      material_face_source_enabled) {
-    if (const std::optional<QuaderHoverTarget> target =
-            pick_material_face_target(editor, frame)) {
-      ++material_interaction_work_stats_.apply_face_to_mesh_request_count;
-      const QuaderApiVoidResult applied =
-          editor.modeling().apply_face_material_to_mesh(
-              static_cast<QuaderModelingObjectId>(target->object_id),
-              static_cast<QuaderElementId>(target->face_id));
-      if (!runtime_binding.current()) {
-        return;
-      }
-      log_material_interaction_failure("Apply face material to mesh", applied);
-    }
-  }
-
-  if (sample_face && frame.input.viewport_hovered &&
-      material_face_source_enabled) {
-    if (const std::optional<QuaderHoverTarget> target =
-            pick_material_face_target(editor, frame)) {
-      ++material_interaction_work_stats_.sample_request_count;
-      const QuaderApiResult<QuaderFaceProjectMaterial> material =
-          editor.modeling().project_material_for_face(
-              static_cast<QuaderModelingObjectId>(target->object_id),
-              static_cast<QuaderElementId>(target->face_id));
-      if (!runtime_binding.current()) {
-        return;
-      }
-      if (!material.ok()) {
-        log_material_interaction_failure("Read clicked face material",
-                                         material);
-      } else {
-        const QuaderApiVoidResult activated =
-            editor.project_assets().set_active_material(material.value().id);
-        if (!runtime_binding.current()) {
-          return;
-        }
-        log_material_interaction_failure("Set active face material",
-                                         activated);
-      }
-    }
-  }
-
-  if (apply_target && frame.input.viewport_hovered &&
-      material_face_source_enabled) {
-    const std::optional<QuaderHoverTarget> target =
-        pick_material_face_target(editor, frame);
-    if (!target.has_value()) {
-      cancel_pending_material_interaction();
+  if (const std::optional<QuaderHoverTarget> target =
+          pick_material_face_target(editor, frame)) {
+    ++material_interaction_work_stats_.apply_face_to_mesh_request_count;
+    const QuaderApiVoidResult applied =
+        editor.modeling().apply_face_material_to_mesh(
+            static_cast<QuaderModelingObjectId>(target->object_id),
+            static_cast<QuaderElementId>(target->face_id));
+    if (!runtime_binding.current()) {
       return;
     }
-    const double timeout =
-        frame.input.apply_active_material_delay_for_double_click
-            ? std::max(frame.double_click_interval_seconds, 0.0)
-            : 0.0;
-    if (timeout <= 0.0) {
-      ++material_interaction_work_stats_.apply_target_request_count;
-      const QuaderApiVoidResult applied =
-          selection_mode == ViewportSelectionMode::Face
-              ? editor.modeling().apply_active_material_to_face(
-                    static_cast<QuaderModelingObjectId>(target->object_id),
-                    static_cast<QuaderElementId>(target->face_id))
-              : editor.modeling().apply_active_material_to_mesh(
-                    static_cast<QuaderModelingObjectId>(target->object_id),
-                    static_cast<QuaderElementId>(target->face_id));
-      if (!runtime_binding.current()) {
-        return;
-      }
-      log_material_interaction_failure("Apply active material under mouse",
-                                       applied);
-    } else {
-      const std::optional<SceneSessionId> scene_session_id =
-          editor.scene_documents().active_scene_id();
-      const QuaderApiResult<QuaderProjectMaterialInfo> active_material =
-          editor.project_assets().active_material();
-      if (!scene_session_id.has_value() || !active_material.ok()) {
-        cancel_pending_material_interaction();
-        return;
-      }
-      pending_apply_active_material_ = PendingApplyActiveMaterial{
-          .pointer = viewport_pointer_gesture_from_latest_edge(
-              frame.input.pointer_released_edges, QuaderMouseButton::Left,
-              frame.input.mouse_local, frame.input.mouse_screen,
-              frame.input.modifiers, 4.0f,
-              frame.monotonic_time_seconds + timeout),
-          .scene_session_id = scene_session_id->packed(),
-          .selection_mode = selection_mode,
-          .modeling_object_id = target->object_id,
-          .face_id = target->face_id,
-          .active_material_id =
-              std::string(active_material.value().id.str()),
-      };
-    }
-    return;
+    log_material_interaction_failure("Apply face material to mesh", applied);
   }
-
-  if (!pending_apply_active_material_.has_value()) {
-    return;
-  }
-  if (!viewport_pointer_deadline_reached(
-          pending_apply_active_material_->pointer,
-          frame.monotonic_time_seconds)) {
-    return;
-  }
-
-  const PendingApplyActiveMaterial pending =
-      *pending_apply_active_material_;
-  cancel_pending_material_interaction();
-  if (selection_mode != pending.selection_mode) {
-    return;
-  }
-  const std::optional<SceneSessionId> scene_session_id =
-      editor.scene_documents().active_scene_id();
-  if (!scene_session_id.has_value() ||
-      scene_session_id->packed() != pending.scene_session_id) {
-    return;
-  }
-  const QuaderApiResult<QuaderProjectMaterialInfo> active_material =
-      editor.project_assets().active_material();
-  if (!active_material.ok() ||
-      active_material.value().id.str() !=
-          std::string_view(pending.active_material_id)) {
-    return;
-  }
-  ++material_interaction_work_stats_.apply_target_request_count;
-  const QuaderApiVoidResult applied =
-      pending.selection_mode == ViewportSelectionMode::Face
-          ? editor.modeling().apply_active_material_to_face(
-                static_cast<QuaderModelingObjectId>(
-                    pending.modeling_object_id),
-                static_cast<QuaderElementId>(pending.face_id))
-          : editor.modeling().apply_active_material_to_mesh(
-                static_cast<QuaderModelingObjectId>(
-                    pending.modeling_object_id),
-                static_cast<QuaderElementId>(pending.face_id));
-  if (!runtime_binding.current()) {
-    return;
-  }
-  log_material_interaction_failure("Apply active material under mouse",
-                                   applied);
 }
 
 void ViewportInteractionController::cancel_pending_material_interaction() {
-  pending_apply_active_material_.reset();
   if (transfer_face_texture_pointer_.has_value()) {
     transfer_release_suppression_.begin(
         transfer_face_texture_pointer_->pointer.press.button, true);

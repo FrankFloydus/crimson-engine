@@ -83,9 +83,9 @@ modeling_face_texture_action_label(ModelingFaceTextureAction action) {
   case ModelingFaceTextureAction::FlipTextureVertical:
     return "Flip Texture Vertically";
   case ModelingFaceTextureAction::FlipFaceHorizontal:
-    return "Flip Face Horizontally";
+    return "Mirror Face UVs Horizontally";
   case ModelingFaceTextureAction::FlipFaceVertical:
-    return "Flip Face Vertically";
+    return "Mirror Face UVs Vertically";
   case ModelingFaceTextureAction::FitBoth: return "Fit Texture Both Axes";
   case ModelingFaceTextureAction::FitX: return "Fit Texture X";
   case ModelingFaceTextureAction::FitY: return "Fit Texture Y";

@@ -24,17 +24,14 @@ public:
   history_policy(std::string_view tool_id) const;
   [[nodiscard]] ModelingCommandAvailability
   availability(std::string_view tool_id, ModelingSessionService &modeling,
-               EditorSelectionService *selection = nullptr,
-               MaterialReference active_material = {}) const;
+               EditorSelectionService *selection = nullptr) const;
 
   ModelingCommandResult
   execute(std::string_view tool_id, ModelingSessionService &modeling,
-          EditorSelectionService *selection = nullptr,
-          MaterialReference active_material = {}) const;
+          EditorSelectionService *selection = nullptr) const;
   ModelingCommandResult
   execute(const CommandTool &tool, ModelingSessionService &modeling,
-          EditorSelectionService *selection = nullptr,
-          MaterialReference active_material = {}) const;
+          EditorSelectionService *selection = nullptr) const;
 };
 
 } // namespace quader

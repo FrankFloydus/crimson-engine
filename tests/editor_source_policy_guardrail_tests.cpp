@@ -553,7 +553,7 @@ TEST(ViewportToolGuardrailTests,
   const std::string transfer = source_slice(
       controller,
       "void ViewportInteractionController::handle_material_interactions(",
-      "const bool sample_face = frame.input.sample_face_material_pressed;");
+      "if (!frame.input.apply_face_material_to_mesh_pressed)");
   const auto input_gate = transfer.find(
       "if (frame.input.transfer_face_texture_pressed)");
   const auto target_pick = transfer.find("pick_material_face_target(");

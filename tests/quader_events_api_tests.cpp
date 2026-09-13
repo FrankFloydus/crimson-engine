@@ -31,7 +31,6 @@ TEST(QuaderEventsApiTests, PublishesStableLifecycleEventCatalog) {
           std::string(quader_event::kProjectOpened),
           std::string(quader_event::kProjectClosed),
           std::string(quader_event::kProjectAssetsChanged),
-          std::string(quader_event::kActiveProjectMaterialChanged),
           std::string(quader_event::kSceneOpened),
                   std::string(quader_event::kActiveSceneChanged),
                   std::string(quader_event::kSceneDirtyChanged),

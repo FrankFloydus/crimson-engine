@@ -204,6 +204,15 @@ public:
   [[nodiscard]] std::uint64_t selection_revision() const;
   [[nodiscard]] std::uint64_t face_texture_settings_revision() const;
   [[nodiscard]] ModelingFaceTextureSettings face_texture_settings() const;
+  [[nodiscard]] ModelingFaceTextureCanvas face_texture_canvas() const;
+  ModelingCommandResult begin_face_texture_gesture(
+      const ModelingFaceTextureGestureBegin &request);
+  ModelingCommandResult update_face_texture_gesture(
+      const ModelingFaceTextureGestureUpdate &request);
+  ModelingCommandResult commit_face_texture_gesture();
+  ModelingCommandResult cancel_face_texture_gesture();
+  void set_face_texture_material_transform_provider(
+      std::function<StandardMaterialTextureTransform(MaterialReference)> provider);
   [[nodiscard]] bool can_project_uv() const;
   ModelingCommandResult
   set_face_texture_setting(const ModelingFaceTextureEdit &edit);
@@ -356,9 +365,11 @@ public:
   ModelingCommandResult mirror_selection(ModelingMirrorAxis axis);
   ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
   [[nodiscard]] ModelingCommandResult
-  active_material_selection_status(bool material_reference_available) const;
-  ModelingCommandResult apply_active_material(std::uint32_t material_slot = 0);
-  ModelingCommandResult apply_active_material(MaterialReference material);
+  material_selection_status(bool material_reference_available) const;
+  ModelingCommandResult apply_material_slot(std::uint32_t material_slot);
+  ModelingCommandResult apply_material(MaterialReference material);
+  ModelingCommandResult apply_material_to_selected_faces(
+      MaterialReference material, std::uint64_t selection_token);
   ModelingCommandResult apply_material_to_mesh_at_face(
       int modeling_object_id, int face_id, MaterialReference material);
   ModelingCommandResult apply_material_to_face(

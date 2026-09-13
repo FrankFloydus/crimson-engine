@@ -10,6 +10,7 @@
 #include "api/quader_api_session.hpp"
 #include "api/quader_api_types.hpp"
 #include "api/quader_curve_types.hpp"
+#include "api/quader_face_texture_canvas_types.hpp"
 
 #include <cstdint>
 #include <initializer_list>
@@ -140,7 +141,9 @@ enum class QuaderFaceTextureAction {
   RotateCounterClockwise,
   FlipTextureHorizontal,
   FlipTextureVertical,
+  /// Mirrors the existing face U coordinates within per-face or shared UV bounds.
   FlipFaceHorizontal,
+  /// Mirrors the existing face V coordinates within per-face or shared UV bounds.
   FlipFaceVertical,
   FitBoth,
   FitX,
@@ -651,6 +654,13 @@ public:
   QuaderApiVoidResult set_selection_mode(QuaderSelectionMode mode);
   [[nodiscard]] QuaderFaceTextureRevision face_texture_settings_revision() const;
   [[nodiscard]] QuaderFaceTextureSettings face_texture_settings() const;
+  [[nodiscard]] QuaderFaceTextureCanvas face_texture_canvas() const;
+  QuaderApiVoidResult begin_face_texture_gesture(
+      const QuaderFaceTextureGestureBegin &request);
+  QuaderApiVoidResult update_face_texture_gesture(
+      const QuaderFaceTextureGestureUpdate &request);
+  QuaderApiVoidResult commit_face_texture_gesture();
+  QuaderApiVoidResult cancel_face_texture_gesture();
   /// Uses the same cached target validation as whole-mesh or selected-face UV projection.
   [[nodiscard]] bool can_project_uv() const;
   QuaderApiVoidResult
@@ -743,11 +753,18 @@ public:
   [[nodiscard]] std::uint64_t instance_edit_revision() const;
   [[nodiscard]] QuaderInstanceEditState instance_edit_state() const;
 
-  QuaderApiVoidResult apply_active_material(std::uint32_t material_slot = 0);
-  QuaderApiVoidResult apply_active_material_to_mesh(
-      QuaderModelingObjectId object_id, QuaderElementId face_id);
-  QuaderApiVoidResult apply_active_material_to_face(
-      QuaderModelingObjectId object_id, QuaderElementId face_id);
+  /// Assigns an explicit reference to the current object, group or face selection.
+  QuaderApiVoidResult apply_material(QuaderMaterialReference material);
+  /// Assigns only the captured face selection; stale scene/selection tokens fail.
+  QuaderApiVoidResult apply_material_to_selected_faces(
+      QuaderMaterialReference material, SceneSessionId scene_session_id,
+      std::uint64_t selection_token);
+  QuaderApiVoidResult apply_material_to_mesh(
+      QuaderModelingObjectId object_id, QuaderElementId face_id,
+      QuaderMaterialReference material);
+  QuaderApiVoidResult apply_material_to_face(
+      QuaderModelingObjectId object_id, QuaderElementId face_id,
+      QuaderMaterialReference material);
   [[nodiscard]] QuaderApiResult<QuaderFaceProjectMaterial>
   project_material_for_face(QuaderModelingObjectId object_id,
                             QuaderElementId face_id) const;

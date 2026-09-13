@@ -1478,6 +1478,8 @@ public:
         preview_checkpoint_hooks_(std::move(preview_checkpoint_hooks)) {
     selection_service_.set_app_selection_mode_provider(
         [this]() { return app_selection_mode_; });
+    sdk_projection_adapter_.set_face_texture_gesture_selection_cancel_handler(
+        [this]() { return cancel_face_texture_gesture(); });
     sdk_projection_adapter_.set_uv_peel_preview_selection_refresh_handler(
         [this]() {
           uv_peel_preview_cache_key_.reset();
@@ -1509,6 +1511,9 @@ public:
   }
 
   ~Impl() {
+    if (face_texture_gesture_begin_.has_value()) {
+      (void)cancel_face_texture_gesture();
+    }
     if (uv_peel_preview_active_) {
       (void)cancel_uv_peel_preview();
     }
@@ -2346,6 +2351,174 @@ public:
     face_texture_settings_cache_ = std::move(settings);
     face_texture_presented_revision_ = face_texture_settings_revision();
     return face_texture_settings_cache_;
+  }
+
+  [[nodiscard]] ModelingFaceTextureCanvas face_texture_canvas() const {
+    const auto revision = face_texture_settings_revision();
+    if (face_texture_canvas_revision_ == revision) return face_texture_canvas_cache_;
+    const auto settings = face_texture_settings();
+    ModelingFaceTextureCanvas canvas;
+    canvas.selected_face_count = settings.selected_face_count;
+    canvas.selection_token = settings.selection_token;
+    canvas.disabled_reason = settings.disabled_reason;
+    if (settings.selected_face_count == 1u &&
+        face_texture_selection_cache_.objects.size() == 1u) {
+      const auto &object = face_texture_selection_cache_.objects.front();
+      std::vector<ModelingFaceTextureActionTarget> targets;
+      modeling::FaceTextureActionOptions options;
+      const auto resolved = prepare_face_texture_action_targets(
+          face_texture_selection_cache_, options, targets);
+      if (resolved.ok && targets.size() == 1u) {
+        const auto &target = targets.front();
+        canvas.target = {.modeling_object_id = target.modeling_object_id,
+                         .face = object.faces.front().face,
+                         .world_from_local = target.world_from_local,
+                         .sampling_from_local = target.sampling_from_local};
+        auto chart = sdk_projection_adapter_.face_texture_canvas(canvas.target);
+        if (chart.ok()) {
+          canvas.chart = std::move(chart).value();
+          const auto *component = scene_.material(object.entity);
+          if (component != nullptr) {
+            canvas.material = component->material_for_slot(object.faces.front().material_slot);
+          }
+          if (face_texture_material_transform_provider_) {
+            canvas.material_transform = face_texture_material_transform_provider_(canvas.material);
+          }
+          canvas.chart.map = transform_face_texture_canvas_map(
+              canvas.chart.map, canvas.material_transform);
+          canvas.texture_extent = face_texture_extent_cache_;
+          if (canvas.material.project_owned() && face_texture_extent_provider_) {
+            canvas.texture_available = face_texture_extent_provider_(canvas.material).has_value();
+          } else if (canvas.material.embedded()) {
+            const auto *material = assets_.material(canvas.material.embedded_asset());
+            const auto texture = material != nullptr
+                ? material_texture_slot_asset(*material, material_texture_slot::kBaseColor)
+                : std::nullopt;
+            canvas.texture_available = texture.has_value() && assets_.texture(*texture) != nullptr;
+          }
+          canvas.gesture_active = face_texture_gesture_begin_.has_value() &&
+              sdk_projection_adapter_.face_texture_gesture_active();
+          canvas.editable = canvas.chart.mapping_usable &&
+              (settings.editable || (canvas.gesture_active &&
+                  settings.block_reason == ModelingFaceTextureBlockReason::PreviewActive));
+          if (!canvas.chart.mapping_usable) {
+            canvas.disabled_reason = canvas.chart.disabled_reason;
+          } else if (canvas.editable) {
+            canvas.disabled_reason.clear();
+          }
+          measure_face_texture_canvas(canvas);
+        } else {
+          canvas.disabled_reason = chart.error_message();
+        }
+      } else if (!resolved.ok) {
+        canvas.disabled_reason = resolved.message;
+      }
+    }
+    face_texture_canvas_cache_ = std::move(canvas);
+    face_texture_canvas_revision_ = face_texture_settings_revision();
+    return face_texture_canvas_cache_;
+  }
+
+  ModelingCommandResult begin_face_texture_gesture(
+      const ModelingFaceTextureGestureBegin &request) {
+    if (face_texture_gesture_begin_.has_value()) {
+      const auto canceled = cancel_face_texture_gesture();
+      if (!canceled.ok) return canceled;
+    }
+    const auto canvas = face_texture_canvas();
+    if (!canvas.editable || request.selection_token == 0 ||
+        request.selection_token != canvas.selection_token) {
+      return {.ok = false, .message = "Select one editable planar face before editing its texture."};
+    }
+    // Validate the pointer and pivot before reserving a preview transaction.
+    const auto initial = prepare_face_texture_gesture_map(canvas, request,
+        {.current = request.start});
+    if (!initial.ok()) return {.ok = false, .message = initial.error_message()};
+    begin_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+    observe_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+    const auto raw_map = transform_face_texture_canvas_map(
+        canvas.chart.map, canvas.material_transform, true);
+    const auto result = sdk_projection_adapter_.refresh_face_texture_gesture(canvas.target, raw_map);
+    record_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+    if (!result.ok) {
+      finish_preview_content_checkpoint(face_texture_gesture_checkpoint_active_, true);
+      return result;
+    }
+    face_texture_gesture_baseline_ = canvas;
+    face_texture_gesture_begin_ = request;
+    face_texture_gesture_selection_revision_ = selection_revision();
+    face_texture_canvas_revision_ = 0;
+    return result;
+  }
+
+  ModelingCommandResult update_face_texture_gesture(
+      const ModelingFaceTextureGestureUpdate &request) {
+    if (!face_texture_gesture_begin_.has_value() ||
+        !sdk_projection_adapter_.face_texture_gesture_active() ||
+        face_texture_gesture_selection_revision_ != selection_revision()) {
+      const auto canceled = cancel_face_texture_gesture();
+      return {.ok = false, .changed = canceled.changed,
+              .message = "The selected face changed during texture editing."};
+    }
+    const auto candidate = prepare_face_texture_gesture_map(
+        face_texture_gesture_baseline_, *face_texture_gesture_begin_, request);
+    if (!candidate.ok()) return {.ok = false, .message = candidate.error_message()};
+    const auto raw_map = transform_face_texture_canvas_map(candidate.value(),
+        face_texture_gesture_baseline_.material_transform, true);
+    observe_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+    const auto result = sdk_projection_adapter_.refresh_face_texture_gesture(
+        face_texture_gesture_baseline_.target, raw_map);
+    record_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+    if (!result.ok && !sdk_projection_adapter_.face_texture_gesture_active()) {
+      finish_preview_content_checkpoint(face_texture_gesture_checkpoint_active_, true);
+      face_texture_gesture_begin_.reset();
+    }
+    face_texture_gesture_selection_revision_ = selection_revision();
+    face_texture_canvas_revision_ = 0;
+    if (result.changed) invalidate_selection_overlay_caches();
+    return result;
+  }
+
+  ModelingCommandResult commit_face_texture_gesture() {
+    if (!face_texture_gesture_begin_.has_value() ||
+        !sdk_projection_adapter_.face_texture_gesture_active() ||
+        face_texture_gesture_selection_revision_ != selection_revision()) {
+      const auto canceled = cancel_face_texture_gesture();
+      return {.ok = false, .changed = canceled.changed,
+              .message = "The selected face changed during texture editing."};
+    }
+    observe_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+    const auto result = sdk_projection_adapter_.commit_operation_preview();
+    record_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+    if (result.ok || !sdk_projection_adapter_.face_texture_gesture_active()) {
+      finish_preview_content_checkpoint(face_texture_gesture_checkpoint_active_, !result.changed || !result.ok);
+      face_texture_gesture_begin_.reset();
+      face_texture_canvas_revision_ = 0;
+    }
+    if (result.changed) invalidate_selection_overlay_caches();
+    return result;
+  }
+
+  ModelingCommandResult cancel_face_texture_gesture() {
+    observe_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+    ModelingCommandResult result{.ok = true};
+    if (sdk_projection_adapter_.face_texture_gesture_active()) {
+      result = sdk_projection_adapter_.cancel_operation_preview();
+      record_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
+      if (!result.ok) return result;
+    }
+    finish_preview_content_checkpoint(face_texture_gesture_checkpoint_active_, true);
+    face_texture_gesture_begin_.reset();
+    face_texture_canvas_revision_ = 0;
+    if (result.changed) invalidate_selection_overlay_caches();
+    return result;
+  }
+
+  void set_face_texture_material_transform_provider(
+      std::function<StandardMaterialTextureTransform(MaterialReference)> provider) {
+    face_texture_material_transform_provider_ = std::move(provider);
+    face_texture_cache_key_.reset();
+    face_texture_canvas_revision_ = 0;
   }
 
   /// Resolves image dimensions and occurrence frames once for either command or
@@ -3428,6 +3601,9 @@ public:
   }
 
   void clear_transient_state_for_document_replacement() {
+    if (face_texture_gesture_begin_.has_value()) {
+      (void)cancel_face_texture_gesture();
+    }
     if (uv_peel_preview_active_) {
       (void)cancel_uv_peel_preview();
     }
@@ -3448,6 +3624,9 @@ public:
   }
 
   void reset_from_scene() {
+    if (face_texture_gesture_begin_.has_value()) {
+      (void)cancel_face_texture_gesture();
+    }
     if (uv_peel_preview_active_) {
       (void)cancel_uv_peel_preview();
     }
@@ -4221,7 +4400,7 @@ public:
     return result;
   }
 
-  ModelingCommandResult apply_active_material(std::uint32_t material_slot) {
+  ModelingCommandResult apply_material_slot(std::uint32_t material_slot) {
     if (selection_mode() == ModelingSelectionMode::Group) {
       const MaterialSurfaceTargets targets = selected_material_surface_targets();
       if (!targets.command.ok) {
@@ -4805,7 +4984,7 @@ public:
     if (!material.valid()) {
       return {.ok = false,
               .changed = false,
-              .message = "The active material is unavailable."};
+              .message = "The requested material is unavailable."};
     }
 
     ModelingCommandResult result{.ok = true};
@@ -4837,7 +5016,7 @@ public:
   }
 
   [[nodiscard]] ModelingCommandResult
-  active_material_selection_status(bool material_reference_available) const {
+  material_selection_status(bool material_reference_available) const {
     const ModelingSelectionMode mode = selection_mode();
     if (mode != ModelingSelectionMode::Object &&
         mode != ModelingSelectionMode::Group &&
@@ -4864,7 +5043,7 @@ public:
       return {.ok = false,
               .changed = false,
               .message =
-                  "Choose an active material before applying it to a "
+                  "Supply a material reference before applying it to a "
                   "solidified Curve."};
     }
     return targets.command;
@@ -4904,7 +5083,7 @@ public:
       return {
           .ok = false,
           .changed = false,
-          .message = "The active material is unavailable.",
+          .message = "The requested material is unavailable.",
       };
     }
     const FaceTarget target = resolve_face_target(modeling_object_id, face_id);
@@ -4921,7 +5100,7 @@ public:
       return {
           .ok = false,
           .changed = false,
-          .message = "The active material is unavailable.",
+          .message = "The requested material is unavailable.",
       };
     }
     const FaceTarget target = resolve_face_target(modeling_object_id, face_id);
@@ -4930,6 +5109,10 @@ public:
     }
 
     const MaterialComponent *existing = scene_.material(target.entity);
+    if (existing != nullptr &&
+        existing->material_for_slot(target.material_slot) == material) {
+      return {.ok = true, .changed = false};
+    }
     MaterialComponent desired;
     if (existing != nullptr) {
       desired = *existing;
@@ -5036,12 +5219,27 @@ public:
     return modeling_result;
   }
 
-  ModelingCommandResult apply_active_material(MaterialReference material) {
+  ModelingCommandResult apply_material_to_selected_faces(
+      MaterialReference material, std::uint64_t selection_token) {
+    if (selection_mode() != ModelingSelectionMode::Face ||
+        selection_summary().selected_face_count == 0u) {
+      return {.ok = false, .changed = false,
+              .message = "Select one or more faces before assigning material."};
+    }
+    if (selection_token == 0u ||
+        selection_token != face_texture_settings().selection_token) {
+      return {.ok = false, .changed = false,
+              .message = "The face selection changed before material assignment."};
+    }
+    return apply_material(material);
+  }
+
+  ModelingCommandResult apply_material(MaterialReference material) {
     if (!material.valid()) {
       return {
           .ok = false,
           .changed = false,
-          .message = "The active material is unavailable.",
+          .message = "The requested material is unavailable.",
       };
     }
 
@@ -5090,23 +5288,33 @@ public:
     };
     std::vector<MaterialProjection> projections;
     for (const ModelingSelectionExportObject &object : selection.objects) {
-      if (object.selected_faces.empty() ||
-          object.entity == kInvalidEntityId ||
-          !scene_.exists(object.entity)) {
+      if (object.selected_faces.empty()) {
         continue;
       }
 
-      MaterialComponent desired;
-      if (const MaterialComponent *existing = scene_.material(object.entity)) {
-        desired = *existing;
-      }
-
-      const std::uint32_t slot = stage_material_slot(desired, material);
-
+      const MaterialComponent *existing = scene_.material(object.entity);
+      std::vector<int> changed_faces;
+      changed_faces.reserve(object.selected_faces.size());
       for (const ModelingSelectionExportFace &face : object.selected_faces) {
+        const FaceTarget target = resolve_face_target(
+            object.modeling_object_id, static_cast<int>(face.id));
+        if (!target.command.ok) {
+          return target.command;
+        }
+        if (existing == nullptr ||
+            existing->material_for_slot(target.material_slot) != material) {
+          changed_faces.push_back(static_cast<int>(face.id));
+        }
+      }
+      if (changed_faces.empty()) {
+        continue;
+      }
+      MaterialComponent desired = existing != nullptr ? *existing : MaterialComponent{};
+      const std::uint32_t slot = stage_material_slot(desired, material);
+      for (const int face_id : changed_faces) {
         assignments.push_back({
             .modeling_object_id = object.modeling_object_id,
-            .face_id = static_cast<int>(face.id),
+            .face_id = face_id,
             .material_slot = slot,
         });
       }
@@ -5114,6 +5322,9 @@ public:
           {.entity = object.entity, .material = std::move(desired)});
     }
 
+    if (assignments.empty()) {
+      return {.ok = true, .changed = false};
+    }
     ModelingCommandResult modeling_result =
         sdk_projection_adapter_.assign_material_slots_to_faces(assignments);
     if (!modeling_result.ok) {
@@ -5833,6 +6044,9 @@ public:
   }
 
   ModelingCommandResult finish_active_operation_preview(bool commit) {
+    if (face_texture_gesture_begin_.has_value()) {
+      return commit ? commit_face_texture_gesture() : cancel_face_texture_gesture();
+    }
     const std::optional<quader_editor_core::EditorOperationId> operation =
         sdk_projection_adapter_.active_preview_operation();
     if (!operation.has_value()) {
@@ -6317,6 +6531,9 @@ public:
 
   ModelingCommandResult
   commit_transform_preview(bool auto_merge_vertices = false) {
+    if (face_texture_gesture_begin_.has_value()) {
+      return commit_face_texture_gesture();
+    }
     if (structural_transform_preview_active()) {
       return commit_structural_transform_preview();
     }
@@ -6329,6 +6546,9 @@ public:
   }
 
   ModelingCommandResult cancel_transform_preview() {
+    if (face_texture_gesture_begin_.has_value()) {
+      return cancel_face_texture_gesture();
+    }
     if (uv_peel_preview_active_) {
       return cancel_uv_peel_preview();
     }
@@ -6541,6 +6761,11 @@ public:
   }
 
   ModelingCommandResult cancel_transform_drag() {
+    // Undo reaches this generic drag route even when the preview belongs to
+    // the texture canvas. Its owner must close the matching content checkpoint.
+    if (face_texture_gesture_begin_.has_value()) {
+      return cancel_face_texture_gesture();
+    }
     const bool drag_was_active = transform_drag_active();
     const bool had_checkpoint = structural_drag_checkpoint_active_;
     observe_preview_content_checkpoint(structural_drag_checkpoint_active_);
@@ -10067,6 +10292,14 @@ private:
   mutable std::uint64_t face_texture_presented_revision_ = 0;
   mutable ModelingSelectedFaceTextureSnapshot face_texture_selection_cache_;
   mutable ModelingFaceTextureSettings face_texture_settings_cache_;
+  mutable std::uint64_t face_texture_canvas_revision_ = 0;
+  mutable ModelingFaceTextureCanvas face_texture_canvas_cache_;
+  ModelingFaceTextureCanvas face_texture_gesture_baseline_;
+  std::optional<ModelingFaceTextureGestureBegin> face_texture_gesture_begin_;
+  std::uint64_t face_texture_gesture_selection_revision_ = 0;
+  bool face_texture_gesture_checkpoint_active_ = false;
+  std::function<StandardMaterialTextureTransform(MaterialReference)>
+      face_texture_material_transform_provider_;
   mutable std::optional<TextureSettingsCacheKey> mesh_uv_projection_cache_key_;
   mutable ModelingSelectedFaceTextureSnapshot mesh_uv_projection_cache_;
   mutable QVec2 face_texture_extent_cache_{64.0f, 64.0f};
@@ -10291,6 +10524,33 @@ std::uint64_t ModelingSessionService::face_texture_settings_revision() const {
 
 ModelingFaceTextureSettings ModelingSessionService::face_texture_settings() const {
   return impl_->face_texture_settings();
+}
+
+ModelingFaceTextureCanvas ModelingSessionService::face_texture_canvas() const {
+  return impl_->face_texture_canvas();
+}
+
+ModelingCommandResult ModelingSessionService::begin_face_texture_gesture(
+    const ModelingFaceTextureGestureBegin &request) {
+  return impl_->begin_face_texture_gesture(request);
+}
+
+ModelingCommandResult ModelingSessionService::update_face_texture_gesture(
+    const ModelingFaceTextureGestureUpdate &request) {
+  return impl_->update_face_texture_gesture(request);
+}
+
+ModelingCommandResult ModelingSessionService::commit_face_texture_gesture() {
+  return impl_->commit_face_texture_gesture();
+}
+
+ModelingCommandResult ModelingSessionService::cancel_face_texture_gesture() {
+  return impl_->cancel_face_texture_gesture();
+}
+
+void ModelingSessionService::set_face_texture_material_transform_provider(
+    std::function<StandardMaterialTextureTransform(MaterialReference)> provider) {
+  impl_->set_face_texture_material_transform_provider(std::move(provider));
 }
 
 bool ModelingSessionService::can_project_uv() const {
@@ -10705,19 +10965,24 @@ ModelingSessionService::flip_selection(ModelingFlipOrientation orientation) {
 }
 
 ModelingCommandResult
-ModelingSessionService::active_material_selection_status(
+ModelingSessionService::material_selection_status(
     bool material_reference_available) const {
-  return impl_->active_material_selection_status(material_reference_available);
+  return impl_->material_selection_status(material_reference_available);
 }
 
 ModelingCommandResult
-ModelingSessionService::apply_active_material(std::uint32_t material_slot) {
-  return impl_->apply_active_material(material_slot);
+ModelingSessionService::apply_material_slot(std::uint32_t material_slot) {
+  return impl_->apply_material_slot(material_slot);
 }
 
 ModelingCommandResult
-ModelingSessionService::apply_active_material(MaterialReference material) {
-  return impl_->apply_active_material(material);
+ModelingSessionService::apply_material(MaterialReference material) {
+  return impl_->apply_material(material);
+}
+
+ModelingCommandResult ModelingSessionService::apply_material_to_selected_faces(
+    MaterialReference material, std::uint64_t selection_token) {
+  return impl_->apply_material_to_selected_faces(material, selection_token);
 }
 
 ModelingCommandResult ModelingSessionService::apply_material_to_mesh_at_face(

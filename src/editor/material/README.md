@@ -12,11 +12,45 @@ file except through prior written authorization from Francesco Di Blasi.
 Empty folders participate in its revision. The Qt browser displays this projection and sends
 organization intent through `QuaderProjectAssetsApi`; it never edits files or owns a second catalog.
 Imports select a material destination while retaining the independent `Textures` storage policy.
+Catalog updates, imports and material saves do not select a material for later creation or assignment.
+New geometry uses the reserved Default Material unless its creation arguments supply a material;
+assignment always carries an explicit reference through the modeling API. Legacy manifest
+`activeMaterial` values are validated on read and discarded, and are omitted from future saves.
+
+Face Texture's **Flip Face UVs** actions mirror the selected faces' effective U or V coordinates
+using `min + max - coordinate`. Each face supplies its own bounds unless Treat as One combines
+the existing selected UV charts. The action retains geometry, winding, normals, material bindings,
+scalar texture settings and occurrence sampling. A collapsed UV axis is a no-op. The separate
+Flip Texture actions continue to negate the corresponding scale value. The portable
+[texture action owner](../../sdk/core/modeling/src/face_texture_actions.cpp) prepares the changes;
+the editor publishes them together in one undoable operation. See the
+[native mirror regressions](../../../tests/face_texture_mirror_api_tests.cpp).
 
 `ProjectMaterialOrganizationService` validates complete folder/material moves through
 `ProjectFileSystem`, preserves material UUIDs and compensates failed publication. Moving an open
 material retargets its draft path without discarding authored properties, pending images or previews.
 The native reader resolves moved UUIDs when a saved scene contains an obsolete material path.
+
+## Actual material usage
+
+`ProjectMaterialUsageService`, owned by `ProjectSession`, supplies the browser's Used/Not Used
+classification through `QuaderProjectAssetsApi::material_usage_revision()` and `material_usage()`.
+It counts actual authored face/primitive slots, including hidden and locked geometry and the
+effective slot zero of solid curves. Dormant bindings and ordinary paths do not count. Resident
+scenes replace their saved versions; unsaved scenes and unopened registered scenes also contribute.
+Project UUIDs resolve persistent deletion, while embedded IDs remain scoped to the active scene.
+
+Owner revisions gate live inspection before entity traversal. Immutable geometry sources retain
+their slot projections; saved sources retain validated file versions. Unchanged frames perform no
+filesystem scans, geometry decoding or catalog rebuilding. Explicit refresh retries incomplete
+sources. The read-only historical metadata-10/geometry-2 projection supports usage inspection only;
+it neither broadens general scene opening/deletion validation nor rewrites the source file.
+
+Inspection issues name their scene source and keep the query successful. Confirmed Used matches
+remain available; incomplete inspection prevents a reliable Not Used classification. These issues
+are browser status, not assignment errors. See the
+[project material usage regressions](../../../tests/project_material_usage_tests.cpp), including the
+opt-in `QUADER_TEST_LEGACY_MATERIAL_USAGE_SCENE` assignment reproduction against a copied source.
 
 ## Dependencies and deletion
 

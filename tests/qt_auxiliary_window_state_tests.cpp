@@ -34,6 +34,12 @@ TEST(QtAuxiliaryWindowStateTests,
   EXPECT_EQ(state.material_browser_tile_size, 128);
   EXPECT_TRUE(state.material_browser_sidebar_visible);
   EXPECT_EQ(state.material_browser_sidebar_width, 200);
+  EXPECT_TRUE(state.face_texture_browser_grid_mode);
+  EXPECT_EQ(state.face_texture_browser_tile_size, 64);
+  EXPECT_TRUE(state.face_texture_browser_sidebar_visible);
+  EXPECT_EQ(state.face_texture_browser_sidebar_width, 120);
+  EXPECT_TRUE(state.face_texture_splitter_state.isEmpty());
+  EXPECT_FALSE(state.face_texture_layout_migrated);
   EXPECT_TRUE(state.standard_material_editor_geometry.isEmpty());
   EXPECT_EQ(state.standard_material_preview_mesh, 0);
   EXPECT_EQ(state.standard_material_preview_shading, 2);
@@ -54,6 +60,12 @@ TEST(QtAuxiliaryWindowStateTests, RoundTripsGeometryAndLogicalVisibility) {
   state.material_browser_tile_size = 192;
   state.material_browser_sidebar_visible = false;
   state.material_browser_sidebar_width = 285;
+  state.face_texture_browser_grid_mode = true;
+  state.face_texture_browser_tile_size = 64;
+  state.face_texture_browser_sidebar_visible = true;
+  state.face_texture_browser_sidebar_width = 110;
+  state.face_texture_splitter_state = QByteArray("face-texture-splitter");
+  state.face_texture_layout_migrated = true;
   state.standard_material_editor_geometry =
       QByteArray("standard-material-editor-geometry");
   state.standard_material_preview_mesh = 2;
@@ -73,6 +85,13 @@ TEST(QtAuxiliaryWindowStateTests, RoundTripsGeometryAndLogicalVisibility) {
   EXPECT_EQ(loaded.material_browser_tile_size, 192);
   EXPECT_FALSE(loaded.material_browser_sidebar_visible);
   EXPECT_EQ(loaded.material_browser_sidebar_width, 285);
+  EXPECT_TRUE(loaded.face_texture_browser_grid_mode);
+  EXPECT_EQ(loaded.face_texture_browser_tile_size, 64);
+  EXPECT_TRUE(loaded.face_texture_browser_sidebar_visible);
+  EXPECT_EQ(loaded.face_texture_browser_sidebar_width, 110);
+  EXPECT_EQ(loaded.face_texture_splitter_state,
+            state.face_texture_splitter_state);
+  EXPECT_TRUE(loaded.face_texture_layout_migrated);
   EXPECT_EQ(loaded.standard_material_editor_geometry,
             state.standard_material_editor_geometry);
   EXPECT_EQ(loaded.standard_material_preview_mesh, 2);

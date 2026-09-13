@@ -379,36 +379,16 @@ TEST(QtViewportContextMenuTests,
   EXPECT_NE(find_top_level(object_menu, QStringLiteral("combine_mesh")),
             nullptr);
   EXPECT_NE(find_top_level(object_menu, QStringLiteral("half_cut")), nullptr);
-  const ContextActionSnapshot *apply_current_material = find_top_level(
-      object_menu, QStringLiteral("edit.apply_material"));
-  ASSERT_NE(apply_current_material, nullptr);
-  EXPECT_EQ(apply_current_material->text,
-            QStringLiteral("Apply Current Material\tShift+T"));
-  EXPECT_TRUE(apply_current_material->enabled);
-  const ContextActionSnapshot *sample_material = find_top_level(
-      object_menu, QStringLiteral("viewport.material.sample_face"));
-  ASSERT_NE(sample_material, nullptr);
-  EXPECT_EQ(sample_material->text,
-            QStringLiteral("Set Material under Mouse as Active\tShift+RMouse"));
-  EXPECT_TRUE(sample_material->enabled);
-  EXPECT_TRUE(sample_material->shortcut_empty);
-  EXPECT_NE(
-      find_top_level(object_menu,
-                     QStringLiteral("viewport.material.edit_under_mouse")),
-      nullptr);
-  const auto apply_material_index =
-      top_level_index(object_menu, QStringLiteral("edit.apply_material"));
-  const auto sample_material_index = top_level_index(
-      object_menu, QStringLiteral("viewport.material.sample_face"));
+  EXPECT_EQ(find_top_level(object_menu, QStringLiteral("edit.apply_material")),
+            nullptr);
+  EXPECT_EQ(find_top_level(object_menu,
+                           QStringLiteral("viewport.material.sample_face")),
+            nullptr);
   const auto edit_material_index = top_level_index(
       object_menu, QStringLiteral("viewport.material.edit_under_mouse"));
-  ASSERT_TRUE(apply_material_index.has_value());
-  ASSERT_TRUE(sample_material_index.has_value());
   ASSERT_TRUE(edit_material_index.has_value());
-  ASSERT_GT(*apply_material_index, 0u);
-  EXPECT_TRUE(object_menu.actions[*apply_material_index - 1u].separator);
-  EXPECT_EQ(*sample_material_index, *apply_material_index + 1u);
-  EXPECT_EQ(*edit_material_index, *sample_material_index + 1u);
+  ASSERT_GT(*edit_material_index, 0u);
+  EXPECT_TRUE(object_menu.actions[*edit_material_index - 1u].separator);
   EXPECT_NE(find_top_level(object_menu, QStringLiteral("edit.cut")), nullptr);
   EXPECT_NE(find_top_level(object_menu, QStringLiteral("edit.copy")), nullptr);
   ASSERT_FALSE(object_menu.actions.empty());
@@ -564,7 +544,6 @@ TEST(QtViewportContextMenuTests,
                       "Bridge Selected Faces with Interpolation"),
        enabled_action("collapse_faces", "Collapse Selected Faces"),
        enabled_action("radial_align_faces", "Radially Align Selected Faces"),
-       enabled_action("apply_active_material", "Apply Active Material"),
        enabled_action("delete_selection", "Delete Selection")});
 
   ASSERT_TRUE(
@@ -590,27 +569,11 @@ TEST(QtViewportContextMenuTests,
   EXPECT_NE(find_child(*face_topology, QStringLiteral("detach_faces")),
             nullptr);
   EXPECT_NE(find_child(*face_normals, QStringLiteral("invert_faces")), nullptr);
-  const auto apply_current_material_count = static_cast<std::size_t>(
-      std::count_if(face_menu.actions.begin(), face_menu.actions.end(),
-                    [](const ContextActionSnapshot &action) {
-                      return action.object_name == QStringLiteral(
-                                                       "edit.apply_material");
-                    }));
-  EXPECT_EQ(apply_current_material_count, 1u);
-  ASSERT_NE(find_top_level(
-                face_menu,
-                QStringLiteral("edit.apply_material")),
+  EXPECT_EQ(find_top_level(face_menu, QStringLiteral("edit.apply_material")),
             nullptr);
-  EXPECT_EQ(find_top_level(
-                face_menu,
-                QStringLiteral("edit.apply_material"))
-                ->text,
-            QStringLiteral("Apply Current Material\tShift+T"));
-  const auto face_apply_material_index =
-      top_level_index(face_menu, QStringLiteral("edit.apply_material"));
-  ASSERT_TRUE(face_apply_material_index.has_value());
-  ASSERT_GT(*face_apply_material_index, 0u);
-  EXPECT_TRUE(face_menu.actions[*face_apply_material_index - 1u].separator);
+  EXPECT_EQ(find_top_level(face_menu,
+                           QStringLiteral("viewport.material.sample_face")),
+            nullptr);
   EXPECT_EQ(face_menu.actions.back().text,
             QStringLiteral("Delete Faces\tDelete"));
 
@@ -827,7 +790,7 @@ TEST(QtViewportContextMenuTests,
   expect_normal_actions(selected_edge_menu, true, QString{});
 }
 
-TEST(QtViewportContextMenuTests, MaterialRejectionPublishesOneErrorPerAttempt) {
+TEST(QtViewportContextMenuTests, MaterialEditingDispatchesWithoutImplicitAssignment) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-viewport-material-error-tests";
@@ -858,16 +821,24 @@ TEST(QtViewportContextMenuTests, MaterialRejectionPublishesOneErrorPerAttempt) {
   ASSERT_TRUE(hovered_material.has_value());
   const std::uint64_t command_status_revision =
       editor.commands().last_status_revision();
+  std::size_t edit_attempts = 0;
   for (std::size_t attempt = 1; attempt <= 2; ++attempt) {
     const ContextMenuSnapshot menu = show_and_snapshot(
         owner, presenter, editor, input_router, localization, {}, {}, true,
-        hovered_material, {}, QStringLiteral("viewport.material.sample_face"));
+        hovered_material,
+        [&](quader::ProjectAssetId id) {
+          EXPECT_EQ(id, *hovered_material);
+          ++edit_attempts;
+        },
+        QStringLiteral("viewport.material.edit_under_mouse"));
     ASSERT_TRUE(menu.opened);
-    ASSERT_EQ(notifications.size(), attempt);
-    EXPECT_EQ(notifications.back().level,
-              quader::QuaderNotificationLevel::Error);
-    EXPECT_EQ(notifications.back().message,
-              "Project materials are unavailable without an open project.");
+    EXPECT_EQ(edit_attempts, attempt);
+    EXPECT_TRUE(notifications.empty());
+    EXPECT_EQ(find_top_level(menu,
+                             QStringLiteral("viewport.material.sample_face")),
+              nullptr);
+    EXPECT_EQ(find_top_level(menu, QStringLiteral("edit.apply_material")),
+              nullptr);
     EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision);
   }
 }

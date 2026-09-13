@@ -523,7 +523,6 @@ QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::save_as(
     publish(quader_event::kStandardMaterialSaved);
     publish(quader_event::kStandardMaterialDirtyChanged);
     publish(quader_event::kProjectAssetsChanged);
-    publish(quader_event::kActiveProjectMaterialChanged);
   }
   return status(session_, result);
 }

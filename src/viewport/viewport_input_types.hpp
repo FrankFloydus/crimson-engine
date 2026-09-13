@@ -185,9 +185,6 @@ struct ViewportInputFrame {
   bool tool_constraint_z_pressed = false;
   int linear_array_copy_delta = 0;
   std::vector<ViewportRadialArrayInputEvent> radial_array_events;
-  bool sample_face_material_pressed = false;
-  bool apply_active_material_to_selection_pressed = false;
-  bool apply_active_material_delay_for_double_click = false;
   bool apply_face_material_to_mesh_pressed = false;
   bool transfer_face_texture_pressed = false;
   // Canonical mouse Click/DoubleClick counterparts and Qt's substituted second

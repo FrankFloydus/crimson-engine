@@ -32,7 +32,9 @@ enum class FaceTextureAction {
   RotateCounterClockwise,
   FlipTextureHorizontal,
   FlipTextureVertical,
+  /// Mirrors effective U coordinates about their bounds without changing geometry.
   FlipFaceHorizontal,
+  /// Mirrors effective V coordinates about their bounds without changing geometry.
   FlipFaceVertical,
   FitBoth,
   FitX,
@@ -84,6 +86,8 @@ struct FaceTextureTransferFace {
 /// Captured operation context; preparing never queries or changes a host.
 struct FaceTextureActionOptions {
   FaceTextureAction action = FaceTextureAction::AlignToGrid;
+  /// Face UV mirrors use the union of existing selected charts; other bounds
+  /// actions may construct a shared chart from the active face.
   bool treat_as_one = false;
   double rotation_degrees = 15.0;
   std::uint64_t active_target_key = 0;
@@ -106,10 +110,14 @@ struct PreparedFaceTextureAction {
 };
 
 /**
- * Prepares selection-wide texturing/face reflection without mutating any input.
+ * Prepares selection-wide texturing without mutating any input or geometry.
  * A missing active reference falls back to the smallest target key and face ID.
  * Result documents retain component IDs, selection, and occurrence sampling;
  * the host publishes changed replacements in one atomic transaction.
+ * FlipFaceHorizontal/Vertical mirror existing effective coordinates using
+ * min + max - coordinate, per face or across the selected UV bounds when
+ * Treat as One is enabled. Scalar settings remain unchanged; a collapsed axis
+ * is a no-op. FlipTextureHorizontal/Vertical retain their scale-sign semantics.
  */
 [[nodiscard]] Result<PreparedFaceTextureAction> prepare_face_texture_action(
     std::span<const FaceTextureActionTarget> targets,

@@ -3423,7 +3423,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
       "} // namespace quader");
   const std::string workspace_refresh = source_slice(
       ui_system_source, "void UISystem::refresh_project_workspace(",
-      "void UISystem::refresh_active_material_panel(");
+      "void UISystem::refresh_face_texture_material(");
   const std::string show_home = source_slice(
       ui_system_source, "void UISystem::show_home()",
       "void UISystem::show_workspace()");
@@ -3509,6 +3509,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_presented_before("Inspector", "modeling_->content_revision()");
   expect_presented_before("Inspector", "inspector_panel_->refresh(context)");
   expect_presented_before("Console", "console_panel_->refresh(context)");
+  expect_presented_before("FaceTexture", "face_texture_panel_->refresh()");
 
   const std::size_t instance_edit_revision =
       workspace_refresh.find("instance_edit_revision()");
@@ -3522,7 +3523,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   EXPECT_LT(instance_edit_revision, workspace_gate);
   EXPECT_LT(workspace_gate, standard_material_refresh);
   for (std::string_view broad_workspace_query :
-       {"recent_projects()", "open_scenes()", ".active_material()"}) {
+       {"recent_projects()", "open_scenes()"}) {
     const std::size_t query = workspace_refresh.find(broad_workspace_query);
     ASSERT_NE(query, std::string::npos) << broad_workspace_query;
     EXPECT_LT(workspace_gate, query) << broad_workspace_query;
@@ -3534,6 +3535,8 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   ASSERT_NE(material_browser_visibility, std::string::npos);
   ASSERT_NE(material_catalog, std::string::npos);
   EXPECT_LT(material_browser_visibility, material_catalog);
+  expect_contains(workspace_refresh, "panel_presented(UIPanelId::FaceTexture)");
+  expect_missing(workspace_refresh, ".active_material()");
   expect_missing(workspace_refresh, ".materials()");
   expect_missing(workspace_refresh, ".material_preview(");
   expect_missing(workspace_refresh, ".material_presentations()");
@@ -3559,6 +3562,20 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(ui_system_source,
                   "project_workspace_refresh_signal_->store(true");
   expect_contains(ui_system_source, "clear_project_workspace_events()");
+  expect_contains(ui_system_source,
+                  "configure_material_browser(*material_browser_window_)");
+  expect_contains(ui_system_source,
+                  "configure_material_browser(face_texture_panel_->browser())");
+  const std::string face_material_refresh = source_slice(
+      ui_system_source, "void UISystem::refresh_face_texture_material(",
+      "void UISystem::configure_material_browser(");
+  const std::size_t face_material_gate = face_material_refresh.find(
+      "face_texture_panel_presenter_.needs_refresh(stamp)");
+  const std::size_t face_material_setter = face_material_refresh.find(
+      "face_texture_panel_->set_material_presentation(");
+  ASSERT_NE(face_material_gate, std::string::npos);
+  ASSERT_NE(face_material_setter, std::string::npos);
+  EXPECT_LT(face_material_gate, face_material_setter);
   expect_missing(workspace_refresh, "last_status_revision()");
 
   const std::size_t home_unchanged =
@@ -3830,7 +3847,7 @@ TEST(BuildGuardrailTests,
   expect_contains(workspace_events, "kProjectOpened");
   expect_contains(workspace_events, "kProjectClosed");
   expect_contains(workspace_events, "kProjectAssetsChanged");
-  expect_contains(workspace_events, "kActiveProjectMaterialChanged");
+  expect_missing(workspace_events, "kActiveProjectMaterialChanged");
   expect_contains(workspace_events, "kActiveSceneChanged");
   expect_contains(workspace_events,
                   "refresh_signal->store(true, std::memory_order_relaxed)");

@@ -10,6 +10,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
+#include "editor/material/project_material_usage_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
@@ -17,6 +18,7 @@
 #include "render/render_system.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_auxiliary_window_state.hpp"
 #include "ui/qt_main_menu.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_operation_input_hints.hpp"
@@ -2590,5 +2592,408 @@ TEST(QtProjectWorkspaceTests,
   settings_dialog->close();
   QCoreApplication::processEvents();
   EXPECT_FALSE(render_system.vsync_enabled());
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     LegacyMaterialDockLayoutMigratesOnceAndPreservesSurroundingDocks) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-face-texture-layout-migration-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-face-texture-layout-migration-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const auto paths = quader::UISettings::resolve_paths(isolated_profile);
+  ASSERT_TRUE(std::filesystem::create_directories(paths.directory));
+  {
+    QMainWindow legacy;
+    legacy.setAttribute(Qt::WA_DontShowOnScreen, true);
+    legacy.resize(1100, 800);
+    auto *outliner = new QDockWidget(&legacy);
+    outliner->setObjectName(QStringLiteral("dock_outliner"));
+    outliner->setWidget(new QWidget(outliner));
+    auto *inspector = new QDockWidget(&legacy);
+    inspector->setObjectName(QStringLiteral("dock_inspector"));
+    inspector->setWidget(new QWidget(inspector));
+    auto *materials = new QDockWidget(&legacy);
+    materials->setObjectName(QStringLiteral("dock_active_material"));
+    materials->setWidget(new QWidget(materials));
+    legacy.addDockWidget(Qt::RightDockWidgetArea, outliner);
+    legacy.addDockWidget(Qt::LeftDockWidgetArea, inspector);
+    legacy.addDockWidget(Qt::LeftDockWidgetArea, materials);
+    legacy.tabifyDockWidget(inspector, materials);
+    legacy.show();
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(legacy.tabifiedDockWidgets(inspector).contains(materials));
+    materials->hide();
+    const QByteArray state = legacy.saveState(1);
+    std::ofstream persisted(paths.qt_window_state_file, std::ios::binary);
+    ASSERT_TRUE(persisted.is_open());
+    persisted.write(state.constData(), static_cast<std::streamsize>(state.size()));
+    ASSERT_TRUE(persisted.good());
+  }
+  {
+    std::ofstream settings(paths.settings_file);
+    ASSERT_TRUE(settings.is_open());
+    settings << "[Panels]\nactive_material=false\noutliner=true\ninspector=true\n";
+  }
+
+  quader::RenderSystem render_system;
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  for (int load = 0; load != 2; ++load) {
+    SCOPED_TRACE(load);
+    quader::UISystem ui;
+    ASSERT_TRUE(ui.initialize(render_system, resource_root));
+    auto *window = ui.main_window();
+    ASSERT_NE(window, nullptr);
+    window->setAttribute(Qt::WA_DontShowOnScreen, true);
+    auto *face_texture = window->findChild<QDockWidget *>(
+        QStringLiteral("dock_face_texture"));
+    auto *inspector = window->findChild<QDockWidget *>(
+        QStringLiteral("dock_inspector"));
+    auto *outliner = window->findChild<QDockWidget *>(
+        QStringLiteral("dock_outliner"));
+    ASSERT_NE(face_texture, nullptr);
+    ASSERT_NE(inspector, nullptr);
+    ASSERT_NE(outliner, nullptr);
+    EXPECT_EQ(window->findChild<QDockWidget *>(
+                  QStringLiteral("dock_active_material")), nullptr);
+    EXPECT_EQ(window->dockWidgetArea(face_texture), Qt::LeftDockWidgetArea);
+    EXPECT_EQ(window->dockWidgetArea(inspector), Qt::LeftDockWidgetArea);
+    EXPECT_EQ(window->dockWidgetArea(outliner), Qt::RightDockWidgetArea);
+    EXPECT_TRUE(face_texture->isHidden());
+    // Home hides every dock. Qt reports tab peers only while they participate
+    // in the visible dock layout, so inspect their restored workspace positions.
+    window->show();
+    inspector->show();
+    face_texture->show();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(window->tabifiedDockWidgets(inspector).contains(face_texture));
+    face_texture->hide();
+    inspector->hide();
+    EXPECT_EQ(face_texture->features(),
+              QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                  QDockWidget::DockWidgetFloatable);
+    ui.shutdown();
+    EXPECT_TRUE(quader::QtAuxiliaryWindowState::load(
+                    paths.qt_auxiliary_window_state_file).face_texture_layout_migrated);
+    EXPECT_FALSE(quader::UISettings::load(paths.settings_file)
+                     .is_panel_visible(quader::UIPanelId::FaceTexture));
+  }
+}
+
+TEST(QtProjectWorkspaceTests,
+     EmbeddedMaterialUsageRefreshesOnRevealAndAlreadyDirtyAssignmentAndUndo) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-embedded-usage-refresh-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-embedded-usage-refresh-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const auto paths = quader::UISettings::resolve_paths(isolated_profile);
+  ASSERT_TRUE(std::filesystem::create_directories(paths.directory));
+  auto settings = quader::UISettings::defaults();
+  settings.set_panel_visible(quader::UIPanelId::FaceTexture, false);
+  ASSERT_TRUE(settings.save(paths.settings_file));
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto project_root = isolated_profile / "Usage Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  const std::array texture_paths{isolated_profile / "First.png",
+                                  isolated_profile / "Second.png"};
+  QImage texture(2, 2, QImage::Format_RGBA8888);
+  texture.fill(Qt::red);
+  ASSERT_TRUE(texture.save(QString::fromStdWString(texture_paths[0].wstring())));
+  texture.fill(Qt::green);
+  ASSERT_TRUE(texture.save(QString::fromStdWString(texture_paths[1].wstring())));
+
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  const auto created = editor.project().create(project_root);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.project_assets()
+                  .create_material_folder("Materials", "Usage").ok());
+  const auto imported = editor.project_assets().import_textures_as_materials(
+      texture_paths, "Materials/Usage");
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_TRUE(imported.value().failed.empty());
+  ASSERT_EQ(imported.value().imported.size(), 2u);
+  const auto first = quader::QuaderMaterialReference::project(
+      imported.value().imported[0].material.id);
+  const auto second = quader::QuaderMaterialReference::project(
+      imported.value().imported[1].material.id);
+  const auto mesh = editor.modeling().create_box({
+      .bounds = {.min = {0.0f, 0.0f, 0.0f}, .max = {16.0f, 16.0f, 16.0f}},
+      .name = "Usage box",
+      .material = first,
+  });
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_faces(mesh.value(), {1, 2, 3, 4, 5, 6}).ok());
+  ASSERT_TRUE(editor.scene_documents().has_dirty_scenes());
+  ASSERT_NE(project.active_scene(), nullptr);
+
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  quader::SceneSession &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(
+      editor, scene.scene(), scene.assets(), scene.modeling(), scene.selection(),
+      scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  auto *dock = ui.main_window()->findChild<QDockWidget *>(
+      QStringLiteral("dock_face_texture"));
+  auto *browser = dynamic_cast<quader::QtMaterialBrowserWindow *>(
+      ui.main_window()->findChild<QWidget *>(
+          QStringLiteral("materialBrowser.embedded")));
+  auto *windowed = ui.main_window()->findChild<QWidget *>(
+      QStringLiteral("materialBrowser.window"));
+  ASSERT_NE(dock, nullptr);
+  ASSERT_NE(browser, nullptr);
+  ASSERT_NE(windowed, nullptr);
+  EXPECT_TRUE(dock->isHidden());
+  EXPECT_TRUE(windowed->isHidden());
+  ui.show();
+  application.processEvents();
+  ui.refresh({}, {});
+  ui.refresh({}, {});
+  EXPECT_TRUE(dock->isHidden());
+  EXPECT_FALSE(windowed->isVisible());
+
+  // The embedded browser must initialize from an ordinary frame even though
+  // its project/catalog events were consumed while the dock was hidden.
+  ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+  application.processEvents();
+  ui.refresh({}, {});
+  ASSERT_TRUE(dock->isVisible());
+  auto *grid = browser->findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  auto *filter = browser->findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  auto *usage_status = browser->findChild<QLabel *>(
+      QStringLiteral("materialBrowser.usageStatus"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(filter, nullptr);
+  ASSERT_NE(usage_status, nullptr);
+  auto *proxy = dynamic_cast<quader::QtMaterialBrowserProxyModel *>(grid->model());
+  ASSERT_NE(proxy, nullptr);
+  ASSERT_TRUE(proxy->usage_complete());
+  EXPECT_TRUE(usage_status->isHidden());
+  browser->set_selected_folder(QStringLiteral("Materials/Usage"));
+  ASSERT_EQ(grid->model()->rowCount(), 2);
+  const auto choose_usage = [&](bool used) {
+    filter->click();
+    auto *popup = browser->findChild<QFrame *>(
+        QStringLiteral("materialBrowser.filterPopup"));
+    ASSERT_NE(popup, nullptr);
+    auto *choice = popup->findChild<QCheckBox *>(
+        used ? QStringLiteral("materialBrowser.filterUsed")
+             : QStringLiteral("materialBrowser.filterNotUsed"));
+    ASSERT_NE(choice, nullptr);
+    ASSERT_TRUE(choice->isEnabled());
+    choice->click();
+    popup->close();
+    application.processEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  const auto expect_only_material = [&](quader::QuaderMaterialReference material) {
+    ASSERT_EQ(grid->model()->rowCount(), 1);
+    EXPECT_EQ(grid->model()->index(0, 0)
+                  .data(quader::QtMaterialBrowserModel::StableIdRole).toString(),
+              quader::qt_material_reference_stable_id(material));
+  };
+  choose_usage(true);
+  expect_only_material(first);
+  choose_usage(false);
+  expect_only_material(second);
+
+  // Use the modeling API directly: browser click handlers explicitly request
+  // a workspace refresh and would conceal the already-dirty refresh defect.
+  ui.refresh({}, {});
+  const auto catalog_before = editor.project_assets().materials();
+  ASSERT_TRUE(catalog_before.ok());
+  const auto work_before_assignment = project.material_usage().work_stats();
+  int catalog_resets = 0;
+  QObject::connect(proxy->sourceModel(), &QAbstractItemModel::modelReset,
+                   browser, [&]() { ++catalog_resets; });
+  const auto token = editor.modeling().face_texture_settings().selection_token;
+  const auto assigned = editor.modeling().apply_material_to_selected_faces(
+      second, mesh.value().scene_session_id, token);
+  ASSERT_TRUE(assigned.ok()) << assigned.error_message();
+  ASSERT_TRUE(assigned.changed());
+  ASSERT_TRUE(editor.scene_documents().has_dirty_scenes());
+  ui.refresh({}, {});
+  EXPECT_TRUE(proxy->usage_complete());
+  expect_only_material(first);
+  EXPECT_GT(project.material_usage().work_stats().snapshot_build_count,
+            work_before_assignment.snapshot_build_count);
+  choose_usage(true);
+  expect_only_material(second);
+  EXPECT_FALSE(windowed->isVisible());
+
+  const auto undone = editor.history().undo();
+  ASSERT_TRUE(undone.ok()) << undone.error_message();
+  ASSERT_TRUE(undone.changed());
+  ASSERT_TRUE(editor.scene_documents().has_dirty_scenes());
+  ui.refresh({}, {});
+  expect_only_material(first);
+  choose_usage(false);
+  expect_only_material(second);
+  ASSERT_TRUE(editor.history().can_redo());
+  const auto work_before_idle = project.material_usage().work_stats();
+  const auto history_before_idle = editor.history().snapshot();
+  const auto revisions_before_idle = editor.revisions();
+  for (int frame = 0; frame != 12; ++frame) {
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(project.material_usage().work_stats(), work_before_idle);
+  EXPECT_EQ(catalog_resets, 0);
+  const auto history_after_idle = editor.history().snapshot();
+  EXPECT_EQ(history_after_idle.can_undo, history_before_idle.can_undo);
+  EXPECT_EQ(history_after_idle.can_redo, history_before_idle.can_redo);
+  EXPECT_EQ(history_after_idle.undo_label, history_before_idle.undo_label);
+  EXPECT_EQ(history_after_idle.redo_label, history_before_idle.redo_label);
+  const auto revisions_after_idle = editor.revisions();
+  EXPECT_EQ(revisions_after_idle.scene_revision,
+            revisions_before_idle.scene_revision);
+  EXPECT_EQ(revisions_after_idle.asset_revision,
+            revisions_before_idle.asset_revision);
+  EXPECT_EQ(revisions_after_idle.modeling_content_revision,
+            revisions_before_idle.modeling_content_revision);
+  for (quader::QuaderElementId face = 1; face != 7; ++face) {
+    const auto assigned_material =
+        editor.modeling().project_material_for_face(
+            mesh.value().modeling_object_id, face);
+    ASSERT_TRUE(assigned_material.ok()) << assigned_material.error_message();
+    EXPECT_EQ(assigned_material.value().id, first.project_asset);
+  }
+  const auto catalog_after = editor.project_assets().materials();
+  ASSERT_TRUE(catalog_after.ok());
+  ASSERT_EQ(catalog_after.value().size(), catalog_before.value().size());
+  for (std::size_t index = 0; index < catalog_before.value().size(); ++index) {
+    EXPECT_EQ(catalog_after.value()[index].id, catalog_before.value()[index].id);
+    EXPECT_EQ(catalog_after.value()[index].project_relative_path,
+              catalog_before.value()[index].project_relative_path);
+  }
+  EXPECT_FALSE(windowed->isVisible());
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     VisibleEmbeddedUsageSurvivesProjectCreateAndReopenGenerationEvents) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-embedded-usage-generation-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-embedded-usage-generation-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto project_root = isolated_profile / "Generation Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  int binding_count = 0;
+  const auto bind_scene = [&](quader::SceneSession &scene) {
+    ++binding_count;
+    ui.install_runtime_hooks(
+        editor, scene.scene(), scene.assets(), scene.modeling(), scene.selection(),
+        scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  };
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, bind_scene);
+  bind_scene(project.fallback_scene());
+  ui.show();
+  application.processEvents();
+  auto *dock = ui.main_window()->findChild<QDockWidget *>(
+      QStringLiteral("dock_face_texture"));
+  auto *browser = dynamic_cast<quader::QtMaterialBrowserWindow *>(
+      ui.main_window()->findChild<QWidget *>(
+          QStringLiteral("materialBrowser.embedded")));
+  auto *windowed = ui.main_window()->findChild<QWidget *>(
+      QStringLiteral("materialBrowser.window"));
+  ASSERT_NE(dock, nullptr);
+  ASSERT_NE(browser, nullptr);
+  ASSERT_NE(windowed, nullptr);
+  auto *grid = browser->findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  auto *status = browser->findChild<QLabel *>(
+      QStringLiteral("materialBrowser.usageStatus"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(status, nullptr);
+  auto *proxy = dynamic_cast<quader::QtMaterialBrowserProxyModel *>(grid->model());
+  ASSERT_NE(proxy, nullptr);
+
+  // This fixture has no renderer, so automatic workspace restoration cannot
+  // initialize a viewport. Present the retained dock through its public intent
+  // before the project binds, preserving the lifecycle ordering under test.
+  ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+  application.processEvents();
+  ASSERT_TRUE(dock->isVisible());
+
+  // Project creation binds its scene synchronously before ProjectOpened reaches
+  // retained UI consumers. Its later generation update must republish usage.
+  const auto created = editor.project().create(project_root);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_GE(binding_count, 2);
+  ui.refresh({}, {});
+  ASSERT_TRUE(dock->isVisible());
+  EXPECT_FALSE(windowed->isVisible());
+  EXPECT_TRUE(proxy->usage_complete());
+  EXPECT_TRUE(status->isHidden());
+  EXPECT_GT(grid->model()->rowCount(), 0);
+  ui.refresh({}, {});
+  EXPECT_TRUE(proxy->usage_complete());
+
+  const auto active_scene = editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(active_scene.has_value());
+  const auto scene_path =
+      quader::ProjectRelativePath::parse_portable("Scenes/Usage.qdr");
+  ASSERT_TRUE(scene_path.ok());
+  const auto saved =
+      editor.scene_documents().save_as(*active_scene, scene_path.value());
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  ui.refresh({}, {});
+  const auto bindings_before_reopen = binding_count;
+  const auto reopened = editor.project().open(editor.project().manifest_path());
+  ASSERT_TRUE(reopened.ok()) << reopened.error_message();
+  ASSERT_TRUE(reopened.changed());
+  EXPECT_GT(binding_count, bindings_before_reopen);
+  ui.refresh({}, {});
+  ASSERT_TRUE(dock->isVisible());
+  EXPECT_FALSE(windowed->isVisible());
+  EXPECT_TRUE(proxy->usage_complete());
+  EXPECT_TRUE(status->isHidden());
+  EXPECT_GT(grid->model()->rowCount(), 0);
+  const auto retained_work = project.material_usage().work_stats();
+  for (int frame = 0; frame != 3; ++frame) {
+    ui.refresh({}, {});
+    EXPECT_TRUE(proxy->usage_complete());
+  }
+  EXPECT_EQ(project.material_usage().work_stats(), retained_work);
   ui.shutdown();
 }

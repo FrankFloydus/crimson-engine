@@ -68,12 +68,6 @@ viewport_context_menu_action_bucket(QuaderSelectionMode mode,
 ViewportContextMenuActionDisposition
 viewport_context_menu_action_disposition(QuaderSelectionMode mode,
                                          std::string_view action_id) {
-  if (action_id == "apply_active_material") {
-    // The current material command is projected explicitly with a consistent
-    // label for mesh and face selection, so do not duplicate the Face action
-    // supplied by the modeling catalog.
-    return ViewportContextMenuActionDisposition::Suppressed;
-  }
   if (viewport_context_menu_action_bucket(mode, action_id) ==
       ViewportContextMenuActionBucket::Suppressed) {
     return ViewportContextMenuActionDisposition::Suppressed;

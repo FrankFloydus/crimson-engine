@@ -19,6 +19,7 @@
 #include "editor/material/project_image_decoder.hpp"
 #include "editor/material/project_material_texture_snapshot.hpp"
 #include "editor/material/project_asset_dependency_service.hpp"
+#include "editor/material/project_material_usage_service.hpp"
 #include "editor/material/project_material_deletion_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
@@ -358,6 +359,7 @@ ProjectSession::ProjectSession(std::filesystem::path recent_scene_storage)
   clipboard_ = std::make_unique<ProjectClipboardService>();
   autosave_ = std::make_unique<ProjectAutosaveService>();
   dependencies_ = std::make_unique<ProjectAssetDependencyService>(*this);
+  material_usage_ = std::make_unique<ProjectMaterialUsageService>(*this);
 }
 
 ProjectSession::~ProjectSession() = default;
@@ -368,6 +370,14 @@ ProjectAssetDependencyService &ProjectSession::dependencies() noexcept {
 
 const ProjectAssetDependencyService &ProjectSession::dependencies() const noexcept {
   return *dependencies_;
+}
+
+ProjectMaterialUsageService &ProjectSession::material_usage() noexcept {
+  return *material_usage_;
+}
+
+const ProjectMaterialUsageService &ProjectSession::material_usage() const noexcept {
+  return *material_usage_;
 }
 
 ProjectAutosaveService &ProjectSession::autosave() noexcept { return *autosave_; }
@@ -495,12 +505,6 @@ ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
     rollback_new_project(candidate, material_changes);
     return failure("Built-in default project material is unavailable.");
   }
-  ProjectIoResult<void> selected =
-      candidate.manifest.set_active_material(*default_material);
-  if (!selected.ok()) {
-    rollback_new_project(candidate, material_changes);
-    return failure(selected.error().message);
-  }
   ProjectIoResult<void> manifest_saved =
       ProjectManifestStore::save_atomic(candidate);
   if (!manifest_saved.ok()) {
@@ -608,23 +612,6 @@ ProjectSessionResult ProjectSession::open_workspace(
       candidate_catalog.find(*default_material) == nullptr) {
     ProjectMaterialProvisioner::rollback(material_changes);
     return failure("Built-in default project material is unavailable.");
-  }
-  std::optional<ProjectAssetId> requested_material =
-      candidate.manifest.active_material_id();
-  if (requested_material.has_value()) {
-    requested_material =
-        ProjectMaterialReferenceResolver::canonical_material_id(
-            candidate.manifest, *requested_material);
-  }
-  if (!requested_material.has_value() ||
-      candidate_catalog.find(*requested_material) == nullptr) {
-    requested_material = default_material;
-  }
-  ProjectIoResult<void> selected =
-      candidate.manifest.set_active_material(requested_material);
-  if (!selected.ok()) {
-    ProjectMaterialProvisioner::rollback(material_changes);
-    return failure(selected.error().message);
   }
   const std::optional<ProjectRelativePath> requested_active =
       required_scene.has_value() ? required_scene
@@ -1376,41 +1363,8 @@ ProjectSessionResult ProjectSession::close_scene(SceneSessionId id,
                                                : std::nullopt);
 }
 
-ProjectSessionResult
-ProjectSession::set_active_material(ProjectAssetId material_id) {
-  if (!workspace_) {
-    return failure("Open or create a project before selecting a material.");
-  }
-  if (!material_id.valid() ||
-      ProjectMaterialReferenceResolver::canonical_material_id(
-          workspace_->manifest, material_id) != material_id ||
-      material_catalog_.find(material_id) == nullptr) {
-    return failure("Project material is missing or unavailable.");
-  }
-  if (workspace_->manifest.active_material_id() == material_id) {
-    return success(false, "Project material is already active.");
-  }
-  ProjectManifest candidate = workspace_->manifest;
-  ProjectIoResult<void> selected =
-      candidate.set_active_material(material_id);
-  if (!selected.ok()) {
-    return failure(selected.error().message);
-  }
-  PersistedWorkspaceState state =
-      workspace_state_for(open_scenes_, active_scene_id_);
-  ProjectSessionResult persisted =
-      persist_manifest(*workspace_, std::move(candidate),
-                       std::move(state.open_paths),
-                       std::move(state.active_path));
-  if (!persisted.ok) {
-    return persisted;
-  }
-  return success(true, "Active project material changed.");
-}
-
 ProjectSessionResult ProjectSession::install_material_catalog(
-    ProjectMaterialCatalog material_catalog,
-    std::optional<ProjectAssetId> active_material) {
+    ProjectMaterialCatalog material_catalog) {
   if (!workspace_) {
     return failure("Open or create a project before updating materials.");
   }
@@ -1419,31 +1373,6 @@ ProjectSessionResult ProjectSession::install_material_catalog(
   if (!default_material.has_value() ||
       material_catalog.find(*default_material) == nullptr) {
     return failure("Built-in default project material is unavailable.");
-  }
-  const std::optional<ProjectAssetId> requested =
-      active_material.has_value() ? active_material
-                                  : workspace_->manifest.active_material_id();
-  if (!requested.has_value() ||
-      ProjectMaterialReferenceResolver::canonical_material_id(
-          workspace_->manifest, *requested) != *requested ||
-      material_catalog.find(*requested) == nullptr) {
-    return failure("Active project material is missing from the new catalog.");
-  }
-
-  if (workspace_->manifest.active_material_id() != requested) {
-    ProjectManifest candidate = workspace_->manifest;
-    ProjectIoResult<void> selected = candidate.set_active_material(requested);
-    if (!selected.ok()) {
-      return failure(selected.error().message);
-    }
-    PersistedWorkspaceState state =
-        workspace_state_for(open_scenes_, active_scene_id_);
-    ProjectSessionResult persisted = persist_manifest(
-        *workspace_, std::move(candidate), std::move(state.open_paths),
-        std::move(state.active_path));
-    if (!persisted.ok) {
-      return persisted;
-    }
   }
   material_catalog_ = std::move(material_catalog);
   invalidate_material_textures();
@@ -1505,20 +1434,6 @@ const std::filesystem::path &ProjectSession::manifest_path() const noexcept {
   return workspace_ ? workspace_->manifest_path : empty_path_;
 }
 
-std::optional<ProjectAssetId>
-ProjectSession::active_material_id() const noexcept {
-  if (!workspace_ ||
-      !workspace_->manifest.active_material_id().has_value()) {
-    return std::nullopt;
-  }
-  const ProjectAssetId id =
-      ProjectMaterialReferenceResolver::canonical_material_id(
-          workspace_->manifest, *workspace_->manifest.active_material_id());
-  return material_catalog_.find(id) != nullptr
-             ? std::optional<ProjectAssetId>(id)
-             : std::nullopt;
-}
-
 ProjectAssetId ProjectSession::canonical_material_id(
     ProjectAssetId material_id) const {
   return workspace_
@@ -1552,6 +1467,7 @@ ProjectSession::material_texture(ProjectAssetId material_id,
 }
 
 void ProjectSession::invalidate_material_textures() {
+  material_usage_->invalidate();
   material_texture_images_.clear();
   ++material_texture_revision_;
 }

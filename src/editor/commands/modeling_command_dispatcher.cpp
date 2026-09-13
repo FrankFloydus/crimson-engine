@@ -24,24 +24,21 @@ ModelingCommandDispatcher::history_policy(std::string_view tool_id) const {
 
 ModelingCommandAvailability ModelingCommandDispatcher::availability(
     std::string_view tool_id, ModelingSessionService &modeling,
-    EditorSelectionService *selection,
-    MaterialReference active_material) const {
+    EditorSelectionService *selection) const {
   const CommandTool *tool = find(tool_id);
   if (tool == nullptr) {
     return ModelingCommandAvailability::unavailable(
         "Command tool is not registered.");
   }
   const ModelingCommandExecutionContext context{.modeling = modeling,
-                                                .selection = selection,
-                                                .active_material = active_material};
+                                                .selection = selection};
   return tool->availability(context);
 }
 
 ModelingCommandResult
 ModelingCommandDispatcher::execute(std::string_view tool_id,
                                    ModelingSessionService &modeling,
-                                   EditorSelectionService *selection,
-                                   MaterialReference active_material) const {
+                                   EditorSelectionService *selection) const {
   const CommandTool *tool = find(tool_id);
   if (tool == nullptr) {
     return {
@@ -50,17 +47,15 @@ ModelingCommandDispatcher::execute(std::string_view tool_id,
         .message = "Command tool is not registered.",
     };
   }
-  return execute(*tool, modeling, selection, active_material);
+  return execute(*tool, modeling, selection);
 }
 
 ModelingCommandResult ModelingCommandDispatcher::execute(
         const CommandTool& tool,
         ModelingSessionService& modeling,
-        EditorSelectionService* selection,
-        MaterialReference active_material) const {
+        EditorSelectionService* selection) const {
     ModelingCommandExecutionContext context{.modeling = modeling,
-                                            .selection = selection,
-                                            .active_material = active_material};
+                                            .selection = selection};
     const ModelingCommandAvailability available = tool.availability(context);
     if (!available.enabled) {
       return {

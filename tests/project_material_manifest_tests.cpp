@@ -136,7 +136,7 @@ std::string manifest_without_active_material(const ProjectId &project_id,
 } // namespace
 
 TEST(ProjectMaterialManifestTests,
-     ReadsMissingV2ActiveMaterialAndWritesExplicitNull) {
+     ReadsV2WithoutRetiredMaterialSelection) {
   const ProjectId project_id = ProjectId::generate();
   const std::string manifest =
       manifest_without_active_material(project_id, 2u);
@@ -144,29 +144,25 @@ TEST(ProjectMaterialManifestTests,
   ProjectIoResult<ProjectManifest> decoded =
       ProjectManifestStore::deserialize(manifest);
   ASSERT_TRUE(decoded.ok()) << decoded.error().message;
-  EXPECT_FALSE(decoded.value().active_material_id().has_value());
 
   const std::string serialized =
       ProjectManifestStore::serialize(decoded.value());
   EXPECT_NE(serialized.find("\"version\": 2"), std::string::npos);
-  EXPECT_NE(serialized.find("\"activeMaterial\": null"),
-            std::string::npos);
+  EXPECT_EQ(serialized.find("\"activeMaterial\""), std::string::npos);
 }
 
 TEST(ProjectMaterialManifestTests,
-     ReadsV1AndUpgradesToV2WithExplicitActiveMaterialState) {
+     ReadsV1AndWritesV2WithoutRetiredMaterialSelection) {
   const ProjectId project_id = ProjectId::generate();
   ProjectIoResult<ProjectManifest> decoded =
       ProjectManifestStore::deserialize(
           manifest_without_active_material(project_id, 1u));
   ASSERT_TRUE(decoded.ok()) << decoded.error().message;
-  EXPECT_FALSE(decoded.value().active_material_id().has_value());
 
   const std::string serialized =
       ProjectManifestStore::serialize(decoded.value());
   EXPECT_NE(serialized.find("\"version\": 2"), std::string::npos);
-  EXPECT_NE(serialized.find("\"activeMaterial\": null"),
-            std::string::npos);
+  EXPECT_EQ(serialized.find("\"activeMaterial\""), std::string::npos);
 }
 
 TEST(ProjectMaterialManifestTests,
@@ -205,7 +201,7 @@ TEST(ProjectMaterialManifestTests,
 }
 
 TEST(ProjectMaterialManifestTests,
-     InvalidDeletionBatchesPreserveExistingIdentitiesAndActiveMaterial) {
+     InvalidDeletionBatchesPreserveExistingIdentities) {
   auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
   ASSERT_TRUE(created.ok());
   ProjectManifest manifest = created.take_value();
@@ -214,7 +210,6 @@ TEST(ProjectMaterialManifestTests,
   const ProjectAssetId default_id =
       *ProjectAssetId::parse(kDefaultProjectMaterialId);
   ASSERT_TRUE(manifest.mark_materials_deleted(std::array{deleted}).ok());
-  ASSERT_TRUE(manifest.set_active_material(active).ok());
   const std::string before = ProjectManifestStore::serialize(manifest);
 
   const auto reserved =
@@ -319,30 +314,39 @@ TEST(ProjectMaterialReferenceResolverTests,
             ProjectAssetId{});
 }
 
-TEST(ProjectMaterialReferenceResolverTests,
-     DeletedActiveMaterialRemainsDefaultAfterSerializationAndLaterSelection) {
-  auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
-  ASSERT_TRUE(created.ok());
-  ProjectManifest manifest = created.take_value();
-  const ProjectAssetId deleted = ProjectAssetId::generate();
-  const ProjectAssetId default_id =
-      *ProjectAssetId::parse(kDefaultProjectMaterialId);
-  ASSERT_TRUE(manifest.set_active_material(deleted).ok());
-  ASSERT_TRUE(manifest.mark_materials_deleted(std::array{deleted}).ok());
-  EXPECT_EQ(manifest.active_material_id(), default_id);
-
-  nlohmann::json document =
-      nlohmann::json::parse(ProjectManifestStore::serialize(manifest));
-  document["workspace"]["activeMaterial"] = std::string(deleted.str());
-  auto decoded = ProjectManifestStore::deserialize(document.dump());
-  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
-  EXPECT_EQ(decoded.value().active_material_id(), default_id);
-  ASSERT_TRUE(decoded.value().set_active_material(deleted).ok());
-  EXPECT_EQ(decoded.value().active_material_id(), default_id);
+TEST(ProjectMaterialManifestTests,
+     LegacyMaterialSelectionIsValidatedAndDiscardedWithoutLosingDeletionState) {
+  for (const std::uint32_t version : {2u, 3u}) {
+    nlohmann::json document = nlohmann::json::parse(
+        manifest_without_active_material(ProjectId::generate(), version));
+    const ProjectAssetId deleted = ProjectAssetId::generate();
+    if (version == 3u) {
+      document["deletedMaterialIds"] =
+          nlohmann::json::array({std::string(deleted.str())});
+    }
+    for (const nlohmann::json &legacy :
+         std::vector<nlohmann::json>{nullptr, std::string(deleted.str())}) {
+      document["workspace"]["activeMaterial"] = legacy;
+      const auto decoded = ProjectManifestStore::deserialize(document.dump());
+      ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+      const auto saved = nlohmann::json::parse(
+          ProjectManifestStore::serialize(decoded.value()));
+      EXPECT_FALSE(saved.at("workspace").contains("activeMaterial"));
+      EXPECT_EQ(saved.at("version"), version);
+      EXPECT_EQ(decoded.value().is_material_deleted(deleted), version == 3u);
+    }
+    for (const nlohmann::json &invalid :
+         std::vector<nlohmann::json>{42, "not-a-uuid", nlohmann::json::array()}) {
+      document["workspace"]["activeMaterial"] = invalid;
+      const auto decoded = ProjectManifestStore::deserialize(document.dump());
+      EXPECT_FALSE(decoded.ok());
+      EXPECT_EQ(decoded.error().code, ProjectIoErrorCode::ManifestMalformed);
+    }
+  }
 }
 
 TEST(ProjectMaterialManifestTests,
-     StaleV2ActiveMaterialSelectsAndPersistsBuiltInDefault) {
+     OpeningLegacyMaterialSelectionRetainsDefaultAndOmitsSelectionOnSave) {
   ScopedTestDirectory temporary("stale-active");
   const std::filesystem::path root =
       temporary.make_empty_project("StaleActive");
@@ -352,27 +356,22 @@ TEST(ProjectMaterialManifestTests,
   const std::filesystem::path manifest_path = creator.manifest_path();
   ASSERT_TRUE(creator.close().ok);
 
-  ProjectIoResult<ProjectWorkspaceStorage> workspace =
-      ProjectManifestStore::open(manifest_path);
-  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
-  const ProjectAssetId stale_id = ProjectAssetId::generate();
-  ASSERT_TRUE(workspace.value().manifest.set_active_material(stale_id).ok());
-  ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
+  auto document = nlohmann::json::parse(read_bytes(manifest_path));
+  document["workspace"]["activeMaterial"] =
+      std::string(ProjectAssetId::generate().str());
+  write_bytes(manifest_path, document.dump());
 
   ProjectSession reopened;
   reopened.set_resource_root(source_resource_root());
   const ProjectSessionResult opened = reopened.open(manifest_path);
   ASSERT_TRUE(opened.ok) << opened.message;
-  const std::optional<ProjectAssetId> expected_default =
-      ProjectAssetId::parse(kDefaultProjectMaterialId);
-  ASSERT_TRUE(expected_default.has_value());
-  EXPECT_EQ(reopened.active_material_id(), expected_default);
-
-  ProjectIoResult<ProjectWorkspaceStorage> persisted =
-      ProjectManifestStore::open(manifest_path);
-  ASSERT_TRUE(persisted.ok()) << persisted.error().message;
-  EXPECT_EQ(persisted.value().manifest.active_material_id(),
-            expected_default);
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  EXPECT_NE(reopened.material_catalog().find(*default_id), nullptr);
+  ASSERT_TRUE(reopened.close().ok);
+  const auto persisted = nlohmann::json::parse(read_bytes(manifest_path));
+  EXPECT_FALSE(persisted.at("workspace").contains("activeMaterial"));
+  EXPECT_EQ(persisted.at("version"), 2u);
 }
 
 TEST(ProjectMaterialProvisionerTests,
