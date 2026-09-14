@@ -1230,7 +1230,6 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Outliner));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Inspector));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Layers));
-  EXPECT_TRUE(settings.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::FaceTexture));
   EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Console));
   EXPECT_TRUE(settings.navigation_gizmo_visible());
@@ -1273,7 +1272,6 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   settings.set_panel_visible(UIPanelId::Outliner, false);
   settings.set_panel_visible(UIPanelId::Inspector, false);
   settings.set_panel_visible(UIPanelId::Layers, false);
-  settings.set_panel_visible(UIPanelId::ToolSettings, false);
   settings.set_panel_visible(UIPanelId::FaceTexture, false);
   settings.set_panel_visible(UIPanelId::Console, true);
   settings.set_navigation_gizmo_visible(false);
@@ -1287,7 +1285,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_NE(saved_text.find("outliner=false"), std::string::npos);
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
   EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
-  EXPECT_NE(saved_text.find("tool_settings=false"), std::string::npos);
+  EXPECT_EQ(saved_text.find("tool_settings="), std::string::npos);
   EXPECT_NE(saved_text.find("face_texture=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
@@ -1305,7 +1303,6 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
-  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::FaceTexture));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
@@ -1367,7 +1364,6 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
-  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::FaceTexture))
       << "settings without a saved material dock preserve the visible default";
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
@@ -1380,7 +1376,7 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
   EXPECT_NE(saved_text.find("outliner=false"), std::string::npos);
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
   EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
-  EXPECT_NE(saved_text.find("tool_settings=false"), std::string::npos);
+  EXPECT_EQ(saved_text.find("tool_settings="), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
@@ -1420,7 +1416,6 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Layers));
-  EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
   EXPECT_FLOAT_EQ(loaded.interface_scale(), 1.0F);

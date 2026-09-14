@@ -333,10 +333,12 @@ public:
 
 protected:
   bool event(QEvent *event) override;
+  bool eventFilter(QObject *watched, QEvent *event) override;
   void closeEvent(QCloseEvent *event) override;
   void showEvent(QShowEvent *event) override;
 
 private:
+  [[nodiscard]] bool owns_browser_focus(const QWidget *focused) const;
   void set_view_mode(QtMaterialBrowserViewMode mode, bool notify);
   void set_tile_size(int tile_size);
   void apply_tile_metrics(int tile_size);
@@ -422,6 +424,8 @@ private:
   std::uint64_t dependency_revision_ = 0;
   std::uint64_t action_eligibility_revision_ = 0;
   int sidebar_width_ = 200;
+  double thumbnail_wheel_remainder_ = 0.0;
+  bool thumbnail_wheel_uses_pixels_ = false;
   bool material_paste_available_ = false;
   PresentationStateChangedCallback presentation_state_changed_;
   QtUiScaleMetrics ui_scale_metrics_;

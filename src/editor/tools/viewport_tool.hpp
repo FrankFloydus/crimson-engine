@@ -104,6 +104,7 @@ struct ViewportToolResult {
     bool active_tool_changed = false;
     bool sync_active_tool_from_modeling = false;
     bool selection_mode_changed = false;
+    bool settings_operation_started = false;
 };
 
 /**

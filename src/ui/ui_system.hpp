@@ -366,9 +366,13 @@ private:
     friend bool operator==(const ToolbarTransformPresentationStamp &,
                            const ToolbarTransformPresentationStamp &) = default;
   };
-  /** Captures the active settings revision presented by Tool Settings. */
+  /** Captures the active settings revision presented in the viewport. */
   struct ToolSettingsPresentationStamp final {
     std::uint64_t active_settings_revision = 0u;
+    std::uint64_t operation_serial = 0u;
+    std::uint64_t active_tool_revision = 0u;
+    bool operation_preview_active = false;
+    bool curve_controls_editable = false;
     friend bool operator==(const ToolSettingsPresentationStamp &,
                            const ToolSettingsPresentationStamp &) = default;
   };

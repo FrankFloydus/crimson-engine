@@ -152,6 +152,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
         preview_port.box_preview(box_event.snap_enabled);
     bool action_consumed = false;
     bool active_tool_sync_requested = false;
+    bool settings_operation_started = false;
 
     if (preview.ok && preview.drag_state == ModelingBoxDragState::Idle &&
         modal_state.primary_pointer_gesture) {
@@ -321,6 +322,8 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       box_event =
           make_box_event(modal_state.primary_pointer_gesture->press.local);
       preview = preview_port.begin_box_footprint(box_event);
+      settings_operation_started =
+          preview.ok && preview.drag_state == ModelingBoxDragState::Footprint;
       if (rollback_failed_preview(box_context, "Box footprint begin",
                                   preview)) {
         active_tool_sync_requested = true;
@@ -380,6 +383,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
         .modal_state_changed = true,
         .active_tool_changed = active_tool_sync_requested,
         .sync_active_tool_from_modeling = active_tool_sync_requested,
+        .settings_operation_started = settings_operation_started,
     };
 }
 

@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <utility>
 
@@ -38,6 +39,92 @@ QPointF point(QVec2 value) { return {value.x, value.y}; }
 
 QVec2 vector(QPointF value) {
   return {static_cast<float>(value.x()), static_cast<float>(value.y())};
+}
+
+QPointF texture_axis_in_plane(const std::array<double, 4> &mapping, bool width) {
+  // Inverse-map columns point along the signed texture axes. Keep the same
+  // handedness as sampling, including mirrored UVs and rotated face charts.
+  const QPointF axis = width ? QPointF(mapping[3], -mapping[2])
+                             : QPointF(-mapping[1], mapping[0]);
+  const double length = std::hypot(axis.x(), axis.y());
+  if (!std::isfinite(length) || length == 0.0) {
+    return {};
+  }
+  const double determinant = mapping[0] * mapping[3] - mapping[1] * mapping[2];
+  return QPointF(axis.x() / length, axis.y() / length) *
+         std::copysign(1.0, determinant);
+}
+
+/// Clips an unbounded axis to the canvas, including when its origin is panned out.
+std::optional<QLineF> axis_across_canvas(QPointF origin, QPointF direction,
+                                        const QRectF &canvas) {
+  double first = -std::numeric_limits<double>::infinity();
+  double last = std::numeric_limits<double>::infinity();
+  for (const bool horizontal : {true, false}) {
+    const double position = horizontal ? origin.x() : origin.y();
+    const double component = horizontal ? direction.x() : direction.y();
+    const double minimum = horizontal ? canvas.left() : canvas.top();
+    const double maximum = horizontal ? canvas.right() : canvas.bottom();
+    if (std::abs(component) < 1.0e-12) {
+      if (position < minimum || position > maximum) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    const double a = (minimum - position) / component;
+    const double b = (maximum - position) / component;
+    first = std::max(first, std::min(a, b));
+    last = std::min(last, std::max(a, b));
+  }
+  if (!std::isfinite(first) || !std::isfinite(last) || first > last) {
+    return std::nullopt;
+  }
+  return QLineF(origin + direction * first, origin + direction * last);
+}
+
+/// Shows texture repetitions without letting dense mappings flood the canvas.
+void paint_texture_grid(QPainter &painter, const ::QTransform &view_to_uv,
+                        const ::QTransform &uv_to_view, const QRectF &viewport,
+                        const QtUiScaleMetrics &metrics) {
+  const QRectF uv_bounds = view_to_uv.mapRect(viewport);
+  if (!std::isfinite(uv_bounds.left()) || !std::isfinite(uv_bounds.right()) ||
+      !std::isfinite(uv_bounds.top()) || !std::isfinite(uv_bounds.bottom())) {
+    return;
+  }
+  for (const bool u : {true, false}) {
+    const double minimum = u ? uv_bounds.left() : uv_bounds.top();
+    const double maximum = u ? uv_bounds.right() : uv_bounds.bottom();
+    const double uv_per_pixel = u
+        ? std::hypot(view_to_uv.m11(), view_to_uv.m21())
+        : std::hypot(view_to_uv.m12(), view_to_uv.m22());
+    const double minimum_step = std::max(metrics.px(48.0) * uv_per_pixel,
+                                          (maximum - minimum) / 63.0);
+    if (!std::isfinite(minimum_step) || minimum_step <= 0.0) {
+      continue;
+    }
+    // Coarsen by whole repetitions, anchored to the actual texture origin.
+    const double step = std::exp2(std::max(0.0, std::ceil(std::log2(minimum_step))));
+    const double first = std::ceil(minimum / step) * step;
+    if (!std::isfinite(step) || !std::isfinite(first)) {
+      continue;
+    }
+    // The cap also bounds paint work for unusually large or sheared canvases.
+    for (int index = 0; index < 64; ++index) {
+      const double value = first + index * step;
+      if (!std::isfinite(value) || value > maximum) {
+        break;
+      }
+      const QLineF line = u
+          ? QLineF(uv_to_view.map(QPointF(value, uv_bounds.top())),
+                   uv_to_view.map(QPointF(value, uv_bounds.bottom())))
+          : QLineF(uv_to_view.map(QPointF(uv_bounds.left(), value)),
+                   uv_to_view.map(QPointF(uv_bounds.right(), value)));
+      painter.setPen(QPen(QColor(0, 0, 0, 65), metrics.px(2.5)));
+      painter.drawLine(line);
+      painter.setPen(QPen(QColor(255, 255, 255, 65), metrics.px(1.0)));
+      painter.drawLine(line);
+    }
+  }
 }
 
 QString localized(const LocalizationService *localization, const char *key,
@@ -94,7 +181,7 @@ FeedbackTextLayout wrap_feedback(const QString &text, const QFont &font,
                                   int available_width) {
   QTextLayout layout(text, font);
   QTextOption option;
-  option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+  option.setWrapMode(QTextOption::WordWrap);
   layout.setTextOption(option);
   layout.beginLayout();
   FeedbackTextLayout result;
@@ -235,7 +322,6 @@ void QtFaceTextureCanvas::refresh() {
       fit_face();
     }
   }
-  setToolTip(QString::fromStdString(presentation_.disabled_reason));
   update_cursor();
   update_feedback();
   update();
@@ -259,11 +345,11 @@ void QtFaceTextureCanvas::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   setMinimumSize(metrics.size(QSize(96, 96)));
   feedback_->setMargin(metrics_.px(8));
   refresh_rotation_cursor();
-  update_cursor();
-  update_feedback();
   if (!view_manipulated_) {
     fit_face();
   }
+  update_cursor();
+  update_feedback();
   updateGeometry();
   update();
 }
@@ -362,6 +448,18 @@ void QtFaceTextureCanvas::paintEvent(QPaintEvent *) {
 
   painter.setRenderHint(QPainter::Antialiasing);
   const QPolygonF polygon = view.map(outline_);
+  const Handle active_handle = gesture_active_ ? dragged_ : hovered_;
+  const bool scaling = (presentation_.editable || gesture_active_) &&
+      (active_handle == Handle::Width || active_handle == Handle::Height);
+  if (scaling && invertible) {
+    painter.save();
+    QPainterPath clip;
+    clip.addPolygon(polygon);
+    painter.setClipPath(clip);
+    paint_texture_grid(painter, view.inverted() * plane_to_uv,
+                       uv_to_plane * view, QRectF(rect()), metrics_);
+    painter.restore();
+  }
   painter.setBrush(Qt::NoBrush);
   // Keep the white stroke broad and uninterrupted. Its narrow outside halo
   // supplies contrast over light texels without consuming the white core.
@@ -380,20 +478,80 @@ void QtFaceTextureCanvas::paintEvent(QPaintEvent *) {
   if (!presentation_.editable && !gesture_active_) {
     return;
   }
-  const double half_size = metrics_.px(6.0);
+  const QPointF origin = handle_position(Handle::Rotation);
+  const double radius = metrics_.px(11.0);
+  QFont badge_font = font();
+  badge_font.setPixelSize(metrics_.px(12));
+  badge_font.setBold(true);
+  painter.setFont(badge_font);
+  // Draw the guides first so a crossing can never obscure either labeled grip.
+  for (const Handle handle : {Handle::Height, Handle::Width}) {
+    const QPointF location = handle_position(handle);
+    QColor color = qt_semantic_axis_color(
+        handle == Handle::Width ? quader_editor_core::ViewAxis::X
+                                : quader_editor_core::ViewAxis::Y);
+    const bool active = handle == active_handle;
+    const QLineF axis(origin, location);
+    if (axis.length() <= 0.0) {
+      continue;
+    }
+    const QPointF direction = (location - origin) / axis.length();
+    const QPointF normal(-direction.y(), direction.x());
+    const QPointF end = location - direction * radius;
+    color.setAlpha(active ? 230 : 145);
+    if (active && scaling) {
+      if (const auto line = axis_across_canvas(origin, direction, QRectF(rect()))) {
+        for (const bool halo : {true, false}) {
+          const double stroke = metrics_.px(halo ? 3.5 : 1.5);
+          QPen pen(halo ? QColor(0, 0, 0, 160) : color, stroke);
+          // Match dash lengths in pixels so the halo cannot fill the gaps.
+          pen.setDashPattern({metrics_.px(7.0) / stroke, metrics_.px(5.0) / stroke});
+          pen.setCapStyle(Qt::FlatCap);
+          painter.setPen(pen);
+          painter.drawLine(*line);
+        }
+      }
+      const QPointF pivot = gesture_active_
+          ? view.map(gesture_pivot_) : origin * 2.0 - location;
+      const double marker = metrics_.px(5.0);
+      painter.setBrush(QColor(24, 26, 29));
+      painter.setPen(QPen(QColor(255, 255, 255, 230), metrics_.px(1.5)));
+      painter.drawPolygon(QPolygonF{pivot + QPointF(0, -marker),
+                                    pivot + QPointF(marker, 0),
+                                    pivot + QPointF(0, marker),
+                                    pivot + QPointF(-marker, 0)});
+    } else if (axis.length() > radius * 2.0) {
+      painter.setPen(QPen(QColor(0, 0, 0, 160), metrics_.px(3.5)));
+      painter.drawLine(origin, end);
+      painter.setPen(QPen(color, metrics_.px(1.5)));
+      painter.drawLine(origin, end);
+      const QPointF tip = origin + direction * (axis.length() - radius - metrics_.px(5.0));
+      const double arrow_size = metrics_.px(4.0);
+      painter.drawLine(tip, tip - direction * arrow_size + normal * arrow_size);
+      painter.drawLine(tip, tip - direction * arrow_size - normal * arrow_size);
+    }
+  }
   for (const Handle handle : {Handle::Height, Handle::Width}) {
     const QPointF location = handle_position(handle);
     const QColor color = qt_semantic_axis_color(
-        handle == Handle::Height ? quader_editor_core::ViewAxis::X
-                                 : quader_editor_core::ViewAxis::Y);
+        handle == Handle::Width ? quader_editor_core::ViewAxis::X
+                                : quader_editor_core::ViewAxis::Y);
+    const bool active = handle == active_handle;
+    if (active) {
+      painter.setBrush(Qt::NoBrush);
+      painter.setPen(QPen(QColor(255, 255, 255, 230), metrics_.px(1.5)));
+      painter.drawEllipse(location, radius + metrics_.px(3.0),
+                          radius + metrics_.px(3.0));
+    }
     painter.setBrush(color);
-    painter.setPen(QPen(handle == hovered_ || handle == dragged_
-                            ? QColor(Qt::white)
-                            : QColor(0, 0, 0, 150),
-                        metrics_.px(1.0)));
-    painter.drawRect(QRectF(location.x() - half_size,
-                            location.y() - half_size,
-                            half_size * 2.0, half_size * 2.0));
+    painter.setPen(QPen(QColor(0, 0, 0, 210), metrics_.px(1.5)));
+    painter.drawEllipse(location, radius, radius);
+    painter.setPen(QColor(15, 18, 22));
+    painter.drawText(QRectF(location - QPointF(radius, radius),
+                            QSizeF(radius * 2.0, radius * 2.0)),
+                     Qt::AlignCenter,
+                     handle == Handle::Width ? QStringLiteral("U")
+                                             : QStringLiteral("V"));
   }
   painter.setBrush(QColor(229, 204, 51, 180));
   painter.setPen(QPen(hovered_ == Handle::Rotation ||
@@ -448,11 +606,11 @@ void QtFaceTextureCanvas::mousePressEvent(QMouseEvent *event) {
   switch (handle) {
   case Handle::Height:
     request.kind = QuaderFaceTextureGestureKind::ScaleHeight;
-    pivot.setY(bounds_.top());
+    pivot = bounds_.center() * 2.0 - plane_position(handle_position(handle));
     break;
   case Handle::Width:
     request.kind = QuaderFaceTextureGestureKind::ScaleWidth;
-    pivot.setX(bounds_.left());
+    pivot = bounds_.center() * 2.0 - plane_position(handle_position(handle));
     break;
   case Handle::Rotation:
     request.kind = QuaderFaceTextureGestureKind::Rotate;
@@ -480,6 +638,7 @@ void QtFaceTextureCanvas::mousePressEvent(QMouseEvent *event) {
     return;
   }
   failure_announced_ = false;
+  gesture_pivot_ = point(request.pivot);
   gesture_active_ = true;
   dragged_ = handle;
   hovered_ = handle;
@@ -679,20 +838,26 @@ QPointF QtFaceTextureCanvas::plane_position(QPointF position) const {
 
 QPointF QtFaceTextureCanvas::handle_position(Handle handle) const {
   QPointF location = bounds_.center();
-  if (handle == Handle::Height) {
-    // QRect top/bottom are numeric extrema; the plane's Y axis points up.
-    location.setY(bounds_.bottom());
-  } else if (handle == Handle::Width) {
-    location.setX(bounds_.right());
+  if (handle == Handle::Height || handle == Handle::Width) {
+    const QPointF axis = texture_axis_in_plane(
+        presentation_.uv_from_plane, handle == Handle::Width);
+    // Place the handle at the bounds along its texture axis, not a world-up
+    // canvas edge. Picking and the opposite pivot use this same position.
+    const double projected_extent = std::max(
+        std::abs(axis.x()) / bounds_.width(),
+        std::abs(axis.y()) / bounds_.height());
+    if (std::isfinite(projected_extent) && projected_extent > 0.0) {
+      location += axis * (0.5 / projected_extent);
+    }
   }
   return plane_to_view().map(location);
 }
 
 QtFaceTextureCanvas::Handle
 QtFaceTextureCanvas::hit_handle(QPointF position) const {
-  const double distance = metrics_.px(10.0);
   for (const Handle handle :
        {Handle::Rotation, Handle::Height, Handle::Width}) {
+    const double distance = metrics_.px(handle == Handle::Rotation ? 10.0 : 13.0);
     if (QLineF(position, handle_position(handle)).length() <= distance) {
       return handle;
     }
@@ -730,9 +895,7 @@ void QtFaceTextureCanvas::update_cursor() {
     }
   } else {
     const Qt::CursorShape shape =
-        next == Handle::Height ? Qt::SizeVerCursor
-        : next == Handle::Width ? Qt::SizeHorCursor
-        : gesture_active_ ? Qt::ClosedHandCursor : Qt::OpenHandCursor;
+        gesture_active_ ? Qt::ClosedHandCursor : Qt::OpenHandCursor;
     if (cursor().shape() != shape) {
       setCursor(shape);
     }
@@ -783,6 +946,22 @@ void QtFaceTextureCanvas::update_feedback() {
   }
   QString text;
   const bool can_present = presentation_.editable || gesture_active_;
+  const Handle active_handle = gesture_active_ ? dragged_ : hovered_;
+  QString tooltip = QString::fromStdString(presentation_.disabled_reason);
+  if (can_present &&
+      (active_handle == Handle::Width || active_handle == Handle::Height)) {
+    tooltip = active_handle == Handle::Width
+        ? localized(localization_, "face_texture.scale_u", "Texture width (U)")
+        : localized(localization_, "face_texture.scale_v", "Texture height (V)");
+    tooltip += QLatin1Char('\n') + localized(localization_, "face_texture.scale_hint",
+        "Drag along the guide to scale. The opposite marker stays fixed.");
+  }
+  if (toolTip() != tooltip) {
+    setToolTip(tooltip);
+  }
+  if (accessibleDescription() != tooltip) {
+    setAccessibleDescription(tooltip);
+  }
   if (can_present && gesture_active_ && dragged_ == Handle::Rotation) {
     text = localized(localization_, "face_texture.rotation_angle",
                      "Rotation: %1°")
@@ -791,7 +970,7 @@ void QtFaceTextureCanvas::update_feedback() {
              (hovered_ == Handle::Height || hovered_ == Handle::Width ||
               dragged_ == Handle::Height || dragged_ == Handle::Width)) {
     text = localized(localization_, "face_texture.measurements",
-                     "X: %1   Y: %2 map units")
+                     "U width: %1   V height: %2 map units")
                .arg(qt_format_number(presentation_.repeat_width, locale()),
                     qt_format_number(presentation_.repeat_height, locale()));
   }
@@ -810,14 +989,15 @@ void QtFaceTextureCanvas::update_feedback() {
   const int margin = metrics_.px(8);
   const int padding = feedback_->margin() * 2;
   const QSize available(std::max(1, width() - margin * 2),
-                         std::max(1, height() - margin * 2));
+                         std::max(1, std::min(height() - margin * 2,
+                                              static_cast<int>(height() * 0.35))));
   const int text_width = std::max(1, available.width() - padding);
   const int text_height = std::max(1, available.height() - padding);
   QFont font = this->font();
   FeedbackTextLayout layout = wrap_feedback(text, font, text_width);
   if (layout.size.height() > text_height || layout.size.width() > text_width) {
-    // Exceptionally small canvases can be shorter than a fully wrapped readout.
-    // Fit only this overlay, keeping the full value available to accessibility.
+    // Keep the face and grips visible, and fit whole numeric tokens rather than
+    // splitting their digits. Accessibility retains the complete unwrapped text.
     int low = 1;
     int high = std::max(1, font.pixelSize() > 0
                              ? font.pixelSize()
@@ -845,8 +1025,33 @@ void QtFaceTextureCanvas::update_feedback() {
     feedback_->setText(layout.text);
   }
   const QSize size = (layout.size + QSize(padding, padding)).boundedTo(available);
-  const QRect geometry(margin, height() - size.height() - margin,
-                        size.width(), size.height());
+  QRect geometry(margin, height() - size.height() - margin,
+                  size.width(), size.height());
+  // Prefer the usual lower corner, but move the readout if it covers a grip.
+  const auto covered_grips = [this, active_handle](const QRect &candidate) {
+    double area = 0.0;
+    const double radius = metrics_.px(16.0);
+    for (const Handle handle : {Handle::Width, Handle::Height, Handle::Rotation}) {
+      const QRectF grip(handle_position(handle) - QPointF(radius, radius),
+                         QSizeF(radius * 2.0, radius * 2.0));
+      const QRectF overlap = grip.intersected(candidate);
+      area += overlap.width() * overlap.height() *
+          (handle == active_handle ? 2.0 : 1.0);
+    }
+    return area;
+  };
+  double covered = covered_grips(geometry);
+  for (const QPoint corner : {
+           QPoint(width() - size.width() - margin, geometry.top()),
+           QPoint(margin, margin),
+           QPoint(width() - size.width() - margin, margin)}) {
+    const QRect candidate(corner, size);
+    const double candidate_covered = covered_grips(candidate);
+    if (candidate_covered < covered) {
+      geometry = candidate;
+      covered = candidate_covered;
+    }
+  }
   if (feedback_->geometry() != geometry) {
     feedback_->setGeometry(geometry);
   }

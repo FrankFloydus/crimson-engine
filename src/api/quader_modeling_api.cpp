@@ -8,6 +8,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 
 #include "api/quader_api_mutation_runner.hpp"
+#include "api/quader_settings_presentation_internal.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_query_api.hpp"
@@ -1599,9 +1600,14 @@ QuaderApiVoidResult QuaderModelingApi::begin_curve_preview(QuaderModelingObjectR
   if (!mutations_.can_mutate_modeling_content()) {
     return mutations_.modeling_content_blocked_status("starting a curve preview.");
   }
-  return mutations_.run_modeling_result(
-      scene_session(session_).modeling().begin_curve_document_preview(object.modeling_object_id),
-      "Begin Curve Preview");
+  const QuaderSettingsOperationOriginCapture origin(session_);
+  const ModelingCommandResult result =
+      scene_session(session_).modeling().begin_curve_document_preview(
+          object.modeling_object_id);
+  if (result.ok && result.changed) {
+    origin.publish();
+  }
+  return mutations_.run_modeling_result(result, "Begin Curve Preview");
 }
 
 QuaderApiVoidResult QuaderModelingApi::update_curve_preview(modeling::CurveDocument document) {
@@ -2141,12 +2147,15 @@ QuaderModelingApi::begin_transform_preview(bool duplicate_selected) {
         "starting a transform preview.");
   }
   SceneSession &session = scene_session(session_);
+  const QuaderSettingsOperationOriginCapture origin(session_);
   const ModelingStructuralDuplicate structural_duplicate =
       structural_duplicate_for_transform(session);
-  return mutations_.run_modeling_result(
-      session.modeling().begin_transform_preview(
-          duplicate_selected, structural_duplicate, session.history()),
-      "Begin Transform Preview");
+  const ModelingCommandResult result = session.modeling().begin_transform_preview(
+      duplicate_selected, structural_duplicate, session.history());
+  if (result.ok && result.changed) {
+    origin.publish();
+  }
+  return mutations_.run_modeling_result(result, "Begin Transform Preview");
 }
 
 QuaderApiVoidResult QuaderModelingApi::update_transform_translate(QVec3 delta) {

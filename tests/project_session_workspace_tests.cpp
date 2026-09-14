@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/session/project_session.hpp"
 
+#include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "assets/default_material_catalog.hpp"
@@ -284,6 +285,53 @@ bool select_and_begin_curve_control_drag(CurveToolService &curve,
   const CurveControlSelection &selection = curve.control_selection();
   return selection.controls.size() == 1u && selection.active == target &&
          curve.begin_selected_control_drag().ok;
+}
+
+TEST(ProjectSessionWorkspace,
+     SettingsOriginCapturesFocusBeforeRuntimeHookAndRejectsReboundScene) {
+  quader::SceneSession first_scene;
+  quader::SceneSession second_scene;
+  auto binding =
+      quader::QuaderApiSessionInternalAccess::from_scene_session(first_scene);
+  auto second_binding =
+      quader::QuaderApiSessionInternalAccess::from_scene_session(second_scene);
+  quader::QuaderToolsApi tools(binding);
+  ASSERT_TRUE(first_scene.viewport_workspace().set_layout(quader::ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(first_scene.viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  tools.set_runtime_hooks({.activate = [&](std::string_view id) {
+    (void)first_scene.viewport_workspace().focus_pane(quader::ViewportPaneId::Front);
+    return quader::QuaderToolsApi(binding).activate(id);
+  }});
+  ASSERT_TRUE(tools.activate(quader::ViewportToolId::Move).ok());
+  EXPECT_EQ(tools.active_settings_presentation_origin().pane,
+            quader::ViewportPaneId::Top);
+
+  ASSERT_TRUE(second_scene.viewport_workspace().set_layout(quader::ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(second_scene.viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
+  tools.set_runtime_hooks({.activate = [&](std::string_view id) {
+    quader::QuaderApiSessionInternalAccess::rebind(binding, second_binding);
+    return quader::QuaderToolsApi(binding).activate(id);
+  }});
+  ASSERT_TRUE(tools.activate(quader::ViewportToolId::Move).ok());
+  EXPECT_EQ(tools.active_settings_presentation_origin().serial, 1u);
+  EXPECT_EQ(tools.active_settings_presentation_origin().pane,
+            quader::ViewportPaneId::Side);
+
+  second_scene.replace_document(quader::SceneContentDocument{});
+  EXPECT_EQ(tools.active_settings_presentation_origin().serial, 0u);
+  EXPECT_TRUE(tools.active_settings_presentation_origin().target_id.empty());
+
+  ASSERT_TRUE(second_scene.viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  tools.set_runtime_hooks({.activate = [&](std::string_view id) {
+    second_scene.replace_document(quader::SceneContentDocument{});
+    (void)second_scene.viewport_workspace().focus_pane(quader::ViewportPaneId::Side);
+    return quader::QuaderToolsApi(binding).activate(id);
+  }});
+  ASSERT_TRUE(tools.activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const auto replacement = tools.active_settings_presentation_origin();
+  EXPECT_EQ(replacement.serial, 1u);
+  EXPECT_EQ(replacement.target_id, "create_primitive");
+  EXPECT_EQ(replacement.pane, quader::ViewportPaneId::Side);
 }
 
 TEST(ProjectSessionWorkspace,

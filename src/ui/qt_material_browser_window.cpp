@@ -10,6 +10,7 @@
 
 #include <QAccessibilityHints>
 #include <QAction>
+#include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -55,6 +56,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <array>
@@ -1165,9 +1167,21 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   set_view_mode(QtMaterialBrowserViewMode::Grid, false);
   set_tile_size(kDefaultTileSize);
   refresh_content_page();
+
+  installEventFilter(this);
+  for (QWidget *widget : findChildren<QWidget *>()) {
+    widget->installEventFilter(this);
+  }
+  QObject::connect(qApp, &QApplication::focusChanged, this,
+                   [this](QWidget *, QWidget *focused) {
+                     if (!owns_browser_focus(focused)) {
+                       thumbnail_wheel_remainder_ = 0.0;
+                     }
+                   });
 }
 
 QtMaterialBrowserWindow::~QtMaterialBrowserWindow() {
+  QObject::disconnect(qApp, nullptr, this, nullptr);
   // A Qt::Popup child owns a native window and can outlive ordinary child
   // teardown ordering. Retire it while the browser controls referenced by its
   // dismissal callback are still intact.
@@ -1625,6 +1639,67 @@ bool QtMaterialBrowserWindow::event(QEvent *event) {
   return handled;
 }
 
+bool QtMaterialBrowserWindow::owns_browser_focus(const QWidget *focused) const {
+  if (focused == this || isAncestorOf(focused)) {
+    return true;
+  }
+  for (const QPointer<QWidget> &popup : {filter_popup_, thumbnail_size_popup_}) {
+    if (popup && (focused == popup || popup->isAncestorOf(focused))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool QtMaterialBrowserWindow::eventFilter(QObject *watched, QEvent *event) {
+  if (event->type() != QEvent::Wheel) {
+    return QMainWindow::eventFilter(watched, event);
+  }
+  auto *wheel = static_cast<QWheelEvent *>(event);
+  if (!wheel->modifiers().testFlag(Qt::ControlModifier) ||
+      !owns_browser_focus(QApplication::focusWidget())) {
+    thumbnail_wheel_remainder_ = 0.0;
+    if (watched == tile_slider_ &&
+        wheel->modifiers().testFlag(Qt::ControlModifier)) {
+      wheel->accept();
+      return true;
+    }
+    return QMainWindow::eventFilter(watched, event);
+  }
+
+  const bool uses_pixels = !wheel->pixelDelta().isNull();
+  const int delta = uses_pixels ? wheel->pixelDelta().y()
+                                : wheel->angleDelta().y();
+  if (delta == 0 && wheel->phase() != Qt::ScrollBegin &&
+      wheel->phase() != Qt::ScrollEnd) {
+    thumbnail_wheel_remainder_ = 0.0;
+    return QMainWindow::eventFilter(watched, event);
+  }
+  if (wheel->phase() == Qt::ScrollBegin ||
+      uses_pixels != thumbnail_wheel_uses_pixels_ ||
+      thumbnail_wheel_remainder_ * delta < 0.0) {
+    thumbnail_wheel_remainder_ = 0.0;
+  }
+  thumbnail_wheel_uses_pixels_ = uses_pixels;
+  // Trackpad pixels are a separate logical distance, not 120-unit detents.
+  const double distance_per_preset = uses_pixels ? 40.0 : 120.0;
+  thumbnail_wheel_remainder_ += delta;
+  const int steps = static_cast<int>(
+      std::trunc(thumbnail_wheel_remainder_ / distance_per_preset));
+  thumbnail_wheel_remainder_ -= steps * distance_per_preset;
+  const int index = std::clamp(tile_slider_->value() + steps,
+                               tile_slider_->minimum(), tile_slider_->maximum());
+  if ((index == tile_slider_->maximum() && delta > 0) ||
+      (index == tile_slider_->minimum() && delta < 0) ||
+      wheel->phase() == Qt::ScrollEnd) {
+    thumbnail_wheel_remainder_ = 0.0;
+  }
+  // Partial motion and attempts beyond either limit still belong to resizing.
+  wheel->accept();
+  tile_slider_->setValue(index);
+  return true;
+}
+
 void QtMaterialBrowserWindow::refresh_view_mode_icons() {
   if (filter_button_ != nullptr) {
     filter_button_->setIcon(
@@ -1703,6 +1778,7 @@ void QtMaterialBrowserWindow::set_view_mode(QtMaterialBrowserViewMode mode,
 }
 
 void QtMaterialBrowserWindow::set_tile_size(int tile_size) {
+  thumbnail_wheel_remainder_ = 0.0;
   const int normalized_index = tile_index_for_size(tile_size);
   const int normalized_size = tile_size_for_index(normalized_index);
   {
@@ -2087,6 +2163,7 @@ void QtMaterialBrowserWindow::show_filter_popup() {
   const std::uint64_t usage_revision = usage_snapshot_.revision;
   auto *popup = new QFrame(this, Qt::Popup | Qt::FramelessWindowHint);
   filter_popup_ = popup;
+  popup->installEventFilter(this);
   popup->setObjectName(QStringLiteral("materialBrowser.filterPopup"));
   popup->setAttribute(Qt::WA_DeleteOnClose);
   popup->setFrameShape(QFrame::StyledPanel);

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "core/localization_service.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_face_texture_canvas.hpp"
 #include "ui/qt_face_texture_controls.hpp"
@@ -18,11 +19,13 @@
 #include <QApplication>
 #include <QAbstractEventDispatcher>
 #include <QBuffer>
+#include <QCheckBox>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QGridLayout>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -30,10 +33,14 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSplitter>
+#include <QTimer>
+#include <QWheelEvent>
 
 #include <array>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace quader {
@@ -259,6 +266,92 @@ TEST_F(QtFaceTexturePanelTests,
 }
 
 TEST_F(QtFaceTexturePanelTests,
+       TextureAxesHaveConsistentNamesAndLocalizedHelp) {
+  const std::array names{"scale_x", "scale_y", "shift_x", "shift_y"};
+  const std::array english{"Scale U", "Scale V", "Shift U (px)", "Shift V (px)"};
+  const std::array italian{"Scala U", "Scala V", "Spostamento U (px)",
+                           "Spostamento V (px)"};
+  std::array<QString, names.size()> fallback_help;
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    const auto *spin = number(names[index]);
+    ASSERT_NE(spin, nullptr);
+    EXPECT_EQ(spin->accessibleName(), QString::fromLatin1(english[index]));
+    fallback_help[index] = spin->toolTip();
+    EXPECT_TRUE(fallback_help[index].contains(
+        index % 2 == 0 ? QStringLiteral("width") : QStringLiteral("height")));
+    EXPECT_TRUE(fallback_help[index].contains(QStringLiteral("mapped texture")));
+    if (index < 2) {
+      EXPECT_TRUE(fallback_help[index].contains(QStringLiteral("negative")));
+      EXPECT_TRUE(fallback_help[index].contains(QStringLiteral("mirror")));
+    }
+  }
+  const std::array action_ids{"fit_x", "fit_y", "flip_texture_horizontal",
+                              "flip_texture_vertical", "flip_face_horizontal",
+                              "flip_face_vertical"};
+  std::array<QPushButton *, action_ids.size()> buttons;
+  std::array<QString, action_ids.size()> fallback_names;
+  std::array<QString, action_ids.size()> fallback_action_help;
+  for (std::size_t index = 0; index < action_ids.size(); ++index) {
+    buttons[index] = panel_->findChild<QPushButton *>(
+        QStringLiteral("face_texture.edit_texture.%1")
+            .arg(QString::fromLatin1(action_ids[index])));
+    ASSERT_NE(buttons[index], nullptr);
+    EXPECT_EQ(buttons[index]->text(),
+              index % 2 == 0 ? QStringLiteral("U") : QStringLiteral("V"));
+    fallback_names[index] = buttons[index]->accessibleName();
+    fallback_action_help[index] = buttons[index]->toolTip();
+  }
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  const auto content_revision = editor().revisions().modeling_content_revision;
+  for (const char *locale : {"en-US", "it-IT", "en-US"}) {
+    SCOPED_TRACE(locale);
+    ASSERT_TRUE(localization.select_locale(locale));
+    panel_->set_localization(localization);
+    settle_layout();
+    const bool is_english = localization.current_locale() == "en-US";
+    for (std::size_t index = 0; index < names.size(); ++index) {
+      const auto *spin = number(names[index]);
+      const auto *label = panel_->findChild<QLabel *>(
+          QStringLiteral("face_texture.texture.%1.label")
+              .arg(QString::fromLatin1(names[index])));
+      ASSERT_NE(spin, nullptr);
+      ASSERT_NE(label, nullptr);
+      const QString caption = QString::fromLatin1(
+          is_english ? english[index] : italian[index]);
+      EXPECT_EQ(label->text(), caption);
+      EXPECT_EQ(spin->accessibleName(), caption);
+      const auto help = localization.text(
+          std::string("tool_settings.texture_") + names[index] + ".tooltip", "");
+      EXPECT_EQ(spin->toolTip(), QString::fromStdString(help));
+      EXPECT_EQ(label->toolTip(), spin->toolTip());
+      if (is_english) {
+        EXPECT_EQ(spin->toolTip(), fallback_help[index]);
+      }
+    }
+    for (std::size_t index = 0; index < action_ids.size(); ++index) {
+      auto *button = panel_->findChild<QPushButton *>(
+          QStringLiteral("face_texture.edit_texture.%1")
+              .arg(QString::fromLatin1(action_ids[index])));
+      ASSERT_EQ(button, buttons[index]);
+      EXPECT_EQ(button->text(),
+                index % 2 == 0 ? QStringLiteral("U") : QStringLiteral("V"));
+      EXPECT_EQ(button->accessibleName(), QString::fromStdString(localization.text(
+          std::string("command.modeling.texture.") + action_ids[index], "")));
+      EXPECT_TRUE(button->toolTip().contains(QString::fromStdString(localization.text(
+          std::string("tool_settings.edit_texture.") + action_ids[index] + ".tooltip",
+          ""))));
+      if (is_english) {
+        EXPECT_EQ(button->accessibleName(), fallback_names[index]);
+        EXPECT_EQ(button->toolTip(), fallback_action_help[index]);
+      }
+    }
+    EXPECT_EQ(editor().revisions().modeling_content_revision, content_revision);
+  }
+}
+
+TEST_F(QtFaceTexturePanelTests,
        CanvasHandleResizesWithoutMovingTheBrowserAndRetainsItsChosenHeight) {
   auto *inner = canvas_splitter();
   auto *outer = browser_splitter();
@@ -307,7 +400,7 @@ TEST_F(QtFaceTexturePanelTests,
 }
 
 TEST_F(QtFaceTexturePanelTests,
-       RestoringAnAutomaticEmptyLayoutExpandsControlsWhenFacesAreSelected) {
+       RestoringAnAutomaticEmptyLayoutKeepsControlsStableWhenFacesAreSelected) {
   ASSERT_TRUE(editor().selection().clear().ok());
   panel_->refresh();
   settle_layout();
@@ -327,11 +420,175 @@ TEST_F(QtFaceTexturePanelTests,
   ASSERT_TRUE(editor().selection().select_face(object_, 1).ok());
   reopened.refresh();
   settle_layout();
-  EXPECT_GT(controls->height(), empty_height);
+  EXPECT_EQ(controls->height(), empty_height);
   EXPECT_GE(controls->height(), controls->widget()->sizeHint().height());
   EXPECT_EQ(controls->verticalScrollBar()->maximum(), 0);
   EXPECT_EQ(controls->horizontalScrollBar()->maximum(), 0);
   reopened.abandon();
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       EmptySelectionRetainsReadOnlyControlsAndDiscardsPendingDrafts) {
+  prepare_screenshot_scene();
+  ASSERT_TRUE(editor().selection().select_face(object_, 1).ok());
+  const std::array fields{QuaderFaceTextureField::ScaleX,
+                          QuaderFaceTextureField::ScaleY,
+                          QuaderFaceTextureField::ShiftX,
+                          QuaderFaceTextureField::ShiftY,
+                          QuaderFaceTextureField::Rotate};
+  const std::array values{2.0, 4.0, 24.0, -16.0, 37.0};
+  const std::array names{"scale_x", "scale_y", "shift_x", "shift_y", "rotate"};
+  for (std::size_t index = 0; index < fields.size(); ++index) {
+    ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+        .field = fields[index], .value = values[index],
+        .selection_token = editor().modeling().face_texture_settings().selection_token,
+    }).ok());
+  }
+  panel_->refresh();
+  settle_layout();
+  const auto settings = editor().modeling().face_texture_settings();
+  const auto content_revision = editor().revisions().modeling_content_revision;
+  const auto undo_label = editor().history().snapshot().undo_label;
+  auto *section = panel_->findChild<QWidget *>(
+      QStringLiteral("face_texture.section.texture"));
+  auto *actions = panel_->findChild<QWidget *>(
+      QStringLiteral("face_texture.section.edit_texture"));
+  auto *treat_as_one = panel_->findChild<QCheckBox *>(
+      QStringLiteral("face_texture.edit_texture.treat_as_one"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(actions, nullptr);
+  ASSERT_NE(treat_as_one, nullptr);
+  const auto buttons = actions->findChildren<QPushButton *>();
+  ASSERT_EQ(buttons.size(), 17);
+  std::array<QDoubleSpinBox *, names.size()> retained;
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    retained[index] = number(names[index]);
+    ASSERT_NE(retained[index], nullptr);
+    EXPECT_FALSE(retained[index]->isReadOnly());
+  }
+
+  const auto expect_empty = [&] {
+    EXPECT_FALSE(section->isHidden());
+    EXPECT_FALSE(actions->isHidden());
+    for (std::size_t index = 0; index < names.size(); ++index) {
+      auto *spin = number(names[index]);
+      ASSERT_EQ(spin, retained[index]);
+      EXPECT_TRUE(spin->isEnabled());
+      EXPECT_TRUE(spin->isReadOnly());
+      EXPECT_EQ(spin->text(), QStringLiteral("\u2014"));
+    }
+    for (const auto *button : buttons) {
+      EXPECT_FALSE(button->isEnabled()) << button->objectName().toStdString();
+    }
+    EXPECT_FALSE(treat_as_one->isEnabled());
+    EXPECT_FALSE(panel_->numeric_interaction_active());
+    EXPECT_EQ(panel_->canvas().presentation().selected_face_count, 0u);
+    EXPECT_TRUE(panel_->canvas().presentation().outline.empty());
+    QImage image(panel_->canvas().size(), QImage::Format_ARGB32);
+    image.fill(Qt::transparent);
+    panel_->canvas().render(&image);
+    QImage blank(image.size(), image.format());
+    blank.fill(panel_->canvas().palette().color(QPalette::Base));
+    EXPECT_EQ(image, blank) << "Empty selection must not paint a cached texture or gizmo";
+  };
+  ASSERT_TRUE(editor().selection().clear().ok());
+  panel_->refresh();
+  settle_layout();
+  expect_empty();
+  for (auto *spin : retained) {
+    spin->setFocus(Qt::OtherFocusReason);
+    spin->selectAll();
+    QKeyEvent typing(QEvent::KeyPress, Qt::Key_9, Qt::NoModifier,
+                      QStringLiteral("9"));
+    QCoreApplication::sendEvent(spin, &typing);
+    QKeyEvent stepping(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+    QCoreApplication::sendEvent(spin, &stepping);
+    const QPoint center = spin->rect().center();
+    QWheelEvent wheel(center, spin->mapToGlobal(center), {}, QPoint(0, 120),
+                      Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(spin, &wheel);
+    spin->stepUp();
+    spin->stepDown();
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(spin, &enter);
+    EXPECT_EQ(spin->text(), QStringLiteral("\u2014"));
+  }
+  for (auto *button : buttons) {
+    button->click();
+  }
+  treat_as_one->click();
+  EXPECT_EQ(editor().revisions().modeling_content_revision, content_revision);
+  EXPECT_EQ(editor().history().snapshot().undo_label, undo_label);
+  EXPECT_FALSE(editor().modeling().face_texture_treat_as_one());
+  number("rotate")->setToolTip(QStringLiteral("unchanged empty controls"));
+  for (int frame = 0; frame < 30; ++frame) {
+    panel_->refresh();
+  }
+  EXPECT_EQ(number("rotate")->toolTip(), QStringLiteral("unchanged empty controls"));
+  expect_empty();
+
+  ASSERT_TRUE(editor().selection().select_face(object_, 1).ok());
+  panel_->refresh();
+  expect_presented_settings(true);
+  for (auto *spin : retained) {
+    EXPECT_FALSE(spin->isReadOnly());
+  }
+  for (const auto *button : buttons) {
+    EXPECT_TRUE(button->isEnabled());
+  }
+  auto *scale = number("scale_x");
+  scale->setFocus(Qt::OtherFocusReason);
+  scale->selectAll();
+  QKeyEvent draft(QEvent::KeyPress, Qt::Key_9, Qt::NoModifier, QStringLiteral("9"));
+  QCoreApplication::sendEvent(scale, &draft);
+  ASSERT_TRUE(panel_->numeric_interaction_active());
+  ASSERT_TRUE(editor().selection().clear().ok());
+  panel_->refresh();
+  QEventLoop loop;
+  QTimer::singleShot(75, &loop, &QEventLoop::quit);
+  loop.exec();
+  settle_layout();
+  expect_empty();
+  EXPECT_EQ(editor().revisions().modeling_content_revision, content_revision);
+  EXPECT_EQ(editor().history().snapshot().undo_label, undo_label);
+  ASSERT_TRUE(editor().selection().select_face(object_, 1).ok());
+  panel_->refresh();
+  expect_presented_settings(true);
+  const auto restored = editor().modeling().face_texture_settings();
+  EXPECT_EQ(restored.scale_x, settings.scale_x);
+  EXPECT_EQ(restored.scale_y, settings.scale_y);
+  EXPECT_EQ(restored.shift_x, settings.shift_x);
+  EXPECT_EQ(restored.shift_y, settings.shift_y);
+  EXPECT_EQ(restored.rotation_degrees, settings.rotation_degrees);
+
+  ASSERT_TRUE(editor().selection().clear().ok());
+  panel_->refresh();
+  QApplication::setPalette(qt_obsidian_application_palette(QApplication::palette()));
+  QtUiScaleApplicationController scale_controller(*application_);
+  const QString screenshot_path = qEnvironmentVariable("QUADER_FACE_TEXTURE_SCREENSHOT_DIR");
+  for (const float factor : {1.0f, 1.5f, 2.0f}) {
+    SCOPED_TRACE(factor);
+    scale_controller.apply_factor(factor);
+    const QtUiScaleMetrics metrics(factor, static_cast<std::uint64_t>(factor * 100));
+    panel_->apply_ui_scale(metrics);
+    panel_->resize(metrics.px(700), metrics.px(1000));
+    settle_layout();
+    expect_empty();
+    if (!screenshot_path.isEmpty()) {
+      const QString build_root = QDir(QString::fromUtf8(QUADER_SOURCE_DIR))
+                                     .absoluteFilePath(QStringLiteral("build"));
+      const QString target = QDir::cleanPath(QDir(screenshot_path).absolutePath());
+      ASSERT_TRUE(target.startsWith(build_root + QLatin1Char('/'),
+                                     Qt::CaseInsensitive));
+      ASSERT_TRUE(QDir().mkpath(target));
+      QImage image(panel_->size(), QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      panel_->render(&image);
+      EXPECT_TRUE(image.save(QDir(target).filePath(
+          QStringLiteral("face-texture-panel-empty-%1.png")
+              .arg(static_cast<int>(factor * 100)))));
+    }
+  }
 }
 
 TEST_F(QtFaceTexturePanelTests,

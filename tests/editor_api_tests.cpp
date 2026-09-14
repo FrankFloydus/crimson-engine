@@ -6210,6 +6210,124 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
+     SettingsOriginPinsToolStartsAndIgnoresFocusParametersAndNoOpActivation) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  (void)create_selected_box(editor, "Settings Origin Source");
+  auto &workspace =
+      quader::QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Top));
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin().serial, 0u);
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  const auto started = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(started.serial, 1u);
+  EXPECT_EQ(started.target_id, "move");
+  EXPECT_EQ(started.pane, quader::ViewportPaneId::Top);
+  editor.tools().record_active_settings_origin(
+      static_cast<quader::ViewportPaneId>(999));
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
+  ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Front));
+  EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Move).changed());
+  ASSERT_TRUE(editor.tools().set_setting("move", "auto_merge_vertices", true).ok());
+  for (int frame = 0; frame < 32; ++frame) {
+    EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
+  }
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Rotate).ok());
+  EXPECT_FALSE(editor.tools().active_settings().active);
+  editor.tools().record_active_settings_origin(quader::ViewportPaneId::Front);
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
+  EXPECT_FALSE(editor.tools().activate("unknown_settings_origin_tool").ok());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LassoSelect).ok());
+  const auto lasso = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(lasso.serial, started.serial + 1u);
+  EXPECT_EQ(lasso.target_id, "lasso_select");
+  EXPECT_EQ(lasso.pane, quader::ViewportPaneId::Front);
+}
+
+TEST(EditorApiTests,
+     SettingsOriginDistinguishesUnobservedPrimitiveRestartsAndFootprintPlacement) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  auto &workspace =
+      quader::QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Top));
+  ASSERT_TRUE(editor.tools().begin_primitive_creation(
+      quader::QuaderPrimitiveCreationShape::Box).ok());
+  const auto initial = editor.tools().active_settings_presentation_origin();
+  ASSERT_EQ(initial.target_id, "create_primitive");
+  EXPECT_EQ(initial.pane, quader::ViewportPaneId::Top);
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Front));
+  ASSERT_TRUE(editor.tools().begin_primitive_creation(
+      quader::QuaderPrimitiveCreationShape::Box).ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const auto restarted = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(restarted.serial, initial.serial + 2u);
+  EXPECT_EQ(restarted.pane, quader::ViewportPaneId::Front);
+
+  editor.tools().record_active_settings_origin(quader::ViewportPaneId::Side);
+  const auto footprint = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(footprint.serial, restarted.serial + 1u);
+  EXPECT_EQ(footprint.pane, quader::ViewportPaneId::Side);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.box.subdivisions_x", 4.0).ok());
+  ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+  ASSERT_TRUE(editor.tools().begin_primitive_creation(
+      quader::QuaderPrimitiveCreationShape::Cylinder).ok());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), footprint);
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(editor.tools().begin_new_curve_creation().ok());
+  const auto curve = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(curve.serial, footprint.serial + 1u);
+  EXPECT_EQ(curve.target_id, "curve");
+  EXPECT_EQ(curve.pane, quader::ViewportPaneId::Front);
+  EXPECT_FALSE(editor.tools().begin_new_curve_creation().changed());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), curve);
+}
+
+TEST(EditorApiTests,
+     SettingsOriginCapturesCommandAndDirectPreviewStartsWithoutUpdateChurn) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Settings Preview Origin Source");
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  auto &workspace =
+      quader::QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
+  ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Top));
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  const auto first = editor.tools().active_settings_presentation_origin();
+  EXPECT_GT(first.serial, 0u);
+  EXPECT_EQ(first.target_id, editor.tools().active_settings().tool_id);
+  EXPECT_EQ(first.pane, quader::ViewportPaneId::Top);
+  ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Front));
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.2).ok());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), first);
+
+  ASSERT_TRUE(editor.modeling().cancel_preview().ok());
+  ASSERT_TRUE(editor.modeling().begin_preview("bevel_edges").ok());
+  const auto second = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(second.serial, first.serial + 1u);
+  EXPECT_EQ(second.target_id, first.target_id);
+  EXPECT_EQ(second.pane, quader::ViewportPaneId::Front);
+  ASSERT_TRUE(editor.modeling().cancel_preview().ok());
+  EXPECT_FALSE(editor.modeling().begin_preview("unknown_settings_origin_action").ok());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), second);
+}
+
+TEST(EditorApiTests,
      ArrayToolSettingsRevisionSkipsStableReadsAndTracksSettingsChanges) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;

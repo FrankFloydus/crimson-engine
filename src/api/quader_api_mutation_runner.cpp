@@ -9,6 +9,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
+#include "api/quader_settings_presentation_internal.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/history/editor_history_service.hpp"
@@ -291,10 +292,15 @@ QuaderApiMutationRunner::run_tracked_modeling_tool(std::string_view tool_id) {
     return modeling_content_blocked_status("editing modeling content.");
   }
   SceneSession &session = scene_session();
-  return status_from(modeling_commands_.execute(history(), session.modeling(),
-                                                 session.selection(), tool_id,
-                                                 &session.structural_lifecycle()),
-                     QuaderMutationKind::Modeling, tool_id);
+  const QuaderSettingsOperationOriginCapture origin(session_);
+  const ModelingCommandResult result = modeling_commands_.execute(
+      history(), session.modeling(), session.selection(), tool_id,
+      &session.structural_lifecycle());
+  if (result.ok && result.changed && origin.current() &&
+      session.modeling().operation_preview_active()) {
+    origin.publish();
+  }
+  return status_from(result, QuaderMutationKind::Modeling, tool_id);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::begin_tracked_modeling_preview(
@@ -306,11 +312,15 @@ QuaderApiVoidResult QuaderApiMutationRunner::begin_tracked_modeling_preview(
     return modeling_content_blocked_status("starting a modeling preview.");
   }
   SceneSession &session = scene_session();
-  return status_from(
-      modeling_commands_.begin_preview(history(), session.modeling(),
-                                       session.selection(), action_id,
-                                       &session.structural_lifecycle()),
-      QuaderMutationKind::Modeling, action_id);
+  const QuaderSettingsOperationOriginCapture origin(session_);
+  const ModelingCommandResult result = modeling_commands_.begin_preview(
+      history(), session.modeling(), session.selection(), action_id,
+      &session.structural_lifecycle());
+  if (result.ok && result.changed && origin.current() &&
+      session.modeling().operation_preview_active()) {
+    origin.publish();
+  }
+  return status_from(result, QuaderMutationKind::Modeling, action_id);
 }
 
 QuaderApiVoidResult

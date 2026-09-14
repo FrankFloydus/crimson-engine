@@ -307,6 +307,10 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
 
 const std::vector<IncludeException> &allowed_include_exceptions() {
   static const std::vector<IncludeException> kExceptions = {
+      {"src/editor/session/scene_session.hpp",
+       "api/quader_settings_presentation_types.hpp",
+       "SceneSession stores the stateless public settings-origin value contract; "
+       "it does not depend on an API facade or viewport owner."},
       {"src/editor/commands/editor_command_registry.hpp",
        "api/quader_editor_api_types.hpp",
        "command registry still consumes public editor command value types"},

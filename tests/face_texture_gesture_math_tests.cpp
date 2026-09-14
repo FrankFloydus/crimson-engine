@@ -162,6 +162,14 @@ TEST(FaceTextureGestureMathTests, SnappingBackToOriginalScaleRetainsExactPhase) 
   }
 }
 
+/// Places handles along the image axes, which are columns of the inverse chart.
+QVec2 texture_axis_point(const Map &map, QVec2 pivot, double u, double v) {
+  const auto &m = map.uv_from_plane;
+  const double determinant = m[0] * m[3] - m[1] * m[2];
+  return {static_cast<float>(pivot.x + (m[3] * u - m[1] * v) / determinant),
+          static_cast<float>(pivot.y + (-m[2] * u + m[0] * v) / determinant)};
+}
+
 TEST(FaceTextureGestureMathTests, RotatedTextureScaleChangesOnlyTheRequestedRepeat) {
   auto baseline = canvas_baseline();
   constexpr double kCosine = std::numbers::sqrt2 / 2.0;
@@ -174,7 +182,9 @@ TEST(FaceTextureGestureMathTests, RotatedTextureScaleChangesOnlyTheRequestedRepe
     SCOPED_TRACE(static_cast<int>(kind));
     const bool width = kind == Kind::ScaleWidth;
     const ModelingFaceTextureGestureBegin begin{
-        .kind = kind, .start = width ? QVec2{13.0F, 2.0F} : QVec2{3.0F, 12.0F},
+        .kind = kind,
+        .start = texture_axis_point(baseline.chart.map, {3.0F, 2.0F},
+                                   width ? 1.0 : 0.0, width ? 0.0 : 0.5),
         .pivot = {3.0F, 2.0F}};
     for (const auto modifiers : {0, 1, 2, 3}) {
       SCOPED_TRACE(modifiers);
@@ -182,14 +192,16 @@ TEST(FaceTextureGestureMathTests, RotatedTextureScaleChangesOnlyTheRequestedRepe
       const bool snap = (modifiers & 2) != 0;
       const auto prepared = prepare_face_texture_gesture_map(
           baseline, begin,
-          {.current = width ? QVec2{16.2F, 99.0F} : QVec2{99.0F, 15.2F},
+          {.current = texture_axis_point(baseline.chart.map, begin.pivot,
+                                         width ? 1.32 : 0.25,
+                                         width ? 0.25 : 0.66),
            .precision = precision, .snap = snap, .grid_step = 4.0});
       ASSERT_TRUE(prepared.ok()) << prepared.error_message();
       const auto measured = measured_candidate(prepared.value());
       const double repeat = width ? measured.repeat_width : measured.repeat_height;
       const double expected = width ? (snap ? 12.0 : precision ? 13.0 : 13.2)
                                      : (snap ? 28.0 : precision ? 26.0 : 26.4);
-      EXPECT_NEAR(repeat, expected, precision || snap ? 1.0e-10 : 2.0e-6);
+      EXPECT_NEAR(repeat, expected, precision || snap ? 1.0e-10 : 1.0e-5);
       EXPECT_NEAR(width ? measured.repeat_height : measured.repeat_width,
                    width ? baseline.repeat_height : baseline.repeat_width, 1.0e-10);
       expect_fixed_point(baseline.chart.map, prepared.value(), begin.pivot);
@@ -346,13 +358,17 @@ TEST(FaceTextureGestureMathTests, QuarterTurnTextureSupportsBothHandlesAndAllMod
     SCOPED_TRACE(static_cast<int>(kind));
     const bool width = kind == Kind::ScaleWidth;
     const ModelingFaceTextureGestureBegin begin{
-        .kind = kind, .start = {10.0F, 10.0F}, .pivot = {0.0F, 0.0F}};
+        .kind = kind,
+        .start = width ? QVec2{0.0F, 10.0F} : QVec2{10.0F, 0.0F},
+        .pivot = {0.0F, 0.0F}};
     for (const auto modifiers : {0, 1, 2, 3}) {
       SCOPED_TRACE(modifiers);
       const bool precision = (modifiers & 1) != 0;
       const bool snap = (modifiers & 2) != 0;
       const auto result = prepare_face_texture_gesture_map(
-          baseline, begin, {.current = {13.2F, 13.2F}, .precision = precision,
+          baseline, begin,
+          {.current = width ? QVec2{4.0F, 13.2F} : QVec2{13.2F, 4.0F},
+           .precision = precision,
                              .snap = snap, .grid_step = 4.0});
       ASSERT_TRUE(result.ok()) << result.error_message();
       const auto measured = measured_candidate(result.value());
@@ -367,8 +383,102 @@ TEST(FaceTextureGestureMathTests, QuarterTurnTextureSupportsBothHandlesAndAllMod
       EXPECT_GT(result.value().uv_from_plane[2], 0.0);
     }
     const auto zero = prepare_face_texture_gesture_map(
-        baseline, begin, {.current = width ? QVec2{0.0F, 10.0F} : QVec2{10.0F, 0.0F}});
+        baseline, begin,
+        {.current = width ? QVec2{10.0F, 0.0F} : QVec2{0.0F, 10.0F}});
     EXPECT_FALSE(zero.ok());
+  }
+}
+
+TEST(FaceTextureGestureMathTests, TextureAxisHandlesPreserveMirrorsShearAndOppositeRepeat) {
+  for (const auto matrix : {
+           std::array{0.0, 0.1, 0.05, 0.0},
+           std::array{0.06, 0.08, 0.04, -0.03},
+           std::array{-0.06, -0.08, 0.04, -0.03},
+           std::array{0.06, 0.08, -0.04, 0.03},
+           std::array{-0.06, -0.08, -0.04, 0.03},
+           std::array{0.1, 0.05, -0.025, 0.05}}) {
+    auto baseline = canvas_baseline();
+    baseline.chart.map.uv_from_plane = matrix;
+    measure_face_texture_canvas(baseline);
+    for (const auto kind : {Kind::ScaleWidth, Kind::ScaleHeight}) {
+      SCOPED_TRACE(static_cast<int>(kind));
+      SCOPED_TRACE(::testing::PrintToString(matrix));
+      const bool width = kind == Kind::ScaleWidth;
+      const QVec2 pivot{3.0F, -2.0F};
+      const ModelingFaceTextureGestureBegin begin{
+          .kind = kind,
+          .start = texture_axis_point(baseline.chart.map, pivot,
+                                     width ? 1.0 : 0.0, width ? 0.0 : 1.0),
+          .pivot = pivot};
+      const auto current = texture_axis_point(baseline.chart.map, pivot,
+                                             width ? 1.5 : 2.0,
+                                             width ? 2.0 : 1.5);
+      const auto prepared = prepare_face_texture_gesture_map(
+          baseline, begin, {.current = current});
+      ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+      const auto &candidate = prepared.value();
+      const auto measured = measured_candidate(candidate);
+      EXPECT_NEAR(measured.repeat_width,
+                  baseline.repeat_width * (width ? 1.5 : 1.0), 1.0e-5);
+      EXPECT_NEAR(measured.repeat_height,
+                  baseline.repeat_height * (width ? 1.0 : 1.5), 1.0e-5);
+      expect_fixed_point(baseline.chart.map, candidate, pivot);
+      const std::size_t selected_row = width ? 0 : 2;
+      const std::size_t opposite_row = width ? 2 : 0;
+      EXPECT_DOUBLE_EQ(candidate.uv_from_plane[opposite_row], matrix[opposite_row]);
+      EXPECT_DOUBLE_EQ(candidate.uv_from_plane[opposite_row + 1], matrix[opposite_row + 1]);
+      EXPECT_NEAR(candidate.uv_from_plane[selected_row], matrix[selected_row] / 1.5, 1.0e-8);
+      EXPECT_NEAR(candidate.uv_from_plane[selected_row + 1], matrix[selected_row + 1] / 1.5, 1.0e-8);
+      const double original_determinant = matrix[0] * matrix[3] - matrix[1] * matrix[2];
+      const auto &changed = candidate.uv_from_plane;
+      EXPECT_EQ(std::signbit(changed[0] * changed[3] - changed[1] * changed[2]),
+                std::signbit(original_determinant));
+      EXPECT_EQ(prepare_face_texture_gesture_map(
+                    baseline, begin, {.current = current}).or_throw(), candidate);
+      const auto opposite_motion = texture_axis_point(
+          baseline.chart.map, pivot, width ? 1.0 : 2.0, width ? 2.0 : 1.0);
+      EXPECT_EQ(prepare_face_texture_gesture_map(
+                    baseline, begin, {.current = opposite_motion}).or_throw(),
+                baseline.chart.map);
+      EXPECT_EQ(prepare_face_texture_gesture_map(
+                    baseline, begin, {.current = begin.start,
+                                      .precision = true, .snap = true,
+                                      .grid_step = 8.0}).or_throw(), baseline.chart.map);
+      for (const double extent : {0.0, -0.5}) {
+        const auto crossed = texture_axis_point(baseline.chart.map, pivot,
+                                               width ? extent : 1.0,
+                                               width ? 1.0 : extent);
+        EXPECT_FALSE(prepare_face_texture_gesture_map(
+            baseline, begin, {.current = crossed}).ok());
+      }
+    }
+  }
+}
+
+TEST(FaceTextureGestureMathTests, ScalePivotToleranceUsesPhysicalUnitsAtAnyTextureDensity) {
+  for (const double density : {1.0e-12, 1.0e12}) {
+    auto baseline = canvas_baseline();
+    baseline.chart.map.uv_from_plane = {0.0, density, -density, 0.0};
+    measure_face_texture_canvas(baseline);
+    for (const auto kind : {Kind::ScaleWidth, Kind::ScaleHeight}) {
+      SCOPED_TRACE(static_cast<int>(kind));
+      SCOPED_TRACE(density);
+      const bool width = kind == Kind::ScaleWidth;
+      ModelingFaceTextureGestureBegin begin{
+          .kind = kind,
+          .start = width ? QVec2{0.0F, 10.0F} : QVec2{10.0F, 0.0F}};
+      const auto scaled = prepare_face_texture_gesture_map(
+          baseline, begin,
+          {.current = width ? QVec2{0.0F, 15.0F} : QVec2{15.0F, 0.0F}});
+      ASSERT_TRUE(scaled.ok()) << scaled.error_message();
+      const auto measured = measured_candidate(scaled.value());
+      EXPECT_NEAR(measured.repeat_width / baseline.repeat_width, width ? 1.5 : 1.0, 1.0e-12);
+      EXPECT_NEAR(measured.repeat_height / baseline.repeat_height, width ? 1.0 : 1.5, 1.0e-12);
+      begin.start = width ? QVec2{0.0F, 1.0e-9F} : QVec2{1.0e-9F, 0.0F};
+      EXPECT_FALSE(prepare_face_texture_gesture_map(
+          baseline, begin,
+          {.current = width ? QVec2{0.0F, 1.0F} : QVec2{1.0F, 0.0F}}).ok());
+    }
   }
 }
 

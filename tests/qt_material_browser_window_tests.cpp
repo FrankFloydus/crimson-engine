@@ -50,6 +50,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -68,6 +69,19 @@ void send_key(QWidget &target, int key) {
   QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
   QCoreApplication::sendEvent(&target, &release);
   QCoreApplication::processEvents();
+}
+
+bool send_browser_wheel(QWidget &target, int angle_y, int pixel_y = 0,
+                        Qt::KeyboardModifiers modifiers = Qt::ControlModifier,
+                        Qt::ScrollPhase phase = Qt::NoScrollPhase) {
+  const QPoint position = target.rect().center();
+  QWheelEvent wheel(QPointF(position), QPointF(target.mapToGlobal(position)),
+                    QPoint(0, pixel_y), QPoint(0, angle_y), Qt::NoButton,
+                    modifiers, phase, false);
+  wheel.setAccepted(false);
+  QCoreApplication::sendEvent(&target, &wheel);
+  QCoreApplication::processEvents();
+  return wheel.isAccepted();
 }
 
 QByteArray encoded_wide_preview() {
@@ -539,6 +553,235 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(window.selected_folder(), QStringLiteral("Materials"));
   EXPECT_EQ(tree->topLevelItemCount(), 1);
   EXPECT_TRUE(window.sidebar_visible());
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     FocusedControlWheelResizesExistingPresetsAcrossHostsAndPicker) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-wheel-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (int variant = 0; variant < 3; ++variant) {
+    SCOPED_TRACE(variant);
+    QWidget owner;
+    owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+    const auto host = variant == 1 ? QtMaterialBrowserHost::Embedded
+                                   : QtMaterialBrowserHost::Windowed;
+    QtMaterialBrowserWindow browser(&owner, host);
+    browser.setAttribute(Qt::WA_DontShowOnScreen, true);
+    if (variant == 2) {
+      browser.set_purpose(QtMaterialBrowserPurpose::Picker);
+    }
+    const auto material = folder_material(
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", QStringLiteral("Oak"),
+        QStringLiteral("Materials/oak.qmat"));
+    browser.set_materials({material}, material.reference);
+    browser.resize(640, 400);
+    owner.show();
+    browser.show();
+    QApplication::setActiveWindow(browser.window());
+    auto *grid = browser.findChild<QListView *>(
+        QStringLiteral("materialBrowser.gridView"));
+    auto *search = browser.findChild<QLineEdit *>(
+        QStringLiteral("materialBrowser.search"));
+    auto *slider = browser.findChild<QSlider *>(
+        QStringLiteral("materialBrowser.tileSize"));
+    ASSERT_NE(grid, nullptr);
+    ASSERT_NE(search, nullptr);
+    ASSERT_NE(slider, nullptr);
+    search->setFocus();
+    application.processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), search);
+    int notifications = 0;
+    int persisted_size = browser.tile_size();
+    browser.set_presentation_state_changed_callback([&]() {
+      ++notifications;
+      persisted_size = browser.tile_size();
+    });
+
+    EXPECT_TRUE(send_browser_wheel(*grid->viewport(), 120));
+    EXPECT_EQ(browser.tile_size(), 256);
+    EXPECT_EQ(grid->iconSize(), QSize(256, 256));
+    EXPECT_EQ(persisted_size, 256);
+    EXPECT_EQ(notifications, 1);
+    EXPECT_TRUE(send_browser_wheel(*grid->viewport(), -240));
+    EXPECT_EQ(browser.tile_size(), 64);
+    EXPECT_EQ(persisted_size, 64);
+    EXPECT_EQ(notifications, 2);
+    EXPECT_EQ(browser.current_selected_material(), material.reference);
+    EXPECT_EQ(browser.view_mode(), QtMaterialBrowserViewMode::Grid);
+
+    // The slider receives the same one-preset gesture, not Qt's accelerated
+    // Ctrl+wheel behavior, even when it lives in the embedded host's popup.
+    EXPECT_TRUE(send_browser_wheel(*slider, 120));
+    EXPECT_EQ(browser.tile_size(), 128);
+    EXPECT_EQ(notifications, 3);
+    if (host == QtMaterialBrowserHost::Embedded) {
+      auto *size_button = browser.findChild<QToolButton *>(
+          QStringLiteral("materialBrowser.thumbnailSize"));
+      ASSERT_NE(size_button, nullptr);
+      size_button->click();
+      QWidget *popup = slider->window();
+      QApplication::setActiveWindow(popup);
+      slider->setFocus();
+      application.processEvents();
+      ASSERT_EQ(QApplication::focusWidget(), slider);
+      EXPECT_TRUE(send_browser_wheel(*slider, 120));
+      EXPECT_EQ(browser.tile_size(), 256);
+      EXPECT_EQ(notifications, 4);
+      popup->close();
+    }
+    if (host == QtMaterialBrowserHost::Windowed) {
+      browser.restore_presentation_state(QtMaterialBrowserViewMode::List, 128);
+      auto *list = browser.findChild<QTableView *>(
+          QStringLiteral("materialBrowser.listView"));
+      ASSERT_NE(list, nullptr);
+      list->setFocus();
+      application.processEvents();
+      EXPECT_TRUE(send_browser_wheel(*list->viewport(), 120));
+      EXPECT_EQ(browser.tile_size(), 256);
+      EXPECT_EQ(browser.view_mode(), QtMaterialBrowserViewMode::List);
+      EXPECT_EQ(browser.current_selected_material(), material.reference);
+      EXPECT_EQ(notifications, 4);
+    }
+    browser.set_presentation_state_changed_callback({});
+  }
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     ControlWheelAccumulatesPartialMotionAndRespectsFocusScrollingAndBounds) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-wheel-scope-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const auto host : {QtMaterialBrowserHost::Windowed,
+                          QtMaterialBrowserHost::Embedded}) {
+    SCOPED_TRACE(static_cast<int>(host));
+    QWidget owner;
+    owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+    QLineEdit outside(&owner);
+    QtMaterialBrowserWindow browser(&owner, host);
+    browser.setAttribute(Qt::WA_DontShowOnScreen, true);
+    browser.resize(500, 350);
+    std::vector<QtMaterialBrowserItem> materials;
+    for (int index = 0; index < 32; ++index) {
+      const QString id = QStringLiteral("aaaaaaaa-aaaa-aaaa-aaaa-%1")
+                             .arg(index, 12, 16, QLatin1Char('0'));
+      const QString name = QStringLiteral("Material %1").arg(index);
+      materials.push_back(folder_material(
+          id.toStdString(), name, QStringLiteral("Materials/%1.qmat").arg(index)));
+    }
+    browser.set_materials(std::move(materials));
+    browser.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 64,
+                                       false);
+    owner.show();
+    browser.show();
+    QApplication::setActiveWindow(browser.window());
+    auto *grid = browser.findChild<QListView *>(
+        QStringLiteral("materialBrowser.gridView"));
+    ASSERT_NE(grid, nullptr);
+    grid->setFocus();
+    application.processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), grid);
+    QWidget &viewport = *grid->viewport();
+
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_EQ(browser.tile_size(), 64);
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_EQ(browser.tile_size(), 128);
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_TRUE(send_browser_wheel(viewport, -60));
+    EXPECT_EQ(browser.tile_size(), 128);
+    EXPECT_TRUE(send_browser_wheel(viewport, -60));
+    EXPECT_EQ(browser.tile_size(), 64);
+
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_TRUE(send_browser_wheel(viewport, 0, 20));
+    EXPECT_EQ(browser.tile_size(), 64)
+        << "switching devices must discard the old angle remainder";
+    EXPECT_TRUE(send_browser_wheel(viewport, 0, 20));
+    EXPECT_EQ(browser.tile_size(), 128);
+    EXPECT_TRUE(send_browser_wheel(viewport, 0, -40));
+    EXPECT_EQ(browser.tile_size(), 64);
+
+    EXPECT_TRUE(send_browser_wheel(viewport, 0, 20, Qt::ControlModifier,
+                                    Qt::ScrollUpdate));
+    EXPECT_EQ(browser.tile_size(), 64);
+    EXPECT_TRUE(send_browser_wheel(viewport, 0, 20, Qt::ControlModifier,
+                                    Qt::ScrollEnd));
+    EXPECT_EQ(browser.tile_size(), 128)
+        << "the ending event must contribute its final pixel motion";
+    EXPECT_TRUE(send_browser_wheel(viewport, 0, -40));
+    EXPECT_EQ(browser.tile_size(), 64);
+
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_TRUE(send_browser_wheel(viewport, 0, 0, Qt::ControlModifier,
+                                    Qt::ScrollEnd));
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_EQ(browser.tile_size(), 64);
+    ASSERT_GT(grid->verticalScrollBar()->maximum(), 0);
+    grid->verticalScrollBar()->setValue(0);
+    send_browser_wheel(viewport, -120, 0, Qt::NoModifier);
+    EXPECT_GT(grid->verticalScrollBar()->value(), 0);
+    EXPECT_EQ(browser.tile_size(), 64);
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_EQ(browser.tile_size(), 64)
+        << "ordinary scrolling breaks the thumbnail resize gesture";
+
+    QApplication::setActiveWindow(&owner);
+    outside.setFocus();
+    application.processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), &outside);
+    send_browser_wheel(viewport, 120);
+    auto *slider = browser.findChild<QSlider *>(
+        QStringLiteral("materialBrowser.tileSize"));
+    ASSERT_NE(slider, nullptr);
+    send_browser_wheel(*slider, 120);
+    send_browser_wheel(outside, 120);
+    EXPECT_EQ(browser.tile_size(), 64);
+    QApplication::setActiveWindow(browser.window());
+    grid->setFocus();
+    application.processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), grid);
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_EQ(browser.tile_size(), 64)
+        << "focus loss must discard partial motion";
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_EQ(browser.tile_size(), 128);
+    send_browser_wheel(outside, 120);
+    EXPECT_EQ(browser.tile_size(), 128)
+        << "browser focus must not capture another widget's wheel";
+
+    browser.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 512,
+                                       false);
+    application.processEvents();
+    QScrollBar *scroll = grid->verticalScrollBar();
+    scroll->setValue(scroll->maximum() / 2);
+    const int retained_scroll = scroll->value();
+    int notifications = 0;
+    browser.set_presentation_state_changed_callback([&]() { ++notifications; });
+    EXPECT_TRUE(send_browser_wheel(viewport, 360));
+    EXPECT_TRUE(send_browser_wheel(viewport, 60));
+    EXPECT_EQ(browser.tile_size(), 512);
+    EXPECT_EQ(scroll->value(), retained_scroll);
+    EXPECT_EQ(notifications, 0);
+    EXPECT_TRUE(send_browser_wheel(viewport, -120));
+    EXPECT_EQ(browser.tile_size(), 256);
+    EXPECT_EQ(notifications, 1);
+    browser.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 16,
+                                       false);
+    EXPECT_TRUE(send_browser_wheel(viewport, -360));
+    EXPECT_EQ(browser.tile_size(), 16);
+    EXPECT_EQ(notifications, 1);
+    EXPECT_TRUE(send_browser_wheel(viewport, 120));
+    EXPECT_EQ(browser.tile_size(), 32);
+    EXPECT_EQ(notifications, 2);
+    browser.set_presentation_state_changed_callback({});
+  }
 }
 
 TEST(QtMaterialBrowserWindowTests,

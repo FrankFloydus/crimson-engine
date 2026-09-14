@@ -423,7 +423,7 @@ std::span<const HostUiSurfaceDescriptor> ui_surface_descriptors()
        false, true},
       {"viewport_tool_toolbar", "Viewport Tool Toolbar",
        HostUiSurfaceKind::Toolbar, true, false},
-      {"tool_settings_panel", "Tool Settings Panel", HostUiSurfaceKind::Panel,
+      {"tool_settings_panel", "Viewport Settings", HostUiSurfaceKind::Panel,
        false, false},
   }};
   return kDescriptors;

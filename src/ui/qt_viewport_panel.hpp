@@ -29,6 +29,7 @@
 #include "viewport/viewport_settings.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
+#include <QPointer>
 #include <QWidget>
 
 #include <array>
@@ -36,6 +37,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <vector>
 
 class QAction;
@@ -53,6 +55,7 @@ class ModelingSessionService;
 class LocalizationService;
 class NativeViewportToolCoordinator;
 class QuaderEditorApi;
+class QtToolSettingsPanel;
 struct QuaderViewportKeybindingContext;
 class RenderOverlaySnapshotCache;
 class QtViewportEdgeLengthHud;
@@ -62,8 +65,8 @@ class SceneRenderBridge;
 class ViewportPointPlacementService;
 
 /**
- * Returns whether an application event target belongs to the retained Tool
- * Settings dock panel, including when the dock is floated. Its controls are
+ * Returns whether an application event target belongs to retained settings
+ * controls, including the viewport overlay's native child window. The controls are
  * part of an active viewport tool rather than an outside interaction that
  * should cancel that tool.
  */
@@ -94,6 +97,13 @@ public:
   void abandon_interactions();
 
   void attach_workspace(ViewportWorkspaceService &workspace);
+  /// Adopts one retained settings overlay; null detaches the host callbacks.
+  void set_settings_panel(QtToolSettingsPanel *panel);
+  /// Samples cheap operation metadata; unchanged frames do no widget work.
+  void refresh_settings_overlay(QuaderEditorApi &editor);
+  [[nodiscard]] std::uint64_t settings_overlay_update_count() const {
+    return settings_overlay_update_count_;
+  }
   void set_viewport_settings(const ViewportSettings &settings);
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   [[nodiscard]] float
@@ -189,6 +199,8 @@ private:
   void sync_pane_control_selection(Pane &pane);
   void update_pane_geometry();
   void update_pane_overlay_geometry(Pane &pane);
+  void update_settings_overlay_geometry();
+  void abandon_settings_overlay();
   void update_focused_pane_indicator();
   void cancel_navigation();
   void request_pane_focus(ViewportPaneId pane_id,
@@ -240,6 +252,13 @@ private:
   QtUiScaleMetrics ui_scale_metrics_;
   RenderSystem *render_system_ = nullptr;
   ViewportWorkspaceService *workspace_ = nullptr;
+  QPointer<QtToolSettingsPanel> settings_panel_;
+  std::string settings_target_id_;
+  std::uint64_t settings_origin_serial_ = 0;
+  std::optional<ViewportPaneId> settings_origin_pane_;
+  std::optional<ViewportPaneId> settings_host_pane_;
+  bool settings_overlay_geometry_dirty_ = true;
+  std::uint64_t settings_overlay_update_count_ = 0;
   const ViewportSettings *viewport_settings_ = nullptr;
   LocalizationService *localization_ = nullptr;
   std::function<void(ProjectAssetId)> open_material_editor_callback_;

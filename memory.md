@@ -394,8 +394,13 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - Face Texture canvas gestures retain one planar chart and prepare every candidate from the
   original UVs. Shared preview cancellation/commit must route through its gesture owner to clear
   presentation state and dirty checkpoints; selection/scene replacement cannot leave a hidden
-  UV preview. Width/height scale the corresponding texture axis even after rotation, preserving
-  the opposite repeat length. Contracts: [canvas workflows](tests/face_texture_canvas_api_tests.cpp),
+  UV preview. Scale handles follow the signed inverse UV axes; drag deltas use the same captured
+  chart rather than world-up canvas axes. This preserves the opposite repeat length and pivot
+  across differently oriented faces, rotation and mirroring. Canvas U/V badges and guides denote
+  texture width/height, not screen directions; scale hover/drag reveals a bounded texture grid,
+  a dashed axis across the canvas and the opposite fixed pivot. Hover uses the open hand and
+  dragging uses the closed hand. Visible U/V names retain the existing X/Y API and persistence IDs.
+  Contracts: [canvas workflows](tests/face_texture_canvas_api_tests.cpp),
   [gesture math](tests/face_texture_gesture_math_tests.cpp), [Qt canvas](tests/qt_face_texture_canvas_tests.cpp).
 - Selecting a single face reveals its assigned material in the embedded browser without assignment.
   Gate this synchronization by selection/material identity, independently of catalog refresh and UV

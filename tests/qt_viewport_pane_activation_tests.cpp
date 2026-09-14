@@ -12,7 +12,6 @@
 
 #include <QApplication>
 #include <QCoreApplication>
-#include <QDockWidget>
 #include <QMainWindow>
 #include <QObject>
 #include <QWidget>
@@ -116,19 +115,18 @@ TEST(QtViewportEventTargetPolicyTests,
 }
 
 TEST(QtViewportEventTargetPolicyTests,
-     DockedControlsAndFloatedNativeWindowStayInsideTheActiveTool) {
+     OverlayControlsAndNativeChildWindowStayInsideTheActiveTool) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char application_name[] = "quader-tool-settings-dock-tests";
+  char application_name[] = "quader-viewport-settings-tests";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
 
   QMainWindow main_window;
-  QDockWidget tool_settings_dock(&main_window);
-  auto *tool_settings = new quader::QtToolSettingsPanel();
-  tool_settings_dock.setWidget(tool_settings);
-  main_window.addDockWidget(Qt::RightDockWidgetArea, &tool_settings_dock);
+  main_window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto *tool_settings = new quader::QtToolSettingsPanel(&main_window);
+  tool_settings->setAttribute(Qt::WA_NativeWindow);
 
   QObject previous_button(tool_settings);
   previous_button.setObjectName(
@@ -142,10 +140,8 @@ TEST(QtViewportEventTargetPolicyTests,
   EXPECT_TRUE(
       quader::qt_event_target_belongs_to_tool_settings(&apply_button));
 
-  tool_settings_dock.setAttribute(Qt::WA_DontShowOnScreen, true);
-  tool_settings_dock.setFloating(true);
-  (void)tool_settings_dock.winId();
-  QWindow *tool_settings_window = tool_settings_dock.windowHandle();
+  (void)tool_settings->winId();
+  QWindow *tool_settings_window = tool_settings->windowHandle();
   ASSERT_NE(tool_settings_window, nullptr);
   EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(
       tool_settings_window));

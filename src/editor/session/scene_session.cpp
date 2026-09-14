@@ -85,8 +85,22 @@ SceneSession::~SceneSession() {
   }
 }
 
+void SceneSession::record_settings_presentation_origin(
+    std::string_view target_id, ViewportPaneId pane) {
+  if (target_id.empty()) {
+    return;
+  }
+  ++settings_presentation_origin_.serial;
+  if (settings_presentation_origin_.serial == 0) {
+    ++settings_presentation_origin_.serial;
+  }
+  settings_presentation_origin_.target_id.assign(target_id);
+  settings_presentation_origin_.pane = pane;
+}
+
 void SceneSession::rebuild_services() {
   QDR_PROFILE_FUNCTION();
+  invalidate_document_binding();
   instance_edit_context_.clear();
   history_ = std::make_unique<EditorHistoryService>();
   history_->set_max_steps(history_max_steps_);
@@ -366,6 +380,7 @@ void SceneSession::replace_document_impl(
   preview_content_checkpoint_.reset();
   document_commands_->abandon_property_edit();
   document_ = std::move(document);
+  invalidate_document_binding();
   scene_surface_query_->invalidate();
   point_placement_->invalidate();
   {
@@ -402,6 +417,14 @@ void SceneSession::replace_document_impl(
     QDR_PROFILE_SCOPE("SceneSession replace mark clean");
     mark_clean();
   }
+}
+
+void SceneSession::invalidate_document_binding() {
+  ++document_binding_generation_;
+  if (document_binding_generation_ == 0) {
+    ++document_binding_generation_;
+  }
+  settings_presentation_origin_ = {};
 }
 
 void SceneSession::set_document_replacement_finalizer(

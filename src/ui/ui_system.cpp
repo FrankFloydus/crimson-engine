@@ -2829,6 +2829,7 @@ void UISystem::shutdown() {
     tool_settings_panel_->unbind();
   }
   if (viewport_panel_ != nullptr) {
+    viewport_panel_->set_settings_panel(nullptr);
     viewport_panel_->reset_interactions(editor_, native_tools_);
     viewport_panel_->shutdown();
   }
@@ -2939,10 +2940,13 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   // Keep retained property/command presentation stable during a pointer drag.
   // Curve previews publish geometry each sample just like transform previews;
   // their final revisions are presented once the gesture ends.
+  const NativeViewportToolPresentationSnapshot frame_native_tools =
+      native_tools_ != nullptr
+          ? native_tools_->presentation_snapshot()
+          : NativeViewportToolPresentationSnapshot{};
   const bool edit_drag_active =
       (modeling_ != nullptr && modeling_->transform_drag_active()) ||
-      (native_tools_ != nullptr &&
-       native_tools_->presentation_snapshot().curve_dragging);
+      frame_native_tools.curve_dragging;
   const bool numeric_interaction_active =
       (tool_settings_panel_ != nullptr &&
        tool_settings_panel_->numeric_interaction_active()) ||
@@ -2953,6 +2957,8 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       editor_ != nullptr ? editor_->tools().active_settings_revision() : 0u;
   const std::uint64_t frame_active_tool_revision =
       editor_ != nullptr ? editor_->tools().active_tool_revision() : 0u;
+  const bool frame_operation_preview_active =
+      modeling_ != nullptr && modeling_->operation_preview_active();
   const std::uint64_t frame_transform_space_revision =
       editor_ != nullptr ? editor_->viewports().transform_space_revision()
                          : 0u;
@@ -3129,22 +3135,43 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       console_panel_->refresh(context);
     }
   }
-  if (panel_visible(UIPanelId::ToolSettings) &&
-      !numeric_interaction_active) {
+  const std::uint64_t settings_operation_serial =
+      editor_ != nullptr
+          ? editor_->tools().active_settings_presentation_origin().serial
+          : 0u;
+  const auto *presented_settings = tool_settings_presenter_.presented_stamp();
+  const bool settings_lifecycle_changed =
+      presented_settings == nullptr ||
+      presented_settings->operation_serial != settings_operation_serial ||
+      presented_settings->active_tool_revision != frame_active_tool_revision ||
+      presented_settings->operation_preview_active !=
+          frame_operation_preview_active ||
+      presented_settings->curve_controls_editable !=
+          frame_native_tools.curve_controls_editable;
+  if (tool_settings_panel_ != nullptr &&
+      (!numeric_interaction_active || settings_lifecycle_changed)) {
     const ToolSettingsPresentationStamp stamp{
         .active_settings_revision = frame_tool_settings_revision,
+        .operation_serial = settings_operation_serial,
+        .active_tool_revision = frame_active_tool_revision,
+        .operation_preview_active = frame_operation_preview_active,
+        .curve_controls_editable = frame_native_tools.curve_controls_editable,
     };
     if (tool_settings_presenter_.needs_refresh(stamp)) {
-      QDR_PROFILE_SCOPE("UI refresh tool settings presentation");
-      const bool was_active = tool_settings_panel_->has_active_target();
+      QDR_PROFILE_SCOPE("UI refresh viewport settings presentation");
+      const auto binding_generation = runtime_binding_generation_;
       tool_settings_panel_->refresh();
-      if (!was_active && tool_settings_panel_->has_active_target() &&
-          panel_visible(UIPanelId::ToolSettings)) {
-        if (QDockWidget *dock = panels_.dock(UIPanelId::ToolSettings)) {
-          dock->raise();
-        }
+      if (binding_generation != runtime_binding_generation_) {
+        return;
       }
       tool_settings_presenter_.mark_presented(stamp);
+    }
+  }
+  if (viewport_panel_ != nullptr && editor_ != nullptr) {
+    const auto binding_generation = runtime_binding_generation_;
+    viewport_panel_->refresh_settings_overlay(*editor_);
+    if (binding_generation != runtime_binding_generation_) {
+      return;
     }
   }
   if (panel_presented(UIPanelId::FaceTexture)) {
@@ -3332,6 +3359,7 @@ void UISystem::create_docks() {
   console_panel_ = new ConsolePanel(main_window_.get());
   tool_settings_panel_ = new QtToolSettingsPanel(main_window_.get());
   tool_settings_panel_->set_localization(localization_);
+  viewport_panel_->set_settings_panel(tool_settings_panel_);
   face_texture_panel_ = new QtFaceTexturePanel(main_window_.get());
   face_texture_panel_->set_localization(localization_);
   QDockWidget &outliner = create_dock(
@@ -3342,15 +3370,11 @@ void UISystem::create_docks() {
       UIPanelId::Layers, *layer_panel_, Qt::RightDockWidgetArea);
   QDockWidget &console = create_dock(
       UIPanelId::Console, *console_panel_, Qt::BottomDockWidgetArea);
-  QDockWidget &tool_settings = create_dock(
-      UIPanelId::ToolSettings, *tool_settings_panel_,
-      Qt::RightDockWidgetArea);
   QDockWidget &face_texture = create_dock(
       UIPanelId::FaceTexture, *face_texture_panel_,
       Qt::RightDockWidgetArea);
   main_window_->splitDockWidget(&inspector, &layers, Qt::Vertical);
   main_window_->splitDockWidget(&inspector, &face_texture, Qt::Vertical);
-  main_window_->tabifyDockWidget(&inspector, &tool_settings);
   inspector.raise();
   const QtUiScaleMetrics &metrics = ui_scale_controller_->metrics();
   main_window_->resizeDocks({&outliner, &inspector},
@@ -4554,7 +4578,6 @@ void UISystem::refresh_localized_chrome() {
   update_title(UIPanelId::Outliner);
   update_title(UIPanelId::Inspector);
   update_title(UIPanelId::Layers);
-  update_title(UIPanelId::ToolSettings);
   update_title(UIPanelId::FaceTexture);
   update_title(UIPanelId::Console);
   if (face_texture_panel_ != nullptr) {

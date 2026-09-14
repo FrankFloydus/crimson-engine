@@ -505,6 +505,7 @@ QtViewportPanel::QtViewportPanel(QWidget *parent)
 }
 
 QtViewportPanel::~QtViewportPanel() {
+  set_settings_panel(nullptr);
   shutdown();
 }
 
@@ -530,6 +531,7 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
 }
 
 void QtViewportPanel::shutdown() {
+  abandon_settings_overlay();
   hide_primitive_feedback();
   set_modal_tool_owns_viewport_snapshot(false);
   for (Pane &pane_state : panes_) {
@@ -605,6 +607,7 @@ void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
 }
 
 void QtViewportPanel::abandon_interactions() {
+  abandon_settings_overlay();
   hide_primitive_feedback();
   ++runtime_binding_generation_;
   interaction_editor_ = nullptr;
@@ -649,6 +652,7 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   interaction_controller_.cancel_pending_material_interaction();
   interaction_controller_.cancel_pending_selection_click();
   if (workspace_ != &workspace) {
+    abandon_settings_overlay();
     hide_primitive_feedback();
     cancel_navigation();
     if (interaction_native_tools_ != nullptr) {
@@ -679,6 +683,125 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   refresh_workspace_layout();
 }
 
+void QtViewportPanel::set_settings_panel(QtToolSettingsPanel *panel) {
+  if (settings_panel_ == panel) {
+    return;
+  }
+  if (settings_panel_ != nullptr) {
+    settings_panel_->presentation_changed = {};
+    settings_panel_->hide();
+  }
+  settings_panel_ = panel;
+  abandon_settings_overlay();
+  if (panel == nullptr) {
+    return;
+  }
+  panel->setParent(this);
+  panel->setAttribute(Qt::WA_NativeWindow);
+  panel->hide();
+  panel->presentation_changed = [this]() {
+    settings_overlay_geometry_dirty_ = true;
+    update_settings_overlay_geometry();
+  };
+}
+
+void QtViewportPanel::abandon_settings_overlay() {
+  if (settings_panel_ != nullptr && !settings_panel_->isHidden()) {
+    settings_panel_->hide();
+  }
+  settings_target_id_.clear();
+  settings_origin_serial_ = 0;
+  settings_origin_pane_.reset();
+  settings_host_pane_.reset();
+  settings_overlay_geometry_dirty_ = true;
+}
+
+void QtViewportPanel::refresh_settings_overlay(QuaderEditorApi &editor) {
+  if (settings_panel_ == nullptr || workspace_ == nullptr ||
+      !settings_panel_->has_settings()) {
+    if (settings_origin_pane_.has_value()) {
+      abandon_settings_overlay();
+    }
+    return;
+  }
+  const auto &origin = editor.tools().active_settings_presentation_origin();
+  const std::string_view target_id = settings_panel_->target_id();
+  if (!settings_origin_pane_.has_value() ||
+      settings_target_id_ != target_id ||
+      settings_origin_serial_ != origin.serial) {
+    settings_target_id_ = target_id;
+    settings_origin_serial_ = origin.serial;
+    settings_origin_pane_ =
+        origin.serial != 0 && origin.target_id == target_id
+            ? origin.pane : workspace_->focused_pane();
+    settings_overlay_geometry_dirty_ = true;
+  }
+  update_settings_overlay_geometry();
+}
+
+void QtViewportPanel::update_settings_overlay_geometry() {
+  if (settings_panel_ == nullptr) {
+    return;
+  }
+  if (workspace_ == nullptr || startup_presentation_blocked_ ||
+      !settings_origin_pane_.has_value() || !settings_panel_->has_settings() ||
+      settings_panel_->target_id() != settings_target_id_) {
+    if (!settings_panel_->isHidden()) {
+      settings_panel_->hide();
+    }
+    settings_overlay_geometry_dirty_ = true;
+    return;
+  }
+
+  ViewportPaneId host_id = *settings_origin_pane_;
+  if (!pane(host_id).frame_presented) {
+    host_id = workspace_->focused_pane();
+  }
+  if (!pane(host_id).frame_presented) {
+    const auto visible = std::find_if(panes_.begin(), panes_.end(),
+        [](const Pane &candidate) { return candidate.frame_presented; });
+    if (visible == panes_.end()) {
+      if (!settings_panel_->isHidden()) {
+        settings_panel_->hide();
+      }
+      settings_overlay_geometry_dirty_ = true;
+      return;
+    }
+    host_id = visible->id;
+  }
+  if (settings_host_pane_ != host_id) {
+    settings_host_pane_ = host_id;
+    settings_overlay_geometry_dirty_ = true;
+  }
+  if (!settings_overlay_geometry_dirty_ && !settings_panel_->isHidden()) {
+    return;
+  }
+
+  ++settings_overlay_update_count_;
+  Pane &host = pane(host_id);
+  if (settings_panel_->parentWidget() != host.frame) {
+    settings_panel_->setParent(host.frame);
+  }
+  const QRect bounds = host.frame->rect();
+  const int inset = std::min({ui_scale_metrics_.px(6),
+                              std::max(0, (bounds.width() - 1) / 2),
+                              std::max(0, (bounds.height() - 1) / 2)});
+  const QSize preferred = settings_panel_->sizeHint();
+  const int width = std::clamp(preferred.width(), 1,
+                               std::max(1, bounds.width() - 2 * inset));
+  const int height = std::clamp(preferred.height(), 1,
+                                std::max(1, bounds.height() - 2 * inset));
+  const QRect geometry{inset, bounds.height() - inset - height, width, height};
+  if (settings_panel_->geometry() != geometry) {
+    settings_panel_->setGeometry(geometry);
+  }
+  if (settings_panel_->isHidden()) {
+    settings_panel_->show();
+  }
+  settings_panel_->raise();
+  settings_overlay_geometry_dirty_ = false;
+}
+
 void QtViewportPanel::set_viewport_settings(const ViewportSettings &settings) {
   viewport_settings_ = &settings;
 }
@@ -701,6 +824,8 @@ void QtViewportPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   }
   update_split_handles();
   update_focused_pane_indicator();
+  settings_overlay_geometry_dirty_ = true;
+  update_settings_overlay_geometry();
 }
 
 float QtViewportPanel::viewport_raster_scale(ViewportPaneId pane_id) const {
@@ -755,6 +880,7 @@ void QtViewportPanel::set_startup_presentation_blocked(bool blocked) {
         handle.visible = false;
       }
     }
+    update_settings_overlay_geometry();
     return;
   }
   displayed_placements_.clear();
@@ -786,6 +912,7 @@ void QtViewportPanel::refresh_workspace_layout() {
     sync_pane_control_selection(pane_state);
   }
   update_focused_pane_indicator();
+  update_settings_overlay_geometry();
 }
 
 void QtViewportPanel::process_input(
@@ -1915,6 +2042,8 @@ void QtViewportPanel::update_pane_geometry() {
       });
   update_split_handles();
   update_focused_pane_indicator();
+  settings_overlay_geometry_dirty_ = true;
+  update_settings_overlay_geometry();
 }
 
 void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
@@ -1989,6 +2118,11 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
     pane_state.info_overlay->raise();
     if (!pane_state.primitive_feedback->isHidden()) {
       pane_state.primitive_feedback->raise();
+    }
+    if (settings_panel_ != nullptr &&
+        settings_panel_->parentWidget() == pane_state.frame &&
+        !settings_panel_->isHidden()) {
+      settings_panel_->raise();
     }
     pane_state.overlay_stack_valid = true;
   }
@@ -3737,6 +3871,13 @@ void QtViewportPanel::process_viewport_input(
           });
   if (runtime_binding_generation_ != input_binding_generation) {
     return;
+  }
+  if (active_tool_result.settings_operation_started) {
+    editor.tools().record_active_settings_origin(*input_pane);
+    refresh_settings_overlay(editor);
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
   }
   if (tool_error_notification.has_value() &&
       editor.commands().last_status_revision() == tool_command_revision) {

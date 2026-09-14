@@ -22,16 +22,26 @@ file except through prior written authorization from Francesco Di Blasi.
   drags carry a project generation; mutations go through `QuaderProjectAssetsApi`, and refreshed
   owner snapshots supply the resulting tree. Permanent folder deletion requires the public
   dependency preview and its matching revision. Picker mode only browses folders.
-- `QtFaceTexturePanel` owns the single-face canvas and retained texture controls; Tool Settings
-  contains only active-tool settings. Both material-browser hosts reuse one implementation, but
+  Ctrl+wheel within a focused browser adjusts its existing thumbnail-size setting;
+  ordinary wheel scrolling and input outside that browser retain their ownership.
+- `QtFaceTexturePanel` owns the single-face canvas and retained texture controls.
+  Both material-browser hosts reuse one implementation, but
   only the embedded browser assigns explicit materials to selected faces. Canvas gestures use
   the public modeling preview lifecycle; widget state never becomes UV or material truth.
+  With no selected face, retain the bound controls with disabled actions and read-only
+  em-dash numeric values; the canvas stays empty. Unbinding still abandons their presentation.
   Visible browsers receive revision-gated catalog and usage updates during normal refresh,
   even after workspace events were consumed while hidden or the scene was already dirty.
   A browser generation change invalidates its usage/dependency presentation stamps even when
   the corresponding owner revisions are unchanged.
 - `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
   cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
+- Its retained settings overlay shows only actual settings controls and their actions, with the
+  operation title in the disclosure header. No descriptions or empty shell are shown. Expansion
+  starts collapsed and is shared across operations/panes for the app session. Scene-owned origin
+  metadata pins the overlay to the initiating pane; hover and parameter edits never move it.
+  Collapse settles field drafts without terminating the operation. See
+  `tests/qt_viewport_settings_overlay_tests.cpp` and the settings-control tests.
 - `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system
   High Contrast fallback. Preserve native control behavior and accessible default, hover, selected,
   pressed, focused, inactive, and disabled states when styling.
@@ -46,7 +56,7 @@ file except through prior written authorization from Francesco Di Blasi.
 - Floating numeric inputs use `QtDoubleSpinBox`; other numeric control text uses
   `qt_format_number`. Show at most four decimal places without trailing zeroes, while retaining
   owner-defined precision and ranges. Unedited rounded text must not change the stored value.
-  Face texture Scale X/Y deliberately retain four decimal places and share bounded binary steps
+  Face texture Scale U/V deliberately retain four decimal places and share bounded binary steps
   with the SDK texture actions; Shift and Rotate retain compact formatting.
 - Settings categories group existing descriptors by user purpose. Undo/autosave share
   `SessionPreferences`: stage changes, merge per field, persist, then publish SessionCommit.

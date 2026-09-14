@@ -11,6 +11,7 @@
 #include "api/quader_editor_api_types.hpp"
 #include "api/quader_operation_input_hint_types.hpp"
 #include "api/quader_primitive_creation_types.hpp"
+#include "api/quader_settings_presentation_types.hpp"
 #include "api/quader_viewport_input_types.hpp"
 
 #include <cstdint>
@@ -55,6 +56,11 @@ public:
     QuaderApiVoidResult begin_light_creation(QuaderLightType type);
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
     [[nodiscard]] std::uint64_t active_settings_revision() const;
+    /// Borrowed until the next operation start or session replacement; no descriptor work.
+    [[nodiscard]] const QuaderSettingsPresentationOrigin &
+    active_settings_presentation_origin() const;
+    /// Records the input pane after a successful semantic settings-operation start.
+    void record_active_settings_origin(ViewportPaneId pane);
     [[nodiscard]] std::uint64_t active_tool_revision() const;
     /// Cheap gate for owner-selected operation hints, including lifecycle/rebind.
     [[nodiscard]] std::uint64_t active_input_hints_revision() const;

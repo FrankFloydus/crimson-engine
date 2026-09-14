@@ -65,6 +65,7 @@ bool is_internal_api_header(const std::filesystem::path &path) {
   const std::string relative = normalized_relative(path);
   return relative == "src/api/quader_api_mutation_runner.hpp" ||
          relative == "src/api/quader_api_status_internal.hpp" ||
+         relative == "src/api/quader_settings_presentation_internal.hpp" ||
          relative == "src/api/quader_api_session_internal_access.hpp" ||
          relative == "src/api/quader_events_api_internal_access.hpp" ||
          relative == "src/api/quader_project_api_internal_access.hpp" ||
@@ -1628,7 +1629,7 @@ TEST(ProgrammaticApiGuardrailTests, UiPanelRoutingUsesStableIdsAndNoDeadShowMenu
             std::string::npos);
   EXPECT_NE(settings_source.find("file << ui_panel_stable_id(id)"),
             std::string::npos);
-  EXPECT_NE(ui_panel_header.find("return \"tool_settings\""),
+  EXPECT_EQ(ui_panel_header.find("return \"tool_settings\""),
             std::string::npos);
 }
 

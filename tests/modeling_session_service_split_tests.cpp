@@ -4289,7 +4289,7 @@ TEST(ModelingSessionServiceSplitTests, PolicyServicesExposeDirectBehavior) {
       "Half-Cut");
   EXPECT_STREQ(
       fallback_tool_settings_label(ModelingToolSettingsTargetKind::None),
-      "Tool Settings");
+      "Settings");
 }
 
 TEST(ModelingSessionServiceSplitTests,

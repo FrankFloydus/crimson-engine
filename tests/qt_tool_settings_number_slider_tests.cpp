@@ -22,9 +22,9 @@
 #include "ui/qt_status_message.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
-#include "ui/ui_panel_manager.hpp"
 
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QButtonGroup>
 #include <QCoreApplication>
 #include <QCheckBox>
@@ -45,6 +45,7 @@
 #include <QRadioButton>
 #include <QRegion>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QScopeGuard>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -930,6 +931,7 @@ TEST(QtToolSettingsDragSpinnerTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::PathArray).ok());
 
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
@@ -1037,6 +1039,7 @@ TEST(QtToolSettingsDragSpinnerTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::PathArray).ok());
 
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
@@ -1138,6 +1141,7 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::PathArray).ok());
 
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
@@ -1242,6 +1246,7 @@ TEST(QtToolSettingsNumberSliderTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::RadialArray).ok());
 
   quader::QtToolSettingsPanel window;
+  window.set_expanded(true);
   window.setAttribute(Qt::WA_DontShowOnScreen, true);
   window.bind(editor);
   window.show();
@@ -1324,6 +1329,7 @@ TEST(QtToolSettingsPanelTests,
       "en-US"));
 
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.set_localization(localization);
   panel.bind(editor);
@@ -1503,142 +1509,317 @@ TEST(QtToolSettingsPanelTests,
 }
 
 TEST(QtToolSettingsPanelTests,
-     CollapsibleSectionsDescribeAndResetTheActiveToolWithoutClosingThePanel) {
+     SettingsOnlyOverlayStartsCollapsedAndRemembersExpansionAcrossTargets) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char executable[] = "quader-tool-settings-panel-tests";
+  char executable[] = "quader-settings-overlay-tests";
   char *argv[] = {executable, nullptr};
   QApplication application(argc, argv);
   QApplication::setStyle(QStringLiteral("Fusion"));
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  EXPECT_FALSE(panel.has_settings());
+  EXPECT_TRUE(panel.isHidden());
+  EXPECT_FALSE(panel.expanded());
+  EXPECT_EQ(panel.findChild<QWidget *>(
+                QStringLiteral("tool_settings.description")), nullptr);
+  EXPECT_EQ(panel.findChild<QWidget *>(
+                QStringLiteral("tool_settings.section.description")), nullptr);
+  EXPECT_EQ(panel.findChild<QWidget *>(
+                QStringLiteral("tool_settings.section.settings")), nullptr);
+  EXPECT_EQ(panel.findChild<QWidget *>(
+                QStringLiteral("tool_settings.settings_empty")), nullptr);
 
-  quader::QuaderStandaloneEditor standalone =
-      quader::create_standalone_editor();
-  quader::QuaderEditorApi &editor = standalone.editor();
-  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> source =
-      editor.modeling().create_box(
-          quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                               .max = {1.0f, 1.0f, 1.0f}},
-          "Tool Settings Panel Source");
-  ASSERT_TRUE(source.ok()) << source.error_message();
-  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
-  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::RadialArray).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  panel.refresh();
+  panel.show();
+  auto *header = panel.findChild<QToolButton *>(
+      QStringLiteral("tool_settings.target_title"));
+  auto *body = panel.findChild<QScrollArea *>(
+      QStringLiteral("tool_settings.scroll"));
+  auto *reset = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.reset_defaults"));
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(body, nullptr);
+  ASSERT_NE(reset, nullptr);
+  EXPECT_TRUE(panel.has_settings());
+  EXPECT_EQ(panel.target_id(), "uv_peel");
+  EXPECT_EQ(header->text(), QStringLiteral("Guided UV Peel"));
+  EXPECT_EQ(header->arrowType(), Qt::RightArrow);
+  EXPECT_EQ(header->accessibleName(), header->text());
+  EXPECT_EQ(panel.windowTitle(), header->text());
+  EXPECT_TRUE(body->isHidden());
+  const QSize collapsed_size = panel.sizeHint();
+  EXPECT_EQ(collapsed_size.width(), 160);
+  header->click();
+  EXPECT_TRUE(panel.expanded());
+  EXPECT_FALSE(body->isHidden());
+  EXPECT_EQ(panel.sizeHint().width(), 280);
+  EXPECT_GT(panel.sizeHint().height(), collapsed_size.height());
 
-  const quader::QuaderToolSettingsTarget defaults =
-      editor.tools().active_settings();
-  const quader::QuaderToolSettingControl *default_copies =
-      find_setting(defaults, "radial_array.copies");
-  ASSERT_NE(default_copies, nullptr);
-  ASSERT_TRUE(editor.tools()
-                  .set_setting("radial_array", "radial_array.copies",
-                               default_copies->number_value + 3.0)
-                  .ok());
+  auto *repeat = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.u_repeat"));
+  ASSERT_NE(repeat, nullptr);
+  repeat->setValue(3.0);
+  finish_spin_edit(*repeat);
+  reset->click();
+  QCoreApplication::processEvents();
+  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
+  EXPECT_EQ(reset->text(), QStringLiteral("Reset Settings"));
 
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+  panel.refresh();
+  EXPECT_FALSE(panel.has_settings());
+  EXPECT_TRUE(panel.isHidden());
+  EXPECT_TRUE(panel.expanded());
+  EXPECT_TRUE(header->text().isEmpty());
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(
+                QStringLiteral("tool_settings.control.uv_peel.u_repeat")), nullptr);
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  panel.refresh();
+  EXPECT_TRUE(panel.has_settings());
+  EXPECT_TRUE(panel.expanded());
+  EXPECT_FALSE(body->isHidden());
+  panel.show();
+  EXPECT_EQ(header->text(), QString::fromStdString(editor.tools().active_settings().title));
+  panel.set_expanded(false);
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  panel.refresh();
+  EXPECT_FALSE(panel.expanded());
+  EXPECT_TRUE(body->isHidden());
+  quader::LocalizationService italian;
+  ASSERT_TRUE(italian.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "it-IT"));
+  panel.set_localization(italian);
+  EXPECT_EQ(header->text(), QStringLiteral("Distensione UV guidata"));
+  EXPECT_EQ(header->accessibleName(), header->text());
+  EXPECT_EQ(reset->text(), QStringLiteral("Ripristina impostazioni"));
+  EXPECT_FALSE(panel.expanded());
+  panel.set_expanded(true);
+  panel.unbind();
+  EXPECT_TRUE(panel.isHidden());
+  panel.bind(editor);
+  EXPECT_TRUE(panel.has_settings());
+  EXPECT_TRUE(panel.expanded());
+}
+
+TEST(QtToolSettingsPanelTests, ActiveToolWithoutSettingsHidesTheEntireOverlay) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-empty-settings-overlay-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto created = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Settings visibility");
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
-  QCoreApplication::processEvents();
+  ASSERT_TRUE(panel.has_settings());
+  ASSERT_FALSE(panel.expanded());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Mirror).ok());
+  const auto mirror_target = editor.tools().active_settings();
+  ASSERT_EQ(editor.tools().active_tool(), "mirror");
+  ASSERT_TRUE(mirror_target.controls.empty());
+  panel.refresh();
+  EXPECT_FALSE(panel.has_settings());
+  EXPECT_TRUE(panel.target_id().empty());
+  EXPECT_TRUE(panel.isHidden());
+  EXPECT_EQ(panel.findChild<QWidget *>(
+                QStringLiteral("tool_settings.control.auto_merge_vertices")), nullptr);
+  auto *header = panel.findChild<QToolButton *>(
+      QStringLiteral("tool_settings.target_title"));
+  ASSERT_NE(header, nullptr);
+  EXPECT_TRUE(header->text().isEmpty());
+  panel.unbind();
+}
 
-  auto *description_header = panel.findChild<QToolButton *>(
-      QStringLiteral("tool_settings.section.description.header"));
-  auto *description_section = panel.findChild<QWidget *>(
-      QStringLiteral("tool_settings.section.description"));
-  auto *description_content = panel.findChild<QWidget *>(
-      QStringLiteral("tool_settings.section.description.content"));
-  auto *settings_header = panel.findChild<QToolButton *>(
-      QStringLiteral("tool_settings.section.settings.header"));
-  auto *settings_section = panel.findChild<QWidget *>(
-      QStringLiteral("tool_settings.section.settings"));
-  auto *settings_content = panel.findChild<QWidget *>(
-      QStringLiteral("tool_settings.section.settings.content"));
-  auto *description = panel.findChild<QLabel *>(
-      QStringLiteral("tool_settings.description"));
+TEST(QtToolSettingsPanelTests,
+     CollapseFlushesValidDraftsAndRestoresInvalidDraftsWithoutCompletingPreview) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-settings-collapse-drafts-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto created = create_texture_action_surface(editor);
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.set_expanded(true);
+  panel.show();
+  QCoreApplication::processEvents();
+  auto *repeat = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.u_repeat"));
+  auto *apply = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.apply"));
+  ASSERT_NE(repeat, nullptr);
+  ASSERT_NE(apply, nullptr);
+  const auto history_before = editor.history().snapshot();
+  repeat->setLocale(QLocale::c());
+  type_spin_text(*repeat, QStringLiteral("2.5"));
+  panel.set_expanded(false);
+  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 2.5);
+  EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  EXPECT_EQ(editor.history().snapshot().undo_label, history_before.undo_label);
+  for (const QString &invalid : {QStringLiteral("0"), QStringLiteral("-")}) {
+    panel.set_expanded(true);
+    type_spin_text(*repeat, invalid);
+    ASSERT_FALSE(apply->isEnabled());
+    panel.set_expanded(false);
+    EXPECT_FALSE(panel.numeric_interaction_active());
+    EXPECT_DOUBLE_EQ(repeat->value(), 2.5);
+    EXPECT_NE(repeat->text(), invalid);
+    EXPECT_TRUE(apply->isEnabled());
+    process_events_for(75);
+    EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 2.5);
+    EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
+    EXPECT_EQ(editor.history().snapshot().undo_label, history_before.undo_label);
+  }
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     RepeatedOperationBeforeRefreshDiscardsOldNumericDispatchAndRetainsExpansion) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-settings-operation-serial-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_expanded(true);
+  panel.bind(editor);
+  panel.show();
+  auto *repeat = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.u_repeat"));
+  ASSERT_NE(repeat, nullptr);
+  const QPointer<QDoubleSpinBox> old_repeat(repeat);
+  repeat->setValue(7.0);
+  ASSERT_TRUE(panel.numeric_interaction_active());
+  const auto serial = editor.tools().active_settings_presentation_origin().serial;
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  ASSERT_GT(editor.tools().active_settings_presentation_origin().serial, serial);
+  panel.refresh();
+  EXPECT_TRUE(old_repeat.isNull());
+  EXPECT_TRUE(panel.expanded());
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     StaleChoicesAndLifecycleButtonsCannotChangeAReplacementOperation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-settings-stale-controls-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto created = create_texture_action_surface(editor);
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_expanded(true);
+  panel.bind(editor);
+  panel.show();
+  auto *axis = panel.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.axis"));
+  auto *world = panel.findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.world_space"));
   auto *reset = panel.findChild<QPushButton *>(
       QStringLiteral("tool_settings.reset_defaults"));
-  auto *copies_label = panel.findChild<QLabel *>(
-      QStringLiteral("tool_settings.control.radial_array.copies.label"));
-  auto *copies_slider =
-      dynamic_cast<quader::QtToolSettingsNumberSlider *>(
-          panel.findChild<QSlider *>(QStringLiteral(
-              "tool_settings.control.radial_array.copies.slider")));
-  ASSERT_NE(description_header, nullptr);
-  ASSERT_NE(description_section, nullptr);
-  ASSERT_NE(description_content, nullptr);
-  ASSERT_NE(settings_header, nullptr);
-  ASSERT_NE(settings_section, nullptr);
-  ASSERT_NE(settings_content, nullptr);
-  ASSERT_NE(description, nullptr);
+  auto *apply = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.apply"));
+  auto *cancel = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.cancel"));
+  ASSERT_NE(axis, nullptr);
+  ASSERT_NE(world, nullptr);
   ASSERT_NE(reset, nullptr);
-  ASSERT_NE(copies_label, nullptr);
-  ASSERT_NE(copies_slider, nullptr);
-  EXPECT_TRUE(panel.has_active_target());
-  EXPECT_FALSE(description->text().isEmpty());
-  EXPECT_TRUE(description_header->isChecked());
-  EXPECT_TRUE(settings_header->isChecked());
-  EXPECT_FALSE(description_section->isHidden());
-  EXPECT_FALSE(settings_section->isHidden());
-  EXPECT_FALSE(description_content->isHidden());
-  EXPECT_FALSE(settings_content->isHidden());
-  EXPECT_TRUE(reset->isEnabled());
-  EXPECT_LE(copies_label->geometry().bottom(),
-            copies_slider->geometry().top());
-
-  settings_header->click();
-  EXPECT_FALSE(settings_header->isChecked());
-  EXPECT_TRUE(settings_content->isHidden());
-  panel.refresh();
-  EXPECT_TRUE(settings_content->isHidden());
-  settings_header->click();
-  EXPECT_FALSE(settings_content->isHidden());
-
+  ASSERT_NE(cancel, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_TRUE(apply->isEnabled());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  auto options = editor.modeling().uv_peel_settings().options;
+  options.u_repeat = 3.0;
+  ASSERT_TRUE(editor.modeling().set_uv_peel_options(options).ok());
+  axis->setCurrentIndex(1);
+  world->click();
   reset->click();
-  QCoreApplication::processEvents();
-  const auto reset_target = editor.tools().active_settings();
-  const quader::QuaderToolSettingControl *reset_copies =
-      find_setting(reset_target, "radial_array.copies");
-  ASSERT_NE(reset_copies, nullptr);
-  EXPECT_DOUBLE_EQ(reset_copies->number_value, default_copies->number_value);
-
-  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  apply->click();
+  cancel->click();
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, options);
+  EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
   panel.refresh();
-  EXPECT_FALSE(panel.has_active_target());
-  EXPECT_FALSE(panel.isHidden());
-  EXPECT_FALSE(reset->isEnabled());
-  EXPECT_TRUE(description_section->isHidden());
-  EXPECT_TRUE(settings_section->isHidden());
-  auto *target_title = panel.findChild<QLabel *>(
-      QStringLiteral("tool_settings.target_title"));
-  ASSERT_NE(target_title, nullptr);
-  EXPECT_EQ(target_title->text(), QStringLiteral("No Active Tool"));
-  EXPECT_FALSE(target_title->isHidden());
-
-  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
-  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
-  quader::LocalizationService italian;
-  ASSERT_TRUE(italian.load(
-      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
-      "it-IT"));
-  panel.set_localization(italian);
-  QCoreApplication::processEvents();
-  auto *discard_left = panel.findChild<QRadioButton *>(
-      QStringLiteral(
-          "tool_settings.control.operation.cut.keep_mode.option.discard_left"));
-  ASSERT_NE(discard_left, nullptr);
-  EXPECT_FALSE(description_section->isHidden());
-  EXPECT_FALSE(settings_section->isHidden());
-  EXPECT_EQ(discard_left->text(), QStringLiteral("Scarta sinistra"));
-  EXPECT_EQ(target_title->text(), QStringLiteral("Taglia"));
-  EXPECT_FALSE(target_title->isHidden());
-  EXPECT_EQ(reset->text(), QStringLiteral("Ripristina predefiniti"));
-
-  ASSERT_TRUE(
-      editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
-  panel.refresh();
-  auto *linear_count_label = panel.findChild<QLabel *>(
-      QStringLiteral("tool_settings.control.linear_array.count.label"));
-  ASSERT_NE(linear_count_label, nullptr);
-  EXPECT_EQ(linear_count_label->text(), QStringLiteral("Numero di copie"));
   panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     PreferredSizeScalesAndUnchangedRefreshDoesNotNotifyTheViewportHost) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-settings-overlay-size-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  EXPECT_EQ(panel.sizeHint().width(), 160);
+  panel.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
+  EXPECT_EQ(panel.sizeHint().width(), 320);
+  panel.set_expanded(true);
+  EXPECT_EQ(panel.sizeHint().width(), 560);
+  panel.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
+  EXPECT_EQ(panel.sizeHint().width(), 280);
+  panel.resize(180, 180);
+  panel.show();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(panel.width(), 180);
+  auto *scroll = panel.findChild<QScrollArea *>(
+      QStringLiteral("tool_settings.scroll"));
+  auto *actions = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.actions"));
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_NE(actions, nullptr);
+  EXPECT_TRUE(panel.rect().contains(actions->geometry()));
+  EXPECT_GT(scroll->verticalScrollBar()->maximum(), 0);
+  int changes = 0;
+  panel.presentation_changed = [&] { ++changes; };
+  for (int frame = 0; frame < 20; ++frame) {
+    panel.refresh();
+  }
+  EXPECT_EQ(changes, 0);
+  panel.set_expanded(false);
+  EXPECT_EQ(changes, 1);
+  panel.unbind();
+  EXPECT_EQ(changes, 2);
 }
 
 TEST(QtFaceTextureControlsTests,
@@ -1719,11 +1900,11 @@ TEST(QtFaceTextureControlsTests,
   ASSERT_NE(edit_content, nullptr);
   ASSERT_NE(treat_as_one, nullptr);
   ASSERT_NE(align_to_face, nullptr);
-  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Shift X (px)"));
-  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Shift Y (px)"));
+  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Shift U (px)"));
+  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Shift V (px)"));
   ASSERT_EQ(scale_y->locale().decimalPoint(), QStringLiteral("."));
-  EXPECT_TRUE(section->isHidden());
-  EXPECT_TRUE(edit_section->isHidden());
+  EXPECT_FALSE(section->isHidden());
+  EXPECT_FALSE(edit_section->isHidden());
   EXPECT_TRUE(edit_header->isChecked());
   EXPECT_FALSE(treat_as_one->isChecked());
   EXPECT_EQ(edit_section->findChildren<QPushButton *>().size(), 17);
@@ -1737,6 +1918,7 @@ TEST(QtFaceTextureControlsTests,
   EXPECT_TRUE(header->isChecked());
   EXPECT_TRUE(section->findChildren<QSlider *>().isEmpty());
   quader::QtToolSettingsPanel tool_panel;
+  tool_panel.set_expanded(true);
   tool_panel.bind(editor);
   EXPECT_EQ(tool_panel.findChild<QDoubleSpinBox *>(
                 QStringLiteral("face_texture.texture.scale_x")), nullptr);
@@ -1891,8 +2073,10 @@ TEST(QtFaceTextureControlsTests,
   EXPECT_TRUE(content->isHidden());
   ASSERT_TRUE(editor.selection().clear().ok());
   panel.refresh();
-  EXPECT_TRUE(section->isHidden());
-  EXPECT_TRUE(edit_section->isHidden());
+  EXPECT_FALSE(section->isHidden());
+  EXPECT_FALSE(edit_section->isHidden());
+  EXPECT_TRUE(content->isHidden());
+  EXPECT_TRUE(edit_content->isHidden());
   ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
   panel.refresh();
   EXPECT_FALSE(section->isHidden());
@@ -1913,16 +2097,18 @@ TEST(QtFaceTextureControlsTests,
   EXPECT_EQ(treat_as_one->text(), QStringLiteral("Tratta come unico"));
   EXPECT_FALSE(align_to_face->accessibleName().isEmpty());
   EXPECT_TRUE(align_to_face->toolTip().startsWith(align_to_face->accessibleName()));
-  EXPECT_EQ(scale_x->accessibleName(), QStringLiteral("Scala X"));
-  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Spostamento X (px)"));
-  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Spostamento Y (px)"));
+  EXPECT_EQ(scale_x->accessibleName(), QStringLiteral("Scala U"));
+  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Spostamento U (px)"));
+  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Spostamento V (px)"));
   EXPECT_EQ(scale_y->locale().decimalPoint(), QStringLiteral("."));
   EXPECT_TRUE(content->isHidden());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   panel.refresh();
+  EXPECT_FALSE(section->isHidden());
+  EXPECT_FALSE(edit_section->isHidden());
+  panel.unbind();
   EXPECT_TRUE(section->isHidden());
   EXPECT_TRUE(edit_section->isHidden());
-  panel.unbind();
 }
 
 TEST(QtFaceTextureControlsTests,
@@ -2602,7 +2788,7 @@ TEST(QtFaceTextureControlsTests,
 }
 
 TEST(QtToolSettingsPanelTests,
-     UvPeelActiveSettingsRetainSceneOptionsLocaleAndClosedDockState) {
+     UvPeelActiveSettingsRetainSceneOptionsLocaleAndCollapsedState) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const QLocale previous_locale;
   const auto restore_locale =
@@ -2622,11 +2808,9 @@ TEST(QtToolSettingsPanelTests,
   window.setAttribute(Qt::WA_DontShowOnScreen, true);
   window.resize(600, 900);
   window.setCentralWidget(new QWidget(&window));
-  auto *dock = new QDockWidget(&window);
-  auto *panel = new quader::QtToolSettingsPanel(dock);
-  panel->setFixedWidth(panel->minimumWidth());
-  dock->setWidget(panel);
-  window.addDockWidget(Qt::RightDockWidgetArea, dock);
+  auto *panel = new quader::QtToolSettingsPanel(window.centralWidget());
+  panel->set_expanded(true);
+  panel->resize(280, 700);
   panel->bind(editor);
   window.show();
   QCoreApplication::processEvents();
@@ -2644,13 +2828,14 @@ TEST(QtToolSettingsPanelTests,
   const auto history_before = editor.history().snapshot();
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   panel->refresh();
+  panel->show();
   QCoreApplication::processEvents();
   auto *section = panel->findChild<QWidget *>(
-      QStringLiteral("tool_settings.section.settings"));
+      QStringLiteral("tool_settings.content"));
   auto *header = panel->findChild<QToolButton *>(
-      QStringLiteral("tool_settings.section.settings.header"));
+      QStringLiteral("tool_settings.target_title"));
   auto *content = panel->findChild<QWidget *>(
-      QStringLiteral("tool_settings.section.settings.content"));
+      QStringLiteral("tool_settings.scroll"));
   auto *axis = panel->findChild<QComboBox *>(
       QStringLiteral("tool_settings.control.uv_peel.axis"));
   auto *world_space = panel->findChild<QCheckBox *>(
@@ -2746,7 +2931,6 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, expected);
 
   header->click();
-  dock->close();
   ASSERT_TRUE(editor.selection().clear().ok());
   panel->refresh();
   EXPECT_TRUE(panel->has_active_target());
@@ -2754,7 +2938,7 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_FALSE(apply->isEnabled());
   ASSERT_TRUE(editor.selection().select_edge(created.value(), 2, 3).ok());
   panel->refresh();
-  EXPECT_TRUE(dock->isHidden());
+  EXPECT_FALSE(panel->expanded());
   EXPECT_TRUE(content->isHidden());
   EXPECT_TRUE(apply->isEnabled());
   cancel->click();
@@ -2768,7 +2952,7 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   panel->refresh();
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, expected);
-  EXPECT_TRUE(dock->isHidden());
+  EXPECT_FALSE(panel->expanded());
   panel->unbind();
 }
 
@@ -2800,6 +2984,7 @@ TEST(QtToolSettingsPanelTests,
       // Activation must expose editable settings before a guide exists.
       ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
       quader::QtToolSettingsPanel panel;
+      panel.set_expanded(true);
       panel.setAttribute(Qt::WA_DontShowOnScreen, true);
       panel.bind(editor);
       panel.show();
@@ -2892,6 +3077,7 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
@@ -2963,6 +3149,7 @@ TEST(QtToolSettingsPanelTests,
   auto &editor = standalone.editor();
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
@@ -3264,6 +3451,7 @@ TEST(QtToolSettingsPanelTests,
       editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
 
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
@@ -3323,6 +3511,7 @@ TEST(QtToolSettingsPanelTests,
       std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
       "it-IT"));
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.set_localization(italian);
   panel.bind(editor);
@@ -3429,15 +3618,14 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_EQ(editor.tools().active_tool(), "select");
 
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
   QCoreApplication::processEvents();
 
-  auto *description_section = panel.findChild<QWidget *>(
-      QStringLiteral("tool_settings.section.description"));
   auto *settings_section = panel.findChild<QWidget *>(
-      QStringLiteral("tool_settings.section.settings"));
+      QStringLiteral("tool_settings.scroll"));
   auto *solidify = panel.findChild<QCheckBox *>(
       QStringLiteral("tool_settings.control.curve.solidify"));
   auto *resolution_row = panel.findChild<QWidget *>(
@@ -3450,7 +3638,6 @@ TEST(QtToolSettingsPanelTests,
       QStringLiteral("tool_settings.control.curve.solidify.radius"));
   auto *apply_solidify = panel.findChild<QPushButton *>(
       QStringLiteral("tool_settings.control.curve.solidify.apply"));
-  ASSERT_NE(description_section, nullptr);
   ASSERT_NE(settings_section, nullptr);
   ASSERT_NE(solidify, nullptr);
   ASSERT_NE(resolution_row, nullptr);
@@ -3459,7 +3646,6 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_NE(radius, nullptr);
   ASSERT_NE(apply_solidify, nullptr);
   EXPECT_TRUE(panel.has_active_target());
-  EXPECT_FALSE(description_section->isHidden());
   EXPECT_FALSE(settings_section->isHidden());
   EXPECT_FALSE(solidify->isChecked());
   EXPECT_FALSE(resolution_row->isEnabled());
@@ -3524,7 +3710,6 @@ TEST(QtToolSettingsPanelTests,
   panel.refresh();
   QCoreApplication::processEvents();
   EXPECT_FALSE(panel.has_active_target());
-  EXPECT_TRUE(description_section->isHidden());
   EXPECT_TRUE(settings_section->isHidden());
   EXPECT_TRUE(retained_solidify.isNull());
   EXPECT_TRUE(retained_resolution.isNull());
@@ -3558,6 +3743,7 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
@@ -3648,6 +3834,7 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 
   quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.resize(360, 640);
   panel.bind(editor);
@@ -3799,67 +3986,59 @@ TEST(QtToolSettingsPanelTests,
 }
 
 TEST(QtToolSettingsPanelTests,
-     DockedNativeWindowClassificationAndTabRefreshUseDockSignals) {
+     NativeOverlayHeaderAndComboPopupOwnInputOnlyWithinTheirSurface) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char executable[] = "quader-tool-settings-native-window-tests";
+  char executable[] = "quader-settings-native-window-tests";
   char *argv[] = {executable, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
-
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   QMainWindow main_window;
   main_window.setAttribute(Qt::WA_DontShowOnScreen, true);
   main_window.resize(900, 600);
   auto *central = new QWidget(&main_window);
   main_window.setCentralWidget(central);
-
-  auto *tool_settings_dock = new QDockWidget(&main_window);
-  auto *tool_settings = new quader::QtToolSettingsPanel();
-  tool_settings_dock->setWidget(tool_settings);
-  main_window.addDockWidget(Qt::RightDockWidgetArea, tool_settings_dock);
-  auto *inspector_dock = new QDockWidget(&main_window);
-  inspector_dock->setWidget(new QWidget());
-  main_window.addDockWidget(Qt::RightDockWidgetArea, inspector_dock);
-  quader::UIPanelManager panels;
-  panels.add(quader::UIPanelId::ToolSettings, *tool_settings_dock);
-  panels.add(quader::UIPanelId::Inspector, *inspector_dock);
-  main_window.tabifyDockWidget(inspector_dock, tool_settings_dock);
-
+  auto *panel = new quader::QtToolSettingsPanel(central);
+  panel->setAttribute(Qt::WA_NativeWindow, true);
+  panel->bind(editor);
+  panel->set_expanded(true);
+  panel->setGeometry(6, 100, 280, 450);
+  panel->show();
   main_window.show();
-  tool_settings_dock->show();
-  tool_settings_dock->raise();
   QCoreApplication::processEvents();
-  QWindow *native_main_window = main_window.windowHandle();
-  ASSERT_NE(native_main_window, nullptr);
-  const QRegion tool_settings_region = tool_settings->visibleRegion();
-  ASSERT_FALSE(tool_settings_region.isEmpty());
-  const QPoint tool_settings_point =
-      tool_settings->mapToGlobal(tool_settings_region.begin()->center());
-  const QPoint viewport_point = central->mapToGlobal(central->rect().center());
-
-  // The shared main QWindow is not blanket-classified as Tool Settings.
-  EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
-      native_main_window));
+  auto *header = panel->findChild<QToolButton *>(
+      QStringLiteral("tool_settings.target_title"));
+  auto *combo = panel->findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.axis"));
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(combo, nullptr);
+  ASSERT_NE(panel->windowHandle(), nullptr);
+  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(header));
+  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(combo));
+  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(panel->windowHandle()));
+  EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(main_window.windowHandle()));
   EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(
-      native_main_window, tool_settings_point));
+      main_window.windowHandle(), header->mapToGlobal(header->rect().center())));
   EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
-      native_main_window, viewport_point));
-  EXPECT_TRUE(panels.is_presented(quader::UIPanelId::ToolSettings));
-  EXPECT_TRUE(
-      panels.set_visible(quader::UIPanelId::ToolSettings, false));
+      main_window.windowHandle(), central->mapToGlobal(QPoint(800, 100))));
+  combo->showPopup();
   QCoreApplication::processEvents();
-  EXPECT_FALSE(panels.is_presented(quader::UIPanelId::ToolSettings));
-  EXPECT_TRUE(panels.set_visible(quader::UIPanelId::ToolSettings, true));
-  tool_settings_dock->raise();
+  QWidget *popup = combo->view()->window();
+  ASSERT_NE(popup, nullptr);
+  ASSERT_NE(popup->windowHandle(), nullptr);
+  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(combo->view()));
+  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(popup->windowHandle()));
+  combo->hidePopup();
+  panel->set_expanded(false);
+  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(header));
+  panel->hide();
   QCoreApplication::processEvents();
-  EXPECT_TRUE(panels.is_presented(quader::UIPanelId::ToolSettings));
-
-  inspector_dock->raise();
-  QCoreApplication::processEvents();
-  EXPECT_FALSE(panels.is_presented(quader::UIPanelId::ToolSettings));
-  EXPECT_TRUE(panels.is_presented(quader::UIPanelId::Inspector));
   EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
-      native_main_window, tool_settings_point));
+      main_window.windowHandle(), header->mapToGlobal(header->rect().center())));
+  panel->unbind();
 }
 
 TEST(QtToolSettingsNumberSliderTests,
@@ -3888,6 +4067,7 @@ TEST(QtToolSettingsNumberSliderTests,
                                   "Focused Settings Box")
                   .ok);
   quader::QtToolSettingsPanel window;
+  window.set_expanded(true);
   window.setAttribute(Qt::WA_DontShowOnScreen, true);
   window.bind(editor);
   window.show();
@@ -4048,6 +4228,7 @@ TEST(QtToolSettingsNumberSliderTests,
   ASSERT_EQ(mesh_before->index_count, 36u);
 
   quader::QtToolSettingsPanel window;
+  window.set_expanded(true);
   window.setAttribute(Qt::WA_DontShowOnScreen, true);
   window.bind(editor);
   window.show();
@@ -4253,11 +4434,19 @@ TEST(QtToolSettingsNumberSliderTests,
                                "operation.edge_bevel.segments", 1.0)
                   .ok());
 
-  quader::QtToolSettingsPanel window;
-  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  // Keep the application window alive when an empty overlay hides itself.
+  // A hidden offscreen top-level widget loses activation on Windows; the real
+  // overlay is a child of a viewport whose application window stays active.
+  QWidget host;
+  host.setAttribute(Qt::WA_DontShowOnScreen, true);
+  QHBoxLayout host_layout(&host);
+  quader::QtToolSettingsPanel window(&host);
+  host_layout.addWidget(&window);
+  window.set_expanded(true);
   window.bind(editor);
   window.show();
-  window.activateWindow();
+  host.show();
+  host.activateWindow();
   QCoreApplication::processEvents();
 
   auto *width_slider = window.findChild<QSlider *>(QStringLiteral(
@@ -4661,7 +4850,12 @@ TEST(QtToolSettingsNumberSliderTests,
                       "bevel_edges"))
                   .ok());
   window.refresh();
+  // Undo hid the empty overlay. Its standalone host restores visibility when
+  // settings return, as QtViewportPanel does in the application.
+  window.show();
   QCoreApplication::processEvents();
+  ASSERT_TRUE(host.isActiveWindow());
+  ASSERT_TRUE(window.isVisible());
   segments_spin = window.findChild<QSpinBox *>(QStringLiteral(
       "tool_settings.control.operation.edge_bevel.segments"));
   auto *cancel_button = window.findChild<QPushButton *>(
@@ -4798,6 +4992,7 @@ TEST(QtFaceTextureControlsTests,
 
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   quader::QtToolSettingsPanel tool_panel;
+  tool_panel.set_expanded(true);
   tool_panel.bind(editor);
   const std::array<std::pair<const char *, const char *>, 5> peel_bindings{{
       {"tool_settings.control.uv_peel.world_space",

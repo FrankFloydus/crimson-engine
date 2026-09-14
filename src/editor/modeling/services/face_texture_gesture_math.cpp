@@ -124,8 +124,17 @@ modeling::Result<Map> prepare_face_texture_gesture_map(
     spatial.uv_from_plane = {c, s, -s, c};
   } else {
     const bool width = begin.kind == ModelingFaceTextureGestureKind::ScaleWidth;
-    const double initial = width ? begin.start.x - px : begin.start.y - py;
-    const double current = width ? update.current.x - px : update.current.y - py;
+    const std::size_t row = width ? 0 : 2;
+    const auto &matrix = baseline.chart.map.uv_from_plane;
+    const double row_length = std::hypot(matrix[row], matrix[row + 1]);
+    const double axis_x = matrix[row] / row_length;
+    const double axis_y = matrix[row + 1] / row_length;
+    // The selected UV row ignores movement along the other image axis, even
+    // for a sheared chart. Normalize it so pivot tolerance stays in map units.
+    const double initial = axis_x * (begin.start.x - px) +
+                           axis_y * (begin.start.y - py);
+    const double current = axis_x * (update.current.x - px) +
+                           axis_y * (update.current.y - py);
     if (std::abs(initial) < 1.0e-8) return failure("Texture scale pivot coincides with its handle.");
     if (current == initial) return modeling::Result<Map>::success(baseline.chart.map);
     double factor = current / initial;
@@ -147,7 +156,6 @@ modeling::Result<Map> prepare_face_texture_gesture_map(
     // The normal pointer motion drives an image-axis dimension. Scale the UV
     // row rather than shearing the rotated chart in physical plane coordinates.
     Map candidate = baseline.chart.map;
-    const std::size_t row = width ? 0 : 2;
     const std::size_t axis = width ? 0 : 1;
     const double pivot_uv = candidate.uv_from_plane[row] * px +
         candidate.uv_from_plane[row + 1] * py + candidate.uv_offset[axis];

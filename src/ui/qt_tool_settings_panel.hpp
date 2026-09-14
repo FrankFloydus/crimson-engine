@@ -9,7 +9,9 @@
 #include <QPoint>
 #include <QWidget>
 
+#include <functional>
 #include <memory>
+#include <string_view>
 
 class QObject;
 
@@ -20,7 +22,7 @@ class QuaderEditorApi;
 class QtUiScaleMetrics;
 
 /**
- * Presents the active tool settings as retained dock content.
+ * Presents active settings in a collapsible viewport overlay.
  * Call refresh from the host UI update path so activation, value changes, and
  * preview completion are reflected immediately.
  */
@@ -38,6 +40,14 @@ public:
   void set_localization(const LocalizationService &localization);
   void refresh();
   [[nodiscard]] bool has_active_target() const;
+  [[nodiscard]] bool has_settings() const;
+  [[nodiscard]] std::string_view target_id() const;
+  [[nodiscard]] bool expanded() const;
+  void set_expanded(bool expanded);
+  [[nodiscard]] QSize sizeHint() const override;
+
+  /// Requests host placement after presence or preferred geometry changes.
+  std::function<void()> presentation_changed;
   /**
    * Returns whether a local numeric edit is still in progress or waiting to
    * dispatch. This is a presentation-only check and performs no owner query.
@@ -50,16 +60,15 @@ private:
 };
 
 /**
- * Returns whether an application event target belongs to Tool Settings,
- * including the native window used when its owning dock is floated.
+ * Returns whether an application event target belongs to the settings overlay,
+ * including native child windows and settings control popups.
  */
 [[nodiscard]] bool
 qt_object_belongs_to_tool_settings_panel(const QObject *target);
 
 /**
- * Resolves native-window pointer delivery for a docked panel. A docked
- * QWindow is shared with the main window, so only the visible Tool Settings
- * region at the event position is treated as panel-owned.
+ * Resolves pointer delivery shared with an ancestor native window by testing
+ * the visible settings region at the event position.
  */
 [[nodiscard]] bool qt_object_belongs_to_tool_settings_panel(
     const QObject *target, const QPoint &global_position);

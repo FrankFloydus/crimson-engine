@@ -12,6 +12,7 @@
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_numeric_format.hpp"
+#include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 
 #include <QApplication>
@@ -22,9 +23,12 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPushButton>
+#include <QRegion>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QStringList>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -33,6 +37,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -93,6 +98,57 @@ protected:
     return canvas_->plane_to_view().map(
         plane_bounds().center() + QPointF(plane_bounds().width() * 0.2,
                                           plane_bounds().height() * 0.2));
+  }
+
+  std::optional<QPointF> painted_scale_handle(bool width) const {
+    const QImage image = render_canvas_surface();
+    const QRgb color = qt_semantic_axis_color(
+        width ? quader_editor_core::ViewAxis::X
+              : quader_editor_core::ViewAxis::Y).rgb();
+    QRect colored_pixels;
+    for (int y = 0; y < image.height(); ++y) {
+      for (int x = 0; x < image.width(); ++x) {
+        if (image.pixel(x, y) == color) {
+          colored_pixels = colored_pixels.united(QRect(x, y, 1, 1));
+        }
+      }
+    }
+    return colored_pixels.isEmpty()
+        ? std::nullopt
+        : std::optional<QPointF>{QRectF(colored_pixels).center()};
+  }
+
+  QImage render_canvas_surface() const {
+    QImage image(canvas_->size(), QImage::Format_ARGB32);
+    canvas_->render(&image, QPoint(), QRegion(), QWidget::DrawWindowBackground);
+    return image;
+  }
+
+  void set_directional_brick_texture() {
+    QImage source(64, 64, QImage::Format_RGB32);
+    source.fill(QColor(30, 33, 37));
+    QPainter painter(&source);
+    painter.setPen(QColor(117, 120, 121));
+    for (int row = 0; row < 4; ++row) {
+      const int offset = row % 2 == 0 ? 0 : -16;
+      for (int column = 0; column < 3; ++column) {
+        const QRect brick(offset + column * 32 + 1, row * 16 + 1, 30, 14);
+        painter.fillRect(brick, QColor(69 + row * 5, 73 + row * 5, 78 + row * 5));
+        painter.drawLine(brick.topLeft(), brick.topRight());
+        painter.drawLine(brick.topLeft(), brick.bottomLeft());
+      }
+    }
+    painter.end();
+    QByteArray encoded;
+    QBuffer buffer(&encoded);
+    ASSERT_TRUE(buffer.open(QIODevice::WriteOnly));
+    ASSERT_TRUE(source.save(&buffer, "PNG"));
+    QtMaterialPresentationItem material;
+    material.reference = canvas_->material_reference();
+    material.encoded_albedo = encoded;
+    material.has_valid_albedo = true;
+    material.content_revision = 1;
+    canvas_->set_material_presentation(material);
   }
 
   void expect_mapping(const QuaderFaceTextureCanvas &actual,
@@ -198,17 +254,14 @@ TEST_F(QtFaceTextureCanvasTests,
        OppositeEdgeScaleHandlesControlHeightAndWidthWithPrecisionModifiers) {
   ASSERT_TRUE(canvas_->presentation().editable);
   for (const bool height : {true, false}) {
-    SCOPED_TRACE(height ? "upper X handle scales height" :
-                            "right Y handle scales width");
+    SCOPED_TRACE(height ? "green V handle scales height" :
+                            "red U handle scales width");
     const auto before = canvas_->presentation();
     const QRectF bounds = plane_bounds();
-    const QPointF plane_handle =
-        height ? QPointF(bounds.center().x(), bounds.bottom())
-               : QPointF(bounds.right(), bounds.center().y());
-    const QPointF start = canvas_->plane_to_view().map(plane_handle);
-    const QPointF pivot = canvas_->plane_to_view().map(
-        height ? QPointF(bounds.center().x(), bounds.top())
-               : QPointF(bounds.left(), bounds.center().y()));
+    const auto painted = painted_scale_handle(!height);
+    ASSERT_TRUE(painted.has_value());
+    const QPointF start = *painted;
+    const QPointF pivot = canvas_->plane_to_view().map(bounds.center()) * 2.0 - start;
     // Default repeats are two map units: a small pixel movement can correctly
     // quantize back to two. Cross a complete precision step before checking undo.
     const QPointF end = start + (start - pivot) * 0.625;
@@ -228,6 +281,338 @@ TEST_F(QtFaceTextureCanvasTests,
     ASSERT_TRUE(editor().history().undo().ok());
     canvas_->refresh();
     expect_mapping(canvas_->presentation(), before);
+  }
+}
+
+TEST_F(QtFaceTextureCanvasTests,
+       PaintedScaleHandlesFollowSignedTextureAxesAcrossFacesAndRotatedMirrors) {
+  // Preserve authored cube projections: forcing Rotate=0 would erase the
+  // differing texture directions on side faces that prompted this regression.
+  for (int scenario = 0; scenario < 8; ++scenario) {
+    const QuaderElementId face = scenario < 6 ? scenario + 1 : 2;
+    SCOPED_TRACE(::testing::Message() << "face=" << face
+                                    << " scenario=" << scenario);
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    if (scenario >= 6) {
+      for (const auto [field, value] : {
+          std::pair{QuaderFaceTextureField::ScaleX, scenario == 6 ? -8.0 : 8.0},
+          std::pair{QuaderFaceTextureField::ScaleY, scenario == 6 ? 16.0 : -16.0},
+          std::pair{QuaderFaceTextureField::Rotate, scenario == 6 ? 90.0 : 37.0}}) {
+        ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+            .field = field, .value = value,
+            .selection_token = editor().modeling()
+                                   .face_texture_settings().selection_token}).ok());
+      }
+    }
+    canvas_->refresh();
+    ASSERT_TRUE(canvas_->presentation().editable);
+    save_canvas(QStringLiteral("canvas_texture_axes_%1.png").arg(scenario));
+    for (const bool width : {true, false}) {
+      SCOPED_TRACE(width ? "red U width" : "green V height");
+      const auto before = canvas_->presentation();
+      const auto stored_before = editor().modeling().face_texture_settings();
+      const auto &mapping = before.uv_from_plane;
+      const double determinant = mapping[0] * mapping[3] - mapping[1] * mapping[2];
+      ASSERT_GT(std::abs(determinant), 1.0e-12);
+      QPointF direction = width
+          ? QPointF(mapping[3], -mapping[2]) / determinant
+          : QPointF(-mapping[1], mapping[0]) / determinant;
+      direction /= std::hypot(direction.x(), direction.y());
+      const QRectF bounds = plane_bounds();
+      const QPointF center = bounds.center();
+      const QPointF center_view = canvas_->plane_to_view().map(center);
+      const auto painted = painted_scale_handle(width);
+      ASSERT_TRUE(painted.has_value());
+      const QPointF painted_plane = canvas_->plane_to_view().inverted().map(*painted);
+      const QPointF displayed_direction = painted_plane - center;
+      const double displayed_length = std::hypot(displayed_direction.x(),
+                                                  displayed_direction.y());
+      ASSERT_GT(displayed_length, 0.0);
+      EXPECT_GT(QPointF::dotProduct(displayed_direction / displayed_length,
+                                   direction), 0.999);
+
+      // The opposite face-boundary point is the pinned UV pivot, independently
+      // of where rasterization rounded the colored handle's center.
+      const double reach = std::min(
+          std::abs(direction.x()) > 1.0e-10
+              ? bounds.width() / (2.0 * std::abs(direction.x())) : 1.0e30,
+          std::abs(direction.y()) > 1.0e-10
+              ? bounds.height() / (2.0 * std::abs(direction.y())) : 1.0e30);
+      const QPointF pivot = center - direction * reach;
+      const auto uv_at = [](const QuaderFaceTextureCanvas &state, QPointF point) {
+        const auto &matrix = state.uv_from_plane;
+        return QPointF(matrix[0] * point.x() + matrix[1] * point.y() + state.uv_offset.x,
+                       matrix[2] * point.x() + matrix[3] * point.y() + state.uv_offset.y);
+      };
+      for (const bool outward : {true, false}) {
+        SCOPED_TRACE(outward ? "outward commit and undo" : "inward cancel");
+        const QPointF end = *painted + (*painted - center_view) *
+            (outward ? 1.25 : -1.0);
+        mouse(QEvent::MouseButtonPress, *painted, Qt::LeftButton, Qt::LeftButton);
+        ASSERT_TRUE(canvas_->interaction_active());
+        mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton,
+              Qt::ControlModifier);
+        const auto after = canvas_->presentation();
+        const double repeat_before = width ? before.repeat_width : before.repeat_height;
+        const double repeat_after = width ? after.repeat_width : after.repeat_height;
+        if (outward) {
+          EXPECT_GT(repeat_after, repeat_before);
+        } else {
+          EXPECT_LT(repeat_after, repeat_before);
+        }
+        EXPECT_NEAR(width ? after.repeat_height : after.repeat_width,
+                    width ? before.repeat_height : before.repeat_width, 0.0001);
+        const auto stored_after = editor().modeling().face_texture_settings();
+        ASSERT_TRUE(stored_before.scale_x.has_value());
+        ASSERT_TRUE(stored_before.scale_y.has_value());
+        ASSERT_TRUE(stored_after.scale_x.has_value());
+        ASSERT_TRUE(stored_after.scale_y.has_value());
+        EXPECT_EQ(std::signbit(*stored_after.scale_x), std::signbit(*stored_before.scale_x));
+        EXPECT_EQ(std::signbit(*stored_after.scale_y), std::signbit(*stored_before.scale_y));
+        EXPECT_NEAR(uv_at(after, pivot).x(), uv_at(before, pivot).x(), 0.0001);
+        EXPECT_NEAR(uv_at(after, pivot).y(), uv_at(before, pivot).y(), 0.0001);
+        expect_outline(after, before);
+        if (outward) {
+          mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton,
+                Qt::ControlModifier);
+          ASSERT_TRUE(editor().history().undo().ok());
+          canvas_->refresh();
+        } else {
+          QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+          QCoreApplication::sendEvent(canvas_.get(), &escape);
+          mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+        }
+        EXPECT_FALSE(canvas_->interaction_active());
+        expect_mapping(canvas_->presentation(), before);
+        expect_outline(canvas_->presentation(), before);
+      }
+    }
+  }
+}
+
+TEST_F(QtFaceTextureCanvasTests,
+       TextureAxisBadgesExplainWidthAndHeightAndRevealScaleGuidesOnlyWhenEditable) {
+  auto *feedback = canvas_->findChild<QLabel *>(
+      QStringLiteral("face_texture.canvas.measurement"));
+  ASSERT_NE(feedback, nullptr);
+  for (const bool rotated_mirror : {false, true}) {
+    SCOPED_TRACE(rotated_mirror ? "oblique mirrored texture" : "authored face");
+    for (const auto [field, value] : {
+         std::pair{QuaderFaceTextureField::ScaleX, 32.0},
+         std::pair{QuaderFaceTextureField::ScaleY, rotated_mirror ? -32.0 : 32.0}}) {
+      ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+          .field = field, .value = value,
+          .selection_token = editor().modeling()
+                                 .face_texture_settings().selection_token}).ok());
+    }
+    if (rotated_mirror) {
+      ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+          .field = QuaderFaceTextureField::Rotate, .value = 37.0,
+          .selection_token = editor().modeling()
+                                 .face_texture_settings().selection_token}).ok());
+    }
+    canvas_->resize(rotated_mirror ? QSize(220, 260) : QSize(420, 320));
+    canvas_->refresh();
+    set_directional_brick_texture();
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(canvas_.get(), &leave);
+    const QString scenario = rotated_mirror ? QStringLiteral("mirrored")
+                                            : QStringLiteral("authored");
+    save_canvas(QStringLiteral("canvas_uv_%1_idle.png").arg(scenario));
+    const QImage idle = render_canvas_surface();
+    const auto before = canvas_->presentation();
+    for (const bool width : {true, false}) {
+      SCOPED_TRACE(width ? "U width" : "V height");
+      const auto handle = painted_scale_handle(width);
+      ASSERT_TRUE(handle.has_value());
+      const QPoint location = handle->toPoint();
+      int contrasting_glyph_pixels = 0;
+      for (int y = -4; y <= 4; ++y) {
+        for (int x = -4; x <= 4; ++x) {
+          const QPoint sample = location + QPoint(x, y);
+          ASSERT_TRUE(idle.rect().contains(sample));
+          const QColor color = idle.pixelColor(sample);
+          const int brightest = std::max({color.red(), color.green(), color.blue()});
+          const int darkest = std::min({color.red(), color.green(), color.blue()});
+          if (brightest < 65 || darkest > 210) {
+            ++contrasting_glyph_pixels;
+          }
+        }
+      }
+      // The letter remains a visible identifier without relying on axis color.
+      EXPECT_GE(contrasting_glyph_pixels, 3);
+      mouse(QEvent::MouseMove, *handle, Qt::NoButton, Qt::NoButton);
+      EXPECT_TRUE(canvas_->toolTip().contains(width
+          ? QStringLiteral("Texture width (U)")
+          : QStringLiteral("Texture height (V)")));
+      EXPECT_FALSE(feedback->isHidden());
+      EXPECT_TRUE(feedback->accessibleName().contains(QStringLiteral("U width:")));
+      EXPECT_TRUE(feedback->accessibleName().contains(QStringLiteral("V height:")));
+
+      const QImage hovered = render_canvas_surface();
+      const QRect interior = canvas_->plane_to_view().mapRect(plane_bounds())
+                                 .toAlignedRect().adjusted(18, 18, -18, -18)
+                                 .intersected(canvas_->rect());
+      int changed_interior_pixels = 0;
+      for (int y = interior.top(); y <= interior.bottom(); ++y) {
+        for (int x = interior.left(); x <= interior.right(); ++x) {
+          if (hovered.pixel(x, y) != idle.pixel(x, y)) {
+            ++changed_interior_pixels;
+          }
+        }
+      }
+      // A texture-aligned guide must reach the face interior; changing just
+      // the badge border would leave the scaling direction unexplained.
+      EXPECT_GT(changed_interior_pixels, 30);
+      const QString axis = width ? QStringLiteral("u") : QStringLiteral("v");
+      save_canvas(QStringLiteral("canvas_uv_%1_%2_hover.png").arg(scenario, axis));
+      const QPointF center = canvas_->plane_to_view().map(plane_bounds().center());
+      const QPointF end = *handle + (*handle - center) * 0.3;
+      mouse(QEvent::MouseButtonPress, *handle, Qt::LeftButton, Qt::LeftButton);
+      mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton,
+            Qt::ControlModifier);
+      ASSERT_TRUE(canvas_->interaction_active());
+      save_canvas(QStringLiteral("canvas_uv_%1_%2_drag.png").arg(scenario, axis));
+      QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+      QCoreApplication::sendEvent(canvas_.get(), &escape);
+      mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+      QCoreApplication::sendEvent(canvas_.get(), &leave);
+      expect_mapping(canvas_->presentation(), before);
+    }
+  }
+
+  const auto old_handle = painted_scale_handle(true);
+  ASSERT_TRUE(old_handle.has_value());
+  mouse(QEvent::MouseMove, *old_handle, Qt::NoButton, Qt::NoButton);
+  ASSERT_TRUE(editor().modeling().begin_transform_preview().ok());
+  canvas_->refresh();
+  ASSERT_FALSE(canvas_->presentation().editable);
+  EXPECT_TRUE(feedback->isHidden());
+  EXPECT_FALSE(painted_scale_handle(true).has_value());
+  EXPECT_FALSE(painted_scale_handle(false).has_value());
+  const QImage disabled = render_canvas_surface();
+  mouse(QEvent::MouseMove, *old_handle, Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(render_canvas_surface(), disabled);
+  ASSERT_TRUE(editor().modeling().cancel_transform_preview().ok());
+  ASSERT_TRUE(editor().selection().clear().ok());
+  canvas_->refresh();
+  const QImage empty = render_canvas_surface();
+  mouse(QEvent::MouseMove, *old_handle, Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(render_canvas_surface(), empty);
+  EXPECT_TRUE(feedback->isHidden());
+  EXPECT_FALSE(painted_scale_handle(true).has_value());
+  EXPECT_FALSE(painted_scale_handle(false).has_value());
+}
+
+TEST_F(QtFaceTextureCanvasTests,
+       HoveredTextureAxisDashesReachBothCanvasEdgesAndUseGrabCursors) {
+  for (const bool rotated_mirror : {false, true}) {
+    SCOPED_TRACE(rotated_mirror ? "oblique mirrored texture" : "authored face");
+    if (rotated_mirror) {
+      for (const auto [field, value] : {
+           std::pair{QuaderFaceTextureField::ScaleY, -32.0},
+           std::pair{QuaderFaceTextureField::Rotate, 37.0}}) {
+        ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+            .field = field, .value = value,
+            .selection_token = editor().modeling()
+                                   .face_texture_settings().selection_token}).ok());
+      }
+      canvas_->refresh();
+    }
+    const QPointF center = canvas_->plane_to_view().map(plane_bounds().center());
+    // Leave enough space beyond the face for several visible dashes and gaps.
+    QWheelEvent wheel(center, canvas_->mapToGlobal(center.toPoint()), {},
+                      QPoint(0, -360), Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(canvas_.get(), &wheel);
+    set_directional_brick_texture();
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(canvas_.get(), &leave);
+    const QImage idle = render_canvas_surface();
+    for (const bool width : {true, false}) {
+      SCOPED_TRACE(width ? "U width" : "V height");
+      const auto handle = painted_scale_handle(width);
+      ASSERT_TRUE(handle.has_value());
+      const auto &mapping = canvas_->presentation().uv_from_plane;
+      const ::QTransform plane_to_uv(mapping[0], mapping[2], mapping[1], mapping[3], 0, 0);
+      const ::QTransform uv_to_view = plane_to_uv.inverted() * canvas_->plane_to_view();
+      const QPointF axis = uv_to_view.map(width ? QPointF(1, 0) : QPointF(0, 1))
+                           - uv_to_view.map(QPointF());
+      const QPointF direction = axis / std::hypot(axis.x(), axis.y());
+      const QRectF face_margin = canvas_->plane_to_view().mapRect(plane_bounds())
+                                     .adjusted(-18, -18, 18, 18);
+      const QRect safe_canvas = canvas_->rect().adjusted(2, 2, -2, -2);
+      std::array<std::vector<QPoint>, 2> rays;
+      for (std::size_t side = 0; side < rays.size(); ++side) {
+        for (int distance = 1; distance < canvas_->width() + canvas_->height(); ++distance) {
+          const QPointF point = center + direction * distance * (side == 0 ? -1.0 : 1.0);
+          if (!safe_canvas.contains(point.toPoint())) {
+            break;
+          }
+          if (!face_margin.contains(point)) {
+            rays[side].push_back(point.toPoint());
+          }
+        }
+        ASSERT_GT(rays[side].size(), 24u);
+      }
+      const auto expect_axis = [&idle, &rays](const QImage &image, bool visible) {
+        for (std::size_t side = 0; side < rays.size(); ++side) {
+          SCOPED_TRACE(side == 0 ? "opposite ray" : "handle ray");
+          int strokes = 0;
+          int gaps = 0;
+          int strokes_near_edge = 0;
+          for (std::size_t index = 0; index < rays[side].size(); ++index) {
+            bool changed = false;
+            for (int y = -1; y <= 1; ++y) {
+              for (int x = -1; x <= 1; ++x) {
+                const QPoint sample = rays[side][index] + QPoint(x, y);
+                changed = changed || image.pixel(sample) != idle.pixel(sample);
+              }
+            }
+            if (changed) {
+              ++strokes;
+              if (index + 16 >= rays[side].size()) {
+                ++strokes_near_edge;
+              }
+            } else {
+              ++gaps;
+            }
+          }
+          if (visible) {
+            EXPECT_GT(strokes, 4);
+            EXPECT_GT(gaps, 2);
+            EXPECT_GT(strokes_near_edge, 2);
+          } else {
+            EXPECT_EQ(strokes, 0);
+          }
+        }
+      };
+      mouse(QEvent::MouseMove, *handle, Qt::NoButton, Qt::NoButton);
+      EXPECT_EQ(canvas_->cursor().shape(), Qt::OpenHandCursor);
+      expect_axis(render_canvas_surface(), true);
+      save_canvas(QStringLiteral("canvas_axis_guide_%1_%2_hover.png")
+                      .arg(rotated_mirror ? QStringLiteral("mirrored") : QStringLiteral("authored"),
+                           width ? QStringLiteral("u") : QStringLiteral("v")));
+      mouse(QEvent::MouseButtonPress, *handle, Qt::LeftButton, Qt::LeftButton);
+      ASSERT_TRUE(canvas_->interaction_active());
+      EXPECT_EQ(canvas_->cursor().shape(), Qt::ClosedHandCursor);
+      expect_axis(render_canvas_surface(), true);
+      mouse(QEvent::MouseButtonRelease, *handle, Qt::LeftButton, Qt::NoButton);
+      ASSERT_FALSE(canvas_->interaction_active());
+      EXPECT_EQ(canvas_->cursor().shape(), Qt::OpenHandCursor);
+      expect_axis(render_canvas_surface(), true);
+      QCoreApplication::sendEvent(canvas_.get(), &leave);
+      EXPECT_EQ(render_canvas_surface(), idle);
+
+      mouse(QEvent::MouseMove, *handle, Qt::NoButton, Qt::NoButton);
+      ASSERT_TRUE(editor().modeling().begin_transform_preview().ok());
+      canvas_->refresh();
+      ASSERT_FALSE(canvas_->presentation().editable);
+      expect_axis(render_canvas_surface(), false);
+      ASSERT_TRUE(editor().modeling().cancel_transform_preview().ok());
+      canvas_->refresh();
+      QCoreApplication::sendEvent(canvas_.get(), &leave);
+    }
   }
 }
 
@@ -346,13 +731,13 @@ TEST_F(QtFaceTextureCanvasTests,
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(canvas_.get(), &escape);
     ASSERT_FALSE(canvas_->interaction_active());
-    const QPointF scale = canvas_->plane_to_view().map(
-        QPointF(bounds.right(), bounds.center().y()));
-    mouse(QEvent::MouseMove, scale, Qt::NoButton, Qt::NoButton);
-    EXPECT_EQ(canvas_->cursor().shape(), Qt::SizeHorCursor);
+    const auto scale = painted_scale_handle(true);
+    ASSERT_TRUE(scale.has_value());
+    mouse(QEvent::MouseMove, *scale, Qt::NoButton, Qt::NoButton);
+    EXPECT_EQ(canvas_->cursor().shape(), Qt::OpenHandCursor);
     EXPECT_FALSE(feedback->isHidden());
     EXPECT_EQ(feedback->text(),
-              QStringLiteral("X: %1   Y: %2 map units")
+              QStringLiteral("U width: %1   V height: %2 map units")
                   .arg(qt_format_number(canvas_->presentation().repeat_width,
                                          canvas_->locale()),
                        qt_format_number(canvas_->presentation().repeat_height,
@@ -368,10 +753,9 @@ TEST_F(QtFaceTextureCanvasTests,
 
 TEST_F(QtFaceTextureCanvasTests,
        ExistingMeasurementHidesWhenAnotherPreviewDisablesTheSameFace) {
-  const QRectF bounds = plane_bounds();
-  const QPointF handle = canvas_->plane_to_view().map(
-      QPointF(bounds.right(), bounds.center().y()));
-  mouse(QEvent::MouseMove, handle, Qt::NoButton, Qt::NoButton);
+  const auto handle = painted_scale_handle(true);
+  ASSERT_TRUE(handle.has_value());
+  mouse(QEvent::MouseMove, *handle, Qt::NoButton, Qt::NoButton);
   auto *feedback = canvas_->findChild<QLabel *>(
       QStringLiteral("face_texture.canvas.measurement"));
   ASSERT_NE(feedback, nullptr);
@@ -416,13 +800,22 @@ TEST_F(QtFaceTextureCanvasTests,
     return result;
   };
   const auto expect_inside = [this, feedback, &without_whitespace](
-                                 const QString &complete_text) {
+                                 const QString &complete_text,
+                                 const QStringList &numeric_tokens) {
     EXPECT_FALSE(feedback->isHidden());
     EXPECT_TRUE(canvas_->rect().contains(feedback->geometry()));
+    EXPECT_LE(feedback->height(),
+              static_cast<int>(std::floor(canvas_->height() * 0.35)));
     EXPECT_EQ(feedback->accessibleName(), complete_text);
     EXPECT_EQ(without_whitespace(feedback->text()),
               without_whitespace(complete_text));
     const auto lines = feedback->text().split(QLatin1Char('\n'));
+    for (const auto &token : numeric_tokens) {
+      EXPECT_TRUE(std::any_of(lines.cbegin(), lines.cend(),
+                             [&token](const QString &line) {
+                               return line.contains(token);
+                             })) << "Split numeric value: " << token.toStdString();
+    }
     const QFontMetrics font_metrics(feedback->font());
     for (const auto &line : lines) {
       EXPECT_LE(font_metrics.horizontalAdvance(line),
@@ -441,15 +834,17 @@ TEST_F(QtFaceTextureCanvasTests,
     enlarged.setPixelSize(metrics.px(28));
     canvas_->setFont(enlarged);
     const QRectF bounds = plane_bounds();
-    const QPointF scale = canvas_->plane_to_view().map(
-        QPointF(bounds.right(), bounds.center().y()));
-    mouse(QEvent::MouseMove, scale, Qt::NoButton, Qt::NoButton);
-    const QString complete = QStringLiteral("X: %1   Y: %2 map units")
-        .arg(qt_format_number(canvas_->presentation().repeat_width,
-                               canvas_->locale()),
-             qt_format_number(canvas_->presentation().repeat_height,
-                               canvas_->locale()));
-    expect_inside(complete);
+    const auto scale = painted_scale_handle(true);
+    ASSERT_TRUE(scale.has_value());
+    mouse(QEvent::MouseMove, *scale, Qt::NoButton, Qt::NoButton);
+    const QString repeat_width = qt_format_number(
+        canvas_->presentation().repeat_width, canvas_->locale());
+    const QString repeat_height = qt_format_number(
+        canvas_->presentation().repeat_height, canvas_->locale());
+    const QString complete = QStringLiteral("U width: %1   V height: %2 map units")
+                                 .arg(repeat_width, repeat_height);
+    expect_inside(complete, {repeat_width, repeat_height});
+    EXPECT_FALSE(feedback->geometry().contains(scale->toPoint()));
     EXPECT_TRUE(feedback->text().contains(QLatin1Char('\n')));
     const QRect geometry = feedback->geometry();
     const QString text = feedback->text();
@@ -468,10 +863,10 @@ TEST_F(QtFaceTextureCanvasTests,
     mouse(QEvent::MouseMove, center + QPointF(10, -8), Qt::NoButton,
            Qt::LeftButton, Qt::ControlModifier);
     ASSERT_TRUE(canvas_->interaction_active());
-    expect_inside(QStringLiteral("Rotation: %1°")
-                      .arg(qt_format_number(
-                          canvas_->presentation().rotation_degrees,
-                          canvas_->locale())));
+    const QString rotation = qt_format_number(
+        canvas_->presentation().rotation_degrees, canvas_->locale());
+    expect_inside(QStringLiteral("Rotation: %1°").arg(rotation), {rotation});
+    EXPECT_FALSE(feedback->geometry().contains(center.toPoint()));
     save_canvas(QStringLiteral("canvas_narrow_rotation_%1.png").arg(percent));
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(canvas_.get(), &escape);

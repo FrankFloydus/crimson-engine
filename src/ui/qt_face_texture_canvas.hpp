@@ -89,6 +89,7 @@ private:
   QPointF pointer_start_;
   QPointF last_pointer_;
   QPointF gesture_pointer_offset_;
+  QPointF gesture_pivot_;
   double zoom_ = 1.0;
   Handle hovered_ = Handle::None;
   Handle dragged_ = Handle::None;

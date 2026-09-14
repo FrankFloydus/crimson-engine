@@ -16,7 +16,6 @@
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
-#include "ui/ui_panel.hpp"
 
 
 #include <QApplication>
@@ -26,7 +25,6 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
-#include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFrame>
 #include <QFont>
@@ -98,25 +96,7 @@ QString localized_target_title(const LocalizationService *localization,
   if (!target.title.empty()) {
     return qtext(target.title);
   }
-  return localized_text(localization, "ui.panel.tool_settings",
-                        "Tool Settings");
-}
-
-QString localized_target_description(
-    const LocalizationService *localization,
-    const QuaderToolSettingsTarget &target) {
-  QString description = qtext(target.description);
-  if (localization != nullptr && !target.tool_id.empty()) {
-    std::string key = "tool_settings.description.";
-    key.append(target.tool_id);
-    description = QString::fromStdString(
-        localization->text(key, target.description));
-  }
-  if (!target.status_message.empty()) {
-    description.append(QStringLiteral("\n\n"));
-    description.append(qtext(target.status_message));
-  }
-  return description;
+  return localized_text(localization, "ui.viewport.settings", "Settings");
 }
 
 QString localized_descriptor_label(const LocalizationService *localization,
@@ -244,7 +224,7 @@ bool same_control_structure(const QuaderToolSettingControl &left,
 bool same_target_structure(const QuaderToolSettingsTarget &left,
                            const QuaderToolSettingsTarget &right) {
   if (left.active != right.active || left.tool_id != right.tool_id ||
-      left.title != right.title || left.description != right.description ||
+      left.title != right.title ||
       left.controls.size() != right.controls.size() ||
       left.groups.size() != right.groups.size()) {
     return false;
@@ -349,6 +329,7 @@ struct QtToolSettingsPanel::Impl {
     std::uint64_t binding_generation = 0;
     std::uint64_t settings_revision = 0;
     std::uint64_t active_tool_revision = 0;
+    std::uint64_t presentation_serial = 0;
     std::string tool_id;
     std::string merge_key;
     bool preview_active = false;
@@ -412,73 +393,45 @@ struct QtToolSettingsPanel::Impl {
   };
 
   explicit Impl(QtToolSettingsPanel &panel) : panel_(panel) {
-    panel_.setObjectName(QString::fromLatin1(
-        ui_panel_stable_id(UIPanelId::ToolSettings)));
-    // This widget is the content of a user-resizable/restored dock. Keep the
-    // constraint in logical Qt units so a live interface-scale change cannot
-    // override the user's saved dock width. First-run dock sizing is scaled by
-    // UISystem before restoreState() instead.
-    panel_.setMinimumWidth(240);
+    panel_.setObjectName(QStringLiteral("viewport.settings_overlay"));
+    panel_.setAutoFillBackground(true);
+    panel_.setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
     auto *root_layout = new QVBoxLayout(&panel_);
     root_layout->setObjectName(QStringLiteral("tool_settings.layout"));
-    set_scalable_margins(*root_layout, QMargins(8, 8, 8, 8));
-    set_scalable_spacing(*root_layout, 8);
+    root_layout->setSizeConstraint(QLayout::SetNoConstraint);
+    set_scalable_margins(*root_layout, QMargins(6, 4, 6, 4));
+    set_scalable_spacing(*root_layout, 6);
+
+    target_title_ = new QToolButton(&panel_);
+    target_title_->setObjectName(QStringLiteral("tool_settings.target_title"));
+    target_title_->setAutoRaise(true);
+    target_title_->setCheckable(true);
+    target_title_->setArrowType(Qt::RightArrow);
+    target_title_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    target_title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    // Mouse collapse settles drafts before focus-out can interpret them.
+    target_title_->setFocusPolicy(Qt::TabFocus);
+    root_layout->addWidget(target_title_);
+    panel_.setFocusProxy(target_title_);
+    QObject::connect(target_title_, &QToolButton::toggled, &panel_,
+                     [this](bool expanded) { set_expanded(expanded); });
 
     scroll_area_ = new QScrollArea(&panel_);
     scroll_area_->setObjectName(QStringLiteral("tool_settings.scroll"));
     scroll_area_->setFrameShape(QFrame::NoFrame);
     scroll_area_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll_area_->setWidgetResizable(true);
-    panel_.setFocusProxy(scroll_area_);
+    scroll_area_->setMinimumSize(0, 0);
+    scroll_area_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
 
-    auto *scroll_content = new QWidget(scroll_area_);
-    scroll_content->setObjectName(QStringLiteral("tool_settings.content"));
-    auto *content_layout = new QVBoxLayout(scroll_content);
-    set_scalable_margins(*content_layout, QMargins(0, 0, 0, 0));
-    set_scalable_spacing(*content_layout, 8);
-
-    target_title_ = new QLabel(scroll_content);
-    target_title_->setObjectName(QStringLiteral("tool_settings.target_title"));
-    target_title_->setWordWrap(true);
-    QFont target_font = target_title_->font();
-    target_font.setBold(true);
-    target_title_->setFont(target_font);
-    content_layout->addWidget(target_title_);
-
-    title_separator_ = new QFrame(scroll_content);
-    title_separator_->setObjectName(
-        QStringLiteral("tool_settings.title_separator"));
-    title_separator_->setFrameShape(QFrame::HLine);
-    content_layout->addWidget(title_separator_);
-
-    description_section_ = new QtSettingsSection(
-        QStringLiteral("tool_settings.section.description"),
-        scroll_content);
-    auto *description_layout =
-        new QVBoxLayout(description_section_->content());
-    set_scalable_margins(*description_layout, QMargins(8, 6, 8, 6));
-    description_label_ =
-        new QLabel(description_section_->content());
-    description_label_->setObjectName(
-        QStringLiteral("tool_settings.description"));
-    description_label_->setWordWrap(true);
-    description_label_->setTextInteractionFlags(
-        Qt::TextSelectableByKeyboard | Qt::TextSelectableByMouse);
-    description_layout->addWidget(description_label_);
-    content_layout->addWidget(description_section_);
-
-    settings_section_ = new QtSettingsSection(
-        QStringLiteral("tool_settings.section.settings"), scroll_content);
-    controls_container_ = settings_section_->content();
-    controls_container_->setObjectName(QStringLiteral(
-        "tool_settings.section.settings.content"));
+    controls_container_ = new QWidget(scroll_area_);
+    controls_container_->setObjectName(QStringLiteral("tool_settings.content"));
     controls_layout_ = new QVBoxLayout(controls_container_);
-    set_scalable_margins(*controls_layout_, QMargins(8, 6, 8, 6));
+    set_scalable_margins(*controls_layout_, QMargins(2, 2, 2, 2));
     set_scalable_spacing(*controls_layout_, 6);
-    content_layout->addWidget(settings_section_);
-    content_layout->addStretch(1);
-    scroll_area_->setWidget(scroll_content);
+    controls_layout_->setAlignment(Qt::AlignTop);
+    scroll_area_->setWidget(controls_container_);
     root_layout->addWidget(scroll_area_, 1);
 
     actions_container_ = new QWidget(&panel_);
@@ -524,7 +477,7 @@ struct QtToolSettingsPanel::Impl {
       // Reset is authoritative: a stale delayed edit must never overwrite it.
       discard_pending_number_dispatches();
       reset_button_->setFocus(Qt::MouseFocusReason);
-      if (editor_ == nullptr) {
+      if (!presentation_is_current()) {
         return;
       }
       const QuaderApiVoidResult result =
@@ -533,7 +486,7 @@ struct QtToolSettingsPanel::Impl {
       schedule_refresh();
     });
     QObject::connect(apply_button_, &QPushButton::clicked, &panel_, [this]() {
-      if (editor_ == nullptr) {
+      if (!presentation_is_current()) {
         discard_pending_number_dispatches();
         return;
       }
@@ -546,6 +499,7 @@ struct QtToolSettingsPanel::Impl {
       flush_pending_number_dispatches();
       if (number_dispatch_failed_ || editor_ == nullptr ||
           generation != binding_generation_ ||
+          !presentation_is_current() ||
           editor_->tools().active_tool_revision() != tool_revision) {
         return;
       }
@@ -559,7 +513,7 @@ struct QtToolSettingsPanel::Impl {
                        // Cancel owns the previous authoritative preview state.
                        discard_pending_number_dispatches();
                        cancel_button_->setFocus(Qt::MouseFocusReason);
-                       if (editor_ == nullptr) {
+                       if (!presentation_is_current()) {
                          return;
                        }
                        const QuaderApiVoidResult result =
@@ -594,7 +548,7 @@ struct QtToolSettingsPanel::Impl {
   void set_localization(const LocalizationService &localization) {
     localization_ = &localization;
     // Descriptor controls retain their visible text, so force a rebuild when
-    // the selected locale changes instead of updating only the dock title.
+    // the selected locale changes instead of updating only the header title.
     last_target_.reset();
     localized_text_dirty_ = true;
     refresh_localized_text();
@@ -610,25 +564,74 @@ struct QtToolSettingsPanel::Impl {
       return;
     }
 
+    const std::uint64_t generation = binding_generation_;
     const QuaderToolSettingsTarget target = editor_->tools().active_settings();
-    if (!target.active) {
+    if (generation != binding_generation_ || editor_ == nullptr) {
+      return;
+    }
+    if (!target.active ||
+        std::none_of(target.controls.begin(), target.controls.end(),
+                     [](const QuaderToolSettingControl &control) {
+                       return control.kind != QuaderToolSettingControlKind::Action;
+                     })) {
       if (!inactive_presented_) {
         present_inactive_target();
       }
       return;
     }
 
+    const std::uint64_t presentation_serial =
+        editor_->tools().active_settings_presentation_origin().serial;
     if (!last_target_.has_value() ||
+        target_presentation_serial_ != presentation_serial ||
         !same_target_structure(*last_target_, target)) {
       rebuild(target);
     } else {
       synchronize_values(target);
     }
     last_target_ = target;
+    target_presentation_serial_ = presentation_serial;
+    target_tool_revision_ = editor_->tools().active_tool_revision();
+    notify_presentation_changed();
   }
 
   [[nodiscard]] bool has_active_target() const {
-    return last_target_.has_value() && last_target_->active;
+    return last_target_.has_value() && last_target_->active &&
+           !last_target_->controls.empty();
+  }
+
+  [[nodiscard]] std::string_view target_id() const {
+    return last_target_.has_value() ? std::string_view(last_target_->tool_id)
+                                    : std::string_view{};
+  }
+
+  [[nodiscard]] bool expanded() const { return expanded_; }
+
+  void set_expanded(bool expanded) {
+    if (expanded_ == expanded) {
+      return;
+    }
+    if (!expanded) {
+      settle_numeric_edits();
+    }
+    expanded_ = expanded;
+    const QSignalBlocker blocker(target_title_);
+    target_title_->setChecked(expanded);
+    target_title_->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+    synchronize_body_visibility();
+    notify_presentation_changed();
+  }
+
+  [[nodiscard]] QSize preferred_size() const {
+    const QMargins margins = panel_.layout()->contentsMargins();
+    int height = target_title_->sizeHint().height() + margins.top() +
+                 margins.bottom();
+    if (expanded_ && !inactive_presented_) {
+      height += controls_layout_->sizeHint().height() +
+                actions_container_->sizeHint().height() +
+                panel_.layout()->spacing() * 2;
+    }
+    return QSize(ui_scale_metrics_.px(expanded_ ? 280 : 160), height);
   }
 
   [[nodiscard]] bool numeric_interaction_active() const {
@@ -657,9 +660,86 @@ struct QtToolSettingsPanel::Impl {
     }
     ui_scale_metrics_ = metrics;
     apply_current_ui_scale();
+    notify_presentation_changed();
   }
 
 private:
+  [[nodiscard]] bool presentation_is_current() const {
+    return editor_ != nullptr && has_active_target() &&
+           editor_->tools().active_tool_revision() == target_tool_revision_ &&
+           editor_->tools().active_settings_presentation_origin().serial ==
+               target_presentation_serial_;
+  }
+
+  void notify_presentation_changed() {
+    // The UI owner already revision-gates refresh. Avoid redundant host work
+    // during retained value synchronization and repeated local refreshes.
+    if (controls_layout_ != nullptr) {
+      controls_layout_->activate();
+    }
+    const QSize size = preferred_size();
+    const bool available = has_active_target();
+    if (last_presentation_size_ == size &&
+        last_presentation_available_ == available) {
+      return;
+    }
+    last_presentation_size_ = size;
+    last_presentation_available_ = available;
+    panel_.updateGeometry();
+    if (panel_.presentation_changed) {
+      panel_.presentation_changed();
+    }
+  }
+
+  void settle_numeric_edits() {
+    const std::uint64_t generation = binding_generation_;
+    const std::uint64_t controls_generation = control_generation_;
+    // Reset invalid drafts before focus-out; otherwise Qt could reinterpret
+    // intermediate input and dispatch it while the settings body is hiding.
+    for (std::size_t index = 0; index < controls_.size(); ++index) {
+      ControlWidget &binding = controls_[index];
+      if (!last_target_.has_value() || index >= last_target_->controls.size()) {
+        break;
+      }
+      const QuaderToolSettingControl &control = last_target_->controls[index];
+      if (binding.invalid_number_draft) {
+        discard_pending_number_dispatch(index);
+        if (binding.spinbox_only != nullptr) {
+          binding.spinbox_only->present(control.number_value);
+        }
+      }
+      const auto restore_invalid = [](auto *spin, auto value) {
+        if (spin != nullptr && !spin->hasAcceptableInput()) {
+          const QSignalBlocker blocker(spin);
+          spin->setValue(value);
+        }
+      };
+      restore_invalid(binding.integer,
+                      static_cast<int>(std::llround(control.number_value)));
+      restore_invalid(binding.floating, control.number_value);
+      for (std::size_t axis = 0; axis < 3U; ++axis) {
+        restore_invalid(binding.vector3_components[axis].spin,
+                        control.vector3_components[axis].value);
+      }
+    }
+    if (QWidget *focus = QApplication::focusWidget();
+        focus != nullptr && panel_.isAncestorOf(focus)) {
+      focus->clearFocus();
+    }
+    if (generation != binding_generation_ ||
+        controls_generation != control_generation_) {
+      return;
+    }
+    flush_pending_number_dispatches();
+    if (generation != binding_generation_ ||
+        controls_generation != control_generation_) {
+      return;
+    }
+    // Hidden controls must never retain a timer or a continuous edit identity.
+    discard_pending_number_dispatches();
+    refresh();
+  }
+
   void apply_current_ui_scale() {
     apply_scalable_layout_metrics(panel_, ui_scale_metrics_);
     apply_scalable_widget_metrics(panel_, ui_scale_metrics_);
@@ -684,6 +764,9 @@ private:
   }
 
   void clear_controls() {
+    ++control_generation_;
+    const bool was_synchronizing = synchronizing_;
+    synchronizing_ = true;
     // Stop old control-owned timers before deleting their rows and callbacks.
     discard_pending_number_dispatches();
     for (ControlWidget &binding : controls_) {
@@ -699,40 +782,22 @@ private:
     }
     controls_.clear();
     control_groups_.clear();
-    empty_settings_label_ = nullptr;
     clear_layout(*controls_layout_);
-    target_title_->clear();
-    description_label_->clear();
+    target_title_->setText({});
     reset_button_->setEnabled(false);
     preview_actions_container_->hide();
     apply_button_->hide();
     cancel_button_->hide();
+    synchronizing_ = was_synchronizing;
   }
 
-  void add_empty_settings_message(const QString &text) {
-    empty_settings_label_ = new QLabel(text, controls_container_);
-    empty_settings_label_->setObjectName(
-        QStringLiteral("tool_settings.settings_empty"));
-    empty_settings_label_->setWordWrap(true);
-    controls_layout_->addWidget(empty_settings_label_);
-  }
-
-  void set_tool_sections_visible(bool visible) {
-    if (description_section_->isHidden() == visible) {
-      description_section_->setVisible(visible);
+  void synchronize_body_visibility() {
+    const bool visible = expanded_ && !inactive_presented_;
+    if (scroll_area_->isHidden() == visible) {
+      scroll_area_->setVisible(visible);
     }
-    if (settings_section_->isHidden() == visible) {
-      settings_section_->setVisible(visible);
-    }
-  }
-
-  void synchronize_target_heading_visibility() {
-    constexpr bool kVisible = true;
-    if (target_title_->isHidden() == kVisible) {
-      target_title_->setVisible(kVisible);
-    }
-    if (title_separator_->isHidden() == kVisible) {
-      title_separator_->setVisible(kVisible);
+    if (actions_container_->isHidden() == visible) {
+      actions_container_->setVisible(visible);
     }
   }
 
@@ -740,31 +805,27 @@ private:
     clear_controls();
     last_target_.reset();
     inactive_presented_ = true;
-    set_tool_sections_visible(false);
-    synchronize_target_heading_visibility();
-    target_title_->setText(localized_text(
-        localization_, "tool_settings.no_active.title", "No Active Tool"));
-    description_label_->setText(localized_text(
-        localization_, "tool_settings.no_active.description",
-        "Activate a tool to view its description and settings."));
-    add_empty_settings_message(localized_text(
-        localization_, "tool_settings.no_active.settings",
-        "No tool settings are available."));
-    controls_layout_->addStretch(1);
-    apply_current_ui_scale();
+    synchronize_body_visibility();
+    panel_.hide();
+    notify_presentation_changed();
   }
 
   void begin_number_continuous_edit(std::size_t control_index) {
     if (control_index >= controls_.size()) {
       return;
     }
-    ControlWidget &binding = controls_[control_index];
-    if (!binding.continuous_number_merge_key.empty()) {
+    if (!controls_[control_index].continuous_number_merge_key.empty()) {
       return;
     }
     // Finish a preceding arrow, wheel, or keyboard step before a new
     // continuous gesture establishes its own merge identity.
+    const std::uint64_t controls_generation = control_generation_;
     flush_number_dispatch(control_index);
+    if (controls_generation != control_generation_ ||
+        !presentation_is_current()) {
+      return;
+    }
+    ControlWidget &binding = controls_[control_index];
     binding.continuous_number_merge_key =
         next_tool_setting_edit_merge_key(binding.id);
   }
@@ -773,7 +834,11 @@ private:
     if (control_index >= controls_.size()) {
       return;
     }
+    const std::uint64_t controls_generation = control_generation_;
     flush_number_dispatch(control_index);
+    if (controls_generation != control_generation_) {
+      return;
+    }
     controls_[control_index].continuous_number_merge_key.clear();
   }
 
@@ -782,12 +847,18 @@ private:
     if (control_index >= controls_.size() || component_index >= 3U) {
       return;
     }
-    Vector3ComponentWidget &component =
-        controls_[control_index].vector3_components[component_index];
-    if (!component.continuous_merge_key.empty()) {
+    if (!controls_[control_index].vector3_components[component_index]
+             .continuous_merge_key.empty()) {
       return;
     }
+    const std::uint64_t controls_generation = control_generation_;
     flush_vector3_dispatch(control_index, component_index);
+    if (controls_generation != control_generation_ ||
+        !presentation_is_current()) {
+      return;
+    }
+    Vector3ComponentWidget &component =
+        controls_[control_index].vector3_components[component_index];
     component.continuous_merge_key =
         next_tool_setting_edit_merge_key(component.id);
   }
@@ -797,7 +868,11 @@ private:
     if (control_index >= controls_.size() || component_index >= 3U) {
       return;
     }
+    const std::uint64_t controls_generation = control_generation_;
     flush_vector3_dispatch(control_index, component_index);
+    if (controls_generation != control_generation_) {
+      return;
+    }
     controls_[control_index]
         .vector3_components[component_index]
         .continuous_merge_key.clear();
@@ -820,18 +895,26 @@ private:
         // Discrete values are delayed for preview pacing, but never replace a
         // preceding discrete history step. Continuous values may replace the
         // pending sample because all dispatched samples share one merge key.
+        const std::uint64_t controls_generation = control_generation_;
         flush_number_dispatch(control_index);
+        if (controls_generation != control_generation_ ||
+            !presentation_is_current()) {
+          return;
+        }
       }
     }
     if (!binding.pending_number_value.has_value()) {
       if (editor_ == nullptr || !last_target_.has_value() ||
-          !last_target_->active) {
+          !last_target_->active ||
+          editor_->tools().active_settings_presentation_origin().serial !=
+              target_presentation_serial_) {
         return;
       }
       binding.pending_number_lifecycle = NumberDispatchLifecycle{
           .binding_generation = binding_generation_,
           .settings_revision = editor_->tools().active_settings_revision(),
           .active_tool_revision = editor_->tools().active_tool_revision(),
+          .presentation_serial = target_presentation_serial_,
           .tool_id = last_target_->tool_id,
           .merge_key = binding.continuous_number_merge_key,
           .preview_active = last_target_->preview_active,
@@ -871,13 +954,16 @@ private:
         controls_[control_index].vector3_components[component_index];
     if (!component.pending_value.has_value()) {
       if (editor_ == nullptr || !last_target_.has_value() ||
-          !last_target_->active) {
+          !last_target_->active ||
+          editor_->tools().active_settings_presentation_origin().serial !=
+              target_presentation_serial_) {
         return;
       }
       component.pending_lifecycle = NumberDispatchLifecycle{
           .binding_generation = binding_generation_,
           .settings_revision = editor_->tools().active_settings_revision(),
           .active_tool_revision = editor_->tools().active_tool_revision(),
+          .presentation_serial = target_presentation_serial_,
           .tool_id = last_target_->tool_id,
           .merge_key = component.continuous_merge_key,
           .preview_active = last_target_->preview_active,
@@ -901,7 +987,9 @@ private:
         editor_->tools().active_settings_revision() !=
             lifecycle.settings_revision ||
         editor_->tools().active_tool_revision() !=
-            lifecycle.active_tool_revision) {
+            lifecycle.active_tool_revision ||
+        editor_->tools().active_settings_presentation_origin().serial !=
+            lifecycle.presentation_serial) {
       return false;
     }
 
@@ -938,6 +1026,8 @@ private:
             lifecycle.settings_revision ||
         editor_->tools().active_tool_revision() !=
             lifecycle.active_tool_revision ||
+        editor_->tools().active_settings_presentation_origin().serial !=
+            lifecycle.presentation_serial ||
         last_target_->tool_id != lifecycle.tool_id ||
         last_target_->preview_active != lifecycle.preview_active) {
       return false;
@@ -1001,11 +1091,14 @@ private:
       return;
     }
     const std::uint64_t generation = binding_generation_;
+    const std::uint64_t controls_generation = control_generation_;
     const std::uint64_t tool_revision = editor_->tools().active_tool_revision();
     const auto dispatch = binding.number_dispatch;
     dispatch(
         value, {.merge_key = std::move(merge_key)});
     if (editor_ == nullptr || generation != binding_generation_ ||
+        controls_generation != control_generation_ ||
+        !presentation_is_current() ||
         editor_->tools().active_tool_revision() != tool_revision) {
       number_dispatch_failed_ = true;
       return;
@@ -1041,19 +1134,38 @@ private:
       schedule_refresh();
       return;
     }
-    component.dispatch(value, {.merge_key = std::move(merge_key)});
+    const std::uint64_t generation = binding_generation_;
+    const std::uint64_t controls_generation = control_generation_;
+    const std::uint64_t tool_revision = editor_->tools().active_tool_revision();
+    const auto dispatch = component.dispatch;
+    dispatch(value, {.merge_key = std::move(merge_key)});
+    if (editor_ == nullptr || generation != binding_generation_ ||
+        controls_generation != control_generation_ ||
+        !presentation_is_current() ||
+        editor_->tools().active_tool_revision() != tool_revision) {
+      number_dispatch_failed_ = true;
+      return;
+    }
     rebind_pending_number_dispatches_to_current_revision();
   }
 
   void flush_pending_number_dispatches() {
     const std::uint64_t generation = binding_generation_;
+    const std::uint64_t controls_generation = control_generation_;
     for (std::size_t index = 0; index < controls_.size(); ++index) {
       flush_number_dispatch(index);
-      if (generation != binding_generation_) {
+      if (generation != binding_generation_ ||
+          controls_generation != control_generation_ ||
+          !presentation_is_current()) {
         return;
       }
       for (std::size_t component = 0; component < 3U; ++component) {
         flush_vector3_dispatch(index, component);
+        if (generation != binding_generation_ ||
+            controls_generation != control_generation_ ||
+            !presentation_is_current()) {
+          return;
+        }
       }
     }
   }
@@ -1101,15 +1213,8 @@ private:
       return;
     }
     localized_text_dirty_ = false;
-    panel_.setWindowTitle(localized_text(
-        localization_, "ui.panel.tool_settings", "Tool Settings"));
-    description_section_->set_title(localized_text(
-        localization_, "tool_settings.section.description", "Description"));
-    settings_section_->set_title(localized_text(
-        localization_, "tool_settings.section.settings", "Settings"));
     reset_button_->setText(localized_text(
-        localization_, "tool_settings.reset_defaults",
-        "Reset to Tool Defaults"));
+        localization_, "tool_settings.reset_defaults", "Reset Settings"));
     apply_button_->setText(
         localized_text(localization_, "ui.action.apply", "Apply"));
     cancel_button_->setText(
@@ -1117,24 +1222,6 @@ private:
     if (last_target_.has_value()) {
       target_title_->setText(
           localized_target_title(localization_, *last_target_));
-      description_label_->setText(
-          localized_target_description(localization_, *last_target_));
-      if (empty_settings_label_ != nullptr) {
-        empty_settings_label_->setText(localized_text(
-            localization_, "tool_settings.no_settings",
-            "This tool has no adjustable settings."));
-      }
-    } else if (inactive_presented_) {
-      target_title_->setText(localized_text(
-          localization_, "tool_settings.no_active.title", "No Active Tool"));
-      description_label_->setText(localized_text(
-          localization_, "tool_settings.no_active.description",
-          "Activate a tool to view its description and settings."));
-      if (empty_settings_label_ != nullptr) {
-        empty_settings_label_->setText(localized_text(
-            localization_, "tool_settings.no_active.settings",
-            "No tool settings are available."));
-      }
     }
   }
 
@@ -1177,6 +1264,7 @@ private:
                                 : group.expanded_by_default);
       section->expansion_changed = [this, state_key](bool expanded) {
         control_group_expansion_[state_key] = expanded;
+        notify_presentation_changed();
       };
 
       auto *layout = new QVBoxLayout(section->content());
@@ -1194,12 +1282,7 @@ private:
   void rebuild(const QuaderToolSettingsTarget &target) {
     clear_controls();
     inactive_presented_ = false;
-    set_tool_sections_visible(true);
-    synchronize_target_heading_visibility();
-    target_title_->setText(localized_target_title(localization_, target));
-    description_label_->setText(
-        localized_target_description(localization_, target));
-
+    synchronize_body_visibility();
     build_control_groups(target);
     for (std::size_t index = 0; index < target.controls.size(); ++index) {
       const QuaderToolSettingControl &control = target.controls[index];
@@ -1209,14 +1292,23 @@ private:
                                    : controls_container_,
                   group != nullptr ? *group->layout : *controls_layout_);
     }
-    if (target.controls.empty()) {
-      add_empty_settings_message(localized_text(
-          localization_, "tool_settings.no_settings",
-          "This tool has no adjustable settings."));
-    }
-    controls_layout_->addStretch(1);
     synchronize_values(target);
     apply_current_ui_scale();
+    reveal_rebuilt_controls();
+  }
+
+  void reveal_rebuilt_controls() {
+    // Qt queues the initial show of widgets added to an already visible parent.
+    // Reveal rebuilt rows before measuring, or the host caches an empty-body
+    // height. Showing sections preserves their deliberately collapsed content.
+    for (const ControlGroupWidget &group : control_groups_) {
+      group.section->show();
+    }
+    for (const ControlWidget &control : controls_) {
+      if (control.container != nullptr) {
+        control.container->show();
+      }
+    }
   }
 
   void add_control(const QuaderToolSettingsTarget &target,
@@ -1243,7 +1335,7 @@ private:
       QObject::connect(toggle, &QCheckBox::toggled, &panel_,
                        [this, tool_id = target.tool_id,
                         control_id = control.id](bool checked) {
-                         if (editor_ == nullptr || synchronizing_) {
+                         if (!presentation_is_current() || synchronizing_) {
                            return;
                          }
                          const QuaderApiVoidResult result =
@@ -1281,7 +1373,7 @@ private:
           [this, tool_id = target.tool_id,
            control_id = control.id](
               double value, QuaderToolSettingEditOptions options) {
-            if (editor_ == nullptr) {
+            if (!presentation_is_current()) {
               return;
             }
             const QuaderApiVoidResult result =
@@ -1314,7 +1406,7 @@ private:
         spin->edited = [this, control_index,
                         positive_only = control.number_positive_only](
                            std::optional<double> value) {
-          if (editor_ == nullptr || synchronizing_ ||
+          if (!presentation_is_current() || synchronizing_ ||
               control_index >= controls_.size()) {
             return;
           }
@@ -1368,7 +1460,7 @@ private:
         spinner->set_value(qt_tool_settings_number_slider_position(
             slider_mapping, control.number_value));
         spinner->value_changed = [this, control_index](int value) {
-          if (editor_ == nullptr || synchronizing_) {
+          if (!presentation_is_current() || synchronizing_) {
             return;
           }
           queue_number_dispatch(control_index, static_cast<double>(value));
@@ -1433,7 +1525,7 @@ private:
         QObject::connect(
             slider, &QSlider::valueChanged, &panel_,
             [this, spin, slider, control_index](int position) {
-              if (editor_ == nullptr || synchronizing_) {
+              if (!presentation_is_current() || synchronizing_) {
                 return;
               }
               const QtToolSettingsNumberSliderMapping &mapping =
@@ -1451,7 +1543,7 @@ private:
             });
         QObject::connect(spin, &QSpinBox::valueChanged, &panel_,
                          [this, spin, slider, control_index](int value) {
-                           if (editor_ == nullptr || synchronizing_) {
+                           if (!presentation_is_current() || synchronizing_) {
                              return;
                            }
                            const QtToolSettingsNumberSliderMapping &mapping =
@@ -1502,7 +1594,7 @@ private:
         QObject::connect(
             slider, &QSlider::valueChanged, &panel_,
             [this, spin, slider, control_index](int position) {
-              if (editor_ == nullptr || synchronizing_) {
+              if (!presentation_is_current() || synchronizing_) {
                 return;
               }
               const QtToolSettingsNumberSliderMapping &mapping =
@@ -1519,7 +1611,7 @@ private:
             });
         QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
                          [this, spin, slider, control_index](double value) {
-                           if (editor_ == nullptr || synchronizing_) {
+                           if (!presentation_is_current() || synchronizing_) {
                              return;
                            }
                            const QtToolSettingsNumberSliderMapping &mapping =
@@ -1631,7 +1723,7 @@ private:
             [this, tool_id = target.tool_id,
              component_id = component.id](
                 double value, QuaderToolSettingEditOptions options) {
-              if (editor_ == nullptr) {
+              if (!presentation_is_current()) {
                 return;
               }
               const QuaderApiVoidResult result = editor_->tools().set_setting(
@@ -1647,7 +1739,7 @@ private:
                          });
         QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
                          [this, control_index, axis](double value) {
-                           if (editor_ == nullptr || synchronizing_) {
+                           if (!presentation_is_current() || synchronizing_) {
                              return;
                            }
                            queue_vector3_dispatch(control_index, axis, value);
@@ -1713,10 +1805,15 @@ private:
               button, &QPushButton::toggled, &panel_,
               [this, tool_id = target.tool_id, control_id = control.id,
                option_id = option.id](bool checked) {
-                if (!checked || editor_ == nullptr || synchronizing_) {
+                if (!checked || !presentation_is_current() || synchronizing_) {
                   return;
                 }
+                const std::uint64_t generation = binding_generation_;
                 flush_pending_number_dispatches();
+                if (generation != binding_generation_ ||
+                    !presentation_is_current()) {
+                  return;
+                }
                 const QuaderApiVoidResult result = editor_->tools().set_setting(
                     tool_id, control_id, std::string_view(option_id));
                 present_failure(editor_, "Tool settings update", result);
@@ -1767,7 +1864,7 @@ private:
             dropdown, &QComboBox::currentIndexChanged, &panel_,
             [this, dropdown, tool_id = target.tool_id,
              control_id = control.id](int index) {
-              if (editor_ == nullptr || synchronizing_ || index < 0) {
+              if (!presentation_is_current() || synchronizing_ || index < 0) {
                 return;
               }
               const QByteArray option_id =
@@ -1819,7 +1916,7 @@ private:
                          [this, tool_id = target.tool_id,
                           control_id = control.id,
                           value = option.value](bool checked) {
-                           if (!checked || editor_ == nullptr ||
+                           if (!checked || !presentation_is_current() ||
                                synchronizing_) {
                              return;
                            }
@@ -1847,14 +1944,19 @@ private:
       QObject::connect(button, &QPushButton::clicked, &panel_,
                        [this, tool_id = target.tool_id,
                         action_id = control.id]() {
-                         if (editor_ == nullptr) {
+                         if (!presentation_is_current()) {
                            discard_pending_number_dispatches();
                            return;
                          }
                          // Actions consume the presented settings. Commit any
                          // coalesced numeric edit first so the owner observes
                          // the latest value rather than the last timer tick.
+                         const std::uint64_t generation = binding_generation_;
                          flush_pending_number_dispatches();
+                         if (generation != binding_generation_ ||
+                             !presentation_is_current()) {
+                           return;
+                         }
                          const QuaderApiVoidResult result =
                              editor_->tools().execute_action(tool_id,
                                                              action_id);
@@ -1959,11 +2061,8 @@ private:
         localized_target_title(localization_, target);
     if (target_title_->text() != target_title) {
       target_title_->setText(target_title);
-    }
-    const QString description =
-        localized_target_description(localization_, target);
-    if (description_label_->text() != description) {
-      description_label_->setText(description);
+      target_title_->setAccessibleName(target_title);
+      panel_.setWindowTitle(target_title);
     }
     if (reset_button_->isEnabled() != target.can_reset) {
       reset_button_->setEnabled(target.can_reset);
@@ -2198,16 +2297,15 @@ private:
   const LocalizationService *localization_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   std::uint64_t binding_generation_ = 0;
+  std::uint64_t target_presentation_serial_ = 0;
+  std::uint64_t target_tool_revision_ = 0;
+  std::uint64_t control_generation_ = 0;
   bool number_dispatch_failed_ = false;
-  QLabel *target_title_ = nullptr;
-  QFrame *title_separator_ = nullptr;
+  QToolButton *target_title_ = nullptr;
   QScrollArea *scroll_area_ = nullptr;
-  QtSettingsSection *description_section_ = nullptr;
-  QLabel *description_label_ = nullptr;
-  QtSettingsSection *settings_section_ = nullptr;
+
   QWidget *controls_container_ = nullptr;
   QVBoxLayout *controls_layout_ = nullptr;
-  QLabel *empty_settings_label_ = nullptr;
   QWidget *actions_container_ = nullptr;
   QWidget *preview_actions_container_ = nullptr;
   QPushButton *reset_button_ = nullptr;
@@ -2217,6 +2315,9 @@ private:
   std::vector<ControlGroupWidget> control_groups_;
   std::unordered_map<std::string, bool> control_group_expansion_;
   std::optional<QuaderToolSettingsTarget> last_target_;
+  bool expanded_ = false;
+  QSize last_presentation_size_;
+  bool last_presentation_available_ = false;
   bool synchronizing_ = false;
   bool refresh_scheduled_ = false;
   bool inactive_presented_ = false;
@@ -2251,6 +2352,22 @@ bool QtToolSettingsPanel::has_active_target() const {
   return impl_->has_active_target();
 }
 
+bool QtToolSettingsPanel::has_settings() const {
+  return impl_->has_active_target();
+}
+
+std::string_view QtToolSettingsPanel::target_id() const {
+  return impl_->target_id();
+}
+
+bool QtToolSettingsPanel::expanded() const { return impl_->expanded(); }
+
+void QtToolSettingsPanel::set_expanded(bool expanded) {
+  impl_->set_expanded(expanded);
+}
+
+QSize QtToolSettingsPanel::sizeHint() const { return impl_->preferred_size(); }
+
 bool QtToolSettingsPanel::numeric_interaction_active() const {
   return impl_->numeric_interaction_active();
 }
@@ -2268,19 +2385,11 @@ bool qt_object_belongs_to_tool_settings_panel(const QObject *target) {
       qobject_cast<QApplication *>(QCoreApplication::instance()) == nullptr) {
     return false;
   }
-  for (const QWidget *top_level : QApplication::topLevelWidgets()) {
-    if (top_level == nullptr || top_level->windowHandle() != target_window) {
-      continue;
-    }
-    if (dynamic_cast<const QtToolSettingsPanel *>(top_level) != nullptr) {
-      return true;
-    }
-    const auto *dock = qobject_cast<const QDockWidget *>(top_level);
-    return dock != nullptr &&
-           dynamic_cast<const QtToolSettingsPanel *>(dock->widget()) !=
-               nullptr;
-  }
-  return false;
+  // Native child and popup windows retain their owning QWidget. Walking that
+  // widget's ancestry also covers a combo's separate popup container.
+  const QWidget *widget = QWidget::find(target_window->winId());
+  return widget != nullptr &&
+         qt_object_belongs_to_tool_settings_panel(widget);
 }
 
 bool qt_object_belongs_to_tool_settings_panel(
@@ -2290,27 +2399,22 @@ bool qt_object_belongs_to_tool_settings_panel(
       qobject_cast<QApplication *>(QCoreApplication::instance()) == nullptr) {
     return false;
   }
-  for (const QWidget *top_level : QApplication::topLevelWidgets()) {
-    if (top_level == nullptr || top_level->windowHandle() != target_window) {
-      continue;
-    }
-    const auto descendants = top_level->findChildren<QWidget *>();
-    if (std::any_of(
-            descendants.begin(), descendants.end(),
-            [&global_position](const QWidget *widget) {
-              const auto *panel =
-                  dynamic_cast<const QtToolSettingsPanel *>(widget);
-              if (panel == nullptr) {
-                return false;
-              }
-              const QPoint local = panel->mapFromGlobal(global_position);
-              return panel->rect().contains(local) &&
-                     panel->visibleRegion().contains(local);
-            })) {
-      return true;
-    }
+  const QWidget *window_widget = QWidget::find(target_window->winId());
+  if (window_widget == nullptr || !window_widget->isVisible()) {
+    return false;
   }
-  return false;
+  const QPoint local = window_widget->mapFromGlobal(global_position);
+  if (!window_widget->rect().contains(local)) {
+    return false;
+  }
+  const QWidget *hit = window_widget->childAt(local);
+  const QWidget *recipient = hit != nullptr ? hit : window_widget;
+  // An ancestor's visible region excludes native children. Test the resolved
+  // child instead so pointer delivery through that ancestor still owns the
+  // overlay, without accepting hidden or obscured settings controls.
+  return qt_object_belongs_to_tool_settings_panel(recipient) &&
+         recipient->visibleRegion().contains(
+             recipient->mapFromGlobal(global_position));
 }
 
 } // namespace quader

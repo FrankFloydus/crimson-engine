@@ -387,7 +387,6 @@ TEST(UiLayoutGuardrailTests,
       create_dock_factory - create_docks_owner);
   for (std::string_view panel : {"UIPanelId::Outliner", "UIPanelId::Inspector",
                                  "UIPanelId::Layers",
-                                 "UIPanelId::ToolSettings",
                                  "UIPanelId::FaceTexture",
                                  "UIPanelId::Console"}) {
     EXPECT_EQ(count_occurrences(create_docks_body, panel), 1u) << panel;
@@ -1005,7 +1004,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     SettingsDialogAndToolSettingsDockUseStockControlsAndStableNames) {
+     SettingsDialogAndViewportSettingsUseStockControlsAndStableNames) {
   const std::string settings_header =
       read_source_file("src/ui/qt_settings_dialog.hpp");
   const std::string settings =
@@ -1062,16 +1061,14 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(tool_header,
                   "class QtToolSettingsPanel final : public QWidget");
-  expect_contains(tool, "ui_panel_stable_id(UIPanelId::ToolSettings)");
+  expect_missing(tool, "UIPanelId::ToolSettings");
   expect_contains(tool, "#include \"ui/qt_settings_control_widgets.hpp\"");
   expect_contains(tool, "new QtSettingsSection(");
   expect_contains(control_widgets,
                   "class QtSettingsSection final : public QWidget");
   expect_contains(control_widgets, "new QToolButton(this)");
-  expect_contains(tool,
+  expect_missing(tool,
                   "QStringLiteral(\"tool_settings.section.description\")");
-  expect_contains(tool,
-                  "QStringLiteral(\"tool_settings.section.settings\")");
   expect_contains(tool,
                   "QStringLiteral(\"tool_settings.reset_defaults\")");
   expect_contains(tool, "QStringLiteral(\"tool_settings.apply\")");
@@ -1123,9 +1120,13 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(preview_flush, std::string::npos);
   ASSERT_NE(preview_commit, std::string::npos);
   EXPECT_LT(preview_flush, preview_commit);
-  expect_contains(tool,
-                  "void clear_controls() {\n"
-                  "    // Stop old control-owned timers");
+  const std::string clear_controls = source_slice(
+      tool, "void clear_controls()", "void present_inactive_target()");
+  const auto discard = clear_controls.find("discard_pending_number_dispatches()");
+  const auto remove_widgets = clear_controls.find("clear_layout(*controls_layout_)");
+  ASSERT_NE(discard, std::string::npos);
+  ASSERT_NE(remove_widgets, std::string::npos);
+  EXPECT_LT(discard, remove_widgets);
   expect_contains(tool_header, "bool numeric_interaction_active() const");
   expect_contains(tool, "new QtDoubleSpinBox");
   expect_contains(tool, "new QRadioButton");
@@ -1159,10 +1160,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source,
                   "new QtToolSettingsPanel(main_window_.get())");
   expect_contains(ui_source,
-                  "UIPanelId::ToolSettings, *tool_settings_panel_");
+                  "viewport_panel_->set_settings_panel(tool_settings_panel_)");
   expect_contains(ui_source,
-                  "main_window_->tabifyDockWidget(&inspector, "
-                  "&tool_settings)");
+                  "viewport_panel_->refresh_settings_overlay(*editor_)");
+  expect_missing(ui_source, "UIPanelId::ToolSettings");
   expect_contains(ui_source,
                   "tool_settings_panel_->numeric_interaction_active()");
   expect_contains(ui_source,
@@ -1310,6 +1311,7 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(refresh, std::string::npos);
   EXPECT_LT(gate, refresh);
   expect_contains(frame, ".active_settings_revision = frame_tool_settings_revision");
+  expect_contains(frame, ".operation_serial = settings_operation_serial");
   expect_contains(frame, "tool_settings_presenter_.mark_presented(stamp)");
   expect_missing(frame, "active_settings()");
   expect_missing(panel, "commands().available()");
@@ -1567,7 +1569,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     AuxiliaryWindowsRetainStateWhileToolSettingsUsesDockPersistence) {
+     AuxiliaryWindowsRetainStateWhileViewportSettingsStayTransient) {
   const std::string settings =
       read_source_file("src/ui/qt_settings_dialog.cpp");
   const std::string tool =
@@ -1579,7 +1581,7 @@ TEST(UiLayoutGuardrailTests,
   const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
 
   expect_contains(tool, "#include \"core/localization_service.hpp\"");
-  expect_contains(tool, "\"ui.panel.tool_settings\"");
+  expect_contains(tool, "\"ui.viewport.settings\"");
   expect_contains(tool, "\"ui.action.apply\"");
   expect_contains(tool, "\"ui.action.cancel\"");
   expect_contains(ui_system,
@@ -1623,7 +1625,7 @@ TEST(UiLayoutGuardrailTests,
   for (std::string_view stable_id :
        {"return \"viewport\"", "return \"outliner\"",
         "return \"inspector\"", "return \"console\"", "return \"layers\"",
-        "return \"tool_settings\""}) {
+        "return \"face_texture\""}) {
     expect_contains(panel_ids, stable_id);
   }
   expect_contains(ui_source, "dock->setObjectName(");
@@ -2224,7 +2226,7 @@ TEST(UiLayoutGuardrailTests,
 
   const std::size_t refresh = ui.find("void UISystem::refresh(");
   const std::size_t drag_query = ui.find(
-      "native_tools_->presentation_snapshot().curve_dragging", refresh);
+      "frame_native_tools.curve_dragging", refresh);
   const std::size_t toolbar_gate =
       ui.find("if (!edit_drag_active && !numeric_interaction_active)", refresh);
   const std::size_t selection_summary =
@@ -4156,11 +4158,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(docks, "UIPanelId::FaceTexture, *face_texture_panel_");
   const auto split = docks.find(
       "splitDockWidget(&inspector, &face_texture, Qt::Vertical)");
-  const auto tabify = docks.find(
-      "tabifyDockWidget(&inspector, &tool_settings)");
   ASSERT_NE(split, std::string::npos);
-  ASSERT_NE(tabify, std::string::npos);
-  EXPECT_LT(split, tabify);
+  expect_missing(docks, "tabifyDockWidget(&inspector, &tool_settings)");
   expect_contains(docks, "panels_.set_presentation_changed_callback(");
   expect_contains(docks, "project_workspace_refresh_signal_->store(");
 

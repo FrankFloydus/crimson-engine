@@ -69,8 +69,6 @@ public:
     bool inspector_visible_ = ui_panel_default_visible(UIPanelId::Inspector);
     bool console_visible_ = ui_panel_default_visible(UIPanelId::Console);
     bool layers_visible_ = ui_panel_default_visible(UIPanelId::Layers);
-    bool tool_settings_visible_ =
-        ui_panel_default_visible(UIPanelId::ToolSettings);
     bool face_texture_visible_ =
         ui_panel_default_visible(UIPanelId::FaceTexture);
     bool navigation_gizmo_visible_ = true;

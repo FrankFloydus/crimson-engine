@@ -9,6 +9,7 @@
 #include "editor/metadata/operation_input_hint_catalog.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_mutation_runner.hpp"
+#include "api/quader_settings_presentation_internal.hpp"
 
 #include "api/quader_api_status_internal.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
@@ -1345,54 +1346,62 @@ void QuaderToolsApi::rebind_session(QuaderApiSession session) {
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
-  if (scene_session(session_).document_commands().property_edit_active()) {
-    return quader_api_failure_status(
-        scene_session(session_), "Finish the active property edit before changing tools.");
-  }
-  if (hooks_.activate) {
-    return hooks_.activate(tool_id);
-  }
+  const QuaderSettingsOperationOriginCapture origin(session_);
+  const auto activate_tool = [&]() -> QuaderApiVoidResult {
+    if (scene_session(session_).document_commands().property_edit_active()) {
+      return quader_api_failure_status(
+          scene_session(session_), "Finish the active property edit before changing tools.");
+    }
+    if (hooks_.activate) {
+      return hooks_.activate(tool_id);
+    }
 
-  SceneSession &session = scene_session(session_);
-  if (session.native_tools().handles(tool_id)) {
-    const double grid_size =
-        hooks_.grid_world_size ? hooks_.grid_world_size() : 1.0;
-    return api_status_from_command(
-        session, session.native_tools().activate(tool_id, grid_size),
-        QuaderMutationKind::Runtime, tool_id);
-  }
+    SceneSession &session = scene_session(session_);
+    if (session.native_tools().handles(tool_id)) {
+      const double grid_size =
+          hooks_.grid_world_size ? hooks_.grid_world_size() : 1.0;
+      return api_status_from_command(
+          session, session.native_tools().activate(tool_id, grid_size),
+          QuaderMutationKind::Runtime, tool_id);
+    }
 
-  const ViewportTool *tool = find_viewport_tool(tool_id);
-  if (tool == nullptr) {
-    return quader_api_failure_status(session, "Unknown viewport tool.");
-  }
-  const CommandResult preflight =
-      runtime_tool_activation_preflight(session, *tool);
-  if (!preflight.ok) {
-    return api_status_from_command(session, preflight,
-                                   QuaderMutationKind::Runtime, tool_id);
-  }
-
-  const ModelingSessionService &modeling = session.modeling();
-  const bool repeated_without_competing_preview =
-      !session.native_tools().has_pending_tool() &&
-      modeling.tool_status().active_tool == tool->modeling_tool() &&
-      !modeling.can_cancel_active_preview_for_undo();
-  CommandResult canceled = command_unchanged_result();
-  if (!repeated_without_competing_preview) {
-    canceled =
-        session.native_tools().cancel_competing_state_for_tool_activation();
-    if (!canceled.ok) {
-      return api_status_from_command(session, canceled,
+    const ViewportTool *tool = find_viewport_tool(tool_id);
+    if (tool == nullptr) {
+      return quader_api_failure_status(session, "Unknown viewport tool.");
+    }
+    const CommandResult preflight =
+        runtime_tool_activation_preflight(session, *tool);
+    if (!preflight.ok) {
+      return api_status_from_command(session, preflight,
                                      QuaderMutationKind::Runtime, tool_id);
     }
-  }
 
-  ModelingCommandResult result = tool->activate(session.modeling());
-  const bool changed = result.changed || canceled.changed;
-  return quader_api_void_status(session, result.ok,
-                                changed, std::move(result.message),
-                                QuaderMutationKind::Modeling, tool_id);
+    const ModelingSessionService &modeling = session.modeling();
+    const bool repeated_without_competing_preview =
+        !session.native_tools().has_pending_tool() &&
+        modeling.tool_status().active_tool == tool->modeling_tool() &&
+        !modeling.can_cancel_active_preview_for_undo();
+    CommandResult canceled = command_unchanged_result();
+    if (!repeated_without_competing_preview) {
+      canceled =
+          session.native_tools().cancel_competing_state_for_tool_activation();
+      if (!canceled.ok) {
+        return api_status_from_command(session, canceled,
+                                       QuaderMutationKind::Runtime, tool_id);
+      }
+    }
+
+    ModelingCommandResult result = tool->activate(session.modeling());
+    const bool changed = result.changed || canceled.changed;
+    return quader_api_void_status(session, result.ok,
+                                  changed, std::move(result.message),
+                                  QuaderMutationKind::Modeling, tool_id);
+  };
+  QuaderApiVoidResult result = activate_tool();
+  if (result.ok() && result.changed()) {
+    origin.publish();
+  }
+  return result;
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
@@ -1417,6 +1426,7 @@ bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
 
 QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
     QuaderPrimitiveCreationShape shape) {
+  const QuaderSettingsOperationOriginCapture origin(session_);
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
   if (!mutations.available()) {
@@ -1434,8 +1444,9 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
     return quader_api_failure_status(session, "Unknown primitive shape.");
   }
 
+  const bool was_active = session.primitive_creation().active();
   CommandResult canceled = command_unchanged_result();
-  if (!session.primitive_creation().active()) {
+  if (!was_active) {
     canceled =
         session.native_tools().cancel_competing_state_for_tool_activation();
     if (!canceled.ok) {
@@ -1445,6 +1456,9 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
     }
   }
   CommandResult activated = session.primitive_creation().activate(*kind);
+  if (activated.ok && activated.changed && !was_active) {
+    origin.publish();
+  }
   activated.changed = activated.changed || canceled.changed;
   return api_status_from_command(session, activated,
                                  QuaderMutationKind::Runtime,
@@ -1452,6 +1466,7 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
 }
 
 QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
+  const QuaderSettingsOperationOriginCapture origin(session_);
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
   if (!mutations.available()) {
@@ -1473,6 +1488,9 @@ QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
     }
   }
   CommandResult activated = session.curve().begin_new_curve();
+  if (activated.ok && activated.changed) {
+    origin.publish();
+  }
   activated.changed = activated.changed || canceled.changed;
   return api_status_from_command(session, activated,
                                  QuaderMutationKind::Runtime, "Create Curve");
@@ -1549,6 +1567,28 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const ModelingSessionService &modeling = session.modeling();
   return modeling_tool_settings_target(modeling.tool_settings_target(),
                                        modeling.interaction_settings());
+}
+
+const QuaderSettingsPresentationOrigin &
+QuaderToolsApi::active_settings_presentation_origin() const {
+  return scene_session(session_).settings_presentation_origin();
+}
+
+void QuaderToolsApi::record_active_settings_origin(ViewportPaneId pane) {
+  switch (pane) {
+  case ViewportPaneId::Perspective:
+  case ViewportPaneId::Top:
+  case ViewportPaneId::Front:
+  case ViewportPaneId::Side:
+    break;
+  default:
+    return;
+  }
+  const QuaderToolSettingsTarget target = active_settings();
+  if (target.active && !target.controls.empty()) {
+    scene_session(session_).record_settings_presentation_origin(target.tool_id,
+                                                               pane);
+  }
 }
 
 std::uint64_t QuaderToolsApi::active_settings_revision() const {

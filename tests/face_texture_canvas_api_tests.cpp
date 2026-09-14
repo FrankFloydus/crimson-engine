@@ -64,6 +64,14 @@ void expect_same_history(const QuaderHistorySnapshot &actual,
   EXPECT_EQ(actual.redo_label, expected.redo_label);
 }
 
+/// Drives semantic scale handles along the selected image axis in the face plane.
+QVec2 texture_axis_point(const QuaderFaceTextureCanvas &canvas, double u, double v) {
+  const auto &m = canvas.uv_from_plane;
+  const double determinant = m[0] * m[3] - m[1] * m[2];
+  return {static_cast<float>((m[3] * u - m[1] * v) / determinant),
+          static_cast<float>((-m[2] * u + m[0] * v) / determinant)};
+}
+
 TEST(FaceTextureCanvasApiTests, OnlyOneFaceEnablesCanvasAndMissingImageKeepsOutline) {
   FaceTextureCanvasHarness harness;
   auto &editor = harness.editor;
@@ -251,15 +259,17 @@ TEST(FaceTextureCanvasApiTests, ModifierChangesUseOneBaselineAndReturningWithSna
   const auto original = editor.modeling().face_texture_canvas();
   const auto history = editor.history().snapshot();
   ASSERT_TRUE(history.can_redo);
+  const QVec2 start = texture_axis_point(original, 1.0, 0.0);
   ASSERT_TRUE(editor.modeling().begin_face_texture_gesture({
       .kind = QuaderFaceTextureGestureKind::ScaleWidth,
-      .selection_token = original.selection_token, .start = {10.0f, 0.0f}}).ok());
+      .selection_token = original.selection_token, .start = start}).ok());
   for (const auto modifiers : {0, 1, 3, 2, 0}) {
     SCOPED_TRACE(modifiers);
     const bool precision = (modifiers & 1) != 0;
     const bool snap = (modifiers & 2) != 0;
     ASSERT_TRUE(editor.modeling().update_face_texture_gesture({
-        .current = {13.7f, 0.0f}, .precision = precision, .snap = snap}).ok());
+        .current = texture_axis_point(original, 1.37, 0.0),
+        .precision = precision, .snap = snap}).ok());
     const auto candidate = editor.modeling().face_texture_canvas();
     const double continuous = original.repeat_width * 1.37;
     const double expected = snap ? std::round(continuous / grid_step) * grid_step
@@ -268,7 +278,7 @@ TEST(FaceTextureCanvasApiTests, ModifierChangesUseOneBaselineAndReturningWithSna
     EXPECT_NEAR(candidate.repeat_height, original.repeat_height, 1.0e-4);
   }
   ASSERT_TRUE(editor.modeling().update_face_texture_gesture({
-      .current = {10.0f, 0.0f}, .precision = true, .snap = true}).ok());
+      .current = start, .precision = true, .snap = true}).ok());
   const auto returned = editor.modeling().commit_face_texture_gesture();
   ASSERT_TRUE(returned.ok()) << returned.error_message();
   EXPECT_FALSE(returned.changed());
@@ -411,11 +421,20 @@ TEST(FaceTextureCanvasApiTests, StoredNumbersFollowEveryPreviewAndPersistAfterRe
     SCOPED_TRACE(static_cast<int>(kind));
     const auto original = editor.modeling().face_texture_canvas();
     const auto settings = editor.modeling().face_texture_settings();
+    const bool width = kind == QuaderFaceTextureGestureKind::ScaleWidth;
+    const bool height = kind == QuaderFaceTextureGestureKind::ScaleHeight;
+    const QVec2 start = width || height
+        ? texture_axis_point(original, width ? 1.0 : 0.0, height ? 1.0 : 0.0)
+        : QVec2{8.0F, 8.0F};
     ASSERT_TRUE(editor.modeling().begin_face_texture_gesture({
         .kind = kind, .selection_token = original.selection_token,
-        .start = {8, 8}, .pivot = {0, 0}}).ok());
+        .start = start, .pivot = {0, 0}}).ok());
     auto revision = editor.modeling().face_texture_settings_revision();
-    for (const QVec2 point : {QVec2{12, 16}, QVec2{20, 24}}) {
+    const std::array points = width || height
+        ? std::array{texture_axis_point(original, width ? 1.5 : 0.0, height ? 1.5 : 0.0),
+                     texture_axis_point(original, width ? 2.5 : 0.0, height ? 2.5 : 0.0)}
+        : std::array{QVec2{12, 16}, QVec2{20, 24}};
+    for (const QVec2 point : points) {
       ASSERT_TRUE(editor.modeling().update_face_texture_gesture({.current = point}).ok());
       EXPECT_NE(editor.modeling().face_texture_settings_revision(), revision);
       revision = editor.modeling().face_texture_settings_revision();

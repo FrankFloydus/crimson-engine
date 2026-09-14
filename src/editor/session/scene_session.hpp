@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_settings_presentation_types.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/instances/instance_edit_context.hpp"
@@ -17,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace quader {
 
@@ -155,6 +157,16 @@ public:
   const ViewportWorkspaceService &viewport_workspace() const {
     return viewport_workspace_;
   }
+  [[nodiscard]] const QuaderSettingsPresentationOrigin &
+  settings_presentation_origin() const noexcept {
+    return settings_presentation_origin_;
+  }
+  /// Invalidates captured operation dispatch when a document is replaced in place.
+  [[nodiscard]] std::uint64_t document_binding_generation() const noexcept {
+    return document_binding_generation_;
+  }
+  void record_settings_presentation_origin(std::string_view target_id,
+                                           ViewportPaneId pane);
   [[nodiscard]] ViewportCameraPose persisted_viewport_camera_pose() const {
     return viewport_workspace_.persisted_perspective_camera_pose();
   }
@@ -205,6 +217,7 @@ private:
   };
 
   void rebuild_services();
+  void invalidate_document_binding();
   void begin_modeling_preview_checkpoint();
   void observe_before_modeling_preview_projection();
   void record_after_modeling_preview_projection();
@@ -238,6 +251,8 @@ private:
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
   ViewportWorkspaceService viewport_workspace_{
       ViewportWorkspaceLayoutPolicy::MultiPane};
+  QuaderSettingsPresentationOrigin settings_presentation_origin_;
+  std::uint64_t document_binding_generation_ = 0;
   std::unique_ptr<ViewportLocalVisibilityService> viewport_local_visibility_;
   std::unique_ptr<SceneSurfaceQuery> scene_surface_query_;
   std::unique_ptr<ViewportPointPlacementService> point_placement_;

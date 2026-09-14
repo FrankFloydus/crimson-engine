@@ -328,8 +328,8 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
                   "Select an active mesh and at least one other editable mesh."),
               "Seleziona una mesh attiva e almeno un'altra mesh modificabile.");
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Elimina");
-    EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
-              "Impostazioni strumento");
+    EXPECT_EQ(localization.text("ui.viewport.settings", "Settings"),
+              "Impostazioni");
     EXPECT_EQ(localization.text("ui.panel.face_texture", "Face Texture"),
               "Texture faccia");
     EXPECT_EQ(localization.text("ui.material_browser.assign", "Assign"),
@@ -423,8 +423,8 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
                   "Select an active mesh and at least one other editable mesh."),
               "Select an active mesh and at least one other editable mesh.");
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Delete");
-    EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
-              "Tool Settings");
+    EXPECT_EQ(localization.text("ui.viewport.settings", "Settings"),
+              "Settings");
     EXPECT_EQ(localization.text("ui.panel.face_texture", "Face Texture"),
               "Face Texture");
     EXPECT_EQ(localization.text("ui.material_browser.assign", "Assign"),

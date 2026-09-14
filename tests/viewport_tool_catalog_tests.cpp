@@ -1624,7 +1624,7 @@ TEST(ViewportToolRuntimeTests,
       .local = kPressLocal,
       .sequence = 100u,
   }};
-  ASSERT_TRUE(harness.dispatch_direct({
+  const ViewportToolResult started = harness.dispatch_direct({
       .hovered = true,
       .left_clicked = true,
       .left_down = true,
@@ -1633,16 +1633,20 @@ TEST(ViewportToolRuntimeTests,
       .mouse_screen = kPressLocal,
       .left_click_local = kPressLocal,
       .pointer_pressed_edges = press_edges,
-  }).consumed);
+  });
+  ASSERT_TRUE(started.consumed);
+  EXPECT_TRUE(started.settings_operation_started);
   ASSERT_TRUE(harness.modal_state.primary_pointer_gesture.has_value());
 
-  ASSERT_TRUE(harness.dispatch_direct({
+  const ViewportToolResult updated = harness.dispatch_direct({
       .hovered = true,
       .left_down = true,
       .viewport_focused = true,
       .mouse_local = kReleaseLocal,
       .mouse_screen = kReleaseLocal,
-  }).handled);
+  });
+  ASSERT_TRUE(updated.handled);
+  EXPECT_FALSE(updated.settings_operation_started);
   ASSERT_EQ(harness.session.modeling().box_preview().drag_state,
             ModelingBoxDragState::Footprint);
 
@@ -1677,6 +1681,7 @@ TEST(ViewportToolRuntimeTests,
       .pointer_released_edges = matching_release,
   });
   EXPECT_TRUE(committed.consumed);
+  EXPECT_FALSE(committed.settings_operation_started);
   EXPECT_FALSE(harness.modal_state.primary_pointer_gesture.has_value());
   EXPECT_EQ(harness.accept_count, 1);
   EXPECT_EQ(harness.session.primitive_creation().shape_count(), 1u);

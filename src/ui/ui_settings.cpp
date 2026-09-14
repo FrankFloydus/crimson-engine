@@ -181,8 +181,6 @@ bool UISettings::is_panel_visible(UIPanelId id) const {
     return console_visible_;
   case UIPanelId::Layers:
     return layers_visible_;
-  case UIPanelId::ToolSettings:
-    return tool_settings_visible_;
   case UIPanelId::FaceTexture:
     return face_texture_visible_;
   case UIPanelId::Count:
@@ -206,9 +204,6 @@ void UISettings::set_panel_visible(UIPanelId id, bool visible) {
     break;
   case UIPanelId::Layers:
     layers_visible_ = visible;
-    break;
-  case UIPanelId::ToolSettings:
-    tool_settings_visible_ = visible;
     break;
   case UIPanelId::FaceTexture:
     face_texture_visible_ = visible;

@@ -90,17 +90,17 @@ struct TextureControlDescription {
 
 constexpr std::array<TextureControlDescription, 5> kTextureControls{{
     {QuaderFaceTextureField::ScaleX, "scale_x",
-     "tool_settings.texture_scale_x", "Scale X", 1.0, 1.0,
-     "Face UV scale modifier: a larger magnitude enlarges the texture horizontally; a negative value mirrors it. Authored UVs and material tiling also affect visible density."},
+     "tool_settings.texture_scale_x", "Scale U", 1.0, 1.0,
+     "Texture width (U) scale; its screen direction follows the mapped texture. Larger magnitudes enlarge the texture; negative values mirror it. Authored UVs and material tiling also affect visible density."},
     {QuaderFaceTextureField::ScaleY, "scale_y",
-     "tool_settings.texture_scale_y", "Scale Y", 1.0, 1.0,
-     "Face UV scale modifier: a larger magnitude enlarges the texture vertically; a negative value mirrors it. Authored UVs and material tiling also affect visible density."},
+     "tool_settings.texture_scale_y", "Scale V", 1.0, 1.0,
+     "Texture height (V) scale; its screen direction follows the mapped texture. Larger magnitudes enlarge the texture; negative values mirror it. Authored UVs and material tiling also affect visible density."},
     {QuaderFaceTextureField::ShiftX, "shift_x",
-     "tool_settings.texture_shift_x", "Shift X (px)", 1.0, 0.0,
-     "Horizontal texture shift in image pixels. Numeric shifts require one selected face."},
+     "tool_settings.texture_shift_x", "Shift U (px)", 1.0, 0.0,
+     "Shift along the texture image's width axis (U), in image pixels. Its screen direction follows the mapped texture. Numeric shifts require one selected face."},
     {QuaderFaceTextureField::ShiftY, "shift_y",
-     "tool_settings.texture_shift_y", "Shift Y (px)", 1.0, 0.0,
-     "Vertical texture shift in image pixels. Numeric shifts require one selected face."},
+     "tool_settings.texture_shift_y", "Shift V (px)", 1.0, 0.0,
+     "Shift along the texture image's height axis (V), in image pixels. Its screen direction follows the mapped texture. Numeric shifts require one selected face."},
     {QuaderFaceTextureField::Rotate, "rotate",
      "tool_settings.texture_rotate", "Rotation (\xC2\xB0)", 1.0, 0.0,
      "Texture rotation in degrees in the face's planar projection. Selecting the face again preserves its angle."},
@@ -114,6 +114,7 @@ struct TextureActionDescription {
   std::string_view id;
   std::string_view caption;
   std::string_view tooltip;
+  std::string_view accessible_name{};
 };
 
 constexpr std::array<TextureActionDescription, 17> kTextureActions{{
@@ -139,32 +140,38 @@ constexpr std::array<TextureActionDescription, 17> kTextureActions{{
      "Rotate the texture image counterclockwise by the current rotation step, viewed from the face front."},
     {QuaderFaceTextureAction::FlipTextureHorizontal,
      quader_command::kModelingTextureFlipTextureHorizontal,
-     "flip_texture_horizontal", "H",
-     "Mirror the texture horizontally about its chart origin. Keep the current shifts."},
+     "flip_texture_horizontal", "U",
+     "Mirror the texture along its width axis (U) about its chart origin. Keep the current shifts.",
+     "Flip Texture U"},
     {QuaderFaceTextureAction::FlipTextureVertical,
      quader_command::kModelingTextureFlipTextureVertical,
      "flip_texture_vertical", "V",
-     "Mirror the texture vertically about its chart origin. Keep the current shifts."},
+     "Mirror the texture along its height axis (V) about its chart origin. Keep the current shifts.",
+     "Flip Texture V"},
     {QuaderFaceTextureAction::FlipFaceHorizontal,
      quader_command::kModelingTextureFlipFaceHorizontal,
-     "flip_face_horizontal", "H",
-     "Mirror the face UVs horizontally within their existing UV bounds. Treat as One uses the combined existing UV bounds; face geometry stays fixed."},
+     "flip_face_horizontal", "U",
+     "Mirror the face UVs along U within their existing bounds. Treat as One uses combined UV bounds across the selection. Geometry and scalar texture settings stay unchanged.",
+     "Flip Face UVs U"},
     {QuaderFaceTextureAction::FlipFaceVertical,
      quader_command::kModelingTextureFlipFaceVertical,
      "flip_face_vertical", "V",
-     "Mirror the face UVs vertically within their existing UV bounds. Treat as One uses the combined existing UV bounds; face geometry stays fixed."},
+     "Mirror the face UVs along V within their existing bounds. Treat as One uses combined UV bounds across the selection. Geometry and scalar texture settings stay unchanged.",
+     "Flip Face UVs V"},
     {QuaderFaceTextureAction::FitBoth,
      quader_command::kModelingTextureFitBoth,
      "fit_both", "Both",
      "Scale and shift both texture axes to fit one tile to the face bounds. Treat as One uses shared projection and combined bounds."},
     {QuaderFaceTextureAction::FitX,
      quader_command::kModelingTextureFitX,
-     "fit_x", "X",
-     "Scale and shift the horizontal texture axis to fit one tile. Keep the vertical mapping. Treat as One uses a shared projection."},
+     "fit_x", "U",
+     "Scale and shift the texture width axis (U) to fit one tile. Keep the V mapping. Treat as One uses a shared projection.",
+     "Fit Texture U"},
     {QuaderFaceTextureAction::FitY,
      quader_command::kModelingTextureFitY,
-     "fit_y", "Y",
-     "Scale and shift the vertical texture axis to fit one tile. Keep the horizontal mapping. Treat as One uses a shared projection."},
+     "fit_y", "V",
+     "Scale and shift the texture height axis (V) to fit one tile. Keep the U mapping. Treat as One uses a shared projection.",
+     "Fit Texture V"},
     {QuaderFaceTextureAction::JustifyLeft,
      quader_command::kModelingTextureJustifyLeft,
      "justify_left", "\xE2\x86\x90",
@@ -355,16 +362,16 @@ private:
         discard_texture_dispatch(binding);
       }
     }
-    const bool visible = settings.selected_face_count > 0;
-    if (texture_section_->isHidden() == visible) {
-      texture_section_->setVisible(visible);
+    const bool has_faces = settings.selected_face_count > 0;
+    if (texture_section_->isHidden()) {
+      texture_section_->setVisible(true);
     }
-    if (edit_texture_section_->isHidden() == visible) {
-      edit_texture_section_->setVisible(visible);
+    if (edit_texture_section_->isHidden()) {
+      edit_texture_section_->setVisible(true);
     }
 
     QString disabled_reason;
-    if (visible && !settings.editable) {
+    if (has_faces && !settings.editable) {
       disabled_reason =
           settings.block_reason == QuaderFaceTextureBlockReason::PreviewActive
               ? localized_text(
@@ -394,7 +401,11 @@ private:
       TextureControlWidget &binding = texture_controls_[index];
       const bool shift = binding.field == QuaderFaceTextureField::ShiftX ||
                          binding.field == QuaderFaceTextureField::ShiftY;
-      const bool enabled = settings.editable && (!shift || single_face);
+      const bool enabled =
+          !has_faces || (settings.editable && (!shift || single_face));
+      if (binding.spin->isReadOnly() != !has_faces) {
+        binding.spin->setReadOnly(!has_faces);
+      }
       if (binding.spin->isEnabled() != enabled) {
         binding.spin->setEnabled(enabled);
       }
@@ -402,13 +413,18 @@ private:
         binding.label->setEnabled(enabled);
       }
       if (!binding.editing) {
-        binding.spin->present(values[index]);
+        binding.spin->present(has_faces ? values[index] : std::nullopt,
+                              has_faces ? QStringLiteral("--")
+                                        : QStringLiteral("\u2014"));
       }
     }
     for (QPushButton *button : texture_action_buttons_) {
       if (button->isEnabled() != settings.editable) {
         button->setEnabled(settings.editable);
       }
+    }
+    if (texture_treat_as_one_->isEnabled() != has_faces) {
+      texture_treat_as_one_->setEnabled(has_faces);
     }
     if (texture_treat_as_one_->isChecked() != settings.treat_as_one) {
       const QSignalBlocker blocker(texture_treat_as_one_);
@@ -822,7 +838,9 @@ private:
       const QString label = localized_text(
           localization_, std::string("command.modeling.texture.") +
                              std::string(description.id),
-          quader_face_texture_action_label(description.action));
+          description.accessible_name.empty()
+              ? quader_face_texture_action_label(description.action)
+              : description.accessible_name);
       if (button->text() != caption) {
         button->setText(caption);
       }

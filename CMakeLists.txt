@@ -1597,6 +1597,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_startup_presentation_tests.cpp
         tests/qt_tool_settings_number_slider_tests.cpp
         tests/qt_viewport_pane_activation_tests.cpp
+        tests/qt_viewport_settings_overlay_tests.cpp
         tests/qt_viewport_render_submission_policy_tests.cpp
         tests/qt_viewport_fly_navigation_hud_tests.cpp
         tests/qt_viewport_edge_length_hud_tests.cpp

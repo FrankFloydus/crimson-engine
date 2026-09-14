@@ -3362,10 +3362,8 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
                   "UIPanelId::Console, *console_panel_, "
                   "Qt::BottomDockWidgetArea");
   expect_contains(ui_system_source,
-                  "UIPanelId::ToolSettings, *tool_settings_panel_");
-  expect_contains(ui_system_source,
-                  "main_window_->tabifyDockWidget(&inspector, "
-                  "&tool_settings)");
+                  "viewport_panel_->set_settings_panel(tool_settings_panel_)");
+  expect_missing(ui_system_source, "UIPanelId::ToolSettings");
   expect_contains(ui_system_source, "new QDockWidget(");
   expect_contains(ui_system_source,
                   "QStringLiteral(\"dock_%1\").arg("
@@ -3381,7 +3379,7 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
   expect_contains(panel_header, "return \"inspector\"");
   expect_contains(panel_header, "return \"console\"");
   expect_contains(panel_header, "return \"layers\"");
-  expect_contains(panel_header, "return \"tool_settings\"");
+  expect_missing(panel_header, "return \"tool_settings\"");
   expect_contains(panel_header, "kUiDockPanelIds");
   expect_contains(panel_manager_header,
                   "std::array<QDockWidget *, kUiPanelCount> docks_");
@@ -3445,7 +3443,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(frame_refresh, "modeling_->transform_drag_active()");
   expect_contains(
       frame_refresh,
-      "native_tools_->presentation_snapshot().curve_dragging");
+      "frame_native_tools.curve_dragging");
   expect_contains(frame_refresh,
                   "!edit_drag_active && "
                   "panel_presented(UIPanelId::Outliner)");
@@ -3468,7 +3466,21 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(frame_refresh, "panel_presented(UIPanelId::Inspector)");
   expect_contains(frame_refresh, "panel_presented(UIPanelId::Console)");
   expect_contains(frame_refresh,
-                  "panel_visible(UIPanelId::ToolSettings)");
+                  "!numeric_interaction_active || settings_lifecycle_changed");
+  expect_contains(frame_refresh,
+                  "viewport_panel_->refresh_settings_overlay(*editor_)");
+  expect_contains(frame_refresh,
+                  "presented_settings->operation_serial != "
+                  "settings_operation_serial");
+  expect_contains(frame_refresh,
+                  "presented_settings->active_tool_revision != "
+                  "frame_active_tool_revision");
+  expect_contains(frame_refresh,
+                  "presented_settings->operation_preview_active !=\n"
+                  "          frame_operation_preview_active");
+  expect_contains(frame_refresh,
+                  "presented_settings->curve_controls_editable !=\n"
+                  "          frame_native_tools.curve_controls_editable");
   expect_contains(frame_refresh, "refresh_project_workspace(false)");
   expect_missing(frame_refresh, "settings_dialog_->refresh()");
   expect_missing(frame_refresh, "main_menu_->refresh()");
@@ -3623,7 +3635,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::size_t tool_settings_revision =
       frame_refresh.find("active_settings_revision()");
   const std::size_t tool_settings_gate =
-      frame_refresh.find("if (panel_visible(UIPanelId::ToolSettings)");
+      frame_refresh.find("if (tool_settings_panel_ != nullptr &&");
   const std::size_t tool_settings_refresh =
       frame_refresh.find("tool_settings_panel_->refresh()",
                          tool_settings_gate);

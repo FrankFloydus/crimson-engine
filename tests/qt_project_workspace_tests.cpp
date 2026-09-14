@@ -1095,8 +1095,8 @@ TEST(QtProjectWorkspaceTests,
     pages->addWidget(new QWidget(pages));
     pages->addWidget(new QWidget(pages));
     window.setCentralWidget(pages);
-    auto *closed_dock = new QDockWidget(QStringLiteral("Tool Settings"), &window);
-    closed_dock->setObjectName(QStringLiteral("dock_tool_settings"));
+    auto *closed_dock = new QDockWidget(QStringLiteral("Layers"), &window);
+    closed_dock->setObjectName(QStringLiteral("dock_layers"));
     closed_dock->setWidget(new QWidget(closed_dock));
     window.addDockWidget(Qt::RightDockWidgetArea, closed_dock);
     closed_dock->hide();
@@ -1258,7 +1258,7 @@ TEST(QtProjectWorkspaceTests,
         EXPECT_TRUE(window.rect().contains(window_bounds));
       }
       auto *closed_dock = window.findChild<QDockWidget *>(
-          QStringLiteral("dock_tool_settings"));
+          QStringLiteral("dock_layers"));
       ASSERT_NE(closed_dock, nullptr);
       EXPECT_TRUE(closed_dock->isHidden());
     };

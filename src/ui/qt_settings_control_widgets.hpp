@@ -211,7 +211,7 @@ public:
                        int position = lineEdit()->cursorPosition();
                        if (QDoubleSpinBox::validate(candidate, position) ==
                                QValidator::Acceptable &&
-                           text != QStringLiteral("--")) {
+                           text != missing_text_) {
                          mixed_ = false;
                          if (edited) {
                            edited(QtDoubleSpinBox::valueFromText(text));
@@ -222,15 +222,17 @@ public:
                      });
   }
 
-  void present(std::optional<double> value) {
+  void present(std::optional<double> value,
+               const QString &missing_text = QStringLiteral("--")) {
     discard_text_edit();
     const QSignalBlocker spin_blocker(this);
     const QSignalBlocker text_blocker(lineEdit());
+    missing_text_ = missing_text;
     mixed_ = !value.has_value();
     if (value.has_value() && this->value() != *value) {
       setValue(*value);
     }
-    const QString desired = mixed_ ? QStringLiteral("--")
+    const QString desired = mixed_ ? missing_text_
                                    : formatted_value(this->value());
     if (lineEdit()->text() != desired) {
       lineEdit()->setText(desired);
@@ -244,18 +246,18 @@ public:
 
 protected:
   QString textFromValue(double value) const override {
-    return mixed_ ? QStringLiteral("--")
+    return mixed_ ? missing_text_
                   : formatted_value(value);
   }
 
   double valueFromText(const QString &text) const override {
-    return text == QStringLiteral("--")
+    return text == missing_text_
                ? value()
                : QtDoubleSpinBox::valueFromText(text);
   }
 
   QValidator::State validate(QString &text, int &position) const override {
-    return text == QStringLiteral("--")
+    return text == missing_text_
                ? QValidator::Intermediate
                : QDoubleSpinBox::validate(text, position);
   }
@@ -268,6 +270,9 @@ protected:
   }
 
   void stepBy(int steps) override {
+    if (isReadOnly()) {
+      return;
+    }
     if (mixed_) {
       // Arrows on an indeterminate field start from its neutral value.
       mixed_ = false;
@@ -312,6 +317,7 @@ private:
   }
 
   double step_origin_ = 0.0;
+  QString missing_text_ = QStringLiteral("--");
   bool mixed_ = false;
   bool scale_steps_ = false;
 };

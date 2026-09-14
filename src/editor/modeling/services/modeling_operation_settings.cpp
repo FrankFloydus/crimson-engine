@@ -61,7 +61,7 @@ const char *fallback_tool_settings_label(ModelingToolSettingsTargetKind kind) {
   case ModelingToolSettingsTargetKind::None:
     break;
   }
-  return "Tool Settings";
+  return "Settings";
 }
 
 quader_editor_core::EditorOperationSettings settings_for_operation(
