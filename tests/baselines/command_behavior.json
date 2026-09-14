@@ -23267,8 +23267,8 @@
           "modeling_selection": 3
         }
       },
-      "before": "c535dfcd2b751a405d7af53c6383de0c",
-      "after": "06d92bd99081ef965be9c3b446e47c83",
+      "before": "3b845a11876cbf678e64128b46a0434e",
+      "after": "c3e38af4e3e2f2c5a04f678b1fcc0548",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
         "scene": "e45934184dbcaae0d23773bdd8de0ae5",
@@ -23277,7 +23277,7 @@
         "overlay": "10b4b7a19520039dc93490faba829f8b",
         "assets": "e46b17ed8ed75b9391ba04cd367f1665",
         "history": "c413cfeec85ac6c2ff4b0ff8c7b51400",
-        "tools": "58e3d7bfc99e729bb7843c020c296f38",
+        "tools": "4d821a23e6845d267b22eb930e663f4f",
         "viewports": "24b6b38757ce513015ba256f71292d95",
         "preferences": "83d54370c1bd4e8c294ae91222934044",
         "revisions": "12f31073c675c02fde8e1ef64269b9c7"
@@ -23290,7 +23290,7 @@
         "overlay": "9f5b332f1e396a0c6513f743052af017",
         "assets": "d78a57be89b98f49264aebb3896b206c",
         "history": "c413cfeec85ac6c2ff4b0ff8c7b51400",
-        "tools": "b12a8728b875ef00b2fcf43a97b19bc4",
+        "tools": "91fe9eb1cff2d0bb4d1a675a9e5b1c11",
         "viewports": "24b6b38757ce513015ba256f71292d95",
         "preferences": "83d54370c1bd4e8c294ae91222934044",
         "revisions": "9c4c85380bcd87a36a91f14682fdea3a"
@@ -23772,7 +23772,7 @@
         }
       },
       "before": "3a800ed4d426dc8529001f1380acba91",
-      "after": "de12309051c1d055107f4f4625e2b636",
+      "after": "c78126e8e45e15e23fb65ffae08d1f54",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
         "scene": "a11cd26f5de885beb0f8333f4d8e3cfd",
@@ -23794,7 +23794,7 @@
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "96e40f1f5d472496c9d99f83cdb2c9b3",
         "history": "0147e55dc7a5afa94125bb23b5c6bd24",
-        "tools": "9359f90ad668f6e90362a5cb381467bb",
+        "tools": "34fee3434d7e98942199027b5c151eb1",
         "viewports": "24b6b38757ce513015ba256f71292d95",
         "preferences": "83d54370c1bd4e8c294ae91222934044",
         "revisions": "ecf3cb38a54a3b6422dc855c8f1b77ff"
@@ -24589,5 +24589,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Flip Face UVs mirrors existing UV bounds while preserving geometry, scalar texture settings and sampling."
+  "approved_change_reason": "Sphere creation now exposes UV/Quad Type and conditional topology settings."
 }

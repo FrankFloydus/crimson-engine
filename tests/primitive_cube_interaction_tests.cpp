@@ -87,7 +87,10 @@ struct PrimitiveCubeInteractionHarness {
       case ViewportPrimitiveCreationShape::Cylinder: setting = kCylinderSideCountSetting; break;
       case ViewportPrimitiveCreationShape::Cone: setting = kConeSideCountSetting; break;
       case ViewportPrimitiveCreationShape::Sphere:
-        setting = axis == 0 ? kSphereRadialSegmentsSetting : kSphereRingsSetting; break;
+        setting = box.live_primitive()->sphere_type == ViewportSphereType::Quad
+            ? kSphereSubdivisionSetting
+            : axis == 0 ? kSphereRadialSegmentsSetting : kSphereRingsSetting;
+        break;
       case ViewportPrimitiveCreationShape::Torus:
         setting = axis == 0 ? kTorusMajorSegmentsSetting : kTorusMinorSegmentsSetting; break;
       case ViewportPrimitiveCreationShape::Box: break;
@@ -999,6 +1002,171 @@ TEST(PrimitiveCubeInteractionTests, TorusBoundaryDragsPreserveTheOtherBoundaryAn
     EXPECT_FLOAT_EQ(canceled.local_max.y, before.local_max.y);
     EXPECT_DOUBLE_EQ(canceled.tube_radius_ratio, before.tube_radius_ratio);
     EXPECT_FALSE(canceled.resizing);
+  }
+}
+
+TEST(PrimitiveCubeInteractionTests, QuadSphereProjectsOneSubdivisionControlAndRetainsCachedFeedback) {
+  PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
+  auto &interaction = h.modal.primitive_creation;
+  const auto uv = *h.box.live_primitive();
+  const auto uv_frame = interaction.frame();
+  ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
+  const auto quad = h.box.live_primitive();
+  ASSERT_TRUE(quad);
+  EXPECT_EQ(quad->sphere_type, ViewportSphereType::Quad);
+  EXPECT_EQ(quad->sphere_subdivision, 3);
+  const auto &frame = interaction.project(quad, h.camera, 1);
+  for (int index = 0; index < 9; ++index) {
+    const bool visible = index == 0 || index == 2 || index == 3 || index == 6;
+    EXPECT_EQ(frame.controls[index].visible, visible);
+    if (visible) {
+      EXPECT_EQ(interaction.hit_test(frame.controls[index].screen_position), index);
+      EXPECT_LT(length(frame.controls[index].world_position -
+                       uv_frame.controls[index].world_position), 0.00001f);
+    }
+  }
+  EXPECT_EQ(frame.controls[6].segment_count, 3);
+  EXPECT_EQ(frame.controls[6].minimum_segments, 1);
+  EXPECT_EQ(frame.controls[6].maximum_segments, 6);
+  interaction.hover(6);
+  EXPECT_EQ(frame.label_key, "primitive.controls.subdivision");
+  EXPECT_EQ(frame.label_value, 3);
+  EXPECT_TRUE(frame.label_is_count);
+  EXPECT_EQ(frame.highlight_point_count, 0u);
+  const auto projections = interaction.projection_count();
+  const auto revision = frame.revision;
+  for (int repeat = 0; repeat < 20; ++repeat) {
+    interaction.project(quad, h.camera, 1);
+    interaction.hover(6);
+  }
+  EXPECT_EQ(interaction.projection_count(), projections);
+  EXPECT_EQ(frame.revision, revision);
+
+  // The DTO fields also invalidate presentation when the producer's revision
+  // happens to match, as on a presentation-only rebind.
+  auto changed = *quad;
+  changed.sphere_subdivision = 2;
+  interaction.project(changed, h.camera, 1);
+  EXPECT_EQ(interaction.projection_count(), projections + 1);
+  EXPECT_EQ(frame.label_value, 2);
+  changed.sphere_type = ViewportSphereType::Uv;
+  interaction.project(changed, h.camera, 1);
+  EXPECT_EQ(interaction.projection_count(), projections + 2);
+  EXPECT_TRUE(frame.controls[7].visible);
+  EXPECT_EQ(frame.controls[6].segment_count, uv.radial_segments);
+  EXPECT_EQ(frame.controls[7].segment_count, uv.rings);
+  EXPECT_EQ(frame.controls[6].maximum_segments, 128);
+  EXPECT_EQ(frame.label_key, "primitive.controls.radial_segments");
+  EXPECT_EQ(frame.highlight_point_count, 65u);
+}
+
+TEST(PrimitiveCubeInteractionTests, QuadSphereButtonsConsumeBothLimitsAndFreezeClickDirection) {
+  PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
+  ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
+  auto &interaction = h.modal.primitive_creation;
+  const auto initial = *h.box.live_primitive();
+  auto point = interaction.project(initial, h.camera, 1).controls[6].screen_position;
+  ASSERT_TRUE(h.pointer(point, true, true, false, true).consumed);
+  ASSERT_TRUE(h.pointer(point, false, false, true, false).consumed);
+  EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, 2);
+  EXPECT_EQ(h.box.live_primitive()->radial_segments, initial.radial_segments);
+  EXPECT_EQ(h.box.live_primitive()->rings, initial.rings);
+
+  for (const bool decrement : {true, false}) {
+    const int limit = decrement ? 1 : 6;
+    ASSERT_TRUE(h.box.set_segments(0, limit).ok);
+    point = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6].screen_position;
+    h.pointer(point, false, false, false, decrement);
+    EXPECT_FALSE(interaction.frame().controls[6].enabled);
+    const auto revision = h.box.live_primitive()->revision;
+    const auto content = h.session.modeling().content_revision();
+    EXPECT_TRUE(h.pointer(point, true, false, true, decrement).consumed);
+    EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, limit);
+    std::array<ViewportNavigationWheelEvent, 1> wheels{{
+        {.action = ViewportInputActionKind::Zoom, .steps = decrement ? -1.0f : 1.0f,
+         .local = point}}};
+    EXPECT_TRUE(h.wheel(wheels).consumed);
+    EXPECT_TRUE(wheels[0].consumed);
+    EXPECT_EQ(h.box.live_primitive()->revision, revision);
+    EXPECT_EQ(h.session.modeling().content_revision(), content);
+    EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+  }
+  EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
+}
+
+TEST(PrimitiveCubeInteractionTests, SphereTypeChangeRetiresHeldButtonsAndFractionalWheelInput) {
+  for (const int source_control : {6, 7}) {
+    PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
+    auto &interaction = h.modal.primitive_creation;
+    const auto point = interaction.frame().controls[source_control].screen_position;
+    ASSERT_TRUE(h.pointer(point, true, true, false).consumed);
+    ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
+    const auto revision = h.box.live_primitive()->revision;
+    ASSERT_TRUE(h.pointer(point, false, true, false).consumed);
+    EXPECT_EQ(interaction.active(), -1);
+    EXPECT_TRUE(h.modal.primary_release_suppression.active());
+    ASSERT_TRUE(h.pointer(point, false, false, true).consumed);
+    EXPECT_EQ(h.box.live_primitive()->revision, revision);
+    EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, 3);
+
+    const auto quad_point = interaction.project(
+        h.box.live_primitive(), h.camera, 1).controls[6].screen_position;
+    ASSERT_TRUE(h.pointer(quad_point, true, true, false).consumed);
+    ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 0.0).ok());
+    const auto uv_revision = h.box.live_primitive()->revision;
+    ASSERT_TRUE(h.pointer(quad_point, false, false, true).consumed);
+    EXPECT_EQ(interaction.active(), -1);
+    EXPECT_EQ(h.box.live_primitive()->revision, uv_revision);
+  }
+
+  PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
+  const auto send_half_step = [&] {
+    const auto point = h.modal.primitive_creation.project(
+        h.box.live_primitive(), h.camera, 1).controls[6].screen_position;
+    std::array<ViewportNavigationWheelEvent, 1> wheels{{
+        {.action = ViewportInputActionKind::Zoom, .steps = 0.5f, .local = point}}};
+    EXPECT_TRUE(h.wheel(wheels).consumed);
+    EXPECT_TRUE(wheels[0].consumed);
+  };
+  send_half_step();
+  ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
+  send_half_step();
+  EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, 3);
+  send_half_step();
+  EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, 4);
+  send_half_step();
+  ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 0.0).ok());
+  send_half_step();
+  EXPECT_EQ(h.box.live_primitive()->radial_segments, 32);
+  send_half_step();
+  EXPECT_EQ(h.box.live_primitive()->radial_segments, 33);
+}
+
+TEST(PrimitiveCubeInteractionTests, QuadSphereTypeChangeRetiresResizeWithoutRestoringOldBounds) {
+  for (const bool to_quad : {true, false}) {
+    PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
+    if (!to_quad) {
+      ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
+    }
+    const auto control = h.modal.primitive_creation.project(
+        h.box.live_primitive(), h.camera, 1).controls[2];
+    ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
+    const auto end = h.camera.project_world_point(
+        control.world_position + QVec3{0, 0.7f, 0}).position;
+    ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
+    const auto resized = *h.box.live_primitive();
+    ASSERT_TRUE(resized.resizing);
+    ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting,
+                                             to_quad ? 1.0 : 0.0).ok());
+    ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
+    ASSERT_TRUE(h.pointer(end, false, false, true).consumed);
+    const auto after = *h.box.live_primitive();
+    EXPECT_FALSE(after.resizing);
+    EXPECT_FLOAT_EQ(after.local_min.y, resized.local_min.y);
+    EXPECT_FLOAT_EQ(after.local_max.y, resized.local_max.y);
+    EXPECT_EQ(after.sphere_type, to_quad ? ViewportSphereType::Quad : ViewportSphereType::Uv);
+    EXPECT_EQ(h.modal.primitive_creation.active(), -1);
+    EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
   }
 }
 

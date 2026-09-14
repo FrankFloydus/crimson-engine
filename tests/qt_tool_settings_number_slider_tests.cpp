@@ -14,6 +14,7 @@
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
@@ -24,6 +25,7 @@
 #include "ui/qt_viewport_panel.hpp"
 
 #include <QApplication>
+#include <QAbstractEventDispatcher>
 #include <QAbstractItemView>
 #include <QButtonGroup>
 #include <QCoreApplication>
@@ -31,8 +33,10 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QDockWidget>
+#include <QDir>
 #include <QEventLoop>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -64,6 +68,7 @@
 #include <cmath>
 #include <filesystem>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -4192,6 +4197,336 @@ TEST(QtToolSettingsNumberSliderTests,
   application.removeEventFilter(&command_filter);
   window.unbind();
   window.hide();
+}
+
+TEST(QtToolSettingsPanelTests,
+     SphereTypeControlsRetainIndependentValuesAndResetToUvDefaults) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-sphere-settings-types-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(
+      quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.type", std::string_view("sphere")).ok());
+  ASSERT_TRUE(session.primitive_creation().accept_preview(
+      tool_settings_primitive_preview(), "Sphere Settings").ok);
+  const auto defaults = session.primitive_creation().sphere_settings();
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  EXPECT_FALSE(panel.expanded());
+  const QSize collapsed_size = panel.sizeHint();
+  panel.set_expanded(true);
+  panel.resize(panel.sizeHint());
+  QCoreApplication::processEvents();
+  auto *type = panel.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.type"));
+  auto *radial = panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.radial_segments"));
+  auto *rings = panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.rings"));
+  ASSERT_NE(type, nullptr);
+  ASSERT_NE(radial, nullptr);
+  ASSERT_NE(rings, nullptr);
+  EXPECT_EQ(type->accessibleName(), QStringLiteral("Type"));
+  ASSERT_EQ(type->count(), 2);
+  EXPECT_EQ(type->currentData().toString(), QStringLiteral("uv"));
+  EXPECT_EQ(type->itemText(type->findData(QStringLiteral("uv"))),
+            QStringLiteral("UV Sphere"));
+  EXPECT_EQ(type->itemText(type->findData(QStringLiteral("quad"))),
+            QStringLiteral("Quad Sphere"));
+  EXPECT_TRUE(type->isVisible());
+  EXPECT_TRUE(radial->isVisible());
+  EXPECT_TRUE(rings->isVisible());
+  EXPECT_LT(type->mapTo(&panel, QPoint()).y(),
+            radial->mapTo(&panel, QPoint()).y());
+  EXPECT_EQ(panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.subdivision")), nullptr);
+  radial->setValue(20);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      radial, "editingFinished", Qt::DirectConnection));
+  rings->setValue(9);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      rings, "editingFinished", Qt::DirectConnection));
+  EXPECT_EQ(session.primitive_creation().sphere_settings().radial_segments, 20);
+  EXPECT_EQ(session.primitive_creation().sphere_settings().rings, 9);
+  type->setCurrentIndex(type->findData(QStringLiteral("quad")));
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(panel.expanded());
+  EXPECT_EQ(panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.radial_segments")), nullptr);
+  EXPECT_EQ(panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.rings")), nullptr);
+  auto *subdivision = panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.subdivision"));
+  ASSERT_NE(subdivision, nullptr);
+  EXPECT_TRUE(subdivision->isVisible());
+  EXPECT_EQ(subdivision->accessibleName(), QStringLiteral("Subdivision"));
+  EXPECT_EQ(subdivision->minimum(), 1);
+  EXPECT_EQ(subdivision->maximum(), 6);
+  EXPECT_EQ(subdivision->value(), 3);
+  for (const char *id : {"primitive.sphere.hemisphere", "primitive.flip_faces"}) {
+    auto *toggle = panel.findChild<QCheckBox *>(
+        QStringLiteral("tool_settings.control.") + QString::fromLatin1(id));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_TRUE(toggle->isVisible());
+    EXPECT_TRUE(toggle->isEnabled());
+  }
+  subdivision->setValue(4);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      subdivision, "editingFinished", Qt::DirectConnection));
+  EXPECT_EQ(session.primitive_creation().sphere_settings().subdivision, 4);
+
+  panel.set_expanded(false);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.type", std::string_view("uv")).ok());
+  panel.refresh();
+  EXPECT_FALSE(panel.expanded());
+  EXPECT_EQ(panel.sizeHint(), collapsed_size);
+  panel.set_expanded(true);
+  radial = panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.radial_segments"));
+  rings = panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.rings"));
+  ASSERT_NE(radial, nullptr);
+  ASSERT_NE(rings, nullptr);
+  EXPECT_EQ(radial->value(), 20);
+  EXPECT_EQ(rings->value(), 9);
+  type = panel.findChild<QComboBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.type"));
+  ASSERT_NE(type, nullptr);
+  type->setCurrentIndex(type->findData(QStringLiteral("quad")));
+  QCoreApplication::processEvents();
+  subdivision = panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.subdivision"));
+  ASSERT_NE(subdivision, nullptr);
+  EXPECT_EQ(subdivision->value(), 4);
+  auto *reset = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.reset_defaults"));
+  ASSERT_NE(reset, nullptr);
+  ASSERT_TRUE(reset->isEnabled());
+  reset->click();
+  QCoreApplication::processEvents();
+  type = panel.findChild<QComboBox *>(QStringLiteral(
+      "tool_settings.control.primitive.sphere.type"));
+  ASSERT_NE(type, nullptr);
+  EXPECT_EQ(type->currentData().toString(), QStringLiteral("uv"));
+  const auto reset_settings = session.primitive_creation().sphere_settings();
+  EXPECT_EQ(reset_settings.radial_segments, defaults.radial_segments);
+  EXPECT_EQ(reset_settings.rings, defaults.rings);
+  EXPECT_EQ(reset_settings.subdivision, 3);
+  EXPECT_EQ(reset_settings.type, defaults.type);
+  EXPECT_TRUE(panel.expanded());
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     SphereTypeChangeDiscardsPendingEditsFromReplacedTopologyControls) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-sphere-stale-settings-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(
+      quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.type", std::string_view("sphere")).ok());
+  ASSERT_TRUE(session.primitive_creation().accept_preview(
+      tool_settings_primitive_preview(), "Sphere Pending Settings").ok);
+  const auto defaults = session.primitive_creation().sphere_settings();
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_expanded(true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  for (const auto &[field, next_type, pending] : {
+           std::tuple{"radial_segments", "quad", 25},
+           std::tuple{"subdivision", "uv", 5}}) {
+    SCOPED_TRACE(field);
+    auto *spin = panel.findChild<QSpinBox *>(
+        QStringLiteral("tool_settings.control.primitive.sphere.") +
+        QString::fromLatin1(field));
+    ASSERT_NE(spin, nullptr);
+    const QPointer<QSpinBox> outgoing(spin);
+    spin->setValue(pending);
+    ASSERT_TRUE(panel.numeric_interaction_active());
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive",
+        "primitive.sphere.type", std::string_view(next_type)).ok());
+    panel.refresh();
+    EXPECT_TRUE(outgoing.isNull());
+    EXPECT_FALSE(panel.numeric_interaction_active());
+    const auto settings_revision = editor.tools().active_settings_revision();
+    const auto content_revision = editor.revisions().modeling_content_revision;
+    process_events_for(75);
+    EXPECT_EQ(session.primitive_creation().sphere_settings().radial_segments,
+              defaults.radial_segments);
+    EXPECT_EQ(session.primitive_creation().sphere_settings().subdivision,
+              defaults.subdivision);
+    EXPECT_EQ(editor.tools().active_settings_revision(), settings_revision);
+    EXPECT_EQ(editor.revisions().modeling_content_revision, content_revision);
+  }
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     SphereTopologyControlsLocalizeFitScaledPanelsAndReuseUnchangedPresentation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-sphere-settings-presentation-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  QApplication::setPalette(quader::qt_obsidian_application_palette(
+      QApplication::palette()));
+  quader::QtUiScaleApplicationController scale_controller(application);
+  const auto settle_layout = [] {
+    auto *dispatcher = QAbstractEventDispatcher::instance();
+    if (dispatcher == nullptr) {
+      return false;
+    }
+    for (int iteration = 0; iteration < 64; ++iteration) {
+      if (!dispatcher->processEvents(QEventLoop::AllEvents)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.tools().activate(
+      quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.type", std::string_view("sphere")).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_expanded(true);
+  panel.bind(editor);
+  panel.show();
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  const QString screenshot_directory =
+      qEnvironmentVariable("QUADER_SPHERE_SETTINGS_SCREENSHOT_DIR");
+  if (!screenshot_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(screenshot_directory));
+  }
+  for (const char *locale : {"en-US", "it-IT"}) {
+    SCOPED_TRACE(locale);
+    const bool italian = std::string_view(locale) == "it-IT";
+    ASSERT_TRUE(localization.select_locale(locale));
+    panel.set_localization(localization);
+    for (const char *sphere_type : {"uv", "quad"}) {
+      SCOPED_TRACE(sphere_type);
+      ASSERT_TRUE(editor.tools().set_setting("create_primitive",
+          "primitive.sphere.type", std::string_view(sphere_type)).ok());
+      panel.refresh();
+      auto *type = panel.findChild<QComboBox *>(QStringLiteral(
+          "tool_settings.control.primitive.sphere.type"));
+      ASSERT_NE(type, nullptr);
+      EXPECT_EQ(type->accessibleName(),
+                italian ? QStringLiteral("Tipo") : QStringLiteral("Type"));
+      EXPECT_EQ(type->itemText(type->findData(QStringLiteral("uv"))),
+                italian ? QStringLiteral("Sfera UV") : QStringLiteral("UV Sphere"));
+      EXPECT_EQ(type->itemText(type->findData(QStringLiteral("quad"))),
+                italian ? QStringLiteral("Sfera Quad") : QStringLiteral("Quad Sphere"));
+      if (std::string_view(sphere_type) == "quad") {
+        auto *subdivision = panel.findChild<QSpinBox *>(QStringLiteral(
+            "tool_settings.control.primitive.sphere.subdivision"));
+        ASSERT_NE(subdivision, nullptr);
+        EXPECT_EQ(subdivision->accessibleName(), italian
+            ? QStringLiteral("Suddivisione") : QStringLiteral("Subdivision"));
+      }
+      auto *scroll = panel.findChild<QScrollArea *>(
+          QStringLiteral("tool_settings.scroll"));
+      auto *actions = panel.findChild<QWidget *>(
+          QStringLiteral("tool_settings.actions"));
+      ASSERT_NE(scroll, nullptr);
+      ASSERT_NE(actions, nullptr);
+      for (float scale : {1.0F, 1.5F, 2.0F}) {
+        SCOPED_TRACE(scale);
+        scale_controller.apply_factor(scale);
+        panel.apply_ui_scale(scale_controller.metrics());
+        // Font and style transitions post nested layout requests. Let those
+        // reach the retained rows before the normal presentation refresh and
+        // viewport-host resize measure the new preferred size.
+        ASSERT_TRUE(settle_layout());
+        panel.refresh();
+        panel.resize(panel.sizeHint());
+        ASSERT_TRUE(settle_layout());
+        const QFont expected_font = scale_controller.metrics().font(
+            scale_controller.baseline_font());
+        EXPECT_EQ(type->font().pointSizeF(), expected_font.pointSizeF());
+        EXPECT_EQ(type->font().pixelSize(), expected_font.pixelSize());
+        EXPECT_TRUE(panel.expanded());
+        EXPECT_EQ(scroll->verticalScrollBar()->maximum(), 0);
+        EXPECT_TRUE(panel.rect().contains(actions->geometry()));
+        EXPECT_GE(type->height(), type->minimumSizeHint().height());
+        for (auto *spin : panel.findChildren<QSpinBox *>()) {
+          ASSERT_TRUE(spin->isVisible());
+          EXPECT_GE(spin->height(), spin->minimumSizeHint().height());
+          const QRect bounds(spin->mapTo(scroll->viewport(), QPoint()), spin->size());
+          EXPECT_TRUE(scroll->viewport()->rect().contains(bounds));
+        }
+        for (auto *label : panel.findChildren<QLabel *>()) {
+          if (!label->objectName().endsWith(QStringLiteral(".label"))) {
+            continue;
+          }
+          SCOPED_TRACE(label->objectName().toStdString());
+          ASSERT_TRUE(label->isVisible());
+          EXPECT_GE(label->width(), label->sizeHint().width());
+          EXPECT_GE(label->height(), label->sizeHint().height());
+          const QRect bounds(label->mapTo(scroll->viewport(), QPoint()), label->size());
+          EXPECT_TRUE(scroll->viewport()->rect().contains(bounds));
+        }
+        if (!screenshot_directory.isEmpty()) {
+          QImage screenshot(panel.size(), QImage::Format_ARGB32_Premultiplied);
+          screenshot.fill(Qt::transparent);
+          panel.render(&screenshot);
+          EXPECT_TRUE(screenshot.save(QDir(screenshot_directory).filePath(
+              QStringLiteral("sphere-%1-%2-%3.png")
+                  .arg(QString::fromLatin1(sphere_type), QString::fromLatin1(locale))
+                  .arg(static_cast<int>(std::lround(scale * 100.0F))))));
+        }
+      }
+      panel.refresh();
+      ASSERT_TRUE(settle_layout());
+      TexturePresentationEvents events;
+      const auto widgets = panel.findChildren<QWidget *>();
+      for (QWidget *widget : widgets) {
+        widget->installEventFilter(&events);
+      }
+      const QPointer<QComboBox> retained_type(type);
+      int changes = 0;
+      panel.presentation_changed = [&] { ++changes; };
+      const auto settings_revision = editor.tools().active_settings_revision();
+      const auto content_revision = editor.revisions().modeling_content_revision;
+      for (int frame = 0; frame < 30; ++frame) {
+        panel.refresh();
+      }
+      EXPECT_EQ(changes, 0);
+      EXPECT_EQ(events.changes, 0);
+      EXPECT_EQ(panel.findChild<QComboBox *>(QStringLiteral(
+          "tool_settings.control.primitive.sphere.type")), retained_type.data());
+      EXPECT_EQ(editor.tools().active_settings_revision(), settings_revision);
+      EXPECT_EQ(editor.revisions().modeling_content_revision, content_revision);
+      panel.presentation_changed = {};
+    }
+  }
+  panel.unbind();
 }
 
 TEST(QtToolSettingsNumberSliderTests,

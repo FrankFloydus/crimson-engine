@@ -1473,14 +1473,18 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(localization.load(std::filesystem::path(__FILE__).parent_path().parent_path() /
                                     "resources" / "locales", "en-US"));
   const auto counts = [](const quader::QuaderPrimitiveCreationState &state) {
-    return std::array<int, 5>{state.side_count, state.radial_segments, state.rings,
-                              state.major_segments, state.minor_segments};
+    return std::array<int, 6>{state.side_count, state.radial_segments, state.rings,
+                             state.major_segments, state.minor_segments,
+                             state.sphere_subdivision};
   };
-  for (const auto kind : {quader::PrimitiveCreationKind::Cylinder,
-                          quader::PrimitiveCreationKind::Cone,
-                          quader::PrimitiveCreationKind::Sphere,
-                          quader::PrimitiveCreationKind::Torus}) {
+  for (const auto [kind, sphere_type] : {
+           std::pair{quader::PrimitiveCreationKind::Cylinder, quader::QuaderSphereType::Uv},
+           std::pair{quader::PrimitiveCreationKind::Cone, quader::QuaderSphereType::Uv},
+           std::pair{quader::PrimitiveCreationKind::Sphere, quader::QuaderSphereType::Uv},
+           std::pair{quader::PrimitiveCreationKind::Sphere, quader::QuaderSphereType::Quad},
+           std::pair{quader::PrimitiveCreationKind::Torus, quader::QuaderSphereType::Uv}}) {
     SCOPED_TRACE(static_cast<int>(kind));
+    SCOPED_TRACE(static_cast<int>(sphere_type));
     ASSERT_TRUE(localization.select_locale("en-US"));
     quader::SceneSession session;
     quader::QuaderEditorApi editor(
@@ -1490,6 +1494,11 @@ TEST(QtViewportSurfaceInputTests,
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
     ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
         quader::kPrimitiveTypeSetting, static_cast<double>(kind)).ok());
+    const bool quad_sphere = sphere_type == quader::QuaderSphereType::Quad;
+    if (quad_sphere) {
+      ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+          quader::kSphereTypeSetting, 1.0).ok());
+    }
     quader::ModelingBoxPreview preview;
     preview.ok = preview.valid = true;
     preview.drag_state = quader::ModelingBoxDragState::Height;
@@ -1553,7 +1562,8 @@ TEST(QtViewportSurfaceInputTests,
     }
     const bool side_count_kind = kind == quader::PrimitiveCreationKind::Cylinder ||
         kind == quader::PrimitiveCreationKind::Cone;
-    const int button_count = side_count_kind ? 1 : 2;
+    const int button_count = side_count_kind || quad_sphere ? 1 : 2;
+    if (quad_sphere) EXPECT_FALSE(project().controls[7].visible);
     for (int axis = 0; axis < button_count; ++axis) {
       const int index = 6 + axis;
       const auto button = project().controls[index];
@@ -1566,6 +1576,7 @@ TEST(QtViewportSurfaceInputTests,
       const auto prefix = QString::fromStdString(
           localization.text(feedback.label_key, "missing")) + QStringLiteral(": ");
       EXPECT_EQ(label->text(), prefix + QString::number(static_cast<int>(feedback.label_value)));
+      if (quad_sphere) EXPECT_EQ(label->text(), QStringLiteral("Subdivision: 3"));
       const auto update_count = panel.primitive_feedback_update_count();
       for (int frame = 0; frame < 60; ++frame) process();
       EXPECT_EQ(panel.primitive_feedback_update_count(), update_count)
@@ -1574,7 +1585,7 @@ TEST(QtViewportSurfaceInputTests,
       const auto before = editor.tools().live_primitive_creation();
       ASSERT_TRUE(before);
       const auto before_counts = counts(*before);
-      const int setting_index = side_count_kind ? 0
+      const int setting_index = quad_sphere ? 5 : side_count_kind ? 0
           : kind == quader::PrimitiveCreationKind::Sphere ? 1 + axis : 3 + axis;
       for (const bool decrement : {false, true}) {
         mouse(QEvent::MouseButtonPress, button.screen_position,
@@ -4074,6 +4085,108 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_FLOAT_EQ(camera.state().distance, distance);
     EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
   }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     QuadSphereWheelChangesSubdivisionAndConsumesLimitsWithoutNavigation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-quad-sphere-wheel-panel-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  editor.preferences().set_runtime_hooks({.gizmos_visible = [] { return true; }});
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kPrimitiveTypeSetting,
+      static_cast<double>(quader::PrimitiveCreationKind::Sphere)).ok());
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kSphereTypeSetting, 1.0).ok());
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kSphereSubdivisionSetting, 1.0).ok());
+  quader::ModelingBoxPreview preview;
+  preview.ok = preview.valid = true;
+  preview.drag_state = quader::ModelingBoxDragState::Height;
+  preview.corners = {quader::QVec3{-2, -2, -2}, quader::QVec3{-2, -2, 2},
+                     quader::QVec3{2, -2, 2}, quader::QVec3{2, -2, -2},
+                     quader::QVec3{-2, 2, -2}, quader::QVec3{-2, 2, 2},
+                     quader::QVec3{2, 2, 2}, quader::QVec3{2, 2, -2}};
+  preview.corner_count = 8;
+  ASSERT_TRUE(session.primitive_creation().accept_preview(preview, "Quad Sphere").ok);
+  const auto original = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(original);
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+  auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  ASSERT_TRUE(camera.restore_perspective_pose(
+      {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
+  const auto process = [&] {
+    panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  process();
+  quader::PrimitiveCreationInteraction projection;
+  const auto wheel = [&](int delta, bool pixel = false,
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    const auto &controls = projection.project(
+        quader::ViewportPrimitiveCreationApiAdapter::from_api(
+            editor.tools().live_primitive_creation()), camera,
+        panel.viewport_raster_scale(quader::ViewportPaneId::Perspective));
+    ASSERT_TRUE(controls.controls[6].visible);
+    EXPECT_FALSE(controls.controls[7].visible);
+    const auto pixels = controls.controls[6].screen_position;
+    const QPointF point{pixels.x / surface->devicePixelRatio(),
+                        pixels.y / surface->devicePixelRatio()};
+    QWheelEvent event(point, point, pixel ? QPoint{0, delta} : QPoint{},
+                      pixel ? QPoint{} : QPoint{0, delta}, Qt::NoButton,
+                      modifiers, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(surface, &event);
+  };
+  const auto subdivision = [&] {
+    return editor.tools().live_primitive_creation()->sphere_subdivision;
+  };
+  const auto distance = camera.state().distance;
+  const auto target = camera.state().target;
+  wheel(-120);
+  wheel(120);
+  // Wheel hit tests retain each event's button position even after the pointer leaves it.
+  QMouseEvent move(QEvent::MouseMove, {12, 12}, {12, 12},
+                    Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &move);
+  process();
+  EXPECT_EQ(subdivision(), 2);
+
+  wheel(-20, true, Qt::ControlModifier);
+  process();
+  EXPECT_EQ(subdivision(), 2);
+  wheel(-20, true, Qt::ControlModifier);
+  process();
+  EXPECT_EQ(subdivision(), 1);
+  wheel(-40, true, Qt::ControlModifier);
+  process();
+  EXPECT_EQ(subdivision(), 1);
+  wheel(120);
+  process();
+  EXPECT_EQ(subdivision(), 2);
+  EXPECT_FLOAT_EQ(camera.state().distance, distance);
+  EXPECT_FLOAT_EQ(quader::length_squared(camera.state().target - target), 0.0f);
+  const auto current = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(current);
+  EXPECT_EQ(current->radial_segments, original->radial_segments);
+  EXPECT_EQ(current->rings, original->rings);
+  EXPECT_EQ(current->object_id, original->object_id);
+  EXPECT_FLOAT_EQ(quader::length_squared(current->local_min - original->local_min), 0.0f);
+  EXPECT_FLOAT_EQ(quader::length_squared(current->local_max - original->local_max), 0.0f);
+  EXPECT_FALSE(current->resizing);
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1);
 }
 
 TEST(QtViewportSurfaceInputTests,

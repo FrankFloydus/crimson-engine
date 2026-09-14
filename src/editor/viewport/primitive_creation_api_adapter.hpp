@@ -39,6 +39,8 @@ public:
         .major_segments = primitive.major_segments,
         .minor_segments = primitive.minor_segments,
         .tube_radius_ratio = primitive.tube_radius_ratio,
+        .sphere_type = from_api(primitive.sphere_type),
+        .sphere_subdivision = primitive.sphere_subdivision,
     };
   }
 
@@ -74,6 +76,14 @@ public:
     case QuaderPrimitiveCreationShape::Torus: return ViewportPrimitiveCreationShape::Torus;
     }
     return ViewportPrimitiveCreationShape::Box;
+  }
+
+  [[nodiscard]] static ViewportSphereType from_api(QuaderSphereType type) {
+    switch (type) {
+    case QuaderSphereType::Uv: return ViewportSphereType::Uv;
+    case QuaderSphereType::Quad: return ViewportSphereType::Quad;
+    }
+    return ViewportSphereType::Uv;
   }
 
   [[nodiscard]] static ViewportPrimitiveCreationState

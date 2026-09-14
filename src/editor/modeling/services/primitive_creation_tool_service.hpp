@@ -41,6 +41,9 @@ inline constexpr std::string_view kCylinderCapsSetting =
 inline constexpr std::string_view kConeSideCountSetting =
     "primitive.cone.side_count";
 inline constexpr std::string_view kConeCapsSetting = "primitive.cone.caps";
+inline constexpr std::string_view kSphereTypeSetting = "primitive.sphere.type";
+inline constexpr std::string_view kSphereSubdivisionSetting =
+    "primitive.sphere.subdivision";
 inline constexpr std::string_view kSphereRadialSegmentsSetting =
     "primitive.sphere.radial_segments";
 inline constexpr std::string_view kSphereRingsSetting =
@@ -64,6 +67,8 @@ inline constexpr int kSphereMinimumRadialSegments = 3;
 inline constexpr int kSphereMaximumRadialSegments = 128;
 inline constexpr int kSphereMinimumRings = 2;
 inline constexpr int kSphereMaximumRings = 128;
+inline constexpr int kSphereMinimumSubdivision = 1;
+inline constexpr int kSphereMaximumSubdivision = 6;
 inline constexpr int kTorusMinimumMajorSegments = 3;
 inline constexpr int kTorusMaximumMajorSegments = 128;
 inline constexpr int kTorusMinimumMinorSegments = 3;
@@ -79,6 +84,9 @@ enum class PrimitiveCreationKind {
   Cone = 3,
   Torus = 4,
 };
+
+/// Selects the topology family used by authored spheres.
+enum class PrimitiveSphereType { Uv = 0, Quad = 1 };
 
 /// Returns the canonical scene-name stem for a generated primitive kind.
 [[nodiscard]] std::string_view
@@ -122,6 +130,8 @@ struct PrimitiveCreationState {
   bool flip_faces = false;
   bool resizing = false;
   std::uint64_t revision = 0;
+  PrimitiveSphereType sphere_type = PrimitiveSphereType::Uv;
+  int sphere_subdivision = 3;
 };
 
 /// Projects the live cube's owner state without compiling or copying its mesh.
@@ -155,6 +165,8 @@ struct SpherePrimitiveCreationSettings {
   int rings = 16;
   bool hemisphere = false;
   bool flip_faces = false;
+  PrimitiveSphereType type = PrimitiveSphereType::Uv;
+  int subdivision = 3;
 };
 
 /// Stores session settings used by new and still-live Tori.

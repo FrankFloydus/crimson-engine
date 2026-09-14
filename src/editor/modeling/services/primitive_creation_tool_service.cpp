@@ -234,6 +234,9 @@ quader_poly::Document build_primitive_document(
         .rings = sphere.rings,
         .hemisphere = sphere.hemisphere,
         .flip_faces = sphere.flip_faces,
+        .type = sphere.type == PrimitiveSphereType::Quad
+                    ? quader_poly::SphereType::Quad : quader_poly::SphereType::Uv,
+        .subdivision = sphere.subdivision,
     });
     break;
   case PrimitiveCreationKind::Torus:
@@ -768,6 +771,24 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
   if (!std::isfinite(value)) {
     return command_invalid_result("Primitive setting must be finite.");
   }
+  // Hidden topology controls can still have an in-flight edit callback. Reject
+  // those edits, and all invalid Sphere input, before changing gesture ownership.
+  if (session_->kind == PrimitiveCreationKind::Sphere) {
+    int count = 0;
+    const bool uv = sphere_settings_.type == PrimitiveSphereType::Uv;
+    const bool valid = name == kPrimitiveFlipFacesSetting ||
+        name == kSphereHemisphereSetting ||
+        (name == kSphereTypeSetting && integer_setting_value(value, 0, 1, count)) ||
+        (name == kSphereSubdivisionSetting && !uv && integer_setting_value(
+            value, kSphereMinimumSubdivision, kSphereMaximumSubdivision, count)) ||
+        (name == kSphereRadialSegmentsSetting && uv && integer_setting_value(
+            value, kSphereMinimumRadialSegments, kSphereMaximumRadialSegments, count)) ||
+        (name == kSphereRingsSetting && uv && integer_setting_value(
+            value, kSphereMinimumRings, kSphereMaximumRings, count));
+    if (!valid) {
+      return command_invalid_result("Invalid or inactive Sphere primitive setting.");
+    }
+  }
   // Invalid input must not cancel a pending resize as a side effect. Validate
   // shape-specific settings before retiring an interrupted gesture.
   if (session_->kind == PrimitiveCreationKind::Box &&
@@ -805,13 +826,6 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
           (name == kConeSideCountSetting && integer_setting_value(
               value, kConeMinimumSideCount, kConeMaximumSideCount, count));
       break;
-    case PrimitiveCreationKind::Sphere:
-      valid = name == kPrimitiveFlipFacesSetting || name == kSphereHemisphereSetting ||
-          (name == kSphereRadialSegmentsSetting && integer_setting_value(
-              value, kSphereMinimumRadialSegments, kSphereMaximumRadialSegments, count)) ||
-          (name == kSphereRingsSetting && integer_setting_value(
-              value, kSphereMinimumRings, kSphereMaximumRings, count));
-      break;
     case PrimitiveCreationKind::Torus:
       valid = name == kPrimitiveFlipFacesSetting ||
           (name == kTorusMajorSegmentsSetting && integer_setting_value(
@@ -823,6 +837,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
       break;
     case PrimitiveCreationKind::Box:
     case PrimitiveCreationKind::Cylinder:
+    case PrimitiveCreationKind::Sphere:
       break;
     }
     if (!valid) {
@@ -926,6 +941,30 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
   }
   case PrimitiveCreationKind::Sphere: {
     int count = 0;
+    if (name == kSphereTypeSetting) {
+      const auto type = static_cast<PrimitiveSphereType>(static_cast<int>(value));
+      if (sphere_settings_.type == type) {
+        return frozen;
+      }
+      // The accepted bounds survive the topology switch, but its previous
+      // gesture must no longer accept drag updates against the old baseline.
+      const CommandResult ended = end_resize();
+      if (!ended.ok) {
+        return ended;
+      }
+      sphere_settings_.type = type;
+      ++tool_settings_revision_;
+      return update_live_primitive();
+    }
+    if (name == kSphereSubdivisionSetting) {
+      count = static_cast<int>(value);
+      if (sphere_settings_.subdivision == count) {
+        return frozen;
+      }
+      sphere_settings_.subdivision = count;
+      ++tool_settings_revision_;
+      return update_live_primitive();
+    }
     if (name == kSphereRadialSegmentsSetting) {
       if (!integer_setting_value(value, kSphereMinimumRadialSegments,
                                  kSphereMaximumRadialSegments, count)) {
@@ -1064,7 +1103,15 @@ CommandResult PrimitiveCreationToolService::reset_settings() {
         sphere_settings_.radial_segments != defaults.radial_segments ||
         sphere_settings_.rings != defaults.rings ||
         sphere_settings_.hemisphere != defaults.hemisphere ||
-        sphere_settings_.flip_faces != defaults.flip_faces;
+        sphere_settings_.flip_faces != defaults.flip_faces ||
+        sphere_settings_.type != defaults.type ||
+        sphere_settings_.subdivision != defaults.subdivision;
+    if (sphere_settings_.type != defaults.type) {
+      const CommandResult ended = end_resize();
+      if (!ended.ok) {
+        return ended;
+      }
+    }
     sphere_settings_ = defaults;
     break;
   }
@@ -1124,6 +1171,8 @@ PrimitiveCreationToolService::live_primitive_creation() const {
           : torus_settings_.flip_faces,
       .resizing = live_primitive_->resize.has_value(),
       .revision = primitive_revision_ + tool_settings_revision_,
+      .sphere_type = sphere_settings_.type,
+      .sphere_subdivision = sphere_settings_.subdivision,
   };
 }
 

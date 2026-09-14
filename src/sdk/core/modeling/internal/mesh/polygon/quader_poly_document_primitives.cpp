@@ -257,6 +257,42 @@ Document make_sphere(const SpherePrimitiveSpec& spec)
     const float half_height = height * 0.5F;
     const float half_depth = depth * 0.5F;
 
+    if (spec.type == SphereType::Quad) {
+        const int subdivisions = 1 << clamp_primitive_count(spec.subdivision, 1, 6);
+        document = make_cube({
+            .width = 2.0F,
+            .height = spec.hemisphere ? 1.0F : 2.0F,
+            .depth = 2.0F,
+            .width_segments = subdivisions,
+            .height_segments = spec.hemisphere ? subdivisions / 2 : subdivisions,
+            .depth_segments = subdivisions,
+        });
+        for (Vertex& vertex : document.vertices) {
+            const float x = vertex.position.x;
+            const float y = vertex.position.y + (spec.hemisphere ? 0.5F : 0.0F);
+            const float z = vertex.position.z;
+            const float x_squared = x * x;
+            const float y_squared = y * y;
+            const float z_squared = z * z;
+            const float sphere_x = x * std::sqrt(std::max(
+                0.0F, 1.0F - y_squared * 0.5F - z_squared * 0.5F + y_squared * z_squared / 3.0F));
+            const float sphere_y = y * std::sqrt(std::max(
+                0.0F, 1.0F - z_squared * 0.5F - x_squared * 0.5F + z_squared * x_squared / 3.0F));
+            const float sphere_z = z * std::sqrt(std::max(
+                0.0F, 1.0F - x_squared * 0.5F - y_squared * 0.5F + x_squared * y_squared / 3.0F));
+            // The half-cube's bottom maps to a flat disk sharing the equator vertices.
+            vertex.position = {
+                sphere_x * half_width,
+                spec.hemisphere ? -half_height + sphere_y * height : sphere_y * half_height,
+                sphere_z * half_depth,
+            };
+        }
+        if (spec.flip_faces) {
+            reverse_all_faces(document);
+        }
+        return document;
+    }
+
     if (spec.hemisphere) {
         std::vector<std::vector<ElementId>> radial_rings;
         radial_rings.reserve(static_cast<std::size_t>(rings));

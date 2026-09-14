@@ -1318,6 +1318,184 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_EQ(quader.mesh_summaries().size(), before_invalid);
 }
 
+TEST(ModelingSdkConsumerTests,
+     SphereTypeDefaultsPreserveUvTopologyAndIgnoreInactiveSubdivision) {
+  EXPECT_EQ(SphereSpec{}.type, SphereType::Uv);
+  EXPECT_EQ(SphereOptions{}.type, SphereType::Uv);
+  EXPECT_EQ(SphereSpec{}.subdivision, 3);
+  EXPECT_EQ(SphereOptions{}.subdivision, 3);
+  const auto implicit_uv = PolygonDocument::make_sphere({});
+  const auto explicit_uv = PolygonDocument::make_sphere({
+      .type = SphereType::Uv,
+      .subdivision = std::numeric_limits<int>::min(),
+  });
+  ASSERT_TRUE(implicit_uv.ok()) << implicit_uv.error_message();
+  ASSERT_TRUE(explicit_uv.ok()) << explicit_uv.error_message();
+  EXPECT_EQ(implicit_uv.value().vertex_count(), 482U);
+  EXPECT_EQ(implicit_uv.value().face_count(), 512U);
+  const auto implicit_bytes = serialize_qdr_authored_topology(implicit_uv.value());
+  const auto explicit_bytes = serialize_qdr_authored_topology(explicit_uv.value());
+  ASSERT_TRUE(implicit_bytes.ok()) << implicit_bytes.error_message();
+  ASSERT_TRUE(explicit_bytes.ok()) << explicit_bytes.error_message();
+  EXPECT_EQ(implicit_bytes.value(), explicit_bytes.value());
+
+  ModelingApi quader = ModelingApi::create();
+  const MeshHandle mesh = quader.create_sphere({
+      .type = SphereType::Uv,
+      .subdivision = std::numeric_limits<int>::max(),
+  });
+  ASSERT_TRUE(mesh.valid());
+  EXPECT_EQ(mesh.payloads().authored_polygon().faces.size(), 512U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     QuadSphereSpecAndOptionsPreserveMaterialAndTopologyThroughQdr) {
+  const MaterialId material = make_id<MaterialTag>(19U);
+  for (bool hemisphere : {false, true}) {
+    SCOPED_TRACE(hemisphere);
+    SphereSpec spec{
+        .width = 4.0F,
+        .height = 6.0F,
+        .depth = 2.0F,
+        .radial_segments = -100,
+        .rings = std::numeric_limits<int>::max(),
+        .hemisphere = hemisphere,
+        .material = material,
+        .type = SphereType::Quad,
+        .subdivision = 2,
+    };
+    const auto created = PolygonDocument::make_sphere(spec);
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const PolygonDocument& document = created.value();
+    const std::size_t face_count = hemisphere ? 64U : 96U;
+    EXPECT_EQ(document.face_count(), face_count);
+    EXPECT_EQ(document.vertex_count(), face_count + 2U);
+    EXPECT_TRUE(document.validate().ok());
+    const auto payload = document.authored_payload();
+    ASSERT_TRUE(payload.ok()) << payload.error_message();
+    for (const auto& face : payload.value().faces) {
+      EXPECT_EQ(face.vertices.size(), 4U);
+      EXPECT_EQ(face.material, material);
+    }
+    const auto compiled = document.compile_mesh();
+    ASSERT_TRUE(compiled.ok()) << compiled.error_message();
+    EXPECT_EQ(compiled.value().indices.size(), face_count * 6U);
+    const auto bounds = mesh_bounds(compiled.value());
+    ASSERT_TRUE(bounds.has_value());
+    expect_vec3_near(bounds->min, {-2.0F, -3.0F, -1.0F});
+    expect_vec3_near(bounds->max, {2.0F, 3.0F, 1.0F});
+    for (const auto& vertex : compiled.value().vertices) {
+      EXPECT_TRUE(std::isfinite(vertex.normal.x));
+      EXPECT_TRUE(std::isfinite(vertex.normal.y));
+      EXPECT_TRUE(std::isfinite(vertex.normal.z));
+      EXPECT_TRUE(std::isfinite(vertex.uv0.x));
+      EXPECT_TRUE(std::isfinite(vertex.uv0.y));
+    }
+    for (const auto& primitive : compiled.value().primitives) {
+      EXPECT_EQ(primitive.material, material);
+    }
+    const auto topology_bytes = serialize_qdr_authored_topology(document);
+    ASSERT_TRUE(topology_bytes.ok()) << topology_bytes.error_message();
+    const auto restored = deserialize_qdr_authored_topology(topology_bytes.value());
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    const auto restored_bytes = serialize_qdr_authored_topology(restored.value());
+    ASSERT_TRUE(restored_bytes.ok()) << restored_bytes.error_message();
+    EXPECT_EQ(restored_bytes.value(), topology_bytes.value());
+
+    spec.flip_faces = true;
+    const auto flipped = PolygonDocument::make_sphere(spec);
+    ASSERT_TRUE(flipped.ok()) << flipped.error_message();
+    expect_reversed_face_winding(document, flipped.value());
+    ModelingApi quader = ModelingApi::create();
+    const MeshHandle mesh = quader.create_sphere({
+        .name = "Quad Sphere",
+        .width = spec.width,
+        .height = spec.height,
+        .depth = spec.depth,
+        .radial_segments = spec.radial_segments,
+        .rings = spec.rings,
+        .hemisphere = spec.hemisphere,
+        .flip_faces = spec.flip_faces,
+        .material = material,
+        .type = spec.type,
+        .subdivision = spec.subdivision,
+    });
+    ASSERT_TRUE(mesh.valid());
+    EXPECT_EQ(mesh.summary().name, "Quad Sphere");
+    const auto options_payload = mesh.payloads().authored_polygon();
+    const auto expected_payload = flipped.value().authored_payload();
+    ASSERT_TRUE(expected_payload.ok()) << expected_payload.error_message();
+    ASSERT_EQ(options_payload.faces.size(), face_count);
+    for (std::size_t index = 0; index < face_count; ++index) {
+      EXPECT_EQ(options_payload.faces[index].vertices,
+                expected_payload.value().faces[index].vertices);
+      EXPECT_EQ(options_payload.faces[index].material, material);
+    }
+    const auto qdr = quader.io().serialize_qdr(mesh.id());
+    const MeshHandle imported = quader.io().deserialize_qdr_object(qdr, "Restored Quad Sphere");
+    ASSERT_TRUE(imported.valid());
+    const auto restored_payload = imported.payloads().authored_polygon();
+    ASSERT_EQ(restored_payload.faces.size(), face_count);
+    ASSERT_EQ(restored_payload.positions.size(), options_payload.positions.size());
+    for (std::size_t index = 0; index < restored_payload.positions.size(); ++index) {
+      expect_vec3_near(restored_payload.positions[index], options_payload.positions[index]);
+    }
+    for (std::size_t index = 0; index < face_count; ++index) {
+      EXPECT_EQ(restored_payload.faces[index].vertices, options_payload.faces[index].vertices);
+      EXPECT_EQ(restored_payload.faces[index].material, material);
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     SphereCreationRejectsInvalidActiveSettingsWithoutPublishingAnObject) {
+  ModelingApi quader = ModelingApi::create();
+  const MeshHandle existing = quader.create_box({.name = "Existing"});
+  ASSERT_TRUE(existing.valid());
+  const RevisionStamp before = quader.revisions();
+  const bool could_undo = quader.can_undo();
+  const bool could_redo = quader.can_redo();
+  const auto original = quader.io().serialize_qdr(existing.id());
+  std::vector<SphereSpec> invalid_specs{
+      {.radial_segments = 2},
+      {.rings = 1},
+      {.type = SphereType::Quad, .subdivision = 0},
+      {.type = SphereType::Quad, .subdivision = 7},
+      {.type = SphereType::Quad, .subdivision = std::numeric_limits<int>::max()},
+      {.type = static_cast<SphereType>(-1)},
+      {.type = static_cast<SphereType>(2)},
+      {.width = 0.0F, .type = SphereType::Quad},
+      {.height = std::numeric_limits<float>::quiet_NaN(), .type = SphereType::Quad},
+      {.depth = std::numeric_limits<float>::infinity(), .type = SphereType::Quad},
+  };
+  for (std::size_t index = 0; index < invalid_specs.size(); ++index) {
+    SCOPED_TRACE(index);
+    const SphereSpec& spec = invalid_specs[index];
+    const auto direct = PolygonDocument::make_sphere(spec);
+    ASSERT_FALSE(direct.ok());
+    EXPECT_EQ(direct.error().code, ErrorCode::InvalidArgument);
+    const auto checked = quader.checked().create_sphere({
+        .width = spec.width,
+        .height = spec.height,
+        .depth = spec.depth,
+        .radial_segments = spec.radial_segments,
+        .rings = spec.rings,
+        .type = spec.type,
+        .subdivision = spec.subdivision,
+    });
+    ASSERT_FALSE(checked.ok());
+    EXPECT_EQ(checked.error().code, ErrorCode::InvalidArgument);
+  }
+  EXPECT_EQ(quader.mesh_summaries().size(), 1U);
+  EXPECT_EQ(quader.revisions().content, before.content);
+  EXPECT_EQ(quader.revisions().selection, before.selection);
+  EXPECT_EQ(quader.revisions().scene, before.scene);
+  EXPECT_EQ(quader.revisions().assets, before.assets);
+  EXPECT_EQ(quader.can_undo(), could_undo);
+  EXPECT_EQ(quader.can_redo(), could_redo);
+  EXPECT_EQ(quader.io().serialize_qdr(existing.id()), original);
+}
+
 TEST(ModelingSdkConsumerTests, RejectsMalformedBoundsAndStaleIds) {
   Result<PolygonDocument> invalid_box =
       PolygonDocument::make_box({.min = {1.0F, 0.0F, 0.0F},

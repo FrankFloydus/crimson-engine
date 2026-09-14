@@ -19,6 +19,9 @@ enum class QuaderPrimitiveCubeAxis { X, Y, Z };
 /// Authored shapes that expose live creation controls through the native API.
 enum class QuaderPrimitiveCreationShape { Box, Cylinder, Cone, Sphere, Torus };
 
+/// Selects the sphere's authored topology without changing its placement.
+enum class QuaderSphereType { Uv = 0, Quad = 1 };
+
 /// Chooses one movable end or radial boundary, in placement-local axes.
 enum class QuaderPrimitiveResizeControl {
   PositiveX, NegativeX, PositiveY, NegativeY, PositiveZ, NegativeZ, Radius,
@@ -48,6 +51,8 @@ struct QuaderPrimitiveCreationState {
   bool flip_faces = false;
   bool resizing = false;
   std::uint64_t revision = 0;
+  QuaderSphereType sphere_type = QuaderSphereType::Uv;
+  int sphere_subdivision = 3;
 };
 
 /// Read-only projection of the newest selected, still-editable Box.

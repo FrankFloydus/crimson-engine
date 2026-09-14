@@ -41,6 +41,7 @@ public:
   [[nodiscard]] std::uint64_t projection_count() const { return projection_count_; }
   [[nodiscard]] double axis_world_scale() const { return drag_axis_scale_; }
   [[nodiscard]] ViewportPrimitiveCreationShape shape() const { return shape_; }
+  [[nodiscard]] ViewportSphereType sphere_type() const { return sphere_type_; }
 
 private:
   void update_subdivision_controls();
@@ -57,6 +58,7 @@ private:
   std::uint64_t projection_count_ = 0;
   std::int32_t object_id_ = {};
   ViewportPrimitiveCreationShape shape_ = ViewportPrimitiveCreationShape::Box;
+  ViewportSphereType sphere_type_ = ViewportSphereType::Uv;
   QVec3 drag_anchor_;
   QVec3 drag_axis_;
   QVec2 drag_press_;

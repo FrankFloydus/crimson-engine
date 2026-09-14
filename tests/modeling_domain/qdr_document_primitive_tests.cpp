@@ -14,6 +14,8 @@
 #include <limits>
 #include <map>
 #include <ranges>
+#include <set>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -697,6 +699,150 @@ TEST(QdrDocumentPrimitiveTests,
 TEST(QdrDocumentPrimitiveTests, SphereSettingsProduceExpectedTopology)
 {
     sphere_factory_honors_radial_ring_and_hemisphere_settings();
+}
+
+TEST(QdrDocumentPrimitiveTests, QuadSphereLevelsProduceWeldedClosedQuadSurfaces)
+{
+    for (bool hemisphere : { false, true }) {
+        for (int subdivision : { 1, 2, 3, 6 }) {
+            SCOPED_TRACE(::testing::Message() << "hemisphere=" << hemisphere
+                << ", subdivision=" << subdivision);
+            SpherePrimitiveSpec spec;
+            spec.type = SphereType::Quad;
+            spec.subdivision = subdivision;
+            spec.hemisphere = hemisphere;
+            const Document document = make_sphere(spec);
+            const std::size_t divisions = std::size_t { 1 } << subdivision;
+            const std::size_t face_count = (hemisphere ? 4U : 6U) * divisions * divisions;
+            ASSERT_EQ(document.faces.size(), face_count);
+            ASSERT_EQ(document.vertices.size(), face_count + 2U);
+
+            std::map<std::pair<ElementId, ElementId>, std::pair<int, int>> incidence;
+            std::map<ElementId, std::vector<ElementId>> adjacency;
+            std::set<std::tuple<float, float, float>> positions;
+            for (const Vertex& vertex : document.vertices) {
+                EXPECT_TRUE(positions.emplace(vertex.position.x, vertex.position.y,
+                    vertex.position.z).second) << "cube seams must share authored vertices";
+            }
+            for (const Face& face : document.faces) {
+                ASSERT_EQ(face.vertices.size(), 4U);
+                EXPECT_EQ(std::set<ElementId>(face.vertices.begin(), face.vertices.end()).size(), 4U);
+                EXPECT_EQ(face.normal_shading, SurfaceShading::Authored);
+                EXPECT_TRUE(face.uvs.empty());
+                for (std::size_t corner = 0; corner < 4U; ++corner) {
+                    const ElementId a = face.vertices[corner];
+                    const ElementId b = face.vertices[(corner + 1U) % 4U];
+                    auto& counts = incidence[{ std::min(a, b), std::max(a, b) }];
+                    ++counts.first;
+                    counts.second += a < b ? 1 : -1;
+                    adjacency[a].push_back(b);
+                    adjacency[b].push_back(a);
+                }
+            }
+            EXPECT_EQ(incidence.size(), 2U * face_count);
+            EXPECT_EQ(adjacency.size(), document.vertices.size());
+            for (const auto& [edge, counts] : incidence) {
+                EXPECT_EQ(counts.first, 2) << edge.first << ", " << edge.second;
+                EXPECT_EQ(counts.second, 0) << "adjacent loops must traverse a shared edge oppositely";
+            }
+            std::vector<ElementId> pending { document.vertices.front().id };
+            std::set<ElementId> visited;
+            while (!pending.empty()) {
+                const ElementId vertex = pending.back();
+                pending.pop_back();
+                if (visited.insert(vertex).second) {
+                    const auto& neighbors = adjacency.at(vertex);
+                    pending.insert(pending.end(), neighbors.begin(), neighbors.end());
+                }
+            }
+            EXPECT_EQ(visited.size(), document.vertices.size());
+            ASSERT_TRUE(require_valid_document(document));
+            const CompiledMesh mesh = compile_document(document);
+            EXPECT_EQ(mesh.primitives.size(), face_count);
+            EXPECT_EQ(mesh.indices.size(), face_count * 6U);
+        }
+    }
+}
+
+TEST(QdrDocumentPrimitiveTests, QuadSpherePreservesEllipsoidBoundsCapAndFaceWinding)
+{
+    for (bool hemisphere : { false, true }) {
+        SCOPED_TRACE(hemisphere);
+        SpherePrimitiveSpec spec;
+        spec.width = 4.0F;
+        spec.height = 6.0F;
+        spec.depth = 2.0F;
+        spec.hemisphere = hemisphere;
+        spec.type = SphereType::Quad;
+        spec.subdivision = 3;
+        const Document document = make_sphere(spec);
+        ASSERT_TRUE(require_bounds(document, spec.width, spec.height, spec.depth));
+        ASSERT_TRUE(require_finite_vertices(document));
+        for (const Vertex& vertex : document.vertices) {
+            const float x = vertex.position.x / (spec.width * 0.5F);
+            const float y = hemisphere
+                ? (vertex.position.y + spec.height * 0.5F) / spec.height
+                : vertex.position.y / (spec.height * 0.5F);
+            const float z = vertex.position.z / (spec.depth * 0.5F);
+            const float radius_squared = x * x + y * y + z * z;
+            if (hemisphere && nearly_equal(vertex.position.y, -spec.height * 0.5F)) {
+                EXPECT_LE(radius_squared, 1.00001F);
+            } else {
+                EXPECT_NEAR(radius_squared, 1.0F, 0.00001F);
+            }
+        }
+        std::size_t cap_faces = 0;
+        for (const Face& face : document.faces) {
+            quader::QVec3 normal;
+            quader::QVec3 centroid;
+            ASSERT_TRUE(authored_face_normal(document, face, normal));
+            ASSERT_TRUE(face_centroid(document, face, centroid));
+            EXPECT_GT(quader::dot(normal, centroid), 0.0F);
+            const bool is_cap = hemisphere && std::ranges::all_of(face.vertices,
+                [&](ElementId id) {
+                    return nearly_equal(find_vertex(document, id)->position.y, -spec.height * 0.5F);
+                });
+            if (is_cap) {
+                ++cap_faces;
+                EXPECT_LT(normal.y, 0.0F);
+                EXPECT_NEAR(normal.x, 0.0F, 0.00001F);
+                EXPECT_NEAR(normal.z, 0.0F, 0.00001F);
+            }
+        }
+        EXPECT_EQ(cap_faces, hemisphere ? 64U : 0U);
+        spec.flip_faces = true;
+        const Document flipped = make_sphere(spec);
+        ASSERT_TRUE(require_faces_reversed(document, flipped));
+        ASSERT_TRUE(require_document_compiles(flipped, "flipped quad sphere"));
+        ASSERT_TRUE(require_valid_document(flipped));
+    }
+}
+
+TEST(QdrDocumentPrimitiveTests, QuadSphereIsDeterministicAndUsesOnlyActiveTopologySettings)
+{
+    SpherePrimitiveSpec spec;
+    spec.type = SphereType::Quad;
+    EXPECT_EQ(spec.subdivision, 3);
+    const Document initial = make_sphere(spec);
+    spec.radial_segments = -10;
+    spec.rings = std::numeric_limits<int>::max();
+    const Document repeated = make_sphere(spec);
+    ASSERT_EQ(initial.vertices.size(), repeated.vertices.size());
+    ASSERT_EQ(initial.faces.size(), repeated.faces.size());
+    for (std::size_t index = 0; index < initial.vertices.size(); ++index) {
+        EXPECT_EQ(initial.vertices[index].id, repeated.vertices[index].id);
+        EXPECT_FLOAT_EQ(initial.vertices[index].position.x, repeated.vertices[index].position.x);
+        EXPECT_FLOAT_EQ(initial.vertices[index].position.y, repeated.vertices[index].position.y);
+        EXPECT_FLOAT_EQ(initial.vertices[index].position.z, repeated.vertices[index].position.z);
+    }
+    for (std::size_t index = 0; index < initial.faces.size(); ++index) {
+        EXPECT_EQ(initial.faces[index].id, repeated.faces[index].id);
+        EXPECT_EQ(initial.faces[index].vertices, repeated.faces[index].vertices);
+    }
+    spec.subdivision = std::numeric_limits<int>::min();
+    EXPECT_EQ(make_sphere(spec).faces.size(), 24U);
+    spec.subdivision = std::numeric_limits<int>::max();
+    EXPECT_EQ(make_sphere(spec).faces.size(), 24576U);
 }
 
 TEST(QdrDocumentPrimitiveTests, ConeSettingsProduceExpectedTopology)

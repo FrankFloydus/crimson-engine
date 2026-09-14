@@ -5958,6 +5958,108 @@ TEST(EditorApiTests, PrimitiveFlipFacesUpdatesLiveCubeWithinCreationHistory) {
 }
 
 
+TEST(EditorApiTests, SphereTypeSettingsRetainParametersAndPresentationOrigin) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.tools().begin_primitive_creation(
+      quader::QuaderPrimitiveCreationShape::Sphere).ok());
+  const auto origin = editor.tools().active_settings_presentation_origin();
+  auto settings = editor.tools().active_settings();
+  ASSERT_GE(settings.controls.size(), 4u);
+  EXPECT_EQ(settings.controls[1].id, "primitive.sphere.type");
+  const auto *type = find_tool_setting_control(settings, "primitive.sphere.type");
+  ASSERT_NE(type, nullptr);
+  EXPECT_EQ(type->choice_value, "uv");
+  EXPECT_EQ(type->choice_presentation,
+            quader::QuaderToolSettingChoicePresentation::Dropdown);
+  ASSERT_EQ(type->choices.size(), 2u);
+  EXPECT_EQ(type->choices[0].id, "uv");
+  EXPECT_EQ(type->choices[0].label, "UV Sphere");
+  EXPECT_DOUBLE_EQ(type->choices[0].value, 0.0);
+  EXPECT_EQ(type->choices[1].id, "quad");
+  EXPECT_EQ(type->choices[1].label, "Quad Sphere");
+  EXPECT_DOUBLE_EQ(type->choices[1].value, 1.0);
+  EXPECT_EQ(find_tool_setting_control(settings, "primitive.sphere.subdivision"),
+            nullptr);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.radial_segments", 12.0).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.rings", 8.0).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.type", "quad").ok());
+  settings = editor.tools().active_settings();
+  EXPECT_EQ(find_tool_setting_control(settings, "primitive.sphere.radial_segments"),
+            nullptr);
+  EXPECT_EQ(find_tool_setting_control(settings, "primitive.sphere.rings"), nullptr);
+  const auto *subdivision =
+      find_tool_setting_control(settings, "primitive.sphere.subdivision");
+  ASSERT_NE(subdivision, nullptr);
+  EXPECT_EQ(subdivision->label, "Subdivision");
+  EXPECT_DOUBLE_EQ(subdivision->number_value, 3.0);
+  EXPECT_DOUBLE_EQ(subdivision->min_value, 1.0);
+  EXPECT_DOUBLE_EQ(subdivision->max_value, 6.0);
+  EXPECT_DOUBLE_EQ(subdivision->step, 1.0);
+  EXPECT_NE(find_tool_setting_control(settings, "primitive.sphere.hemisphere"),
+            nullptr);
+  EXPECT_NE(find_tool_setting_control(settings, "primitive.flip_faces"), nullptr);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.subdivision", 4.0).ok());
+  const auto revision = editor.tools().active_settings_revision();
+  for (const double invalid : {0.0, 7.0, 2.5,
+                              std::numeric_limits<double>::infinity(),
+                              std::numeric_limits<double>::quiet_NaN()}) {
+    EXPECT_FALSE(editor.tools().set_setting(
+        "create_primitive", "primitive.sphere.subdivision", invalid).ok());
+  }
+  for (const double invalid : {-1.0, 2.0, 0.5,
+                              std::numeric_limits<double>::infinity()}) {
+    EXPECT_FALSE(editor.tools().set_setting(
+        "create_primitive", "primitive.sphere.type", invalid).ok());
+  }
+  EXPECT_FALSE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.type", "unknown").ok());
+  EXPECT_FALSE(editor.tools().set_setting(
+      "move", "primitive.sphere.type", "uv").ok());
+  EXPECT_FALSE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.rings", 10.0).ok());
+  EXPECT_FALSE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.type", 1.0).changed());
+  for (int frame = 0; frame < 32; ++frame) {
+    EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+    EXPECT_EQ(editor.tools().active_settings_presentation_origin(), origin);
+  }
+
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.type", 0.0).ok());
+  settings = editor.tools().active_settings();
+  const auto *radial =
+      find_tool_setting_control(settings, "primitive.sphere.radial_segments");
+  const auto *rings = find_tool_setting_control(settings, "primitive.sphere.rings");
+  ASSERT_NE(radial, nullptr);
+  ASSERT_NE(rings, nullptr);
+  EXPECT_DOUBLE_EQ(radial->number_value, 12.0);
+  EXPECT_DOUBLE_EQ(rings->number_value, 8.0);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.type", 1.0).ok());
+  settings = editor.tools().active_settings();
+  subdivision = find_tool_setting_control(settings, "primitive.sphere.subdivision");
+  ASSERT_NE(subdivision, nullptr);
+  EXPECT_DOUBLE_EQ(subdivision->number_value, 4.0);
+  ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+  settings = editor.tools().active_settings();
+  type = find_tool_setting_control(settings, "primitive.sphere.type");
+  ASSERT_NE(type, nullptr);
+  EXPECT_EQ(type->choice_value, "uv");
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), origin);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_primitive", "primitive.sphere.type", "quad").ok());
+  settings = editor.tools().active_settings();
+  subdivision = find_tool_setting_control(settings, "primitive.sphere.subdivision");
+  ASSERT_NE(subdivision, nullptr);
+  EXPECT_DOUBLE_EQ(subdivision->number_value, 3.0);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
 TEST(EditorApiTests,
      CreatePrimitiveExposesDynamicSettingsAndRemainsActiveUntilCancel) {
   CommandTestHarness harness;

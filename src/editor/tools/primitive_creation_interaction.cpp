@@ -30,7 +30,8 @@ bool same_cube(const ViewportPrimitiveCreationState &a,
          a.shape == b.shape && a.side_count == b.side_count && a.caps == b.caps &&
          a.radial_segments == b.radial_segments && a.rings == b.rings &&
          a.hemisphere == b.hemisphere && a.major_segments == b.major_segments &&
-         a.minor_segments == b.minor_segments && a.tube_radius_ratio == b.tube_radius_ratio;
+         a.minor_segments == b.minor_segments && a.tube_radius_ratio == b.tube_radius_ratio &&
+         a.sphere_type == b.sphere_type && a.sphere_subdivision == b.sphere_subdivision;
 }
 
 bool same_camera(const ViewportCameraState &a, const ViewportCameraState &b) {
@@ -128,7 +129,7 @@ const PrimitiveCreationControlsFrame &PrimitiveCreationInteraction::project(
     return frame_;
   }
   if (!cached_cube_ || cached_cube_->object_id != cube->object_id ||
-      cached_cube_->shape != cube->shape) {
+      cached_cube_->shape != cube->shape || cached_cube_->sphere_type != cube->sphere_type) {
     clear_segment_wheel();
   }
   cached_cube_ = cube;
@@ -189,7 +190,7 @@ const PrimitiveCreationControlsFrame &PrimitiveCreationInteraction::project(
       rim.y = cube->local_max.y;
     }
     button(6, rim);
-    if (sphere) {
+    if (sphere && cube->sphere_type == ViewportSphereType::Uv) {
       QVec3 meridian = center + axis * (radius * 0.70710678f);
       meridian.y = cube->hemisphere
           ? cube->local_min.y + 2 * radii.y * 0.70710678f
@@ -306,7 +307,7 @@ std::optional<int> PrimitiveCreationInteraction::wheel_segment_value(
     wheel_control_ = control;
   }
   const auto &button = frame_.controls[control];
-  if ((steps > 0.0 && button.segment_count >= 128) ||
+  if ((steps > 0.0 && button.segment_count >= button.maximum_segments) ||
       (steps < 0.0 && button.segment_count <= button.minimum_segments)) {
     wheel_remainder_ = 0.0;
     return std::nullopt;
@@ -316,9 +317,9 @@ std::optional<int> PrimitiveCreationInteraction::wheel_segment_value(
   wheel_remainder_ = std::modf(wheel_remainder_ + steps, &whole_steps);
   const int value = static_cast<int>(std::clamp(
       static_cast<double>(button.segment_count) + whole_steps,
-      static_cast<double>(button.minimum_segments), 128.0));
+      static_cast<double>(button.minimum_segments), static_cast<double>(button.maximum_segments)));
   if ((whole_steps < 0.0 && value == button.minimum_segments) ||
-      (whole_steps > 0.0 && value == 128)) wheel_remainder_ = 0.0;
+      (whole_steps > 0.0 && value == button.maximum_segments)) wheel_remainder_ = 0.0;
   return value != button.segment_count ? std::optional<int>{value} : std::nullopt;
 }
 
@@ -333,12 +334,18 @@ void PrimitiveCreationInteraction::update_subdivision_controls() {
                                : subdivision_decrement_;
     int count = cached_cube_->subdivisions[axis];
     int minimum = 1;
+    int maximum = 128;
     switch (cached_cube_->shape) {
     case ViewportPrimitiveCreationShape::Cylinder:
     case ViewportPrimitiveCreationShape::Cone: count = cached_cube_->side_count; minimum = 3; break;
     case ViewportPrimitiveCreationShape::Sphere:
-      count = axis == 0 ? cached_cube_->radial_segments : cached_cube_->rings;
-      minimum = axis == 0 ? 3 : 2;
+      if (cached_cube_->sphere_type == ViewportSphereType::Quad) {
+        count = cached_cube_->sphere_subdivision;
+        maximum = 6;
+      } else {
+        count = axis == 0 ? cached_cube_->radial_segments : cached_cube_->rings;
+        minimum = axis == 0 ? 3 : 2;
+      }
       break;
     case ViewportPrimitiveCreationShape::Torus:
       count = axis == 0 ? cached_cube_->major_segments : cached_cube_->minor_segments;
@@ -348,7 +355,8 @@ void PrimitiveCreationInteraction::update_subdivision_controls() {
     }
     control.segment_count = count;
     control.minimum_segments = minimum;
-    const bool enabled = decrement ? count > minimum : count < 128;
+    control.maximum_segments = maximum;
+    const bool enabled = decrement ? count > minimum : count < maximum;
     changed |= control.subdivision_decrement != decrement || control.enabled != enabled;
     control.subdivision_decrement = decrement;
     control.enabled = enabled;
@@ -406,6 +414,10 @@ void PrimitiveCreationInteraction::update_feedback() {
     return;
   }
   frame_.label_value = control.segment_count;
+  if (sphere && primitive.sphere_type == ViewportSphereType::Quad) {
+    frame_.label_key = "primitive.controls.subdivision";
+    return;
+  }
   frame_.label_key = sphere ? (index == 6 ? "primitive.controls.radial_segments"
                                          : "primitive.controls.rings")
       : torus ? (index == 6 ? "primitive.controls.major_segments"
@@ -454,6 +466,7 @@ void PrimitiveCreationInteraction::begin(
   active_subdivision_decrement_ = subdivision_decrement;
   object_id_ = cube.object_id;
   shape_ = cube.shape;
+  sphere_type_ = cube.sphere_type;
   ++frame_.revision;
   update_subdivision_controls();
   update_feedback();

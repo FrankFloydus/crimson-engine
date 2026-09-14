@@ -84,6 +84,8 @@ void set_nondefault_primitive_settings(QuaderToolsApi &tools) {
       {Kind::Sphere, kSphereRingsSetting, 4.0},
       {Kind::Sphere, kSphereHemisphereSetting, 1.0},
       {Kind::Sphere, kPrimitiveFlipFacesSetting, 1.0},
+      {Kind::Sphere, kSphereTypeSetting, 1.0},
+      {Kind::Sphere, kSphereSubdivisionSetting, 2.0},
       {Kind::Torus, kTorusMajorSegmentsSetting, 8.0},
       {Kind::Torus, kTorusMinorSegmentsSetting, 4.0},
       {Kind::Torus, kTorusTubeRadiusRatioSetting, 0.3},
@@ -114,6 +116,8 @@ void expect_default_primitive_settings(const PrimitiveCreationToolService &tool)
   EXPECT_EQ(tool.sphere_settings().rings, 16);
   EXPECT_FALSE(tool.sphere_settings().hemisphere);
   EXPECT_FALSE(tool.sphere_settings().flip_faces);
+  EXPECT_EQ(tool.sphere_settings().type, PrimitiveSphereType::Uv);
+  EXPECT_EQ(tool.sphere_settings().subdivision, 3);
   EXPECT_EQ(tool.torus_settings().major_segments, 32);
   EXPECT_EQ(tool.torus_settings().minor_segments, 12);
   EXPECT_DOUBLE_EQ(tool.torus_settings().tube_radius_ratio, 0.2);
@@ -4430,6 +4434,254 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_EQ(session.modeling().objects().size(), 1U);
     EXPECT_EQ(compiled_content_id(session.modeling(), "Baseline"), baseline);
   }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     SphereTypeChangesRetainIndependentTopologyBoundsMaterialAndPlacement) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  auto &tool = session.primitive_creation();
+  ASSERT_TRUE(tool.activate(PrimitiveCreationKind::Sphere).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereRadialSegmentsSetting, 8.0).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereRingsSetting, 4.0).ok);
+  const auto material = session.assets().add_material(
+      make_default_quader_material("Sphere Material"));
+  ASSERT_TRUE(tool.accept_preview(
+      oriented_primitive_preview({4.0f, 2.0f, -3.0f}, {0.0f, 0.0f, -1.0f},
+                                 {0.0f, 1.0f, 0.0f}, 6.0f, 4.0f, 2.0f),
+      "Typed Sphere", MaterialReference(material)).ok);
+  ASSERT_TRUE(tool.begin_resize(PrimitiveResizeControl::PositiveY).ok);
+  ASSERT_TRUE(tool.update_resize(1.0).ok);
+  ASSERT_TRUE(tool.end_resize().ok);
+  const auto original = tool.live_primitive_creation();
+  ASSERT_TRUE(original.has_value());
+  const auto entity = *session.modeling().entity_for_modeling_object(
+      original->modeling_object_id);
+  ASSERT_TRUE(session.scene().set_transform(entity, {
+      .position = {7.0f, 3.0f, -2.0f},
+      .rotation_euler = {0.2f, 0.7f, -0.1f},
+      .scale = {2.0f, 0.5f, 3.0f}}));
+  const auto world = session.scene().world_transform_matrix(entity);
+  const auto material_before = *session.scene().material(entity);
+  const auto selection = session.scene().selected_entities();
+  const auto sampling = effective_texture_sampling_from_local(session.scene(), entity);
+  ASSERT_TRUE(sampling.has_value());
+  const auto uv_content = compiled_content_id(session.modeling(), "Typed Sphere");
+
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 1.0).ok);
+  EXPECT_EQ(tool.live_primitive_creation()->sphere_type, PrimitiveSphereType::Quad);
+  EXPECT_EQ(tool.live_primitive_creation()->sphere_subdivision, 3);
+  EXPECT_EQ(compiled_index_count(session.modeling(), "Typed Sphere"), 384U * 6U);
+  ASSERT_TRUE(tool.set_setting(kSphereSubdivisionSetting, 2.0).ok);
+  EXPECT_EQ(compiled_index_count(session.modeling(), "Typed Sphere"), 96U * 6U);
+  const auto quad_content = compiled_content_id(session.modeling(), "Typed Sphere");
+  const auto projected = editor.tools().live_primitive_creation();
+  ASSERT_TRUE(projected.has_value());
+  EXPECT_EQ(projected->sphere_type, QuaderSphereType::Quad);
+  EXPECT_EQ(projected->sphere_subdivision, 2);
+  const auto projection_stats = session.modeling().modeling_sdk_projection_stats_for_tests();
+  for (int frame = 0; frame < 20; ++frame) {
+    const auto retained = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(retained.has_value());
+    EXPECT_EQ(retained->revision, projected->revision);
+    EXPECT_EQ(retained->sphere_type, QuaderSphereType::Quad);
+    EXPECT_EQ(retained->sphere_subdivision, 2);
+  }
+  EXPECT_EQ(session.modeling().modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+            projection_stats.mesh_compile_count);
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 0.0).ok);
+  EXPECT_EQ(tool.sphere_settings().radial_segments, 8);
+  EXPECT_EQ(tool.sphere_settings().rings, 4);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Typed Sphere"), uv_content);
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 1.0).ok);
+  EXPECT_EQ(tool.sphere_settings().subdivision, 2);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Typed Sphere"), quad_content);
+  ASSERT_TRUE(tool.toggle_hemisphere().ok);
+  EXPECT_EQ(compiled_index_count(session.modeling(), "Typed Sphere"), 64U * 6U);
+  const auto unflipped = session.modeling().compile_object_mesh(original->modeling_object_id);
+  ASSERT_TRUE(unflipped.has_value());
+  ASSERT_TRUE(tool.flip_faces().ok);
+  const auto flipped = session.modeling().compile_object_mesh(original->modeling_object_id);
+  ASSERT_TRUE(flipped.has_value());
+  EXPECT_NEAR(cube_signed_volume(*flipped), -cube_signed_volume(*unflipped), 0.0001);
+
+  const auto changed = tool.live_primitive_creation();
+  ASSERT_TRUE(changed.has_value());
+  EXPECT_EQ(changed->modeling_object_id, original->modeling_object_id);
+  EXPECT_EQ(cube_components(changed->local_min), cube_components(original->local_min));
+  EXPECT_EQ(cube_components(changed->local_max), cube_components(original->local_max));
+  EXPECT_EQ(session.scene().world_transform_matrix(entity).values, world.values);
+  EXPECT_EQ(session.scene().selected_entities(), selection);
+  EXPECT_EQ(*session.scene().material(entity), material_before);
+  const auto sampling_after = effective_texture_sampling_from_local(session.scene(), entity);
+  ASSERT_TRUE(sampling_after.has_value());
+  EXPECT_EQ(sampling_after->values, sampling->values);
+
+  const auto revision = tool.tool_settings_revision();
+  ASSERT_TRUE(tool.reset_settings().ok);
+  expect_default_primitive_settings(tool);
+  EXPECT_EQ(tool.tool_settings_revision(), revision + 1U);
+  EXPECT_EQ(cube_components(tool.live_primitive_creation()->local_min),
+            cube_components(original->local_min));
+  EXPECT_EQ(cube_components(tool.live_primitive_creation()->local_max),
+            cube_components(original->local_max));
+  const auto reset_content = compiled_content_id(session.modeling(), "Typed Sphere");
+  EXPECT_FALSE(tool.reset_settings().changed);
+  EXPECT_EQ(tool.tool_settings_revision(), revision + 1U);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Typed Sphere"), reset_content);
+  ASSERT_TRUE(tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     SphereTypeRetiresResizeAndRejectsInvalidOrInactiveEditsBeforeMutation) {
+  PrimitiveCreationHarness harness;
+  auto &tool = harness.tool;
+  ASSERT_TRUE(tool.activate(PrimitiveCreationKind::Sphere).ok);
+  EXPECT_FALSE(tool.set_setting(kSphereSubdivisionSetting, 2.0).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 1.0).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereSubdivisionSetting, 1.0).ok);
+  ASSERT_TRUE(tool.accept_preview(valid_primitive_preview(), "Resize Sphere").ok);
+  ASSERT_TRUE(tool.begin_resize(PrimitiveResizeControl::Radius).ok);
+  ASSERT_TRUE(tool.update_resize(0.5).ok);
+  const auto resized = *tool.live_primitive_creation();
+  const auto content = compiled_content_id(harness.modeling, "Resize Sphere");
+  const auto selection_revision = harness.modeling.selection_summary().selection_revision;
+  struct InvalidSetting {
+    std::string_view name;
+    double value;
+  };
+  for (const auto &setting : {
+           InvalidSetting{kSphereTypeSetting, -1.0},
+           InvalidSetting{kSphereTypeSetting, 2.0},
+           InvalidSetting{kSphereTypeSetting, 0.5},
+           InvalidSetting{kSphereTypeSetting, std::numeric_limits<double>::quiet_NaN()},
+           InvalidSetting{kSphereSubdivisionSetting, 0.0},
+           InvalidSetting{kSphereSubdivisionSetting, 7.0},
+           InvalidSetting{kSphereSubdivisionSetting, 1.5},
+           InvalidSetting{kSphereRadialSegmentsSetting, 8.0},
+           InvalidSetting{kSphereRingsSetting, 4.0}}) {
+    SCOPED_TRACE(setting.name);
+    SCOPED_TRACE(setting.value);
+    const auto rejected = tool.set_setting(setting.name, setting.value);
+    EXPECT_FALSE(rejected.ok);
+    EXPECT_FALSE(rejected.changed);
+    const auto retained = tool.live_primitive_creation();
+    ASSERT_TRUE(retained.has_value());
+    EXPECT_TRUE(retained->resizing);
+    EXPECT_EQ(retained->revision, resized.revision);
+    EXPECT_EQ(cube_components(retained->local_min), cube_components(resized.local_min));
+    EXPECT_EQ(cube_components(retained->local_max), cube_components(resized.local_max));
+    EXPECT_EQ(compiled_content_id(harness.modeling, "Resize Sphere"), content);
+    EXPECT_EQ(harness.modeling.selection_summary().selection_revision, selection_revision);
+  }
+  EXPECT_FALSE(tool.set_setting(kSphereTypeSetting, 1.0).changed);
+  EXPECT_TRUE(tool.live_primitive_creation()->resizing);
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 0.0).ok);
+  EXPECT_FALSE(tool.live_primitive_creation()->resizing);
+  EXPECT_EQ(cube_components(tool.live_primitive_creation()->local_max),
+            cube_components(resized.local_max));
+  EXPECT_FALSE(tool.update_resize(2.0).ok);
+  EXPECT_FALSE(tool.cancel_resize().changed);
+
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 1.0).ok);
+  ASSERT_TRUE(tool.begin_resize(PrimitiveResizeControl::PositiveY).ok);
+  ASSERT_TRUE(tool.update_resize(1.0).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereSubdivisionSetting, 2.0).ok);
+  EXPECT_TRUE(tool.live_primitive_creation()->resizing);
+  ASSERT_TRUE(tool.cancel_resize().ok);
+  EXPECT_EQ(tool.live_primitive_creation()->sphere_subdivision, 2);
+  EXPECT_EQ(cube_components(tool.live_primitive_creation()->local_max),
+            cube_components(resized.local_max));
+  ASSERT_TRUE(tool.begin_resize(PrimitiveResizeControl::PositiveY).ok);
+  ASSERT_TRUE(tool.update_resize(1.0).ok);
+  const auto before_reset = *tool.live_primitive_creation();
+  ASSERT_TRUE(tool.reset_settings().ok);
+  EXPECT_FALSE(tool.live_primitive_creation()->resizing);
+  EXPECT_EQ(cube_components(tool.live_primitive_creation()->local_max),
+            cube_components(before_reset.local_max));
+  expect_default_primitive_settings(tool);
+  ASSERT_TRUE(tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     QuadSphereFootprintRestrictionsAndSelectionLossFreezeAcceptedGeometry) {
+  PrimitiveCreationHarness harness;
+  auto &tool = harness.tool;
+  ASSERT_TRUE(tool.activate(PrimitiveCreationKind::Sphere).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 1.0).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereSubdivisionSetting, 1.0).ok);
+  ASSERT_TRUE(tool.accept_preview(valid_primitive_preview(), "Frozen Sphere").ok);
+  const auto content = compiled_content_id(harness.modeling, "Frozen Sphere");
+  ASSERT_TRUE(harness.modeling.begin_box_footprint({
+      .ray = {.origin = {6.0f, 4.0f, 0.0f}, .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  }).ok);
+  const auto revision = tool.tool_settings_revision();
+  for (const auto name : {kSphereTypeSetting, kSphereSubdivisionSetting,
+                          kSphereRadialSegmentsSetting, kSphereRingsSetting}) {
+    const auto rejected = tool.set_setting(name, 0.0);
+    EXPECT_FALSE(rejected.ok);
+    EXPECT_FALSE(rejected.changed);
+  }
+  EXPECT_FALSE(tool.can_reset_settings());
+  EXPECT_FALSE(tool.reset_settings().ok);
+  EXPECT_EQ(tool.tool_settings_revision(), revision);
+  ASSERT_TRUE(tool.toggle_hemisphere().ok);
+  ASSERT_TRUE(tool.flip_faces().ok);
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Frozen Sphere"), content);
+  ASSERT_TRUE(tool.undo().ok);
+  EXPECT_FALSE(tool.live_primitive_creation().has_value());
+  ASSERT_TRUE(tool.accept_footprint(valid_primitive_preview(6.0f), "Pending Sphere").ok);
+  const auto pending = tool.live_primitive_creation();
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(pending->sphere_type, PrimitiveSphereType::Quad);
+  EXPECT_EQ(pending->sphere_subdivision, 1);
+  EXPECT_TRUE(pending->hemisphere);
+  EXPECT_TRUE(pending->flip_faces);
+  EXPECT_FLOAT_EQ(pending->local_max.y - pending->local_min.y, 1.0f);
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Pending Sphere"), 16U * 6U);
+  const auto pending_content = compiled_content_id(harness.modeling, "Pending Sphere");
+  ASSERT_TRUE(harness.modeling.clear_selection().ok);
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 0.0).ok);
+  EXPECT_FALSE(tool.live_primitive_creation().has_value());
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Pending Sphere"), pending_content);
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Frozen Sphere"), content);
+  ASSERT_TRUE(tool.cancel().ok);
+  EXPECT_TRUE(harness.modeling.objects().empty());
+  expect_default_primitive_settings(tool);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     SphereTypeEditsRemainWithinPerShapeHistoryAndResetWhenSessionEnds) {
+  PrimitiveCreationHarness harness;
+  auto &tool = harness.tool;
+  ASSERT_TRUE(tool.activate(PrimitiveCreationKind::Sphere).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 1.0).ok);
+  ASSERT_TRUE(tool.set_setting(kSphereSubdivisionSetting, 1.0).ok);
+  ASSERT_TRUE(tool.accept_preview(valid_primitive_preview(), "First Sphere").ok);
+  ASSERT_TRUE(tool.set_setting(kSphereSubdivisionSetting, 2.0).ok);
+  const auto first_content = compiled_content_id(harness.modeling, "First Sphere");
+  ASSERT_TRUE(tool.accept_preview(valid_primitive_preview(5.0f), "Second Sphere").ok);
+  EXPECT_EQ(tool.live_primitive_creation()->sphere_type, PrimitiveSphereType::Quad);
+  EXPECT_EQ(tool.live_primitive_creation()->sphere_subdivision, 2);
+  ASSERT_TRUE(tool.set_setting(kSphereTypeSetting, 0.0).ok);
+  const auto second_content = compiled_content_id(harness.modeling, "Second Sphere");
+  EXPECT_EQ(compiled_content_id(harness.modeling, "First Sphere"), first_content);
+  ASSERT_TRUE(tool.undo().ok);
+  EXPECT_EQ(tool.shape_count(), 1U);
+  ASSERT_TRUE(tool.redo().ok);
+  EXPECT_FALSE(tool.live_primitive_creation().has_value());
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Second Sphere"), second_content);
+  ASSERT_TRUE(tool.apply().ok);
+  EXPECT_EQ(harness.history.undo_count(), 2U);
+  expect_default_primitive_settings(tool);
+  ASSERT_TRUE(harness.history.undo().ok);
+  ASSERT_TRUE(harness.history.undo().ok);
+  EXPECT_TRUE(harness.modeling.objects().empty());
+  ASSERT_TRUE(harness.history.redo().ok);
+  ASSERT_TRUE(harness.history.redo().ok);
+  EXPECT_EQ(compiled_content_id(harness.modeling, "First Sphere"), first_content);
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Second Sphere"), second_content);
 }
 
 TEST(PrimitiveCreationToolServiceTests, PrimitiveFlipFacesDuringFootprintLeavesPreviousCubeFrozen) {

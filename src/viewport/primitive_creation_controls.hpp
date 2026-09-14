@@ -17,6 +17,8 @@ namespace quader {
 
 /// Shapes that currently expose creation controls in the viewport.
 enum class ViewportPrimitiveCreationShape { Box, Cylinder, Cone, Sphere, Torus };
+/// Sphere topology used by the projected creation controls.
+enum class ViewportSphereType { Uv, Quad };
 /// Semantic resize intent sent from a projected dot to the primitive owner.
 enum class ViewportPrimitiveResizeControl {
   PositiveX, NegativeX, PositiveY, NegativeY, PositiveZ, NegativeZ, Radius,
@@ -46,6 +48,8 @@ struct ViewportPrimitiveCreationState final {
   int major_segments = 32;
   int minor_segments = 12;
   double tube_radius_ratio = 0.2;
+  ViewportSphereType sphere_type = ViewportSphereType::Uv;
+  int sphere_subdivision = 3;
 };
 
 /** One projected resize dot or segment button. */
@@ -61,6 +65,7 @@ struct PrimitiveCreationControl final {
   ViewportPrimitiveResizeControl resize_control = ViewportPrimitiveResizeControl::PositiveX;
   int segment_count = 1;
   int minimum_segments = 1;
+  int maximum_segments = 128;
 };
 
 /** Shared drawing/picking slots: dots 0–5, segment buttons 6–8. Round shapes

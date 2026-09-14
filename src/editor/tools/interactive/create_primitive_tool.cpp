@@ -110,6 +110,7 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
     const bool resizing = active < 6;
     const bool stale = !cube || cube->object_id != interaction.object_id() ||
                        cube->shape != interaction.shape() ||
+                       cube->sphere_type != interaction.sphere_type() ||
                        (resizing && !cube->resizing);
     const bool interrupted = pointer.pointer_interaction_canceled ||
         !pointer.viewport_focused || pointer.navigation_active ||
@@ -118,7 +119,8 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
         !box.primitive_controls_visible ||
         (!pointer.left_down && !pointer.left_released);
     if (stale || interrupted || !modal.primary_pointer_gesture) {
-      if (resizing && (!cube || cube->object_id == interaction.object_id())) {
+      if (resizing && (!cube || (cube->object_id == interaction.object_id() &&
+                                cube->sphere_type == interaction.sphere_type()))) {
         (void)accepted_cube_result(box.cancel_resize());
         if (!context.runtime_binding.current()) return consumed_cube();
       }
@@ -162,7 +164,7 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
                  interaction.hit_test(current) == active) {
         const auto &control = interaction.frame().controls[active];
         const int value = control.segment_count + (gesture.modifiers.primary ? -1 : 1);
-        if (value >= control.minimum_segments && value <= 128) {
+        if (value >= control.minimum_segments && value <= control.maximum_segments) {
           (void)accepted_cube_result(box.set_segments(active - 6, value));
         }
       }

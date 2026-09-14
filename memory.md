@@ -228,7 +228,12 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
   their center from an immutable baseline, retaining ellipse proportions. Cylinder F/C change
   Flip Faces/caps for the live shape or only the pending shape during footprint drawing; neither
   command retires a held resize. Cone uses the same ends/radius controls with its radius on the base.
-- Sphere adds radial/ring buttons and a contextual H hemisphere toggle; Torus adds outer/hole
+- Sphere defaults to UV topology with radial/ring buttons. Quad topology uses one Subdivision
+  level control (1–6, default 3), generating welded spherified-cube quads; its hemisphere base is
+  also filled with quads. Switching type retains each topology's settings and authored bounds,
+  retires old pointer gestures, and preserves the settings overlay origin. Both types share the
+  contextual H hemisphere toggle. See `tests/primitive_creation_tool_service_tests.cpp` and
+  `tests/modeling_domain/qdr_document_primitive_tests.cpp`. Torus adds outer/hole
   boundary dots, a bottom-anchored height dot, and major/minor segment buttons. Torus outer drags
   retain the hole, inner drags retain the outside, and both retain XZ ellipse proportions. Its
   resize baseline includes tube ratio as well as bounds: cancellation/Undo must restore both.

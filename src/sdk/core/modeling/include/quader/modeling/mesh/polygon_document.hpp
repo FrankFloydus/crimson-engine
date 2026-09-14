@@ -88,6 +88,14 @@ struct ConeSpec {
 };
 
 /**
+ * Selects latitude/longitude or subdivided-cube sphere topology.
+ */
+enum class SphereType {
+  Uv = 0,
+  Quad = 1,
+};
+
+/**
  * Defines an origin-centered sphere or upper hemisphere document.
  */
 struct SphereSpec {
@@ -99,6 +107,8 @@ struct SphereSpec {
   bool hemisphere = false;
   bool flip_faces = false;
   MaterialId material{};
+  SphereType type = SphereType::Uv;
+  int subdivision = 3;
 };
 
 /**

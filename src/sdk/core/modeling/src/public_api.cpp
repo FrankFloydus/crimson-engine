@@ -83,6 +83,8 @@ Result<MeshHandle> CheckedModelingApi::create_sphere(SphereOptions options) {
       .hemisphere = options.hemisphere,
       .flip_faces = options.flip_faces,
       .material = options.material,
+      .type = options.type,
+      .subdivision = options.subdivision,
   });
   if (!document.ok()) {
     return Result<MeshHandle>::failure(document.error());

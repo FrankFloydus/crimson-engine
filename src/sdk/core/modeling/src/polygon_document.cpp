@@ -1049,15 +1049,32 @@ Result<PolygonDocument> PolygonDocument::make_sphere(const SphereSpec &spec) {
         ErrorCode::InvalidArgument,
         "Sphere dimensions must have positive width, height, and depth."));
   }
-  if (!valid_subdivision_count(spec.radial_segments, 3)) {
-    return Result<PolygonDocument>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "Sphere radial segment count must be between 3 and 128."));
-  }
-  if (!valid_subdivision_count(spec.rings, 2)) {
+  quader_poly::SphereType native_type;
+  switch (spec.type) {
+  case SphereType::Uv:
+    native_type = quader_poly::SphereType::Uv;
+    if (!valid_subdivision_count(spec.radial_segments, 3)) {
+      return Result<PolygonDocument>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Sphere radial segment count must be between 3 and 128."));
+    }
+    if (!valid_subdivision_count(spec.rings, 2)) {
+      return Result<PolygonDocument>::failure(
+          make_error(ErrorCode::InvalidArgument,
+                     "Sphere ring count must be between 2 and 128."));
+    }
+    break;
+  case SphereType::Quad:
+    native_type = quader_poly::SphereType::Quad;
+    if (spec.subdivision < 1 || spec.subdivision > 6) {
+      return Result<PolygonDocument>::failure(
+          make_error(ErrorCode::InvalidArgument,
+                     "Quad sphere subdivision must be between 1 and 6."));
+    }
+    break;
+  default:
     return Result<PolygonDocument>::failure(
-        make_error(ErrorCode::InvalidArgument,
-                   "Sphere ring count must be between 2 and 128."));
+        make_error(ErrorCode::InvalidArgument, "Sphere type is invalid."));
   }
 
   quader_poly::Document document = quader_poly::make_sphere({
@@ -1068,6 +1085,8 @@ Result<PolygonDocument> PolygonDocument::make_sphere(const SphereSpec &spec) {
       .rings = spec.rings,
       .hemisphere = spec.hemisphere,
       .flip_faces = spec.flip_faces,
+      .type = native_type,
+      .subdivision = spec.subdivision,
   });
   prepare_primitive_document(document, {}, native_material_slot(spec.material));
   return Result<PolygonDocument>::success(

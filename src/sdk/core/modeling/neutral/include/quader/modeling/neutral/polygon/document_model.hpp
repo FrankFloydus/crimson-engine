@@ -158,6 +158,14 @@ struct ConePrimitiveSpec {
 };
 
 /**
+ * Selects latitude/longitude or subdivided-cube sphere topology.
+ */
+enum class SphereType {
+    Uv = 0,
+    Quad = 1,
+};
+
+/**
  * Represents a Sphere Primitive Spec value used by the polygon document and mesh editing core.
  */
 struct SpherePrimitiveSpec {
@@ -168,6 +176,8 @@ struct SpherePrimitiveSpec {
     int rings = 16;
     bool hemisphere = false;
     bool flip_faces = false;
+    SphereType type = SphereType::Uv;
+    int subdivision = 3;
 };
 
 /**

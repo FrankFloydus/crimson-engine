@@ -151,8 +151,12 @@ ModelingCommandResult set_primitive_segments(QuaderEditorApi &editor, int axis, 
     if (axis == 0) setting = "primitive.cone.side_count";
     break;
   case QuaderPrimitiveCreationShape::Sphere:
-    if (axis == 0) setting = "primitive.sphere.radial_segments";
-    else if (axis == 1) setting = "primitive.sphere.rings";
+    if (primitive->sphere_type == QuaderSphereType::Quad) {
+      if (axis == 0) setting = "primitive.sphere.subdivision";
+    } else {
+      if (axis == 0) setting = "primitive.sphere.radial_segments";
+      else if (axis == 1) setting = "primitive.sphere.rings";
+    }
     break;
   case QuaderPrimitiveCreationShape::Torus:
     if (axis == 0) setting = "primitive.torus.major_segments";
@@ -998,7 +1002,7 @@ void QtViewportPanel::present_primitive_feedback(
   pane_state.primitive_feedback_dpr = dpr;
   ++primitive_feedback_update_count_;
 
-  constexpr std::array<std::pair<std::string_view, std::string_view>, 12> kLabels{{
+  constexpr std::array<std::pair<std::string_view, std::string_view>, 13> kLabels{{
       {"primitive.controls.width", "Width"},
       {"primitive.controls.height", "Height"},
       {"primitive.controls.depth", "Depth"},
@@ -1006,6 +1010,7 @@ void QtViewportPanel::present_primitive_feedback(
       {"primitive.controls.sides", "Sides"},
       {"primitive.controls.radial_segments", "Radial segments"},
       {"primitive.controls.rings", "Rings"},
+      {"primitive.controls.subdivision", "Subdivision"},
       {"primitive.controls.outer_radius", "Outer radius"},
       {"primitive.controls.inner_radius", "Inner radius"},
       {"primitive.controls.tube_height", "Tube height"},

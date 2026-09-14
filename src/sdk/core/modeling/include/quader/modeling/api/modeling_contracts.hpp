@@ -200,6 +200,8 @@ struct SphereOptions {
   bool hemisphere = false;
   bool flip_faces = false;
   MaterialId material{};
+  SphereType type = SphereType::Uv;
+  int subdivision = 3;
 };
 
 /**

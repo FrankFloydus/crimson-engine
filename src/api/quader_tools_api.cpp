@@ -952,13 +952,26 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
   case PrimitiveCreationKind::Sphere: {
     const SpherePrimitiveCreationSettings &settings =
         primitive.sphere_settings();
-    result.controls.push_back(number_control(
-        std::string(kSphereRadialSegmentsSetting), "Radial Segments",
-        settings.radial_segments, kSphereMinimumRadialSegments,
-        kSphereMaximumRadialSegments, 1.0));
-    result.controls.push_back(number_control(
-        std::string(kSphereRingsSetting), "Rings", settings.rings,
-        kSphereMinimumRings, kSphereMaximumRings, 1.0));
+    result.controls.push_back(choice_control(
+        std::string(kSphereTypeSetting), "Type",
+        settings.type == PrimitiveSphereType::Quad ? "quad" : "uv",
+        {{.id = "uv", .label = "UV Sphere", .value = 0.0},
+         {.id = "quad", .label = "Quad Sphere", .value = 1.0}},
+        QuaderToolSettingChoicePresentation::Dropdown));
+    if (settings.type == PrimitiveSphereType::Quad) {
+      result.controls.push_back(number_control(
+          std::string(kSphereSubdivisionSetting), "Subdivision",
+          settings.subdivision, kSphereMinimumSubdivision,
+          kSphereMaximumSubdivision, 1.0));
+    } else {
+      result.controls.push_back(number_control(
+          std::string(kSphereRadialSegmentsSetting), "Radial Segments",
+          settings.radial_segments, kSphereMinimumRadialSegments,
+          kSphereMaximumRadialSegments, 1.0));
+      result.controls.push_back(number_control(
+          std::string(kSphereRingsSetting), "Rings", settings.rings,
+          kSphereMinimumRings, kSphereMaximumRings, 1.0));
+    }
     result.controls.push_back(toggle_control(
         std::string(kSphereHemisphereSetting), "Hemisphere",
         settings.hemisphere));
@@ -2080,6 +2093,10 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
     }
     return set_setting(tool_id, name, primitive_kind_setting_value(*kind));
   }
+  if (session.primitive_creation().active() && name == kSphereTypeSetting &&
+      (value == "uv" || value == "quad")) {
+    return set_setting(tool_id, name, value == "uv" ? 0.0 : 1.0);
+  }
 
   char *end = nullptr;
   const std::string text(value);
@@ -2285,6 +2302,10 @@ QuaderToolsApi::live_primitive_creation() const {
       .flip_faces = primitive->flip_faces,
       .resizing = primitive->resizing,
       .revision = ++primitive_creation_revision_,
+      .sphere_type = primitive->sphere_type == PrimitiveSphereType::Quad
+                         ? QuaderSphereType::Quad
+                         : QuaderSphereType::Uv,
+      .sphere_subdivision = primitive->sphere_subdivision,
   };
   primitive_creation_owner_revision_ = primitive->revision;
   primitive_creation_transform_revision_ = transform_revision;
