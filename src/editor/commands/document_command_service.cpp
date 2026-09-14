@@ -1304,6 +1304,64 @@ DocumentCommandResult DocumentCommandService::finish_environment_color_edit(
   return finish_property_edit(cancel);
 }
 
+DocumentCommandResult DocumentCommandService::begin_fog_color_edit(EntityId entity) {
+  if (property_edit_) {
+    return document_command_invalid_request_result("A document property edit is already active");
+  }
+  const auto *settings = scene_.scene_settings(entity);
+  if (!settings || scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
+    return document_command_invalid_request_result("Fog color cannot be edited");
+  }
+  const QVec3 color = settings->fog.color;
+  property_edit_ = PropertyEdit{.entity = entity, .uuid = scene_.uuid(entity),
+                               .value = FogColorEdit{color, color}};
+  advance_property_edit_generation();
+  if (property_preview_hooks_.begin) property_preview_hooks_.begin();
+  return document_command_unchanged_result();
+}
+
+DocumentCommandResult DocumentCommandService::update_fog_color_edit(
+    EntityId entity, std::uint64_t generation, QVec3 color) {
+  if (generation == 0u || generation != property_edit_generation_ ||
+      !property_edit_ || property_edit_->entity != entity ||
+      !std::holds_alternative<FogColorEdit>(property_edit_->value) ||
+      !std::isfinite(color.x) || !std::isfinite(color.y) || !std::isfinite(color.z) ||
+      color.x < 0.0f || color.y < 0.0f || color.z < 0.0f) {
+    return document_command_invalid_request_result("Invalid fog color edit");
+  }
+  auto &edit = std::get<FogColorEdit>(property_edit_->value);
+  const auto *current = scene_.scene_settings(entity);
+  if (!current || scene_.uuid(entity) != property_edit_->uuid ||
+      !same_preview_color(current->fog.color, edit.expected) ||
+      scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
+    const auto canceled = finish_property_edit(true);
+    return canceled.ok ? document_command_invalid_request_result("Fog changed during color edit")
+                       : canceled;
+  }
+  if (same_preview_color(color, edit.expected)) return document_command_unchanged_result();
+  SceneSettingsComponent settings = *current;
+  settings.fog.color = color;
+  if (property_preview_hooks_.observe_before_projection)
+    property_preview_hooks_.observe_before_projection();
+  if (!scene_.set_scene_settings(entity, settings)) {
+    return document_command_invalid_request_result("Fog color could not be applied");
+  }
+  edit.expected = color;
+  if (property_preview_hooks_.record_after_projection)
+    property_preview_hooks_.record_after_projection();
+  return document_command_changed_result();
+}
+
+DocumentCommandResult DocumentCommandService::finish_fog_color_edit(
+    EntityId entity, std::uint64_t generation, bool cancel) {
+  if (generation == 0u || generation != property_edit_generation_ ||
+      (property_edit_ && (property_edit_->entity != entity ||
+                         !std::holds_alternative<FogColorEdit>(property_edit_->value)))) {
+    return document_command_invalid_request_result("Color edit is no longer active");
+  }
+  return finish_property_edit(cancel);
+}
+
 DocumentCommandResult DocumentCommandService::settle_property_edit(
     DocumentCommandResult result, bool restored) {
   if (property_preview_hooks_.record_after_projection)
@@ -1323,20 +1381,29 @@ DocumentCommandResult DocumentCommandService::finish_property_edit(bool cancel) 
         "Entity changed during property edit"), false);
   }
   const bool restore = cancel || scene_.is_effectively_locked(edit.entity);
-  if (const auto *color = std::get_if<EnvironmentColorEdit>(&edit.value)) {
+  const auto *environment_color = std::get_if<EnvironmentColorEdit>(&edit.value);
+  const auto *fog_color = std::get_if<FogColorEdit>(&edit.value);
+  if (environment_color || fog_color) {
+    const QVec3 initial = fog_color ? fog_color->before : environment_color->before;
+    const QVec3 expected = fog_color ? fog_color->expected : environment_color->expected;
     const auto *current = scene_.scene_settings(edit.entity);
-    if (!current || !same_preview_color(current->environment.clear_color, color->expected)) {
+    if (!current || !same_preview_color(
+            fog_color ? current->fog.color : current->environment.clear_color, expected)) {
       return settle_property_edit(document_command_invalid_request_result(
-          "Environment changed during color edit"), false);
+          fog_color ? "Fog changed during color edit"
+                    : "Environment changed during color edit"), false);
     }
-    if (same_preview_color(color->before, color->expected))
+    if (same_preview_color(initial, expected))
       return settle_property_edit(document_command_unchanged_result(), true);
     SceneSettingsComponent before = *current;
-    before.environment.clear_color = color->before;
+    if (fog_color) before.fog.color = initial;
+    else before.environment.clear_color = initial;
     if (restore) {
       const bool restored = scene_.set_scene_settings(edit.entity, before);
       return settle_property_edit(restored ? document_command_changed_result()
-          : document_command_invalid_request_result("Environment color could not be restored"), restored);
+          : document_command_invalid_request_result(
+                fog_color ? "Fog color could not be restored"
+                          : "Environment color could not be restored"), restored);
     }
     return settle_property_edit(history_.record_executed(
         std::make_unique<SetSceneSettingsCommand>(scene_, edit.entity, before, *current)), false);
@@ -1388,6 +1455,9 @@ DocumentCommandResult
 DocumentCommandService::set_scene_settings(EntityId entity,
                                            SceneSettingsComponent settings,
                                            UndoRedoExecuteOptions options) {
+  if (!scene_fog_settings_is_valid(settings.fog)) {
+    return document_command_invalid_request_result("Fog settings contain invalid values");
+  }
   if (mutation_blocked(entity)) {
     return document_command_active_tool_entity_result();
   }

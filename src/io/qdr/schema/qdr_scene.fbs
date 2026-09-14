@@ -338,10 +338,25 @@ table ScenePostProcessSettings {
   tone_mapping:SceneToneMapping = Aces;
 }
 
+table SceneFogSettings {
+  enabled:bool = false;
+  distance:float = 0.0;
+  cut_off_distance:float = 0.0;
+  maximum_opacity:float = 1.0;
+  height:float = 0.0;
+  height_falloff:float = 1.0;
+  color:Vec3;
+  density:float = 0.1;
+  in_scattering_start:float = 0.0;
+  in_scattering_size:float = -1.0;
+  color_from_environment:bool = false;
+}
+
 table SceneSettingsComponent {
   environment:SceneEnvironmentSettings;
   camera:SceneCameraSettings;
   post_process:ScenePostProcessSettings;
+  fog:SceneFogSettings;
 }
 
 table InstanceDefinitionComponent {

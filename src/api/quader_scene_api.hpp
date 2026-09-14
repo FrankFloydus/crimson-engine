@@ -187,6 +187,10 @@ public:
     QuaderApiResult<QuaderScenePropertyEditRef> begin_environment_color_edit(EntityId entity);
     QuaderApiVoidResult update_environment_color_edit(QuaderScenePropertyEditRef environment, QVec3 color);
     QuaderApiVoidResult finish_environment_color_edit(QuaderScenePropertyEditRef environment, bool cancel = false);
+    /// Preview fog color live, accepting one undo step or restoring on cancellation.
+    QuaderApiResult<QuaderScenePropertyEditRef> begin_fog_color_edit(EntityId entity);
+    QuaderApiVoidResult update_fog_color_edit(QuaderScenePropertyEditRef fog, QVec3 color);
+    QuaderApiVoidResult finish_fog_color_edit(QuaderScenePropertyEditRef fog, bool cancel = false);
     QuaderApiVoidResult set_scene_settings(EntityId entity,
                                            QuaderSceneSettings settings,
                                            QuaderSceneEditOptions options = {});

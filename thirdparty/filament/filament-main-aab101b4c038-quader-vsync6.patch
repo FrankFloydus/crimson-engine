@@ -1,5 +1,5 @@
 diff --git a/filament/backend/include/backend/DriverEnums.h b/filament/backend/include/backend/DriverEnums.h
-index 6aeb05c..9fa2249 100644
+index 4647991..3f1db17 100644
 --- a/filament/backend/include/backend/DriverEnums.h
 +++ b/filament/backend/include/backend/DriverEnums.h
 @@ -19,6 +19,9 @@
@@ -7,7 +7,7 @@ index 6aeb05c..9fa2249 100644
  #define TNT_FILAMENT_BACKEND_DRIVERENUMS_H
  
 +// Quader's pinned presentation and lighting extension; rebuild headers and libraries together.
-+#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 4
++#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 6
 +
  #include <utils/unwindows.h> // Because we define ERROR in the FenceStatus enum.
  
@@ -23,11 +23,11 @@ index 6aeb05c..9fa2249 100644
  static constexpr size_t MAX_SAMPLER_COUNT           = 62;   // Maximum needed at feature level 3.
  static constexpr size_t MAX_VERTEX_BUFFER_COUNT     = 16;   // Max number of bound buffer objects.
 diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filament/backend/include/backend/platforms/VulkanPlatform.h
-index 6d6fd46..c10c394 100644
+index cf1d04b..3c7fb0b 100644
 --- a/filament/backend/include/backend/platforms/VulkanPlatform.h
 +++ b/filament/backend/include/backend/platforms/VulkanPlatform.h
-@@ -481,6 +481,15 @@ public:
-     }
+@@ -483,6 +483,15 @@ public:
+     virtual void setPresentationTime(int64_t presentTime) noexcept;
  
  protected:
 +    /**
@@ -39,10 +39,10 @@ index 6d6fd46..c10c394 100644
 +    virtual void onSwapChainPresentModeSelected(void* nativeWindow,
 +            bool unsynchronized) noexcept {}
 +
-     struct VulkanSync : public Platform::Sync {
-         std::shared_ptr<VulkanCmdFence> fenceStatus;
-     };
-@@ -589,6 +598,7 @@ private:
+     struct VulkanSync : public Sync {
+         explicit VulkanSync(std::shared_ptr<VulkanCmdFence> fence) noexcept
+             : fenceStatus(std::move(fence)) {}
+@@ -598,6 +607,7 @@ private:
              MiscDeviceFeatures const& requestedFeatures) noexcept;
  
      friend struct VulkanPlatformPrivate;
@@ -51,10 +51,10 @@ index 6d6fd46..c10c394 100644
  
  }// namespace filament::backend
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
-index 3404b9c..9a9e171 100644
+index 6534e1c..c4dca42 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
-@@ -778,7 +778,7 @@ SwapChainPtr VulkanPlatform::createSwapChain(void* nativeWindow, uint64_t flags,
+@@ -874,7 +874,7 @@ SwapChainPtr VulkanPlatform::createSwapChain(void* nativeWindow, uint64_t flags,
  
      auto [surface, fallbackExtent] = createVkSurfaceKHR(nativeWindow, mImpl->mInstance, flags);
      // The VulkanPlatformSurfaceSwapChain now `owns` the surface.
@@ -64,11 +64,11 @@ index 3404b9c..9a9e171 100644
              surface, fallbackExtent, nativeWindow, flags);
      return swapchain;
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
-index fc6192e..2a5fda3 100644
+index 7ada36c..5cb1e6b 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
-@@ -141,10 +141,12 @@ bool VulkanPlatformSwapChainBase::queryFrameTimestamps(uint64_t frameId,
-     return false;
+@@ -149,10 +149,12 @@ int VulkanPlatformSwapChainBase::setFrameRate(float,
+     return 0;
  }
  
 -VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext const& context,
@@ -81,7 +81,7 @@ index fc6192e..2a5fda3 100644
        mInstance(instance),
        mPhysicalDevice(physicalDevice),
        mSurface(surface),
-@@ -152,6 +154,7 @@ VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext con
+@@ -160,6 +162,7 @@ VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext con
        mUsesRGB((flags & backend::SWAP_CHAIN_CONFIG_SRGB_COLORSPACE) != 0),
        mHasStencil((flags & backend::SWAP_CHAIN_HAS_STENCIL_BUFFER) != 0),
        mIsProtected((flags & backend::SWAP_CHAIN_CONFIG_PROTECTED_CONTENT) != 0),
@@ -89,7 +89,7 @@ index fc6192e..2a5fda3 100644
        mNativeWindow(nativeWindow) {
      assert_invariant(surface);
      create();
-@@ -216,11 +219,13 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+@@ -224,11 +227,13 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
      FILAMENT_CHECK_POSTCONDITION(surfaceFormat.format != VK_FORMAT_UNDEFINED)
              << "Cannot find suitable swapchain format";
  
@@ -106,7 +106,7 @@ index fc6192e..2a5fda3 100644
  
      bool const foundSuitablePresentMode = std::find(presentModes.begin(), presentModes.end(),
                                              desiredPresentMode) != presentModes.end();
-@@ -287,7 +292,10 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+@@ -295,7 +300,10 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
             << "swapchain-size=" << mSwapChainBundle.colors.size() << ", "
             << "identity-transform=" << (caps.currentTransform == 1) << ", "
             << "depth=" << mSwapChainBundle.depthFormat << ", "
@@ -118,7 +118,7 @@ index fc6192e..2a5fda3 100644
  
      VkSemaphoreCreateInfo const semaphoreCreateInfo = {
              .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-@@ -301,6 +309,8 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
+@@ -309,6 +317,8 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
                  << " error=" << static_cast<int32_t>(result);
      }
  
@@ -128,10 +128,10 @@ index fc6192e..2a5fda3 100644
  }
  
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
-index db94e28..821337f 100644
+index 658dfff..a46572c 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
-@@ -76,7 +76,8 @@ protected:
+@@ -84,7 +84,8 @@ protected:
  };
  
  struct VulkanPlatformSurfaceSwapChain : public VulkanPlatformSwapChainBase {
@@ -141,7 +141,7 @@ index db94e28..821337f 100644
              VkDevice device, VkQueue queue, VkInstance instance, VkSurfaceKHR surface,
              VkExtent2D fallbackExtent, void* nativeWindow, uint64_t flags);
  
-@@ -106,6 +107,7 @@ private:
+@@ -121,6 +122,7 @@ private:
  
      VkResult create();
  
@@ -149,7 +149,7 @@ index db94e28..821337f 100644
      VkInstance mInstance;
      VkPhysicalDevice mPhysicalDevice;
      // This class takes ownership of the surface.
-@@ -118,6 +120,7 @@ private:
+@@ -133,6 +135,7 @@ private:
      bool const mUsesRGB = false;
      bool const mHasStencil = false;
      bool const mIsProtected = false;
@@ -158,10 +158,10 @@ index db94e28..821337f 100644
      UTILS_UNUSED void* mNativeWindow = nullptr;
  
 diff --git a/filament/include/filament/LightManager.h b/filament/include/filament/LightManager.h
-index b4db569..bc8cebf 100644
+index f9f7ce1..254d661 100644
 --- a/filament/include/filament/LightManager.h
 +++ b/filament/include/filament/LightManager.h
-@@ -598,6 +598,15 @@ public:
+@@ -686,6 +686,15 @@ public:
           */
          Builder& falloff(float radius) noexcept;
  
@@ -177,7 +177,7 @@ index b4db569..bc8cebf 100644
          /**
           * Defines a spot light'st angular falloff attenuation.
           *
-@@ -857,6 +866,14 @@ public:
+@@ -945,6 +954,14 @@ public:
       */
      float getFalloff(Instance i) const noexcept;
  
@@ -193,10 +193,10 @@ index b4db569..bc8cebf 100644
       * Dynamically updates a spot light's cone as angles
       *
 diff --git a/filament/include/filament/SwapChain.h b/filament/include/filament/SwapChain.h
-index 94721c0..c81fcd4 100644
+index c3b9810..429a11c 100644
 --- a/filament/include/filament/SwapChain.h
 +++ b/filament/include/filament/SwapChain.h
-@@ -248,6 +248,15 @@ public:
+@@ -252,6 +252,15 @@ public:
       */
      static constexpr uint64_t CONFIG_MSAA_4_SAMPLES = backend::SWAP_CHAIN_CONFIG_MSAA_4_SAMPLES;
  
@@ -232,10 +232,10 @@ index 751231b..8776000 100644
      downcast(this)->setSpotLightCone(i, inner, outer);
  }
 diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManager.cpp
-index ba0d1f0..d0cc129 100644
+index b654755..6de000e 100644
 --- a/filament/src/PostProcessManager.cpp
 +++ b/filament/src/PostProcessManager.cpp
-@@ -3233,7 +3233,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::rcas(
+@@ -3245,7 +3245,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::rcas(
  FrameGraphId<FrameGraphTexture> PostProcessManager::upscale(FrameGraph& fg, bool const translucent,
      bool sourceHasLuminance, DynamicResolutionOptions dsrOptions,
      FrameGraphId<FrameGraphTexture> const input, filament::Viewport const& vp,
@@ -244,7 +244,7 @@ index ba0d1f0..d0cc129 100644
      // The code below cannot handle sub-resources
      assert_invariant(fg.getSubResourceDescriptor(input).layer == 0);
      assert_invariant(fg.getSubResourceDescriptor(input).level == 0);
-@@ -3244,7 +3244,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscale(FrameGraph& fg, bool
+@@ -3256,7 +3256,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscale(FrameGraph& fg, bool
      }
  
      if (dsrOptions.quality == QualityLevel::LOW) {
@@ -253,7 +253,7 @@ index ba0d1f0..d0cc129 100644
      }
      if (dsrOptions.quality == QualityLevel::MEDIUM) {
          return upscaleSGSR1(fg, sourceHasLuminance, dsrOptions, input, vp, outDesc);
-@@ -3256,7 +3256,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
+@@ -3268,7 +3268,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
          bool const translucent,
          DynamicResolutionOptions dsrOptions, FrameGraphId<FrameGraphTexture> const input,
          filament::Viewport const& vp, FrameGraphTexture::Descriptor const& outDesc,
@@ -262,7 +262,7 @@ index ba0d1f0..d0cc129 100644
  
      struct QuadBlitData {
          FrameGraphId<FrameGraphTexture> input;
-@@ -3267,7 +3267,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
+@@ -3279,7 +3279,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
      // have to do it with an extra pass). Blending must then happen either during the upsacling
      // or during the RCAS pass, whichever is last
  
@@ -272,7 +272,7 @@ index ba0d1f0..d0cc129 100644
  
      auto const& ppQuadBlit = fg.addPass<QuadBlitData>(dsrOptions.enabled ? "upscaling" : "compositing",
              [&](FrameGraph::Builder& builder, auto& data) {
-@@ -3297,6 +3298,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
+@@ -3309,6 +3310,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
                  });
  
                  mi->setParameter("levelOfDetail", 0.0f);
@@ -281,7 +281,7 @@ index ba0d1f0..d0cc129 100644
  
                  mi->setParameter("viewport", float4{
                          float(vp.left)   / inputDesc.width,
-@@ -3326,7 +3329,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
+@@ -3338,7 +3341,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
      // if we had to take the low quality fallback, we still do the "sharpen pass"
      if (dsrOptions.sharpness > 0.0f) {
          output = rcas(fg, dsrOptions.sharpness, output, outDesc,
@@ -291,7 +291,7 @@ index ba0d1f0..d0cc129 100644
      }
  
      // we rely on automatic culling of unused render passes
-@@ -3550,7 +3554,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blit(FrameGraph& fg, bool co
+@@ -3562,7 +3566,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blit(FrameGraph& fg, bool co
          FrameGraphId<FrameGraphTexture> const input,
          filament::Viewport const& vp, FrameGraphTexture::Descriptor const& outDesc,
          SamplerMagFilter filterMag,
@@ -301,7 +301,7 @@ index ba0d1f0..d0cc129 100644
  
      uint32_t const layer = fg.getSubResourceDescriptor(input).layer;
      float const levelOfDetail = fg.getSubResourceDescriptor(input).level;
-@@ -3596,6 +3601,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blit(FrameGraph& fg, bool co
+@@ -3608,6 +3613,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blit(FrameGraph& fg, bool co
                          float(vp.height) / inputDesc.height
                  });
                  mi->setParameter("levelOfDetail", levelOfDetail);
@@ -310,7 +310,7 @@ index ba0d1f0..d0cc129 100644
                  if (layer) {
                      mi->setParameter("layerIndex", layer);
                  }
-@@ -3904,6 +3911,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::debugCombineArrayTexture(Fra
+@@ -3916,6 +3923,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::debugCombineArrayTexture(Fra
                  // It should be ok to not move this getMaterialInstance to inside the loop, since
                  // this is a pass meant for debug.
                  auto* mi = getMaterialInstance(driver, ma);
@@ -350,10 +350,10 @@ index 2f825ea..d9e2e6a 100644
      // depth blitter using shaders
      FrameGraphId<FrameGraphTexture> blitDepth(FrameGraph& fg,
 diff --git a/filament/src/components/LightManager.cpp b/filament/src/components/LightManager.cpp
-index d9312c8..a68c0c9 100644
+index b01a80b..557677e 100644
 --- a/filament/src/components/LightManager.cpp
 +++ b/filament/src/components/LightManager.cpp
-@@ -52,6 +52,7 @@ struct LightManager::BuilderDetails {
+@@ -53,6 +53,7 @@ struct LightManager::BuilderDetails {
      uint8_t mChannels = 1u;
      float3 mPosition = {};
      float mFalloff = 1.0f;
@@ -361,7 +361,7 @@ index d9312c8..a68c0c9 100644
      LinearColor mColor = LinearColor{ 1.0f };
      float mIntensity = 100000.0f;
      FLightManager::IntensityUnit mIntensityUnit = FLightManager::IntensityUnit::LUMEN_LUX;
-@@ -128,6 +129,13 @@ LightManager::Builder& LightManager::Builder::falloff(float const radius) noexce
+@@ -129,6 +130,13 @@ LightManager::Builder& LightManager::Builder::falloff(float const radius) noexce
      return *this;
  }
  
@@ -375,7 +375,7 @@ index d9312c8..a68c0c9 100644
  LightManager::Builder& LightManager::Builder::spotLightCone(float inner, float outer) noexcept {
      mImpl->mSpotInnerOuter = { inner, outer };
      return *this;
-@@ -207,6 +215,7 @@ void FLightManager::create(const Builder& builder, Entity const entity) {
+@@ -214,6 +222,7 @@ void FLightManager::create(const Builder& builder, Entity const entity) {
          setIntensity(i, builder->mIntensity, builder->mIntensityUnit);
  
          setFalloff(i, builder->mCastLight ? builder->mFalloff : 0);
@@ -383,7 +383,7 @@ index d9312c8..a68c0c9 100644
          setSunAngularRadiusRad(i, builder->mSunAngularRadiusRad);
          setSunHaloSize(i, builder->mSunHaloSize);
          setSunHaloFalloff(i, builder->mSunHaloFalloff);
-@@ -396,6 +405,14 @@ void FLightManager::setFalloff(Instance const i, float const falloff) noexcept {
+@@ -429,6 +438,14 @@ void FLightManager::setFalloff(Instance const i, float const falloff) noexcept {
      }
  }
  
@@ -399,10 +399,10 @@ index d9312c8..a68c0c9 100644
      auto& manager = mManager;
      if (i && isSpotLight(i)) {
 diff --git a/filament/src/components/LightManager.h b/filament/src/components/LightManager.h
-index 44d374d..17a5e0b 100644
+index a579587..86a1130 100644
 --- a/filament/src/components/LightManager.h
 +++ b/filament/src/components/LightManager.h
-@@ -125,6 +125,7 @@ public:
+@@ -129,6 +129,7 @@ public:
      UTILS_NOINLINE void setSpotLightCone(Instance i, float inner, float outer) noexcept;
      UTILS_NOINLINE void setIntensity(Instance i, float intensity, IntensityUnit unit) noexcept;
      UTILS_NOINLINE void setFalloff(Instance i, float radius) noexcept;
@@ -410,7 +410,7 @@ index 44d374d..17a5e0b 100644
      UTILS_NOINLINE void setShadowCaster(Instance i, bool shadowCaster) noexcept;
      UTILS_NOINLINE void setSunAngularRadiusRad(Instance i, float angularRadiusRad) noexcept;
      UTILS_NOINLINE void setSunHaloSize(Instance i, float haloSize) noexcept;
-@@ -218,6 +219,10 @@ public:
+@@ -222,6 +223,10 @@ public:
          return getRadius(i);
      }
  
@@ -421,7 +421,7 @@ index 44d374d..17a5e0b 100644
      SpotParams const& getSpotParams(Instance const i) const noexcept {
          return mManager[i].spotParams;
      }
-@@ -269,10 +274,11 @@ private:
+@@ -275,10 +280,11 @@ private:
          SUN_HALO_FALLOFF,   // state for the directional light sun
          INTENSITY,
          FALLOFF,
@@ -434,7 +434,7 @@ index 44d374d..17a5e0b 100644
              LightType,      //  1
              math::float3,   // 12
              math::float3,   // 12
-@@ -284,6 +290,7 @@ private:
+@@ -290,6 +296,7 @@ private:
              float,          //  4
              float,          //  4
              float,          //  4
@@ -442,7 +442,7 @@ index 44d374d..17a5e0b 100644
              uint8_t         //  1
      >;
  
-@@ -310,6 +317,7 @@ private:
+@@ -317,6 +324,7 @@ private:
                  Field<SUN_HALO_FALLOFF>     sunHaloFalloff;
                  Field<INTENSITY>            intensity;
                  Field<FALLOFF>              squaredFallOffInv;
@@ -451,7 +451,7 @@ index 44d374d..17a5e0b 100644
              };
          };
 diff --git a/filament/src/details/ColorGrading.cpp b/filament/src/details/ColorGrading.cpp
-index 30ef371..37589bf 100644
+index 635abc8..70b6c28 100644
 --- a/filament/src/details/ColorGrading.cpp
 +++ b/filament/src/details/ColorGrading.cpp
 @@ -811,6 +811,8 @@ FColorGrading::FColorGrading(FEngine& engine, const Builder& builder) {
@@ -484,10 +484,10 @@ index 3876938..f9acc5f 100644
  #if defined(__ARM_NEON)
      static void generateDefaultLUTNeon(FEngine const& engine, void* data, Config const& config, Builder const& builder) noexcept;
 diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.cpp
-index 03ea0eb..a91d5d3 100644
+index 53d556a..db46971 100644
 --- a/filament/src/details/Renderer.cpp
 +++ b/filament/src/details/Renderer.cpp
-@@ -1034,6 +1034,11 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
+@@ -1094,6 +1094,11 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
      // is "replacing" another one. E.g. typically when the color pass ends-up drawing directly
      // here.
      auto [viewRenderTarget, attachmentMask] = getRenderTarget(view);
@@ -499,7 +499,7 @@ index 03ea0eb..a91d5d3 100644
      FrameGraphId<FrameGraphTexture> const fgViewRenderTarget = fg.import("viewRenderTarget", {
              .attachments = attachmentMask,
              .viewport = DEBUG_DYNAMIC_SCALING ? svp : vp,
-@@ -1469,15 +1474,16 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
+@@ -1529,15 +1534,16 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
          }
  
          if (scaled) {
@@ -520,7 +520,7 @@ index 03ea0eb..a91d5d3 100644
              // scaling has been applied, and offset removed
              xvp = viewport;
              xvp.left = xvp.bottom = 0;
-@@ -1487,7 +1493,8 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
+@@ -1547,7 +1553,8 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
  
      // Debug: combine the array texture for multiview into a single image.
      if (UTILS_UNLIKELY(isRenderingMultiview && engine.debug.stereo.combine_multiview_images)) {
@@ -530,7 +530,7 @@ index 03ea0eb..a91d5d3 100644
                          .width = vp.width, .height = vp.height,
                          .format = colorGradingConfig.ldrFormat },
                          SamplerMagFilter::NEAREST, SamplerMinFilter::NEAREST);
-@@ -1517,7 +1524,8 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
+@@ -1577,7 +1584,8 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
       * 3. MRT is needed (colorGradingConfig.asSubpass)
       * 4. Frame history is needed (hasScreenSpaceRefraction)
       * 5. Refraction is used because how clear flags work (ssReflectionsOptions.enabled)
@@ -540,7 +540,7 @@ index 03ea0eb..a91d5d3 100644
       *      - MSAA doesn't match. Note: auto-resolve could work if the SwapChain was configured
       *        this way.
       *
-@@ -1535,11 +1543,11 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
+@@ -1595,11 +1603,11 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
       */
  
      if (mightNeedFinalBlit) {
@@ -554,7 +554,7 @@ index 03ea0eb..a91d5d3 100644
              xvp != svp ||
              (inputIsColorPass &&
                      (msaaSampleCount > 1 ||
-@@ -1549,7 +1557,8 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
+@@ -1609,7 +1617,8 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
              input = ppm.blit(fg, blendModeTranslucent, input, xvp, {
                              .width = vp.width, .height = vp.height,
                              .format = colorGradingConfig.ldrFormat },
@@ -565,10 +565,10 @@ index 03ea0eb..a91d5d3 100644
      }
  
 diff --git a/filament/src/details/Scene.cpp b/filament/src/details/Scene.cpp
-index cca0398..36b8a12 100644
+index d1459ad..0d0b913 100644
 --- a/filament/src/details/Scene.cpp
 +++ b/filament/src/details/Scene.cpp
-@@ -449,7 +449,7 @@ void FScene::prepareDynamicLights(const CameraInfo& camera,
+@@ -512,7 +512,7 @@ void FScene::prepareDynamicLights(const CameraInfo& camera,
          auto const li = lcm.getInstance(entities[i]);
          lp[gpuIndex].positionFalloff      = { spheres[i].xyz, lcm.getSquaredFalloffInv(li) };
          lp[gpuIndex].direction            = directions[i];
@@ -638,10 +638,10 @@ index d504ec0..993cbe4 100644
      }
  }
 diff --git a/libs/filabridge/include/private/filament/UibStructs.h b/libs/filabridge/include/private/filament/UibStructs.h
-index 7575414..9b1f32a 100644
+index 2507ee7..48d7d36 100644
 --- a/libs/filabridge/include/private/filament/UibStructs.h
 +++ b/libs/filabridge/include/private/filament/UibStructs.h
-@@ -275,7 +275,7 @@ struct LightsUib { // NOLINT(cppcoreguidelines-pro-type-member-init)
+@@ -289,7 +289,7 @@ struct LightsUib { // NOLINT(cppcoreguidelines-pro-type-member-init)
      static constexpr std::string_view _name{ "LightsUniforms" };
      math::float4 positionFalloff;     // { float3(pos), 1/falloff^2 }
      math::float3 direction;           // dir
@@ -651,7 +651,7 @@ index 7575414..9b1f32a 100644
      math::float2 spotScaleOffset;     // { scale, offset }
      float reserved3;                  // 0
 diff --git a/shaders/src/surface_light_punctual.fs b/shaders/src/surface_light_punctual.fs
-index df015d7..bccc6f5 100644
+index 9435c00..1bb88b4 100644
 --- a/shaders/src/surface_light_punctual.fs
 +++ b/shaders/src/surface_light_punctual.fs
 @@ -98,14 +98,22 @@ float getSquareFalloffAttenuation(float distanceSquare, float falloff) {
@@ -698,9 +698,10 @@ index df015d7..bccc6f5 100644
      light.NoL = saturate(dot(shading_normal, light.l));
      light.worldPosition = positionFalloff.xyz;
 diff --git a/shaders/src/surface_shading_model_standard.fs b/shaders/src/surface_shading_model_standard.fs
+index 547f63f..c888d51 100644
 --- a/shaders/src/surface_shading_model_standard.fs
 +++ b/shaders/src/surface_shading_model_standard.fs
-@@ -80,7 +80,15 @@ vec3 specularLobe(const PixelParams pixel, const Light light, const vec3 h,
+@@ -89,7 +89,15 @@ vec3 specularLobe(const PixelParams pixel, const Light light, const vec3 h,
  }
  
  vec3 diffuseLobe(const PixelParams pixel, float NoV, float NoL, float LoH) {

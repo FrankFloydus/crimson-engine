@@ -15,6 +15,7 @@
 
 #include <filament/ColorGrading.h>
 #include <filament/ColorSpace.h>
+#include <filament/IndirectLight.h>
 #include <filament/Options.h>
 #include <filament/ToneMapper.h>
 #include <filament/Viewport.h>
@@ -22,6 +23,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace quader {
 namespace {
@@ -107,7 +109,7 @@ std::uint64_t viewport_camera_presentation_signature(
 
 std::uint64_t scene_settings_presentation_signature(
     const SceneSettingsComponent &settings, bool rendered_mode,
-    ViewportSettingColor resolved_background) {
+    ViewportSettingColor resolved_background, bool fog_environment_available) {
   const bool post_processing_enabled =
       rendered_mode && settings.post_process.enabled;
   RenderSignatureBuilder signature;
@@ -124,6 +126,21 @@ std::uint64_t scene_settings_presentation_signature(
         .add_bool(settings.post_process.dithering)
         .add_value(
             static_cast<std::uint32_t>(settings.post_process.tone_mapping));
+  }
+  const bool fog_enabled = rendered_mode && settings.fog.enabled;
+  signature.add_bool(fog_enabled);
+  if (fog_enabled) {
+    signature.add_float(settings.fog.distance)
+        .add_float(settings.fog.cut_off_distance)
+        .add_float(settings.fog.maximum_opacity)
+        .add_float(settings.fog.height)
+        .add_float(settings.fog.height_falloff)
+        .add_vec3(settings.fog.color)
+        .add_float(settings.fog.density)
+        .add_float(settings.fog.in_scattering_start)
+        .add_float(settings.fog.in_scattering_size)
+        .add_bool(settings.fog.color_from_environment &&
+                  fog_environment_available);
   }
   return signature.value();
 }
@@ -167,6 +184,7 @@ void ViewportRenderer::initialize(filament::Engine &engine,
   overlay_view_->setAntiAliasing(filament::AntiAliasing::NONE);
   overlay_view_->setDithering(filament::Dithering::NONE);
   overlay_view_->setShadowingEnabled(false);
+  overlay_view_->setFogOptions({.enabled = false});
   overlay_view_->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
   update_visible_layers();
 
@@ -334,9 +352,17 @@ void ViewportRenderer::apply_scene_settings(
       instance_edit_style_.resolve_background_color(
           viewport_clear_color(settings.environment, rendered_mode),
           instance_edit_context_active_);
+  const filament::IndirectLight *indirect_light =
+      scene_ ? scene_->getIndirectLight() : nullptr;
+  // Missing or disabled environments use the authored color, rather than
+  // sampling Filament's black fallback cubemap and turning the fog black.
+  const bool fog_environment_available =
+      settings.environment.enabled && indirect_light != nullptr &&
+      indirect_light->getReflectionsTexture() != nullptr;
   const std::uint64_t presentation_signature =
       scene_settings_presentation_signature(settings, rendered_mode,
-                                            resolved_background);
+                                            resolved_background,
+                                            fog_environment_available);
   if (scene_settings_presentation_signature_ == presentation_signature) {
     return;
   }
@@ -362,6 +388,7 @@ void ViewportRenderer::apply_scene_settings(
     overlay_view_->setDithering(filament::Dithering::NONE);
     overlay_view_->setShadowingEnabled(false);
     overlay_view_->setColorGrading(nullptr);
+    overlay_view_->setFogOptions({.enabled = false});
   }
   apply_tone_mapping(settings.post_process.tone_mapping,
                      post_processing_enabled);
@@ -382,10 +409,34 @@ void ViewportRenderer::apply_scene_settings(
   bloom.strength = std::clamp(settings.post_process.bloom_strength, 0.0f, 1.0f);
   view_->setBloomOptions(bloom);
 
+  // Fog is evaluated by Filament's surface materials and remains available
+  // when the scene's post-processing section is disabled.
+  filament::FogOptions fog;
+  fog.enabled = rendered_mode && settings.fog.enabled;
+  fog.distance = std::max(settings.fog.distance, 0.0f);
+  fog.cutOffDistance = settings.fog.cut_off_distance > 0.0f
+                           ? settings.fog.cut_off_distance
+                           : std::numeric_limits<float>::infinity();
+  fog.maximumOpacity = std::clamp(settings.fog.maximum_opacity, 0.0f, 1.0f);
+  fog.height = settings.fog.height;
+  fog.heightFalloff = std::max(settings.fog.height_falloff, 0.0f);
+  fog.color = {std::max(settings.fog.color.x, 0.0f),
+               std::max(settings.fog.color.y, 0.0f),
+               std::max(settings.fog.color.z, 0.0f)};
+  fog.density = std::max(settings.fog.density, 0.0f);
+  fog.inScatteringStart = std::max(settings.fog.in_scattering_start, 0.0f);
+  fog.inScatteringSize = settings.fog.in_scattering_size > 0.0f
+                             ? settings.fog.in_scattering_size
+                             : -1.0f;
+  fog.fogColorFromIbl =
+      settings.fog.color_from_environment && fog_environment_available;
+  view_->setFogOptions(fog);
+
   camera_->setExposure(kLightPreviewAperture, kLightPreviewShutterSeconds,
                        kLightPreviewSensitivity);
   apply_neutral_overlay_exposure(overlay_camera_);
   scene_settings_presentation_signature_ = presentation_signature;
+  ++scene_settings_apply_count_;
 }
 
 void ViewportRenderer::apply_tone_mapping(SceneToneMapping tone_mapping,
@@ -519,6 +570,7 @@ void ViewportRenderer::update_visible_layers() {
 void ViewportRenderer::reset_presentation_cache() {
   camera_presentation_signature_.reset();
   scene_settings_presentation_signature_.reset();
+  scene_settings_apply_count_ = 0u;
   shadowing_enabled_.reset();
   material_debug_mode_ = ViewportMaterialDebugMode::None;
   solid_material_presentation_ = false;

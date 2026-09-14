@@ -1,9 +1,76 @@
 # Filament presentation and lighting patch
 
-Quader uses upstream Filament v1.71.6 at commit
-`ab65c099438ead4fabf496706da4aa3e0a272472` with the `quader-vsync4` patch in this directory.
-The archive identity is recorded in `filament-v1.71.6-quader-vsync4.json`. Filament and changes to
-these upstream source files are licensed under Apache-2.0; see
+## Daily upstream check
+
+[UPSTREAM_STATUS.md](UPSTREAM_STATUS.md) records the last successful local check day, our pinned
+version and patch identity, the latest stable release, and an exact snapshot of upstream `main`.
+Root `AGENTS.md` instructs the coordinating agent to run the checker at task start or when
+resuming on a new day. This is an agent instruction, not a background scheduler or an executable
+Markdown file; no check runs while the project is idle. A user instruction to stay offline wins.
+
+Run from the repository root (Python 3.10+ and Git, no additional Python packages):
+
+```powershell
+python tools/check_filament_updates.py --allow-network
+python tools/check_filament_updates.py --allow-network --force
+python -B tools/test_filament_updates.py
+```
+
+The first command is quiet after a successful check on the same local day. `--force` checks again.
+Without `--allow-network`, a due check reports that network access is required and makes no
+requests. Requests read only public `google/filament` metadata; nothing is fetched into a source
+checkout, applied, built, pushed or posted. An optional existing `GH_TOKEN` or `GITHUB_TOKEN`
+environment variable authenticates these GETs; unauthenticated access also works within GitHub's
+rate limits. Tokens are never saved in the cache or report.
+
+The active CMake pin remains authoritative. The checker derives the displayed version from it,
+and hashes the manifest identity and patch bytes so either changing forces a fresh baseline.
+Machine state lives in `<git-common-dir>/quader/filament-updates/<fingerprint>.json`; linked
+worktrees with the same pin share the daily cache and an operating-system lock. Each worktree's
+Markdown report can be regenerated from that cache. The report is generated repository content;
+review its diff, and put durable integration decisions in this README rather than editing it.
+
+Checks capture `main` as an immutable SHA, then paginate every commit since the previous successful
+SHA. A separate pin-to-main comparison retains candidates across daily checks, including days with
+no new commits. Initial checks establish a baseline and do not call existing history "new today".
+This candidate list is not a review ledger; reviewing a commit does not remove it. Release/main
+divergence and cherry-picks mean ancestry candidates may already have equivalent changes in our
+release. Review the actual diff before selecting an upgrade or backport.
+
+Overlap reporting uses returned net file paths, including rename sources. GitHub caps that list
+at 300 files; reaching the cap is explicitly marked incomplete. Even a complete net comparison
+does not prove patch compatibility or cover changes later reverted. Commit summaries are escaped
+display data. Large reports show the most recent 60 entries per list, with full comparison links
+and the complete commit lists in the local cache.
+
+Network failures, rate limits and incomplete pagination leave the successful date/SHA unchanged,
+so a later task retries. A check has a 45-second request budget with individual request timeouts;
+startup failures do not block other work. Rewritten `main` history also preserves the old state.
+After manually reviewing a rewrite, explicitly accept a new baseline with:
+
+```powershell
+python tools/check_filament_updates.py --allow-network --reset-main-baseline
+```
+
+If a cache is corrupt or from an unsupported schema, preserve that exact JSON file under a backup
+name before running a fresh check; do not silently discard its previous SHA. Upgrade decisions
+remain separate: assess the four Quader patches, rebase or backport selected changes, update the
+pin/provenance/guardrails together, rebuild the matching SDK and materials, then run the required
+app and GPU verification described below.
+
+The checker uses GitHub's [commit comparison API](https://docs.github.com/en/rest/commits/commits#compare-two-commits)
+and [latest stable release API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release).
+
+## Maintained renderer patch
+
+Quader uses the complete upstream Filament `main` snapshot at commit
+`aab101b4c038da83f71a16accb8279516a0247b9` (checked 2026-09-14), with the `quader-vsync6`
+patch in this directory. This is an unreleased source snapshot, not a released version tag.
+Its upstream version label is still `1.76.1`; the exact commit and `upstream_ref: main`
+distinguish it from the v1.76.1 release archive.
+The archive identity is recorded in
+[`filament-main-aab101b4c038-quader-vsync6.json`](filament-main-aab101b4c038-quader-vsync6.json).
+Filament and changes to these upstream source files are licensed under Apache-2.0; see
 [`../licenses/filament-Apache-2.0.txt`](../licenses/filament-Apache-2.0.txt). The patch modifies files
 carrying the upstream license notices. This directory contains the patch and provenance only.
 
@@ -17,10 +84,13 @@ is a protected virtual callback with a default empty implementation. It reports 
 after successful creation and recreation, including resize. It runs on the backend thread, so
 Quader's override publishes synchronized state and never calls the UI or Engine from the callback.
 The platform must outlive the Engine. Vulkan creation diagnostics record requested and actual modes.
-`FILAMENT_QUADER_VSYNC_PATCH_VERSION` is `4` in the public backend header. Revision 4 retains
-revision 1's VSync behavior, revision 2's light attenuation extension, and revision 3's correction
-for display-encoded post-processing on hardware-sRGB swapchains. It adds opt-in material diffuse
-selection below.
+`FILAMENT_QUADER_VSYNC_PATCH_VERSION` is `6` in the public backend header. Revision 6 rebases
+revision 5 onto the pinned `main` snapshot while preserving all four extensions: VSync control,
+light distance attenuation, hardware-sRGB presentation correction, and opt-in Burley/Lambert
+diffuse selection.
+The rebase retains upstream's `VulkanSync` constructor and swapchain `setFrameRate` implementation.
+All upstream changes through the pinned SHA are included; no backport selection is needed for
+that snapshot. Future upstream commits remain separate updates detected by the daily checker.
 
 Color-grading LUTs, dithering, FXAA, and scaling remain in the encoded output space. Filament's
 unchanged dither assumes this space and an 8-bit destination; applying it to linear values before
@@ -63,6 +133,14 @@ uniform. Quader's `quader_mesh_lit.mat` opts in; scene and material-preview bind
 same authored value. Material fragment code precedes the standard surface helper in generated
 shaders, so the opt-in is visible when that helper is preprocessed.
 
+Upstream's additional directional lights require `Engine::Config::enableMultipleDirectionalLights`,
+which remains disabled in Quader. They use separate per-view uniforms and do not overlap the
+patched distance-exponent slot. The second specular lobe and iridescence are available in the
+SDK and require explicit material integration before Quader can expose authoring controls.
+The upstream runtime defaults are retained, including disabled Vulkan dynamic pipeline state;
+enable and benchmark that option separately before changing the app's default. Updating the
+renderer snapshot does not add new material controls or change saved material properties.
+
 The perceptual-roughness convention matches the Burley evaluation in
 [Godot 4.7's direct-light shader](https://raw.githubusercontent.com/godotengine/godot/4.7-stable/servers/rendering/renderer_rd/shaders/scene_forward_lights_inc.glsl).
 GPU comparisons include roughness 0.5 as well as 1.0 to distinguish this convention from
@@ -89,8 +167,10 @@ contains freshly rebuilt matching headers, libraries, and `matc.exe`; mixing an 
 patched headers would break the platform ABI. The installed `quader-filament-sdk.json` records
 the source and patch identities and the hashes of every library used by Quader plus public
 presentation headers, `LightManager.h`, and `matc.exe`. Native configure verifies those identities
-and hashes. Quader's material outputs depend on this matching compiler executable, so rebuilding
-the SDK recompiles existing materials with the modified punctual-light and diffuse shaders.
+and hashes. Quader's material outputs depend on this matching compiler executable. This snapshot
+retains material format version 76 from v1.76.1, but changes upstream material variant generation
+and shaders. Recompile every material with the rebuilt `matc.exe`, including the modified
+punctual-light and diffuse shaders; an unchanged format number does not establish binary compatibility.
 The install also includes BlueVK's `bluevk`, `vulkan`, and `vk_video` public header groups from
 the pinned source, which upstream's normal install omits despite exposing `VulkanPlatform.h`.
 These headers retain their Apache-2.0/Khronos notices and introduce no additional runtime DLL.

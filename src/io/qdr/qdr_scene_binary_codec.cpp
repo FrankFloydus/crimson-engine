@@ -54,7 +54,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 14u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 15u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 /**
@@ -860,6 +860,9 @@ encode_material_component(flatbuffers::FlatBufferBuilder &builder,
 [[nodiscard]] flatbuffers::Offset<fb::SceneSettingsComponent>
 encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
                       const SceneSettingsComponent &settings) {
+  if (!scene_fog_settings_is_valid(settings.fog)) {
+    throw std::runtime_error("QDR scene contains invalid fog settings.");
+  }
   const fb::Vec3 clear_color = to_fb(settings.environment.clear_color);
   const auto environment = fb::CreateSceneEnvironmentSettings(
       builder, builder.CreateString(settings.environment.environment_id),
@@ -880,8 +883,15 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       settings.post_process.bloom, settings.post_process.bloom_strength,
       settings.post_process.dithering,
       to_fb(settings.post_process.tone_mapping));
+  const fb::Vec3 fog_color = to_fb(settings.fog.color);
+  const auto fog = fb::CreateSceneFogSettings(
+      builder, settings.fog.enabled, settings.fog.distance,
+      settings.fog.cut_off_distance, settings.fog.maximum_opacity,
+      settings.fog.height, settings.fog.height_falloff, &fog_color,
+      settings.fog.density, settings.fog.in_scattering_start,
+      settings.fog.in_scattering_size, settings.fog.color_from_environment);
   return fb::CreateSceneSettingsComponent(builder, environment, camera,
-                                          post_process);
+                                          post_process, fog);
 }
 
 [[nodiscard]] std::vector<std::byte> encode_scene_metadata(
@@ -1806,6 +1816,23 @@ decode_scene_settings(const fb::SceneSettingsComponent &value,
   }
   settings.post_process.tone_mapping =
       tone_mapping_from_fb(post_process->tone_mapping());
+  if (schema_version >= 15u && value.fog() != nullptr) {
+    const fb::SceneFogSettings &fog = *value.fog();
+    settings.fog.enabled = fog.enabled();
+    settings.fog.distance = fog.distance();
+    settings.fog.cut_off_distance = fog.cut_off_distance();
+    settings.fog.maximum_opacity = fog.maximum_opacity();
+    settings.fog.height = fog.height();
+    settings.fog.height_falloff = fog.height_falloff();
+    settings.fog.color = from_fb(fog.color(), settings.fog.color);
+    settings.fog.density = fog.density();
+    settings.fog.in_scattering_start = fog.in_scattering_start();
+    settings.fog.in_scattering_size = fog.in_scattering_size();
+    settings.fog.color_from_environment = fog.color_from_environment();
+    if (!scene_fog_settings_is_valid(settings.fog)) {
+      throw std::runtime_error("QDR scene contains invalid fog settings.");
+    }
+  }
   return settings;
 }
 

@@ -100,6 +100,10 @@ public:
     std::uint32_t height() const { return height_; }
     float texture_max_u() const;
     float texture_max_v() const;
+    /** Counts effective scene-setting applications since initialization. */
+    std::uint64_t scene_settings_apply_count() const {
+      return scene_settings_apply_count_;
+    }
 
   private:
     void update_visible_layers();
@@ -136,6 +140,7 @@ public:
     InstanceEditStyle instance_edit_style_;
     std::optional<std::uint64_t> camera_presentation_signature_;
     std::optional<std::uint64_t> scene_settings_presentation_signature_;
+    std::uint64_t scene_settings_apply_count_ = 0u;
     std::optional<bool> shadowing_enabled_;
 };
 

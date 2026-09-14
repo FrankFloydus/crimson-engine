@@ -1111,6 +1111,23 @@ struct QuaderScenePostProcessSettings {
     QuaderToneMapping tone_mapping = QuaderToneMapping::Linear;
 };
 
+/// Stores public atmospheric fog settings; color is linear RGB.
+struct QuaderSceneFogSettings {
+  bool enabled = false;
+  float distance = 0.0f;
+  /// Zero means no distance cutoff.
+  float cut_off_distance = 0.0f;
+  float maximum_opacity = 1.0f;
+  float height = 0.0f;
+  float height_falloff = 1.0f;
+  QVec3 color = {1.0f, 1.0f, 1.0f};
+  float density = 0.1f;
+  float in_scattering_start = 0.0f;
+  /// Nonpositive values disable directional sunlight scattering.
+  float in_scattering_size = -1.0f;
+  bool color_from_environment = false;
+};
+
 /**
  * Stores public scene root settings.
  */
@@ -1118,6 +1135,7 @@ struct QuaderSceneSettings {
     QuaderSceneEnvironmentSettings environment;
     QuaderSceneCameraSettings camera;
     QuaderScenePostProcessSettings post_process;
+    QuaderSceneFogSettings fog;
 };
 
 /**

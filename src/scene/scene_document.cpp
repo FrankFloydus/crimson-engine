@@ -3216,6 +3216,9 @@ bool SceneDocument::clear_light(EntityId id) {
 
 bool SceneDocument::set_scene_settings(EntityId id,
                                        SceneSettingsComponent settings) {
+  if (!scene_fog_settings_is_valid(settings.fog)) {
+    return false;
+  }
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || curve(id) != nullptr) {
     return false;

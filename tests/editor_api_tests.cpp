@@ -142,6 +142,19 @@ void expect_scene_settings_eq(const quader::QuaderSceneSettings &actual,
   EXPECT_EQ(actual.post_process.dithering, expected.post_process.dithering);
   EXPECT_EQ(actual.post_process.tone_mapping,
             expected.post_process.tone_mapping);
+  EXPECT_EQ(actual.fog.enabled, expected.fog.enabled);
+  EXPECT_EQ(actual.fog.color_from_environment, expected.fog.color_from_environment);
+  EXPECT_FLOAT_EQ(actual.fog.distance, expected.fog.distance);
+  EXPECT_FLOAT_EQ(actual.fog.cut_off_distance, expected.fog.cut_off_distance);
+  EXPECT_FLOAT_EQ(actual.fog.maximum_opacity, expected.fog.maximum_opacity);
+  EXPECT_FLOAT_EQ(actual.fog.height, expected.fog.height);
+  EXPECT_FLOAT_EQ(actual.fog.height_falloff, expected.fog.height_falloff);
+  EXPECT_FLOAT_EQ(actual.fog.density, expected.fog.density);
+  EXPECT_FLOAT_EQ(actual.fog.in_scattering_start, expected.fog.in_scattering_start);
+  EXPECT_FLOAT_EQ(actual.fog.in_scattering_size, expected.fog.in_scattering_size);
+  EXPECT_FLOAT_EQ(actual.fog.color.x, expected.fog.color.x);
+  EXPECT_FLOAT_EQ(actual.fog.color.y, expected.fog.color.y);
+  EXPECT_FLOAT_EQ(actual.fog.color.z, expected.fog.color.z);
 }
 
 void expect_light_eq(const quader::QuaderLightComponent &actual,
@@ -15275,6 +15288,9 @@ TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
         ASSERT_TRUE(set.ok()) << set.error_message();
         EXPECT_TRUE(set.changed());
         expect_scene_settings_eq(scene_root_settings(editor), edited);
+        const auto unchanged = editor.scene().set_scene_settings(root->id, edited);
+        ASSERT_TRUE(unchanged.ok());
+        EXPECT_FALSE(unchanged.changed());
 
         const quader::QuaderApiVoidResult undo =
             editor.commands().execute(quader::quader_command::kEditUndo);
@@ -15368,6 +15384,39 @@ TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
                settings.post_process.tone_mapping =
                    quader::QuaderToneMapping::DisplayRange;
              });
+    exercise("fog.enabled", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.enabled = true;
+    });
+    exercise("fog.distance", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.distance = 4.0f;
+    });
+    exercise("fog.cut_off_distance", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.cut_off_distance = 120.0f;
+    });
+    exercise("fog.maximum_opacity", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.maximum_opacity = 0.75f;
+    });
+    exercise("fog.height", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.height = -2.0f;
+    });
+    exercise("fog.height_falloff", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.height_falloff = 0.3f;
+    });
+    exercise("fog.color", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.color = {0.25f, 0.5f, 0.75f};
+    });
+    exercise("fog.density", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.density = 0.05f;
+    });
+    exercise("fog.in_scattering_start", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.in_scattering_start = 8.0f;
+    });
+    exercise("fog.in_scattering_size", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.in_scattering_size = 16.0f;
+    });
+    exercise("fog.color_from_environment", [](quader::QuaderSceneSettings &settings) {
+      settings.fog.color_from_environment = true;
+    });
 }
 
 TEST(EditorApiTests, SceneSettingsLiveEditsApplyImmediatelyAndCoalesceByMergeKey) {

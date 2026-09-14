@@ -721,10 +721,27 @@ private:
   }
 };
 
+std::string scene_fog_settings_text(const QuaderSceneFogSettings &fog) {
+  return "enabled:" + bool_text(fog.enabled) +
+         ",distance:" + float_bits(fog.distance) +
+         ",cut_off_distance:" + float_bits(fog.cut_off_distance) +
+         ",maximum_opacity:" + float_bits(fog.maximum_opacity) +
+         ",height:" + float_bits(fog.height) +
+         ",height_falloff:" + float_bits(fog.height_falloff) +
+         ",color:" + vec3_text(fog.color) +
+         ",density:" + float_bits(fog.density) +
+         ",in_scattering_start:" + float_bits(fog.in_scattering_start) +
+         ",in_scattering_size:" + float_bits(fog.in_scattering_size) +
+         ",color_from_environment:" + bool_text(fog.color_from_environment);
+}
+
 std::string scene_settings_text(const QuaderSceneSettings &settings) {
   const QuaderSceneEnvironmentSettings &environment = settings.environment;
   const QuaderSceneCameraSettings &camera = settings.camera;
   const QuaderScenePostProcessSettings &post_process = settings.post_process;
+  // Preserve historical command fingerprints for scenes with default fog.
+  const std::string fog = scene_fog_settings_text(settings.fog);
+  const std::string default_fog = scene_fog_settings_text({});
   return "environment_id:" + quote(environment.environment_id) +
          ",environment_enabled:" + bool_text(environment.enabled) +
          ",show_background:" + bool_text(environment.show_background) +
@@ -750,7 +767,8 @@ std::string scene_settings_text(const QuaderSceneSettings &settings) {
          ",bloom:" + bool_text(post_process.bloom) +
          ",bloom_strength:" + float_bits(post_process.bloom_strength) +
          ",dithering:" + bool_text(post_process.dithering) +
-         ",tone_mapping:" + enum_text(post_process.tone_mapping);
+         ",tone_mapping:" + enum_text(post_process.tone_mapping) +
+         (fog == default_fog ? "" : ",fog:{" + fog + "}");
 }
 
 std::string light_text(const QuaderLightComponent &light) {

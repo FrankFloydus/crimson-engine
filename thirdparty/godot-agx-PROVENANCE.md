@@ -31,8 +31,9 @@ The adapted code is from the MIT-licensed Godot sources above; no Blender code i
 
 ## ACES audit
 
-Quader's retained ACES mode delegates to the pinned Filament v1.71.6
-[`ACESToneMapper`](https://raw.githubusercontent.com/google/filament/v1.71.6/filament/src/ToneMapper.cpp).
+Quader's retained ACES mode delegates to the pinned Filament `main` snapshot at
+`aab101b4c038da83f71a16accb8279516a0247b9`, with
+[`ACESToneMapper`](https://raw.githubusercontent.com/google/filament/aab101b4c038da83f71a16accb8279516a0247b9/filament/src/ToneMapper.cpp).
 This implements an ACES 1-style fitted RRT/ODT with AP0/AP1 transforms, glow, red
 modifier, desaturation and dim-surround adjustment. It is a standard real-time
 approximation, not the reference-exact ACES transform or ACES 2. Filament's separate
@@ -40,6 +41,10 @@ legacy mapper adds a 1.6667 brightness scale; Quader no longer offers that mode.
 Godot, Unreal and Filament need not produce identical pixels when each selects
 its own ACES approximation. Lighting calibration therefore uses neutral Linear
 output first and compares tone mapping independently.
+
+The 2026-09-14 source check found this exact snapshot's `ToneMapper.cpp` unchanged from
+v1.76.1, retaining the scalar ACES equations previously audited in v1.71.6. The upgrade
+does not change the Godot adaptation or its source hashes above.
 
 CPU reference coverage: [scene_tone_mapper_tests.cpp](../tests/scene_tone_mapper_tests.cpp).
 The opt-in native/Godot GPU calibration compares the complete output pipeline.

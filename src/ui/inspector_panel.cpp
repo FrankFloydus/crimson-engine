@@ -30,6 +30,7 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDialog>
+#include <QDoubleValidator>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QFrame>
@@ -362,6 +363,51 @@ protected:
   }
 };
 
+/// Keeps small atmospheric coefficients readable without rounding owner values.
+class InspectorFogSpinBox final : public QtDoubleSpinBox {
+public:
+  explicit InspectorFogSpinBox(QWidget *parent) : QtDoubleSpinBox(parent) {
+    QObject::connect(lineEdit(), &QLineEdit::textEdited, this,
+                     [this]() { draft_edited_ = true; });
+    const auto settled = [this]() { draft_edited_ = false; };
+    QObject::connect(this, &QDoubleSpinBox::valueChanged, this, settled);
+    QObject::connect(this, &QDoubleSpinBox::editingFinished, this, settled);
+  }
+
+protected:
+  QString textFromValue(double value) const override {
+    if (value != 0.0 && std::abs(value) < 0.0001) {
+      return locale().toString(value, 'g', 4);
+    }
+    return QtDoubleSpinBox::textFromValue(value);
+  }
+
+  double valueFromText(const QString &text) const override {
+    if (!specialValueText().isEmpty() && text == specialValueText()) {
+      return minimum();
+    }
+    if (!draft_edited_ && text == textFromValue(value())) {
+      return value();
+    }
+    bool valid = false;
+    const double parsed = locale().toDouble(text, &valid);
+    return valid ? parsed : QtDoubleSpinBox::valueFromText(text);
+  }
+
+  QValidator::State validate(QString &text, int &position) const override {
+    if (!specialValueText().isEmpty() && text == specialValueText()) {
+      return QValidator::Acceptable;
+    }
+    QDoubleValidator validator(minimum(), maximum(), decimals());
+    validator.setLocale(locale());
+    validator.setNotation(QDoubleValidator::ScientificNotation);
+    return validator.validate(text, position);
+  }
+
+private:
+  bool draft_edited_ = false;
+};
+
 /// Draws inspector property-cell separators from the active Fusion palette.
 class InspectorPropertyDelegate final : public QStyledItemDelegate {
 public:
@@ -392,6 +438,9 @@ enum class TransformEditKind {
   Rotation,
   Scale,
 };
+
+/// Selects the scene-owned color preview lifecycle and color space.
+enum class InspectorColorProperty { Light, Environment, Fog };
 
 /// Captures the selection and baseline values for one transform edit preview.
 struct TransformEditState {
@@ -1146,8 +1195,12 @@ private:
   add_continuous_number(Section &section, std::string stable_id,
                         const QString &label, double value, double minimum,
                         double maximum, double step, int decimals,
-                        std::function<void(double, std::string)> changed) {
-    auto *spin = new InspectorDoubleSpinBox(section.editor_parent);
+                        std::function<void(double, std::string)> changed,
+                        bool fog_number = false) {
+    QtDoubleSpinBox *spin = fog_number
+                              ? static_cast<QtDoubleSpinBox *>(
+                                    new InspectorFogSpinBox(section.editor_parent))
+                              : new InspectorDoubleSpinBox(section.editor_parent);
     spin->setObjectName(stable_name(stable_id));
     spin->setRange(minimum, maximum);
     spin->setSingleStep(step);
@@ -1350,7 +1403,7 @@ private:
   QtColorSwatchButton *
   add_color_button(Section &section, std::string stable_id,
                     const QString &label, QVec3 value,
-                    EntityId entity, bool light_color) {
+                    EntityId entity, InspectorColorProperty property) {
     const QColor initial = QColor::fromRgbF(std::clamp(value.x, 0.0f, 1.0f),
                                             std::clamp(value.y, 0.0f, 1.0f),
                                             std::clamp(value.z, 0.0f, 1.0f));
@@ -1362,14 +1415,16 @@ private:
 
     QObject::connect(
         button, &QtColorSwatchButton::clicked, &panel_,
-        [this, stable_id, button, entity, light_color]() {
+        [this, stable_id, button, entity, property]() {
           if (editor_ == nullptr) {
             return;
           }
           const std::uint64_t dialog_generation = runtime_binding_generation_;
           QPointer<InspectorPanel> panel_guard(&panel_);
-          const auto edit = light_color
+          const auto edit = property == InspectorColorProperty::Light
                                 ? editor_->scene().begin_light_color_edit(entity)
+                            : property == InspectorColorProperty::Fog
+                                ? editor_->scene().begin_fog_color_edit(entity)
                                 : editor_->scene().begin_environment_color_edit(
                                       entity);
           if (panel_guard == nullptr ||
@@ -1390,7 +1445,7 @@ private:
           QObject::connect(
               &dialog, &QColorDialog::currentColorChanged, &dialog,
               [this, &dialog, guarded_button, panel_guard, dialog_generation,
-               session = edit.value(), light_color](const QColor &color) {
+               session = edit.value(), property](const QColor &color) {
                 if (panel_guard == nullptr || !color.isValid() ||
                     runtime_binding_generation_ != dialog_generation ||
                     editor_ == nullptr) {
@@ -1399,11 +1454,14 @@ private:
                 QVec3 next{static_cast<float>(color.redF()),
                            static_cast<float>(color.greenF()),
                            static_cast<float>(color.blueF())};
-                if (light_color) {
+                if (property != InspectorColorProperty::Environment) {
                   next = light_srgb_to_linear(next);
                 }
-                const auto result = light_color
+                const auto result = property == InspectorColorProperty::Light
                                         ? editor_->scene().update_light_color_edit(
+                                              session, next)
+                                    : property == InspectorColorProperty::Fog
+                                        ? editor_->scene().update_fog_color_edit(
                                               session, next)
                                         : editor_->scene().update_environment_color_edit(
                                               session, next);
@@ -1418,7 +1476,8 @@ private:
                 if (guarded_button != nullptr) {
                   guarded_button->set_swatch_color(color);
                 }
-                if (light_color && document_ != nullptr) {
+                if (property == InspectorColorProperty::Light &&
+                    document_ != nullptr) {
                   if (const LightComponent *light = document_->light(primary_)) {
                     synchronize_light_controls(*light);
                   }
@@ -1436,8 +1495,11 @@ private:
             return;
           }
           const bool cancel = result != QDialog::Accepted;
-          const auto finished = light_color
+          const auto finished = property == InspectorColorProperty::Light
                                     ? editor_->scene().finish_light_color_edit(
+                                          edit.value(), cancel)
+                                : property == InspectorColorProperty::Fog
+                                    ? editor_->scene().finish_fog_color_edit(
                                           edit.value(), cancel)
                                     : editor_->scene().finish_environment_color_edit(
                                           edit.value(), cancel);
@@ -1894,6 +1956,121 @@ private:
     active_transform_edit_.reset();
   }
 
+  void build_fog_section(EntityId entity, const SceneFogSettings &settings) {
+    Section fog = add_section("fog", localized("ui.inspector.fog", "Fog"));
+    auto *enabled = add_checkbox(
+        fog, "fog.enabled", localized("ui.inspector.enabled", "Enabled"),
+        settings.enabled, [this, entity](bool value) {
+          apply_scene_settings(entity, [value](SceneSettingsComponent &next) {
+            next.fog.enabled = value;
+          });
+        });
+    enabled->setToolTip(localized(
+        "ui.inspector.fog.enabled.tooltip",
+        "Show atmospheric fog in Rendered viewports. Other shading modes stay clear."));
+
+    const auto add_fog_number =
+        [this, &fog, &settings, entity](
+            std::string stable_id, const QString &label,
+            float SceneFogSettings::*member, double minimum, double maximum,
+            double step, const QString &tooltip) {
+          auto *field = add_continuous_number(
+              fog, std::move(stable_id), label, settings.*member, minimum,
+              maximum, step, 50,
+              [this, entity, member](double value, std::string merge_key) {
+                apply_scene_settings(
+                    entity,
+                    [value, member](SceneSettingsComponent &next) {
+                      // Return can emit the displayed zero for an unchanged
+                      // Disabled sentinel. Preserve the owner's negative value.
+                      if (member == &SceneFogSettings::in_scattering_size &&
+                          value <= 0.0 && next.fog.in_scattering_size <= 0.0f) {
+                        return;
+                      }
+                      next.fog.*member = static_cast<float>(value);
+                    },
+                    std::move(merge_key));
+              }, true);
+          field->setEnabled(settings.enabled);
+          field->setToolTip(tooltip);
+          return field;
+        };
+    const double maximum = std::numeric_limits<float>::max();
+    add_fog_number(
+        "fog.density", localized("ui.inspector.fog.density", "Density (1/m)"),
+        &SceneFogSettings::density, 0.0, maximum, 0.001,
+        localized("ui.inspector.fog.density.tooltip",
+                  "Extinction per meter at the fog height. Higher values make the fog denser."));
+    add_fog_number(
+        "fog.distance", localized("ui.inspector.fog.distance", "Start (m)"),
+        &SceneFogSettings::distance, 0.0, maximum, 0.1,
+        localized("ui.inspector.fog.distance.tooltip",
+                  "Distance from the camera before fog starts."));
+    auto *cutoff = add_fog_number(
+        "fog.cut_off_distance",
+        localized("ui.inspector.fog.cut_off_distance", "Cutoff (m)"),
+        &SceneFogSettings::cut_off_distance, 0.0, maximum, 1.0,
+        localized("ui.inspector.fog.cut_off_distance.tooltip",
+                  "Objects beyond this distance receive no fog. Zero means unlimited, including the sky background."));
+    cutoff->setSpecialValueText(localized("ui.inspector.fog.unlimited", "Unlimited"));
+    add_fog_number(
+        "fog.maximum_opacity",
+        localized("ui.inspector.fog.maximum_opacity", "Max Opacity"),
+        &SceneFogSettings::maximum_opacity, 0.0, 1.0, 0.01,
+        localized("ui.inspector.fog.maximum_opacity.tooltip",
+                  "Upper limit of fog opacity, from transparent (0) to opaque (1)."));
+    add_fog_number(
+        "fog.height", localized("ui.inspector.fog.height", "Height (m)"),
+        &SceneFogSettings::height, -maximum, maximum, 0.1,
+        localized("ui.inspector.fog.height.tooltip",
+                  "World height of the fog layer, measured along the vertical axis."));
+    add_fog_number(
+        "fog.height_falloff",
+        localized("ui.inspector.fog.height_falloff", "Falloff (1/m)"),
+        &SceneFogSettings::height_falloff, 0.0, maximum, 0.01,
+        localized("ui.inspector.fog.height_falloff.tooltip",
+                  "How quickly density decreases above the fog height. Zero gives uniform density at every height."));
+    auto *color = add_color_button(
+        fog, "fog.color", localized("ui.inspector.fog.color", "Color / Tint"),
+        light_linear_to_srgb(settings.color), entity, InspectorColorProperty::Fog);
+    color->setEnabled(settings.enabled);
+    color->setToolTip(localized(
+        "ui.inspector.fog.color.tooltip",
+        "Fog color, or a tint applied to the sampled environment when Environment Color is enabled."));
+    auto *environment = add_checkbox(
+        fog, "fog.color_from_environment",
+        localized("ui.inspector.fog.color_from_environment", "Environment Color"),
+        settings.color_from_environment, [this, entity](bool value) {
+          apply_scene_settings(entity, [value](SceneSettingsComponent &next) {
+            next.fog.color_from_environment = value;
+          });
+        });
+    environment->setEnabled(settings.enabled);
+    environment->setToolTip(localized(
+        "ui.inspector.fog.color_from_environment.tooltip",
+        "Sample the scene environment in the view direction and multiply it by the fog tint. Requires an enabled environment."));
+    auto *scattering_size = add_fog_number(
+        "fog.in_scattering_size",
+        localized("ui.inspector.fog.in_scattering_size", "Sun Scattering"),
+        &SceneFogSettings::in_scattering_size, 0.0, maximum, 1.0,
+        localized("ui.inspector.fog.in_scattering_size.tooltip",
+                  "Directional-light scattering; zero disables it. Try 10 to 100. Smaller positive values spread the glow wider. Requires a directional light."));
+    scattering_size->setSpecialValueText(
+        localized("ui.inspector.fog.disabled", "Disabled"));
+    auto *scattering_start = add_fog_number(
+        "fog.in_scattering_start",
+        localized("ui.inspector.fog.in_scattering_start", "Sun Start (m)"),
+        &SceneFogSettings::in_scattering_start, 0.0, maximum, 0.1,
+        localized("ui.inspector.fog.in_scattering_start.tooltip",
+                  "Distance from the camera before directional-light scattering starts."));
+    scattering_start->setEnabled(settings.enabled && settings.in_scattering_size > 0.0f);
+    QObject::connect(
+        scattering_size, &QDoubleSpinBox::valueChanged, scattering_start,
+        [scattering_start, enabled = settings.enabled](double value) {
+          scattering_start->setEnabled(enabled && value > 0.0);
+        });
+  }
+
   void build_scene_settings_sections() {
     const SceneSettingsComponent *settings =
         document_->scene_settings(primary_);
@@ -1955,7 +2132,8 @@ private:
         });
     add_color_button(environment, "environment.clear_color",
                      localized("ui.inspector.clear_color", "Clear Color"),
-                     settings->environment.clear_color, entity, false);
+                     settings->environment.clear_color, entity,
+                     InspectorColorProperty::Environment);
     add_continuous_number(environment, "environment.intensity",
                           localized("ui.inspector.intensity", "Intensity"),
                           settings->environment.intensity, 0.0, 16.0, 0.01, 3,
@@ -1993,6 +2171,8 @@ private:
                             },
                             std::move(merge_key));
                       }, true, true);
+
+    build_fog_section(entity, settings->fog);
 
     Section camera =
         add_section("camera", localized("ui.inspector.camera", "Camera"));
@@ -2331,7 +2511,7 @@ private:
         });
     light_color_button_ = add_color_button(
         section, "light.color", localized("ui.inspector.color", "Color"),
-        light_linear_to_srgb(light->color), entity, true);
+        light_linear_to_srgb(light->color), entity, InspectorColorProperty::Light);
 
     light_intensity_field_ = add_number_slider(
         section, "light.intensity", localized("ui.inspector.intensity", "Intensity"),

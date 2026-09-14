@@ -126,6 +126,9 @@ public:
     DocumentCommandResult begin_environment_color_edit(EntityId entity);
     DocumentCommandResult update_environment_color_edit(EntityId entity, std::uint64_t generation, QVec3 color);
     DocumentCommandResult finish_environment_color_edit(EntityId entity, std::uint64_t generation, bool cancel);
+    DocumentCommandResult begin_fog_color_edit(EntityId entity);
+    DocumentCommandResult update_fog_color_edit(EntityId entity, std::uint64_t generation, QVec3 color);
+    DocumentCommandResult finish_fog_color_edit(EntityId entity, std::uint64_t generation, bool cancel);
     DocumentCommandResult cancel_active_property_edit();
     DocumentCommandResult cancel_active_point_light_range_edit();
     void abandon_property_edit() { property_edit_.reset(); }
@@ -200,11 +203,17 @@ public:
       QVec3 before;
       QVec3 expected;
     };
+    /// Captures only the fog color; other settings remain independently authored.
+    struct FogColorEdit {
+      QVec3 before;
+      QVec3 expected;
+    };
     /// Pins the sole active preview to an entity identity and typed values.
     struct PropertyEdit {
       EntityId entity = kInvalidEntityId;
       std::string uuid;
-      std::variant<PointLightRangeEdit, LightColorEdit, EnvironmentColorEdit> value;
+      std::variant<PointLightRangeEdit, LightColorEdit, EnvironmentColorEdit,
+                   FogColorEdit> value;
     };
     DocumentCommandResult finish_property_edit(bool cancel);
     DocumentCommandResult settle_property_edit(DocumentCommandResult result, bool restored);

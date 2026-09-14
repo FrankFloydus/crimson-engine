@@ -14,7 +14,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | Zstandard | https://github.com/facebook/zstd | vcpkg `1.5.7` | BSD-3-Clause OR GPL-2.0-only; Quader uses the BSD-3-Clause option, see `licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt` | Adaptive level-1 compression for sufficiently large binary `.qdr` geometry chunks. |
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
-| Filament SDK and bundled IBL assets | https://github.com/google/filament | v1.71.6 commit `ab65c099438ead4fabf496706da4aa3e0a272472`, source SHA-256 `ed2c4faa3bc22046d9a9ae574fb644c80f305f3e0386536fc9e6d8577295eb8a`, Quader patch `quader-vsync4` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync, light distance attenuation, opt-in Burley/Lambert diffuse shading, and correct sRGB presentation after dithering, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
+| Filament SDK and bundled IBL assets | https://github.com/google/filament | Unreleased `main` commit `aab101b4c038da83f71a16accb8279516a0247b9` (upstream version label `1.76.1`), source SHA-256 `7c464ef115a048ab77eb8e1898f1f79721a21b8364a4fda3e44a7e0e5f447c68`, Quader patch `quader-vsync6` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync, light distance attenuation, opt-in Burley/Lambert diffuse shading, and correct sRGB presentation after dithering, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
 | Qt Base | https://code.qt.io/cgit/qt/qtbase.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically linked distribution path, see `licenses/qtbase-LGPL-3.0-only.txt` | Qt Core, GUI, and Widgets support for the retained-mode editor shell. |
 | Qt Image Formats | https://code.qt.io/cgit/qt/qtimageformats.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically loaded plugin distribution path, see `licenses/qtimageformats-LGPL-3.0-only.txt` | TGA, TIFF, and WebP image plugins used by project texture import; Jasper/JP2 support is deliberately disabled. |
 | libjpeg-turbo | https://github.com/libjpeg-turbo/libjpeg-turbo | vcpkg `3.1.4.1` | IJG and BSD-3-Clause, see `licenses/libjpeg-turbo-BSD-3-Clause-IJG.txt` | JPEG decoding through Qt's dynamically loaded `qjpeg` image plugin. |
@@ -50,11 +50,16 @@ If a local source snapshot is checked into a release workspace, place it at `thi
 Filament is not vendored. `tools/build_filament_sdk.ps1` builds the pinned upstream source with
 the reviewed patch under `thirdparty/filament`, producing one matching set of headers, tools,
 and Release /MD libraries. Downloads require `-AllowDownload` and must match the source digest
-before extraction. The default install is the sibling `_SOURCES/filament-v1.71.6-quader-vsync4-windows`;
+before extraction. The default install is the sibling `_SOURCES/filament-main-aab101b4c038-quader-vsync6-windows`;
 `FILAMENT_SDK_ROOT` may select another validated install. The generated `quader-filament-sdk.json`
 records upstream and patch identities plus the installed header/library hashes. Native configure
 rejects missing, unpatched, or mismatched SDK artifacts. The original official SDK and unversioned
 local source checkouts are never modified.
+
+The current pin includes all upstream `main` changes through the recorded commit, including
+unreleased changes. The numeric upstream version label alone is not its identity: the full SHA,
+archive digest and Quader patch revision distinguish this snapshot from the v1.76.1 release.
+The retained Apache-2.0 license text was checked against that exact commit on 2026-09-14.
 
 Updating Filament requires one atomic change to the source pin, patch, build script, CMake default
 and artifact validation, this manifest row, license evidence when applicable,

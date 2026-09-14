@@ -358,6 +358,20 @@ scene_settings_json(const SceneSettingsComponent &settings) {
            {"toneMapping", tone_mapping_name(
                                settings.post_process.tone_mapping)},
        }},
+      {"fog",
+       {
+           {"enabled", settings.fog.enabled},
+           {"distance", settings.fog.distance},
+           {"cutOffDistance", settings.fog.cut_off_distance},
+           {"maximumOpacity", settings.fog.maximum_opacity},
+           {"height", settings.fog.height},
+           {"heightFalloff", settings.fog.height_falloff},
+           {"color", vec3_json(settings.fog.color)},
+           {"density", settings.fog.density},
+           {"inScatteringStart", settings.fog.in_scattering_start},
+           {"inScatteringSize", settings.fog.in_scattering_size},
+           {"colorFromEnvironment", settings.fog.color_from_environment},
+       }},
   };
 }
 

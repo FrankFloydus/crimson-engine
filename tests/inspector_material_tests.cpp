@@ -21,16 +21,19 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QHeaderView>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPalette>
 #include <QPointer>
+#include <QPixmap>
 #include <QPushButton>
 #include <QStyle>
 #include <QSlider>
@@ -527,6 +530,265 @@ TEST(InspectorMaterialTests, EnvironmentColorDialogPreviewsAndCancelsOnSelection
       scenario.session.scene().scene_settings(root)->environment.clear_color,
       baseline);
   EXPECT_TRUE(scenario.session.scene().selected_entities().empty());
+}
+
+TEST(InspectorMaterialTests, FogSectionEditsRetainGesturesAndCollapseAcrossLocaleChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-fog-controls";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  application.setQuitOnLastWindowClosed(false);
+  InspectorLightScenario scenario;
+  const EntityId root = scenario.session.scene().scene_root();
+  ASSERT_TRUE(scenario.editor.scene().select(root).ok());
+  scenario.refresh();
+  auto *tree = scenario.panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  ASSERT_NE(tree, nullptr);
+  auto *fog = find_top_level_item(*tree, QStringLiteral("fog"));
+  ASSERT_NE(fog, nullptr);
+  EXPECT_TRUE(fog->isExpanded());
+  EXPECT_EQ(fog->text(0), QStringLiteral("Fog"));
+  EXPECT_EQ(fog->childCount(), 11);
+  EXPECT_EQ(tree->indexOfTopLevelItem(fog),
+            tree->indexOfTopLevelItem(find_top_level_item(*tree, QStringLiteral("environment"))) + 1);
+  EXPECT_EQ(tree->indexOfTopLevelItem(find_top_level_item(*tree, QStringLiteral("camera"))),
+            tree->indexOfTopLevelItem(fog) + 1);
+  const auto number = [&](const char *id) {
+    return scenario.panel.findChild<QDoubleSpinBox *>(
+        QStringLiteral("inspector.fog.") + QString::fromLatin1(id));
+  };
+  for (const char *id : {"density", "distance", "cut_off_distance", "maximum_opacity",
+                         "height", "height_falloff", "in_scattering_size", "in_scattering_start"}) {
+    auto *field = number(id);
+    ASSERT_NE(field, nullptr) << id;
+    EXPECT_FALSE(field->isEnabled()) << id;
+    EXPECT_FALSE(field->toolTip().isEmpty()) << id;
+  }
+  EXPECT_EQ(number("cut_off_distance")->text(), QStringLiteral("Unlimited"));
+  EXPECT_EQ(number("in_scattering_size")->text(), QStringLiteral("Disabled"));
+  auto *enabled = scenario.panel.findChild<QCheckBox *>(QStringLiteral("inspector.fog.enabled"));
+  ASSERT_NE(enabled, nullptr);
+  EXPECT_TRUE(enabled->isEnabled());
+  EXPECT_FALSE(enabled->isChecked());
+  fog->setExpanded(false);
+  enabled->setChecked(true);
+  scenario.refresh();
+  fog = find_top_level_item(*tree, QStringLiteral("fog"));
+  ASSERT_NE(fog, nullptr);
+  EXPECT_FALSE(fog->isExpanded());
+  EXPECT_TRUE(scenario.session.scene().scene_settings(root)->fog.enabled);
+  fog->setExpanded(true);
+  EXPECT_TRUE(number("density")->isEnabled());
+  EXPECT_FALSE(number("in_scattering_start")->isEnabled());
+  const auto sentinel_settings = scenario.session.scene().scene_settings(root)->fog;
+  const auto sentinel_history = scenario.session.history().undo_count();
+  const auto sentinel_revision = scenario.session.scene().revision();
+  for (const char *id : {"cut_off_distance", "in_scattering_size"}) {
+    auto *field = number(id);
+    const QString sentinel = field->text();
+    field->interpretText();
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(field, &enter);
+    field->clearFocus();
+    EXPECT_EQ(field->text(), sentinel);
+  }
+  scenario.refresh();
+  EXPECT_EQ(scenario.session.scene().scene_settings(root)->fog, sentinel_settings);
+  EXPECT_FLOAT_EQ(scenario.session.scene().scene_settings(root)->fog.in_scattering_size, -1.0f);
+  EXPECT_EQ(scenario.session.history().undo_count(), sentinel_history);
+  EXPECT_EQ(scenario.session.scene().revision(), sentinel_revision);
+
+  QPointer<QDoubleSpinBox> density = number("density");
+  density->setToolTip(QStringLiteral("retained fog field"));
+  const auto revision = scenario.session.scene().revision();
+  const auto history = scenario.session.history().undo_count();
+  scenario.refresh();
+  ASSERT_NE(density, nullptr);
+  EXPECT_EQ(number("density"), density.data());
+  EXPECT_EQ(density->toolTip(), QStringLiteral("retained fog field"));
+  EXPECT_EQ(scenario.session.scene().revision(), revision);
+  density->setValue(0.02);
+  scenario.refresh();
+  ASSERT_NE(density, nullptr);
+  EXPECT_EQ(number("density"), density.data());
+  density->setValue(0.032);
+  scenario.refresh();
+  ASSERT_NE(density, nullptr);
+  EXPECT_EQ(scenario.session.history().undo_count(), history + 1u);
+  density->editingFinished();
+  scenario.refresh();
+  EXPECT_FLOAT_EQ(scenario.session.scene().scene_settings(root)->fog.density, 0.032f);
+  ASSERT_TRUE(scenario.editor.history().undo().ok());
+  scenario.refresh();
+  EXPECT_FLOAT_EQ(scenario.session.scene().scene_settings(root)->fog.density, 0.1f);
+  ASSERT_TRUE(scenario.editor.history().redo().ok());
+  scenario.refresh();
+  EXPECT_NEAR(number("density")->value(), 0.032, 0.000001);
+
+  struct FogNumberEdit {
+    const char *id;
+    float SceneFogSettings::*member;
+    float value;
+  };
+  for (const FogNumberEdit &edit : {
+           FogNumberEdit{"distance", &SceneFogSettings::distance, 2.5f},
+           FogNumberEdit{"cut_off_distance", &SceneFogSettings::cut_off_distance, 150.0f},
+           FogNumberEdit{"maximum_opacity", &SceneFogSettings::maximum_opacity, 0.65f},
+           FogNumberEdit{"height", &SceneFogSettings::height, -3.0f},
+           FogNumberEdit{"height_falloff", &SceneFogSettings::height_falloff, 0.035f},
+           FogNumberEdit{"in_scattering_size", &SceneFogSettings::in_scattering_size, 32.0f},
+           FogNumberEdit{"in_scattering_start", &SceneFogSettings::in_scattering_start, 5.0f}}) {
+    auto *field = number(edit.id);
+    ASSERT_NE(field, nullptr);
+    EXPECT_TRUE(field->isEnabled()) << edit.id;
+    field->setValue(edit.value);
+    if (std::string_view(edit.id) == "in_scattering_size") {
+      EXPECT_TRUE(number("in_scattering_start")->isEnabled());
+    }
+    field->editingFinished();
+    scenario.refresh();
+    EXPECT_FLOAT_EQ(scenario.session.scene().scene_settings(root)->fog.*(edit.member), edit.value);
+  }
+  auto *scattering_size = number("in_scattering_size");
+  scattering_size->setValue(0.0);
+  EXPECT_FALSE(number("in_scattering_start")->isEnabled());
+  scattering_size->editingFinished();
+  scenario.refresh();
+  EXPECT_FLOAT_EQ(scenario.session.scene().scene_settings(root)->fog.in_scattering_size, 0.0f);
+  EXPECT_EQ(number("in_scattering_size")->text(), QStringLiteral("Disabled"));
+  ASSERT_TRUE(scenario.editor.history().undo().ok());
+  scenario.refresh();
+  EXPECT_FLOAT_EQ(scenario.session.scene().scene_settings(root)->fog.in_scattering_size, 32.0f);
+  EXPECT_TRUE(number("in_scattering_start")->isEnabled());
+  auto *environment = scenario.panel.findChild<QCheckBox *>(
+      QStringLiteral("inspector.fog.color_from_environment"));
+  ASSERT_NE(environment, nullptr);
+  environment->setChecked(true);
+  scenario.refresh();
+  EXPECT_TRUE(scenario.session.scene().scene_settings(root)->fog.color_from_environment);
+
+  auto settings = to_api_scene_settings(*scenario.session.scene().scene_settings(root));
+  settings.fog.density = 0.000001234567f;
+  ASSERT_TRUE(scenario.editor.scene().set_scene_settings(root, settings).ok());
+  scenario.refresh();
+  const auto precise_history = scenario.session.history().undo_count();
+  auto *precise = number("density");
+  ASSERT_NE(precise, nullptr);
+  EXPECT_NEAR(precise->value(), settings.fog.density, 0.000000000001);
+  bool display_valid = false;
+  EXPECT_GT(precise->locale().toDouble(precise->text(), &display_valid), 0.0);
+  EXPECT_TRUE(display_valid);
+  EXPECT_TRUE(precise->text().contains(QLatin1Char('e'), Qt::CaseInsensitive));
+  precise->interpretText();
+  precise->editingFinished();
+  scenario.refresh();
+  EXPECT_FLOAT_EQ(scenario.session.scene().scene_settings(root)->fog.density, settings.fog.density);
+  EXPECT_EQ(scenario.session.history().undo_count(), precise_history);
+  precise = number("density");
+  auto *density_text = precise->findChild<QLineEdit *>();
+  ASSERT_NE(density_text, nullptr);
+  const QString typed_density = precise->locale().toString(0.0000025, 'g', 4);
+  density_text->setText(typed_density);
+  density_text->textEdited(typed_density);
+  precise->interpretText();
+  precise->editingFinished();
+  scenario.refresh();
+  EXPECT_FLOAT_EQ(scenario.session.scene().scene_settings(root)->fog.density, 0.0000025f);
+  EXPECT_GT(number("density")->locale().toDouble(number("density")->text()), 0.0);
+
+  fog = find_top_level_item(*tree, QStringLiteral("fog"));
+  ASSERT_NE(fog, nullptr);
+  fog->setExpanded(false);
+  ASSERT_TRUE(scenario.localization.select_locale("it-IT"));
+  scenario.refresh();
+  fog = find_top_level_item(*tree, QStringLiteral("fog"));
+  ASSERT_NE(fog, nullptr);
+  EXPECT_FALSE(fog->isExpanded());
+  EXPECT_EQ(fog->text(0), QStringLiteral("Nebbia"));
+  EXPECT_TRUE(number("density")->toolTip().contains(QStringLiteral("Estinzione")));
+
+  const QString screenshot = qEnvironmentVariable("QUADER_FOG_INSPECTOR_SCREENSHOT");
+  if (!screenshot.isEmpty()) {
+    ASSERT_TRUE(scenario.localization.select_locale("en-US"));
+    scenario.refresh();
+    for (int row = 0; row < tree->topLevelItemCount(); ++row) {
+      auto *section = tree->topLevelItem(row);
+      section->setExpanded(section->data(0, Qt::UserRole).toString() == QStringLiteral("fog"));
+    }
+    process_inspector_events();
+    EXPECT_TRUE(scenario.panel.grab().save(screenshot));
+  }
+}
+
+TEST(InspectorMaterialTests, FogColorPreviewUsesLinearColorAndCancelPreservesHistory) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-fog-live-color";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  InspectorLightScenario scenario;
+  const EntityId root = scenario.session.scene().scene_root();
+  auto settings = to_api_scene_settings(*scenario.session.scene().scene_settings(root));
+  settings.fog.enabled = true;
+  settings.fog.color = {0.2f, 0.3f, 0.4f};
+  ASSERT_TRUE(scenario.editor.scene().set_scene_settings(root, settings).ok());
+  ASSERT_TRUE(scenario.editor.scene().select(root).ok());
+  scenario.refresh();
+  scenario.session.mark_clean();
+  const auto baseline = scenario.session.scene().scene_settings(root)->fog;
+  const auto history = scenario.session.history().undo_count();
+  const auto run_dialog = [&](bool cancel) {
+    QPointer<QPushButton> button = scenario.panel.findChild<QPushButton *>(
+        QStringLiteral("inspector.fog.color"));
+    ASSERT_NE(button, nullptr);
+    EXPECT_TRUE(button->isEnabled());
+    QTimer::singleShot(0, &scenario.panel, [&]() {
+      auto *dialog = scenario.panel.findChild<QColorDialog *>(
+          QStringLiteral("inspector.fog.color.dialog"));
+      EXPECT_NE(dialog, nullptr);
+      if (dialog == nullptr) {
+        scenario.panel.abandon_runtime();
+        return;
+      }
+      dialog->setCurrentColor(QColor::fromRgbF(0.75, 0.25, 0.5));
+      const QColor displayed = dialog->currentColor();
+      const QVec3 expected = light_srgb_to_linear(
+          {static_cast<float>(displayed.redF()), static_cast<float>(displayed.greenF()),
+           static_cast<float>(displayed.blueF())});
+      scenario.refresh();
+      EXPECT_NE(button, nullptr);
+      const QVec3 current = scenario.session.scene().scene_settings(root)->fog.color;
+      EXPECT_NEAR(current.x, expected.x, 0.0001);
+      EXPECT_NEAR(current.y, expected.y, 0.0001);
+      EXPECT_NEAR(current.z, expected.z, 0.0001);
+      EXPECT_EQ(scenario.session.history().undo_count(), history);
+      dialog->setCurrentColor(QColor::fromRgbF(0.1, 0.8, 0.6));
+      if (cancel) {
+        dialog->reject();
+      } else {
+        dialog->accept();
+      }
+    });
+    button->click();
+    scenario.refresh();
+  };
+  run_dialog(true);
+  EXPECT_EQ(scenario.session.scene().scene_settings(root)->fog, baseline);
+  EXPECT_EQ(scenario.session.history().undo_count(), history);
+  EXPECT_FALSE(scenario.session.dirty());
+  run_dialog(false);
+  const auto accepted = scenario.session.scene().scene_settings(root)->fog;
+  EXPECT_NE(accepted.color.x, baseline.color.x);
+  EXPECT_EQ(scenario.session.history().undo_count(), history + 1u);
+  EXPECT_TRUE(scenario.session.dirty());
+  ASSERT_TRUE(scenario.editor.history().undo().ok());
+  EXPECT_EQ(scenario.session.scene().scene_settings(root)->fog, baseline);
+  ASSERT_TRUE(scenario.editor.history().redo().ok());
+  EXPECT_EQ(scenario.session.scene().scene_settings(root)->fog, accepted);
 }
 
 TEST(InspectorMaterialTests, DISABLED_PointLightRangeRefreshPerformance) {

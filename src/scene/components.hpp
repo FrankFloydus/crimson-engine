@@ -471,6 +471,48 @@ struct ScenePostProcessSettings {
     }
 };
 
+/// Stores linear-color atmospheric fog on the real scene root.
+struct SceneFogSettings {
+  bool enabled = false;
+  float distance = 0.0f;
+  /// Zero keeps fog unbounded; positive values exclude farther geometry.
+  float cut_off_distance = 0.0f;
+  float maximum_opacity = 1.0f;
+  float height = 0.0f;
+  float height_falloff = 1.0f;
+  QVec3 color = {1.0f, 1.0f, 1.0f};
+  float density = 0.1f;
+  float in_scattering_start = 0.0f;
+  /// Nonpositive values disable directional sunlight scattering.
+  float in_scattering_size = -1.0f;
+  bool color_from_environment = false;
+
+  [[nodiscard]] bool operator==(const SceneFogSettings &other) const {
+    return enabled == other.enabled && distance == other.distance &&
+           cut_off_distance == other.cut_off_distance &&
+           maximum_opacity == other.maximum_opacity && height == other.height &&
+           height_falloff == other.height_falloff && color.x == other.color.x &&
+           color.y == other.color.y && color.z == other.color.z &&
+           density == other.density &&
+           in_scattering_start == other.in_scattering_start &&
+           in_scattering_size == other.in_scattering_size &&
+           color_from_environment == other.color_from_environment;
+  }
+};
+
+/// Validates durable fog values before publication, including disabled settings.
+[[nodiscard]] inline bool scene_fog_settings_is_valid(const SceneFogSettings &fog) {
+  const auto nonnegative = [](float value) {
+    return std::isfinite(value) && value >= 0.0f;
+  };
+  return nonnegative(fog.distance) && nonnegative(fog.cut_off_distance) &&
+         nonnegative(fog.maximum_opacity) && fog.maximum_opacity <= 1.0f &&
+         std::isfinite(fog.height) && nonnegative(fog.height_falloff) &&
+         nonnegative(fog.color.x) && nonnegative(fog.color.y) &&
+         nonnegative(fog.color.z) && nonnegative(fog.density) &&
+         nonnegative(fog.in_scattering_start) && std::isfinite(fog.in_scattering_size);
+}
+
 /**
  * Marks the real scene root entity and stores global scene render settings.
  */
@@ -478,10 +520,11 @@ struct SceneSettingsComponent {
     SceneEnvironmentSettings environment;
     SceneCameraSettings camera;
     ScenePostProcessSettings post_process;
+    SceneFogSettings fog;
 
     [[nodiscard]] bool operator==(const SceneSettingsComponent& other) const {
       return environment == other.environment && camera == other.camera &&
-             post_process == other.post_process;
+             post_process == other.post_process && fog == other.fog;
     }
 };
 

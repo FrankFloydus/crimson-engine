@@ -27,7 +27,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$pinPath = Join-Path $repoRoot "thirdparty/filament/filament-v1.71.6-quader-vsync4.json"
+$pinPath = Join-Path $repoRoot "thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.json"
 $pin = Get-Content -LiteralPath $pinPath -Raw | ConvertFrom-Json
 $patchPath = Join-Path (Split-Path $pinPath -Parent) $pin.patch_file
 $patchSha = (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -35,7 +35,9 @@ if ([string]::IsNullOrWhiteSpace($WorkRoot)) {
     $WorkRoot = Join-Path (Split-Path $repoRoot -Parent) "_SOURCES"
 }
 $WorkRoot = [IO.Path]::GetFullPath($WorkRoot)
-$stem = "filament-v$($pin.upstream_version)-quader-vsync$($pin.patch_version)"
+# Main can retain a released version label. Include its immutable snapshot identity
+# in the source/build locations by deriving them from the pinned artifact name.
+$stem = $pin.artifact -replace '-windows$', ''
 $archive = Join-Path $WorkRoot "filament-$($pin.upstream_commit).tar.gz"
 $sourceRoot = Join-Path $WorkRoot "$stem-source"
 $buildRoot = Join-Path $WorkRoot "$stem-build"
@@ -200,6 +202,7 @@ Copy-Item -LiteralPath (Join-Path $sourceRoot "LICENSE") -Destination (Join-Path
 $installManifest = [ordered]@{
     artifact = $pin.artifact
     upstream_version = $pin.upstream_version
+    upstream_ref = $pin.upstream_ref
     upstream_commit = $pin.upstream_commit
     source_sha256 = $sourceSha
     patch_sha256 = $patchSha

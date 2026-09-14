@@ -282,6 +282,19 @@ to_scene_settings_component(const QuaderSceneSettings &settings) {
               .tone_mapping =
                   to_scene_tone_mapping(settings.post_process.tone_mapping),
           },
+      .fog = SceneFogSettings{
+          .enabled = settings.fog.enabled,
+          .distance = settings.fog.distance,
+          .cut_off_distance = settings.fog.cut_off_distance,
+          .maximum_opacity = settings.fog.maximum_opacity,
+          .height = settings.fog.height,
+          .height_falloff = settings.fog.height_falloff,
+          .color = settings.fog.color,
+          .density = settings.fog.density,
+          .in_scattering_start = settings.fog.in_scattering_start,
+          .in_scattering_size = settings.fog.in_scattering_size,
+          .color_from_environment = settings.fog.color_from_environment,
+      },
   };
 }
 
@@ -322,6 +335,19 @@ to_api_scene_settings(const SceneSettingsComponent &settings) {
               .tone_mapping =
                   to_api_tone_mapping(settings.post_process.tone_mapping),
           },
+      .fog = QuaderSceneFogSettings{
+          .enabled = settings.fog.enabled,
+          .distance = settings.fog.distance,
+          .cut_off_distance = settings.fog.cut_off_distance,
+          .maximum_opacity = settings.fog.maximum_opacity,
+          .height = settings.fog.height,
+          .height_falloff = settings.fog.height_falloff,
+          .color = settings.fog.color,
+          .density = settings.fog.density,
+          .in_scattering_start = settings.fog.in_scattering_start,
+          .in_scattering_size = settings.fog.in_scattering_size,
+          .color_from_environment = settings.fog.color_from_environment,
+      },
   };
 }
 

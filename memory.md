@@ -535,6 +535,16 @@ Tests: [occurrences](tests/scene_mesh_occurrence_projection_tests.cpp),
 
 ## Render binding and resource lifetime
 
+- Scene fog belongs to the root's scene settings and its existing document-command history.
+  It applies only to Rendered viewport scene views, independently of the Post Process toggle;
+  overlay views stay clear. Keep every effective fog field in the viewport presentation gate so
+  edits invalidate rendering while unchanged frames skip Filament setters. Fog color is linear
+  and uses the Inspector's color-preview transaction, including cancel and scene-rebind fences.
+  QDR schema 15 stores fog; older scenes default to disabled. Zero cutoff means unlimited.
+  Owners: [scene settings](src/scene/components.hpp), [viewport fog](src/render/viewport_renderer.cpp),
+  [QDR compatibility](src/io/qdr/README.md).
+  Tests: [color preview](tests/scene_color_preview_tests.cpp),
+  [Inspector](tests/inspector_material_tests.cpp), [fog pixels](tests/render_fog_runtime_tests.cpp).
 - Keep postprocessed viewport and preview grading in Rec709-sRGB-D65: Filament's dithering,
   integer LUT and LDR intermediates need display-encoded values. Linear grading amplifies dark
   noise and loses shadow precision. The maintained presentation patch decodes only the final
@@ -577,10 +587,13 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
 
 ## VSync and accepted presentation
 
-- The pinned Filament v1.71.6 quader-vsync4 patch supplies opt-in Immediate presentation and a
-  backend-confirmed mode callback. FIFO is the default/unsupported-mode fallback. Rebuild matching
+- The pinned Filament main snapshot `aab101b4c038` with quader-vsync6 supplies opt-in Immediate
+  presentation and a backend-confirmed mode callback. FIFO is the default/unsupported-mode fallback. Rebuild matching
   headers/libraries together; CMake verifies provenance/hashes. Keep the maintained patch through
   upgrades; the installer consumes compiled artifacts, not a compiler or end-user SDK download.
+  Revision 6 preserves upstream's `VulkanSync` constructor and `setFrameRate` during the rebase.
+  Recompile all materials with the matching rebuilt `matc`: the main snapshot retains material
+  format 76 from v1.76.1 but changes material variants and shaders.
 - Dependency patch commands must stop parent Git discovery: source or TEMP inside Quader can
   otherwise make Git silently skip every patch path. Keep archive-plus-patch byte verification;
   [nested staging regression](tools/test_filament_patch.ps1) protects this boundary.
@@ -597,7 +610,7 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   baseline remains compatible while detecting preference side effects.
 
 Owners: [RenderSystem](src/render/render_system.cpp), [frame schedule](src/app/app_frame_schedule.hpp),
-[Filament patch](thirdparty/filament/filament-v1.71.6-quader-vsync4.patch).
+[Filament patch](thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.patch).
 Tests: [presentation](tests/render_presentation_tests.cpp),
 [opt-in native Vulkan runtime](tests/render_vsync_runtime_tests.cpp).
 

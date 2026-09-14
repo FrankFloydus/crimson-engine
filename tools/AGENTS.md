@@ -80,6 +80,11 @@ artifact actually built. Allow ten minutes per process; asynchronous yields must
 
 ## GPU Smoke And Dependency Tools
 
+- `check_filament_updates.py --allow-network` performs the daily public GitHub metadata check
+  instructed by root `AGENTS.md`; it generates the Filament status report without changing the
+  pin, patch, source checkout or SDK. Run its offline checks with
+  `python -B tools/test_filament_updates.py`. Details and cache recovery are in
+  [the Filament update workflow](../thirdparty/filament/README.md#daily-upstream-check).
 - `boot_smoke.ps1` launches the app for Vulkan/window checks and collects screenshots and a log
   copy; error/critical/fatal log entries fail the check. Check window chrome/layout, every visible
   viewport, resize, and orbit/pan/zoom when relevant to the change.

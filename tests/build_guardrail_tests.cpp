@@ -1820,17 +1820,21 @@ TEST(BuildGuardrailTests, ModelingSdkInstallAndConsumerUseRequestedConfiguration
 
 TEST(BuildGuardrailTests, NativeDependencyToolsValidateSourceAndDeployment) {
   const std::string filament_sha256 = joined(
-      "ed2c4faa3bc22046d9a9ae574fb644c80",
-      "f305f3e0386536fc9e6d8577295eb8a");
+      "7c464ef115a048ab77eb8e1898f1f797",
+      "21a21b8364a4fda3e44a7e0e5f447c68");
   const std::string third_party_manifest =
       read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
   const std::string filament_pin = read_source_file(
-      "thirdparty/filament/filament-v1.71.6-quader-vsync4.json");
+      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.json");
   const std::string filament_builder = read_source_file("tools/build_filament_sdk.ps1");
   const std::string tracy_pin = read_source_file("thirdparty/tracy-0.13.1.json");
   const std::string native_verifier = read_source_file("tools/verify_native_build.ps1");
 
   expect_contains(filament_pin, filament_sha256);
+  expect_contains(filament_pin, "\"upstream_ref\": \"main\"");
+  expect_contains(filament_pin,
+                  "\"upstream_commit\": \"" +
+                      joined("aab101b4c038da83f71a", "16accb8279516a0247b9") + "\"");
   expect_contains(filament_builder, "if (-not $AllowDownload)");
   expect_contains(filament_builder, "Get-FileHash -LiteralPath $archive -Algorithm SHA256");
   expect_contains(filament_builder, "if ($sourceSha -ne $pin.source_sha256)");
@@ -1880,11 +1884,11 @@ TEST(BuildGuardrailTests, FilamentPatchAppliesInsideAncestorWorktree) {
 
 TEST(BuildGuardrailTests, FilamentPresentationPatchPreservesDitheringAndTargetRouting) {
   const std::string pin = read_source_file(
-      "thirdparty/filament/filament-v1.71.6-quader-vsync4.json");
+      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.json");
   const std::string patch = read_source_file(
-      "thirdparty/filament/filament-v1.71.6-quader-vsync4.patch");
-  expect_contains(pin, "\"patch_version\": 4");
-  expect_contains(patch, "#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 4");
+      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.patch");
+  expect_contains(pin, "\"patch_version\": 6");
+  expect_contains(patch, "#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 6");
   // Preserve upstream dither amplitude. Native GPU tests verify the resulting pixels;
   // this contract prevents a dependency update from replacing the presentation fix
   // with noise suppression or applying its decode to an unrelated render target.
@@ -2158,7 +2162,8 @@ TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
   const std::string presets = read_source_file("CMakePresets.json");
 
   expect_contains(root_c_make, "ENV{FILAMENT_SDK_ROOT}");
-  expect_contains(root_c_make, "../_SOURCES/filament-v1.71.6-quader-vsync4-windows");
+  expect_contains(root_c_make,
+                  "../_SOURCES/filament-main-aab101b4c038-quader-vsync6-windows");
   expect_contains(options, "QUADER_OPENMESH_SOURCE_DIR");
   expect_contains(options, "ENV{${env_var}}");
   expect_contains(options, "ENV{USERPROFILE}");
@@ -2197,6 +2202,9 @@ TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
   expect_contains(root_c_make, "quader_validate_filament_patch(\"${sdk_root}\")");
   const std::string patch_validation = read_source_file("cmake/QuaderFilamentSdk.cmake");
   expect_contains(patch_validation, "quader-filament-sdk.json");
+  expect_contains(patch_validation,
+                  "foreach(field artifact upstream_version upstream_ref "
+                  "upstream_commit source_sha256 patch_version)");
   expect_contains(patch_validation, "file(SHA256 \"${patch_path}\" expected_patch)");
   expect_contains(patch_validation, "file(SHA256 \"${sdk_root}/${relative_path}\" actual_hash)");
   expect_contains(patch_validation, "file_sha256");

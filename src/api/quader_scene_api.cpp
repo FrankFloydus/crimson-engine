@@ -516,6 +516,53 @@ QuaderApiVoidResult QuaderSceneApi::finish_environment_color_edit(
           environment.entity.id, environment.generation, cancel), "Edit Environment Color");
 }
 
+QuaderApiResult<QuaderScenePropertyEditRef>
+QuaderSceneApi::begin_fog_color_edit(EntityId entity) {
+  SceneSession &session = scene_session(session_);
+  if (session.modeling().modal_tool_owns_viewport() ||
+      session.modeling().can_cancel_active_preview_for_undo() ||
+      session.native_tools().has_pending_history_preview()) {
+    return quader_api_result_from_status<QuaderScenePropertyEditRef>(
+        mutations_.run_runtime_result(document_command_invalid_request_result(
+            "Apply or cancel the active tool before editing a color"),
+            "Edit Fog Color"));
+  }
+  const auto status = mutations_.run_document_result(
+      session.document_commands().begin_fog_color_edit(entity),
+      "Edit Fog Color");
+  auto result = quader_api_result_from_status<QuaderScenePropertyEditRef>(status);
+  if (result.ok()) {
+    result.value = QuaderScenePropertyEditRef{
+        .entity = {.scene_session_id = mutations_.scene_session_id(), .id = entity,
+                   .uuid = session.scene().uuid(entity),
+                   .editor_object_id = session.scene().editor_object_id(entity)},
+        .generation = session.document_commands().property_edit_generation()};
+  }
+  return result;
+}
+
+QuaderApiVoidResult QuaderSceneApi::update_fog_color_edit(
+    QuaderScenePropertyEditRef fog, QVec3 color) {
+  if (!mutations_.belongs_to_active_scene(fog.entity.scene_session_id) ||
+      scene_session(session_).scene().uuid(fog.entity.id) != fog.entity.uuid) {
+    return mutations_.stale_scene_reference_status("Fog color edit");
+  }
+  return mutations_.run_document_result(
+      scene_session(session_).document_commands().update_fog_color_edit(
+          fog.entity.id, fog.generation, color), "Edit Fog Color");
+}
+
+QuaderApiVoidResult QuaderSceneApi::finish_fog_color_edit(
+    QuaderScenePropertyEditRef fog, bool cancel) {
+  if (!mutations_.belongs_to_active_scene(fog.entity.scene_session_id) ||
+      scene_session(session_).scene().uuid(fog.entity.id) != fog.entity.uuid) {
+    return mutations_.stale_scene_reference_status("Fog color edit");
+  }
+  return mutations_.run_document_result(
+      scene_session(session_).document_commands().finish_fog_color_edit(
+          fog.entity.id, fog.generation, cancel), "Edit Fog Color");
+}
+
 QuaderApiVoidResult
 QuaderSceneApi::set_scene_settings(EntityId entity,
                                    QuaderSceneSettings settings,
