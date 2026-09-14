@@ -40,6 +40,8 @@ struct QuaderFaceTextureCanvas final {
   bool texture_available = false;
   double repeat_width = 0.0;
   double repeat_height = 0.0;
+  /// Signed U-axis orientation in the upright face plane, in [-180, 180).
+  double rotation_degrees = 0.0;
   bool gesture_active = false;
 };
 

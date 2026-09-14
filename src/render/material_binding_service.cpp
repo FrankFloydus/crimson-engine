@@ -297,6 +297,14 @@ MaterialBindingService::create_mesh_material_instance(
     bind_default_shaded_lighting(*material_instance);
   }
   apply_instance_edit_dim(*material_instance, false);
+  material_instance->setParameter(
+      material_texture_slot::kNormal,
+      texture_binding_->resolve_texture(
+          *material_instance, assets, material, material_texture_slot::kNormal,
+          texture_binding_->fallback_normal_texture()),
+      sampler);
+  material_instance->setParameter("normalStrength", 1.0f);
+  material_instance->setParameter("normalYSign", 1.0f);
   if (!editor_unlit) {
     material_instance->setParameter(
         material_texture_slot::kRoughness,
@@ -310,12 +318,6 @@ MaterialBindingService::create_mesh_material_instance(
             *material_instance, assets, material, material_texture_slot::kMetallic,
             texture_binding_->fallback_metallic_texture()),
         sampler);
-    material_instance->setParameter(
-        material_texture_slot::kNormal,
-        texture_binding_->resolve_texture(
-            *material_instance, assets, material, material_texture_slot::kNormal,
-            texture_binding_->fallback_normal_texture()),
-        sampler);
     material_instance->setParameter("metallicFactor",
                                     material ? material->metallic : 0.0f);
     material_instance->setParameter("roughnessFactor",
@@ -325,8 +327,6 @@ MaterialBindingService::create_mesh_material_instance(
         material && material->diffuse_model == MaterialDiffuseModel::Lambert
             ? 1
             : 0);
-    material_instance->setParameter("normalStrength", 1.0f);
-    material_instance->setParameter("normalYSign", 1.0f);
   }
   return material_instance;
 }
@@ -380,6 +380,18 @@ MaterialBindingService::create_mesh_material_instance(
     bind_default_shaded_lighting(*material_instance);
   }
   apply_instance_edit_dim(*material_instance, false);
+  material_instance->setParameter(
+      material_texture_slot::kNormal,
+      texture_binding_->resolve_texture(
+          *material_instance, material, material_texture_slot::kNormal,
+          texture_binding_->fallback_normal_texture()),
+      sampler);
+  material_instance->setParameter(
+      "normalStrength",
+      material && material->present ? material->normal_strength : 1.0f);
+  material_instance->setParameter(
+      "normalYSign",
+      material && material->present && material->directx_normal ? -1.0f : 1.0f);
   if (!editor_unlit) {
     material_instance->setParameter(
         material_texture_slot::kRoughness,
@@ -394,12 +406,6 @@ MaterialBindingService::create_mesh_material_instance(
             texture_binding_->fallback_metallic_texture()),
         sampler);
     material_instance->setParameter(
-        material_texture_slot::kNormal,
-        texture_binding_->resolve_texture(
-            *material_instance, material, material_texture_slot::kNormal,
-            texture_binding_->fallback_normal_texture()),
-        sampler);
-    material_instance->setParameter(
         "metallicFactor",
         material && material->present ? material->document.metallic : 0.0f);
     material_instance->setParameter(
@@ -411,13 +417,6 @@ MaterialBindingService::create_mesh_material_instance(
                 material->document.diffuse_model == MaterialDiffuseModel::Lambert
             ? 1
             : 0);
-    material_instance->setParameter(
-        "normalStrength",
-        material && material->present ? material->normal_strength : 1.0f);
-    material_instance->setParameter(
-        "normalYSign",
-        material && material->present && material->directx_normal ? -1.0f
-                                                                  : 1.0f);
   }
   return material_instance;
 }

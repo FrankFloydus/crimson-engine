@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_api_result.hpp"
+#include "api/quader_api_types.hpp"
 #include "api/quader_viewport_layout_types.hpp"
 #include "viewport/viewport_runtime_binding_token.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
@@ -101,6 +102,9 @@ public:
   void set_localization(LocalizationService &localization);
   void set_open_material_editor_callback(
       std::function<void(ProjectAssetId)> callback);
+  // Sample UI material selection only when a primitive footprint is accepted.
+  void set_primitive_creation_material_provider(
+      std::function<QuaderMaterialReference()> provider);
   void refresh_keybinding_presentation(QuaderEditorApi &editor);
   void prewarm_retained_dialogs();
   void set_startup_presentation_blocked(bool blocked);
@@ -239,6 +243,7 @@ private:
   const ViewportSettings *viewport_settings_ = nullptr;
   LocalizationService *localization_ = nullptr;
   std::function<void(ProjectAssetId)> open_material_editor_callback_;
+  std::function<QuaderMaterialReference()> primitive_creation_material_provider_;
   RenderFramePerformanceStats render_performance_ = {};
   ViewportSettings fallback_settings_ = ViewportSettings::defaults();
   ViewportLayoutId displayed_layout_ = ViewportLayoutId::Single;

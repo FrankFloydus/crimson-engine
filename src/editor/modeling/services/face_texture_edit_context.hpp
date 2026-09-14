@@ -13,7 +13,7 @@
 
 namespace quader {
 
-/// Owns selection epochs and relative rotation editing, without owning mesh UVs.
+/// Owns selection epochs and scalar fallback editing, without owning mesh UVs.
 class FaceTextureEditContext final {
 public:
   [[nodiscard]] ModelingFaceTextureSettings synchronize(

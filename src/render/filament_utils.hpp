@@ -10,11 +10,18 @@
 #include "math/types.hpp"
 
 #include <filament/Box.h>
+#include <math/mat3.h>
 #include <math/vec3.h>
+#include <math/vec4.h>
 
 namespace quader {
 
 inline filament::math::float3 to_filament(QVec3 v) { return {v.x, v.y, v.z}; }
+
+/// Encodes an orthonormal tangent frame while preserving handedness through
+/// Filament's medium-precision tangent varying, including half-turn frames.
+filament::math::float4 pack_filament_tangent_frame(
+    const filament::math::mat3f &frame);
 
 filament::Box compute_bounds(const MeshAsset &mesh);
 

@@ -361,7 +361,7 @@ TEST(QuaderMeshMaterialTests,
                 "material.textureSamplingCorrection.x,"
                 "material.quadUvCoordinates.w)"));
     EXPECT_TRUE(source_contains_compact(
-        source, "vec2 uv = applyTextureTransform(applyQuadUvInterpolation("
+        source, "uv = applyTextureTransform(applyQuadUvInterpolation("
                 "vec2(getUV0().x, 1.0 - getUV0().y)))"));
   }
 }
@@ -371,9 +371,11 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
       read_source_file("resources/materials/quader_mesh.mat");
   const std::string source =
       read_source_file("resources/materials/quader_mesh_lit.mat");
+  const std::string normal_mapping =
+      read_source_file("resources/materials/mesh_normal_mapping.glsl");
 
   EXPECT_NE(shaded_source.find("shadingModel : unlit"), std::string::npos);
-  EXPECT_NE(shaded_source.find("vec2 uv = applyTextureTransform("),
+  EXPECT_NE(shaded_source.find("uv = applyTextureTransform("),
             std::string::npos);
   EXPECT_NE(shaded_source.find(
                 "(uv - materialParams.textureTransformCenter)"),
@@ -419,10 +421,17 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   EXPECT_NE(shaded_source.find("baseColor *= lighting"), std::string::npos);
   EXPECT_EQ(shaded_source.find("roughnessTexture"), std::string::npos);
   EXPECT_EQ(shaded_source.find("metallicTexture"), std::string::npos);
-  EXPECT_EQ(shaded_source.find("normalTexture"), std::string::npos);
+  EXPECT_NE(shaded_source.find("name : normalTexture"), std::string::npos);
   EXPECT_EQ(shaded_source.find("shadedModelingSpecular"), std::string::npos);
-  EXPECT_EQ(shaded_source.find("getWorldViewVector"), std::string::npos);
-  EXPECT_EQ(shaded_source.find("reflect("), std::string::npos);
+  EXPECT_NE(shaded_source.find("getWorldViewVector"), std::string::npos);
+  EXPECT_NE(shaded_source.find("shadedSurfaceColor(vec3 albedo"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      shaded_source,
+      "if (solidPresentation) { float lighting = mix(1.0, "
+      "shadedModelingLighting(), lightingEnabled); baseColor *= lighting; } "
+      "else { baseColor = mix(baseColor, shadedSurfaceColor(baseColor, normalWorld), "
+      "lightingEnabled); }"));
   EXPECT_EQ(shaded_source.find("editor_unlit"), std::string::npos);
   EXPECT_NE(source.find("shadingModel : lit"), std::string::npos);
   EXPECT_EQ(source.find("doubleSided : true"), std::string::npos);
@@ -452,12 +461,12 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   EXPECT_NE(source.find(
                 "texture(materialParams_metallicTexture, uv).r"),
             std::string::npos);
-  EXPECT_NE(source.find(
+  EXPECT_NE(normal_mapping.find(
                 "texture(materialParams_normalTexture, uv).xyz"),
             std::string::npos);
-  EXPECT_NE(source.find("normalSample.y *= materialParams.normalYSign"),
+  EXPECT_NE(normal_mapping.find("normalSample.y *= materialParams.normalYSign"),
             std::string::npos);
-  EXPECT_NE(source.find("normalSample.xy *= "
+  EXPECT_NE(normal_mapping.find("normalSample.xy *= "
                         "clamp(materialParams.normalStrength, -16.0, 16.0)"),
             std::string::npos);
   EXPECT_NE(source.find("metallicSample * materialParams.metallicFactor"),
@@ -467,21 +476,26 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
 }
 
 TEST(QuaderMeshMaterialTests,
-     AssignsNormalMapBeforeFilamentPreparesTheLitMaterial) {
+     SharesNormalMapSamplingBeforeFilamentPreparesEachMaterial) {
   const std::string source =
-      read_source_file("resources/materials/quader_mesh_lit.mat");
-
-  const std::size_t normal_assignment =
-      source.find("material.normal = normalSample");
-  const std::size_t prepare_material =
-      source.find("prepareMaterial(material)");
-  const std::size_t normal_orientation =
-      source.find("normalSample = normalForTextureUv(normalSample, uv)");
-  ASSERT_NE(normal_assignment, std::string::npos);
-  ASSERT_NE(prepare_material, std::string::npos);
-  ASSERT_NE(normal_orientation, std::string::npos);
-  EXPECT_LT(normal_orientation, normal_assignment);
-  EXPECT_LT(normal_assignment, prepare_material);
+      read_source_file("resources/materials/mesh_normal_mapping.glsl");
+  for (const char *path : {"resources/materials/quader_mesh.mat",
+                           "resources/materials/quader_mesh_lit.mat"}) {
+    SCOPED_TRACE(path);
+    const std::string material = read_source_file(path);
+    EXPECT_NE(material.find("#include \"mesh_normal_mapping.glsl\""),
+              std::string::npos);
+    const std::size_t sample = material.find("sampleTextureNormal(uv)");
+    const std::size_t assignment = material.find("material.normal =");
+    const std::size_t prepare = material.find("prepareMaterial(material)");
+    ASSERT_NE(sample, std::string::npos);
+    ASSERT_NE(assignment, std::string::npos);
+    ASSERT_NE(prepare, std::string::npos);
+    EXPECT_LT(sample, prepare);
+    EXPECT_LT(assignment, prepare);
+  }
+  EXPECT_NE(source.find("return normalForTextureUv(normalSample, uv)"),
+            std::string::npos);
   EXPECT_NE(source.find("normalSample = safeTextureNormal("),
             std::string::npos);
   EXPECT_NE(source.find("uvDx = dFdx(uv)"), std::string::npos);
@@ -525,7 +539,7 @@ TEST(QuaderMeshMaterialTests,
             std::string::npos);
 }
 
-TEST(QuaderMeshMaterialTests, ShadedPreviewBindsOnlyTheBaseColorSurfaceInput) {
+TEST(QuaderMeshMaterialTests, ShadedPreviewBindsBaseColorAndNormalSurfaceInputs) {
   const std::string source =
       read_source_file("src/render/material_preview_renderer.cpp");
 
@@ -537,7 +551,11 @@ TEST(QuaderMeshMaterialTests, ShadedPreviewBindsOnlyTheBaseColorSurfaceInput) {
   EXPECT_NE(source.find(
                 "rendered_instance->setParameter(\"roughnessTexture\""),
             std::string::npos);
-  EXPECT_EQ(source.find("wire_instance->setParameter(\"normalTexture\""),
+  EXPECT_NE(source.find("shaded_instance->setParameter(\"normalTexture\""),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      source, "wire_instance->setParameter(\"normalTexture\", fallback_textures[3], sampler)"));
+  EXPECT_NE(source.find("wire_instance->setParameter(\"normalStrength\", 0.0f)"),
             std::string::npos);
 }
 
@@ -569,7 +587,12 @@ TEST(QuaderMeshMaterialTests,
       material,
       "if (solidPresentation) { baseColor = texture("
       "materialParams_solidColorTexture, vec2(0.5)).rgb; "
-      "sourceAlpha = 1.0; } else { vec2 uv = applyTextureTransform("));
+      "sourceAlpha = 1.0; } else { vec4 baseSample = texture("));
+  EXPECT_TRUE(source_contains_compact(
+      material, "material.normal = vec3(0.0, 0.0, 1.0); if (!solidPresentation) {"));
+  EXPECT_TRUE(source_contains_compact(
+      material, "if (materialParams.shadedLightingEnabled > 0.0) { "
+                "material.normal = sampleTextureNormal(uv); }"));
   EXPECT_NE(material.find("materialParams_baseColorTexture"),
             std::string::npos);
   EXPECT_NE(material.find("materialParams.baseColorFactor"),

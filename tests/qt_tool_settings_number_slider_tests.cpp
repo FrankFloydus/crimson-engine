@@ -2555,10 +2555,12 @@ TEST(QtFaceTextureControlsTests,
   rotate->click();
   EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
             std::optional<double>(5.0));
-  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees, -22.5);
+  EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees,
+              editor.modeling().face_texture_canvas().rotation_degrees, 1.0e-5);
   EXPECT_FALSE(panel->numeric_interaction_active());
   process_events_for(75);
-  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees, -22.5);
+  EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees,
+              editor.modeling().face_texture_canvas().rotation_degrees, 1.0e-5);
 
   TexturePresentationEvents presentation_events;
   for (QPushButton *button : buttons) {
@@ -3023,7 +3025,7 @@ TEST(QtToolSettingsPanelTests,
 }
 
 TEST(QtFaceTextureControlsTests,
-     FaceTextureRotationUsesSelectionBaselineAndCoalescesOneNumericGesture) {
+     FaceTextureRotationUsesAbsoluteAnglesAndCoalescesOneNumericGesture) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-face-texture-rotation-tests";
@@ -3056,25 +3058,23 @@ TEST(QtFaceTextureControlsTests,
       QStringLiteral("face_texture.texture.scale_x"));
   ASSERT_NE(rotate, nullptr);
   ASSERT_NE(scale_x, nullptr);
-  EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
+  EXPECT_EQ(rotate->text(), QStringLiteral("--"));
 
   rotate->setValue(10.0);
   ASSERT_TRUE(process_events_until([&] {
-    return editor.modeling().face_texture_settings().rotation_degrees == 10.0;
+    return std::abs(editor.modeling().face_texture_settings().rotation_degrees - 10.0) < 1.0e-4;
   }, 1000));
-  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees,
-                   10.0);
+  EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, 10.0, 1.0e-4);
   rotate->setValue(20.0);
   ASSERT_TRUE(process_events_until([&] {
-    return editor.modeling().face_texture_settings().rotation_degrees == 20.0;
+    return std::abs(editor.modeling().face_texture_settings().rotation_degrees - 20.0) < 1.0e-4;
   }, 1000));
-  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees,
-                   20.0);
+  EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, 20.0, 1.0e-4);
   finish_spin_edit(*rotate);
   EXPECT_FALSE(panel.numeric_interaction_active());
   ASSERT_TRUE(editor.history().undo().ok());
   panel.refresh();
-  EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
+  EXPECT_EQ(rotate->text(), QStringLiteral("--"));
   ASSERT_TRUE(editor.history().redo().ok());
   panel.refresh();
 
@@ -3093,13 +3093,13 @@ TEST(QtFaceTextureControlsTests,
   ASSERT_TRUE(editor.selection().select_face(
                   source.value(), 3, quader::QuaderSelectionEdit::Add).ok());
   panel.refresh();
-  EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
+  EXPECT_EQ(rotate->text(), QStringLiteral("--"));
   rotate->setValue(8.0);
   finish_spin_edit(*rotate);
   ASSERT_TRUE(editor.selection().select_face(
                   source.value(), 3, quader::QuaderSelectionEdit::Remove).ok());
   panel.refresh();
-  EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
+  EXPECT_NEAR(rotate->value(), 8.0, 1.0e-4);
   panel.unbind();
 }
 

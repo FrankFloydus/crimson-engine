@@ -49,6 +49,7 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <numbers>
 #include <memory>
 #include <optional>
 #include <span>
@@ -1462,6 +1463,7 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     std::uint64_t visibility_revision = 0;
     std::uint64_t extent_revision = 0;
     std::uint64_t context_revision = 0;
+    std::uint64_t texture_gesture_revision = 0;
     ModelingInstanceEditScope instance_scope;
     bool preview_active = false;
 
@@ -2251,6 +2253,7 @@ public:
         .visibility_revision = selection_service_.viewport_visibility_revision(),
         .extent_revision = extent_revision,
         .context_revision = context_revision,
+        .texture_gesture_revision = face_texture_gesture_revision_,
         .instance_scope = instance_edit_scope_provider_
                               ? instance_edit_scope_provider_()
                               : ModelingInstanceEditScope{},
@@ -2347,75 +2350,95 @@ public:
       settings.disabled_reason =
           "Commit or cancel the active tool or preview before editing textures.";
     }
+    // Resolve each selected planar chart once per owner revision. Both the
+    // canvas and absolute angle consume this immutable effective projection;
+    // scale and shift come from the stored properties of the current preview.
+    face_texture_projection_cache_.clear();
+    std::vector<ModelingFaceTextureActionTarget> targets;
+    modeling::FaceTextureActionOptions options;
+    const auto resolved = prepare_face_texture_action_targets(snapshot, options, targets);
+    if (resolved.ok) {
+      bool first = true;
+      for (std::size_t object_index = 0; object_index < snapshot.objects.size(); ++object_index) {
+        const auto &object = snapshot.objects[object_index];
+        for (const auto &face : object.faces) {
+          auto canvas = resolve_face_texture_canvas(object, face, targets[object_index], settings);
+          const bool usable = canvas.chart.mapping_usable && canvas.repeat_width > 0.0;
+          const double angle = usable ? canvas.rotation_degrees : face.texture_transform.rotation_degrees;
+          if (first) {
+            settings.rotation_degrees = angle;
+            settings.rotation_mixed = false;
+            first = false;
+          } else {
+            settings.rotation_mixed = settings.rotation_mixed ||
+                std::abs(std::remainder(angle - settings.rotation_degrees, 360.0)) > 1.0e-4;
+          }
+          face_texture_projection_cache_.push_back(std::move(canvas));
+        }
+      }
+    }
+    face_texture_canvas_cache_ = {};
+    face_texture_canvas_cache_.selected_face_count = settings.selected_face_count;
+    face_texture_canvas_cache_.selection_token = settings.selection_token;
+    face_texture_canvas_cache_.disabled_reason = settings.disabled_reason;
+    if (settings.selected_face_count == 1 && face_texture_projection_cache_.size() == 1) {
+      face_texture_canvas_cache_ = face_texture_projection_cache_.front();
+    }
     face_texture_selection_cache_ = std::move(snapshot);
     face_texture_settings_cache_ = std::move(settings);
     face_texture_presented_revision_ = face_texture_settings_revision();
     return face_texture_settings_cache_;
   }
 
-  [[nodiscard]] ModelingFaceTextureCanvas face_texture_canvas() const {
-    const auto revision = face_texture_settings_revision();
-    if (face_texture_canvas_revision_ == revision) return face_texture_canvas_cache_;
-    const auto settings = face_texture_settings();
+  [[nodiscard]] ModelingFaceTextureCanvas resolve_face_texture_canvas(
+      const ModelingSelectedFaceTextureObject &object,
+      const modeling::FaceTextureSettings &face,
+      const ModelingFaceTextureActionTarget &target,
+      const ModelingFaceTextureSettings &settings) const {
     ModelingFaceTextureCanvas canvas;
-    canvas.selected_face_count = settings.selected_face_count;
+    canvas.selected_face_count = 1;
     canvas.selection_token = settings.selection_token;
     canvas.disabled_reason = settings.disabled_reason;
-    if (settings.selected_face_count == 1u &&
-        face_texture_selection_cache_.objects.size() == 1u) {
-      const auto &object = face_texture_selection_cache_.objects.front();
-      std::vector<ModelingFaceTextureActionTarget> targets;
-      modeling::FaceTextureActionOptions options;
-      const auto resolved = prepare_face_texture_action_targets(
-          face_texture_selection_cache_, options, targets);
-      if (resolved.ok && targets.size() == 1u) {
-        const auto &target = targets.front();
-        canvas.target = {.modeling_object_id = target.modeling_object_id,
-                         .face = object.faces.front().face,
-                         .world_from_local = target.world_from_local,
-                         .sampling_from_local = target.sampling_from_local};
-        auto chart = sdk_projection_adapter_.face_texture_canvas(canvas.target);
-        if (chart.ok()) {
-          canvas.chart = std::move(chart).value();
-          const auto *component = scene_.material(object.entity);
-          if (component != nullptr) {
-            canvas.material = component->material_for_slot(object.faces.front().material_slot);
-          }
-          if (face_texture_material_transform_provider_) {
-            canvas.material_transform = face_texture_material_transform_provider_(canvas.material);
-          }
-          canvas.chart.map = transform_face_texture_canvas_map(
-              canvas.chart.map, canvas.material_transform);
-          canvas.texture_extent = face_texture_extent_cache_;
-          if (canvas.material.project_owned() && face_texture_extent_provider_) {
-            canvas.texture_available = face_texture_extent_provider_(canvas.material).has_value();
-          } else if (canvas.material.embedded()) {
-            const auto *material = assets_.material(canvas.material.embedded_asset());
-            const auto texture = material != nullptr
-                ? material_texture_slot_asset(*material, material_texture_slot::kBaseColor)
-                : std::nullopt;
-            canvas.texture_available = texture.has_value() && assets_.texture(*texture) != nullptr;
-          }
-          canvas.gesture_active = face_texture_gesture_begin_.has_value() &&
-              sdk_projection_adapter_.face_texture_gesture_active();
-          canvas.editable = canvas.chart.mapping_usable &&
-              (settings.editable || (canvas.gesture_active &&
-                  settings.block_reason == ModelingFaceTextureBlockReason::PreviewActive));
-          if (!canvas.chart.mapping_usable) {
-            canvas.disabled_reason = canvas.chart.disabled_reason;
-          } else if (canvas.editable) {
-            canvas.disabled_reason.clear();
-          }
-          measure_face_texture_canvas(canvas);
-        } else {
-          canvas.disabled_reason = chart.error_message();
-        }
-      } else if (!resolved.ok) {
-        canvas.disabled_reason = resolved.message;
-      }
+    canvas.target = {.modeling_object_id = target.modeling_object_id,
+                     .face = face.face,
+                     .world_from_local = target.world_from_local,
+                     .sampling_from_local = target.sampling_from_local};
+    auto chart = sdk_projection_adapter_.face_texture_canvas(canvas.target);
+    if (!chart.ok()) {
+      canvas.disabled_reason = chart.error_message();
+      return canvas;
     }
-    face_texture_canvas_cache_ = std::move(canvas);
-    face_texture_canvas_revision_ = face_texture_settings_revision();
+    canvas.chart = std::move(chart).value();
+    const auto *component = scene_.material(object.entity);
+    if (component != nullptr) canvas.material = component->material_for_slot(face.material_slot);
+    if (face_texture_material_transform_provider_) {
+      canvas.material_transform = face_texture_material_transform_provider_(canvas.material);
+    }
+    canvas.chart.map = transform_face_texture_canvas_map(canvas.chart.map, canvas.material_transform);
+    canvas.texture_extent = face_texture_extent(object.entity, face.material_slot);
+    if (canvas.material.project_owned() && face_texture_extent_provider_) {
+      canvas.texture_available = face_texture_extent_provider_(canvas.material).has_value();
+    } else if (canvas.material.embedded()) {
+      const auto *material = assets_.material(canvas.material.embedded_asset());
+      const auto texture = material != nullptr
+          ? material_texture_slot_asset(*material, material_texture_slot::kBaseColor)
+          : std::nullopt;
+      canvas.texture_available = texture.has_value() && assets_.texture(*texture) != nullptr;
+    }
+    canvas.gesture_active = face_texture_gesture_begin_.has_value() &&
+        sdk_projection_adapter_.face_texture_gesture_active();
+    canvas.editable = canvas.chart.mapping_usable &&
+        (settings.editable || (canvas.gesture_active &&
+            settings.block_reason == ModelingFaceTextureBlockReason::PreviewActive));
+    canvas.texture_transform = face.texture_transform;
+    if (!canvas.chart.mapping_usable) canvas.disabled_reason = canvas.chart.disabled_reason;
+    else if (canvas.editable) canvas.disabled_reason.clear();
+    measure_face_texture_canvas(canvas);
+    return canvas;
+  }
+
+  [[nodiscard]] ModelingFaceTextureCanvas face_texture_canvas() const {
+    (void)face_texture_settings();
     return face_texture_canvas_cache_;
   }
 
@@ -2447,7 +2470,7 @@ public:
     face_texture_gesture_baseline_ = canvas;
     face_texture_gesture_begin_ = request;
     face_texture_gesture_selection_revision_ = selection_revision();
-    face_texture_canvas_revision_ = 0;
+    ++face_texture_gesture_revision_;
     return result;
   }
 
@@ -2465,16 +2488,48 @@ public:
     if (!candidate.ok()) return {.ok = false, .message = candidate.error_message()};
     const auto raw_map = transform_face_texture_canvas_map(candidate.value(),
         face_texture_gesture_baseline_.material_transform, true);
+    std::optional<modeling::FaceTextureTransformUpdate> scalar_update;
+    if (candidate.value() != face_texture_gesture_baseline_.chart.map) {
+      const auto &baseline = face_texture_gesture_baseline_;
+      auto measured = baseline;
+      measured.chart.map = candidate.value();
+      measure_face_texture_canvas(measured);
+      const auto kind = face_texture_gesture_begin_->kind;
+      const double factor_x = kind == ModelingFaceTextureGestureKind::ScaleWidth
+          ? measured.repeat_width / baseline.repeat_width : 1.0;
+      const double factor_y = kind == ModelingFaceTextureGestureKind::ScaleHeight
+          ? measured.repeat_height / baseline.repeat_height : 1.0;
+      const auto original_map = transform_face_texture_canvas_map(
+          baseline.chart.map, baseline.material_transform, true);
+      const auto &stored = baseline.texture_transform;
+      const double scale_x = stored.scale.x * factor_x;
+      const double scale_y = stored.scale.y * factor_y;
+      const double shift_x = raw_map.uv_offset[0] -
+          (original_map.uv_offset[0] - stored.shift_uv.x) / factor_x;
+      const double shift_y = raw_map.uv_offset[1] -
+          (original_map.uv_offset[1] - stored.shift_uv.y) / factor_y;
+      const auto storable = [](double value) {
+        return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
+      };
+      if (!storable(scale_x) || !storable(scale_y) || !storable(shift_x) || !storable(shift_y) ||
+          static_cast<float>(scale_x) == 0.0f || static_cast<float>(scale_y) == 0.0f) {
+        return {.ok = false, .message = "The texture gesture exceeds the supported scalar range."};
+      }
+      scalar_update = modeling::FaceTextureTransformUpdate{
+          .face = baseline.target.face,
+          .scale_x = static_cast<float>(scale_x), .scale_y = static_cast<float>(scale_y),
+          .shift_x = static_cast<float>(shift_x), .shift_y = static_cast<float>(shift_y)};
+    }
     observe_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
     const auto result = sdk_projection_adapter_.refresh_face_texture_gesture(
-        face_texture_gesture_baseline_.target, raw_map);
+        face_texture_gesture_baseline_.target, raw_map, scalar_update);
     record_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
     if (!result.ok && !sdk_projection_adapter_.face_texture_gesture_active()) {
       finish_preview_content_checkpoint(face_texture_gesture_checkpoint_active_, true);
       face_texture_gesture_begin_.reset();
     }
     face_texture_gesture_selection_revision_ = selection_revision();
-    face_texture_canvas_revision_ = 0;
+    ++face_texture_gesture_revision_;
     if (result.changed) invalidate_selection_overlay_caches();
     return result;
   }
@@ -2493,13 +2548,15 @@ public:
     if (result.ok || !sdk_projection_adapter_.face_texture_gesture_active()) {
       finish_preview_content_checkpoint(face_texture_gesture_checkpoint_active_, !result.changed || !result.ok);
       face_texture_gesture_begin_.reset();
-      face_texture_canvas_revision_ = 0;
+      ++face_texture_gesture_revision_;
     }
     if (result.changed) invalidate_selection_overlay_caches();
     return result;
   }
 
   ModelingCommandResult cancel_face_texture_gesture() {
+    const bool had_gesture = face_texture_gesture_begin_.has_value() ||
+        sdk_projection_adapter_.face_texture_gesture_active();
     observe_preview_content_checkpoint(face_texture_gesture_checkpoint_active_);
     ModelingCommandResult result{.ok = true};
     if (sdk_projection_adapter_.face_texture_gesture_active()) {
@@ -2509,7 +2566,7 @@ public:
     }
     finish_preview_content_checkpoint(face_texture_gesture_checkpoint_active_, true);
     face_texture_gesture_begin_.reset();
-    face_texture_canvas_revision_ = 0;
+    if (had_gesture) ++face_texture_gesture_revision_;
     if (result.changed) invalidate_selection_overlay_caches();
     return result;
   }
@@ -2518,7 +2575,6 @@ public:
       std::function<StandardMaterialTextureTransform(MaterialReference)> provider) {
     face_texture_material_transform_provider_ = std::move(provider);
     face_texture_cache_key_.reset();
-    face_texture_canvas_revision_ = 0;
   }
 
   /// Resolves image dimensions and occurrence frames once for either command or
@@ -2590,26 +2646,39 @@ public:
       return prepared;
     }
     ModelingCommandResult result;
-    if (edit.field == ModelingFaceTextureField::Rotate) {
-      modeling::FaceTextureActionOptions options{
-          .action = ModelingFaceTextureAction::RotateCounterClockwise,
-      };
-      std::vector<ModelingFaceTextureActionTarget> targets;
-      const auto resolved = prepare_face_texture_action_targets(
-          face_texture_selection_cache_, options, targets);
-      if (!resolved.ok) return resolved;
-      // The context validates exact per-face baseline+offset floats. Supplying
-      // them determines the actual rotation (including negative/no-op edits)
-      // without accumulating rounding across a continuous numeric gesture.
-      for (std::size_t object = 0; object < targets.size(); ++object) {
-        for (std::size_t face = 0; face < targets[object].faces.size(); ++face) {
-          targets[object].faces[face].target_rotation_degrees =
-              batches[object].updates[face].rotation_degrees;
+    if (edit.field != ModelingFaceTextureField::Rotate) {
+      result = sdk_projection_adapter_.apply_face_texture_updates(batches);
+    } else {
+      std::vector<ModelingFaceTextureCanvasEdit> canvas_edits;
+      std::size_t projection_index = 0;
+      for (std::size_t object = 0; object < batches.size(); ++object) {
+        for (std::size_t face = 0; face < batches[object].updates.size(); ++face, ++projection_index) {
+          if (projection_index >= face_texture_projection_cache_.size()) {
+            return {.ok = false, .message = "A selected face has no usable texture mapping frame."};
+          }
+          const auto &canvas = face_texture_projection_cache_[projection_index];
+          ModelingFaceTextureCanvasEdit candidate{
+              .target = canvas.target, .map = canvas.chart.map,
+              .scalar_update = batches[object].updates[face],
+              .apply_mapping = canvas.chart.mapping_usable && canvas.repeat_width > 0.0,
+              .texture_extent = canvas.texture_extent,
+          };
+          if (candidate.apply_mapping) {
+            const double degrees = std::remainder(edit.value - canvas.rotation_degrees, 360.0);
+            if (std::abs(degrees) <= 1.0e-5) continue;
+            const double radians = degrees * std::numbers::pi / 180.0;
+            const double c = std::cos(radians), sn = std::sin(radians);
+            const auto m = candidate.map.uv_from_plane;
+            candidate.map.uv_from_plane = {m[0] * c - m[1] * sn, m[0] * sn + m[1] * c,
+                                          m[2] * c - m[3] * sn, m[2] * sn + m[3] * c};
+            candidate.map = transform_face_texture_canvas_map(
+                candidate.map, canvas.material_transform, true);
+          }
+          canvas_edits.push_back(std::move(candidate));
         }
       }
-      result = sdk_projection_adapter_.apply_face_texture_action(targets, options);
-    } else {
-      result = sdk_projection_adapter_.apply_face_texture_updates(batches);
+      if (canvas_edits.empty()) return {.ok = true, .changed = false};
+      result = sdk_projection_adapter_.apply_face_texture_canvas_edits(canvas_edits);
     }
     if (result.ok && result.changed) {
       face_texture_context_.record_applied_edit(edit);
@@ -10292,8 +10361,9 @@ private:
   mutable std::uint64_t face_texture_presented_revision_ = 0;
   mutable ModelingSelectedFaceTextureSnapshot face_texture_selection_cache_;
   mutable ModelingFaceTextureSettings face_texture_settings_cache_;
-  mutable std::uint64_t face_texture_canvas_revision_ = 0;
   mutable ModelingFaceTextureCanvas face_texture_canvas_cache_;
+  mutable std::vector<ModelingFaceTextureCanvas> face_texture_projection_cache_;
+  std::uint64_t face_texture_gesture_revision_ = 0;
   ModelingFaceTextureCanvas face_texture_gesture_baseline_;
   std::optional<ModelingFaceTextureGestureBegin> face_texture_gesture_begin_;
   std::uint64_t face_texture_gesture_selection_revision_ = 0;

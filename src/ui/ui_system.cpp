@@ -29,6 +29,7 @@
 #include "ui/layer_panel.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_face_texture_panel.hpp"
+#include "ui/qt_face_texture_canvas.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_command_palette.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
@@ -331,6 +332,8 @@ UISystem::UISystem() = default;
 UISystem::~UISystem() { shutdown(); }
 
 void UISystem::abandon_scene_backed_panels() noexcept {
+  face_texture_browser_selection_presenter_.invalidate();
+  face_texture_browser_selection_pending_ = false;
   if (face_texture_panel_ != nullptr) {
     face_texture_panel_->abandon();
   }
@@ -596,6 +599,23 @@ bool UISystem::initialize(RenderSystem &render_system,
       QtMaterialBrowserPurpose::Management);
   configure_material_browser(*material_browser_window_);
   configure_material_browser(face_texture_panel_->browser());
+  viewport_panel_->set_primitive_creation_material_provider([this]() {
+    if (editor_ == nullptr || face_texture_panel_ == nullptr ||
+        material_browser_project_generation_ !=
+            material_browser_project_generation_signal_->load(
+                std::memory_order_acquire) ||
+        !material_presentation_catalog_attempt_.has_value()) {
+      return QuaderMaterialReference{};
+    }
+    const auto revision = editor_->project_assets().material_presentation_revision();
+    if (!revision.ok() ||
+        revision.value().project_activation_generation !=
+            material_presentation_catalog_attempt_->owner_revision
+                .project_activation_generation) {
+      return QuaderMaterialReference{};
+    }
+    return face_texture_panel_->browser().current_selected_material();
+  });
   material_texture_info_window_ =
       new QtTextureInfoWindow(main_window_.get(), initial_ui_metrics);
   material_texture_info_window_->hide();
@@ -1928,6 +1948,29 @@ void UISystem::configure_material_browser(QtMaterialBrowserWindow &source) {
       });
 }
 
+void UISystem::refresh_face_texture_browser_selection() {
+  const auto revision = editor_->modeling().face_texture_settings_revision();
+  const auto &face = face_texture_panel_->canvas().presentation();
+  const FaceTextureBrowserSelectionStamp stamp{
+      .scene_session_id = revision.scene_session_id,
+      .selection_revision = revision.selection_revision,
+      .selected_face_count = face.selected_face_count,
+      .reference = face_texture_panel_->canvas_material_reference(),
+  };
+  if (!face_texture_browser_selection_presenter_.needs_refresh(stamp) &&
+      !(face_texture_browser_selection_pending_ &&
+        face_texture_browser_selection_catalog_revision_ !=
+            material_presentation_catalog_revision_)) {
+    return;
+  }
+  face_texture_browser_selection_pending_ =
+      stamp.selected_face_count == 1u && stamp.reference.valid() &&
+      !face_texture_panel_->browser().reveal_material(stamp.reference);
+  face_texture_browser_selection_catalog_revision_ =
+      material_presentation_catalog_revision_;
+  face_texture_browser_selection_presenter_.mark_presented(stamp);
+}
+
 void UISystem::refresh_material_browser_usage() {
   if (material_browser_window_ == nullptr || editor_ == nullptr ||
       !editor_->project().has_project()) {
@@ -2511,6 +2554,7 @@ void UISystem::show_home() {
       face_texture_panel_->browser().clear_materials();
     }
     face_texture_panel_presenter_.invalidate();
+    face_texture_browser_selection_presenter_.invalidate();
     material_presentation_items_.clear();
     material_presentation_folders_.clear();
     material_browser_project_identity_.clear();
@@ -3107,6 +3151,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     // The panel gates settings, geometry and images by their owner revisions.
     face_texture_panel_->refresh();
     refresh_face_texture_material(face_texture_panel_->canvas_material_reference());
+    refresh_face_texture_browser_selection();
   }
 
   {

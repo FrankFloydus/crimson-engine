@@ -11,22 +11,28 @@
 #include "ui/qt_face_texture_controls.hpp"
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_numeric_format.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 
 #include <QApplication>
 #include <QBuffer>
+#include <QDir>
 #include <QDoubleSpinBox>
+#include <QFontMetrics>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -106,6 +112,26 @@ protected:
       EXPECT_EQ(actual.outline[index].x, expected.outline[index].x);
       EXPECT_EQ(actual.outline[index].y, expected.outline[index].y);
     }
+  }
+
+  void save_image(const QString &name, const QImage &image) const {
+    const QString path =
+        qEnvironmentVariable("QUADER_FACE_TEXTURE_SCREENSHOT_DIR");
+    if (path.isEmpty()) {
+      return;
+    }
+    const QDir directory(path);
+    ASSERT_TRUE(directory.mkpath(QStringLiteral(".")));
+    EXPECT_TRUE(image.save(directory.filePath(name), "PNG"));
+  }
+
+  void save_canvas(const QString &name) const {
+    if (qEnvironmentVariable("QUADER_FACE_TEXTURE_SCREENSHOT_DIR").isEmpty()) {
+      return;
+    }
+    QImage image(canvas_->size(), QImage::Format_ARGB32);
+    canvas_->render(&image);
+    save_image(name, image);
   }
 
   int argc_ = 1;
@@ -238,6 +264,267 @@ TEST_F(QtFaceTextureCanvasTests,
   ASSERT_TRUE(editor().history().undo().ok());
   canvas_->refresh();
   expect_mapping(canvas_->presentation(), before);
+}
+
+TEST_F(QtFaceTextureCanvasTests,
+       RotationCursorAndAbsoluteAngleFeedbackFollowTheCapturedGesture) {
+  ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+      .field = QuaderFaceTextureField::Rotate,
+      .value = 27.0,
+      .selection_token =
+          editor().modeling().face_texture_settings().selection_token,
+  }).ok());
+  canvas_->refresh();
+  const auto initial = canvas_->presentation();
+  auto *feedback = canvas_->findChild<QLabel *>(
+      QStringLiteral("face_texture.canvas.measurement"));
+  ASSERT_NE(feedback, nullptr);
+  EXPECT_TRUE(feedback->isHidden());
+  const QPointF center = canvas_->plane_to_view().map(plane_bounds().center());
+  mouse(QEvent::MouseMove, center, Qt::NoButton, Qt::NoButton);
+  ASSERT_EQ(canvas_->cursor().shape(), Qt::BitmapCursor);
+  const QPixmap rotation_cursor = canvas_->cursor().pixmap();
+  ASSERT_FALSE(rotation_cursor.isNull());
+  EXPECT_TRUE(rotation_cursor.hasAlphaChannel());
+  mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+  ASSERT_TRUE(canvas_->interaction_active());
+  EXPECT_FALSE(feedback->isHidden());
+  EXPECT_TRUE(feedback->testAttribute(Qt::WA_TransparentForMouseEvents));
+  EXPECT_EQ(feedback->text(),
+            QStringLiteral("Rotation: %1°")
+                .arg(qt_format_number(initial.rotation_degrees,
+                                       canvas_->locale())));
+  mouse(QEvent::MouseMove, center + QPointF(30, -25), Qt::NoButton,
+         Qt::LeftButton, Qt::ControlModifier);
+  EXPECT_NE(canvas_->presentation().rotation_degrees, initial.rotation_degrees);
+  EXPECT_EQ(feedback->text(),
+            QStringLiteral("Rotation: %1°")
+                .arg(qt_format_number(canvas_->presentation().rotation_degrees,
+                                       canvas_->locale())));
+  EXPECT_EQ(canvas_->cursor().shape(), Qt::BitmapCursor);
+  EXPECT_EQ(canvas_->cursor().pixmap().cacheKey(), rotation_cursor.cacheKey());
+  save_canvas(QStringLiteral("canvas_absolute_rotation.png"));
+  const auto *retained_outline = canvas_->presentation().outline.data();
+  const QRect feedback_geometry = feedback->geometry();
+  for (int frame = 0; frame < 30; ++frame) {
+    canvas_->refresh();
+  }
+  EXPECT_EQ(canvas_->presentation().outline.data(), retained_outline);
+  EXPECT_EQ(feedback->geometry(), feedback_geometry);
+  EXPECT_EQ(canvas_->cursor().pixmap().cacheKey(), rotation_cursor.cacheKey());
+  QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(canvas_.get(), &escape);
+  EXPECT_FALSE(canvas_->interaction_active());
+  EXPECT_TRUE(feedback->isHidden());
+  expect_mapping(canvas_->presentation(), initial);
+}
+
+TEST_F(QtFaceTextureCanvasTests,
+       RotationCursorScalesAndMeasurementBadgesDoNotInterceptTheCanvas) {
+  auto *feedback = canvas_->findChild<QLabel *>(
+      QStringLiteral("face_texture.canvas.measurement"));
+  ASSERT_NE(feedback, nullptr);
+  for (const float factor : {1.0f, 1.5f, 2.0f}) {
+    SCOPED_TRACE(factor);
+    canvas_->apply_ui_scale(QtUiScaleMetrics(factor, 1));
+    const QRectF bounds = plane_bounds();
+    const QPointF center = canvas_->plane_to_view().map(bounds.center());
+    mouse(QEvent::MouseMove, center, Qt::NoButton, Qt::NoButton);
+    const QPixmap cursor = canvas_->cursor().pixmap();
+    ASSERT_FALSE(cursor.isNull());
+    EXPECT_NEAR(cursor.width() / cursor.devicePixelRatioF(), 32.0 * factor, 1.0);
+    EXPECT_NEAR(canvas_->cursor().hotSpot().x(), 16.0 * factor, 1.0);
+    EXPECT_NEAR(canvas_->cursor().hotSpot().y(), 16.0 * factor, 1.0);
+    const int percent = static_cast<int>(std::lround(factor * 100.0f));
+    save_image(QStringLiteral("canvas_rotation_cursor_%1.png").arg(percent),
+                cursor.toImage());
+    mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, center + QPointF(30, -25), Qt::NoButton,
+           Qt::LeftButton, Qt::ControlModifier);
+    ASSERT_TRUE(canvas_->interaction_active());
+    save_canvas(QStringLiteral("canvas_rotation_feedback_%1.png").arg(percent));
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(canvas_.get(), &escape);
+    ASSERT_FALSE(canvas_->interaction_active());
+    const QPointF scale = canvas_->plane_to_view().map(
+        QPointF(bounds.right(), bounds.center().y()));
+    mouse(QEvent::MouseMove, scale, Qt::NoButton, Qt::NoButton);
+    EXPECT_EQ(canvas_->cursor().shape(), Qt::SizeHorCursor);
+    EXPECT_FALSE(feedback->isHidden());
+    EXPECT_EQ(feedback->text(),
+              QStringLiteral("X: %1   Y: %2 map units")
+                  .arg(qt_format_number(canvas_->presentation().repeat_width,
+                                         canvas_->locale()),
+                       qt_format_number(canvas_->presentation().repeat_height,
+                                         canvas_->locale())));
+    EXPECT_TRUE(feedback->testAttribute(Qt::WA_TransparentForMouseEvents));
+    EXPECT_TRUE(canvas_->rect().contains(feedback->geometry()));
+    save_canvas(QStringLiteral("canvas_scale_feedback_%1.png").arg(percent));
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(canvas_.get(), &leave);
+    EXPECT_TRUE(feedback->isHidden());
+  }
+}
+
+TEST_F(QtFaceTextureCanvasTests,
+       ExistingMeasurementHidesWhenAnotherPreviewDisablesTheSameFace) {
+  const QRectF bounds = plane_bounds();
+  const QPointF handle = canvas_->plane_to_view().map(
+      QPointF(bounds.right(), bounds.center().y()));
+  mouse(QEvent::MouseMove, handle, Qt::NoButton, Qt::NoButton);
+  auto *feedback = canvas_->findChild<QLabel *>(
+      QStringLiteral("face_texture.canvas.measurement"));
+  ASSERT_NE(feedback, nullptr);
+  ASSERT_FALSE(feedback->isHidden());
+  const auto original = canvas_->presentation();
+  ASSERT_TRUE(editor().modeling().begin_transform_preview().ok());
+  canvas_->refresh();
+  EXPECT_EQ(canvas_->presentation().object_id, original.object_id);
+  EXPECT_EQ(canvas_->presentation().face_id, original.face_id);
+  EXPECT_EQ(canvas_->presentation().selected_face_count, 1u);
+  EXPECT_FALSE(canvas_->presentation().editable);
+  EXPECT_TRUE(feedback->isHidden());
+  ASSERT_TRUE(editor().modeling().cancel_transform_preview().ok());
+  canvas_->refresh();
+  EXPECT_TRUE(canvas_->presentation().editable);
+}
+
+TEST_F(QtFaceTextureCanvasTests,
+       NarrowFeedbackPreservesLargeValuesAndFitsScaledFontsInsideTheCanvas) {
+  for (const auto [field, value] :
+       {std::pair{QuaderFaceTextureField::ScaleX, 123456.789},
+        std::pair{QuaderFaceTextureField::ScaleY, 987654.321}}) {
+    ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+        .field = field,
+        .value = value,
+        .selection_token =
+            editor().modeling().face_texture_settings().selection_token,
+    }).ok());
+  }
+  canvas_->refresh();
+  ASSERT_GT(canvas_->presentation().repeat_width, 100000.0);
+  auto *feedback = canvas_->findChild<QLabel *>(
+      QStringLiteral("face_texture.canvas.measurement"));
+  ASSERT_NE(feedback, nullptr);
+  const auto without_whitespace = [](const QString &text) {
+    QString result;
+    for (const QChar character : text) {
+      if (!character.isSpace()) {
+        result += character;
+      }
+    }
+    return result;
+  };
+  const auto expect_inside = [this, feedback, &without_whitespace](
+                                 const QString &complete_text) {
+    EXPECT_FALSE(feedback->isHidden());
+    EXPECT_TRUE(canvas_->rect().contains(feedback->geometry()));
+    EXPECT_EQ(feedback->accessibleName(), complete_text);
+    EXPECT_EQ(without_whitespace(feedback->text()),
+              without_whitespace(complete_text));
+    const auto lines = feedback->text().split(QLatin1Char('\n'));
+    const QFontMetrics font_metrics(feedback->font());
+    for (const auto &line : lines) {
+      EXPECT_LE(font_metrics.horizontalAdvance(line),
+                feedback->width() - feedback->margin() * 2);
+    }
+    EXPECT_LE(font_metrics.height() +
+                  (lines.size() - 1) * font_metrics.lineSpacing(),
+              feedback->height() - feedback->margin() * 2);
+  };
+  for (const float factor : {1.0f, 1.5f, 2.0f}) {
+    SCOPED_TRACE(factor);
+    const QtUiScaleMetrics metrics(factor, 2);
+    canvas_->apply_ui_scale(metrics);
+    canvas_->resize(metrics.size(QSize(96, 128)));
+    QFont enlarged = canvas_->font();
+    enlarged.setPixelSize(metrics.px(28));
+    canvas_->setFont(enlarged);
+    const QRectF bounds = plane_bounds();
+    const QPointF scale = canvas_->plane_to_view().map(
+        QPointF(bounds.right(), bounds.center().y()));
+    mouse(QEvent::MouseMove, scale, Qt::NoButton, Qt::NoButton);
+    const QString complete = QStringLiteral("X: %1   Y: %2 map units")
+        .arg(qt_format_number(canvas_->presentation().repeat_width,
+                               canvas_->locale()),
+             qt_format_number(canvas_->presentation().repeat_height,
+                               canvas_->locale()));
+    expect_inside(complete);
+    EXPECT_TRUE(feedback->text().contains(QLatin1Char('\n')));
+    const QRect geometry = feedback->geometry();
+    const QString text = feedback->text();
+    const QFont font = feedback->font();
+    for (int frame = 0; frame < 20; ++frame) {
+      canvas_->refresh();
+    }
+    EXPECT_EQ(feedback->geometry(), geometry);
+    EXPECT_EQ(feedback->text(), text);
+    EXPECT_EQ(feedback->font(), font);
+    const int percent = static_cast<int>(std::lround(factor * 100.0f));
+    save_canvas(QStringLiteral("canvas_narrow_scale_%1.png").arg(percent));
+
+    const QPointF center = canvas_->plane_to_view().map(bounds.center());
+    mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, center + QPointF(10, -8), Qt::NoButton,
+           Qt::LeftButton, Qt::ControlModifier);
+    ASSERT_TRUE(canvas_->interaction_active());
+    expect_inside(QStringLiteral("Rotation: %1°")
+                      .arg(qt_format_number(
+                          canvas_->presentation().rotation_degrees,
+                          canvas_->locale())));
+    save_canvas(QStringLiteral("canvas_narrow_rotation_%1.png").arg(percent));
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(canvas_.get(), &escape);
+    EXPECT_TRUE(feedback->isHidden());
+  }
+}
+
+TEST_F(QtFaceTextureCanvasTests,
+       FaceOutlineRetainsABroadWhiteCoreAndOutsideContrastAcrossUiScales) {
+  for (const float factor : {1.0f, 1.5f, 2.0f}) {
+    canvas_->apply_ui_scale(QtUiScaleMetrics(factor, 1));
+    for (const QColor background : {QColor(Qt::black), QColor(Qt::white)}) {
+      SCOPED_TRACE(factor);
+      SCOPED_TRACE(background.name().toStdString());
+      QtMaterialPresentationItem material;
+      material.reference = canvas_->material_reference();
+      material.fallback_color = background;
+      material.content_revision = 1;
+      canvas_->set_material_presentation(material);
+      QImage output(canvas_->size(), QImage::Format_ARGB32);
+      canvas_->render(&output);
+      save_image(QStringLiteral("canvas_outline_%1_%2.png")
+                     .arg(background == QColor(Qt::black)
+                              ? QStringLiteral("dark")
+                              : QStringLiteral("light"))
+                     .arg(static_cast<int>(std::lround(factor * 100.0f))),
+                   output);
+      const QRectF bounds = plane_bounds();
+      const QPointF edge = canvas_->plane_to_view().map(QPointF(
+          bounds.left() + bounds.width() * 0.25, bounds.top()));
+      int white_pixels = 0;
+      int darkest_channel = 255;
+      const int radius = static_cast<int>(std::ceil(3.0 * factor));
+      for (int offset = -radius; offset <= radius; ++offset) {
+        const QPoint sample = edge.toPoint() + QPoint(0, offset);
+        ASSERT_TRUE(output.rect().contains(sample));
+        const QColor pixel = output.pixelColor(sample);
+        if (pixel.red() >= 245 && pixel.green() >= 245 && pixel.blue() >= 245) {
+          ++white_pixels;
+        }
+        darkest_channel = std::min(darkest_channel, pixel.red());
+      }
+      if (background == QColor(Qt::black)) {
+        EXPECT_GE(white_pixels, std::max(1, static_cast<int>(2.0f * factor) - 1));
+      } else {
+        EXPECT_LT(darkest_channel, 220);
+        const QColor center = output.pixelColor(edge.toPoint());
+        EXPECT_GE(center.red(), 245);
+        EXPECT_GE(center.green(), 245);
+        EXPECT_GE(center.blue(), 245);
+      }
+    }
+  }
 }
 
 TEST_F(QtFaceTextureCanvasTests,

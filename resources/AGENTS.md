@@ -25,8 +25,17 @@ presentation and rendering integration.
   third-party assets without license evidence under `thirdparty/`.
 - Material source changes under `resources/materials` must compile through configured Filament
   `matc.exe`.
-- In `quader_mesh_lit.mat`, assign tangent-space `material.normal` before `prepareMaterial`;
-  assigning it afterward silently bypasses the intended normal-map lighting input.
+- Both mesh shaders share `mesh_normal_mapping.glsl` for sampled normal orientation. Assign
+  tangent-space `material.normal` before `prepareMaterial`; assigning it afterward silently
+  bypasses normal-map lighting. Shaded keeps neutral normals for Solid and unlit wire previews.
+  Derivative reconstruction must retain Filament's packed-frame convention: normal-map +Y
+  follows decreasing sampled V. Test against independent world normals, including half-turn
+  tangent frames and identity-to-transformed UV continuity, rather than only comparing shaders.
+  The shared vertex helper also selects reconstruction for reflected, nonuniformly scaled or
+  sheared occurrences; only positive conformal transforms retain the interpolated packed frame.
+- Textured Shaded uses a soft sky/ground fill, curved camera-facing response and a narrow cosine
+  sheen. Keep normal-map detail and fixed roughness/metallic-independent shape cues; Solid and
+  Rendered retain their separate lighting contracts. Check appearance on the GPU when tuning it.
 - Keep default material assets under the app-owned resources tree and preserve post-build copy
   paths.
 - Update localization, render, or resource tests when resource contracts change.

@@ -5511,8 +5511,20 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(source_before.ok());
   const auto source_identity = source.value().content_identity();
   const auto source_revision = source.value().content_revision();
-  for (const double degrees : {90.0, 37.0, -53.0, 179.999, 0.001,
-                               180.0 - 1.0e-10, 1.0e-10}) {
+  struct WrapCase {
+    double degrees;
+    float outer_source_x;
+  };
+  // Hammer rotates the source chart through the acute angle between planes.
+  // Beyond 90 degrees, the two-unit target edge therefore no longer unfolds
+  // to source X = 6; at 135 degrees its projected width is zero.
+  constexpr std::array<WrapCase, 10> kCases{{
+      {90.0, 6.0F}, {37.0, 6.0F}, {-53.0, 6.0F},
+      {120.0, 5.0F}, {135.0, 4.0F}, {150.0, 3.0F},
+      {179.999, 2.0F}, {0.001, 6.0F},
+      {180.0 - 1.0e-10, 2.0F}, {1.0e-10, 6.0F},
+  }};
+  for (const auto &[degrees, outer_source_x] : kCases) {
     SCOPED_TRACE(degrees);
     const double angle = degrees * 0.017453292519943295;
     const float x = static_cast<float>(2.0 * std::cos(angle));
@@ -5551,8 +5563,8 @@ TEST(ModelingSdkConsumerTests,
     EXPECT_EQ(topology.value().faces.front().material_slot, 42U);
     const std::array<Vec2, 4> expected{{
         expected_texture_uv(transfer_sheared_uv(4.0F, 0.0F), settings),
-        expected_texture_uv(transfer_sheared_uv(6.0F, 0.0F), settings),
-        expected_texture_uv(transfer_sheared_uv(6.0F, 3.0F), settings),
+        expected_texture_uv(transfer_sheared_uv(outer_source_x, 0.0F), settings),
+        expected_texture_uv(transfer_sheared_uv(outer_source_x, 3.0F), settings),
         expected_texture_uv(transfer_sheared_uv(4.0F, 3.0F), settings),
     }};
     expect_compiled_texture_uvs(prepared->document,

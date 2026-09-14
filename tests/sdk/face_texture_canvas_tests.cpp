@@ -8,6 +8,7 @@
 
 #include <quader/modeling/modeling.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -60,6 +61,97 @@ TEST(FaceTextureCanvasTests, QueryUsesPhysicalProportionsAndNormalizedMirroredUv
   expect_canvas_map_near(chart.map, {.uv_from_plane = {0.5, 0.0, 0.0, -1.0 / 3.0},
                                     .uv_offset = {0.25, 0.0}});
   EXPECT_TRUE(chart.disabled_reason.empty());
+}
+
+TEST(FaceTextureCanvasTests, SlopedTriangleStaysUprightAcrossCornerOrderAndUvEdits) {
+  auto topology = canvas_topology();
+  topology.vertices.resize(3U);
+  topology.vertices[2].position = {0.0F, 8.0F, -4.0F};
+  auto &face = topology.faces.front();
+  face.vertices.resize(3U);
+  face.uvs = {{0.0F, 0.0F}, {2.0F, 0.0F}, {0.0F, -3.0F}};
+  const double height = std::sqrt(80.0);
+  const std::array<std::array<double, 2>, 3> physical{
+      std::array{0.0, 0.0}, std::array{4.0, 0.0}, std::array{0.0, height}};
+  for (std::size_t first = 0U; first < 3U; ++first) {
+    SCOPED_TRACE(first);
+    const auto document = PolygonDocument::from_authored_topology(topology).or_throw();
+    const auto source_bytes = serialize_qdr_authored_topology(document).or_throw();
+    const auto input = canvas_input(document);
+    const auto chart = query_face_texture_canvas(input).or_throw();
+    ASSERT_TRUE(chart.mapping_usable) << chart.disabled_reason;
+    ASSERT_EQ(chart.outline.size(), 3U);
+    for (std::size_t corner = 0U; corner < 3U; ++corner) {
+      const auto &point = physical[(first + corner) % 3U];
+      EXPECT_NEAR(chart.outline[corner][0], point[0] - physical[first][0], 1.0e-12);
+      EXPECT_NEAR(chart.outline[corner][1], point[1] - physical[first][1], 1.0e-12);
+    }
+    auto changed_map = chart.map;
+    changed_map.uv_from_plane = {0.125, 0.75, -0.25, 0.5};
+    changed_map.uv_offset = {-0.25, 1.5};
+    const auto edited = prepare_face_texture_canvas(input, changed_map).or_throw();
+    ASSERT_TRUE(edited.receipt.changed);
+    const auto changed_chart = query_face_texture_canvas(canvas_input(edited.document)).or_throw();
+    EXPECT_EQ(chart.outline, changed_chart.outline);
+    expect_canvas_map_near(changed_chart.map, changed_map);
+    EXPECT_EQ(serialize_qdr_authored_topology(document).or_throw(), source_bytes);
+    std::rotate(face.vertices.begin(), face.vertices.begin() + 1, face.vertices.end());
+    std::rotate(face.uvs.begin(), face.uvs.begin() + 1, face.uvs.end());
+  }
+}
+
+TEST(FaceTextureCanvasTests, ScalarAndOccurrenceOffsetsDoNotQuantizeTextureGradients) {
+  for (const bool generated : {false, true}) {
+    for (const bool placed : {false, true}) {
+      auto topology = canvas_topology();
+      auto &face = topology.faces.front();
+      if (generated) {
+        face.uvs.clear();
+      }
+      face.texture_transform.scale = {32768.0F, -16384.0F};
+      face.texture_transform.rotation_degrees = 37.0F;
+      auto document = PolygonDocument::from_authored_topology(topology).or_throw();
+      auto input = canvas_input(document);
+      if (placed) {
+        input.sampling_from_local.x_axis = {1.5F, 0.25F, 0.0F};
+        input.sampling_from_local.y_axis = {0.5F, 0.75F, 0.0F};
+      }
+      const auto baseline = query_face_texture_canvas(input).or_throw();
+      ASSERT_TRUE(baseline.mapping_usable) << baseline.disabled_reason;
+      for (const float phase : {0.5F, 32.0F, 1024.0F}) {
+        SCOPED_TRACE(phase);
+        face.texture_transform.shift_uv = {phase, -phase};
+        document = PolygonDocument::from_authored_topology(topology).or_throw();
+        input.document = &document;
+        input.sampling_from_local.origin = {phase, -phase, 0.0F};
+        const auto shifted = query_face_texture_canvas(input).or_throw();
+        ASSERT_TRUE(shifted.mapping_usable) << shifted.disabled_reason;
+        EXPECT_EQ(shifted.outline, baseline.outline);
+        EXPECT_EQ(shifted.map.uv_from_plane, baseline.map.uv_from_plane);
+      }
+    }
+  }
+}
+
+TEST(FaceTextureCanvasTests, WorldPlacementDeterminesUprightWallAndHorizontalViews) {
+  const auto document = PolygonDocument::from_authored_topology(canvas_topology()).or_throw();
+  // Preserve world up on either wall side; floor/ceiling use world X as right.
+  const std::array placements{
+      Transform3{},
+      Transform3{.x_axis = {-1.0F, 0.0F, 0.0F}, .z_axis = {0.0F, 0.0F, -1.0F}},
+      Transform3{.x_axis = {0.0F, 0.0F, -1.0F}, .z_axis = {1.0F, 0.0F, 0.0F}},
+      Transform3{.y_axis = {0.0F, 0.0F, -1.0F}, .z_axis = {0.0F, 1.0F, 0.0F}},
+      Transform3{.y_axis = {0.0F, 0.0F, 1.0F}, .z_axis = {0.0F, -1.0F, 0.0F}}};
+  const std::vector<std::array<double, 2>> expected{
+      {0.0, 0.0}, {4.0, 0.0}, {4.0, 3.0}, {0.0, 3.0}};
+  for (const auto &placement : placements) {
+    auto input = canvas_input(document);
+    input.world_from_local = placement;
+    const auto chart = query_face_texture_canvas(input).or_throw();
+    ASSERT_TRUE(chart.mapping_usable) << chart.disabled_reason;
+    EXPECT_EQ(chart.outline, expected);
+    EXPECT_FALSE(prepare_face_texture_canvas(input, chart.map).or_throw().receipt.changed);
+  }
 }
 
 TEST(FaceTextureCanvasTests, TranslationKeepsOutlineGeometrySettingsAndSelection) {

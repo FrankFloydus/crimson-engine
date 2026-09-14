@@ -209,6 +209,7 @@ private:
   void show_autosave_recovery();
   void show_material_browser();
   void configure_material_browser(QtMaterialBrowserWindow &browser);
+  void refresh_face_texture_browser_selection();
   void refresh_material_browser_usage();
   void handle_material_browser_action(QtMaterialBrowserWindow &source,
                                       QtMaterialBrowserActionRequest request);
@@ -420,6 +421,18 @@ private:
   };
   RetainedUiPresenter<FaceTextureMaterialPresentationStamp>
       face_texture_panel_presenter_;
+  /** Follows face selection/material changes without overriding later browsing. */
+  struct FaceTextureBrowserSelectionStamp final {
+    SceneSessionId scene_session_id;
+    std::uint64_t selection_revision = 0u;
+    std::size_t selected_face_count = 0u;
+    QuaderMaterialReference reference;
+    bool operator==(const FaceTextureBrowserSelectionStamp &) const = default;
+  };
+  RetainedUiPresenter<FaceTextureBrowserSelectionStamp>
+      face_texture_browser_selection_presenter_;
+  std::uint64_t face_texture_browser_selection_catalog_revision_ = 0u;
+  bool face_texture_browser_selection_pending_ = false;
 
   /** Keys one attempted material-catalog rebuild by owner and invalidation revisions. */
   struct MaterialPresentationCatalogStamp final {

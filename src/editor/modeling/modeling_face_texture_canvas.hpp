@@ -27,7 +27,19 @@ struct ModelingFaceTextureCanvas final {
   bool texture_available = false;
   double repeat_width = 0.0;
   double repeat_height = 0.0;
+  double rotation_degrees = 0.0;
+  modeling::FaceTextureTransform texture_transform;
   bool gesture_active = false;
+};
+
+/// An explicit numeric edit can retain scalar bookkeeping while the prepared
+/// chart determines the effective mapping. Presentation never writes these fields.
+struct ModelingFaceTextureCanvasEdit final {
+  ModelingFaceTextureTransferTarget target;
+  modeling::FaceTextureCanvasMap map;
+  std::optional<modeling::FaceTextureTransformUpdate> scalar_update;
+  bool apply_mapping = true;
+  QVec2 texture_extent{64.0f, 64.0f};
 };
 
 /// Names the semantic mapping operation performed by one retained canvas gesture.

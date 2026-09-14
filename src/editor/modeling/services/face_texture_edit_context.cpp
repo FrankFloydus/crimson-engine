@@ -30,18 +30,6 @@ std::size_t selected_face_count(
   return count;
 }
 
-double rotation_rounding_error(float value) {
-  const float above = std::nextafter(value, std::numeric_limits<float>::infinity());
-  const float below = std::nextafter(value, -std::numeric_limits<float>::infinity());
-  const double upper_spacing = std::isfinite(above)
-                                   ? static_cast<double>(above) - value
-                                   : static_cast<double>(value) - below;
-  const double lower_spacing = std::isfinite(below)
-                                   ? static_cast<double>(value) - below
-                                   : static_cast<double>(above) - value;
-  return 0.5 * std::max(upper_spacing, lower_spacing);
-}
-
 ModelingCommandResult rejected(std::string message) {
   return {.ok = false, .changed = false, .message = std::move(message)};
 }
@@ -95,41 +83,6 @@ ModelingFaceTextureSettings FaceTextureEditContext::synchronize(
     reset_baselines(snapshot, selection_revision);
   }
 
-  // Preserve the exact accepted offset when each stored float is its rounded
-  // projection. Subtracting a large absolute baseline would otherwise make a
-  // shared small offset appear mixed (for example 1000 + 0.1 degrees).
-  // External edits may still share an offset when their float rounding intervals
-  // overlap; only disjoint intervals require a new safe editing origin.
-  std::optional<double> offset;
-  double smallest_error = std::numeric_limits<double>::infinity();
-  double lower_offset = -std::numeric_limits<double>::infinity();
-  double upper_offset = std::numeric_limits<double>::infinity();
-  bool expected_offset = true;
-  std::size_t index = 0;
-  for (const auto &object : snapshot.objects) {
-    for (const auto &face : object.faces) {
-      const float rotation = face.texture_transform.rotation_degrees;
-      const float baseline = state_.rotations[index++].rotation_degrees;
-      expected_offset = expected_offset &&
-                        rotation == static_cast<float>(
-                                        baseline + state_.rotation_degrees);
-      const double value = static_cast<double>(rotation) - baseline;
-      const double error = rotation_rounding_error(rotation);
-      lower_offset = std::max(lower_offset, value - error);
-      upper_offset = std::min(upper_offset, value + error);
-      if (!offset.has_value() || error < smallest_error) {
-        offset = value;
-        smallest_error = error;
-      }
-    }
-  }
-  if (!expected_offset && lower_offset > upper_offset) {
-    reset_baselines(snapshot, selection_revision);
-  } else if (!expected_offset) {
-    state_.rotation_degrees =
-        std::clamp(offset.value_or(0.0), lower_offset, upper_offset);
-  }
-
   ModelingFaceTextureSettings result{
       .selected_face_count = selected_face_count(snapshot),
       .editable = snapshot.command.ok && !snapshot.objects.empty(),
@@ -146,6 +99,7 @@ ModelingFaceTextureSettings FaceTextureEditContext::synchronize(
     for (const auto &face : object.faces) {
       const auto &transform = face.texture_transform;
       if (first) {
+        result.rotation_degrees = transform.rotation_degrees;
         result.scale_x = transform.scale.x;
         result.scale_y = transform.scale.y;
         result.shift_x = static_cast<double>(transform.shift_uv.x) *
@@ -154,6 +108,8 @@ ModelingFaceTextureSettings FaceTextureEditContext::synchronize(
                          texture_extent.y;
         first = false;
       } else {
+        result.rotation_mixed = result.rotation_mixed ||
+            result.rotation_degrees != transform.rotation_degrees;
         if (result.scale_x != transform.scale.x) {
           result.scale_x.reset();
         }
@@ -195,7 +151,6 @@ ModelingCommandResult FaceTextureEditContext::prepare_edit(
 
   batches.clear();
   batches.reserve(snapshot.objects.size());
-  std::size_t index = 0;
   for (const auto &object : snapshot.objects) {
     ModelingFaceTextureUpdateBatch batch{
         .modeling_object_id = object.modeling_object_id,
@@ -203,7 +158,6 @@ ModelingCommandResult FaceTextureEditContext::prepare_edit(
     batch.updates.reserve(object.faces.size());
     for (const auto &face : object.faces) {
       modeling::FaceTextureTransformUpdate update{.face = face.face};
-      const auto &baseline = state_.rotations[index++];
       switch (edit.field) {
       case ModelingFaceTextureField::ScaleX:
         update.scale_x = value;
@@ -218,7 +172,7 @@ ModelingCommandResult FaceTextureEditContext::prepare_edit(
         update.shift_y = value / texture_extent.y;
         break;
       case ModelingFaceTextureField::Rotate: {
-        const double rotation = baseline.rotation_degrees + edit.value;
+        const double rotation = edit.value;
         if (!std::isfinite(rotation) ||
             std::abs(rotation) > std::numeric_limits<float>::max()) {
           return rejected("Texture rotation is outside the supported range.");

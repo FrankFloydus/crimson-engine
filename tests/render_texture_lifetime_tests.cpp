@@ -15,6 +15,7 @@
 #include <QByteArray>
 #include <QImage>
 #include <QString>
+#include <QTemporaryDir>
 
 #include <filament/Camera.h>
 #include <filament/Renderer.h>
@@ -157,7 +158,8 @@ private:
 /// Owns immutable image and geometry inputs for render-cache lifecycle tests.
 class TexturedTriangle final {
 public:
-  TexturedTriangle() {
+  explicit TexturedTriangle(
+      const char *texture_slot = material_texture_slot::kBaseColor) {
     record.entity_id = 1u;
     record.mesh = {.mesh_id = 1u,
                    .mesh_revision = 1u,
@@ -171,10 +173,13 @@ public:
     record.material.component.material = record.material_reference;
     record.material.primary_material.reference = record.material_reference;
     RenderTextureAssetSnapshot texture;
-    texture.slot = material_texture_slot::kBaseColor;
+    texture.slot = texture_slot;
     texture.project_texture_id = *ProjectAssetId::parse(
         "f7097612-7f3b-481b-98cb-5dce4a983aec");
-    texture.texture.color_space = TextureColorSpace::Srgb;
+    texture.texture.color_space =
+        texture.slot == material_texture_slot::kNormal
+            ? TextureColorSpace::Linear
+            : TextureColorSpace::Srgb;
     texture.width = 2u;
     texture.height = 2u;
     texture.present = true;
@@ -316,6 +321,105 @@ TEST(RenderTextureLifetimeTests,
   harness.materials().bind_scene({.scene_session_id = 2u});
   EXPECT_EQ(harness.textures().solid_color_texture(), solid_color);
   EXPECT_EQ(harness.stats().resource_count, 0u);
+}
+
+TEST(RenderTextureLifetimeTests,
+     ShadedNormalBindingsUseMaterialSettingsAndNeutralFallbacks) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  AssetRegistry assets;
+  for (const bool editor_unlit : {true, false}) {
+    SCOPED_TRACE(editor_unlit);
+    filament::MaterialInstance *missing =
+        harness.materials().create_mesh_material_instance(assets, nullptr, false,
+                                                          editor_unlit);
+    ASSERT_NE(missing, nullptr);
+    EXPECT_FLOAT_EQ(missing->getParameter<float>("normalStrength"), 1.0f);
+    EXPECT_FLOAT_EQ(missing->getParameter<float>("normalYSign"), 1.0f);
+    EXPECT_EQ(harness.stats().resource_count, 0u);
+    EXPECT_EQ(harness.stats().material_consumer_count, 0u);
+    harness.materials().destroy_mesh_material_instance(harness.engine(), missing);
+
+    RenderMaterialAssetSnapshot snapshot;
+    snapshot.present = true;
+    snapshot.normal_strength = 2.5f;
+    snapshot.directx_normal = true;
+    filament::MaterialInstance *projected =
+        harness.materials().create_mesh_material_instance(&snapshot, false,
+                                                          editor_unlit);
+    ASSERT_NE(projected, nullptr);
+    EXPECT_FLOAT_EQ(projected->getParameter<float>("normalStrength"), 2.5f);
+    EXPECT_FLOAT_EQ(projected->getParameter<float>("normalYSign"), -1.0f);
+    EXPECT_EQ(harness.stats().resource_count, 0u);
+    EXPECT_EQ(harness.stats().material_consumer_count, 0u);
+    harness.materials().destroy_mesh_material_instance(harness.engine(),
+                                                       projected);
+  }
+
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const QString image_path = directory.filePath(QStringLiteral("normal.png"));
+  QImage normal_image(2, 2, QImage::Format_RGBA8888);
+  normal_image.fill(QColor(180, 128, 240, 255));
+  ASSERT_TRUE(normal_image.save(image_path));
+  TextureAsset normal;
+  normal.source_path = std::filesystem::path(image_path.toStdWString());
+  normal.color_space = TextureColorSpace::Linear;
+  normal.usage = TextureUsage::Normal;
+  MaterialDocument material;
+  material.texture_slots[material_texture_slot::kNormal] =
+      assets.add_texture(std::move(normal));
+  filament::MaterialInstance *shaded =
+      harness.materials().create_mesh_material_instance(assets, &material, false,
+                                                        true);
+  ASSERT_NE(shaded, nullptr);
+  EXPECT_FLOAT_EQ(shaded->getParameter<float>("normalStrength"), 1.0f);
+  EXPECT_FLOAT_EQ(shaded->getParameter<float>("normalYSign"), 1.0f);
+  EXPECT_EQ(harness.stats().resource_count, 1u);
+  EXPECT_EQ(harness.stats().material_consumer_count, 1u);
+  EXPECT_EQ(harness.stats().upload_count, 1u);
+  harness.materials().destroy_mesh_material_instance(harness.engine(), shaded);
+  EXPECT_EQ(harness.stats().resource_count, 0u);
+  EXPECT_EQ(harness.stats().destroy_count, 1u);
+}
+
+TEST(RenderTextureLifetimeTests,
+     ShadedNormalImagesShareUploadsAndRetainRetiredConsumers) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  TexturedTriangle triangle(material_texture_slot::kNormal);
+  harness.cache().sync_mesh(triangle.record);
+  ASSERT_EQ(harness.stats().resource_count, 1u);
+  ASSERT_EQ(harness.stats().material_consumer_count, 3u);
+  ASSERT_EQ(harness.stats().upload_count, 1u);
+  const auto initial_updates = harness.cache().update_stats();
+  for (std::size_t frame = 0u; frame < 24u; ++frame) {
+    harness.cache().sync_mesh(triangle.record);
+  }
+  EXPECT_EQ(harness.stats().upload_count, 1u);
+  EXPECT_EQ(harness.stats().destroy_count, 0u);
+  EXPECT_EQ(harness.stats().material_consumer_count, 3u);
+  EXPECT_EQ(harness.cache().update_stats().full_proxy_rebuild_count,
+            initial_updates.full_proxy_rebuild_count);
+  EXPECT_EQ(harness.cache().update_stats().topology_stable_geometry_rebind_count,
+            initial_updates.topology_stable_geometry_rebind_count);
+
+  triangle.replace_image(2u);
+  harness.cache().sync_mesh(triangle.record);
+  EXPECT_EQ(harness.stats().resource_count, 2u);
+  EXPECT_EQ(harness.stats().upload_count, 2u);
+  harness.cache().drain_retired_destroy_queue(1u);
+  EXPECT_EQ(harness.stats().resource_count, 2u)
+      << "retired Shaded and depth consumers keep the old normal map alive";
+  harness.drain_retired();
+  EXPECT_EQ(harness.stats().resource_count, 1u);
+  EXPECT_EQ(harness.stats().material_consumer_count, 3u);
+  EXPECT_EQ(harness.stats().destroy_count, 1u);
+  harness.cache().remove(triangle.record.entity_id);
+  harness.drain_retired();
+  EXPECT_EQ(harness.stats().resource_count, 0u);
+  EXPECT_EQ(harness.stats().material_consumer_count, 0u);
+  EXPECT_EQ(harness.stats().upload_count, harness.stats().destroy_count);
 }
 
 TEST(RenderTextureLifetimeTests, ScalarUpdatesReuseTextureAcrossRetiredProxies) {

@@ -186,9 +186,9 @@ struct QuaderFaceTextureRevision final {
                          const QuaderFaceTextureRevision &) = default;
 };
 
-/// Presents face-transform scale modifiers, pixel shifts and selection-relative
-/// rotation. Scale does not measure the combined world density of authored UVs,
-/// occurrence sampling and the material's separate UV tiling transform.
+/// Presents face-transform scale modifiers and pixel shifts, including live
+/// preview values. Affine faces report absolute upright-plane texture rotation;
+/// unusable projections retain the stored rotation editing contract.
 struct QuaderFaceTextureSettings final {
   std::size_t selected_face_count = 0;
   bool editable = false;
@@ -201,6 +201,7 @@ struct QuaderFaceTextureSettings final {
   double shift_x = 0.0;
   double shift_y = 0.0;
   double rotation_degrees = 0.0;
+  bool rotation_mixed = false;
   std::uint64_t selection_token = 0;
 };
 
@@ -668,7 +669,8 @@ public:
   QuaderApiVoidResult
   apply_face_texture_action(const QuaderFaceTextureActionRequest &request);
   /// Continues the sole selected face's material/UV chart onto a target face by
-  /// rotating the chart about the planes' intersection, retaining the selection.
+  /// rotating about the planes' intersection with Hammer's folded-angle rule.
+  /// Nearly parallel planes retain the chart; the source selection stays intact.
   QuaderApiVoidResult transfer_face_texture_to_face(
       QuaderModelingObjectId object_id, QuaderElementId face_id);
   [[nodiscard]] bool face_texture_treat_as_one() const;

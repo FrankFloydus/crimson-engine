@@ -9,9 +9,11 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "assets/default_material_catalog.hpp"
 #include "core/localization_service.hpp"
 #include "editor/material/project_material_usage_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
@@ -32,6 +34,7 @@
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
+#include "ui/qt_viewport_surface.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/ui_system.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -51,6 +54,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFrame>
+#include <QFocusEvent>
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QIcon>
@@ -2890,6 +2894,211 @@ TEST(QtProjectWorkspaceTests,
               catalog_before.value()[index].project_relative_path);
   }
   EXPECT_FALSE(windowed->isVisible());
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     FaceMaterialHighlightAndEmbeddedPrimitiveChoiceStayPresentationOnly) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-browser-primitive-choice-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-browser-primitive-choice-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto project_root = isolated_profile / "Primitive Materials";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  const std::array texture_paths{isolated_profile / "First.png",
+                                  isolated_profile / "Second.png"};
+  QImage texture(2, 2, QImage::Format_RGBA8888);
+  texture.fill(Qt::red);
+  ASSERT_TRUE(texture.save(QString::fromStdWString(texture_paths[0].wstring())));
+  texture.fill(Qt::green);
+  ASSERT_TRUE(texture.save(QString::fromStdWString(texture_paths[1].wstring())));
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  const auto created = editor.project().create(project_root);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto imported = editor.project_assets().import_textures_as_materials(
+      texture_paths, "Materials");
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_TRUE(imported.value().failed.empty());
+  ASSERT_EQ(imported.value().imported.size(), 2u);
+  const auto first = quader::QuaderMaterialReference::project(
+      imported.value().imported[0].material.id);
+  const auto second = quader::QuaderMaterialReference::project(
+      imported.value().imported[1].material.id);
+  const auto mesh = editor.modeling().create_box({
+      .bounds = {.min = {1000.0f, 0.0f, 0.0f},
+                  .max = {1016.0f, 16.0f, 16.0f}},
+      .name = "Existing material assignments",
+      .material = first,
+  });
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(mesh.value(), 2).ok());
+  const auto token = editor.modeling().face_texture_settings().selection_token;
+  ASSERT_TRUE(editor.modeling().apply_material_to_selected_faces(
+      second, mesh.value().scene_session_id, token).ok());
+  ASSERT_TRUE(editor.selection().select_face(mesh.value(), 1).ok());
+
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(
+      editor, scene.scene(), scene.assets(), scene.modeling(), scene.selection(),
+      scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  auto *embedded = dynamic_cast<quader::QtMaterialBrowserWindow *>(
+      ui.main_window()->findChild<QWidget *>(
+          QStringLiteral("materialBrowser.embedded")));
+  auto *windowed = dynamic_cast<quader::QtMaterialBrowserWindow *>(
+      ui.main_window()->findChild<QWidget *>(
+          QStringLiteral("materialBrowser.window")));
+  auto *viewport = dynamic_cast<quader::QtViewportPanel *>(
+      ui.main_window()->findChild<QWidget *>(QStringLiteral("viewportWorkspace")));
+  ASSERT_NE(embedded, nullptr);
+  ASSERT_NE(windowed, nullptr);
+  ASSERT_NE(viewport, nullptr);
+  ui.show();
+  ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+  windowed->setAttribute(Qt::WA_DontShowOnScreen, true);
+  windowed->show();
+  application.processEvents();
+  const auto history_before_sync = editor.history().snapshot();
+  const auto revisions_before_sync = editor.revisions();
+  ui.refresh({}, {});
+  ui.refresh({}, {});
+  EXPECT_EQ(embedded->selected_material(), first);
+  EXPECT_EQ(editor.revisions().modeling_content_revision,
+            revisions_before_sync.modeling_content_revision);
+  EXPECT_EQ(editor.history().snapshot().undo_label, history_before_sync.undo_label);
+  EXPECT_EQ(editor.history().snapshot().redo_label, history_before_sync.redo_label);
+
+  // Programmatic highlighting must neither assign faces nor force the face's
+  // material back over a later browser choice on every retained refresh.
+  embedded->set_selected_material(second);
+  windowed->set_selected_material(first);
+  auto *grid = embedded->findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  ASSERT_NE(grid, nullptr);
+  auto *proxy = dynamic_cast<quader::QtMaterialBrowserProxyModel *>(grid->model());
+  ASSERT_NE(proxy, nullptr);
+  int catalog_resets = 0;
+  QObject::connect(proxy->sourceModel(), &QAbstractItemModel::modelReset,
+                   embedded, [&]() { ++catalog_resets; });
+  const auto usage_work = project.material_usage().work_stats();
+  for (int frame = 0; frame < 12; ++frame) {
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(embedded->selected_material(), second);
+  EXPECT_EQ(windowed->selected_material(), first);
+  EXPECT_EQ(catalog_resets, 0);
+  EXPECT_EQ(project.material_usage().work_stats(), usage_work);
+  EXPECT_EQ(editor.revisions().modeling_content_revision,
+            revisions_before_sync.modeling_content_revision);
+  EXPECT_EQ(editor.history().snapshot().undo_label, history_before_sync.undo_label);
+  EXPECT_EQ(editor.history().snapshot().redo_label, history_before_sync.redo_label);
+
+  const auto rotated = editor.modeling().set_face_texture_setting({
+      .field = quader::QuaderFaceTextureField::Rotate,
+      .value = 30.0,
+      .selection_token = editor.modeling().face_texture_settings().selection_token,
+  });
+  ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+  ASSERT_TRUE(rotated.changed());
+  ui.refresh({}, {});
+  EXPECT_EQ(embedded->selected_material(), second);
+  ASSERT_TRUE(editor.history().undo().ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(embedded->selected_material(), second);
+  EXPECT_TRUE(editor.history().can_redo());
+
+  const std::array additional_source{first.project_asset};
+  const auto additional = editor.project_assets().duplicate_materials(additional_source);
+  ASSERT_TRUE(additional.ok()) << additional.error_message();
+  ui.refresh({}, {});
+  EXPECT_EQ(embedded->selected_material(), second);
+  EXPECT_GT(catalog_resets, 0);
+  ASSERT_TRUE(editor.selection().select_face(mesh.value(), 2).ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(embedded->selected_material(), second);
+  ASSERT_TRUE(editor.selection().select_face(mesh.value(), 3).ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(embedded->selected_material(), first);
+  for (quader::QuaderElementId face = 1; face != 7; ++face) {
+    const auto material = editor.modeling().project_material_for_face(
+        mesh.value().modeling_object_id, face);
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    EXPECT_EQ(material.value().id,
+              face == 2 ? second.project_asset : first.project_asset);
+  }
+
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ui.refresh({}, {});
+  auto *surface = viewport->surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  auto &camera = scene.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  ASSERT_TRUE(camera.restore_perspective_pose(
+      {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
+  const auto process = [&] {
+    viewport->process_input(editor, scene.scene(), scene.assets(), scene.modeling(),
+        quader::kInvalidAssetId, scene.native_tools(), &scene.point_placement(),
+        1.0 / 60.0);
+  };
+  for (const bool choose_material : {true, false}) {
+    SCOPED_TRACE(choose_material);
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+        quader::kPrimitiveTypeSetting,
+        static_cast<double>(quader::PrimitiveCreationKind::Sphere)).ok());
+    ui.refresh({}, {});
+    embedded->set_selected_material(second);
+    if (!choose_material) {
+      // Ctrl-deselect and clicking blank grid space leave the keyboard current
+      // index intact. A focused but unselected material must not seed creation.
+      grid->selectionModel()->clearSelection();
+      ASSERT_TRUE(grid->currentIndex().isValid());
+    }
+    windowed->set_selected_material(first);
+    ui.refresh({}, {});
+    EXPECT_EQ(embedded->current_selected_material().valid(), choose_material);
+    QFocusEvent focus(QEvent::FocusIn);
+    QApplication::sendEvent(surface, &focus);
+    process();
+    QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
+                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(surface, &press);
+    process();
+    QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
+                         Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(surface, &release);
+    process();
+    ASSERT_TRUE(editor.tools().live_primitive_creation());
+    const auto entity = scene.scene().primary_selection();
+    const auto *material = scene.scene().material(entity);
+    ASSERT_NE(material, nullptr);
+    ASSERT_TRUE(material->material.project_owned());
+    if (choose_material) {
+      EXPECT_EQ(material->material.project_asset(), second.project_asset);
+    } else {
+      EXPECT_EQ(material->material.project_asset().str(),
+                quader::kDefaultProjectMaterialId);
+    }
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+  }
   ui.shutdown();
 }
 

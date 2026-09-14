@@ -527,9 +527,11 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(window.selected_folder(), QStringLiteral("Materials/Art"));
   const QString screenshot_path = qEnvironmentVariable("QUADER_MATERIAL_BROWSER_SCREENSHOT");
   if (!screenshot_path.isEmpty()) {
+    window.set_materials(materials, materials[1].reference);
     window.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 128, true, 230);
     window.resize(980, 600);
     window.show();
+    search->setFocus();
     QCoreApplication::processEvents();
     EXPECT_TRUE(window.grab().save(screenshot_path, "PNG"));
   }
@@ -2315,6 +2317,231 @@ TEST(QtMaterialBrowserWindowTests,
 }
 
 TEST(QtMaterialBrowserWindowTests,
+     TooltipsFollowMaterialFilenamesWithoutChangingPathSearchOrAssignment) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-material-filename-tooltip-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget owner;
+  for (const auto host : {QtMaterialBrowserHost::Embedded,
+                          QtMaterialBrowserHost::Windowed}) {
+    QtMaterialBrowserWindow browser(&owner, host);
+    browser.set_project_generation(9);
+    browser.set_assignment_available(true);
+    int assignments = 0;
+    browser.set_assign_material_callback(
+        [&](QuaderMaterialReference) { ++assignments; });
+    auto oak = folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                               QStringLiteral("Display name"),
+                               QStringLiteral("Materials/Wood/Oak.fine.QMAT"));
+    const auto steel = folder_material("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                                      QStringLiteral("Steel"),
+                                      QStringLiteral("Materials/Metal/steel.qmat"));
+    browser.set_materials({oak, steel}, steel.reference);
+    auto *grid = browser.findChild<QListView *>(
+        QStringLiteral("materialBrowser.gridView"));
+    auto *list = browser.findChild<QTableView *>(
+        QStringLiteral("materialBrowser.listView"));
+    auto *search = browser.findChild<QLineEdit *>(
+        QStringLiteral("materialBrowser.search"));
+    ASSERT_NE(grid, nullptr);
+    ASSERT_NE(list, nullptr);
+    ASSERT_NE(search, nullptr);
+    ASSERT_EQ(grid->model()->rowCount(), 2);
+    EXPECT_EQ(grid->model()->index(0, 0).data(Qt::ToolTipRole).toString(),
+              QStringLiteral("Oak.fine.QMAT"));
+    EXPECT_EQ(grid->model()->index(1, 0).data(Qt::ToolTipRole).toString(),
+              QStringLiteral("steel.qmat"));
+    EXPECT_EQ(list->model()->index(0, 1).data(Qt::ToolTipRole).toString(),
+              QStringLiteral("Oak.fine.QMAT"));
+    EXPECT_EQ(grid->model()->index(0, 0)
+                  .data(QtMaterialBrowserModel::RelativePathRole).toString(),
+              oak.project_relative_path);
+    search->setText(QStringLiteral("Wood/"));
+    ASSERT_EQ(grid->model()->rowCount(), 1)
+        << "folder paths remain searchable despite shorter tooltips";
+    EXPECT_EQ(grid->model()->index(0, 0).data(Qt::ToolTipRole).toString(),
+              QStringLiteral("Oak.fine.QMAT"));
+
+    oak.project_relative_path = QStringLiteral("Materials/Wood/Oak.renamed.qmat");
+    browser.set_materials({oak, steel}, steel.reference);
+    EXPECT_EQ(grid->model()->index(0, 0).data(Qt::ToolTipRole).toString(),
+              QStringLiteral("Oak.renamed.qmat"));
+    int resets = 0;
+    QObject::connect(grid->model(), &QAbstractItemModel::modelReset, &browser,
+                     [&]() { ++resets; });
+    browser.set_materials({oak, steel}, steel.reference);
+    EXPECT_EQ(resets, 0);
+    EXPECT_EQ(assignments, 0)
+        << "catalog refresh and filtering must never assign materials";
+  }
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     RevealingVisibleMaterialReplacesBatchSelectionWithoutAssignment) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-material-reveal-visible-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  QtMaterialBrowserWindow browser(&owner, QtMaterialBrowserHost::Embedded);
+  browser.resize(360, 360);
+  browser.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 128,
+                                     false, 120);
+  const auto first = folder_material(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", QStringLiteral("Oak First"),
+      QStringLiteral("Materials/Wood/oak_first.qmat"));
+  const auto second = folder_material(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", QStringLiteral("Oak Second"),
+      QStringLiteral("Materials/Wood/oak_second.qmat"));
+  browser.set_project_generation(7);
+  browser.set_materials({first, second});
+  browser.set_selected_folder(QStringLiteral("Materials/Wood"));
+  browser.set_material_usage({
+      .project_generation = 7,
+      .revision = 1,
+      .complete = true,
+      .used_materials = {first.reference, second.reference},
+  });
+  browser.set_assignment_available(true);
+  int assignments = 0;
+  browser.set_assign_material_callback(
+      [&](QuaderMaterialReference) { ++assignments; });
+  auto *search = browser.findChild<QLineEdit *>(
+      QStringLiteral("materialBrowser.search"));
+  auto *filter = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  auto *grid = browser.findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(filter, nullptr);
+  ASSERT_NE(grid, nullptr);
+  search->setText(QStringLiteral("  OAK  "));
+  owner.show();
+  browser.show();
+  application.processEvents();
+  filter->click();
+  auto *used = browser.findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  ASSERT_NE(used, nullptr);
+  used->click();
+  browser.set_selected_material(first.reference);
+  browser.set_selected_material(second.reference);
+  ASSERT_EQ(grid->selectionModel()->selectedRows().size(), 2);
+  int catalog_resets = 0;
+  QObject::connect(grid->model(), &QAbstractItemModel::modelReset, &browser,
+                   [&]() { ++catalog_resets; });
+
+  ASSERT_TRUE(browser.reveal_material(second.reference));
+  EXPECT_EQ(browser.selected_material(), second.reference);
+  ASSERT_EQ(grid->selectionModel()->selectedRows().size(), 1);
+  EXPECT_EQ(grid->selectionModel()->selectedRows().front(),
+            grid->selectionModel()->currentIndex());
+  EXPECT_EQ(search->text(), QStringLiteral("  OAK  "));
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  application.processEvents();
+  EXPECT_TRUE(grid->viewport()->rect().intersects(
+      grid->visualRect(grid->selectionModel()->currentIndex())));
+  EXPECT_EQ(catalog_resets, 0);
+  EXPECT_EQ(assignments, 0);
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     RevealingHiddenMaterialRelaxesOnlyBlockingFiltersAndIgnoresMissingTarget) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-material-reveal-filtered-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  QtMaterialBrowserWindow browser(&owner, QtMaterialBrowserHost::Embedded);
+  browser.resize(360, 360);
+  const auto oak = folder_material(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", QStringLiteral("Oak"),
+      QStringLiteral("Materials/Wood/oak.qmat"));
+  const auto steel = folder_material(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", QStringLiteral("Steel"),
+      QStringLiteral("Materials/Metal/steel.qmat"));
+  const auto pine = folder_material(
+      "cccccccc-cccc-cccc-cccc-cccccccccccc", QStringLiteral("Pine"),
+      QStringLiteral("Materials/Wood/pine.qmat"));
+  browser.set_project_generation(7);
+  browser.set_materials({oak, steel, pine});
+  browser.set_material_usage({
+      .project_generation = 7,
+      .revision = 1,
+      .complete = true,
+      .used_materials = {oak.reference, steel.reference},
+  });
+  browser.set_assignment_available(true);
+  int assignments = 0;
+  browser.set_assign_material_callback(
+      [&](QuaderMaterialReference) { ++assignments; });
+  auto *search = browser.findChild<QLineEdit *>(
+      QStringLiteral("materialBrowser.search"));
+  auto *filter = browser.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(filter, nullptr);
+  owner.show();
+  browser.show();
+  application.processEvents();
+  const auto choose_usage = [&](bool used) {
+    filter->click();
+    auto *choice = browser.findChild<QCheckBox *>(
+        used ? QStringLiteral("materialBrowser.filterUsed")
+             : QStringLiteral("materialBrowser.filterNotUsed"));
+    ASSERT_NE(choice, nullptr);
+    choice->click();
+    application.processEvents();
+  };
+
+  browser.set_selected_folder(QStringLiteral("Materials/Wood"));
+  search->setText(QStringLiteral("Materials/"));
+  choose_usage(true);
+  ASSERT_TRUE(browser.reveal_material(steel.reference));
+  EXPECT_EQ(browser.selected_material(), steel.reference);
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
+  EXPECT_EQ(search->text(), QStringLiteral("Materials/"));
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
+
+  browser.set_selected_folder(QStringLiteral("Materials/Wood"));
+  search->setText(QStringLiteral("steel"));
+  ASSERT_TRUE(browser.reveal_material(pine.reference));
+  EXPECT_EQ(browser.selected_material(), pine.reference);
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_TRUE(search->text().isEmpty());
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::All);
+
+  search->setText(QStringLiteral("oak"));
+  choose_usage(false);
+  ASSERT_TRUE(browser.reveal_material(oak.reference));
+  EXPECT_EQ(browser.selected_material(), oak.reference);
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(search->text(), QStringLiteral("oak"));
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::All);
+  choose_usage(true);
+  EXPECT_FALSE(browser.reveal_material({}));
+  EXPECT_FALSE(browser.reveal_material(QuaderMaterialReference::project(
+      required_project_id("dddddddd-dddd-dddd-dddd-dddddddddddd"))));
+  EXPECT_EQ(browser.selected_material(), oak.reference);
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(search->text(), QStringLiteral("oak"));
+  EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  EXPECT_TRUE(filter->isChecked());
+  EXPECT_EQ(assignments, 0);
+}
+
+TEST(QtMaterialBrowserWindowTests,
      EmbeddedHostAssignsFromGridAndKeepsCompactToolbarAtDockWidth) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -2481,6 +2708,7 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_LE(browser.minimumSizeHint().width(), 340);
   const int toolbar_center_y =
       search->mapTo(&browser, search->rect().center()).y();
+  const int grid_bottom = grid->mapTo(&browser, grid->rect().bottomLeft()).y();
   for (QWidget *control : std::vector<QWidget *>{
            folders, search, filter, import_button, thumbnail_size}) {
     const QRect bounds(control->mapTo(&browser, QPoint{}), control->size());
@@ -2490,6 +2718,8 @@ TEST(QtMaterialBrowserWindowTests,
     EXPECT_LE(std::abs(bounds.center().y() - toolbar_center_y), 1)
         << "embedded tools share one row: "
         << control->objectName().toStdString();
+    EXPECT_GT(bounds.top(), grid_bottom)
+        << "the embedded toolbar belongs below the material grid";
   }
   int presentation_changes = 0;
   browser.set_presentation_state_changed_callback(
@@ -2899,6 +3129,9 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(stack->currentWidget(), grid);
   EXPECT_EQ(grid->model()->rowCount(), 2)
       << "the largest tile preset must retain the complete catalog";
+  EXPECT_LT(search->mapTo(window, search->rect().bottomLeft()).y(),
+            grid->mapTo(window, QPoint{}).y())
+      << "the windowed browser retains its toolbar above the catalog";
   EXPECT_GT(grid->verticalScrollBar()->maximum(), 0)
       << "large tiles must remain reachable through vertical scrolling";
   EXPECT_GT(grid->horizontalScrollBar()->maximum(), 0)

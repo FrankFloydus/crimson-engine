@@ -2625,6 +2625,7 @@ QuaderFaceTextureSettings QuaderModelingApi::face_texture_settings() const {
       .shift_x = settings.shift_x,
       .shift_y = settings.shift_y,
       .rotation_degrees = settings.rotation_degrees,
+      .rotation_mixed = settings.rotation_mixed,
       .selection_token = settings.selection_token,
   };
   switch (settings.block_reason) {
@@ -2678,6 +2679,7 @@ QuaderFaceTextureCanvas QuaderModelingApi::face_texture_canvas() const {
       .texture_available = native.texture_available,
       .repeat_width = native.repeat_width,
       .repeat_height = native.repeat_height,
+      .rotation_degrees = native.rotation_degrees,
       .gesture_active = native.gesture_active,
   };
   result.outline.reserve(native.chart.outline.size());

@@ -823,6 +823,11 @@ void QtViewportPanel::set_open_material_editor_callback(
   open_material_editor_callback_ = std::move(callback);
 }
 
+void QtViewportPanel::set_primitive_creation_material_provider(
+    std::function<QuaderMaterialReference()> provider) {
+  primitive_creation_material_provider_ = std::move(provider);
+}
+
 void QtViewportPanel::hide_primitive_feedback() {
   for (Pane &pane_state : panes_) {
     if (pane_state.primitive_feedback != nullptr &&
@@ -3570,9 +3575,18 @@ void QtViewportPanel::process_viewport_input(
   };
   box_context.accept_preview = [&](std::string name, AssetId material,
                                    bool snap_enabled) {
-    const QuaderApiVoidResult result =
-        editor.tools().accept_active_primitive(std::move(name), material,
-                                               snap_enabled);
+    QuaderMaterialReference selected_material;
+    if (primitive_creation_material_provider_) {
+      selected_material = primitive_creation_material_provider_();
+      if (runtime_binding_generation_ != input_binding_generation) {
+        return ModelingCommandResult{.ok = false};
+      }
+    }
+    const QuaderApiVoidResult result = primitive_creation_material_provider_
+        ? editor.tools().accept_active_primitive(
+              std::move(name), selected_material, snap_enabled)
+        : editor.tools().accept_active_primitive(
+              std::move(name), material, snap_enabled);
     record_direct_tool_failure(result);
     return ModelingCommandResult{
         .ok = result.ok,

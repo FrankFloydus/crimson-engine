@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cmath>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -321,6 +322,32 @@ TEST(FaceTextureCanvasApiTests, UnchangedQueriesDoNotExtractGeometryOrRepublish)
   for (int frame = 0; frame != 32; ++frame) {
     EXPECT_EQ(editor.modeling().face_texture_settings_revision(), revision);
     EXPECT_TRUE(editor.modeling().face_texture_canvas().editable);
+    EXPECT_TRUE(editor.modeling().face_texture_settings().editable);
+  }
+  const auto after = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after.face_texture_canvas_build_count, before.face_texture_canvas_build_count);
+  EXPECT_EQ(after.face_texture_summary_build_count, before.face_texture_summary_build_count);
+  EXPECT_EQ(after.mesh_compile_count, before.mesh_compile_count);
+  EXPECT_EQ(after.asset_publication_count, before.asset_publication_count);
+}
+
+TEST(FaceTextureCanvasApiTests, IdleCancellationPreservesRevisionsAndRetainedQueries) {
+  FaceTextureCanvasHarness harness;
+  harness.create_box();
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.modeling().face_texture_canvas().editable);
+  const auto revision = editor.modeling().face_texture_settings_revision();
+  const auto settings = editor.modeling().face_texture_settings();
+  const auto history = editor.history().snapshot();
+  const auto before = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  for (int attempt = 0; attempt != 3; ++attempt) {
+    const auto canceled = editor.modeling().cancel_face_texture_gesture();
+    ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+    EXPECT_FALSE(canceled.changed());
+    EXPECT_EQ(editor.modeling().face_texture_settings_revision(), revision);
+    EXPECT_EQ(editor.modeling().face_texture_settings().selection_token, settings.selection_token);
+    EXPECT_TRUE(editor.modeling().face_texture_canvas().editable);
+    expect_same_history(editor.history().snapshot(), history);
   }
   const auto after = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
   EXPECT_EQ(after.face_texture_canvas_build_count, before.face_texture_canvas_build_count);
@@ -358,6 +385,171 @@ TEST(FaceTextureCanvasApiTests, OccurrenceSamplingSurvivesPreviewCommitAndUndo) 
   EXPECT_EQ(instance_after->texture_sampling_from_local->values, sampling);
   ASSERT_TRUE(editor.history().undo().ok());
   expect_same_mapping(editor.modeling().face_texture_canvas(), original);
+}
+
+TEST(FaceTextureCanvasApiTests, StoredNumbersFollowEveryPreviewAndPersistAfterReselection) {
+  FaceTextureCanvasHarness harness;
+  const auto object = harness.create_box();
+  auto &editor = harness.editor;
+  const auto expect_numbers = [&] {
+    const auto canvas = editor.modeling().face_texture_canvas();
+    const auto values = editor.modeling().face_texture_settings();
+    const auto mesh = editor.query().compiled_object_mesh(object);
+    ASSERT_TRUE(mesh.has_value());
+    ASSERT_FALSE(mesh->face_textures.empty());
+    const auto &stored = mesh->face_textures.front();
+    EXPECT_DOUBLE_EQ(*values.scale_x, stored.scale.x);
+    EXPECT_DOUBLE_EQ(*values.scale_y, stored.scale.y);
+    EXPECT_NEAR(values.shift_x, stored.shift_uv.x * canvas.texture_extent.x, 1.0e-6);
+    EXPECT_NEAR(values.shift_y, stored.shift_uv.y * canvas.texture_extent.y, 1.0e-6);
+    EXPECT_NEAR(values.rotation_degrees, canvas.rotation_degrees, 1.0e-6);
+  };
+  for (const auto kind : {QuaderFaceTextureGestureKind::Translate,
+                          QuaderFaceTextureGestureKind::ScaleWidth,
+                          QuaderFaceTextureGestureKind::ScaleHeight,
+                          QuaderFaceTextureGestureKind::Rotate}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    const auto original = editor.modeling().face_texture_canvas();
+    const auto settings = editor.modeling().face_texture_settings();
+    ASSERT_TRUE(editor.modeling().begin_face_texture_gesture({
+        .kind = kind, .selection_token = original.selection_token,
+        .start = {8, 8}, .pivot = {0, 0}}).ok());
+    auto revision = editor.modeling().face_texture_settings_revision();
+    for (const QVec2 point : {QVec2{12, 16}, QVec2{20, 24}}) {
+      ASSERT_TRUE(editor.modeling().update_face_texture_gesture({.current = point}).ok());
+      EXPECT_NE(editor.modeling().face_texture_settings_revision(), revision);
+      revision = editor.modeling().face_texture_settings_revision();
+      EXPECT_FALSE(editor.modeling().face_texture_settings().editable);
+      expect_numbers();
+    }
+    const auto preview = editor.modeling().face_texture_settings();
+    if (kind == QuaderFaceTextureGestureKind::Translate) {
+      EXPECT_TRUE(std::abs(preview.shift_x - settings.shift_x) > 0.01 ||
+                  std::abs(preview.shift_y - settings.shift_y) > 0.01);
+    } else if (kind == QuaderFaceTextureGestureKind::ScaleWidth) {
+      EXPECT_GT(*preview.scale_x, *settings.scale_x);
+    } else if (kind == QuaderFaceTextureGestureKind::ScaleHeight) {
+      EXPECT_GT(*preview.scale_y, *settings.scale_y);
+    } else {
+      EXPECT_GT(std::abs(preview.rotation_degrees - settings.rotation_degrees), 0.1);
+    }
+    ASSERT_TRUE(editor.modeling().commit_face_texture_gesture().ok());
+    expect_numbers();
+    ASSERT_TRUE(editor.selection().select_face(object, 2).ok());
+    ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+    const auto retained = editor.modeling().face_texture_settings();
+    EXPECT_NEAR(*retained.scale_x, *preview.scale_x, 1.0e-5);
+    EXPECT_NEAR(*retained.scale_y, *preview.scale_y, 1.0e-5);
+    EXPECT_NEAR(retained.rotation_degrees, preview.rotation_degrees, 1.0e-4);
+    EXPECT_NEAR(retained.shift_x, preview.shift_x, 1.0e-4);
+    EXPECT_NEAR(retained.shift_y, preview.shift_y, 1.0e-4);
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_same_mapping(editor.modeling().face_texture_canvas(), original);
+    expect_numbers();
+  }
+}
+
+TEST(FaceTextureCanvasApiTests, AbsoluteAnglesAndStoredNumericFieldsRoundTripAndKeepNoOpHistory) {
+  FaceTextureCanvasHarness harness;
+  const auto object = harness.create_box();
+  auto &editor = harness.editor;
+  const auto edit = [&](QuaderFaceTextureField field, double value) {
+    return editor.modeling().set_face_texture_setting({.field = field, .value = value,
+        .selection_token = editor.modeling().face_texture_settings().selection_token});
+  };
+  for (const auto [field, value] : std::array{
+           std::pair{QuaderFaceTextureField::Rotate, 37.0},
+           std::pair{QuaderFaceTextureField::ScaleX, -2.0},
+           std::pair{QuaderFaceTextureField::ScaleY, 0.75},
+           std::pair{QuaderFaceTextureField::ShiftX, 13.25},
+           std::pair{QuaderFaceTextureField::ShiftY, -7.5}}) {
+    ASSERT_TRUE(edit(field, value).ok());
+  }
+  ASSERT_TRUE(editor.selection().select_face(object, 2).ok());
+  ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+  const auto values = editor.modeling().face_texture_settings();
+  ASSERT_TRUE(values.scale_x.has_value());
+  ASSERT_TRUE(values.scale_y.has_value());
+  EXPECT_NEAR(*values.scale_x, -2.0, 1.0e-5);
+  EXPECT_NEAR(*values.scale_y, 0.75, 1.0e-5);
+  EXPECT_NEAR(values.rotation_degrees, 37.0, 1.0e-4);
+  EXPECT_NEAR(values.shift_x, 13.25, 1.0e-4);
+  EXPECT_NEAR(values.shift_y, -7.5, 1.0e-4);
+  const auto mapping = editor.modeling().face_texture_canvas();
+  const auto history = editor.history().snapshot();
+  EXPECT_FALSE(edit(QuaderFaceTextureField::Rotate, values.rotation_degrees).changed());
+  EXPECT_FALSE(edit(QuaderFaceTextureField::ScaleX, *values.scale_x).changed());
+  EXPECT_FALSE(edit(QuaderFaceTextureField::ShiftY, values.shift_y).changed());
+  expect_same_mapping(editor.modeling().face_texture_canvas(), mapping);
+  expect_same_history(editor.history().snapshot(), history);
+}
+
+TEST(FaceTextureCanvasApiTests, NumericScaleKeepsStoredUnitsAndDoesNotMoveGeometry) {
+  FaceTextureCanvasHarness harness;
+  const auto object = harness.create_box();
+  auto &editor = harness.editor;
+  const auto original = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(original.has_value());
+  ASSERT_FALSE(original->face_textures.empty());
+  const auto initial = editor.modeling().face_texture_settings();
+  ASSERT_EQ(initial.scale_x, std::optional<double>(1.0));
+  for (const int exponent : {-13, 0, 10}) {
+    SCOPED_TRACE(exponent);
+    const double value = std::ldexp(1.0, exponent);
+    const auto result = editor.modeling().set_face_texture_setting({
+        .field = QuaderFaceTextureField::ScaleX, .value = value,
+        .selection_token = editor.modeling().face_texture_settings().selection_token});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto settings = editor.modeling().face_texture_settings();
+    ASSERT_TRUE(settings.scale_x.has_value());
+    EXPECT_DOUBLE_EQ(*settings.scale_x, value);
+    EXPECT_EQ(settings.scale_y, initial.scale_y);
+    EXPECT_NEAR(settings.shift_x, initial.shift_x, 1.0e-5);
+    const auto mesh = editor.query().compiled_object_mesh(object);
+    ASSERT_TRUE(mesh.has_value());
+    ASSERT_EQ(mesh->face_textures.size(), original->face_textures.size());
+    // Numeric scale remains the stored face modifier, independent of face size
+    // and decoded image dimensions.
+    EXPECT_FLOAT_EQ(mesh->face_textures.front().scale.x,
+        static_cast<float>(value));
+    EXPECT_FLOAT_EQ(mesh->face_textures.front().scale.y, original->face_textures.front().scale.y);
+    EXPECT_EQ(mesh->indices, original->indices);
+    ASSERT_EQ(mesh->vertices.size(), original->vertices.size());
+    for (std::size_t vertex = 0; vertex < mesh->vertices.size(); ++vertex) {
+      EXPECT_FLOAT_EQ(mesh->vertices[vertex].position.x, original->vertices[vertex].position.x);
+      EXPECT_FLOAT_EQ(mesh->vertices[vertex].position.y, original->vertices[vertex].position.y);
+      EXPECT_FLOAT_EQ(mesh->vertices[vertex].position.z, original->vertices[vertex].position.z);
+    }
+  }
+}
+
+TEST(FaceTextureCanvasApiTests, AbsoluteMultiObjectRotationUsesEachFaceChartAndOneUndo) {
+  FaceTextureCanvasHarness harness;
+  const auto first = harness.create_box();
+  const auto second = harness.create_box();
+  auto &editor = harness.editor;
+  const auto rotate = [&](double value) {
+    return editor.modeling().set_face_texture_setting({
+        .field = QuaderFaceTextureField::Rotate, .value = value,
+        .selection_token = editor.modeling().face_texture_settings().selection_token});
+  };
+  ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+  ASSERT_TRUE(rotate(31.0).ok());
+  ASSERT_TRUE(editor.selection().select_face(second, 2).ok());
+  ASSERT_TRUE(rotate(-42.0).ok());
+  ASSERT_TRUE(editor.selection().select_face(first, 1, QuaderSelectionEdit::Add).ok());
+  EXPECT_TRUE(editor.modeling().face_texture_settings().rotation_mixed);
+  const auto history = editor.history().snapshot();
+  ASSERT_TRUE(rotate(-15.0).ok());
+  EXPECT_FALSE(editor.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, -15.0, 1.0e-4);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(editor.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+  ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+  EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, 31.0, 1.0e-4);
+  ASSERT_TRUE(editor.selection().select_face(second, 2).ok());
+  EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, -42.0, 1.0e-4);
 }
 
 } // namespace

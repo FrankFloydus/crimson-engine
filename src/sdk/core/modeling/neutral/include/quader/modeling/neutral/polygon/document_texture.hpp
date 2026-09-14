@@ -61,6 +61,14 @@ struct TextureAffineChart {
     const std::array<float, 4> &carrier,
     const Transform3 &sampling_from_local);
 
+/** Fits effective gradients before rounding or adding phase to corner samples. */
+[[nodiscard]] std::optional<TextureAffineChart> fit_face_texture_affine_chart(
+    std::span<const std::array<double, 2>> coordinates,
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> base_uvs,
+    quader::QVec3 geometric_normal, const FaceTextureTransform &transform,
+    const Transform3 &sampling_from_local);
+
 /** Selects storage reconstruction or non-affine residual uncertainty. */
 enum class TextureUvPrecision {
   Reconstruction,

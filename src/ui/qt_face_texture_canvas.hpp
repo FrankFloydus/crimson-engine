@@ -10,6 +10,7 @@
 #include "ui/qt_material_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
+#include <QCursor>
 #include <QPointF>
 #include <QPolygonF>
 #include <QTransform>
@@ -17,6 +18,8 @@
 
 #include <cstdint>
 #include <optional>
+
+class QLabel;
 
 namespace quader {
 
@@ -69,6 +72,9 @@ private:
   [[nodiscard]] QPointF handle_position(Handle handle) const;
   [[nodiscard]] Handle hit_handle(QPointF position) const;
   void update_hover(QPointF position);
+  void update_cursor();
+  void refresh_rotation_cursor();
+  void update_feedback();
   void present_failure(const QuaderApiVoidResult &result);
 
   QuaderEditorApi *editor_ = nullptr;
@@ -96,6 +102,8 @@ private:
   QImage image_;
   int decoded_extent_ = 0;
   QtUiScaleMetrics metrics_;
+  QCursor rotation_cursor_;
+  QLabel *feedback_ = nullptr;
 };
 
 } // namespace quader

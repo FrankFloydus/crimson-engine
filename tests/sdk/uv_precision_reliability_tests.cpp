@@ -188,6 +188,15 @@ TEST(UvPrecisionReliabilityTests,
           .shift_uv = {-0.27F, 0.19F}, .rotation_degrees = -23.0F}};
   constexpr std::array kTranslations{
       Vec3{}, Vec3{5.0F, 0.5F, -21.5F}, Vec3{-31.25F, 7.75F, 13.5F}};
+  struct WrapStep {
+    double degrees;
+    float developed_width;
+  };
+  // The 90 -> -20 turn uses Hammer's acute 70-degree wrap. Its projected
+  // advance is 2*cos(40 degrees), and the last panel retains that density.
+  constexpr std::array<WrapStep, 4> kSteps{{
+      {37.0, 2.0F}, {90.0, 2.0F},
+      {-20.0, 1.532088886F}, {0.0, 1.532088886F}}};
   std::array<Vec2, 4> source_uvs;
   for (std::size_t corner = 0U; corner < source_uvs.size(); ++corner) {
     source_uvs[corner] = strip_uv(kSourcePoints[corner].x, kSourcePoints[corner].y);
@@ -199,7 +208,7 @@ TEST(UvPrecisionReliabilityTests,
       auto current = precision_face(kSourcePoints, source_uvs, settings);
       Vec3 seam{4.0F, 0.0F, 0.0F};
       float developed_start = 4.0F;
-      for (const double degrees : {37.0, 90.0, -20.0, 0.0}) {
+      for (const auto &[degrees, developed_width] : kSteps) {
         SCOPED_TRACE(degrees);
         const double angle = degrees * 0.017453292519943295;
         const Vec3 end{seam.x + static_cast<float>(2.0 * std::cos(angle)), 0.0F,
@@ -231,7 +240,7 @@ TEST(UvPrecisionReliabilityTests,
           ASSERT_NE(found, ids.end());
           const auto corner = static_cast<std::size_t>(found - ids.begin());
           const float developed_x = developed_start +
-              ((corner == 1U || corner == 2U) ? 2.0F : 0.0F);
+              ((corner == 1U || corner == 2U) ? developed_width : 0.0F);
           const auto expected = transformed_uv(
               strip_uv(developed_x + translation.x, points[corner].y + translation.y),
               settings);
@@ -252,7 +261,7 @@ TEST(UvPrecisionReliabilityTests,
         EXPECT_EQ(serialize_qdr_authored_topology(repeated_document).or_throw(), bytes);
         current = prepared;
         seam = end;
-        developed_start += 2.0F;
+        developed_start += developed_width;
       }
     }
   }

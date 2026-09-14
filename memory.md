@@ -195,6 +195,10 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
 
 ## Persistent primitive tool history
 
+- The viewport samples the embedded Face Texture browser at each accepted primitive footprint
+  and passes an explicit material reference into that shape's transaction. Missing/deleted choices
+  use the reserved project Default Material. Tool activation, regeneration and Apply do not resample;
+  the windowed management browser and other creation APIs do not supply this choice.
 - Accepted footprints have per-shape before/after mementos and a local cursor. Undo/redo operates
   within the active primitive tool, preserving final edited geometry and identities; new shapes
   retire only the local redo branch. Undo of an unfinished footprint clears that gesture.
@@ -385,13 +389,26 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   Contracts: [Move regressions](tests/move_auto_merge_tests.cpp).
 - TextureMappingComponent preserves occurrence-specific sampling without changing shared geometry.
   Materializing base UVs first inverts retained FaceTextureTransform; otherwise the edit is applied
-  twice. Rotation numeric gestures use a captured per-face baseline, not accumulated displayed deltas.
+  twice. Texture numeric gestures use the captured editing context and absolute targets, never
+  accumulated displayed deltas.
 - Face Texture canvas gestures retain one planar chart and prepare every candidate from the
   original UVs. Shared preview cancellation/commit must route through its gesture owner to clear
   presentation state and dirty checkpoints; selection/scene replacement cannot leave a hidden
   UV preview. Width/height scale the corresponding texture axis even after rotation, preserving
   the opposite repeat length. Contracts: [canvas workflows](tests/face_texture_canvas_api_tests.cpp),
   [gesture math](tests/face_texture_gesture_math_tests.cpp), [Qt canvas](tests/qt_face_texture_canvas_tests.cpp).
+- Selecting a single face reveals its assigned material in the embedded browser without assignment.
+  Gate this synchronization by selection/material identity, independently of catalog refresh and UV
+  previews, so subsequent browsing remains available for primitive creation. Revealing clears only
+  constraints hiding the target; zero/multiple selected faces retain the user's browser choice.
+- The canvas plane uses projected world Y as up and world X as the horizontal-face fallback,
+  independently of boundary ordering, UV rotation or the viewport camera. Usable affine mappings
+  supply the absolute texture angle. Scale modifiers and pixel shifts retain their existing units;
+  canvas gestures update those settings in the same prepared preview, so numeric fields stay live
+  and retain their values after commit. Queries do not rewrite stored settings.
+  The canvas/controls divider has its own saved position inside the browser divider, with legacy
+  two-part layout restoration. Contracts: [canvas projection](tests/sdk/face_texture_canvas_tests.cpp),
+  [panel presentation](tests/qt_face_texture_panel_tests.cpp).
 - Texture scale clicks double/halve signed magnitudes between exact `1/8192` and `1024`;
   four-decimal display rounding must never feed the next step. Align Grid resets world-axis
   mapping to `0.125` map units per texel, zero shift/rotation, using each texture's dimensions
@@ -408,8 +425,9 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   [portable texture actions](src/sdk/core/modeling/src/face_texture_actions.cpp).
 - Face/View alignment retains settings but uses the same image-axis texel units as Grid:
   rotate/scale the generated chart, normalize by image width/height, then add UV shift.
-  Subsequent rotation must use image-axis units too. Numeric rotation shares action preparation
-  with exact baseline-plus-offset targets, including negative/no-op edits and merged history.
+  Subsequent rotation must use image-axis units too. Numeric canvas rotation sets an absolute
+  effective angle; action rotation retains its incremental command semantics. Preserve negative/no-op
+  edits and merged numeric history.
   Test non-square images and front-view feature movement for named CW/CCW actions.
 - Continue Texture retains the selected source; target material and UVs publish in one history
   step. A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
@@ -532,6 +550,14 @@ Tests: [occurrences](tests/scene_mesh_occurrence_projection_tests.cpp),
 - Moving preview meshes need matching overlay-depth companions. Device-domain shaders convert
   Filament's reversed [0,1] clip Z back to GL NDC before DEVICE remapping; double conversion produces
   X-ray component overlays. Normal-map inputs precede prepareMaterial.
+- Mesh and material-preview tangent packing must preserve handedness through Filament's mediump
+  varying. A float-sized quaternion bias underflows on half-turn frames, erasing the bitangent
+  and normal-map detail on particular face orientations. Use the shared render packer with a
+  normal FP16 minimum; derivative normal mapping retains packed-frame +Y = -dP/dV. Reflected
+  or nonuniform world transforms must also select UV-derived tangents. Verify
+  independent world directions and near-identity UV continuity, not only Shaded/Rendered parity.
+  Coverage: [tangent precision](tests/render_tangent_frame_tests.cpp),
+  [windowless Vulkan normals](tests/render_normal_mapping_runtime_tests.cpp).
 
 Owners: [render binding](src/render/render_scene_binding.hpp),
 [preview cache](src/render/tool_preview_renderable_cache.cpp), [lit material](resources/materials/quader_mesh_lit.mat).

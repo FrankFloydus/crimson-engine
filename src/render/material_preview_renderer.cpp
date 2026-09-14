@@ -10,6 +10,7 @@
 #include "math/glm_bridge.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_environment_library.hpp"
+#include "render/filament_utils.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/material_preview_mesh_library.hpp"
 #include "render/png_texture_loader.hpp"
@@ -113,9 +114,7 @@ filament::math::float4 packed_tangent_frame(
       filament::math::float3{vertex.normal.x, vertex.normal.y,
                              vertex.normal.z},
   };
-  const filament::math::quatf packed =
-      filament::math::mat3f::packTangentFrame(tangent_frame, sizeof(float));
-  return {packed.x, packed.y, packed.z, packed.w};
+  return pack_filament_tangent_frame(tangent_frame);
 }
 
 glm::mat4 environment_rig_rotation(float rotation_radians) {
@@ -648,6 +647,7 @@ struct MaterialPreviewRenderer::Impl final {
     sampler.setAnisotropy(kPreviewTextureAnisotropy);
 
     shaded_instance->setParameter("baseColorTexture", texture(0u), sampler);
+    shaded_instance->setParameter("normalTexture", texture(3u), sampler);
     shaded_instance->setParameter("baseColorFactor", base_factor);
     bind_standard_material_texture_transform(
         *shaded_instance, standard.texture_transform);
@@ -668,19 +668,25 @@ struct MaterialPreviewRenderer::Impl final {
         std::isfinite(standard.metallic)
             ? std::clamp(standard.metallic, 0.0f, 1.0f)
             : 0.0f);
-    rendered_instance->setParameter(
-        "normalStrength",
+    const float normal_strength =
         std::isfinite(standard.normal_strength)
             ? std::clamp(standard.normal_strength, -16.0f, 16.0f)
-            : 1.0f);
-    rendered_instance->setParameter("normalYSign",
-                                    standard.directx_normal ? -1.0f : 1.0f);
+            : 1.0f;
+    for (filament::MaterialInstance *instance :
+         {shaded_instance, rendered_instance}) {
+      instance->setParameter("normalStrength", normal_strength);
+      instance->setParameter("normalYSign",
+                             standard.directx_normal ? -1.0f : 1.0f);
+    }
     rendered_instance->setParameter(
         "diffuseModel", standard.diffuse_model == MaterialDiffuseModel::Lambert
                             ? 1
                             : 0);
     wire_instance->setParameter("baseColorTexture", fallback_textures[0],
                                 sampler);
+    wire_instance->setParameter("normalTexture", fallback_textures[3], sampler);
+    wire_instance->setParameter("normalStrength", 0.0f);
+    wire_instance->setParameter("normalYSign", 1.0f);
     wire_instance->setParameter(
         "baseColorFactor",
         filament::math::float4{0.82f, 0.82f, 0.82f, 1.0f});

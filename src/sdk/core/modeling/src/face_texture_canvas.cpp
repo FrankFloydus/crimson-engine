@@ -162,23 +162,13 @@ struct CanvasWork {
     return disable("The face has no usable geometric plane.");
   }
   const auto normal = area / area_length;
-  QVec3d x_axis{};
-  double edge_length_squared = 0.0;
-  // The longest boundary edge is stable under texture edits and resists short
-  // or repeated leading edges without imposing a texture-dependent rotation.
-  for (std::size_t corner = 0U; corner < physical.size(); ++corner) {
-    const auto edge = physical[(corner + 1U) % physical.size()] - physical[corner];
-    const auto tangent = edge - normal * quader_geometry::dot(edge, normal);
-    const double length_squared = quader_geometry::dot(tangent, tangent);
-    if (length_squared > edge_length_squared) {
-      x_axis = tangent;
-      edge_length_squared = length_squared;
-    }
+  // Keep the face upright in world Y, independently of texture orientation,
+  // boundary lengths, and the first corner. Horizontal faces use world X.
+  auto x_axis = quader_geometry::cross(QVec3d{0.0, 1.0, 0.0}, normal);
+  if (quader_geometry::dot(x_axis, x_axis) <= 1.0e-12) {
+    x_axis = QVec3d{1.0, 0.0, 0.0} - normal * normal.x;
   }
-  if (edge_length_squared == 0.0) {
-    return disable("The face has no usable geometric plane.");
-  }
-  x_axis = x_axis / std::sqrt(edge_length_squared);
+  x_axis = x_axis / std::sqrt(quader_geometry::dot(x_axis, x_axis));
   const auto y_axis = quader_geometry::cross(normal, x_axis);
   bool planar = true;
   const double plane_tolerance = 32.0 * std::numeric_limits<float>::epsilon() *
@@ -215,8 +205,9 @@ struct CanvasWork {
     }
     work.effective_uvs.push_back(uv);
   }
-  const auto affine = quader_poly::fit_texture_affine_chart(
-      work.chart.outline, work.effective_uvs);
+  const auto affine = quader_poly::fit_face_texture_affine_chart(
+      work.chart.outline, work.positions, work.face->uvs, work.normal,
+      work.face->texture_transform, work.sampling);
   if (!affine.has_value()) {
     return disable("The face has no usable affine texture projection.");
   }

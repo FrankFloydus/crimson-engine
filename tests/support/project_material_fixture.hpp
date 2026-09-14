@@ -39,6 +39,8 @@ public:
   [[nodiscard]] bool set_selectable(EntityId entity, bool selectable) const;
   [[nodiscard]] bool bind_shared_mesh(EntityId entity, AssetId mesh) const;
   [[nodiscard]] bool set_projection_failure(ProjectionFailurePoint point) const;
+  /// Supplies a drawn footprint without accepting or assigning its material.
+  [[nodiscard]] bool prepare_primitive_footprint(float origin_x = 0.0f) const;
   [[nodiscard]] std::optional<QMat4>
   instance_member_world_transform(EntityId member, EntityId occurrence) const;
   [[nodiscard]] ModelingSelectionExport selection() const;

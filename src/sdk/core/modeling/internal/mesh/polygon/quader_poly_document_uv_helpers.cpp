@@ -1206,6 +1206,86 @@ quader::QVec2 evaluate_texture_mapping(
           uv0.y + carrier[2] * delta.x + carrier[3] * delta.y};
 }
 
+std::optional<TextureAffineChart> fit_face_texture_affine_chart(
+    std::span<const std::array<double, 2>> coordinates,
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> base_uvs,
+    quader::QVec3 geometric_normal, const FaceTextureTransform &transform,
+    const Transform3 &sampling_from_local) {
+  if (coordinates.size() != positions.size() ||
+      (!base_uvs.empty() && base_uvs.size() != positions.size()) ||
+      !valid_face_texture_transform(transform)) {
+    return std::nullopt;
+  }
+  const auto fit = prepare_texture_chart_fit(coordinates.size(),
+      [&](std::size_t index) { return coordinates[index]; });
+  if (!fit.has_value()) {
+    return std::nullopt;
+  }
+  const auto linear = texture_linear_transform(transform);
+  const auto carrier = face_texture_carrier(positions, base_uvs,
+                                             geometric_normal, transform);
+  const auto correction = texture_mapping_coefficients(geometric_normal,
+                                                        sampling_from_local);
+  const auto base_at = [&](std::size_t index) {
+    return base_uvs.empty() ? generated_texture_uv(positions[index], geometric_normal)
+                            : base_uvs[index];
+  };
+  const auto first = base_at(0U);
+  std::vector<std::array<double, 2>> differences;
+  differences.reserve(positions.size());
+  std::array<double, 2> mean_uv{};
+  std::array<double, 2> mean_q{};
+  for (std::size_t index = 0U; index < positions.size(); ++index) {
+    const auto base = base_at(index);
+    const double u = static_cast<double>(base.x) - first.x;
+    const double v = static_cast<double>(base.y) - first.y;
+    const double x = static_cast<double>(positions[index].x) - positions[0].x;
+    const double y = static_cast<double>(positions[index].y) - positions[0].y;
+    const double z = static_cast<double>(positions[index].z) - positions[0].z;
+    const double du = correction.x.x * x + correction.y.x * y + correction.z.x * z;
+    const double dv = correction.x.y * x + correction.y.y * y + correction.z.y * z;
+    const std::array difference{
+        linear[0] * u + linear[1] * v + carrier[0] * du + carrier[1] * dv,
+        linear[2] * u + linear[3] * v + carrier[2] * du + carrier[3] * dv};
+    differences.push_back(difference);
+    for (std::size_t axis = 0U; axis < 2U; ++axis) {
+      mean_uv[axis] += difference[axis] / static_cast<double>(positions.size());
+      mean_q[axis] += coordinates[index][axis] / static_cast<double>(positions.size());
+    }
+  }
+  TextureAffineChart chart{};
+  for (std::size_t index = 0U; index < differences.size(); ++index) {
+    const auto weight = fit->sensitivity(index);
+    for (std::size_t axis = 0U; axis < 2U; ++axis) {
+      const double centered = differences[index][axis] - mean_uv[axis];
+      chart.carrier[axis * 2U] += weight[0] * centered;
+      chart.carrier[axis * 2U + 1U] += weight[1] * centered;
+    }
+  }
+  const auto position = positions.front();
+  const double du = static_cast<double>(correction.x.x) * position.x +
+      static_cast<double>(correction.y.x) * position.y +
+      static_cast<double>(correction.z.x) * position.z + correction.origin.x;
+  const double dv = static_cast<double>(correction.x.y) * position.x +
+      static_cast<double>(correction.y.y) * position.y +
+      static_cast<double>(correction.z.y) * position.z + correction.origin.y;
+  const std::array origin{
+      linear[0] * first.x + linear[1] * first.y + transform.shift_uv.x +
+          carrier[0] * du + carrier[1] * dv,
+      linear[2] * first.x + linear[3] * first.y + transform.shift_uv.y +
+          carrier[2] * du + carrier[3] * dv};
+  for (std::size_t axis = 0U; axis < 2U; ++axis) {
+    chart.offset[axis] = origin[axis] + mean_uv[axis] -
+        chart.carrier[axis * 2U] * mean_q[0] -
+        chart.carrier[axis * 2U + 1U] * mean_q[1];
+  }
+  const auto finite = [](double value) { return std::isfinite(value); };
+  return std::ranges::all_of(chart.carrier, finite) &&
+         std::ranges::all_of(chart.offset, finite)
+      ? std::optional{chart} : std::nullopt;
+}
+
 std::vector<std::array<double, 2>> face_texture_precision_bounds(
     std::span<const quader::QVec3> positions,
     std::span<const quader::QVec2> base_uvs, quader::QVec3 geometric_normal,

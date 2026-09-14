@@ -3897,6 +3897,54 @@ void activate_public_primitive(QuaderToolsApi &tools, std::string_view kind) {
 }
 
 TEST(PrimitiveCreationToolServiceTests,
+     PublicMaterialReferenceAcceptancePreservesEmbeddedAndLegacyDefaults) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const AssetId embedded =
+      session.assets().add_material(make_default_quader_material("Chosen Material"));
+  ASSERT_NE(embedded, kInvalidAssetId);
+  ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), "box"));
+  for (int acceptance = 0; acceptance < 4; ++acceptance) {
+    SCOPED_TRACE(acceptance);
+    const ModelingBoxToolEvent start{
+        .ray = {.origin = {static_cast<float>(acceptance) * 4.0f, 8.0f, 0.0f},
+                .direction = {0.0f, -1.0f, 0.0f}},
+        .grid_size = 1.0,
+    };
+    ASSERT_TRUE(session.modeling().begin_box_footprint(start).ok);
+    auto finish = start;
+    finish.ray.origin.x += 2.0f;
+    finish.ray.origin.z = 2.0f;
+    ASSERT_TRUE(session.modeling().update_box_footprint(finish).valid);
+    ASSERT_TRUE(session.modeling().begin_box_height(finish).valid);
+    const auto result = acceptance == 0
+        ? editor.tools().accept_active_primitive(
+              "Typed Embedded", QuaderMaterialReference::embedded(embedded))
+        : acceptance == 1
+        ? editor.tools().accept_active_primitive("Legacy Embedded", embedded)
+        : acceptance == 2
+        ? editor.tools().accept_active_primitive(
+              "Missing Embedded", QuaderMaterialReference::embedded(
+                  std::numeric_limits<AssetId>::max()))
+        : editor.tools().accept_active_primitive("Ordinary Default");
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto state = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(state.has_value());
+    const auto entity = session.modeling().entity_for_modeling_object(state->object_id);
+    ASSERT_TRUE(entity.has_value());
+    const auto *material = session.scene().material(*entity);
+    if (acceptance < 2) {
+      ASSERT_NE(material, nullptr);
+      EXPECT_EQ(material->material, MaterialReference(embedded));
+    } else {
+      EXPECT_EQ(material, nullptr);
+    }
+  }
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(session.history().undo_count(), 4u);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
      FootprintSphereAndTorusProportionsIgnoreGridHeight) {
   struct FootprintCase {
     double grid;

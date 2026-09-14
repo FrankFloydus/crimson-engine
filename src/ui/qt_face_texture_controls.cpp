@@ -102,8 +102,8 @@ constexpr std::array<TextureControlDescription, 5> kTextureControls{{
      "tool_settings.texture_shift_y", "Shift Y (px)", 1.0, 0.0,
      "Vertical texture shift in image pixels. Numeric shifts require one selected face."},
     {QuaderFaceTextureField::Rotate, "rotate",
-     "tool_settings.texture_rotate", "Rotation Offset (\xC2\xB0)", 1.0, 0.0,
-     "Rotation offset from each face's angle when the current selection was made. Selecting faces again resets this field to zero without changing their mapping."},
+     "tool_settings.texture_rotate", "Rotation (\xC2\xB0)", 1.0, 0.0,
+     "Texture rotation in degrees in the face's planar projection. Selecting the face again preserves its angle."},
 }};
 
 /// Retained presentation only; each button dispatches the same public action
@@ -229,6 +229,7 @@ struct QtFaceTextureControls::Impl {
     layout->setObjectName(QStringLiteral("face_texture.controls.layout"));
     set_scalable_margins(*layout, QMargins(8, 8, 8, 8));
     set_scalable_spacing(*layout, 8);
+    layout->setAlignment(Qt::AlignTop);
     texture_section_ = new QtSettingsSection(
         QStringLiteral("face_texture.section.texture"), &panel_);
     build_texture_controls();
@@ -341,8 +342,7 @@ private:
     if (!binding_is_current(editor, generation)) {
       return;
     }
-    // Initializing a new selection's rotation baseline can advance its context
-    // revision. Pending edits belong to the context returned by this query.
+    // Pending edits belong to the exact context returned by the settings query.
     revision = editor_->modeling().face_texture_settings_revision();
     const bool selection_changed =
         !texture_settings_.has_value() ||
@@ -388,7 +388,8 @@ private:
         settings.scale_x, settings.scale_y,
         single_face ? std::optional<double>(settings.shift_x) : std::nullopt,
         single_face ? std::optional<double>(settings.shift_y) : std::nullopt,
-        settings.rotation_degrees};
+        settings.rotation_mixed ? std::nullopt
+                                : std::optional<double>(settings.rotation_degrees)};
     for (std::size_t index = 0; index < texture_controls_.size(); ++index) {
       TextureControlWidget &binding = texture_controls_[index];
       const bool shift = binding.field == QuaderFaceTextureField::ShiftX ||
@@ -425,6 +426,7 @@ private:
     auto *layout = new QGridLayout(edit_texture_section_->content());
     set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
     set_scalable_grid_spacing(*layout, 6, 4);
+    layout->setAlignment(Qt::AlignTop);
     layout->setColumnStretch(1, 1);
     std::size_t action_index = 0;
     for (std::size_t group_index = 0;
@@ -539,7 +541,8 @@ private:
   void build_texture_controls() {
     auto *layout = new QGridLayout(texture_section_->content());
     set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
-    set_scalable_grid_spacing(*layout, 8, 6);
+    set_scalable_grid_spacing(*layout, 6, 4);
+    layout->setAlignment(Qt::AlignTop);
     layout->setColumnStretch(1, 1);
     layout->setColumnStretch(3, 1);
     for (std::size_t index = 0; index < kTextureControls.size(); ++index) {
@@ -550,7 +553,7 @@ private:
           QStringLiteral("face_texture.texture.%1").arg(qtext(description.id));
       binding.label = new QLabel(texture_section_->content());
       binding.label->setObjectName(name + QStringLiteral(".label"));
-      binding.label->setWordWrap(true);
+      binding.label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
       binding.spin = new QtMixedNumberSpinBox(
           description.step_origin, texture_section_->content(),
           binding.field == QuaderFaceTextureField::ScaleX ||

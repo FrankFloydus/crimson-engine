@@ -122,6 +122,26 @@ MaterialReference default_project_material(QuaderApiSession session) {
              : MaterialReference{};
 }
 
+MaterialReference primitive_creation_material(
+    QuaderApiSession session, QuaderMaterialReference requested) {
+  if (requested.valid()) {
+    if (requested.embedded() &&
+        scene_session(session).assets().material(requested.embedded_asset) !=
+            nullptr) {
+      return MaterialReference(requested.embedded_asset);
+    }
+    const ProjectSession *project =
+        QuaderApiSessionInternalAccess::project_session(session);
+    if (requested.project_owned() && project != nullptr &&
+        project->manifest() != nullptr &&
+        !project->manifest()->is_material_deleted(requested.project_asset) &&
+        project->material_catalog().find(requested.project_asset) != nullptr) {
+      return MaterialReference::project(requested.project_asset);
+    }
+  }
+  return default_project_material(session);
+}
+
 ActiveToolSettingsSource
 active_tool_settings_source(const SceneSession &session) {
   const UvPeelToolService &uv_peel = session.uv_peel();
@@ -2121,6 +2141,17 @@ QuaderApiVoidResult QuaderToolsApi::accept_active_primitive(
       session.native_tools().accept_active_primitive(std::move(name),
                                                       material,
                                                       snap_enabled),
+      QuaderMutationKind::Modeling, "Create Primitive");
+}
+
+QuaderApiVoidResult QuaderToolsApi::accept_active_primitive(
+    std::string name, QuaderMaterialReference material, bool snap_enabled) {
+  SceneSession &session = scene_session(session_);
+  return api_status_from_command(
+      session,
+      session.native_tools().accept_active_primitive(
+          std::move(name), primitive_creation_material(session_, material),
+          snap_enabled),
       QuaderMutationKind::Modeling, "Create Primitive");
 }
 

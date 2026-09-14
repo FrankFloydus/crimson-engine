@@ -1290,7 +1290,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,
-     FaceTextureRotationKeepsPerFaceOriginsAndOneUndoPerGesture) {
+     FaceTextureRotationUsesAbsoluteAnglesAndOneUndoPerGesture) {
   auto s = quader::test::BehaviorScenario::new_project();
   auto &api = s.api();
   const auto created = api.modeling().create_box(
@@ -1299,76 +1299,107 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const auto object = created.value();
   ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(api.selection().select_face(object, 1).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftX, 16).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftY, -8).ok());
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 30).ok());
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 30, 1.0e-4);
   ASSERT_TRUE(api.selection().select_face(object, 2).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftX, -4).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftY, 12).ok());
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, -15).ok());
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, -15, 1.0e-4);
   ASSERT_TRUE(api.selection().select_faces(object, {1, 2}).ok());
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0);
+  EXPECT_TRUE(api.modeling().face_texture_settings().rotation_mixed);
+  const auto before_gesture = api.query().compiled_object_mesh(object);
+  ASSERT_TRUE(before_gesture.has_value());
 
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 10,
                                "texture.rotation.gesture").ok());
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 20,
                                "texture.rotation.gesture").ok());
-  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 50);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 5);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 20);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 20);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 20);
+  EXPECT_FALSE(api.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 20, 1.0e-4);
+  const auto after_gesture = api.query().compiled_object_mesh(object);
+  ASSERT_TRUE(after_gesture.has_value());
   ASSERT_TRUE(api.history().undo().ok());
   EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 30);
   EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -15);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0);
+  EXPECT_TRUE(api.modeling().face_texture_settings().rotation_mixed);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *before_gesture);
   ASSERT_TRUE(api.history().redo().ok());
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 20);
+  EXPECT_FALSE(api.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 20, 1.0e-4);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *after_gesture);
 
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleX, 2).ok());
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 20);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 20, 1.0e-4);
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 25).ok());
-  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 55);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 10);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 1).scale.x, 2);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 25);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 25);
+  ASSERT_TRUE(api.modeling().face_texture_settings().scale_x.has_value());
+  EXPECT_NEAR(*api.modeling().face_texture_settings().scale_x, 2, 1.0e-5);
 
   const auto before_selection = api.modeling().face_texture_settings();
   ASSERT_TRUE(api.selection().select_face(object, 2, quader::QuaderSelectionEdit::Remove).ok());
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 25, 1.0e-4);
+  EXPECT_NEAR(api.modeling().face_texture_settings().shift_x, 16, 1.0e-4);
+  EXPECT_NEAR(api.modeling().face_texture_settings().shift_y, -8, 1.0e-4);
   EXPECT_FALSE(api.modeling().set_face_texture_setting({
       .field = quader::QuaderFaceTextureField::Rotate,
       .value = 90,
       .selection_token = before_selection.selection_token,
   }).ok());
-  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 55);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 25);
   ASSERT_TRUE(api.selection().select_face(object, 2, quader::QuaderSelectionEdit::Add).ok());
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 10);
+  EXPECT_FALSE(api.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 25, 1.0e-4);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 25);
+  ASSERT_TRUE(api.selection().select_face(object, 2).ok());
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 25, 1.0e-4);
+  EXPECT_NEAR(api.modeling().face_texture_settings().shift_x, -4, 1.0e-4);
+  EXPECT_NEAR(api.modeling().face_texture_settings().shift_y, 12, 1.0e-4);
   ASSERT_TRUE(api.selection().clear().ok());
   EXPECT_EQ(api.modeling().face_texture_settings().selected_face_count, 0u);
 
-  // Float storage has much coarser absolute precision at 1000 degrees than at
-  // zero; that must not turn one common fractional offset into a new selection.
+  // Whole turns normalize in the readout; fractional absolute edits still
+  // share one selection epoch and one history gesture across both faces.
   ASSERT_TRUE(api.selection().select_face(object, 1).ok());
-  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate,
-                               -face_texture(api, object, 1).rotation_degrees).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 0).ok());
   ASSERT_TRUE(api.selection().select_face(object, 2).ok());
-  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate,
-                               1000.0 - face_texture(api, object, 2).rotation_degrees).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 1000).ok());
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, -80, 1.0e-4);
   ASSERT_TRUE(api.selection().select_faces(object, {1, 2}).ok());
+  EXPECT_TRUE(api.modeling().face_texture_settings().rotation_mixed);
+  const auto before_fractional = api.query().compiled_object_mesh(object);
+  ASSERT_TRUE(before_fractional.has_value());
   const auto fractional_token = api.modeling().face_texture_settings().selection_token;
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 0.1,
                                "texture.fractional.rotation.gesture").ok());
   EXPECT_EQ(api.modeling().face_texture_settings().selection_token, fractional_token);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.1);
+  EXPECT_FALSE(api.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 0.1, 1.0e-4);
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 0.2,
                                "texture.fractional.rotation.gesture").ok());
   EXPECT_EQ(api.modeling().face_texture_settings().selection_token, fractional_token);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.2);
+  EXPECT_FALSE(api.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 0.2, 1.0e-4);
   EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 0.2f);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 1000.2f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 0.2f);
+  const auto after_fractional = api.query().compiled_object_mesh(object);
+  ASSERT_TRUE(after_fractional.has_value());
   ASSERT_TRUE(api.history().undo().ok());
   EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 0.0f);
   EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 1000.0f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.0);
+  EXPECT_TRUE(api.modeling().face_texture_settings().rotation_mixed);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *before_fractional);
   ASSERT_TRUE(api.history().redo().ok());
   EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 0.2f);
-  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 1000.2f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.2);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 0.2f);
+  EXPECT_FALSE(api.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees, 0.2, 1.0e-4);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(object), *after_fractional);
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,
@@ -1390,7 +1421,12 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const auto texture = face_texture(api, object, 1);
   EXPECT_FLOAT_EQ(texture.shift_uv.x, 0.25f);
   EXPECT_FLOAT_EQ(texture.shift_uv.y, -0.125f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 45);
+  const auto settings = api.modeling().face_texture_settings();
+  EXPECT_NEAR(settings.rotation_degrees, 45, 1.0e-4);
+  EXPECT_NEAR(settings.shift_x, 16, 1.0e-4);
+  EXPECT_NEAR(settings.shift_y, -8, 1.0e-4);
+  ASSERT_TRUE(settings.scale_x.has_value());
+  EXPECT_NEAR(*settings.scale_x, -2, 1.0e-4);
 
   const auto before = api.revisions();
   EXPECT_FALSE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleY, 0).ok());
@@ -1475,7 +1511,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 7.5f);
   EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -37.5f);
   EXPECT_EQ(api.modeling().face_texture_settings().selection_token, token);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -22.5);
+  EXPECT_TRUE(api.modeling().face_texture_settings().rotation_mixed);
   EXPECT_EQ(api.history().snapshot().undo_label, "Rotate Texture Clockwise");
 
   rotation_snap_degrees = 90.0;
@@ -1484,25 +1520,37 @@ TEST(ProgrammaticBehaviorScenarioTests,
   ASSERT_TRUE(repeated.changed());
   EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, -15.0f);
   EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -60.0f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -45.0);
+  EXPECT_TRUE(api.modeling().face_texture_settings().rotation_mixed);
   ASSERT_TRUE(api.history().undo().ok());
   EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 7.5f);
   EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -37.5f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -22.5);
+  EXPECT_TRUE(api.modeling().face_texture_settings().rotation_mixed);
   ASSERT_TRUE(api.history().redo().ok());
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -45.0);
+  EXPECT_TRUE(api.modeling().face_texture_settings().rotation_mixed);
 
   ASSERT_TRUE(api.selection().select_face(object, 2).ok());
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.0);
+  const auto before_repeat = api.modeling().face_texture_settings();
+  EXPECT_FALSE(before_repeat.rotation_mixed);
+  EXPECT_NEAR(before_repeat.rotation_degrees,
+              api.modeling().face_texture_canvas().rotation_degrees, 1.0e-4);
   const auto new_selection_repeat = api.history().repeat_last_action();
   ASSERT_TRUE(new_selection_repeat.ok()) << new_selection_repeat.error_message();
   EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, -15.0f);
   EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -82.5f);
-  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, -22.5);
+  const double repeated_angle = api.modeling().face_texture_settings().rotation_degrees;
+  EXPECT_NEAR(std::abs(std::remainder(
+                  repeated_angle - before_repeat.rotation_degrees, 360.0)),
+              22.5, 1.0e-4);
+  EXPECT_NEAR(repeated_angle,
+              api.modeling().face_texture_canvas().rotation_degrees, 1.0e-4);
   ASSERT_TRUE(api.history().undo().ok());
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees,
+              before_repeat.rotation_degrees, 1.0e-4);
   const auto repeat_after_undo = api.history().repeat_last_action();
   ASSERT_TRUE(repeat_after_undo.ok()) << repeat_after_undo.error_message();
   EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -82.5f);
+  EXPECT_NEAR(api.modeling().face_texture_settings().rotation_degrees,
+              repeated_angle, 1.0e-4);
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,

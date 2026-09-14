@@ -87,6 +87,30 @@ bool ProjectMaterialFixture::set_projection_failure(
   return true;
 }
 
+bool ProjectMaterialFixture::prepare_primitive_footprint(float origin_x) const {
+  OpenSceneSession *open_scene =
+      project_ != nullptr ? project_->active_scene() : nullptr;
+  if (open_scene == nullptr || open_scene->session == nullptr) {
+    return false;
+  }
+  auto &modeling = open_scene->session->modeling();
+  const ModelingBoxToolEvent start{
+      .ray = {.origin = {origin_x, 8.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  };
+  if (!modeling.begin_box_footprint(start).ok) {
+    return false;
+  }
+  auto finish = start;
+  finish.ray.origin = {origin_x + 2.0f, 8.0f, 2.0f};
+  if (!modeling.update_box_footprint(finish).valid) {
+    return false;
+  }
+  const auto preview = modeling.begin_box_height(finish);
+  return preview.ok && preview.valid;
+}
+
 std::optional<QMat4> ProjectMaterialFixture::instance_member_world_transform(
     EntityId member, EntityId occurrence) const {
   OpenSceneSession *open_scene =

@@ -282,6 +282,9 @@ public:
   void set_materials(std::vector<QtMaterialBrowserItem> materials,
                      QuaderMaterialReference selected_material = {});
   void set_selected_material(QuaderMaterialReference material);
+  /// Reveals one existing material without assignment, relaxing only filters
+  /// that hide it and replacing any previous thumbnail selection.
+  [[nodiscard]] bool reveal_material(QuaderMaterialReference material);
   void set_assignment_available(bool available);
   [[nodiscard]] QtMaterialBrowserHost host() const noexcept { return host_; }
   void set_folders(std::vector<QString> project_relative_folders);
@@ -302,6 +305,8 @@ public:
     return purpose_;
   }
   [[nodiscard]] QuaderMaterialReference selected_material() const;
+  /// Returns the current item only while it is part of the thumbnail selection.
+  [[nodiscard]] QuaderMaterialReference current_selected_material() const;
   void set_assign_material_callback(AssignMaterialCallback callback);
   void set_open_material_callback(OpenMaterialCallback callback);
   void set_accept_material_callback(AcceptMaterialCallback callback);

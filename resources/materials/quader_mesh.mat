@@ -37,6 +37,18 @@ material {
         },
         {
             type : sampler2d,
+            name : normalTexture
+        },
+        {
+            type : float,
+            name : normalStrength
+        },
+        {
+            type : float,
+            name : normalYSign
+        },
+        {
+            type : sampler2d,
             name : solidColorTexture
         },
         {
@@ -143,6 +155,8 @@ material {
 }
 
 vertex {
+    #include "mesh_vertex_normal_mapping.glsl"
+
     vec2 generatedTextureUv(highp vec3 position, highp vec3 geometricNormal) {
         // Match the portable generated UV chart, not the surface-grid chart:
         // Quader -> Source (x, -z, y), with dominant-axis ties X, then Y, then Z.
@@ -233,6 +247,9 @@ vertex {
         material.textureSamplingCorrection.x = max(
                 material.textureSamplingCorrection.x,
                 material.quadUvCoordinates.w);
+        if (requiresWorldTextureNormalCorrection()) {
+            material.textureSamplingCorrection.x = 1.0;
+        }
         vec4 projection = getCustom0();
         vec3 worldNormal = getWorldFromModelNormalMatrix() * projection.xyz;
         float normalLengthSquared = dot(worldNormal, worldNormal);
@@ -435,12 +452,39 @@ fragment {
         return min(ambient + keyIntensity * wrappedDiffuse, 1.0);
     }
 
-    void material(inout MaterialInputs material) {
-        prepareMaterial(material);
+    #include "mesh_normal_mapping.glsl"
 
+    vec3 shadedSurfaceColor(vec3 albedo, vec3 surfaceNormal) {
+        // A soft sky/ground transition keeps opposing surfaces readable,
+        // with a slightly brighter X axis to distinguish upright planes.
+        float skyBlend = smoothstep(-0.35, 0.35, surfaceNormal.y);
+        vec3 fillWeights = vec3(0.59, mix(0.22, 0.98, skyBlend), 0.42);
+        float surfaceFill = dot(surfaceNormal * surfaceNormal, fillWeights);
+
+        // A gently wrapped camera light reveals bump detail. The narrow
+        // cosine lobe is fixed so material roughness does not obscure shape.
+        float facing = clamp(dot(surfaceNormal, getWorldViewVector()), 0.0, 1.0);
+        float cameraFill = 0.31 + 0.69 * facing * (1.08 - 0.08 * facing);
+        float sheen = 0.047 * pow(facing, 18.0);
+        return albedo * (surfaceFill * cameraFill) + vec3(sheen);
+    }
+
+    void material(inout MaterialInputs material) {
         // Global 0 composes renderer-wide presentation: x is the rendered
         // material diagnostic and y is this shaded material's Solid override.
         bool solidPresentation = getMaterialGlobal0().y >= 0.5;
+        vec2 uv = vec2(0.0);
+        material.normal = vec3(0.0, 0.0, 1.0);
+        if (!solidPresentation) {
+            uv = applyTextureTransform(applyQuadUvInterpolation(
+                    vec2(getUV0().x, 1.0 - getUV0().y)));
+            if (materialParams.shadedLightingEnabled > 0.0) {
+                material.normal = sampleTextureNormal(uv);
+            }
+        }
+        prepareMaterial(material);
+
+        vec3 normalWorld = normalize(getWorldNormalVector());
         vec3 baseColor;
         float sourceAlpha;
         if (solidPresentation) {
@@ -448,17 +492,20 @@ fragment {
                     materialParams_solidColorTexture, vec2(0.5)).rgb;
             sourceAlpha = 1.0;
         } else {
-            vec2 uv = applyTextureTransform(applyQuadUvInterpolation(
-                    vec2(getUV0().x, 1.0 - getUV0().y)));
             vec4 baseSample = texture(materialParams_baseColorTexture, uv);
             baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
             sourceAlpha = baseSample.a * materialParams.baseColorFactor.a;
         }
-        float lighting = mix(
-                1.0,
-                shadedModelingLighting(),
-                clamp(materialParams.shadedLightingEnabled, 0.0, 1.0));
-        baseColor *= lighting;
+        float lightingEnabled = clamp(
+                materialParams.shadedLightingEnabled, 0.0, 1.0);
+        if (solidPresentation) {
+            float lighting = mix(1.0, shadedModelingLighting(), lightingEnabled);
+            baseColor *= lighting;
+        } else {
+            baseColor = mix(
+                    baseColor, shadedSurfaceColor(baseColor, normalWorld),
+                    lightingEnabled);
+        }
         baseColor = applySurfaceGrid(baseColor);
         vec4 edited = applyInstanceEditContext(
                 vec4(baseColor, sourceAlpha),

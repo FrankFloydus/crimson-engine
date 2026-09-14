@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -367,6 +368,23 @@ void expect_all_face_slots(ProjectSession &project, EntityId entity,
   ASSERT_FALSE(document->faces.empty());
   for (const quader_poly::Face &face : document->faces) {
     EXPECT_EQ(face.material_slot, expected) << face.id;
+  }
+}
+
+void expect_primitive_project_material(ProjectSession &project,
+                                       QuaderEditorApi &editor,
+                                       QuaderModelingObjectId object,
+                                       ProjectAssetId expected) {
+  const auto reference = editor.query().modeling_object_for_id(object);
+  ASSERT_TRUE(reference.has_value());
+  expect_primary_material(project, reference->entity, expected);
+  expect_all_face_slots(project, reference->entity, 0u);
+  const auto *document = authored_document(project, reference->entity);
+  ASSERT_NE(document, nullptr);
+  for (const auto &face : document->faces) {
+    const auto material = editor.modeling().project_material_for_face(object, face.id);
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    EXPECT_EQ(material.value().id, expected);
   }
 }
 
@@ -2113,8 +2131,11 @@ TEST(ProjectMaterialBehaviorTests,
   const std::array<QVec2, 4> unfolded_base{{
       {1.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 1.0f}, {1.0f, 1.0f}}};
   for (std::size_t corner = 0; corner < target_uv.size(); ++corner) {
-    const QVec2 expected = quader_poly::apply_face_texture_transform(
-        unfolded_base[corner], source_before.faces.front().texture_transform);
+    // Numeric edits can author the effective chart independently of its scalar
+    // settings. Continue the measured source basis by the known unfolded width.
+    const QVec2 expected = source_uv[0] +
+        (source_uv[1] - source_uv[0]) * unfolded_base[corner].x +
+        (source_uv[3] - source_uv[0]) * unfolded_base[corner].y;
     EXPECT_NEAR(target_uv[corner].x, expected.x, 2.0e-5f);
     EXPECT_NEAR(target_uv[corner].y, expected.y, 2.0e-5f);
   }
@@ -2151,6 +2172,87 @@ TEST(ProjectMaterialBehaviorTests,
   }
   ASSERT_TRUE(editor.history().redo().ok());
   EXPECT_TRUE(editor.query().entity(transient.value().entity).has_value());
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferMatchesHammerObtuseWrapWithExactHistory) {
+  ProjectMaterialBehaviorHarness harness("face-transfer-hammer-obtuse");
+  harness.create();
+  auto &editor = harness.editor();
+  const auto source = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()));
+  auto target_document = texture_transfer_quad(true);
+  constexpr float kRootThree = 1.7320508075688772F;
+  target_document.vertices[1].position = {1.0F, 0.0F, -kRootThree};
+  target_document.vertices[2].position = {1.0F, 2.0F, -kRootThree};
+  const auto target = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(target_document));
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(target.ok()) << target.error_message();
+  const auto material = editor.assets().add_material(
+      QuaderMaterialArgs{.name = "Wrapped Material"});
+  ASSERT_TRUE(material.ok());
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(source.value().entity,
+      MaterialComponent{.material = material.value().id}));
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::ScaleX, -1.25).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::Rotate, 31.0).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::ShiftY, 7.0).ok());
+  const auto source_before = *authored_document(harness.project(), source.value().entity);
+  const auto source_uv = effective_face_corner_uvs(harness.project(), source.value().entity, 1);
+  ASSERT_EQ(source_uv.size(), 4U);
+  const auto before = *authored_document(harness.project(), target.value().entity);
+  const auto material_before = *scene_material(harness.project(), target.value().entity);
+  const auto selection_before = exact_selection(harness.project());
+  const auto history_before = editor.query().history();
+
+  const auto applied = editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, 1);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  const auto after = *authored_document(harness.project(), target.value().entity);
+  const auto material_after = *scene_material(harness.project(), target.value().entity);
+  EXPECT_EQ(material_after.material_for_slot(after.faces.front().material_slot),
+            material.value().id);
+  auto expected_document = before;
+  expected_document.faces.front() = after.faces.front();
+  expected_document.faces.front().vertices = before.faces.front().vertices;
+  expect_same_authored_document(after, expected_document);
+  expect_same_authored_document(
+      *authored_document(harness.project(), source.value().entity), source_before);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+  EXPECT_EQ(after.faces.front().texture_transform, source_before.faces.front().texture_transform);
+  const auto uv = effective_face_corner_uvs(harness.project(), target.value().entity, 1);
+  ASSERT_EQ(uv.size(), 4U);
+  // Hammer folds the 120-degree normal angle to 60 degrees. The target's
+  // transverse UV advance is one half, while both seam endpoints stay fixed.
+  constexpr std::array<QVec2, 4> kExpectedBase{{
+      {1.0F, 0.0F}, {1.5F, 0.0F}, {1.5F, 1.0F}, {1.0F, 1.0F}}};
+  for (std::size_t corner = 0; corner < uv.size(); ++corner) {
+    const QVec2 expected = source_uv[0] +
+        (source_uv[1] - source_uv[0]) * kExpectedBase[corner].x +
+        (source_uv[3] - source_uv[0]) * kExpectedBase[corner].y;
+    EXPECT_NEAR(uv[corner].x, expected.x, 2.0e-5F);
+    EXPECT_NEAR(uv[corner].y, expected.y, 2.0e-5F);
+  }
+  const auto history_after = editor.query().history();
+  const auto repeated = editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, 1);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  expect_same_history(editor.query().history(), history_after);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), before);
+  EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_before);
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), after);
+  EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_after);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
 }
 
 TEST(ProjectMaterialBehaviorTests,
@@ -2903,6 +3005,121 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_EQ(scene_material(harness.project(), box.value().entity), nullptr);
   EXPECT_EQ(face_slot_snapshot(harness.project(), box.value().entity),
             slots_before);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     PrimitiveAcceptanceUsesExplicitMaterialPerShapeWithExactHistory) {
+  ProjectMaterialBehaviorHarness harness("primitive-explicit-material");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber", {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue", {0.1f, 0.2f, 1.0f}),
+  };
+  harness.install_and_reopen(std::array{amber, blue});
+  auto &editor = harness.editor();
+  auto &session = *harness.project().active_scene()->session;
+  constexpr std::array kShapes{
+      QuaderPrimitiveCreationShape::Box,
+      QuaderPrimitiveCreationShape::Cylinder,
+      QuaderPrimitiveCreationShape::Cone,
+      QuaderPrimitiveCreationShape::Sphere,
+      QuaderPrimitiveCreationShape::Torus,
+  };
+  for (const auto shape : kShapes) {
+    SCOPED_TRACE(static_cast<int>(shape));
+    ASSERT_TRUE(editor.tools().begin_primitive_creation(shape).ok());
+    ASSERT_TRUE(ProjectMaterialFixture(harness.project()).prepare_primitive_footprint());
+    ASSERT_TRUE(editor.tools().accept_active_primitive(
+        "Amber Primitive", QuaderMaterialReference::project(amber.material.id)).ok());
+    const auto first = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(first.has_value());
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, first->object_id, amber.material.id));
+    EXPECT_EQ(session.history().undo_count(), 0u);
+
+    // A different choice is consumed only by the next accepted footprint.
+    ASSERT_TRUE(ProjectMaterialFixture(harness.project()).prepare_primitive_footprint(4.0f));
+    ASSERT_TRUE(editor.tools().accept_active_primitive(
+        "Blue Primitive", QuaderMaterialReference::project(blue.material.id)).ok());
+    const auto second = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(second.has_value());
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, first->object_id, amber.material.id));
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, second->object_id, blue.material.id));
+    EXPECT_EQ(session.history().undo_count(), 0u);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_EQ(editor.query().modeling_objects().size(), 1u);
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, first->object_id, amber.material.id));
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_EQ(editor.query().modeling_objects().size(), 2u);
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, second->object_id, blue.material.id));
+
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    EXPECT_EQ(session.history().undo_count(), 2u);
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_EQ(editor.query().modeling_objects().size(), 1u);
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, first->object_id, amber.material.id));
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(editor.query().modeling_objects().empty());
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, first->object_id, amber.material.id));
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, second->object_id, blue.material.id));
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.history().undo().ok());
+  }
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     PrimitiveAcceptanceFallsBackForInvalidMissingAndDeletedMaterialReferences) {
+  ProjectMaterialBehaviorHarness harness("primitive-material-fallback");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber", {1.0f, 0.5f, 0.1f}),
+  };
+  harness.install_and_reopen(std::array{amber});
+  auto &editor = harness.editor();
+  const std::array removed{amber.material.id};
+  const auto deletion = editor.project_assets().preview_delete_materials(removed);
+  ASSERT_TRUE(deletion.ok()) << deletion.error_message();
+  const auto deleted = editor.project_assets().delete_materials(
+      removed, deletion.value().revision);
+  ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+  const auto history_before =
+      harness.project().active_scene()->session->history().undo_count();
+  const std::array references{
+      QuaderMaterialReference{},
+      QuaderMaterialReference::project(project_asset_id(kBlueMaterialId)),
+      QuaderMaterialReference::project(amber.material.id),
+      QuaderMaterialReference::embedded(std::numeric_limits<AssetId>::max()),
+  };
+  ASSERT_TRUE(editor.tools().begin_primitive_creation(
+      QuaderPrimitiveCreationShape::Box).ok());
+  for (const auto reference : references) {
+    ASSERT_TRUE(ProjectMaterialFixture(harness.project()).prepare_primitive_footprint());
+    const auto created = editor.tools().accept_active_primitive("Fallback Primitive", reference);
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const auto state = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(state.has_value());
+    ASSERT_NO_FATAL_FAILURE(expect_primitive_project_material(
+        harness.project(), editor, state->object_id,
+        project_asset_id(kDefaultProjectMaterialId)));
+  }
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(harness.project().active_scene()->session->history().undo_count(),
+            history_before + references.size());
 }
 
 TEST(ProjectMaterialBehaviorTests,

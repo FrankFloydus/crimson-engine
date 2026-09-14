@@ -32,9 +32,10 @@ struct FaceTextureCanvasMap {
                          const FaceTextureCanvasMap &) = default;
 };
 
-/// Owns a geometry-derived orthonormal chart whose outline never depends on UVs.
+/// Owns a world-upright orthonormal chart whose outline never depends on UVs.
 struct FaceTextureCanvasChart {
-  /// Coordinates are world units; the first corner is the plane origin.
+  /// Coordinates are world units; the first corner is the plane origin. Projected
+  /// world Y points up; horizontal faces use world X as their right axis.
   std::vector<std::array<double, 2>> outline;
   FaceTextureCanvasMap map;
   bool mapping_usable = false;

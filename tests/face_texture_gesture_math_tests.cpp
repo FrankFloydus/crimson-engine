@@ -144,6 +144,24 @@ TEST(FaceTextureGestureMathTests, ScaleModifiersQuantizeDisplayedRepeatDimension
   EXPECT_NEAR(measured_candidate(height_grid).repeat_height, 24.0, 1.0e-10);
 }
 
+TEST(FaceTextureGestureMathTests, SnappingBackToOriginalScaleRetainsExactPhase) {
+  auto baseline = canvas_baseline();
+  baseline.chart.map.uv_offset = {0.1, 0.3};
+  for (const auto kind : {Kind::ScaleWidth, Kind::ScaleHeight}) {
+    const bool width = kind == Kind::ScaleWidth;
+    const ModelingFaceTextureGestureBegin begin{
+        .kind = kind,
+        .start = width ? QVec2{10010.0F, 10000.0F} : QVec2{10000.0F, 10010.0F},
+        .pivot = {10000.0F, 10000.0F}};
+    for (const bool grid : {false, true}) {
+      const auto candidate = prepare_face_texture_gesture_map(baseline, begin,
+          {.current = width ? QVec2{10010.1F, 10000.0F} : QVec2{10000.0F, 10010.1F},
+           .precision = true, .snap = grid, .grid_step = 1.0}).or_throw();
+      EXPECT_EQ(candidate, baseline.chart.map);
+    }
+  }
+}
+
 TEST(FaceTextureGestureMathTests, RotatedTextureScaleChangesOnlyTheRequestedRepeat) {
   auto baseline = canvas_baseline();
   constexpr double kCosine = std::numbers::sqrt2 / 2.0;

@@ -36,6 +36,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -4990,8 +4991,22 @@ public:
       return result;
     }
     const std::vector<ObjectId> selected = selected_sdk_objects();
-    const Result<std::vector<PolygonDocument>> documents =
-        session_.document_copies(selected);
+    const auto documents = [&]() -> Result<std::vector<PolygonDocument>> {
+      if (!face_texture_gesture_active()) {
+        return session_.document_copies(selected);
+      }
+      const auto preview = session_.preview_summary();
+      std::vector<PolygonDocument> candidates;
+      candidates.reserve(selected.size());
+      for (const auto object : selected) {
+        auto candidate = session_.preview_document_copy(preview.id, object);
+        if (!candidate.ok()) {
+          return Result<std::vector<PolygonDocument>>::failure(candidate.error());
+        }
+        candidates.push_back(std::move(candidate).value());
+      }
+      return Result<std::vector<PolygonDocument>>::success(std::move(candidates));
+    }();
     if (!documents.ok()) {
       result.command = failure(documents.error_message());
       return result;
@@ -5203,6 +5218,134 @@ public:
         .sampling_from_local = to_sdk(target.sampling_from_local)});
   }
 
+  [[nodiscard]] ModelingCommandResult apply_face_texture_canvas_edits(
+      std::span<const ModelingFaceTextureCanvasEdit> edits) {
+    if (selection_mode_ != ModelingSelectionMode::Face) {
+      return failure("Texture settings require face selection mode.");
+    }
+    if (edits.empty()) {
+      return failure("Select one or more editable faces first.");
+    }
+    if (preview_active()) {
+      return failure("Commit or cancel the active preview first.");
+    }
+    const auto selected = selected_sdk_objects();
+    std::vector<ObjectId> objects;
+    std::vector<std::size_t> object_indices;
+    std::set<std::pair<int, FaceId>> faces;
+    objects.reserve(edits.size());
+    object_indices.reserve(edits.size());
+    for (const auto &edit : edits) {
+      const auto &target = edit.target;
+      const auto object = sdk_object(target.modeling_object_id);
+      if (!object.has_value() || !target.face.valid() ||
+          std::ranges::find(selected, *object) == selected.end() ||
+          !faces.emplace(target.modeling_object_id, target.face).second ||
+          (edit.scalar_update.has_value() &&
+           edit.scalar_update->face != target.face)) {
+        return failure("The selected texture targets are no longer valid.");
+      }
+      const auto found = std::ranges::find(objects, *object);
+      const auto index = static_cast<std::size_t>(found - objects.begin());
+      if (found == objects.end()) {
+        objects.push_back(*object);
+      }
+      object_indices.push_back(index);
+    }
+    auto documents = session_.document_copies(objects);
+    if (!documents.ok()) {
+      return failure(documents.error_message());
+    }
+    std::vector<modeling::PreparedFaceTextureDocument> prepared_documents;
+    std::vector<PolygonSelectionSnapshot> selections;
+    prepared_documents.reserve(objects.size());
+    selections.reserve(objects.size());
+    for (std::size_t index = 0; index < objects.size(); ++index) {
+      const auto native = native_object(objects[index]);
+      if (!native.has_value()) {
+        return failure("The selected texture targets are no longer valid.");
+      }
+      auto selection = documents.value()[index].selection();
+      std::ranges::sort(selection.faces);
+      selections.push_back(std::move(selection));
+      prepared_documents.push_back({
+          .key = static_cast<std::uint64_t>(*native),
+          .document = std::move(documents.value()[index]),
+      });
+    }
+    bool changed = false;
+    for (std::size_t index = 0; index < edits.size(); ++index) {
+      const auto &edit = edits[index];
+      const auto &target = edit.target;
+      auto &working = prepared_documents[object_indices[index]];
+      const auto &selection = selections[object_indices[index]];
+      if (!std::ranges::binary_search(selection.faces, target.face)) {
+        return failure("The selected texture targets are no longer valid.");
+      }
+      bool face_changed = false;
+      if (!edit.apply_mapping && edit.scalar_update.has_value() &&
+          edit.scalar_update->rotation_degrees.has_value()) {
+        // Nonaffine authored faces keep the existing image-axis scalar rotation
+        // contract, including rectangular textures and occurrence compensation.
+        const std::array targets{modeling::FaceTextureActionTarget{
+            .key = working.key, .document = &working.document,
+            .faces = {{.face = target.face,
+                       .texture_width = static_cast<std::uint32_t>(edit.texture_extent.x),
+                       .texture_height = static_cast<std::uint32_t>(edit.texture_extent.y),
+                       .target_rotation_degrees = edit.scalar_update->rotation_degrees}},
+            .world_from_local = to_sdk(target.world_from_local),
+            .sampling_from_local = to_sdk(target.sampling_from_local)}};
+        auto prepared = modeling::prepare_face_texture_action(targets,
+            {.action = modeling::FaceTextureAction::RotateCounterClockwise});
+        if (!prepared.ok()) return failure(prepared.error_message());
+        face_changed = prepared.value().changed;
+        if (face_changed) working.document = std::move(prepared.value().documents.front().document);
+      } else if (edit.scalar_update.has_value()) {
+        const std::array updates{*edit.scalar_update};
+        const auto updated = working.document.set_face_texture_transforms(updates);
+        if (!updated.ok()) {
+          return failure(updated.error_message());
+        }
+        if (!updated.value().success) {
+          return failure(updated.value().message);
+        }
+        face_changed = updated.value().changed;
+      }
+      if (edit.apply_mapping) {
+        auto prepared = modeling::prepare_face_texture_canvas({
+            .key = working.key,
+            .document = &working.document,
+            .face = target.face,
+            .world_from_local = to_sdk(target.world_from_local),
+            .sampling_from_local = to_sdk(target.sampling_from_local)}, edit.map);
+        if (!prepared.ok()) {
+          return failure(prepared.error_message());
+        }
+        if (!prepared.value().receipt.success) {
+          return failure(prepared.value().receipt.message);
+        }
+        face_changed = face_changed || prepared.value().receipt.changed;
+        working.document = std::move(prepared.value().document);
+      }
+      if (!face_changed) {
+        continue;
+      }
+      // Both preparations retain topology and selection. Each unique changed
+      // face contributes to the one geometry-only receipt for its object.
+      working.receipt.changed = true;
+      working.receipt.message = "Updated face texture settings.";
+      working.receipt.dirty.geometry = true;
+      working.receipt.affected.faces.push_back(target.face);
+      working.receipt.modified.faces.push_back(target.face);
+      changed = true;
+    }
+    if (!changed) {
+      return {.ok = true, .changed = false};
+    }
+    return publish_prepared_documents(objects, prepared_documents,
+                                      "Edit face texture settings failed.");
+  }
+
   [[nodiscard]] bool face_texture_gesture_active() const noexcept {
     return preview_active() && active_preview_operation_id_ == "face_texture_gesture";
   }
@@ -5214,7 +5357,8 @@ public:
 
   [[nodiscard]] ModelingCommandResult refresh_face_texture_gesture(
       const ModelingFaceTextureTransferTarget &target,
-      const modeling::FaceTextureCanvasMap &map) {
+      const modeling::FaceTextureCanvasMap &map,
+      std::optional<modeling::FaceTextureTransformUpdate> scalar_update) {
     if (preview_active() && !face_texture_gesture_active()) {
       return failure("Apply or cancel the active preview before editing textures.");
     }
@@ -5229,6 +5373,17 @@ public:
         ? session_.preview_base_document_copy(preview.id, *object)
         : session_.document_copy(*object);
     if (!document.ok()) return failure(document.error_message());
+    bool scalar_changed = false;
+    if (scalar_update.has_value()) {
+      if (scalar_update->face != target.face) {
+        return failure("The texture gesture scalar target does not match its face.");
+      }
+      const std::array updates{*scalar_update};
+      const auto updated = document.value().set_face_texture_transforms(updates);
+      if (!updated.ok()) return failure(updated.error_message());
+      if (!updated.value().success) return failure(updated.value().message);
+      scalar_changed = updated.value().changed;
+    }
     auto prepared = modeling::prepare_face_texture_canvas({
         .key = static_cast<std::uint64_t>(target.modeling_object_id),
         .document = &document.value(),
@@ -5236,6 +5391,14 @@ public:
         .world_from_local = to_sdk(target.world_from_local),
         .sampling_from_local = to_sdk(target.sampling_from_local)}, map);
     if (!prepared.ok()) return failure(prepared.error_message());
+    if (scalar_changed && !prepared.value().receipt.changed) {
+      auto &receipt = prepared.value().receipt;
+      receipt.changed = true;
+      receipt.message = "Updated face texture settings.";
+      receipt.dirty.geometry = true;
+      receipt.affected.faces.push_back(target.face);
+      receipt.modified.faces.push_back(target.face);
+    }
     PreparedMeshPreviewBatch batch;
     batch.changed = prepared.value().receipt.changed;
     batch.updates.push_back({.object = *object,
@@ -13020,6 +13183,11 @@ ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_updates(
   return impl_->apply_face_texture_updates(batches);
 }
 
+ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_canvas_edits(
+    std::span<const ModelingFaceTextureCanvasEdit> edits) {
+  return impl_->apply_face_texture_canvas_edits(edits);
+}
+
 ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_action(
     std::span<const ModelingFaceTextureActionTarget> targets,
     const modeling::FaceTextureActionOptions &options) {
@@ -13041,8 +13209,9 @@ ModelingSdkProjectionAdapter::face_texture_canvas(
 
 ModelingCommandResult ModelingSdkProjectionAdapter::refresh_face_texture_gesture(
     const ModelingFaceTextureTransferTarget &target,
-    const modeling::FaceTextureCanvasMap &map) {
-  return impl_->refresh_face_texture_gesture(target, map);
+    const modeling::FaceTextureCanvasMap &map,
+    std::optional<modeling::FaceTextureTransformUpdate> scalar_update) {
+  return impl_->refresh_face_texture_gesture(target, map, std::move(scalar_update));
 }
 
 bool ModelingSdkProjectionAdapter::face_texture_gesture_active() const noexcept {

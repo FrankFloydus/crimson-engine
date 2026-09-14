@@ -124,12 +124,14 @@ struct PreparedFaceTextureAction {
     const FaceTextureActionOptions &options);
 
 /**
- * Continues a source texture chart by rotating it onto the target plane about
- * their intersection. A shared edge in the same document uses its endpoint UVs
+ * Continues a source texture chart about the planes' intersection using Hammer's
+ * acute plane angle. A shared edge in the same document uses its endpoint UVs
  * and a geometrically conditioned third corner, preserving that local seam
  * even for non-affine source UVs. Otherwise the source must supply an affine
- * chart. Parallel/opposed planes retain world axes
- * and phase. Copies the source face settings and the host-resolved material
+ * chart. The shared edge, or closest aligned pair of boundary-edge lines,
+ * orients each plane using its farthest corner, including concave faces.
+ * Parallel/opposed and float-epsilon near-parallel planes retain world
+ * axes and phase. Copies the source face settings and the host-resolved material
  * slot without changing geometry, component IDs, selection, or sampling.
  * Returns only the immutable target replacement; neither input is modified.
  */

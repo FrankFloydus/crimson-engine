@@ -241,12 +241,12 @@ bool allowed_public_behavior_harness_use(std::string_view relative,
     const std::array<std::string_view, 8> fixture_access{
         "#include \"api/quader_api_session_internal_access.hpp\"",
         "#include \"editor/modeling/services/modeling_session_service.hpp\"",
-        "SceneSession session;",
-        "QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};",
-        "auto mesh = session.modeling().compile_object_mesh(object.modeling_object_id);",
-        "ASSERT_TRUE(session.scene().set_texture_mapping(object.entity,",
-        "session.modeling().set_modeling_sdk_projection_failure_for_tests(point);",
-        "session.modeling().set_modeling_sdk_projection_failure_for_tests(",
+        "SceneSession session_;",
+        "QuaderEditorApi editor_{QuaderApiSessionInternalAccess::from_scene_session(session_)};",
+        "auto mesh = session_.modeling().compile_object_mesh(object.modeling_object_id);",
+        "ASSERT_TRUE(session_.scene().set_texture_mapping(object.entity,",
+        "session_.modeling().set_modeling_sdk_projection_failure_for_tests(point);",
+        "session_.modeling().set_modeling_sdk_projection_failure_for_tests(",
     };
     return std::find(fixture_access.begin(), fixture_access.end(), trimmed) !=
            fixture_access.end();

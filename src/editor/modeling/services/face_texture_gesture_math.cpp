@@ -43,6 +43,7 @@ bool usable(const Map &map) {
   return magnitude > 0.0 && std::isfinite(magnitude) &&
          std::abs(m[0] * m[3] - m[1] * m[2]) / magnitude > 1.0e-10;
 }
+
 } // namespace
 
 modeling::FaceTextureCanvasMap transform_face_texture_canvas_map(
@@ -72,6 +73,10 @@ void measure_face_texture_canvas(ModelingFaceTextureCanvas &canvas) {
   const auto &m = inverse_map(canvas.chart.map).uv_from_plane;
   canvas.repeat_width = std::hypot(m[0], m[2]);
   canvas.repeat_height = std::hypot(m[1], m[3]);
+  const double sign_x = std::signbit(canvas.texture_transform.scale.x) ? -1.0 : 1.0;
+  canvas.rotation_degrees = std::atan2(sign_x * m[2], sign_x * m[0]) *
+      180.0 / std::numbers::pi;
+  if (canvas.rotation_degrees >= 180.0) canvas.rotation_degrees -= 360.0;
 }
 
 modeling::Result<Map> prepare_face_texture_gesture_map(
@@ -135,6 +140,10 @@ modeling::Result<Map> prepare_face_texture_gesture_map(
     // mirrored maps remain mirrored because the spatial scale stays positive.
     if (!std::isfinite(factor) || factor <= 1.0e-8)
       return failure("Texture scale must remain nonzero.");
+    // Inverting the chart can place an exact snapped repeat a few double ULPs
+    // from its baseline. Preserve the original phase and no-op history exactly.
+    if (std::abs(factor - 1.0) <= 8.0 * std::numeric_limits<double>::epsilon())
+      return modeling::Result<Map>::success(baseline.chart.map);
     // The normal pointer motion drives an image-axis dimension. Scale the UV
     // row rather than shearing the rotated chart in physical plane coordinates.
     Map candidate = baseline.chart.map;

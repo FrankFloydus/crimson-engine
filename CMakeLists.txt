@@ -726,8 +726,8 @@ quader_require_existing_path("${QUADER_DEFAULT_ROUGHNESS_TEXTURE}" "app-owned de
 quader_require_existing_path("${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}" "app-owned default project material template")
 quader_require_existing_path("${QUADER_SOLID_VIEWPORT_TEXTURE}" "app-owned Solid viewport texture")
 
-quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh resources/materials/mesh_quad_uv.glsl resources/materials/instance_edit.glsl)
-quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit resources/materials/mesh_quad_uv.glsl resources/materials/instance_edit.glsl)
+quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh resources/materials/mesh_quad_uv.glsl resources/materials/mesh_normal_mapping.glsl resources/materials/mesh_vertex_normal_mapping.glsl resources/materials/instance_edit.glsl)
+quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit resources/materials/mesh_quad_uv.glsl resources/materials/mesh_normal_mapping.glsl resources/materials/mesh_vertex_normal_mapping.glsl resources/materials/instance_edit.glsl)
 quader_register_filament_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
 quader_register_filament_material(quader_instance_selection_fill_material resources/materials/quader_instance_selection_fill.mat quader_instance_selection_fill)
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
@@ -1541,6 +1541,8 @@ if(QUADER_BUILD_TESTS)
         tests/session_preferences_tests.cpp
         tests/render_presentation_tests.cpp
         tests/render_vsync_runtime_tests.cpp
+        tests/render_normal_mapping_runtime_tests.cpp
+        tests/render_tangent_frame_tests.cpp
         tests/scene_tone_mapper_tests.cpp
         tests/render_texture_lifetime_tests.cpp
         tests/curve_modeling_behavior_tests.cpp
@@ -1580,6 +1582,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_input_adapter_tests.cpp
         tests/qt_material_browser_window_tests.cpp
         tests/qt_face_texture_canvas_tests.cpp
+        tests/qt_face_texture_panel_tests.cpp
         tests/qt_material_find_replace_dialog_tests.cpp
         tests/qt_material_preview_surface_tests.cpp
         tests/qt_standard_material_preview_image_cache_tests.cpp

@@ -138,6 +138,7 @@ struct ModelingFaceTextureSettings final {
   double shift_x = 0.0;
   double shift_y = 0.0;
   double rotation_degrees = 0.0;
+  bool rotation_mixed = false;
   std::uint64_t selection_token = 0;
 };
 

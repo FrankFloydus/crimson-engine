@@ -78,6 +78,14 @@ public:
     accept_active_primitive(std::string name,
                             AssetId default_material = kInvalidAssetId,
                             bool snap_enabled = true);
+    /**
+     * Accepts the pending footprint with an explicit material for this shape.
+     * Missing, deleted or invalid references use the project's Default Material.
+     * Scene-only sessions retain their ordinary default when no material resolves.
+     */
+    QuaderApiVoidResult
+    accept_active_primitive(std::string name, QuaderMaterialReference material,
+                            bool snap_enabled = true);
     [[nodiscard]] bool has_active_primitive_creation() const;
     [[nodiscard]] std::string active_primitive_type() const;
     [[nodiscard]] std::string active_primitive_default_name() const;

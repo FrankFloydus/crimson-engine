@@ -11,27 +11,41 @@
 #include "ui/qt_material_browser_window.hpp"
 
 #include <QApplication>
+#include <QDataStream>
 #include <QDockWidget>
 #include <QEvent>
+#include <QIODevice>
 #include <QScrollArea>
 #include <QSplitter>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 
+#include <algorithm>
+#include <functional>
 #include <utility>
 
 namespace quader {
 namespace {
+
+constexpr quint32 kPanelSplitterStateTag = 0x51465450;
+constexpr quint16 kPanelSplitterStateVersion = 1;
 
 /// Reserves the compact controls' natural height, with scrolling when the
 /// dock or UI scale cannot accommodate their full presentation.
 class QtFaceTextureControlsScrollArea final : public QScrollArea {
 public:
   using QScrollArea::QScrollArea;
+  std::function<void()> natural_height_changed;
 
   [[nodiscard]] QSize sizeHint() const override {
     if (const QWidget *content = widget()) {
-      return content->sizeHint() + QSize(frameWidth() * 2, frameWidth() * 2);
+      QSize hint = content->sizeHint().expandedTo(content->minimumSizeHint());
+      if (content->hasHeightForWidth()) {
+        hint.setHeight(std::max(hint.height(),
+            content->heightForWidth(std::max(1, viewport()->width()))));
+      }
+      return hint + QSize(frameWidth() * 2, frameWidth() * 2);
     }
     return QScrollArea::sizeHint();
   }
@@ -46,12 +60,15 @@ protected:
     if (watched == widget() &&
         (event->type() == QEvent::LayoutRequest ||
          event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
-      const QSize hint = widget()->sizeHint();
+      const QSize hint = sizeHint();
       if (natural_hint_ != hint) {
         natural_hint_ = hint;
         // The viewport otherwise isolates child layout changes from the dock:
         // selecting faces would retain the hidden controls' tiny initial slot.
         updateGeometry();
+        if (natural_height_changed) {
+          natural_height_changed();
+        }
       }
     }
     return handled;
@@ -74,14 +91,14 @@ QtFaceTexturePanel::QtFaceTexturePanel(QWidget *parent) : QWidget(parent) {
   splitter_->setChildrenCollapsible(false);
   layout->addWidget(splitter_);
 
-  upper_ = new QWidget(splitter_);
-  upper_->setObjectName(QStringLiteral("face_texture.upper"));
-  auto *upper_layout = new QVBoxLayout(upper_);
-  upper_layout->setContentsMargins(0, 0, 0, 0);
-  upper_layout->setSpacing(0);
+  upper_ = new QSplitter(Qt::Vertical, splitter_);
+  upper_->setObjectName(QStringLiteral("face_texture.canvas_splitter"));
+  upper_->setChildrenCollapsible(false);
+  upper_->installEventFilter(this);
   canvas_ = new QtFaceTextureCanvas(upper_);
-  upper_layout->addWidget(canvas_, 1);
-  controls_scroll_ = new QtFaceTextureControlsScrollArea(upper_);
+  upper_->addWidget(canvas_);
+  auto *controls_scroll = new QtFaceTextureControlsScrollArea(upper_);
+  controls_scroll_ = controls_scroll;
   controls_scroll_->setObjectName(QStringLiteral("face_texture.controls_scroll"));
   controls_scroll_->setWidgetResizable(true);
   controls_scroll_->setFrameShape(QFrame::NoFrame);
@@ -90,7 +107,14 @@ QtFaceTexturePanel::QtFaceTexturePanel(QWidget *parent) : QWidget(parent) {
   controls_scroll_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
   controls_ = new QtFaceTextureControls(controls_scroll_);
   controls_scroll_->setWidget(controls_);
-  upper_layout->addWidget(controls_scroll_);
+  upper_->addWidget(controls_scroll_);
+  upper_->setStretchFactor(0, 1);
+  upper_->setStretchFactor(1, 0);
+  controls_scroll->natural_height_changed = [this]() {
+    schedule_controls_height_fit();
+  };
+  connect(upper_, &QSplitter::splitterMoved, this,
+          [this](int, int) { canvas_splitter_adjusted_ = true; });
   splitter_->addWidget(upper_);
 
   browser_ = new QtMaterialBrowserWindow(splitter_,
@@ -105,6 +129,41 @@ QtFaceTexturePanel::QtFaceTexturePanel(QWidget *parent) : QWidget(parent) {
   splitter_->setStretchFactor(1, 2);
   splitter_->setSizes({520, 280});
   setFocusProxy(canvas_);
+}
+
+void QtFaceTexturePanel::schedule_controls_height_fit() {
+  if (controls_height_fit_scheduled_ || canvas_splitter_adjusted_) {
+    return;
+  }
+  controls_height_fit_scheduled_ = true;
+  // A scroll area's content resize still uses its captured viewport extent
+  // when it updates scroll ranges. Refit after that event has completed.
+  QTimer::singleShot(0, this, [this]() {
+    controls_height_fit_scheduled_ = false;
+    fit_controls_height();
+  });
+}
+
+void QtFaceTexturePanel::fit_controls_height() {
+  if (controls_scroll_ == nullptr || canvas_splitter_adjusted_ ||
+      canvas_->interaction_active() ||
+      canvas_->presentation().gesture_active) {
+    return;
+  }
+  const int controls_height = std::max(controls_scroll_->minimumHeight(),
+                                        controls_scroll_->sizeHint().height());
+  const int canvas_height = std::max(
+      canvas_->minimumHeight(),
+      upper_->height() - upper_->handleWidth() - controls_height);
+  upper_->setSizes({canvas_height, controls_height});
+}
+
+bool QtFaceTexturePanel::eventFilter(QObject *watched, QEvent *event) {
+  const bool handled = QWidget::eventFilter(watched, event);
+  if (watched == upper_ && event->type() == QEvent::Resize) {
+    schedule_controls_height_fit();
+  }
+  return handled;
 }
 
 QtFaceTexturePanel::~QtFaceTexturePanel() { abandon(); }
@@ -153,6 +212,9 @@ void QtFaceTexturePanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   browser_->apply_ui_scale(metrics);
   controls_scroll_->setMinimumHeight(metrics.px(80));
   browser_->setMinimumHeight(metrics.px(96));
+  splitter_->setHandleWidth(metrics.px(5));
+  upper_->setHandleWidth(metrics.px(5));
+  schedule_controls_height_fit();
   updateGeometry();
 }
 
@@ -181,11 +243,49 @@ bool QtFaceTexturePanel::interaction_active() const {
 }
 
 QByteArray QtFaceTexturePanel::save_splitter_state() const {
-  return splitter_->saveState();
+  QByteArray state;
+  QDataStream stream(&state, QIODevice::WriteOnly);
+  stream << kPanelSplitterStateTag << kPanelSplitterStateVersion
+         << splitter_->saveState() << upper_->saveState()
+         << static_cast<quint8>(canvas_splitter_adjusted_ ? 1 : 0);
+  return state;
 }
 
 bool QtFaceTexturePanel::restore_splitter_state(const QByteArray &state) {
-  return !state.isEmpty() && splitter_->restoreState(state);
+  if (state.isEmpty()) {
+    return false;
+  }
+  QDataStream stream(state);
+  quint32 tag = 0;
+  stream >> tag;
+  if (tag != kPanelSplitterStateTag) {
+    // Older preferences contain only the canvas/controls versus browser split.
+    return splitter_->restoreState(state);
+  }
+  quint16 version = 0;
+  QByteArray browser_state;
+  QByteArray canvas_state;
+  quint8 canvas_adjusted = 0;
+  stream >> version >> browser_state >> canvas_state >> canvas_adjusted;
+  if (stream.status() != QDataStream::Ok || !stream.atEnd() ||
+      version != kPanelSplitterStateVersion || browser_state.isEmpty() ||
+      canvas_state.isEmpty() || canvas_adjusted > 1) {
+    return false;
+  }
+  const QByteArray previous_browser = splitter_->saveState();
+  const QByteArray previous_canvas = upper_->saveState();
+  const bool previous_adjusted = canvas_splitter_adjusted_;
+  canvas_splitter_adjusted_ = true;
+  if (!splitter_->restoreState(browser_state) ||
+      !upper_->restoreState(canvas_state)) {
+    splitter_->restoreState(previous_browser);
+    upper_->restoreState(previous_canvas);
+    canvas_splitter_adjusted_ = previous_adjusted;
+    return false;
+  }
+  canvas_splitter_adjusted_ = canvas_adjusted != 0;
+  schedule_controls_height_fit();
+  return true;
 }
 
 QSize QtFaceTexturePanel::sizeHint() const {

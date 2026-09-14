@@ -51,14 +51,22 @@ public:
   bool restore_splitter_state(const QByteArray &state);
   [[nodiscard]] QSize sizeHint() const override;
 
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
+  void schedule_controls_height_fit();
+  void fit_controls_height();
+
   QSplitter *splitter_ = nullptr;
-  QWidget *upper_ = nullptr;
+  QSplitter *upper_ = nullptr;
   QtFaceTextureCanvas *canvas_ = nullptr;
   QScrollArea *controls_scroll_ = nullptr;
   QtFaceTextureControls *controls_ = nullptr;
   QtMaterialBrowserWindow *browser_ = nullptr;
   QtUiScaleMetrics metrics_;
+  bool canvas_splitter_adjusted_ = false;
+  bool controls_height_fit_scheduled_ = false;
 };
 
 /** Includes a floated dock's native window in Face Texture input ownership. */

@@ -4211,3 +4211,154 @@ TEST(QtViewportSurfaceInputTests, RoundPrimitiveFootprintUsesNaturalHeightThroug
     EXPECT_EQ(session.modeling().box_drag_state(), quader::ModelingBoxDragState::Idle);
   }
 }
+
+TEST(QtViewportSurfaceInputTests,
+     PrimitiveMaterialIsSampledAtFootprintAcceptanceAndRetainedDuringEdits) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-primitive-browser-material-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const auto kind : {quader::PrimitiveCreationKind::Box,
+                          quader::PrimitiveCreationKind::Cylinder,
+                          quader::PrimitiveCreationKind::Cone,
+                          quader::PrimitiveCreationKind::Sphere,
+                          quader::PrimitiveCreationKind::Torus}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    for (const bool has_browser_selection : {true, false}) {
+      SCOPED_TRACE(has_browser_selection);
+      quader::SceneSession session;
+      quader::QuaderEditorApi editor(
+          quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+      const auto fallback = editor.assets().add_material(
+          quader::QuaderMaterialArgs{.name = "Fallback primitive material"});
+      const auto selected = editor.assets().add_material(
+          quader::QuaderMaterialArgs{.name = "Selected primitive material"});
+      ASSERT_TRUE(fallback.ok()) << fallback.error_message();
+      ASSERT_TRUE(selected.ok()) << selected.error_message();
+      ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+      ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+          quader::kPrimitiveTypeSetting, static_cast<double>(kind)).ok());
+
+      quader::QtViewportPanel panel;
+      panel.attach_workspace(session.viewport_workspace());
+      auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+      ASSERT_NE(surface, nullptr);
+      surface->resize(800, 600);
+      QFocusEvent focus(QEvent::FocusIn);
+      QApplication::sendEvent(surface, &focus);
+      auto &camera = session.viewport_workspace().camera(
+          quader::ViewportPaneId::Perspective);
+      ASSERT_TRUE(camera.restore_perspective_pose(
+          {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
+      auto browser_selection = quader::QuaderMaterialReference::embedded(
+          fallback.value().id);
+      int material_queries = 0;
+      panel.set_primitive_creation_material_provider([&] {
+        ++material_queries;
+        return browser_selection;
+      });
+      const auto process = [&] {
+        panel.process_input(editor, session.scene(), session.assets(),
+            session.modeling(), fallback.value().id, session.native_tools(),
+            &session.point_placement(), 1.0 / 60.0);
+      };
+      for (int frame = 0; frame < 8; ++frame) {
+        process();
+      }
+      EXPECT_EQ(material_queries, 0);
+      QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+      QApplication::sendEvent(surface, &press);
+      process();
+      EXPECT_EQ(material_queries, 0);
+
+      // A browser choice made after the tool starts belongs to this primitive.
+      browser_selection = has_browser_selection
+          ? quader::QuaderMaterialReference::embedded(selected.value().id)
+          : quader::QuaderMaterialReference{};
+      QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
+                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+      QApplication::sendEvent(surface, &release);
+      process();
+      ASSERT_TRUE(editor.tools().live_primitive_creation());
+      ASSERT_EQ(material_queries, 1);
+      const auto entity = session.scene().primary_selection();
+      const auto expect_material = [&] {
+        const auto *material = session.scene().material(entity);
+        if (has_browser_selection) {
+          ASSERT_NE(material, nullptr);
+          EXPECT_EQ(material->material, selected.value().id);
+        } else {
+          // Scene-only fixtures have no project Default Material binding.
+          EXPECT_EQ(material, nullptr);
+        }
+      };
+      ASSERT_NO_FATAL_FAILURE(expect_material());
+
+      browser_selection = quader::QuaderMaterialReference::embedded(
+          has_browser_selection ? fallback.value().id : selected.value().id);
+      ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+          quader::kPrimitiveFlipFacesSetting, true).ok());
+      for (int frame = 0; frame < 8; ++frame) {
+        process();
+      }
+      EXPECT_EQ(material_queries, 1);
+      ASSERT_NO_FATAL_FAILURE(expect_material());
+      ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+      EXPECT_EQ(material_queries, 1);
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PrimitiveMaterialProviderAbandonmentInvalidatesPendingAcceptance) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-primitive-material-binding-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+  auto &camera = session.viewport_workspace().camera(
+      quader::ViewportPaneId::Perspective);
+  ASSERT_TRUE(camera.restore_perspective_pose(
+      {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
+  int material_queries = 0;
+  panel.set_primitive_creation_material_provider([&] {
+    ++material_queries;
+    panel.abandon_interactions();
+    return quader::QuaderMaterialReference{};
+  });
+  const auto process = [&] {
+    panel.process_input(editor, session.scene(), session.assets(),
+        session.modeling(), {}, session.native_tools(),
+        &session.point_placement(), 1.0 / 60.0);
+  };
+  process();
+  QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
+                     Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &press);
+  process();
+  QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
+                       Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &release);
+  process();
+  EXPECT_EQ(material_queries, 1);
+  EXPECT_TRUE(session.modeling().objects().empty());
+  EXPECT_EQ(session.primitive_creation().shape_count(), 0);
+  process();
+  EXPECT_EQ(material_queries, 1);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}

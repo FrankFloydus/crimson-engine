@@ -469,12 +469,15 @@ public:
   face_texture_canvas(const ModelingFaceTextureTransferTarget &target) const;
   [[nodiscard]] ModelingCommandResult refresh_face_texture_gesture(
       const ModelingFaceTextureTransferTarget &target,
-      const modeling::FaceTextureCanvasMap &map);
+      const modeling::FaceTextureCanvasMap &map,
+      std::optional<modeling::FaceTextureTransformUpdate> scalar_update = {});
   [[nodiscard]] bool face_texture_gesture_active() const noexcept;
   void set_face_texture_gesture_selection_cancel_handler(
       std::function<ModelingCommandResult()> handler);
   [[nodiscard]] ModelingCommandResult apply_face_texture_updates(
       std::span<const ModelingFaceTextureUpdateBatch> batches);
+  [[nodiscard]] ModelingCommandResult apply_face_texture_canvas_edits(
+      std::span<const ModelingFaceTextureCanvasEdit> edits);
   [[nodiscard]] ModelingCommandResult apply_face_texture_action(
       std::span<const ModelingFaceTextureActionTarget> targets,
       const modeling::FaceTextureActionOptions &options);

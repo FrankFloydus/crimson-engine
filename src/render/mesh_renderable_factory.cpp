@@ -151,9 +151,7 @@ filament::math::float4 tangent_frame_from_basis(
       to_filament(bitangent),
       to_filament(normal),
   };
-  const filament::math::quatf packed =
-      filament::math::mat3f::packTangentFrame(tangent_frame, sizeof(float));
-  return {packed.x, packed.y, packed.z, packed.w};
+  return pack_filament_tangent_frame(tangent_frame);
 }
 
 std::vector<filament::math::float4>

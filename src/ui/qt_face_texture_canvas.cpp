@@ -16,15 +16,19 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QLabel>
 #include <QLineF>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QResizeEvent>
+#include <QTextLayout>
 #include <QWheelEvent>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 #include <utility>
 
 namespace quader {
@@ -81,6 +85,42 @@ QImage tinted_canvas_image(QImage image, const QColor &linear_tint) {
   return image;
 }
 
+struct FeedbackTextLayout {
+  QString text;
+  QSize size;
+};
+
+FeedbackTextLayout wrap_feedback(const QString &text, const QFont &font,
+                                  int available_width) {
+  QTextLayout layout(text, font);
+  QTextOption option;
+  option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+  layout.setTextOption(option);
+  layout.beginLayout();
+  FeedbackTextLayout result;
+  int count = 0;
+  const QFontMetrics metrics(font);
+  while (true) {
+    QTextLine line = layout.createLine();
+    if (!line.isValid()) {
+      break;
+    }
+    line.setLineWidth(available_width);
+    const QString segment =
+        text.mid(line.textStart(), line.textLength()).trimmed();
+    if (count++ > 0) {
+      result.text += QLatin1Char('\n');
+    }
+    result.text += segment;
+    result.size.setWidth(std::max(result.size.width(),
+                                  metrics.horizontalAdvance(segment)));
+  }
+  layout.endLayout();
+  result.size.setHeight(metrics.height() +
+                         std::max(0, count - 1) * metrics.lineSpacing());
+  return result;
+}
+
 } // namespace
 
 QtFaceTextureCanvas::QtFaceTextureCanvas(QWidget *parent) : QWidget(parent) {
@@ -90,6 +130,17 @@ QtFaceTextureCanvas::QtFaceTextureCanvas(QWidget *parent) : QWidget(parent) {
   setMouseTracking(true);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setMinimumSize(96, 96);
+  feedback_ = new QLabel(this);
+  feedback_->setObjectName(QStringLiteral("face_texture.canvas.measurement"));
+  feedback_->setAttribute(Qt::WA_TransparentForMouseEvents);
+  feedback_->setTextFormat(Qt::PlainText);
+  feedback_->setAutoFillBackground(true);
+  feedback_->setBackgroundRole(QPalette::ToolTipBase);
+  feedback_->setForegroundRole(QPalette::ToolTipText);
+  feedback_->setAlignment(Qt::AlignCenter);
+  feedback_->setMargin(metrics_.px(8));
+  feedback_->hide();
+  refresh_rotation_cursor();
 }
 
 QtFaceTextureCanvas::~QtFaceTextureCanvas() { abandon(); }
@@ -122,6 +173,7 @@ void QtFaceTextureCanvas::abandon() {
   release_capture();
   unsetCursor();
   setToolTip({});
+  update_feedback();
   update();
 }
 
@@ -184,6 +236,8 @@ void QtFaceTextureCanvas::refresh() {
     }
   }
   setToolTip(QString::fromStdString(presentation_.disabled_reason));
+  update_cursor();
+  update_feedback();
   update();
 }
 
@@ -192,6 +246,7 @@ void QtFaceTextureCanvas::set_localization(
   localization_ = &localization;
   setAccessibleName(localized(localization_, "face_texture.canvas",
                               "Face texture canvas"));
+  update_feedback();
   update();
 }
 
@@ -202,6 +257,10 @@ void QtFaceTextureCanvas::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   }
   metrics_ = metrics;
   setMinimumSize(metrics.size(QSize(96, 96)));
+  feedback_->setMargin(metrics_.px(8));
+  refresh_rotation_cursor();
+  update_cursor();
+  update_feedback();
   if (!view_manipulated_) {
     fit_face();
   }
@@ -265,6 +324,14 @@ bool QtFaceTextureCanvas::event(QEvent *event) {
       event->type() == QEvent::FocusOut || event->type() == QEvent::Hide) {
     cancel_gesture();
   }
+  if (event->type() == QEvent::DevicePixelRatioChange) {
+    refresh_rotation_cursor();
+    update_cursor();
+  }
+  if (event->type() == QEvent::FontChange ||
+      event->type() == QEvent::LocaleChange) {
+    update_feedback();
+  }
   return QWidget::event(event);
 }
 
@@ -296,9 +363,13 @@ void QtFaceTextureCanvas::paintEvent(QPaintEvent *) {
   painter.setRenderHint(QPainter::Antialiasing);
   const QPolygonF polygon = view.map(outline_);
   painter.setBrush(Qt::NoBrush);
-  painter.setPen(QPen(QColor(0, 0, 0, 190), metrics_.px(3.0)));
+  // Keep the white stroke broad and uninterrupted. Its narrow outside halo
+  // supplies contrast over light texels without consuming the white core.
+  painter.setPen(QPen(QColor(0, 0, 0, 190), metrics_.px(3.5),
+                      Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
   painter.drawPolygon(polygon);
-  painter.setPen(QPen(QColor(238, 242, 247), metrics_.px(1.0)));
+  painter.setPen(QPen(QColor(Qt::white), metrics_.px(2.0),
+                      Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
   painter.drawPolygon(polygon);
   painter.setPen(Qt::NoPen);
   painter.setBrush(QColor(130, 228, 237));
@@ -332,25 +403,6 @@ void QtFaceTextureCanvas::paintEvent(QPaintEvent *) {
                      metrics_.px(1.5)));
   painter.drawEllipse(handle_position(Handle::Rotation), metrics_.px(7.0),
                        metrics_.px(7.0));
-
-  const bool show_measurement =
-      hovered_ == Handle::Height || hovered_ == Handle::Width ||
-      dragged_ == Handle::Height || dragged_ == Handle::Width;
-  if (show_measurement) {
-    const QString label =
-        localized(localization_, "face_texture.measurements",
-                   "X: %1   Y: %2 map units")
-            .arg(qt_format_number(presentation_.repeat_width, locale()),
-                 qt_format_number(presentation_.repeat_height, locale()));
-    const int margin = metrics_.px(8);
-    const QRect text_bounds = painter.fontMetrics().boundingRect(label);
-    QRect badge(margin, height() - text_bounds.height() - margin * 3,
-                 text_bounds.width() + margin * 2,
-                 text_bounds.height() + margin * 2);
-    painter.fillRect(badge, QColor(20, 23, 28, 235));
-    painter.setPen(QColor(245, 245, 245));
-    painter.drawText(badge, Qt::AlignCenter, label);
-  }
 }
 
 void QtFaceTextureCanvas::resizeEvent(QResizeEvent *event) {
@@ -359,6 +411,7 @@ void QtFaceTextureCanvas::resizeEvent(QResizeEvent *event) {
     fit_face();
   }
   refresh_image();
+  update_feedback();
 }
 
 void QtFaceTextureCanvas::mousePressEvent(QMouseEvent *event) {
@@ -429,6 +482,7 @@ void QtFaceTextureCanvas::mousePressEvent(QMouseEvent *event) {
   failure_announced_ = false;
   gesture_active_ = true;
   dragged_ = handle;
+  hovered_ = handle;
   last_pointer_ = event->position();
   grabMouse();
   revision_.reset();
@@ -525,6 +579,7 @@ void QtFaceTextureCanvas::leaveEvent(QEvent *event) {
   if (!interaction_active()) {
     hovered_ = Handle::None;
     unsetCursor();
+    update_feedback();
     update();
   }
   QWidget::leaveEvent(event);
@@ -584,6 +639,7 @@ void QtFaceTextureCanvas::cancel_gesture() {
   hovered_ = Handle::None;
   release_capture();
   unsetCursor();
+  update_feedback();
   if (cancel_owner) {
     const std::uint64_t generation = binding_generation_;
     const auto result = editor_->modeling().cancel_face_texture_gesture();
@@ -649,18 +705,150 @@ void QtFaceTextureCanvas::update_hover(QPointF position) {
                                             : Handle::None;
   if (hovered_ != next) {
     hovered_ = next;
+    update_feedback();
     update();
   }
-  if (!presentation_.editable) {
-    unsetCursor();
-  } else if (next == Handle::Height) {
-    setCursor(Qt::SizeVerCursor);
-  } else if (next == Handle::Width) {
-    setCursor(Qt::SizeHorCursor);
+  update_cursor();
+}
+
+void QtFaceTextureCanvas::update_cursor() {
+  if (panning_) {
+    if (cursor().shape() != Qt::ClosedHandCursor) {
+      setCursor(Qt::ClosedHandCursor);
+    }
+    return;
+  }
+  const Handle next = gesture_active_ ? dragged_ : hovered_;
+  if (!presentation_.editable && !gesture_active_) {
+    if (testAttribute(Qt::WA_SetCursor)) {
+      unsetCursor();
+    }
   } else if (next == Handle::Rotation) {
-    setCursor(Qt::CrossCursor);
+    if (cursor().shape() != Qt::BitmapCursor ||
+        cursor().pixmap().cacheKey() != rotation_cursor_.pixmap().cacheKey()) {
+      setCursor(rotation_cursor_);
+    }
   } else {
-    setCursor(Qt::OpenHandCursor);
+    const Qt::CursorShape shape =
+        next == Handle::Height ? Qt::SizeVerCursor
+        : next == Handle::Width ? Qt::SizeHorCursor
+        : gesture_active_ ? Qt::ClosedHandCursor : Qt::OpenHandCursor;
+    if (cursor().shape() != shape) {
+      setCursor(shape);
+    }
+  }
+}
+
+void QtFaceTextureCanvas::refresh_rotation_cursor() {
+  const int extent = metrics_.px(32);
+  QPixmap pixmap(metrics_.device_pixels(32, devicePixelRatioF()),
+                 metrics_.device_pixels(32, devicePixelRatioF()));
+  pixmap.setDevicePixelRatio(devicePixelRatioF());
+  pixmap.fill(Qt::transparent);
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.scale(metrics_.factor(), metrics_.factor());
+  QPainterPath arrows;
+  const QPointF center(16.0, 16.0);
+  const auto circle_point = [center](double degrees) {
+    const double radians = degrees * std::numbers::pi / 180.0;
+    return center + QPointF(std::cos(radians), -std::sin(radians)) * 9.0;
+  };
+  arrows.moveTo(circle_point(45.0));
+  arrows.arcTo(QRectF(7.0, 7.0, 18.0, 18.0), 45.0, 270.0);
+  for (const double end_angle : {45.0, 315.0}) {
+    const QPointF tip = circle_point(end_angle);
+    const double radians = end_angle * std::numbers::pi / 180.0;
+    const double direction = end_angle == 45.0 ? -1.0 : 1.0;
+    const QPointF forward(-std::sin(radians) * direction,
+                           -std::cos(radians) * direction);
+    const QPointF side(-forward.y(), forward.x());
+    arrows.moveTo(tip - forward * 4.5 + side * 3.5);
+    arrows.lineTo(tip);
+    arrows.lineTo(tip - forward * 4.5 - side * 3.5);
+  }
+  painter.setPen(QPen(QColor(20, 23, 28), 4.5, Qt::SolidLine,
+                      Qt::RoundCap, Qt::RoundJoin));
+  painter.drawPath(arrows);
+  painter.setPen(QPen(Qt::white, 2.0, Qt::SolidLine,
+                      Qt::RoundCap, Qt::RoundJoin));
+  painter.drawPath(arrows);
+  painter.end();
+  rotation_cursor_ = QCursor(pixmap, extent / 2, extent / 2);
+}
+
+void QtFaceTextureCanvas::update_feedback() {
+  if (feedback_ == nullptr) {
+    return;
+  }
+  QString text;
+  const bool can_present = presentation_.editable || gesture_active_;
+  if (can_present && gesture_active_ && dragged_ == Handle::Rotation) {
+    text = localized(localization_, "face_texture.rotation_angle",
+                     "Rotation: %1°")
+               .arg(qt_format_number(presentation_.rotation_degrees, locale()));
+  } else if (can_present &&
+             (hovered_ == Handle::Height || hovered_ == Handle::Width ||
+              dragged_ == Handle::Height || dragged_ == Handle::Width)) {
+    text = localized(localization_, "face_texture.measurements",
+                     "X: %1   Y: %2 map units")
+               .arg(qt_format_number(presentation_.repeat_width, locale()),
+                    qt_format_number(presentation_.repeat_height, locale()));
+  }
+  if (feedback_->accessibleName() != text) {
+    feedback_->setAccessibleName(text);
+  }
+  if (feedback_->isHidden() == !text.isEmpty()) {
+    feedback_->setVisible(!text.isEmpty());
+  }
+  if (text.isEmpty()) {
+    if (!feedback_->text().isEmpty()) {
+      feedback_->clear();
+    }
+    return;
+  }
+  const int margin = metrics_.px(8);
+  const int padding = feedback_->margin() * 2;
+  const QSize available(std::max(1, width() - margin * 2),
+                         std::max(1, height() - margin * 2));
+  const int text_width = std::max(1, available.width() - padding);
+  const int text_height = std::max(1, available.height() - padding);
+  QFont font = this->font();
+  FeedbackTextLayout layout = wrap_feedback(text, font, text_width);
+  if (layout.size.height() > text_height || layout.size.width() > text_width) {
+    // Exceptionally small canvases can be shorter than a fully wrapped readout.
+    // Fit only this overlay, keeping the full value available to accessibility.
+    int low = 1;
+    int high = std::max(1, font.pixelSize() > 0
+                             ? font.pixelSize()
+                             : static_cast<int>(std::ceil(font.pointSizeF() *
+                                                           logicalDpiY() / 72.0)));
+    while (low < high) {
+      const int candidate = (low + high + 1) / 2;
+      QFont fitted = font;
+      fitted.setPixelSize(candidate);
+      const auto wrapped = wrap_feedback(text, fitted, text_width);
+      if (wrapped.size.height() <= text_height &&
+          wrapped.size.width() <= text_width) {
+        low = candidate;
+      } else {
+        high = candidate - 1;
+      }
+    }
+    font.setPixelSize(low);
+    layout = wrap_feedback(text, font, text_width);
+  }
+  if (feedback_->font() != font) {
+    feedback_->setFont(font);
+  }
+  if (feedback_->text() != layout.text) {
+    feedback_->setText(layout.text);
+  }
+  const QSize size = (layout.size + QSize(padding, padding)).boundedTo(available);
+  const QRect geometry(margin, height() - size.height() - margin,
+                        size.width(), size.height());
+  if (feedback_->geometry() != geometry) {
+    feedback_->setGeometry(geometry);
   }
 }
 

@@ -21,6 +21,7 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QEvent>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHeaderView>
@@ -47,6 +48,8 @@
 #include <QStackedWidget>
 #include <QStyle>
 #include <QStyleHints>
+#include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QTableView>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -73,6 +76,41 @@ constexpr auto kFolderDragMime = "application/x-quader-material-browser-folder";
 constexpr int kFolderPathRole = Qt::UserRole;
 constexpr std::uint64_t kPreviewIconCacheBudgetBytes =
     96ULL * 1024ULL * 1024ULL;
+
+/** Keeps the current material visible even while focus belongs to the viewport. */
+class MaterialGridDelegate final : public QStyledItemDelegate {
+public:
+  explicit MaterialGridDelegate(QListView &view)
+      : QStyledItemDelegate(&view), view_(view) {}
+
+  void set_border_width(qreal width) { border_width_ = width; }
+
+  void paint(QPainter *painter, const QStyleOptionViewItem &option,
+             const QModelIndex &index) const override {
+    QStyledItemDelegate::paint(painter, option, index);
+    if (index != view_.currentIndex() ||
+        !view_.selectionModel()->isSelected(index)) {
+      return;
+    }
+    QStyleOptionViewItem item(option);
+    initStyleOption(&item, index);
+    const QRect decoration = view_.style()->subElementRect(
+        QStyle::SE_ItemViewItemDecoration, &item, &view_);
+    const qreal inset = border_width_ * 0.5;
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, false);
+    // The orange authored in the face-selection toolbar icon.
+    painter->setPen(QPen(QColor(255, 143, 24), border_width_, Qt::SolidLine,
+                        Qt::SquareCap, Qt::MiterJoin));
+    painter->setBrush(Qt::NoBrush);
+    painter->drawRect(QRectF(decoration).adjusted(inset, inset, -inset, -inset));
+    painter->restore();
+  }
+
+private:
+  QListView &view_;
+  qreal border_width_ = 2.0;
+};
 
 /// A passive condition badge; its child remove button owns all interaction.
 class UsageFilterBadge final : public QWidget {
@@ -247,6 +285,34 @@ QString normalized_search_text(QString text) {
   return text.trimmed().toCaseFolded();
 }
 
+bool material_matches_folder(const QModelIndex &source_index,
+                             const QString &folder) {
+  return folder.isEmpty() || folder == QStringLiteral("Materials") ||
+         source_index.data(QtMaterialBrowserModel::RelativePathRole)
+             .toString().startsWith(folder + QLatin1Char('/'),
+                                   Qt::CaseInsensitive);
+}
+
+bool material_matches_search(const QModelIndex &source_index,
+                             const QString &search_text) {
+  return search_text.isEmpty() ||
+         source_index.data(QtMaterialBrowserModel::SearchTextRole)
+             .toString().toCaseFolded().contains(search_text);
+}
+
+bool material_matches_usage(QtMaterialBrowserUsageMode mode,
+                            bool complete, bool used) {
+  switch (mode) {
+  case QtMaterialBrowserUsageMode::Used:
+    return used;
+  case QtMaterialBrowserUsageMode::NotUsed:
+    return complete && !used;
+  case QtMaterialBrowserUsageMode::All:
+    return true;
+  }
+  return false;
+}
+
 QString normalized_folder(QString folder) {
   folder.replace(QLatin1Char('\\'), QLatin1Char('/'));
   while (folder.endsWith(QLatin1Char('/'))) {
@@ -370,8 +436,11 @@ QVariant QtMaterialBrowserModel::data(const QModelIndex &index,
   if (role == SizeBytesRole) {
     return item.qmat_size_bytes;
   }
-  if (role == RelativePathRole || role == Qt::ToolTipRole) {
+  if (role == RelativePathRole) {
     return item.project_relative_path;
+  }
+  if (role == Qt::ToolTipRole) {
+    return QFileInfo(item.project_relative_path).fileName();
   }
   if (role == Qt::DecorationRole && index.column() == NameColumn) {
     return preview_icon(index.row());
@@ -638,31 +707,18 @@ bool QtMaterialBrowserProxyModel::accepts_row(
   const QModelIndex source_index =
       sourceModel()->index(source_row, QtMaterialBrowserModel::NameColumn,
                            source_parent);
-  if (!folder_.isEmpty() &&
-      !source_index.data(QtMaterialBrowserModel::RelativePathRole)
-           .toString().startsWith(folder_ + QLatin1Char('/'),
-                                  Qt::CaseInsensitive)) {
-    return false;
-  }
-  if (!search_text_.isEmpty() &&
-      !sourceModel()
-           ->data(source_index, QtMaterialBrowserModel::SearchTextRole)
-           .toString()
-           .toCaseFolded()
-           .contains(search_text_)) {
+  if (!material_matches_folder(source_index, folder_) ||
+      !material_matches_search(source_index, search_text_)) {
     return false;
   }
   if (!include_usage || usage_mode_ == QtMaterialBrowserUsageMode::All) {
     return true;
   }
-  if (!usage_complete_ && usage_mode_ == QtMaterialBrowserUsageMode::NotUsed) {
-    return false;
-  }
   const QString stable_id =
       source_index.data(QtMaterialBrowserModel::StableIdRole).toString();
   const bool used = std::binary_search(used_material_ids_.begin(),
                                        used_material_ids_.end(), stable_id);
-  return usage_mode_ == QtMaterialBrowserUsageMode::Used ? used : !used;
+  return material_matches_usage(usage_mode_, usage_complete_, used);
 }
 
 bool QtMaterialBrowserProxyModel::lessThan(
@@ -840,7 +896,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   if (host_ == QtMaterialBrowserHost::Windowed) {
     view_toolbar->addWidget(tile_slider_);
   }
-  root_layout->addLayout(toolbar);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    root_layout->addLayout(toolbar);
+  }
   active_filters_ = new QWidget(central_widget);
   active_filters_->setObjectName(QStringLiteral("materialBrowser.activeFilters"));
   auto *active_filters_layout = new QHBoxLayout(active_filters_);
@@ -864,7 +922,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   active_filters_layout->addWidget(usage_chip_);
   active_filters_layout->addStretch(1);
   active_filters_->hide();
-  root_layout->addWidget(active_filters_);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    root_layout->addWidget(active_filters_);
+  }
   refresh_usage_badge_style();
   usage_status_ = new QLabel(central_widget);
   usage_status_->setObjectName(QStringLiteral("materialBrowser.usageStatus"));
@@ -872,7 +932,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   usage_status_->setTextFormat(Qt::PlainText);
   usage_status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   usage_status_->hide();
-  root_layout->addWidget(usage_status_);
+  if (host_ == QtMaterialBrowserHost::Windowed) {
+    root_layout->addWidget(usage_status_);
+  }
 
   model_ = new QtMaterialBrowserModel(central_widget);
   proxy_ = new QtMaterialBrowserProxyModel(central_widget);
@@ -905,6 +967,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   grid_view_->setObjectName(QStringLiteral("materialBrowser.gridView"));
   grid_view_->setModel(proxy_);
   grid_view_->setSelectionModel(selection);
+  grid_view_->setItemDelegate(new MaterialGridDelegate(*grid_view_));
   grid_view_->setViewMode(QListView::IconMode);
   grid_view_->setResizeMode(QListView::Adjust);
   grid_view_->setMovement(QListView::Static);
@@ -958,6 +1021,12 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   splitter_->setCollapsible(1, false);
   splitter_->setSizes({sidebar_width_, 540});
   root_layout->addWidget(splitter_, 1);
+
+  if (host_ == QtMaterialBrowserHost::Embedded) {
+    root_layout->addLayout(toolbar);
+    root_layout->addWidget(active_filters_);
+    root_layout->addWidget(usage_status_);
+  }
 
   if (host_ == QtMaterialBrowserHost::Windowed) {
     auto *footer = new QHBoxLayout();
@@ -1078,9 +1147,11 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
                                         empty_label_->mapToGlobal(position));
                    });
   QObject::connect(selection, &QItemSelectionModel::currentChanged, this,
-                   [this]() {
+                   [this](const QModelIndex &current, const QModelIndex &previous) {
                      ++action_eligibility_revision_;
                      update_accept_enabled();
+                     grid_view_->update(previous);
+                     grid_view_->update(current);
                    });
   QObject::connect(selection, &QItemSelectionModel::selectionChanged, this,
                    [this]() { ++action_eligibility_revision_; });
@@ -1208,6 +1279,48 @@ void QtMaterialBrowserWindow::set_materials(
 void QtMaterialBrowserWindow::set_selected_material(
     QuaderMaterialReference material) {
   select_material(material);
+}
+
+bool QtMaterialBrowserWindow::reveal_material(
+    QuaderMaterialReference material) {
+  if (!material.valid()) {
+    return false;
+  }
+  const auto &items = model_->items();
+  const auto found = std::find_if(items.begin(), items.end(),
+      [&](const auto &item) { return item.reference == material; });
+  if (found == items.end()) {
+    return false;
+  }
+  const QModelIndex source_index = model_->index(
+      static_cast<int>(std::distance(items.begin(), found)),
+      QtMaterialBrowserModel::NameColumn);
+  if (!material_matches_folder(source_index, selected_folder())) {
+    set_selected_folder(QStringLiteral("Materials"));
+  }
+  if (!material_matches_search(source_index,
+                               normalized_search_text(search_->text()))) {
+    search_->clear();
+  }
+  const bool used = std::find(usage_snapshot_.used_materials.begin(),
+                              usage_snapshot_.used_materials.end(), material) !=
+                    usage_snapshot_.used_materials.end();
+  if (purpose_ != QtMaterialBrowserPurpose::Picker &&
+      !material_matches_usage(usage_mode_, usage_snapshot_.complete, used)) {
+    apply_usage_mode(QtMaterialBrowserUsageMode::All);
+  }
+  const QModelIndex index = proxy_->mapFromSource(source_index);
+  if (!index.isValid()) {
+    return false;
+  }
+  grid_view_->selectionModel()->setCurrentIndex(
+      index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  if (view_mode() == QtMaterialBrowserViewMode::List) {
+    list_view_->scrollTo(index);
+  } else {
+    grid_view_->scrollTo(index);
+  }
+  return true;
 }
 
 void QtMaterialBrowserWindow::set_assignment_available(bool available) {
@@ -1364,6 +1477,12 @@ QuaderMaterialReference QtMaterialBrowserWindow::selected_material() const {
   return item != nullptr ? item->reference : QuaderMaterialReference{};
 }
 
+QuaderMaterialReference QtMaterialBrowserWindow::current_selected_material() const {
+  const auto *selection = grid_view_->selectionModel();
+  return selection->isSelected(selection->currentIndex())
+      ? selected_material() : QuaderMaterialReference{};
+}
+
 void QtMaterialBrowserWindow::set_assign_material_callback(
     AssignMaterialCallback callback) {
   assign_material_ = std::move(callback);
@@ -1427,6 +1546,8 @@ void QtMaterialBrowserWindow::apply_ui_scale(
     return;
   }
   ui_scale_metrics_ = metrics;
+  static_cast<MaterialGridDelegate *>(grid_view_->itemDelegate())
+      ->set_border_width(metrics.px(2));
   static_cast<MaterialFolderTree *>(folder_tree_)->apply_ui_scale(metrics);
   filter_button_->setIconSize(metrics.size(QSize(20, 20)));
   filter_button_->setFixedSize(metrics.size(QSize(28, 28)));

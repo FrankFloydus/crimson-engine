@@ -633,11 +633,13 @@ TEST_F(UvNativeSamplingTests, RectangularNumericRotationMatchesActionAndContinuo
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(source, 1).ok());
   const auto before = displayed(source.entity);
+  const double initial_angle = editor.modeling().face_texture_settings().rotation_degrees;
+  ASSERT_DOUBLE_EQ(initial_angle, 37.0);
   session.history().clear();
-  ASSERT_TRUE(rotate_numeric(10, "rectangular.rotation").ok());
-  ASSERT_TRUE(rotate_numeric(15, "rectangular.rotation").ok());
+  ASSERT_TRUE(rotate_numeric(initial_angle + 10, "rectangular.rotation").ok());
+  ASSERT_TRUE(rotate_numeric(initial_angle + 15, "rectangular.rotation").ok());
   EXPECT_EQ(session.history().undo_count(), 1U);
-  EXPECT_EQ(editor.modeling().face_texture_settings().rotation_degrees, 15);
+  EXPECT_EQ(editor.modeling().face_texture_settings().rotation_degrees, initial_angle + 15);
   const auto numeric = displayed(source.entity);
   ASSERT_EQ(numeric.size(), before.size());
   // Image-axis distances include the retained signed face scales. A pure
@@ -654,7 +656,7 @@ TEST_F(UvNativeSamplingTests, RectangularNumericRotationMatchesActionAndContinuo
   }
   ASSERT_TRUE(editor.history().undo().ok());
   expect_displayed_corners(displayed(source.entity), before);
-  EXPECT_EQ(editor.modeling().face_texture_settings().rotation_degrees, 0);
+  EXPECT_EQ(editor.modeling().face_texture_settings().rotation_degrees, initial_angle);
   ASSERT_TRUE(editor.history().redo().ok());
   expect_displayed_corners(displayed(source.entity), numeric);
   ASSERT_TRUE(editor.history().undo().ok());
@@ -687,7 +689,8 @@ TEST_F(UvNativeSamplingTests, MixedMaterialNumericRotationKeepsDimensionsAndPrio
       .action = QuaderFaceTextureAction::ShiftRight,
       .selection_token = editor.modeling().face_texture_settings().selection_token}).ok());
   session.history().clear();
-  ASSERT_TRUE(rotate_numeric(15).ok());
+  const double initial_angle = editor.modeling().face_texture_settings().rotation_degrees;
+  ASSERT_TRUE(rotate_numeric(initial_angle + 15).ok());
   const auto wide_numeric = displayed(wide.entity);
   const auto tall_numeric = displayed(tall.entity);
   ASSERT_TRUE(editor.history().undo().ok());
