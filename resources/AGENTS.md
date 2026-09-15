@@ -36,6 +36,19 @@ presentation and rendering integration.
 - Textured Shaded uses a soft sky/ground fill, curved camera-facing response and a narrow cosine
   sheen. Keep normal-map detail and fixed roughness/metallic-independent shape cues; Solid and
   Rendered retain their separate lighting contracts. Check appearance on the GPU when tuning it.
+- Both mesh shaders share `mesh_surface_grid.glsl`. It blends fixed configured colors with
+  coverage-scaled alpha; transparent major slots exclude minor lines. Shaded applies it after
+  modeling lighting, Rendered through post-lighting composition with instance context/opacity
+  preserved. Material diagnostics remain independent of the grid.
+- Perspective ground-grid colors are sRGB palette values decoded before ordinary alpha blending.
+  Keep palette intensity separate from coverage: the default small/64-unit shades are 76/114,
+  with full authored opacity. Verify the blend over black and textured beige in Shaded mode;
+  matching grid/background colors do not imply a contrast-adaptation rule.
+- The perspective construction grid occupies a fixed 1024-by-1024 world rectangle at the origin.
+  Its coverage has no camera-distance or perimeter opacity fade; the visible edge is the grid's
+  boundary. Shaded uses the viewport Background Color preference; the scene's Environment Clear
+  Color applies only in Rendered mode. Preserve orthographic placement/fades
+  separately; verify distant lines and the fixed corner in `RenderGroundGridRuntimeTests`.
 - Keep default material assets under the app-owned resources tree and preserve post-build copy
   paths.
 - Update localization, render, or resource tests when resource contracts change.

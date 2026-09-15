@@ -116,6 +116,8 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::HoverVertex, ViewportSettingsSectionId::Vertices, "Hover Vertex", key("HoverVertexColor"), abgr8(kOverlayHoverVertexColor)},
         {ViewportColorSettingId::RemoveSelectionVertex, ViewportSettingsSectionId::Vertices, "Remove Vertex", key("RemoveSelectionVertexColor"), abgr8(kOverlayRemoveWireColor)},
         {ViewportColorSettingId::CollisionFill, ViewportSettingsSectionId::Overlay, "Collision Color", key("CollisionFillColor"), kDefaultViewportCollisionFillColor},
+        {ViewportColorSettingId::Background, ViewportSettingsSectionId::Shading, "Background Color", key("BackgroundColor"), kDefaultViewportBackgroundColor,
+         "Editor background for Shaded, Solid and Wireframe views. Rendered views use the scene environment. Use Apply to preview."},
 }};
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFloatSettings{{
@@ -297,6 +299,16 @@ color_descriptor(ViewportColorSettingId id) {
   return kColorSettings[index(id)];
 }
 
+ViewportSettingColor sanitize_color_setting(ViewportColorSettingId id,
+                                            ViewportSettingColor value) {
+  ViewportSettingColor sanitized =
+      sanitize_color(value, color_descriptor(id).default_value);
+  if (id == ViewportColorSettingId::Background) {
+    sanitized.a = 1.0f;
+  }
+  return sanitized;
+}
+
 const ViewportBoolSettingDescriptor &bool_descriptor(ViewportBoolSettingId id) {
   return kBoolSettings[index(id)];
 }
@@ -421,12 +433,14 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
           if (const std::optional<ViewportSettingColor> parsed =
                   parse_color(value)) {
             ViewportSettingColor loaded_color = *parsed;
-            if (descriptor.id == ViewportColorSettingId::GridYAxis &&
-                color_to_hex(loaded_color) == "4A940000") {
+            if ((descriptor.id == ViewportColorSettingId::GridYAxis &&
+                 color_to_hex(loaded_color) == "4A940000") ||
+                (descriptor.id == ViewportColorSettingId::MeshGridMinor &&
+                 color_to_hex(loaded_color) == "050505FF")) {
               loaded_color = descriptor.default_value;
             }
             settings.colors_[index(descriptor.id)] =
-                sanitize_color(loaded_color, descriptor.default_value);
+                sanitize_color_setting(descriptor.id, loaded_color);
           }
         }
         }
@@ -546,9 +560,8 @@ ViewportSettingColor ViewportSettings::color(ViewportColorSettingId id) const {
 
 bool ViewportSettings::set_color(ViewportColorSettingId id,
                                  ViewportSettingColor value) {
-  const ViewportColorSettingDescriptor &descriptor = color_descriptor(id);
   const ViewportSettingColor sanitized =
-      sanitize_color(value, descriptor.default_value);
+      sanitize_color_setting(id, value);
   if (viewport_setting_colors_approximately(colors_[index(id)], sanitized)) {
     return false;
   }
@@ -558,9 +571,8 @@ bool ViewportSettings::set_color(ViewportColorSettingId id,
 
 bool ViewportSettings::restore_color(ViewportColorSettingId id,
                                      ViewportSettingColor value) {
-  const ViewportColorSettingDescriptor &descriptor = color_descriptor(id);
   const ViewportSettingColor sanitized =
-      sanitize_color(value, descriptor.default_value);
+      sanitize_color_setting(id, value);
   const ViewportSettingColor current = colors_[index(id)];
   if (current.r == sanitized.r && current.g == sanitized.g &&
       current.b == sanitized.b && current.a == sanitized.a) {

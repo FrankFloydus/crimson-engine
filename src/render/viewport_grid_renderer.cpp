@@ -13,6 +13,7 @@
 #include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
 #include "viewport/viewport_grid_placement_policy.hpp"
+#include "viewport/viewport_settings_defaults.hpp"
 
 #include <backend/DriverEnums.h>
 #include <filament/RenderableManager.h>
@@ -33,6 +34,13 @@ using AttributeType = filament::backend::ElementType;
 constexpr float kGroundGridFadeStart = 96.0f;
 constexpr float kGroundGridFadeEnd = 1536.0f;
 constexpr float kParentGridWorldSize = 2.0f;
+// The installed Hammer palette after its 30% grid-intensity conversion.
+// Small and 64-unit colors are exposed by the existing viewport settings.
+constexpr ViewportSettingColor kGroundGrid1024Color = {
+    100.0f / 255.0f, 50.0f / 255.0f, 5.0f / 255.0f, 1.0f};
+// Clip-depth bias keeps the plane visible on coplanar faces without disabling
+// mesh occlusion. The perspective material applies it in homogeneous space.
+constexpr float kGroundGridDepthBias = 0.005f;
 constexpr float kHalfPi = 1.57079632679f;
 
 /**
@@ -42,10 +50,11 @@ struct GroundGridVertex {
     filament::math::float3 position;
 };
 
-filament::Box ground_grid_bounds() {
+filament::Box ground_grid_bounds(float width, float height) {
   filament::Box box;
-  const float half = kViewportGridDefaultPlaneSize * 0.5f;
-  box.set({-half, -0.01f, -half}, {half, 0.01f, half});
+  const float half_x = width * 0.5f;
+  const float half_z = height * 0.5f;
+  box.set({-half_x, -0.01f, -half_z}, {half_x, 0.01f, half_z});
   return box;
 }
 
@@ -79,7 +88,6 @@ std::uint64_t ground_grid_presentation_signature(
       .add_vec3(pose.up)
       .add_value(static_cast<std::uint32_t>(state.projection))
       .add_float(state.orthographic_size)
-      .add_float(state.far_plane)
       .add_value(viewport_width)
       .add_value(viewport_height)
       .add_float(std::max(grid_world_spacing, 0.0001f))
@@ -249,6 +257,12 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
 
   ground_grid_material_instance_->setDepthCulling(
       controller.state().projection != ViewportProjection::Orthographic);
+  ground_grid_material_instance_->setParameter(
+      "analyticGridEnabled",
+      controller.state().projection == ViewportProjection::Perspective ? 1.0f
+                                                                       : 0.0f);
+  ground_grid_material_instance_->setParameter("depthBiasAmount",
+                                               kGroundGridDepthBias);
   const float spacing = std::max(grid_world_spacing, 0.0001f);
   const float parent_spacing = std::max(kParentGridWorldSize, spacing);
   const InstanceEditStyle instance_edit_style =
@@ -261,6 +275,15 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
       "gridColor", grid_color(ViewportColorSettingId::GridMinor));
   ground_grid_material_instance_->setParameter(
       "majorGridColor", grid_color(ViewportColorSettingId::GridMajor));
+  const auto tier_color = [&](ViewportSettingColor color,
+                              ViewportColorSettingId opacity_setting) {
+    color.a = settings.color(opacity_setting).a;
+    return setting_color(instance_edit_style.resolve_grid_color(
+        color, instance_edit_context));
+  };
+  ground_grid_material_instance_->setParameter(
+      "grid1024Color",
+      tier_color(kGroundGrid1024Color, ViewportColorSettingId::GridMajor));
   ground_grid_material_instance_->setParameter(
       "originUColor", grid_color(grid.axes.u_color));
   ground_grid_material_instance_->setParameter(
@@ -284,15 +307,18 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
   ground_grid_material_instance_->setParameter(
       "axisLineThickness",
       settings.float_value(ViewportFloatSettingId::GridAxisLineSize));
+  ground_grid_material_instance_->setParameter(
+      "analyticLineThickness",
+      filament::math::float3{
+          settings.float_value(ViewportFloatSettingId::GridMinorLineSize) /
+              kDefaultViewportGridMinorLineSize,
+          settings.float_value(ViewportFloatSettingId::GridMajorLineSize) /
+              kDefaultViewportGridMajorLineSize,
+          settings.float_value(ViewportFloatSettingId::GridAxisLineSize) /
+              kDefaultViewportGridAxisLineSize});
   ground_grid_material_instance_->setParameter("fadeStart",
                                                kGroundGridFadeStart);
   ground_grid_material_instance_->setParameter("fadeEnd", kGroundGridFadeEnd);
-  ground_grid_material_instance_->setParameter(
-      "cameraFarPlane", std::max(controller.state().far_plane, 0.0001f));
-  ground_grid_material_instance_->setParameter(
-      "cameraFarFade",
-      controller.state().projection == ViewportProjection::Perspective ? 1.0f
-                                                                       : 0.0f);
   ground_grid_material_instance_->setParameter(
       "planeHalfSize", std::max(grid.plane_size.x, grid.plane_size.y) * 0.5f);
   ground_grid_material_instance_->setParameter(
@@ -355,7 +381,8 @@ void ViewportGridRenderer::create_ground_grid() {
                 creation_guard.vertex_buffer, creation_guard.index_buffer)
       .material(0, creation_guard.material_instance)
       .layerMask(kViewportAllLayerMask, grid_layer_mask_)
-      .boundingBox(ground_grid_bounds())
+      .boundingBox(ground_grid_bounds(kViewportGridDefaultPlaneSize,
+                                     kViewportGridDefaultPlaneSize))
       .castShadows(false)
       .receiveShadows(false)
       .build(*engine_, creation_guard.entity);
@@ -415,6 +442,12 @@ void ViewportGridRenderer::update_ground_grid_mesh(float width, float height) {
   };
   ground_grid_vertex_buffer_->setBufferAt(
       *engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
+  auto &renderables = engine_->getRenderableManager();
+  const auto renderable = renderables.getInstance(ground_grid_entity_);
+  if (renderable) {
+    renderables.setAxisAlignedBoundingBox(renderable,
+                                         ground_grid_bounds(width, height));
+  }
   ground_grid_mesh_width_ = width;
   ground_grid_mesh_height_ = height;
 }

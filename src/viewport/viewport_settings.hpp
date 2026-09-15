@@ -70,6 +70,7 @@ enum class ViewportColorSettingId {
     HoverVertex,
     RemoveSelectionVertex,
     CollisionFill,
+    Background,
     Count,
 };
 

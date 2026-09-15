@@ -1572,6 +1572,8 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_EQ(viewport_settings_sections()[8].label, "Gizmo");
   EXPECT_EQ(viewport_settings_sections()[9].label, "Texturing");
 
+  expect_color_near(settings.color(ViewportColorSettingId::Background),
+                    {21.0f / 255.0f, 21.0f / 255.0f, 21.0f / 255.0f, 1.0f});
   expect_color_near(settings.color(ViewportColorSettingId::SelectionWire),
                     overlay_policy_setting_color(kOverlaySelectionWireColor));
   expect_color_near(
@@ -1580,11 +1582,11 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   expect_color_near(settings.color(ViewportColorSettingId::SourceWire),
                     overlay_policy_setting_color(kOverlaySourceWireColor));
   expect_color_near(settings.color(ViewportColorSettingId::GridMinor),
-                    {150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f});
+                    {76.0f / 255.0f, 76.0f / 255.0f, 76.0f / 255.0f, 1.0f});
   expect_color_near(settings.color(ViewportColorSettingId::GridMajor),
-                    {210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f});
+                    {114.0f / 255.0f, 114.0f / 255.0f, 114.0f / 255.0f, 1.0f});
   expect_color_near(settings.color(ViewportColorSettingId::MeshGridMinor),
-                    {0.02f, 0.02f, 0.02f, 1.0f});
+                    {150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f});
   expect_color_near(settings.color(ViewportColorSettingId::MeshGridMajor),
                     {1.0f, 0.84f, 0.22f, 1.0f});
   expect_color_near(
@@ -1638,7 +1640,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       15.0f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
-  ASSERT_EQ(viewport_color_settings().size(), 24u);
+  ASSERT_EQ(viewport_color_settings().size(), 25u);
   ASSERT_EQ(viewport_float_settings().size(), 32u);
   ASSERT_EQ(viewport_bool_settings().size(), 14u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
@@ -2022,6 +2024,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   std::filesystem::remove(path);
 
   ViewportSettings settings = ViewportSettings::defaults();
+  EXPECT_TRUE(settings.set_color(ViewportColorSettingId::Background,
+                                 {0.2f, 0.4f, 0.6f, 0.3f}));
   EXPECT_TRUE(settings.set_color(ViewportColorSettingId::GridMinor,
                                  {0.25f, 0.5f, 0.75f, 0.6f}));
   EXPECT_TRUE(settings.set_color(ViewportColorSettingId::GridMajor,
@@ -2058,6 +2062,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   ASSERT_TRUE(settings.save(path));
 
   const ViewportSettings loaded = ViewportSettings::load(path);
+  expect_color_near(loaded.color(ViewportColorSettingId::Background),
+                    {0.2f, 0.4f, 0.6f, 1.0f});
   expect_color_near(loaded.color(ViewportColorSettingId::GridMinor),
                     {0.25098f, 0.501961f, 0.74902f, 0.6f});
   expect_color_near(loaded.color(ViewportColorSettingId::GridMajor),
@@ -2129,12 +2135,100 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
               std::string::npos);
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.TextureLockScale=true"),
               std::string::npos);
-    EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.BackgroundColor"),
+    EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.BackgroundColor=336699FF"),
               std::string::npos);
     EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.ShowSpecialTextures"),
               std::string::npos);
   }
 
+  std::filesystem::remove(path);
+}
+
+TEST(ViewportSettingsTests,
+     BackgroundIsOpaqueAndDefaultsWhenAbsentFromOlderPreferences) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "quader_background_preferences.ini";
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.GridMinorColor=12345678\n";
+  }
+  ViewportSettings settings = ViewportSettings::load(path);
+  const ViewportSettingColor default_background =
+      ViewportSettings::defaults().color(ViewportColorSettingId::Background);
+  expect_color_near(settings.color(ViewportColorSettingId::Background),
+                    default_background);
+  expect_color_near(settings.color(ViewportColorSettingId::GridMinor),
+                    {18.0f / 255.0f, 52.0f / 255.0f, 86.0f / 255.0f,
+                     120.0f / 255.0f});
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.BackgroundColor=33669900\n";
+  }
+  settings = ViewportSettings::load(path);
+  expect_color_near(settings.color(ViewportColorSettingId::Background),
+                    {0.2f, 0.4f, 0.6f, 1.0f});
+  EXPECT_FALSE(settings.set_color(ViewportColorSettingId::Background,
+                                  {0.2f, 0.4f, 0.6f, 0.0f}));
+  EXPECT_FALSE(settings.restore_color(ViewportColorSettingId::Background,
+                                      {0.2f, 0.4f, 0.6f, 0.5f}));
+  EXPECT_TRUE(settings.restore_color(ViewportColorSettingId::Background,
+                                     {0.4f, 0.6f, 0.8f, 0.0f}));
+  expect_color_near(settings.color(ViewportColorSettingId::Background),
+                    {0.4f, 0.6f, 0.8f, 1.0f});
+  EXPECT_TRUE(settings.reset_to_defaults());
+  expect_color_near(settings.color(ViewportColorSettingId::Background),
+                    default_background);
+  std::filesystem::remove(path);
+}
+
+TEST(ViewportSettingsTests,
+     MigratesOnlyTheExactPreviousMeshGridMinorColor) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "quader_mesh_grid_color_migration.ini";
+  struct ColorCase {
+    std::string_view source;
+    std::string_view saved;
+    ViewportSettingColor expected;
+  };
+  const std::array cases{
+      ColorCase{"050505FF", "969696FF",
+                {150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f}},
+      ColorCase{"060505FF", "060505FF",
+                {6.0f / 255.0f, 5.0f / 255.0f, 5.0f / 255.0f, 1.0f}},
+      ColorCase{"050505FE", "050505FE",
+                {5.0f / 255.0f, 5.0f / 255.0f, 5.0f / 255.0f, 254.0f / 255.0f}},
+      ColorCase{"000000FF", "000000FF", {0.0f, 0.0f, 0.0f, 1.0f}},
+      ColorCase{"12345678", "12345678",
+                {18.0f / 255.0f, 52.0f / 255.0f, 86.0f / 255.0f, 120.0f / 255.0f}},
+  };
+  for (const ColorCase &color_case : cases) {
+    SCOPED_TRACE(color_case.source);
+    {
+      std::ofstream file(path, std::ios::trunc);
+      ASSERT_TRUE(file.is_open()) << path.string();
+      file << "QVertexWorks.Quader.Viewport.MeshGridMinorColor="
+           << color_case.source
+           << "\nQVertexWorks.Quader.Viewport.MeshGridMajorColor=050505FF\n";
+    }
+    const ViewportSettings loaded = ViewportSettings::load(path);
+    expect_color_near(loaded.color(ViewportColorSettingId::MeshGridMinor),
+                      color_case.expected);
+    expect_color_near(loaded.color(ViewportColorSettingId::MeshGridMajor),
+                      {5.0f / 255.0f, 5.0f / 255.0f, 5.0f / 255.0f, 1.0f});
+    ASSERT_TRUE(loaded.save(path));
+    {
+      std::ifstream file(path);
+      const std::string saved{std::istreambuf_iterator<char>(file),
+                              std::istreambuf_iterator<char>()};
+      EXPECT_NE(saved.find("MeshGridMinorColor=" + std::string(color_case.saved)),
+                std::string::npos);
+    }
+    expect_color_near(
+        ViewportSettings::load(path).color(ViewportColorSettingId::MeshGridMinor),
+        color_case.expected);
+  }
   std::filesystem::remove(path);
 }
 
@@ -3397,12 +3491,24 @@ TEST(ViewportGridPlacementPolicyTests,
       ViewportGridPlacementPolicy::placement(camera, 200u, 100u);
   EXPECT_EQ(perspective.plane, ViewportGridPlane::XZ);
   EXPECT_EQ(perspective.rotation, ViewportGridRotation::Identity);
-  EXPECT_FLOAT_EQ(perspective.plane_size.x, kViewportGridDefaultPlaneSize);
-  EXPECT_FLOAT_EQ(perspective.plane_size.y, kViewportGridDefaultPlaneSize);
+  expect_vec3_near(perspective.origin, {});
+  EXPECT_FLOAT_EQ(perspective.plane_size.x, 1024.0f);
+  EXPECT_FLOAT_EQ(perspective.plane_size.y, 1024.0f);
   expect_vec3_near(perspective.axes.u_axis, {1.0f, 0.0f, 0.0f});
   expect_vec3_near(perspective.axes.v_axis, {0.0f, 0.0f, -1.0f});
   EXPECT_EQ(perspective.axes.u_color, ViewportColorSettingId::GridXAxis);
   EXPECT_EQ(perspective.axes.v_color, ViewportColorSettingId::GridZAxis);
+
+  ViewportCameraPose translated_pose = camera.pose();
+  const QVec3 camera_translation{123.0f, -45.0f, 678.0f};
+  translated_pose.eye = translated_pose.eye + camera_translation;
+  translated_pose.target = translated_pose.target + camera_translation;
+  ASSERT_TRUE(camera.restore_perspective_pose(translated_pose));
+  const ViewportGridPlacement translated_perspective =
+      ViewportGridPlacementPolicy::placement(camera, 200u, 100u);
+  expect_vec3_near(translated_perspective.origin, {});
+  EXPECT_FLOAT_EQ(translated_perspective.plane_size.x, 1024.0f);
+  EXPECT_FLOAT_EQ(translated_perspective.plane_size.y, 1024.0f);
 
   camera.view_axis(ViewportViewAxis::X, 1);
   const ViewportGridPlacement side =
@@ -3412,6 +3518,8 @@ TEST(ViewportGridPlacementPolicyTests,
   EXPECT_EQ(side.plane, ViewportGridPlane::YZ);
   EXPECT_EQ(side.rotation, ViewportGridRotation::NegativeHalfPiAroundZ);
   EXPECT_FLOAT_EQ(side.origin.x, kViewportGridPlaneOffset);
+  EXPECT_FLOAT_EQ(side.origin.y, camera.pose().eye.y);
+  EXPECT_FLOAT_EQ(side.origin.z, camera.pose().eye.z);
   EXPECT_FLOAT_EQ(side.plane_size.x, ortho_plane_height);
   EXPECT_FLOAT_EQ(side.plane_size.y, ortho_plane_height * 2.0f);
   expect_vec3_near(side.axes.u_axis, {0.0f, 0.0f, -1.0f});
@@ -3424,6 +3532,8 @@ TEST(ViewportGridPlacementPolicyTests,
       ViewportGridPlacementPolicy::placement(camera, 200u, 100u);
   EXPECT_EQ(front.plane, ViewportGridPlane::XY);
   EXPECT_EQ(front.rotation, ViewportGridRotation::PositiveHalfPiAroundX);
+  EXPECT_FLOAT_EQ(front.origin.x, camera.pose().eye.x);
+  EXPECT_FLOAT_EQ(front.origin.y, camera.pose().eye.y);
   EXPECT_FLOAT_EQ(front.origin.z, kViewportGridPlaneOffset);
   EXPECT_FLOAT_EQ(front.plane_size.x, camera.state().orthographic_size *
                                           kViewportGridOrthographicMargin *

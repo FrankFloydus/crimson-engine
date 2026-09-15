@@ -374,7 +374,7 @@ public:
     settings_.post_process.tone_mapping = tone_mapping;
     settings_.post_process.anti_aliasing = fxaa;
     settings_.post_process.dithering = dithering;
-    view_.apply_scene_settings(settings_, true);
+    view_.apply_scene_settings(settings_, true, ViewportSettings::defaults());
     std::cout << "Vulkan color scene settings: tone_mapping="
               << (tone_mapping == SceneToneMapping::Linear ? "Linear" : "ACES")
               << ", use_exposure=" << settings_.camera.use_exposure
@@ -586,7 +586,7 @@ public:
   QImage capture(SceneToneMapping tone, SceneCameraSettings camera = {}) {
     settings_.camera = camera;
     settings_.post_process.tone_mapping = tone;
-    view_.apply_scene_settings(settings_, true);
+    view_.apply_scene_settings(settings_, true, ViewportSettings::defaults());
     for (int frame = 0; frame < 6; ++frame) {
       if (!begin_frame()) return {};
       view_.render(*renderer_);

@@ -1025,6 +1025,8 @@ viewport.settings.section.picking.label=Picking
 viewport.settings.section.gizmo.label=Gizmo
 viewport.settings.section.texturing.label=Texturing
 
+viewport.settings.BackgroundColor.label=Background Color
+viewport.settings.BackgroundColor.help=Editor background for Shaded, Solid and Wireframe views. Rendered views use the scene environment. Use Apply to preview.
 viewport.settings.GridMinorColor.label=Ground Minor
 viewport.settings.GridMajorColor.label=Ground Major
 viewport.settings.MeshGridMinorColor.label=Mesh Surface Minor

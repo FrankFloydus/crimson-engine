@@ -15,7 +15,8 @@
 
 namespace quader {
 
-inline constexpr float kViewportGridDefaultPlaneSize = 8192.0f;
+// A finite construction plane, equivalent to +/-16384 map units at 32:1.
+inline constexpr float kViewportGridDefaultPlaneSize = 1024.0f;
 inline constexpr float kViewportGridPlaneOffset = -0.002f;
 inline constexpr float kViewportGridMinOrthographicSize = 0.01f;
 inline constexpr float kViewportGridOrthographicMargin = 1.25f;
@@ -70,9 +71,15 @@ public:
                                          std::uint32_t viewport_height) {
     const ViewportCameraPose pose = camera.pose();
     const ViewportGridPlane resolved_plane = plane(camera, pose);
+    QVec3 plane_origin = origin(resolved_plane, pose);
+    if (camera.state().projection == ViewportProjection::Perspective) {
+      // The construction grid is a bounded world plane. Its perimeter must
+      // not move with the camera; coplanar depth bias belongs to the material.
+      plane_origin = {};
+    }
     return {
         .plane = resolved_plane,
-        .origin = origin(resolved_plane, pose),
+        .origin = plane_origin,
         .rotation = rotation(resolved_plane),
         .plane_size =
             plane_size(resolved_plane, camera, viewport_width, viewport_height),

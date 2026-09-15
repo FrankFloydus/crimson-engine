@@ -170,12 +170,12 @@ TEST(QtSettingsControllerTests,
 
 TEST(QtSettingsControllerTests,
      EveryControlMutatesItsOwnerAndNotifiesItsPhase) {
-  static_assert(kViewportColorSettingCount == 24u);
+  static_assert(kViewportColorSettingCount == 25u);
   static_assert(kViewportFloatSettingCount == 32u);
   static_assert(kViewportBoolSettingCount == 14u);
   static_assert(3u + kViewportColorSettingCount + kViewportFloatSettingCount +
                      kViewportBoolSettingCount ==
-                73u);
+                74u);
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
@@ -192,7 +192,10 @@ TEST(QtSettingsControllerTests,
   for (const ViewportColorSettingDescriptor &descriptor :
        viewport_color_settings()) {
     const ViewportSettingColor initial = viewport_settings.color(descriptor.id);
-    const ViewportSettingColor edited = changed_color(initial);
+    ViewportSettingColor edited = changed_color(initial);
+    if (descriptor.id == ViewportColorSettingId::Background) {
+      edited.a = 1.0f;
+    }
     ASSERT_TRUE(controller.preview_color(descriptor.id, edited))
         << descriptor.key;
     expect_color_exact(viewport_settings.color(descriptor.id), edited);

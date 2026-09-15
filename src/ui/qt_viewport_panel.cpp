@@ -1302,7 +1302,8 @@ void QtViewportPanel::prepare_viewports(
         pane_workspace.camera.set_clip_planes(scene_settings->camera.near_plane,
                                               scene_settings->camera.far_plane);
         renderer.apply_scene_settings(
-            *scene_settings, viewport_shading_uses_scene_lighting(shading));
+            *scene_settings, viewport_shading_uses_scene_lighting(shading),
+            settings);
       }
     }
     renderer.update_camera(pane_workspace.camera);

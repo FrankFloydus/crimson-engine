@@ -127,7 +127,7 @@ public:
     settings.post_process.ambient_occlusion = false;
     settings.post_process.bloom = false;
     settings.post_process.tone_mapping = SceneToneMapping::Linear;
-    view_.apply_scene_settings(settings, true);
+    view_.apply_scene_settings(settings, true, ViewportSettings::defaults());
 
     QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
     const auto wall = api.modeling().create_box(

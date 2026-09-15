@@ -841,6 +841,8 @@ TEST(QtSettingsDialogTests,
                 "settingsPage_viewport");
   expect_group("viewportSetting_GizmoSize", "settingsGroup_gizmo",
                 "settingsPage_viewport");
+  expect_group("viewportSetting_BackgroundColor", "settingsGroup_shading",
+                "settingsPage_viewport");
   expect_group("settingsLocale", "settingsGroup_language",
                 "settingsPage_interface");
   expect_group("settingsInterfaceScale", "settingsGroup_interface_scale",
@@ -1260,6 +1262,98 @@ TEST(QtSettingsDialogTests,
       setting_color(applied)));
   EXPECT_TRUE(viewport_setting_colors_approximately(
       ViewportSettings::load(path).color(ViewportColorSettingId::CollisionFill),
+      setting_color(applied)));
+}
+
+TEST(QtSettingsDialogTests,
+     BackgroundColorStagesAnOpaqueEditorPreferenceAndPersistsOnApply) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-background-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const std::filesystem::path path =
+      std::filesystem::path(directory.path().toStdWString()) / "viewport.ini";
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  const ViewportSettingColor initial =
+      viewport_settings.color(ViewportColorSettingId::Background);
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) {
+        changes.push_back(change);
+        EXPECT_TRUE(viewport_settings.save(path));
+      });
+  auto *swatch = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_BackgroundColor"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *cancel = dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
+  ASSERT_NE(swatch, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  const auto *group = qobject_cast<QGroupBox *>(swatch->parentWidget());
+  ASSERT_NE(group, nullptr);
+  EXPECT_EQ(group->title(), QStringLiteral("Shading"));
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(swatch->accessibleName(), QStringLiteral("Background Color"));
+  EXPECT_TRUE(swatch->toolTip().contains(
+      QStringLiteral("Rendered views use the scene environment.")));
+  EXPECT_FALSE(swatch->toolTip().contains(QStringLiteral("Opacity")));
+  const QColor applied = QColor::fromRgb(51, 102, 153);
+  const QString picker_name =
+      QStringLiteral("viewportSetting_BackgroundColor_dialog");
+  ASSERT_TRUE(reject_color_picker(
+      dialog, *swatch, picker_name, applied, [&]() {
+        const auto *picker = dialog.findChild<QColorDialog *>(picker_name);
+        ASSERT_NE(picker, nullptr);
+        EXPECT_FALSE(picker->testOption(QColorDialog::ShowAlphaChannel));
+      }));
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::Background), initial));
+
+  ASSERT_TRUE(accept_color_picker(dialog, *swatch, picker_name, applied));
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::Background), initial));
+  apply->click();
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::Background),
+      setting_color(applied)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      ViewportSettings::load(path).color(ViewportColorSettingId::Background),
+      setting_color(applied)));
+
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  dialog.refresh();
+  EXPECT_EQ(swatch->accessibleName(), QStringLiteral("Colore dello sfondo"));
+  ASSERT_TRUE(accept_color_picker(dialog, *swatch, picker_name,
+                                 QColor::fromRgb(200, 10, 100)));
+  cancel->click();
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::Background),
+      setting_color(applied)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      ViewportSettings::load(path).color(ViewportColorSettingId::Background),
       setting_color(applied)));
 }
 

@@ -164,10 +164,11 @@ void set_color_button_presentation(
     const ViewportColorSettingDescriptor &descriptor) {
   const QColor swatch_color = to_q_color(color);
   button.set_swatch_color(swatch_color);
-  const QString opacity = color_opacity_text(localization, swatch_color);
-  QString details =
-      QStringLiteral("%1 | %2")
-          .arg(swatch_color.name(QColor::HexArgb).toUpper(), opacity);
+  QString details = descriptor.id == ViewportColorSettingId::Background
+                        ? swatch_color.name(QColor::HexRgb).toUpper()
+                        : QStringLiteral("%1 | %2")
+                              .arg(swatch_color.name(QColor::HexArgb).toUpper(),
+                                   color_opacity_text(localization, swatch_color));
   const QString help =
       setting_help_text(localization, descriptor.key, descriptor.help);
   if (!help.isEmpty()) {
@@ -2706,7 +2707,8 @@ struct QtSettingsDialog::Impl {
         setting_object_name(descriptor.key) + QStringLiteral("_dialog"));
     dialog.setWindowTitle(qtext(localization, key, descriptor.label));
     dialog.setOption(QColorDialog::DontUseNativeDialog, true);
-    dialog.setOption(QColorDialog::ShowAlphaChannel, true);
+    dialog.setOption(QColorDialog::ShowAlphaChannel,
+                     descriptor.id != ViewportColorSettingId::Background);
 
     QPointer<QtColorSwatchButton> guarded_button(&button);
     QObject::connect(

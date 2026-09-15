@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/viewport_renderer.hpp"
 
+#include "core/color_space.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/render_layers.hpp"
@@ -17,6 +18,7 @@
 #include <filament/ColorSpace.h>
 #include <filament/IndirectLight.h>
 #include <filament/Options.h>
+#include <filament/Skybox.h>
 #include <filament/ToneMapper.h>
 #include <filament/Viewport.h>
 #include <utils/EntityManager.h>
@@ -32,6 +34,26 @@ constexpr float kViewportOverlayCameraAperture = 16.0f;
 constexpr float kViewportOverlayCameraShutterSpeed = 1.0f / 125.0f;
 constexpr float kViewportOverlayCameraSensitivity = 100.0f;
 
+class ScopedDiagnosticSkyboxMask {
+public:
+  explicit ScopedDiagnosticSkyboxMask(filament::Skybox *skybox)
+      : skybox_(skybox), layer_mask_(skybox ? skybox->getLayerMask() : 0u) {
+    if (skybox_) {
+      skybox_->setLayerMask(0xffu, 0u);
+    }
+  }
+
+  ~ScopedDiagnosticSkyboxMask() {
+    if (skybox_) {
+      skybox_->setLayerMask(0xffu, layer_mask_);
+    }
+  }
+
+private:
+  filament::Skybox *skybox_;
+  std::uint8_t layer_mask_;
+};
+
 void apply_neutral_overlay_exposure(filament::Camera *camera) {
   if (!camera) {
     return;
@@ -43,16 +65,15 @@ void apply_neutral_overlay_exposure(filament::Camera *camera) {
 
 ViewportSettingColor
 viewport_clear_color(const SceneEnvironmentSettings &environment,
-                     bool rendered_mode) {
+                     bool rendered_mode,
+                     const ViewportSettings &viewport_settings) {
   if (rendered_mode) {
-    return {};
+    return {environment.clear_color.x, environment.clear_color.y,
+            environment.clear_color.z, 1.0f};
   }
-  return {
-      environment.clear_color.x,
-      environment.clear_color.y,
-      environment.clear_color.z,
-      1.0f,
-  };
+  const auto color = viewport_settings.color(ViewportColorSettingId::Background);
+  return {srgb_to_linear(color.r), srgb_to_linear(color.g),
+          srgb_to_linear(color.b), 1.0f};
 }
 
 filament::ColorGrading *
@@ -342,15 +363,19 @@ void ViewportRenderer::update_camera(
 }
 
 void ViewportRenderer::apply_scene_settings(
-    const SceneSettingsComponent &settings, bool rendered_mode) {
+    const SceneSettingsComponent &settings, bool rendered_mode,
+    const ViewportSettings &viewport_settings) {
   QDR_PROFILE_FUNCTION();
   if (!view_ || !camera_) {
     return;
   }
 
+  const bool rendered_background =
+      rendered_mode && material_debug_mode_ == ViewportMaterialDebugMode::None;
   const ViewportSettingColor resolved_background =
       instance_edit_style_.resolve_background_color(
-          viewport_clear_color(settings.environment, rendered_mode),
+          viewport_clear_color(settings.environment, rendered_background,
+                               viewport_settings),
           instance_edit_context_active_);
   const filament::IndirectLight *indirect_light =
       scene_ ? scene_->getIndirectLight() : nullptr;
@@ -556,6 +581,12 @@ void ViewportRenderer::set_material_debug_mode(
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
     QDR_PROFILE_FUNCTION();
+    // Diagnostics need the lit mesh layer but use the editor backdrop. Hide
+    // only the skybox during this view's submission, then restore it before
+    // another pane uses the shared scene. Filament snapshots it during render.
+    ScopedDiagnosticSkyboxMask skybox_mask(
+        scene_ && material_debug_mode_ != ViewportMaterialDebugMode::None
+            ? scene_->getSkybox() : nullptr);
     render_pass_coordinator_.render(renderer, view_, overlay_view_,
                                     surface_ == ViewportRenderSurface::Texture);
 }
