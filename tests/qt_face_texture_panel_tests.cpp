@@ -181,6 +181,10 @@ protected:
       const auto *spin = number(names[index]);
       ASSERT_NE(spin, nullptr);
       EXPECT_EQ(spin->isEnabled(), editable);
+      const auto *label = panel_->findChild<QLabel *>(
+          spin->objectName() + QStringLiteral(".label"));
+      ASSERT_NE(label, nullptr);
+      EXPECT_EQ(label->isEnabled(), editable);
       EXPECT_NEAR(spin->value(), values[index], 0.000001);
     }
   }
@@ -428,7 +432,7 @@ TEST_F(QtFaceTexturePanelTests,
 }
 
 TEST_F(QtFaceTexturePanelTests,
-       EmptySelectionRetainsReadOnlyControlsAndDiscardsPendingDrafts) {
+       EmptySelectionRetainsDisabledControlsAndDiscardsPendingDrafts) {
   prepare_screenshot_scene();
   ASSERT_TRUE(editor().selection().select_face(object_, 1).ok());
   const std::array fields{QuaderFaceTextureField::ScaleX,
@@ -473,7 +477,11 @@ TEST_F(QtFaceTexturePanelTests,
     for (std::size_t index = 0; index < names.size(); ++index) {
       auto *spin = number(names[index]);
       ASSERT_EQ(spin, retained[index]);
-      EXPECT_TRUE(spin->isEnabled());
+      EXPECT_FALSE(spin->isEnabled());
+      const auto *label = panel_->findChild<QLabel *>(
+          spin->objectName() + QStringLiteral(".label"));
+      ASSERT_NE(label, nullptr);
+      EXPECT_FALSE(label->isEnabled());
       EXPECT_TRUE(spin->isReadOnly());
       EXPECT_EQ(spin->text(), QStringLiteral("\u2014"));
     }

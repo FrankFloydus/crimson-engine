@@ -4900,9 +4900,9 @@ void UISystem::refresh_localized_chrome() {
             .texture_info_location =
                 text("ui.texture_info.location", "Location"),
             .texture_info_format = text("ui.texture_info.format", "Format"),
-            .texture_info_has_alpha =
-                text("ui.texture_info.has_alpha", "Has alpha"),
             .texture_info_size = text("ui.texture_info.size", "Size"),
+            .texture_info_file_size =
+                text("ui.texture_info.file_size", "File size"),
             .texture_info_red_channel =
                 text("ui.texture_info.channel.red", "Red channel"),
             .texture_info_green_channel =
@@ -4935,8 +4935,8 @@ void UISystem::refresh_localized_chrome() {
         .name = text("ui.texture_info.name", "Name"),
         .location = text("ui.texture_info.location", "Location"),
         .format = text("ui.texture_info.format", "Format"),
-        .has_alpha = text("ui.texture_info.has_alpha", "Has alpha"),
         .size = text("ui.texture_info.size", "Size"),
+        .file_size = text("ui.texture_info.file_size", "File size"),
         .red_channel =
             text("ui.texture_info.channel.red", "Red channel"),
         .green_channel =

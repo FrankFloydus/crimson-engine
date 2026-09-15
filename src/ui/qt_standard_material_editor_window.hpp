@@ -248,8 +248,8 @@ struct QtStandardMaterialEditorLabels final {
   QString texture_info_name = QStringLiteral("name");
   QString texture_info_location = QStringLiteral("location");
   QString texture_info_format = QStringLiteral("format");
-  QString texture_info_has_alpha = QStringLiteral("has alpha");
   QString texture_info_size = QStringLiteral("size");
+  QString texture_info_file_size = QStringLiteral("file size");
   QString texture_info_red_channel = QStringLiteral("Red channel");
   QString texture_info_green_channel = QStringLiteral("Green channel");
   QString texture_info_blue_channel = QStringLiteral("Blue channel");

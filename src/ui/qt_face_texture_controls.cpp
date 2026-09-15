@@ -402,7 +402,7 @@ private:
       const bool shift = binding.field == QuaderFaceTextureField::ShiftX ||
                          binding.field == QuaderFaceTextureField::ShiftY;
       const bool enabled =
-          !has_faces || (settings.editable && (!shift || single_face));
+          has_faces && settings.editable && (!shift || single_face);
       if (binding.spin->isReadOnly() != !has_faces) {
         binding.spin->setReadOnly(!has_faces);
       }

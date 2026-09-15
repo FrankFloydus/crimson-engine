@@ -102,6 +102,11 @@ Use one native multi-config Visual Studio tree: `build/vs2026`. Do not create al
 native build trees or a traditional checked Debug configuration without an explicit request.
 The isolated SDK verification fixture is separate from the native handoff.
 
+Always close running Quader instances from this checkout autonomously before rebuilding.
+This is standing user authorization: do not ask the user to close Quader or request confirmation.
+Prefer a normal window close and wait for exit. If it does not exit, terminate only verified
+Quader processes using this checkout's build artifacts, then continue the build.
+
 For feature/fix handoff, build **Release only** by default. Build the Debug/Profile executable
 only when the user explicitly requests it. Keep both configurations available in the canonical tree:
 

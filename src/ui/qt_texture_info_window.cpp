@@ -46,8 +46,8 @@ constexpr std::uint8_t kAllChannels = 0x0Fu;
 constexpr int kNameRow = 0;
 constexpr int kLocationRow = 1;
 constexpr int kFormatRow = 2;
-constexpr int kHasAlphaRow = 3;
-constexpr int kSizeRow = 4;
+constexpr int kSizeRow = 3;
+constexpr int kFileSizeRow = 4;
 constexpr int kPropertyColumn = 0;
 constexpr int kValueColumn = 1;
 
@@ -316,8 +316,6 @@ QtTextureInfoWindow::QtTextureInfoWindow(QWidget *parent,
     value_item->setFlags(Qt::ItemIsEnabled);
     table_->setItem(row, kValueColumn, value_item);
   }
-  table_->item(kHasAlphaRow, kValueColumn)->setCheckState(Qt::Unchecked);
-  table_->item(kHasAlphaRow, kValueColumn)->setFlags(Qt::ItemIsEnabled);
 
   splitter_->addWidget(canvas_);
   splitter_->addWidget(table_);
@@ -408,8 +406,6 @@ void QtTextureInfoWindow::clear() {
     table_->item(row, kValueColumn)->setText({});
     table_->item(row, kValueColumn)->setToolTip({});
   }
-  table_->item(kHasAlphaRow, kValueColumn)->setCheckState(Qt::Unchecked);
-  table_->item(kHasAlphaRow, kValueColumn)->setFlags(Qt::ItemIsEnabled);
   canvas_->set_image({}, true);
   refresh_channel_properties();
 }
@@ -556,8 +552,8 @@ void QtTextureInfoWindow::refresh_labels() {
   table_->item(kNameRow, kPropertyColumn)->setText(labels_.name);
   table_->item(kLocationRow, kPropertyColumn)->setText(labels_.location);
   table_->item(kFormatRow, kPropertyColumn)->setText(labels_.format);
-  table_->item(kHasAlphaRow, kPropertyColumn)->setText(labels_.has_alpha);
   table_->item(kSizeRow, kPropertyColumn)->setText(labels_.size);
+  table_->item(kFileSizeRow, kPropertyColumn)->setText(labels_.file_size);
   red_button_->setToolTip(labels_.red_channel);
   red_button_->setAccessibleName(labels_.red_channel);
   green_button_->setToolTip(labels_.green_channel);
@@ -579,15 +575,16 @@ void QtTextureInfoWindow::refresh_table(
   table_->item(kFormatRow, kValueColumn)
       ->setText(normalized_format(presentation.format));
 
-  QTableWidgetItem *has_alpha = table_->item(kHasAlphaRow, kValueColumn);
-  has_alpha->setText({});
-  has_alpha->setCheckState(presentation.source_has_alpha ? Qt::Checked
-                                                        : Qt::Unchecked);
-  has_alpha->setFlags(Qt::ItemIsEnabled);
-
-  const QString size = format_storage_size(presentation.encoded_byte_size);
+  const QString size = QStringLiteral("%1x%2")
+                           .arg(presentation.width)
+                           .arg(presentation.height);
   table_->item(kSizeRow, kValueColumn)->setText(size);
   table_->item(kSizeRow, kValueColumn)->setToolTip(size);
+
+  const QString file_size =
+      format_storage_size(presentation.encoded_byte_size);
+  table_->item(kFileSizeRow, kValueColumn)->setText(file_size);
+  table_->item(kFileSizeRow, kValueColumn)->setToolTip(file_size);
 }
 
 void QtTextureInfoWindow::refresh_channel_properties() {

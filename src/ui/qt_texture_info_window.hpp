@@ -60,8 +60,8 @@ struct QtTextureInfoLabels final {
   QString name = QStringLiteral("name");
   QString location = QStringLiteral("location");
   QString format = QStringLiteral("format");
-  QString has_alpha = QStringLiteral("has alpha");
   QString size = QStringLiteral("size");
+  QString file_size = QStringLiteral("file size");
   QString red_channel = QStringLiteral("Red channel");
   QString green_channel = QStringLiteral("Green channel");
   QString blue_channel = QStringLiteral("Blue channel");

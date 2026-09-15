@@ -28,8 +28,9 @@ file except through prior written authorization from Francesco Di Blasi.
   Both material-browser hosts reuse one implementation, but
   only the embedded browser assigns explicit materials to selected faces. Canvas gestures use
   the public modeling preview lifecycle; widget state never becomes UV or material truth.
-  With no selected face, retain the bound controls with disabled actions and read-only
-  em-dash numeric values; the canvas stays empty. Unbinding still abandons their presentation.
+  With no selected face, retain the bound controls with disabled actions, numeric fields,
+  and field labels; numeric values show em dashes and the canvas stays empty. Unbinding still
+  abandons their presentation.
   Visible browsers receive revision-gated catalog and usage updates during normal refresh,
   even after workspace events were consumed while hidden or the scene was already dirty.
   A browser generation change invalidates its usage/dependency presentation stamps even when

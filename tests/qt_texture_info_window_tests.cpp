@@ -130,9 +130,10 @@ TEST(QtTextureInfoWindowTests,
   EXPECT_EQ(table->horizontalHeader()->sectionResizeMode(1),
             QHeaderView::Stretch);
 
-  const std::vector<std::byte> pixels{
-      std::byte{12u}, std::byte{34u}, std::byte{56u}, std::byte{78u}};
+  const std::vector<std::byte> pixels(64u * 32u * 4u, std::byte{78u});
   TextureInfoPresentation presentation = texture_presentation(pixels);
+  presentation.width = 64u;
+  presentation.height = 32u;
   ASSERT_TRUE(window.present(presentation));
   EXPECT_TRUE(window.has_presentation());
   ASSERT_NE(window.current_context(), nullptr);
@@ -140,18 +141,22 @@ TEST(QtTextureInfoWindowTests,
   EXPECT_EQ(table->item(0, 0)->text(), QStringLiteral("name"));
   EXPECT_EQ(table->item(1, 0)->text(), QStringLiteral("location"));
   EXPECT_EQ(table->item(2, 0)->text(), QStringLiteral("format"));
-  EXPECT_EQ(table->item(3, 0)->text(), QStringLiteral("has alpha"));
-  EXPECT_EQ(table->item(4, 0)->text(), QStringLiteral("size"));
+  EXPECT_EQ(table->item(3, 0)->text(), QStringLiteral("size"));
+  EXPECT_EQ(table->item(4, 0)->text(), QStringLiteral("file size"));
   EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("wall_albedo.png"));
   EXPECT_EQ(table->item(1, 1)->text(),
             QStringLiteral("C:\\Project\\Textures\\wall_albedo.png"));
   EXPECT_EQ(table->item(2, 1)->text(), QStringLiteral("PNG"));
-  EXPECT_EQ(table->item(3, 1)->checkState(), Qt::Checked);
-  const Qt::ItemFlags alpha_flags = table->item(3, 1)->flags();
-  EXPECT_TRUE(alpha_flags.testFlag(Qt::ItemIsEnabled));
-  EXPECT_FALSE(alpha_flags.testFlag(Qt::ItemIsSelectable));
-  EXPECT_FALSE(alpha_flags.testFlag(Qt::ItemIsEditable));
-  EXPECT_FALSE(alpha_flags.testFlag(Qt::ItemIsUserCheckable));
+  EXPECT_EQ(table->item(3, 1)->text(), QStringLiteral("64x32"));
+  EXPECT_EQ(table->item(3, 1)->toolTip(), QStringLiteral("64x32"));
+  for (int row = 0; row < table->rowCount(); ++row) {
+    const Qt::ItemFlags value_flags = table->item(row, 1)->flags();
+    EXPECT_TRUE(value_flags.testFlag(Qt::ItemIsEnabled));
+    EXPECT_FALSE(value_flags.testFlag(Qt::ItemIsSelectable));
+    EXPECT_FALSE(value_flags.testFlag(Qt::ItemIsEditable));
+    EXPECT_FALSE(value_flags.testFlag(Qt::ItemIsUserCheckable));
+    EXPECT_FALSE(table->item(row, 1)->data(Qt::CheckStateRole).isValid());
+  }
   EXPECT_EQ(table->item(4, 1)->text(), QStringLiteral("1.3 MB"));
 
   const std::uint64_t rebuilds = window.masked_image_rebuild_count();
@@ -162,8 +167,13 @@ TEST(QtTextureInfoWindowTests,
   EXPECT_EQ(window.masked_image_rebuild_count(), rebuilds)
       << "metadata-only changes must not rebuild the masked image";
   EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("updated_name.png"));
-  EXPECT_EQ(table->item(3, 1)->checkState(), Qt::Unchecked);
+  EXPECT_EQ(table->item(3, 1)->text(), QStringLiteral("64x32"));
   EXPECT_EQ(table->item(4, 1)->text(), QStringLiteral("750 KB"));
+
+  presentation.width = 32u;
+  presentation.height = 64u;
+  ASSERT_TRUE(window.present(presentation));
+  EXPECT_EQ(table->item(3, 1)->text(), QStringLiteral("32x64"));
 
   EXPECT_EQ(QtTextureInfoWindow::format_storage_size(1'250u),
             QStringLiteral("1.3 KB"));

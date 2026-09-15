@@ -714,8 +714,10 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_EQ(texture_information->item(2, 0)->text(),
             QStringLiteral("format"));
   EXPECT_EQ(texture_information->item(3, 0)->text(),
-            QStringLiteral("has alpha"));
-  EXPECT_EQ(texture_information->item(4, 0)->text(), QStringLiteral("size"));
+            QStringLiteral("size"));
+  EXPECT_EQ(texture_information->item(3, 1)->text(), QStringLiteral("8x4"));
+  EXPECT_EQ(texture_information->item(4, 0)->text(),
+            QStringLiteral("file size"));
   EXPECT_TRUE(red_channel->isChecked());
   EXPECT_EQ(texture_canvas->minimumSize(), QSize(480, 360))
       << "a lazily created inspector must receive the current scale";
@@ -730,7 +732,7 @@ TEST(QtStandardMaterialEditorWindowTests,
             QStringLiteral("Textures/bronze_albedo.png"));
   EXPECT_EQ(texture_information->item(2, 1)->text(),
             QStringLiteral("RGBA8"));
-  EXPECT_EQ(texture_information->item(3, 1)->checkState(), Qt::Unchecked);
+  EXPECT_EQ(texture_information->item(3, 1)->text(), QStringLiteral("8x4"));
   document.textures[0].project_relative_path =
       QStringLiteral("Textures/replaced_albedo.png");
   document.textures[0].content_revision = 2u;
