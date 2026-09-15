@@ -17256,7 +17256,7 @@ TEST(ModelingSessionServiceTests,
   const ModelingActionItem *invert =
       find_action_item(*object_panel, "invert_mesh");
   ASSERT_NE(invert, nullptr);
-  EXPECT_EQ(invert->label, "Flip Selected Mesh Normals");
+  EXPECT_EQ(invert->label, "Flip Mesh Normals");
   EXPECT_EQ(invert->operation_id, "flip_face_normals");
   EXPECT_EQ(invert->visibility, ModelingActionVisibility::Enabled);
 
@@ -17379,7 +17379,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(target.kind, ModelingToolSettingsTargetKind::EdgeBevel);
   EXPECT_EQ(target.action_id, "bevel_edges");
   EXPECT_EQ(target.operation_id, "edge_bevel");
-  EXPECT_EQ(target.label, "Bevel Selected Edges");
+  EXPECT_EQ(target.label, "Bevel Edges");
 
   const std::optional<MeshAsset> preview_before =
       service.compile_object_mesh(box.object.modeling_object_id);
@@ -18414,6 +18414,19 @@ TEST(ModelingSessionServiceTests,
       .surface = ModelingActionSurface::OperationsPanel,
       .include_disabled = true,
   });
+  const ModelingSdkProjectionStats first_action_query =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_GT(first_action_query.selection_topology_build_count, 0U);
+  for (int frame = 0; frame < 32; ++frame) {
+    (void)service.context_action_set({
+        .surface = ModelingActionSurface::OperationsPanel,
+        .include_disabled = true,
+    });
+  }
+  const ModelingSdkProjectionStats repeated_action_queries =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(repeated_action_queries.selection_topology_build_count,
+            first_action_query.selection_topology_build_count);
   ASSERT_EQ(actions.panels.size(), 1u);
   EXPECT_EQ(find_action_panel(actions, "object_operations"), nullptr);
   EXPECT_EQ(find_action_panel(actions, "edge_operations"), nullptr);

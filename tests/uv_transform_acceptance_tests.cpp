@@ -41,13 +41,13 @@ QVec3 half_turn_x(QVec3 point) { return {point.x, -point.y, -point.z}; }
 
 quader_poly::Document transform_uv_document(bool reversed = false) {
   quader_poly::Document document;
-  constexpr std::array<QVec3, 6> loop{{
+  constexpr std::array<QVec3, 6> kLoop{{
       {0, 0, 0}, {3, 0, 0}, {4, 1, 0},
       {3, 3, 0}, {1, 4, 0}, {0, 2, 0}}};
   // The second disconnected face exercises untouched topology in the same mesh.
   for (const float offset : {0.0F, 10.0F}) {
     std::vector<quader_poly::ElementId> corners;
-    for (const auto point : loop) {
+    for (const auto point : kLoop) {
       corners.push_back(quader_poly::add_vertex(
           document, point + QVec3{offset, 0, 0}));
     }
@@ -129,22 +129,22 @@ std::optional<QVec2> triangle_uv_at(const MeshAsset &mesh, QVec3 point,
 class UvTransformAcceptanceTests : public ::testing::Test {
 protected:
   UvTransformAcceptanceTests()
-      : editor(QuaderApiSessionInternalAccess::from_scene_session(session)) {}
+      : editor_(QuaderApiSessionInternalAccess::from_scene_session(session_)) {}
 
   void create(bool reversed = false) {
-    const auto created = editor.modeling().create_mesh(
+    const auto created = editor_.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(transform_uv_document(reversed)),
         {.name = "Transform UV interiors"});
     ASSERT_TRUE(created.ok()) << created.error_message();
-    object = created.value();
-    ASSERT_TRUE(session.scene().set_texture_mapping(object.entity, {QMat4{}}));
+    object_ = created.value();
+    ASSERT_TRUE(session_.scene().set_texture_mapping(object_.entity, {QMat4{}}));
     select(QuaderSelectionMode::Face);
   }
 
   void select(QuaderSelectionMode mode) {
-    ASSERT_TRUE(editor.selection().clear().ok());
-    ASSERT_TRUE(editor.modeling().set_selection_mode(mode).ok());
-    QuaderComponentSelectionArgs selected{.object = object};
+    ASSERT_TRUE(editor_.selection().clear().ok());
+    ASSERT_TRUE(editor_.modeling().set_selection_mode(mode).ok());
+    QuaderComponentSelectionArgs selected{.object = object_};
     const auto source = document();
     const auto &face = source.faces.front();
     if (mode == QuaderSelectionMode::Face) {
@@ -163,12 +163,12 @@ protected:
             static_cast<QuaderElementId>(face.vertices[(index + 1U) % face.vertices.size()]));
       }
     }
-    ASSERT_TRUE(editor.selection().select_components(selected).ok());
-    session.history().clear();
+    ASSERT_TRUE(editor_.selection().select_components(selected).ok());
+    session_.history().clear();
   }
 
   MeshAsset mesh() const {
-    auto compiled = session.modeling().compile_object_mesh(object.modeling_object_id);
+    auto compiled = session_.modeling().compile_object_mesh(object_.modeling_object_id);
     EXPECT_TRUE(compiled.has_value());
     return compiled.value_or(MeshAsset{});
   }
@@ -259,23 +259,23 @@ protected:
             .rotation_snap_degrees = 0};
   }
 
-  SceneSession session;
-  QuaderEditorApi editor;
-  QuaderModelingObjectRef object;
+  SceneSession session_;
+  QuaderEditorApi editor_;
+  QuaderModelingObjectRef object_;
 };
 
 TEST_F(UvTransformAcceptanceTests, RotatePreviewStaysTransientAndAcceptancePreservesInteriors) {
   create();
   const auto before = document();
   const auto expected = samples();
-  const auto scene_revision = session.scene().revision();
-  const auto asset_revision = session.assets().revision();
-  const auto publications = session.modeling().modeling_sdk_projection_stats_for_tests();
-  ASSERT_TRUE(editor.modeling().begin_transform_drag(rotate_begin()).ok());
-  const auto updated = editor.modeling().update_transform_drag(rotate_update());
+  const auto scene_revision = session_.scene().revision();
+  const auto asset_revision = session_.assets().revision();
+  const auto publications = session_.modeling().modeling_sdk_projection_stats_for_tests();
+  ASSERT_TRUE(editor_.modeling().begin_transform_drag(rotate_begin()).ok());
+  const auto updated = editor_.modeling().update_transform_drag(rotate_update());
   ASSERT_TRUE(updated.ok()) << updated.error_message();
   EXPECT_NEAR(std::abs(updated.value().rotate_angle_degrees), 180.0, 0.00001);
-  const auto previews = session.modeling().tool_preview_meshes();
+  const auto previews = session_.modeling().tool_preview_meshes();
   ASSERT_EQ(previews.size(), 1U);
   const auto &preview = previews.front();
   ASSERT_TRUE(preview.dynamic_positions);
@@ -296,31 +296,31 @@ TEST_F(UvTransformAcceptanceTests, RotatePreviewStaysTransientAndAcceptancePrese
   expect_preview_samples(preview, expected, 180.0);
   expect_samples(mesh(), expected, false);
   expect_document(document(), before);
-  EXPECT_EQ(session.scene().revision(), scene_revision);
-  EXPECT_EQ(session.assets().revision(), asset_revision);
-  EXPECT_EQ(session.history().undo_count(), 0U);
-  const auto after_preview = session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(session_.scene().revision(), scene_revision);
+  EXPECT_EQ(session_.assets().revision(), asset_revision);
+  EXPECT_EQ(session_.history().undo_count(), 0U);
+  const auto after_preview = session_.modeling().modeling_sdk_projection_stats_for_tests();
   EXPECT_EQ(after_preview.mesh_compile_count, publications.mesh_compile_count);
   EXPECT_EQ(after_preview.asset_publication_count, publications.asset_publication_count);
   EXPECT_EQ(after_preview.scene_publication_count, publications.scene_publication_count);
   EXPECT_EQ(after_preview.preview_publication_count, publications.preview_publication_count);
 
-  const auto preview_revision = session.modeling().transient_transform_preview_revision();
-  const auto work = session.modeling().tool_preview_work_stats();
+  const auto preview_revision = session_.modeling().transient_transform_preview_revision();
+  const auto work = session_.modeling().tool_preview_work_stats();
   for (int sample = 0; sample < 8; ++sample) {
-    ASSERT_TRUE(editor.modeling().update_transform_drag(rotate_update()).ok());
+    ASSERT_TRUE(editor_.modeling().update_transform_drag(rotate_update()).ok());
   }
-  EXPECT_EQ(session.modeling().transient_transform_preview_revision(), preview_revision);
-  EXPECT_EQ(session.modeling().tool_preview_work_stats().signature_enumeration_count,
+  EXPECT_EQ(session_.modeling().transient_transform_preview_revision(), preview_revision);
+  EXPECT_EQ(session_.modeling().tool_preview_work_stats().signature_enumeration_count,
             work.signature_enumeration_count);
-  EXPECT_EQ(session.modeling().tool_preview_work_stats().mesh_extraction_count,
+  EXPECT_EQ(session_.modeling().tool_preview_work_stats().mesh_extraction_count,
             work.mesh_extraction_count);
-  const auto after_unchanged = session.modeling().modeling_sdk_projection_stats_for_tests();
+  const auto after_unchanged = session_.modeling().modeling_sdk_projection_stats_for_tests();
   EXPECT_EQ(after_unchanged.mesh_compile_count, after_preview.mesh_compile_count);
   EXPECT_EQ(after_unchanged.asset_publication_count, after_preview.asset_publication_count);
   EXPECT_EQ(after_unchanged.scene_publication_count, after_preview.scene_publication_count);
   EXPECT_EQ(after_unchanged.preview_publication_count, after_preview.preview_publication_count);
-  const auto retained = session.modeling().tool_preview_meshes();
+  const auto retained = session_.modeling().tool_preview_meshes();
   ASSERT_EQ(retained.size(), 1U);
   EXPECT_EQ(retained.front().position_revision, preview.position_revision);
   EXPECT_EQ(retained.front().dynamic_position_payload, preview.dynamic_position_payload);
@@ -329,10 +329,10 @@ TEST_F(UvTransformAcceptanceTests, RotatePreviewStaysTransientAndAcceptancePrese
   // can leave a later position stream paired with the wrong UV corners.
   auto next_update = rotate_update();
   next_update.screen_position = {80, 120};
-  const auto next = editor.modeling().update_transform_drag(next_update);
+  const auto next = editor_.modeling().update_transform_drag(next_update);
   ASSERT_TRUE(next.ok()) << next.error_message();
   ASSERT_TRUE(next.changed());
-  const auto next_previews = session.modeling().tool_preview_meshes();
+  const auto next_previews = session_.modeling().tool_preview_meshes();
   ASSERT_EQ(next_previews.size(), 1U);
   const auto &next_preview = next_previews.front();
   EXPECT_NE(next_preview.position_revision, preview.position_revision);
@@ -340,51 +340,51 @@ TEST_F(UvTransformAcceptanceTests, RotatePreviewStaysTransientAndAcceptancePrese
   // A retained earlier frame must keep its own packed stream and attributes.
   expect_preview_samples(preview, expected, 180.0);
   expect_document(document(), before);
-  EXPECT_EQ(session.scene().revision(), scene_revision);
-  EXPECT_EQ(session.assets().revision(), asset_revision);
-  EXPECT_EQ(session.history().undo_count(), 0U);
+  EXPECT_EQ(session_.scene().revision(), scene_revision);
+  EXPECT_EQ(session_.assets().revision(), asset_revision);
+  EXPECT_EQ(session_.history().undo_count(), 0U);
 
-  const auto next_revision = session.modeling().transient_transform_preview_revision();
-  const auto next_work = session.modeling().tool_preview_work_stats();
+  const auto next_revision = session_.modeling().transient_transform_preview_revision();
+  const auto next_work = session_.modeling().tool_preview_work_stats();
   for (int sample = 0; sample < 8; ++sample) {
-    ASSERT_TRUE(editor.modeling().update_transform_drag(next_update).ok());
+    ASSERT_TRUE(editor_.modeling().update_transform_drag(next_update).ok());
   }
-  EXPECT_EQ(session.modeling().transient_transform_preview_revision(), next_revision);
-  EXPECT_EQ(session.modeling().tool_preview_work_stats().signature_enumeration_count,
+  EXPECT_EQ(session_.modeling().transient_transform_preview_revision(), next_revision);
+  EXPECT_EQ(session_.modeling().tool_preview_work_stats().signature_enumeration_count,
             next_work.signature_enumeration_count);
-  EXPECT_EQ(session.modeling().tool_preview_work_stats().mesh_extraction_count,
+  EXPECT_EQ(session_.modeling().tool_preview_work_stats().mesh_extraction_count,
             next_work.mesh_extraction_count);
-  const auto next_retained = session.modeling().tool_preview_meshes();
+  const auto next_retained = session_.modeling().tool_preview_meshes();
   ASSERT_EQ(next_retained.size(), 1U);
   EXPECT_EQ(next_retained.front().position_revision, next_preview.position_revision);
   EXPECT_EQ(next_retained.front().layout_key, next_preview.layout_key);
   EXPECT_EQ(next_retained.front().dynamic_position_payload,
             next_preview.dynamic_position_payload);
 
-  ASSERT_TRUE(editor.modeling().update_transform_drag(rotate_update()).ok());
-  const auto final_previews = session.modeling().tool_preview_meshes();
+  ASSERT_TRUE(editor_.modeling().update_transform_drag(rotate_update()).ok());
+  const auto final_previews = session_.modeling().tool_preview_meshes();
   ASSERT_EQ(final_previews.size(), 1U);
   expect_preview_samples(final_previews.front(), expected, 180.0);
 
-  const auto accepted = editor.modeling().commit_transform_drag();
+  const auto accepted = editor_.modeling().commit_transform_drag();
   ASSERT_TRUE(accepted.ok()) << accepted.error_message();
   ASSERT_TRUE(accepted.changed());
   const auto after = document();
   EXPECT_NE(after.faces.front().vertices, before.faces.front().vertices);
   expect_face_attributes(after.faces.back(), before.faces.back());
   expect_samples(mesh(), expected, true);
-  EXPECT_EQ(session.history().undo_count(), 1U);
-  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session_.history().undo_count(), 1U);
+  ASSERT_TRUE(editor_.history().undo().ok());
   expect_document(document(), before);
   expect_samples(mesh(), expected, false);
-  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_TRUE(editor_.history().redo().ok());
   expect_document(document(), after);
   expect_samples(mesh(), expected, true);
 
-  ASSERT_TRUE(editor.history().repeat_last_action().ok());
-  EXPECT_EQ(session.history().undo_count(), 2U);
+  ASSERT_TRUE(editor_.history().repeat_last_action().ok());
+  EXPECT_EQ(session_.history().undo_count(), 2U);
   expect_samples(mesh(), expected, false);
-  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor_.history().undo().ok());
   expect_document(document(), after);
 }
 
@@ -397,24 +397,24 @@ TEST_F(UvTransformAcceptanceTests, DirectAndPreviewAcceptancePreserveBothWinding
       select(mode);
       const auto before = document();
       const auto expected = samples();
-      const auto transformed = editor.modeling().transform_selection(half_turn_x());
+      const auto transformed = editor_.modeling().transform_selection(half_turn_x());
       ASSERT_TRUE(transformed.ok()) << transformed.error_message();
       expect_samples(mesh(), expected, true);
       const auto direct = document();
       expect_face_attributes(direct.faces.back(), before.faces.back());
-      EXPECT_EQ(session.history().undo_count(), 1U);
-      ASSERT_TRUE(editor.history().undo().ok());
+      EXPECT_EQ(session_.history().undo_count(), 1U);
+      ASSERT_TRUE(editor_.history().undo().ok());
       expect_document(document(), before);
-      ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
-      ASSERT_TRUE(editor.modeling().update_transform_matrix(half_turn_x(), {}).ok());
-      const auto accepted = editor.modeling().commit_transform_preview("Rotate Selection");
+      ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+      ASSERT_TRUE(editor_.modeling().update_transform_matrix(half_turn_x(), {}).ok());
+      const auto accepted = editor_.modeling().commit_transform_preview("Rotate Selection");
       ASSERT_TRUE(accepted.ok()) << accepted.error_message();
       expect_document(document(), direct);
       expect_samples(mesh(), expected, true);
-      EXPECT_EQ(session.history().undo_count(), 1U);
-      ASSERT_TRUE(editor.history().undo().ok());
+      EXPECT_EQ(session_.history().undo_count(), 1U);
+      ASSERT_TRUE(editor_.history().undo().ok());
       expect_document(document(), before);
-      ASSERT_TRUE(editor.history().redo().ok());
+      ASSERT_TRUE(editor_.history().redo().ok());
       expect_document(document(), direct);
     }
   }
@@ -422,13 +422,13 @@ TEST_F(UvTransformAcceptanceTests, DirectAndPreviewAcceptancePreserveBothWinding
 
 TEST_F(UvTransformAcceptanceTests, PartialFaceDeformationRetainsAuthoredCornerChart) {
   create();
-  ASSERT_TRUE(editor.modeling().set_selection_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor_.modeling().set_selection_mode(QuaderSelectionMode::Vertex).ok());
   const auto before = document();
   const auto vertex = before.faces.front().vertices[1];
-  ASSERT_TRUE(editor.selection().select_vertex(object,
+  ASSERT_TRUE(editor_.selection().select_vertex(object_,
       static_cast<QuaderElementId>(vertex)).ok());
-  session.history().clear();
-  const auto moved = editor.modeling().transform_selection({.origin = {0.2F, 0.1F, 0.3F}});
+  session_.history().clear();
+  const auto moved = editor_.modeling().transform_selection({.origin = {0.2F, 0.1F, 0.3F}});
   ASSERT_TRUE(moved.ok()) << moved.error_message();
   ASSERT_TRUE(moved.changed());
   const auto after = document();
@@ -440,10 +440,10 @@ TEST_F(UvTransformAcceptanceTests, PartialFaceDeformationRetainsAuthoredCornerCh
     EXPECT_NEAR(length_squared(after.vertices[index].position -
                                before.vertices[index].position - delta), 0, 0.000001F);
   }
-  EXPECT_EQ(session.history().undo_count(), 1U);
-  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session_.history().undo_count(), 1U);
+  ASSERT_TRUE(editor_.history().undo().ok());
   expect_document(document(), before);
-  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_TRUE(editor_.history().redo().ok());
   expect_document(document(), after);
 }
 
@@ -451,24 +451,24 @@ TEST_F(UvTransformAcceptanceTests, ObjectGeometryPreviewPreservesChartsAndSelect
   for (const auto mode : {QuaderSelectionMode::Object, QuaderSelectionMode::Group}) {
     SCOPED_TRACE(static_cast<int>(mode));
     create();
-    ASSERT_TRUE(editor.selection().clear().ok());
-    ASSERT_TRUE(editor.modeling().set_selection_mode(QuaderSelectionMode::Object).ok());
-    ASSERT_TRUE(editor.selection().select_object(object).ok());
+    ASSERT_TRUE(editor_.selection().clear().ok());
+    ASSERT_TRUE(editor_.modeling().set_selection_mode(QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(editor_.selection().select_object(object_).ok());
     if (mode == QuaderSelectionMode::Group) {
-      const auto group = editor.scene().group_selection("Geometry preview group");
+      const auto group = editor_.scene().group_selection("Geometry preview group");
       ASSERT_TRUE(group.ok()) << group.error_message();
-      ASSERT_TRUE(editor.modeling().set_selection_mode(mode).ok());
-      ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
+      ASSERT_TRUE(editor_.modeling().set_selection_mode(mode).ok());
+      ASSERT_TRUE(editor_.selection().select_object(group.value().id).ok());
     }
-    session.history().clear();
+    session_.history().clear();
     const auto before = document();
     auto expected = samples();
     for (auto &sample : expected) sample.transformed = true;
-    const auto world = session.scene().world_transform_matrix(object.entity);
-    const auto scene_before = session.scene().revision();
-    const auto assets_before = session.assets().revision();
-    const auto selected_before = session.scene().selected_entities();
-    const auto begun = editor.modeling().begin_transform_preview();
+    const auto world = session_.scene().world_transform_matrix(object_.entity);
+    const auto scene_before = session_.scene().revision();
+    const auto assets_before = session_.assets().revision();
+    const auto selected_before = session_.scene().selected_entities();
+    const auto begun = editor_.modeling().begin_transform_preview();
     if (mode == QuaderSelectionMode::Group) {
       // Group selection belongs to scene transforms and intentionally clears
       // SDK object selection; this geometry-only preview API cannot expand it.
@@ -477,60 +477,60 @@ TEST_F(UvTransformAcceptanceTests, ObjectGeometryPreviewPreservesChartsAndSelect
       EXPECT_EQ(begun.error_message(), "No active SDK modeling selection.");
       expect_document(document(), before);
       expect_samples(mesh(), expected, false);
-      EXPECT_EQ(editor.modeling().selection_summary().mode, mode);
-      EXPECT_EQ(session.scene().selected_entities(), selected_before);
-      EXPECT_EQ(session.scene().revision(), scene_before);
-      EXPECT_EQ(session.assets().revision(), assets_before);
-      EXPECT_EQ(session.history().undo_count(), 0U);
-      EXPECT_TRUE(session.modeling().tool_preview_meshes().empty());
+      EXPECT_EQ(editor_.modeling().selection_summary().mode, mode);
+      EXPECT_EQ(session_.scene().selected_entities(), selected_before);
+      EXPECT_EQ(session_.scene().revision(), scene_before);
+      EXPECT_EQ(session_.assets().revision(), assets_before);
+      EXPECT_EQ(session_.history().undo_count(), 0U);
+      EXPECT_TRUE(session_.modeling().tool_preview_meshes().empty());
       continue;
     }
     ASSERT_TRUE(begun.ok()) << begun.error_message();
-    ASSERT_TRUE(editor.modeling().update_transform_matrix(half_turn_x(), {}).ok());
-    EXPECT_EQ(editor.modeling().selection_summary().mode, mode);
-    EXPECT_EQ(session.history().undo_count(), 0U);
+    ASSERT_TRUE(editor_.modeling().update_transform_matrix(half_turn_x(), {}).ok());
+    EXPECT_EQ(editor_.modeling().selection_summary().mode, mode);
+    EXPECT_EQ(session_.history().undo_count(), 0U);
     // This API renders its existing scene-bound preview asset, whereas the
     // component drag uses the transient tool-preview mesh collection.
-    EXPECT_TRUE(session.modeling().tool_preview_meshes().empty());
+    EXPECT_TRUE(session_.modeling().tool_preview_meshes().empty());
     const auto preview = mesh();
     expect_samples(preview, expected, true);
-    const auto scene_revision = session.scene().revision();
-    const auto asset_revision = session.assets().revision();
-    const auto work = session.modeling().tool_preview_work_stats();
-    const auto publications = session.modeling().modeling_sdk_projection_stats_for_tests();
+    const auto scene_revision = session_.scene().revision();
+    const auto asset_revision = session_.assets().revision();
+    const auto work = session_.modeling().tool_preview_work_stats();
+    const auto publications = session_.modeling().modeling_sdk_projection_stats_for_tests();
     for (int sample = 0; sample < 8; ++sample) {
-      const auto unchanged = editor.modeling().update_transform_matrix(half_turn_x(), {});
+      const auto unchanged = editor_.modeling().update_transform_matrix(half_turn_x(), {});
       ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
       EXPECT_FALSE(unchanged.changed());
     }
-    EXPECT_EQ(session.modeling().tool_preview_work_stats().signature_enumeration_count,
+    EXPECT_EQ(session_.modeling().tool_preview_work_stats().signature_enumeration_count,
               work.signature_enumeration_count);
-    EXPECT_EQ(session.modeling().tool_preview_work_stats().mesh_extraction_count,
+    EXPECT_EQ(session_.modeling().tool_preview_work_stats().mesh_extraction_count,
               work.mesh_extraction_count);
-    const auto retained = session.modeling().modeling_sdk_projection_stats_for_tests();
+    const auto retained = session_.modeling().modeling_sdk_projection_stats_for_tests();
     EXPECT_EQ(retained.mesh_compile_count, publications.mesh_compile_count);
     EXPECT_EQ(retained.preview_publication_count, publications.preview_publication_count);
     EXPECT_EQ(retained.asset_publication_count, publications.asset_publication_count);
     EXPECT_EQ(retained.scene_publication_count, publications.scene_publication_count);
-    EXPECT_EQ(session.scene().revision(), scene_revision);
-    EXPECT_EQ(session.assets().revision(), asset_revision);
+    EXPECT_EQ(session_.scene().revision(), scene_revision);
+    EXPECT_EQ(session_.assets().revision(), asset_revision);
     EXPECT_EQ(mesh().geometry().content_id(), preview.geometry().content_id());
-    const auto accepted = editor.modeling().commit_transform_preview("Rotate Geometry");
+    const auto accepted = editor_.modeling().commit_transform_preview("Rotate Geometry");
     ASSERT_TRUE(accepted.ok()) << accepted.error_message();
     ASSERT_TRUE(accepted.changed());
     const auto after = document();
-    EXPECT_EQ(session.scene().world_transform_matrix(object.entity).values, world.values);
-    EXPECT_EQ(editor.modeling().selection_summary().mode, mode);
+    EXPECT_EQ(session_.scene().world_transform_matrix(object_.entity).values, world.values);
+    EXPECT_EQ(editor_.modeling().selection_summary().mode, mode);
     expect_samples(mesh(), expected, true);
-    EXPECT_EQ(session.history().undo_count(), 1U);
-    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(session_.history().undo_count(), 1U);
+    ASSERT_TRUE(editor_.history().undo().ok());
     expect_document(document(), before);
     expect_samples(mesh(), expected, false);
-    EXPECT_EQ(editor.modeling().selection_summary().mode, mode);
-    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(editor_.modeling().selection_summary().mode, mode);
+    ASSERT_TRUE(editor_.history().redo().ok());
     expect_document(document(), after);
     expect_samples(mesh(), expected, true);
-    EXPECT_EQ(editor.modeling().selection_summary().mode, mode);
+    EXPECT_EQ(editor_.modeling().selection_summary().mode, mode);
   }
 }
 
@@ -540,7 +540,7 @@ TEST_F(UvTransformAcceptanceTests, NegativeScalePreservesLoopOrientationAndInter
     create(reversed);
     const auto before = document();
     const auto expected = samples();
-    const auto scaled = editor.modeling().scale_selection({1, -1, 1});
+    const auto scaled = editor_.modeling().scale_selection({1, -1, 1});
     ASSERT_TRUE(scaled.ok()) << scaled.error_message();
     const auto after = document();
     const auto &source = before.faces.front().vertices;
@@ -556,22 +556,22 @@ TEST_F(UvTransformAcceptanceTests, NegativeScalePreservesLoopOrientationAndInter
     // reach the same sample positions while exercising distinct transform paths.
     expect_samples(mesh(), expected, true);
     expect_face_attributes(after.faces.back(), before.faces.back());
-    EXPECT_EQ(session.history().undo_count(), 1U);
-    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(session_.history().undo_count(), 1U);
+    ASSERT_TRUE(editor_.history().undo().ok());
     expect_document(document(), before);
-    ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
-    ASSERT_TRUE(editor.modeling().update_transform_matrix(
+    ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+    ASSERT_TRUE(editor_.modeling().update_transform_matrix(
         {.y_axis = {0, -1, 0}}, {}).ok());
-    const auto previews = session.modeling().tool_preview_meshes();
+    const auto previews = session_.modeling().tool_preview_meshes();
     ASSERT_EQ(previews.size(), 1U);
     expect_preview_samples(previews.front(), expected, 180.0);
-    const auto accepted = editor.modeling().commit_transform_preview("Scale Selection");
+    const auto accepted = editor_.modeling().commit_transform_preview("Scale Selection");
     ASSERT_TRUE(accepted.ok()) << accepted.error_message();
     expect_document(document(), after);
     expect_samples(mesh(), expected, true);
-    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor_.history().undo().ok());
     expect_document(document(), before);
-    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(editor_.history().redo().ok());
     expect_document(document(), after);
   }
 }
@@ -579,54 +579,54 @@ TEST_F(UvTransformAcceptanceTests, NegativeScalePreservesLoopOrientationAndInter
 TEST_F(UvTransformAcceptanceTests, CancelAndZeroRotationLeaveChartsAndHistoryUntouched) {
   create();
   const auto before = document();
-  const auto scene_revision = session.scene().revision();
-  const auto asset_revision = session.assets().revision();
-  ASSERT_TRUE(editor.modeling().begin_transform_drag(rotate_begin()).ok());
-  ASSERT_TRUE(editor.modeling().update_transform_drag(rotate_update()).ok());
-  ASSERT_TRUE(editor.modeling().cancel_transform_drag().ok());
+  const auto scene_revision = session_.scene().revision();
+  const auto asset_revision = session_.assets().revision();
+  ASSERT_TRUE(editor_.modeling().begin_transform_drag(rotate_begin()).ok());
+  ASSERT_TRUE(editor_.modeling().update_transform_drag(rotate_update()).ok());
+  ASSERT_TRUE(editor_.modeling().cancel_transform_drag().ok());
   expect_document(document(), before);
-  EXPECT_TRUE(session.modeling().tool_preview_meshes().empty());
-  ASSERT_TRUE(editor.modeling().begin_transform_drag(rotate_begin()).ok());
-  const auto zero = editor.modeling().commit_transform_drag();
+  EXPECT_TRUE(session_.modeling().tool_preview_meshes().empty());
+  ASSERT_TRUE(editor_.modeling().begin_transform_drag(rotate_begin()).ok());
+  const auto zero = editor_.modeling().commit_transform_drag();
   ASSERT_TRUE(zero.ok()) << zero.error_message();
   EXPECT_FALSE(zero.changed());
-  const auto direct_zero = editor.modeling().transform_selection({});
+  const auto direct_zero = editor_.modeling().transform_selection({});
   ASSERT_TRUE(direct_zero.ok()) << direct_zero.error_message();
   EXPECT_FALSE(direct_zero.changed());
   expect_document(document(), before);
-  EXPECT_EQ(session.history().undo_count(), 0U);
-  EXPECT_EQ(session.scene().revision(), scene_revision);
-  EXPECT_EQ(session.assets().revision(), asset_revision);
+  EXPECT_EQ(session_.history().undo_count(), 0U);
+  EXPECT_EQ(session_.scene().revision(), scene_revision);
+  EXPECT_EQ(session_.assets().revision(), asset_revision);
 }
 
 TEST_F(UvTransformAcceptanceTests, FailedAcceptanceRollsBackPositionsChartsAndHistory) {
   create();
   const auto before = document();
   const auto expected = samples();
-  const auto scene_revision = session.scene().revision();
-  const auto asset_revision = session.assets().revision();
-  const auto selected = session.scene().selected_entities();
+  const auto scene_revision = session_.scene().revision();
+  const auto asset_revision = session_.assets().revision();
+  const auto selected = session_.scene().selected_entities();
   for (const auto point : {ModelingSdkProjectionFailurePoint::BeforeCommit,
                            ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
                            ModelingSdkProjectionFailurePoint::CommittedSceneNotify,
                            ModelingSdkProjectionFailurePoint::AfterSdkMutation}) {
     SCOPED_TRACE(static_cast<int>(point));
-    ASSERT_TRUE(editor.modeling().begin_transform_drag(rotate_begin()).ok());
-    ASSERT_TRUE(editor.modeling().update_transform_drag(rotate_update()).ok());
-    session.modeling().set_modeling_sdk_projection_failure_for_tests(point);
-    const auto failed = editor.modeling().commit_transform_drag();
-    session.modeling().set_modeling_sdk_projection_failure_for_tests(
+    ASSERT_TRUE(editor_.modeling().begin_transform_drag(rotate_begin()).ok());
+    ASSERT_TRUE(editor_.modeling().update_transform_drag(rotate_update()).ok());
+    session_.modeling().set_modeling_sdk_projection_failure_for_tests(point);
+    const auto failed = editor_.modeling().commit_transform_drag();
+    session_.modeling().set_modeling_sdk_projection_failure_for_tests(
         ModelingSdkProjectionFailurePoint::None);
     EXPECT_FALSE(failed.ok());
     EXPECT_FALSE(failed.changed());
     expect_document(document(), before);
     expect_samples(mesh(), expected, false);
-    EXPECT_TRUE(session.modeling().tool_preview_meshes().empty());
-    EXPECT_EQ(session.scene().selected_entities(), selected);
-    EXPECT_EQ(session.scene().revision(), scene_revision);
-    EXPECT_EQ(session.assets().revision(), asset_revision);
-    EXPECT_EQ(session.history().undo_count(), 0U);
-    EXPECT_EQ(session.history().redo_count(), 0U);
+    EXPECT_TRUE(session_.modeling().tool_preview_meshes().empty());
+    EXPECT_EQ(session_.scene().selected_entities(), selected);
+    EXPECT_EQ(session_.scene().revision(), scene_revision);
+    EXPECT_EQ(session_.assets().revision(), asset_revision);
+    EXPECT_EQ(session_.history().undo_count(), 0U);
+    EXPECT_EQ(session_.history().redo_count(), 0U);
   }
 }
 

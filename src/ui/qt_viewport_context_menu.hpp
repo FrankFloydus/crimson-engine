@@ -10,7 +10,6 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "viewport/viewport_runtime_binding_token.hpp"
 
-#include <functional>
 #include <optional>
 
 class QPoint;
@@ -36,8 +35,7 @@ public:
             LocalizationService &localization,
             const QuaderActionSet &action_set,
             const QuaderSelectionSummary &selection, bool target_hit,
-            const std::optional<ProjectAssetId> &material_under_mouse,
-            const std::function<void(ProjectAssetId)> &open_material_editor,
+            const std::optional<QuaderHoverTarget> &material_face_target,
             ViewportRuntimeBindingToken runtime_binding = {}) const;
 
 private:

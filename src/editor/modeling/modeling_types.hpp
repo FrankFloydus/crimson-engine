@@ -643,6 +643,17 @@ struct ModelingSelectionSummary {
   std::uint32_t selected_vertex_count = 0;
   std::uint32_t selected_edge_count = 0;
   std::uint32_t selected_face_count = 0;
+  std::optional<bool> selected_faces_have_open_perimeter;
+  std::optional<bool> combinable_selected_faces;
+  std::optional<bool> bridge_face_pair;
+  std::optional<bool> bridge_edge_pair;
+  std::optional<bool> selected_edges_belong_to_faces;
+  std::optional<bool> selected_edges_are_interior;
+  std::optional<bool> three_selected_open_boundary_edges;
+  std::optional<bool> selected_vertices_belong_to_faces;
+  std::optional<bool> selected_vertices_share_face;
+  std::optional<bool> whole_mesh_closed;
+  std::optional<bool> whole_mesh_has_open_perimeter;
   ModelingSubSelectionKind sub_selection_kind =
       ModelingSubSelectionKind::None;
   std::uint32_t selected_sub_element_count = 0;

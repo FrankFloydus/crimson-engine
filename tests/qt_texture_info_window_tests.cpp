@@ -213,10 +213,10 @@ TEST(QtTextureInfoWindowTests,
   canvas_palette.setColor(QPalette::Mid, Qt::white);
   canvas->setPalette(canvas_palette);
 
-  constexpr std::array<std::uint8_t, 4> source{200u, 100u, 50u, 128u};
+  constexpr std::array<std::uint8_t, 4> kSource{200u, 100u, 50u, 128u};
   const std::vector<std::byte> pixels{
-      std::byte{source[0]}, std::byte{source[1]}, std::byte{source[2]},
-      std::byte{source[3]}};
+      std::byte{kSource[0]}, std::byte{kSource[1]}, std::byte{kSource[2]},
+      std::byte{kSource[3]}};
   TextureInfoPresentation presentation = texture_presentation(pixels);
   ASSERT_TRUE(window.present(presentation));
   ASSERT_EQ(window.masked_image_rebuild_count(), 1u);
@@ -242,10 +242,10 @@ TEST(QtTextureInfoWindowTests,
     const QColor observed = rendered_canvas_center(*canvas);
     const std::array<int, 3> observed_components{
         observed.red(), observed.green(), observed.blue()};
-    const int effective_alpha = (mask & 0x08u) != 0u ? source[3] : 255;
+    const int effective_alpha = (mask & 0x08u) != 0u ? kSource[3] : 255;
     for (std::size_t channel = 0u; channel < 3u; ++channel) {
       const int component =
-          (mask & (1u << channel)) != 0u ? source[channel] : 0;
+          (mask & (1u << channel)) != 0u ? kSource[channel] : 0;
       const int expected =
           (component * effective_alpha + 255 * (255 - effective_alpha) +
            127) /

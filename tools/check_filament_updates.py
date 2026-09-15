@@ -359,7 +359,23 @@ def main():
         result = check_updates(repo_root, Path(common.stdout.strip()) / "quader/filament-updates",
                                allow_network=args.allow_network, force=args.force,
                                reset_main_baseline=args.reset_main_baseline)
-    except (UpdateCheckError, OSError, subprocess.CalledProcessError) as error:
+    except subprocess.CalledProcessError as error:
+        stderr = error.stderr or ""
+        lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+        detail = next((line for line in lines if line.lower().startswith(("fatal:", "error:"))),
+                      lines[0] if lines else "Git returned no diagnostic output.")
+        print(f"Filament update check: Git repository lookup failed (exit {error.returncode}): "
+              f"{detail[:500]}", file=sys.stderr)
+        if any(reason in stderr.lower() for reason in
+               ("dubious ownership", "permission denied", "access is denied", "access denied",
+                "operation not permitted")):
+            print("Retry the authorized check as the repository owner; if a sandbox runs as a "
+                  "different account, use authorized host-context execution. "
+                  "Do not change repository ownership or Git trust settings for this check.",
+                  file=sys.stderr)
+        print("The last successful Filament watermark was not advanced.", file=sys.stderr)
+        return 1
+    except (UpdateCheckError, OSError) as error:
         print(f"Filament update check: {error}", file=sys.stderr)
         return 1
     status = result["status"]

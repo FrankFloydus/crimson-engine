@@ -312,10 +312,10 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("viewport.tool.move.label", "Move"), "Sposta");
     EXPECT_EQ(localization.text("modeling.action.bridge_faces.label",
                                 "Bridge Selected Faces"),
-              "Crea bridge tra facce selezionate");
+              "Bridge facce");
     EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
                                 "Copy Pivot From Active"),
-              "Copia pivot dall'oggetto attivo");
+              "Copia pivot dall'attivo");
     EXPECT_EQ(localization.text("modeling.action.snap_meshes_to_floor.label",
                                 "Snap Meshes to Floor"),
               "Aggancia mesh al pavimento");
@@ -337,7 +337,7 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.panel.layers", "Layers"), "Livelli");
     EXPECT_EQ(localization.text("ui.layers.add_selection",
                                 "Add Selection to Layer"),
-              "Aggiungi gli oggetti selezionati a questo livello");
+              "Aggiungi oggetti al livello");
     EXPECT_EQ(localization.text("ui.layers.locked", "Locked"),
               "Bloccato");
     EXPECT_EQ(localization.text("ui.layers.lock_state_unlocked",
@@ -410,7 +410,7 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
               "Material");
     EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
                                 "Copy Pivot From Active"),
-              "Copy Pivot from Active Object");
+              "Copy Pivot from Active");
     EXPECT_EQ(localization.text("modeling.action.snap_meshes_to_floor.label",
                                 "Snap Meshes to Floor"),
               "Snap Meshes to Floor");
@@ -577,16 +577,16 @@ TEST(LocalizationResourceTests,
       {"soften_edge_normals", "Soften Normals", "Ammorbidisci normali"},
       {"bevel_edges", "Bevel Edges", "Smussa spigoli"},
       {"bridge_edges", "Bridge", "Bridge"},
-      {"interpolated_bridge_edges", "Interpolated Bridge",
-       "Bridge interpolato"},
+      {"interpolated_bridge_edges", "Bridge Edges",
+       "Collega spigoli"},
       {"dissolve_edges", "Dissolve", "Dissolvi"},
       {"merge_edges", "Merge Edges", "Unisci spigoli"},
       {"collapse_edges", "Collapse", "Collassa"},
       {"fill_hole", "Fill Hole", "Riempi foro"},
       {"radial_align_edges", "Radial Align", "Allinea radialmente"},
       {"bridge_faces", "Bridge Faces", "Bridge facce"},
-      {"interpolated_bridge_faces", "Interpolated Bridge",
-       "Bridge interpolato"},
+      {"interpolated_bridge_faces", "Bridge Faces",
+       "Collega facce"},
       {"invert_faces", "Flip Face Normals", "Inverti normali facce"},
       {"combine_faces", "Combine Faces", "Combina facce"},
       {"collapse_faces", "Collapse Faces", "Collassa facce"},
@@ -638,9 +638,9 @@ TEST(LocalizationResourceTests,
   }
 
   EXPECT_EQ(english->at("modeling.action.snap_edges_to_active.label"),
-            "Snap Selected Edges to Active Edge");
+            "Snap Edges to Active");
   EXPECT_EQ(italian->at("modeling.action.snap_edges_to_active.label"),
-            "Aggancia spigoli selezionati allo spigolo attivo");
+            "Aggancia spigoli all'attivo");
 
   EXPECT_EQ(english->at("ui.viewport.context_menu.section.mesh"), "Mesh");
   EXPECT_EQ(italian->at("ui.viewport.context_menu.section.mesh"), "Mesh");
@@ -658,16 +658,16 @@ TEST(LocalizationResourceTests,
             "Vertice");
   EXPECT_EQ(
       english->at("ui.viewport.context_menu.command.center_selection"),
-      "Center View on Selection");
+      "Focus Selection");
   EXPECT_EQ(
       italian->at("ui.viewport.context_menu.command.center_selection"),
-      "Centra la vista sulla selezione");
+      "Inquadra selezione");
   EXPECT_EQ(english->at(
                 "ui.viewport.context_menu.command.edit_material_under_mouse"),
-            "Edit Material under Mouse");
+            "Edit Material");
   EXPECT_EQ(italian->at(
                 "ui.viewport.context_menu.command.edit_material_under_mouse"),
-            "Modifica il materiale sotto il mouse");
+            "Modifica materiale");
   EXPECT_EQ(english->at("ui.menu.edit.cut"), "Cut");
   EXPECT_EQ(italian->at("ui.menu.edit.cut"), "Taglia");
   EXPECT_EQ(english->at("keybindings.target.edit.cut.label"),

@@ -23,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <ranges>
@@ -1268,6 +1269,147 @@ std::size_t PolygonDocument::vertex_count() const {
 
 std::size_t PolygonDocument::face_count() const {
   return impl_->document->faces.size();
+}
+
+bool PolygonDocument::selected_faces_have_open_perimeter() const {
+  const quader_poly::FacePerimeterInfo perimeter =
+      quader_poly::selected_faces_perimeter_info(*impl_->document,
+                                                *impl_->selection);
+  return !perimeter.empty() && perimeter.has_only_open_edges();
+}
+
+PolygonSelectionTopologyEligibility
+PolygonDocument::selection_topology_eligibility() const {
+  PolygonSelectionTopologyEligibility result;
+  const quader_poly::Document &document = *impl_->document;
+  const quader_poly::Selection &selection = *impl_->selection;
+  if (selection.mode == quader_poly::SelectionMode::Face) {
+    result.open_face_perimeter = selected_faces_have_open_perimeter();
+    const std::unordered_set<quader_poly::ElementId> selected_face_ids(
+        selection.faces.begin(), selection.faces.end());
+    std::vector<const quader_poly::Face *> selected_faces;
+    for (const auto &face : document.faces) {
+      if (!selected_face_ids.contains(face.id)) {
+        continue;
+      }
+      selected_faces.push_back(&face);
+    }
+    if (selected_faces.size() >= 2U) {
+      const auto selected =
+          quader_poly::document_internal::selected_face_copies(document, selection);
+      const auto islands =
+          quader_poly::document_internal::selected_face_island_boundaries(document, selected);
+      const quader_poly::document_internal::VertexLookupIndex vertices(document);
+      bool valid_boundaries = true;
+      bool has_merged_island = false;
+      for (const auto &island : islands) {
+        if (island.face_ids.size() < 2U) {
+          continue;
+        }
+        has_merged_island = true;
+        quader_poly::Face merged;
+        merged.vertices = island.vertices;
+        quader_poly::document_internal::orient_face_toward_normal(document, merged, island.normal);
+        if (!quader_poly::document_internal::face_triangulation_preserves_boundary(
+                document, merged, vertices)) {
+          valid_boundaries = false;
+          break;
+        }
+      }
+      result.combinable_selected_faces = has_merged_island && valid_boundaries;
+      if (selected_faces.size() > 2U) {
+        result.bridge_face_pair =
+            islands.size() == 2U &&
+            islands[0].edges.size() == islands[1].edges.size() &&
+            islands[0].vertices.size() >= 3U &&
+            islands[1].vertices.size() >= 3U;
+      }
+    }
+    if (selected_faces.size() == 2U) {
+      result.bridge_face_pair =
+          selected_faces[0]->vertices.size() ==
+          selected_faces[1]->vertices.size();
+    } else if (selected_faces.size() == 1U) {
+      result.single_selected_face_edge_count = static_cast<std::uint32_t>(
+          selected_faces.front()->vertices.size());
+    }
+    return result;
+  }
+
+  std::map<std::pair<quader_poly::ElementId, quader_poly::ElementId>, int>
+      face_edge_counts;
+  std::set<quader_poly::ElementId> face_vertices;
+  const std::unordered_set<quader_poly::ElementId> selected_vertex_ids(
+      selection.vertices.begin(), selection.vertices.end());
+  for (const auto &face : document.faces) {
+    std::size_t selected_vertex_count = 0U;
+    for (std::size_t i = 0; i < face.vertices.size(); ++i) {
+      const auto vertex = face.vertices[i];
+      if (selection.mode == quader_poly::SelectionMode::Vertex) {
+        face_vertices.insert(vertex);
+        selected_vertex_count += selected_vertex_ids.contains(vertex);
+      } else if (selection.mode == quader_poly::SelectionMode::Edge) {
+        const auto edge = quader_poly::make_edge(
+            vertex, face.vertices[(i + 1U) % face.vertices.size()]);
+        ++face_edge_counts[{edge.a, edge.b}];
+      }
+    }
+    if (selected_vertex_count >= 2U) {
+      result.selected_vertices_share_face = true;
+    }
+  }
+  result.selected_vertices_belong_to_faces =
+      !selection.vertices.empty() &&
+      std::ranges::all_of(selection.vertices, [&face_vertices](auto vertex) {
+        return face_vertices.contains(vertex);
+      });
+
+  if (selection.mode == quader_poly::SelectionMode::Edge &&
+      !selection.edges.empty()) {
+    result.bridge_edge_pair = selection.edges.size() == 2U;
+    result.selected_edges_belong_to_faces = true;
+    result.selected_edges_are_interior = true;
+    std::uint32_t open_boundary_count = 0U;
+    for (const auto &selected : selection.edges) {
+      const auto edge = quader_poly::make_edge(selected.a, selected.b);
+      const auto found = face_edge_counts.find({edge.a, edge.b});
+      const int incidence = found == face_edge_counts.end() ? 0 : found->second;
+      result.selected_edges_belong_to_faces &= incidence >= 1;
+      result.selected_edges_are_interior &= incidence == 2;
+      open_boundary_count += incidence == 1;
+    }
+    result.three_selected_open_boundary_edges = open_boundary_count >= 3U;
+  }
+  return result;
+}
+
+PolygonSelectionTopologyEligibility
+PolygonDocument::whole_mesh_topology_eligibility() const {
+  PolygonSelectionTopologyEligibility result;
+  if (impl_->document->faces.empty()) {
+    return result;
+  }
+  std::map<std::pair<quader_poly::ElementId, quader_poly::ElementId>, int>
+      incidence;
+  for (const auto &face : impl_->document->faces) {
+    for (std::size_t i = 0; i < face.vertices.size(); ++i) {
+      const auto edge = quader_poly::make_edge(
+          face.vertices[i], face.vertices[(i + 1U) % face.vertices.size()]);
+      ++incidence[{edge.a, edge.b}];
+    }
+  }
+  bool has_open_edge = false;
+  bool has_nonmanifold_edge = false;
+  result.whole_mesh_closed = true;
+  for (const auto &[edge, count] : incidence) {
+    (void)edge;
+    result.whole_mesh_closed &= count == 2;
+    has_open_edge |= count == 1;
+    has_nonmanifold_edge |= count > 2;
+  }
+  result.whole_mesh_has_open_perimeter =
+      has_open_edge && !has_nonmanifold_edge;
+  return result;
 }
 
 PolygonContentIdentity PolygonDocument::content_identity() const noexcept {
@@ -3070,16 +3212,27 @@ PolygonDocument::reflect_across_plane(Vec3 origin, Vec3 normal) {
                                  offset.z * native_normal.z;
           vertex.position =
               vertex.position - native_normal * (2.0F * distance);
+          if (!std::isfinite(vertex.position.x) ||
+              !std::isfinite(vertex.position.y) ||
+              !std::isfinite(vertex.position.z)) {
+            return quader_poly::OperationResult::failure(
+                "Reflection would create non-finite vertex positions.");
+          }
         }
         const quader_poly::document_internal::VertexLookupIndex source_lookup(*source_document);
         const quader_poly::document_internal::VertexLookupIndex result_lookup(document);
         for (quader_poly::Face &face : document.faces) {
           const auto* source_face = quader_poly::find_face(*source_document, face.id);
-          if (source_face == nullptr ||
-              !quader_poly::document_internal::reverse_reflected_face_winding(
-                  *source_document, *source_face, document, face, source_lookup, result_lookup)) {
+          if (source_face == nullptr) {
             return quader_poly::OperationResult::failure(
-                "Reflection cannot preserve this authored face's texture interpolation.");
+                "Reflection source face identity is unavailable.");
+          }
+          if (!quader_poly::document_internal::reverse_reflected_face_winding(
+                  *source_document, *source_face, document, face, source_lookup, result_lookup)) {
+            // Keep each stored UV with its vertex when the reflected n-gon
+            // requires a different interior triangulation.
+            quader_poly::document_internal::reverse_face_winding(
+                face, quader_poly::document_internal::FaceWindingChange::ReflectedGeometry);
           }
         }
         return quader_poly::OperationResult{

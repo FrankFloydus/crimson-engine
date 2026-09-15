@@ -66,6 +66,7 @@ struct ModelingSdkProjectionStats {
   std::uint64_t scene_publication_count = 0;
   std::uint64_t preview_publication_count = 0;
   std::uint64_t selection_summary_build_count = 0;
+  std::uint64_t selection_topology_build_count = 0;
   std::uint64_t face_texture_summary_build_count = 0;
   std::uint64_t face_texture_canvas_build_count = 0;
   std::uint64_t uv_peel_summary_build_count = 0;
@@ -460,6 +461,9 @@ public:
 
   [[nodiscard]] ModelingSelectionMode selection_mode() const noexcept;
   [[nodiscard]] ModelingSelectionSummary selection_summary() const;
+  [[nodiscard]] bool selected_faces_have_open_perimeter() const;
+  [[nodiscard]] modeling::PolygonSelectionTopologyEligibility
+  selection_topology_eligibility() const;
   [[nodiscard]] std::span<const EntityId>
   selected_component_entities() const;
   [[nodiscard]] ModelingSelectionExport export_selection() const;

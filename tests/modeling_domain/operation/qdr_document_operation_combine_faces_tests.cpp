@@ -8,11 +8,61 @@
 
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 
+#include <bit>
+#include <cmath>
+#include <limits>
 #include <map>
 
 using namespace quader_poly;
 
 namespace {
+
+void expect_combine_state_unchanged(const Document& actual, const Document& expected,
+    const Selection& selection, const Selection& original_selection)
+{
+    const auto expect_float_unchanged = [](float value, float original) {
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(value), std::bit_cast<std::uint32_t>(original));
+    };
+    EXPECT_EQ(actual.next_vertex_id, expected.next_vertex_id);
+    EXPECT_EQ(actual.next_face_id, expected.next_face_id);
+    EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
+    EXPECT_EQ(actual.soft_normal_edges, expected.soft_normal_edges);
+    ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+    for (std::size_t index = 0U; index < actual.vertices.size(); ++index) {
+        EXPECT_EQ(actual.vertices[index].id, expected.vertices[index].id);
+        expect_float_unchanged(actual.vertices[index].position.x, expected.vertices[index].position.x);
+        expect_float_unchanged(actual.vertices[index].position.y, expected.vertices[index].position.y);
+        expect_float_unchanged(actual.vertices[index].position.z, expected.vertices[index].position.z);
+    }
+    ASSERT_EQ(actual.faces.size(), expected.faces.size());
+    for (std::size_t index = 0U; index < actual.faces.size(); ++index) {
+        const auto& face = actual.faces[index];
+        const auto& original = expected.faces[index];
+        EXPECT_EQ(face.id, original.id);
+        EXPECT_EQ(face.vertices, original.vertices);
+        EXPECT_EQ(face.material_slot, original.material_slot);
+        EXPECT_EQ(face.normal_shading, original.normal_shading);
+        expect_float_unchanged(face.texture_transform.scale.x, original.texture_transform.scale.x);
+        expect_float_unchanged(face.texture_transform.scale.y, original.texture_transform.scale.y);
+        expect_float_unchanged(face.texture_transform.shift_uv.x, original.texture_transform.shift_uv.x);
+        expect_float_unchanged(face.texture_transform.shift_uv.y, original.texture_transform.shift_uv.y);
+        expect_float_unchanged(face.texture_transform.rotation_degrees, original.texture_transform.rotation_degrees);
+        ASSERT_EQ(face.uvs.size(), original.uvs.size());
+        for (std::size_t corner = 0U; corner < face.uvs.size(); ++corner) {
+            expect_float_unchanged(face.uvs[corner].x, original.uvs[corner].x);
+            expect_float_unchanged(face.uvs[corner].y, original.uvs[corner].y);
+        }
+    }
+    EXPECT_EQ(selection.mode, original_selection.mode);
+    EXPECT_EQ(selection.vertices, original_selection.vertices);
+    EXPECT_EQ(selection.edges, original_selection.edges);
+    EXPECT_EQ(selection.faces, original_selection.faces);
+    EXPECT_EQ(selection.has_active, original_selection.has_active);
+    EXPECT_EQ(selection.active_kind, original_selection.active_kind);
+    EXPECT_EQ(selection.active_vertex, original_selection.active_vertex);
+    EXPECT_EQ(selection.active_edge, original_selection.active_edge);
+    EXPECT_EQ(selection.active_face, original_selection.active_face);
+}
 
 struct RedundantSharedEdgeFixture {
 	Document document;
@@ -182,7 +232,7 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineRetainsCustomChartsWithIdenti
     }
 }
 
-TEST(QdrDocumentOperationCombineFacesTests, CombineRejectsAnAuthoredInteriorSeamWithoutChangingFaces) {
+TEST(QdrDocumentOperationCombineFacesTests, CombineRemovesAnInteriorSeamAndKeepsOuterBoundaryUvs) {
     qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
     Selection split = qdr_test::edge_selection({
         make_edge(fixture.bottom_left, fixture.bottom_right),
@@ -196,26 +246,164 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineRejectsAnAuthoredInteriorSeam
             face.uvs.push_back({position.x + 10.0F * static_cast<float>(index), position.y});
         }
     }
-    const Document original = fixture.document;
+    std::map<ElementId, quader::QVec2> outer_uvs;
+    for (const ElementId id : {fixture.bottom_left, fixture.bottom_right,
+                               fixture.top_right, fixture.top_left}) {
+        for (const Face& face : fixture.document.faces) {
+            const auto corner = std::ranges::find(face.vertices, id);
+            if (corner != face.vertices.end()) {
+                outer_uvs.emplace(id, face.uvs[static_cast<std::size_t>(corner - face.vertices.begin())]);
+            }
+        }
+    }
     Selection selection = qdr_test::all_face_selection(fixture.document);
-    const auto original_selection = selection.faces;
 
     const OperationResult result = combine_selected_faces(fixture.document, selection);
 
-    EXPECT_FALSE(result.changed);
-    EXPECT_FALSE(result.success);
-    ASSERT_EQ(fixture.document.faces.size(), original.faces.size());
-    for (std::size_t index = 0; index < original.faces.size(); ++index) {
-        EXPECT_EQ(fixture.document.faces[index].vertices, original.faces[index].vertices);
-        ASSERT_EQ(fixture.document.faces[index].uvs.size(), original.faces[index].uvs.size());
-        for (std::size_t corner = 0; corner < original.faces[index].uvs.size(); ++corner) {
-            EXPECT_FLOAT_EQ(fixture.document.faces[index].uvs[corner].x, original.faces[index].uvs[corner].x);
-            EXPECT_FLOAT_EQ(fixture.document.faces[index].uvs[corner].y, original.faces[index].uvs[corner].y);
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    ASSERT_EQ(fixture.document.faces.size(), 1U);
+    const Face& merged = fixture.document.faces.front();
+    ASSERT_EQ(merged.uvs.size(), merged.vertices.size());
+    for (const auto& [id, expected] : outer_uvs) {
+        const auto corner = std::ranges::find(merged.vertices, id);
+        ASSERT_NE(corner, merged.vertices.end());
+        const auto index = static_cast<std::size_t>(corner - merged.vertices.begin());
+        EXPECT_FLOAT_EQ(merged.uvs[index].x, expected.x);
+        EXPECT_FLOAT_EQ(merged.uvs[index].y, expected.y);
+    }
+    EXPECT_EQ(selection.faces, std::vector<ElementId>{merged.id});
+    qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+}
+
+TEST(QdrDocumentOperationCombineFacesTests, CombineRejectsCubeCornersWhoseTriangulationDropsTheBoundary) {
+    const Document cube = make_cube({});
+    for (std::size_t first = 0U; first < cube.faces.size(); ++first) {
+        for (std::size_t second = first + 1U; second < cube.faces.size(); ++second) {
+            if (std::abs(quader::dot(face_normal(cube, cube.faces[first]),
+                    face_normal(cube, cube.faces[second]))) >= 0.0001F) {
+                continue;
+            }
+            for (const bool authored_uvs : {false, true}) {
+                SCOPED_TRACE(::testing::Message() << first << "," << second << "," << authored_uvs);
+                Document document = cube;
+                const ElementId first_id = document.faces[first].id;
+                const ElementId second_id = document.faces[second].id;
+                if (authored_uvs) {
+                    for (Face& face : document.faces) {
+                        face.uvs = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}};
+                    }
+                    find_face(document, second_id)->texture_transform.shift_uv = {3.0F, -2.0F};
+                }
+                const Document original = document;
+                Selection selection = qdr_test::face_selection({first_id, second_id}, first_id);
+                const Selection original_selection = selection;
+
+                const OperationResult result = combine_selected_faces(document, selection);
+
+                EXPECT_FALSE(result.success);
+                EXPECT_FALSE(result.changed);
+                EXPECT_EQ(result.message, "Combine Faces would create invalid face geometry.");
+                expect_combine_state_unchanged(document, original, selection, original_selection);
+            }
         }
     }
-    EXPECT_EQ(selection.faces, original_selection);
-    EXPECT_EQ(fixture.document.next_face_id, original.next_face_id);
-    EXPECT_EQ(fixture.document.next_vertex_id, original.next_vertex_id);
+}
+
+TEST(QdrDocumentOperationCombineFacesTests, CombineRejectsMalformedSelectedFaceDataWithoutChangingState) {
+    for (const int malformed_input : {0, 1, 2, 3, 4, 5}) {
+        SCOPED_TRACE(malformed_input);
+        qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+        Selection split = qdr_test::edge_selection({
+            make_edge(fixture.bottom_left, fixture.bottom_right),
+            make_edge(fixture.top_right, fixture.top_left)});
+        ASSERT_TRUE(connect_selected_edges(fixture.document, split).changed);
+        for (Face& face : fixture.document.faces) {
+            face.uvs = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}};
+        }
+        Face& malformed = fixture.document.faces.front();
+        switch (malformed_input) {
+        case 0:
+            malformed.uvs.pop_back();
+            break;
+        case 1:
+            malformed.uvs.front().x = std::numeric_limits<float>::quiet_NaN();
+            break;
+        case 2:
+            malformed.texture_transform.scale.x = 0.0F;
+            break;
+        case 3:
+            fixture.document.vertices.front().position.x = std::numeric_limits<float>::quiet_NaN();
+            break;
+        case 4:
+            malformed.vertices.front() = fixture.document.next_vertex_id;
+            break;
+        default:
+            malformed.vertices.front() = malformed.vertices.back();
+            break;
+        }
+        const Document original = fixture.document;
+        Selection selection = qdr_test::all_face_selection(fixture.document);
+        const Selection original_selection = selection;
+
+        const OperationResult result = combine_selected_faces(fixture.document, selection);
+
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(result.changed);
+        EXPECT_EQ(result.message, "Combine Faces encountered invalid mesh data.");
+        expect_combine_state_unchanged(fixture.document, original, selection, original_selection);
+    }
+}
+
+TEST(QdrDocumentOperationCombineFacesTests, CombineAcceptsANonplanarQuadWithCompleteTriangulatedBoundary) {
+    Document document;
+    const ElementId a = add_vertex(document, {-1.0F, -1.0F, 0.0F});
+    const ElementId b = add_vertex(document, {1.0F, -1.0F, 0.0F});
+    const ElementId c = add_vertex(document, {1.0F, 1.0F, 0.25F});
+    const ElementId d = add_vertex(document, {-1.0F, 1.0F, 0.0F});
+    const ElementId first = add_face(document, std::array{a, b, c});
+    const ElementId second = add_face(document, std::array{a, c, d});
+    ASSERT_NE(first, kInvalidElementId);
+    ASSERT_NE(second, kInvalidElementId);
+    find_face(document, first)->uvs = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}};
+    find_face(document, second)->uvs = {{3.0F, 0.0F}, {4.0F, 1.0F}, {3.0F, 1.0F}};
+    Selection selection = qdr_test::face_selection({first, second}, first);
+
+    const OperationResult result = combine_selected_faces(document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    ASSERT_EQ(document.faces.size(), 1U);
+    ASSERT_EQ(document.faces.front().vertices.size(), 4U);
+    EXPECT_EQ(document.vertices.size(), 4U);
+    EXPECT_FLOAT_EQ(find_vertex(document, c)->position.z, 0.25F);
+    EXPECT_EQ(compile_document(document).indices.size(), 6U);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationCombineFacesTests, CombineUsesGeneratedMappingWhenFiniteSourceChartsOverflowDonorSpace) {
+    qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+    Selection split = qdr_test::edge_selection({
+        make_edge(fixture.bottom_left, fixture.bottom_right),
+        make_edge(fixture.top_right, fixture.top_left)});
+    ASSERT_TRUE(connect_selected_edges(fixture.document, split).changed);
+    fixture.document.faces[0].texture_transform.scale = {1.0e30F, 1.0e30F};
+    fixture.document.faces[1].uvs.assign(4U, {1.0e30F, 1.0e30F});
+    Selection selection = qdr_test::all_face_selection(fixture.document);
+
+    const OperationResult result = combine_selected_faces(fixture.document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    ASSERT_EQ(fixture.document.faces.size(), 1U);
+    EXPECT_TRUE(fixture.document.faces.front().uvs.empty());
+    qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+    const auto mesh = compile_document(fixture.document);
+    ASSERT_FALSE(mesh.indices.empty());
+    for (const auto& vertex : mesh.vertices) {
+        EXPECT_TRUE(std::isfinite(vertex.uv0.x));
+        EXPECT_TRUE(std::isfinite(vertex.uv0.y));
+    }
 }
 
 TEST(QdrDocumentOperationCombineFacesTests, CombineRetainsACollinearBoundaryUvBreakpoint) {

@@ -109,8 +109,6 @@ public:
   viewport_raster_scale(ViewportPaneId pane_id) const;
   void set_render_performance_stats(RenderFramePerformanceStats stats);
   void set_localization(LocalizationService &localization);
-  void set_open_material_editor_callback(
-      std::function<void(ProjectAssetId)> callback);
   // Sample UI material selection only when a primitive footprint is accepted.
   void set_primitive_creation_material_provider(
       std::function<QuaderMaterialReference()> provider);
@@ -260,7 +258,6 @@ private:
   std::uint64_t settings_overlay_update_count_ = 0;
   const ViewportSettings *viewport_settings_ = nullptr;
   LocalizationService *localization_ = nullptr;
-  std::function<void(ProjectAssetId)> open_material_editor_callback_;
   std::function<QuaderMaterialReference()> primitive_creation_material_provider_;
   RenderFramePerformanceStats render_performance_ = {};
   ViewportSettings fallback_settings_ = ViewportSettings::defaults();

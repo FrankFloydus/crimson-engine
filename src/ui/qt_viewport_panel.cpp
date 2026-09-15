@@ -982,11 +982,6 @@ void QtViewportPanel::process_input(
   }
 }
 
-void QtViewportPanel::set_open_material_editor_callback(
-    std::function<void(ProjectAssetId)> callback) {
-  open_material_editor_callback_ = std::move(callback);
-}
-
 void QtViewportPanel::set_primitive_creation_material_provider(
     std::function<QuaderMaterialReference()> provider) {
   primitive_creation_material_provider_ = std::move(provider);
@@ -3953,7 +3948,7 @@ void QtViewportPanel::process_viewport_input(
   QPoint context_menu_global_point;
   QuaderActionSet context_menu_action_set;
   QuaderSelectionSummary context_menu_selection;
-  std::optional<ProjectAssetId> context_menu_material_under_mouse;
+  std::optional<QuaderHoverTarget> context_menu_material_face_target;
   const bool selection_fallback_active =
       interaction_controller_.active_tool_allows_selection_fallback(
           input_router_.state().active_tool);
@@ -3975,26 +3970,14 @@ void QtViewportPanel::process_viewport_input(
             interaction_frame.scene_curve_pick_candidates,
         .scene_surfaces = interaction_frame.scene_surfaces,
     };
-    const std::optional<QuaderHoverTarget> material_face_target =
+    context_menu_material_face_target =
         interaction_controller_.pick_material_face_target(editor,
                                                           context_frame);
-    if (material_face_target.has_value() &&
-        material_face_target->kind == QuaderActiveSelectionKind::Face) {
-      const QuaderApiResult<QuaderFaceProjectMaterial> material =
-          editor.modeling().project_material_for_face(
-              static_cast<QuaderModelingObjectId>(
-                  material_face_target->object_id),
-              static_cast<QuaderElementId>(material_face_target->face_id));
-      if (runtime_binding_generation_ != input_binding_generation) {
-        return;
-      }
-      if (material.ok()) {
-        context_menu_material_under_mouse = material.value().id;
-      }
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
     }
-    context_menu_selection =
-        interaction_controller_.pick_context_menu_target(editor,
-                                                         context_frame);
+    context_menu_selection = interaction_controller_.pick_context_menu_target(
+        editor, context_frame);
     if (runtime_binding_generation_ != input_binding_generation) {
       return;
     }
@@ -4017,7 +4000,7 @@ void QtViewportPanel::process_viewport_input(
         });
     pending_context_menu_request.target_hit =
         context_menu_selection.has_selection ||
-        context_menu_material_under_mouse.has_value();
+        context_menu_material_face_target.has_value();
     // Cut/Copy/Paste remain useful target-independent context actions. Keeping
     // this explicit also lets Paste open from an empty viewport.
     pending_context_menu_request.has_target_independent_actions = true;
@@ -4027,7 +4010,7 @@ void QtViewportPanel::process_viewport_input(
             context_menu_selection.mode == QuaderSelectionMode::Object ||
                 context_menu_selection.mode == QuaderSelectionMode::Group,
             context_menu_selection.has_selection,
-            context_menu_material_under_mouse.has_value(), true);
+            context_menu_material_face_target.has_value(), true);
     show_context_menu =
         should_open_viewport_context_menu(pending_context_menu_request) &&
         localization_ != nullptr;
@@ -4061,8 +4044,7 @@ void QtViewportPanel::process_viewport_input(
         *pane_state.surface_container, context_menu_global_point, editor,
         input_router_, *localization_, context_menu_action_set,
         context_menu_selection, pending_context_menu_request.target_hit,
-        context_menu_material_under_mouse,
-        open_material_editor_callback_,
+        context_menu_material_face_target,
         {.current_generation = &runtime_binding_generation_,
          .expected_generation = input_binding_generation});
     if (runtime_binding_generation_ != input_binding_generation) {

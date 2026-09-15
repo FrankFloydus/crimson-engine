@@ -129,7 +129,7 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
         Face rebuilt_face = face;
         rebuilt_face.vertices = std::move(rebuilt_loop);
         if (face_changed && !preserve_face_uvs(document, face, candidate, rebuilt_face)) {
-            return OperationResult::failure("Bevel could not preserve the source texture mapping.");
+            return OperationResult::failure("Bevel encountered invalid mesh data.");
         }
         rebuilt_faces.push_back(std::move(rebuilt_face));
         changed = changed || face_changed;

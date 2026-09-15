@@ -75,6 +75,68 @@ std::optional<quader::QVec3> triangle_weights(
     return quader::QVec3 { wa, wb, wc };
 }
 
+quader::QVec2 nearest_face_base_uv(const FaceUvSampler& sampler,
+    const Face& source_face, quader::QVec3 position)
+{
+    const auto as_double = [](quader::QVec3 value) {
+        return quader_geometry::QVec3d { value.x, value.y, value.z };
+    };
+    const auto finite = [](quader::QVec2 uv) {
+        return std::isfinite(uv.x) && std::isfinite(uv.y);
+    };
+    const auto positions = sampler.positions();
+    const auto point = as_double(position);
+    quader::QVec2 nearest {};
+    for (const auto uv : source_face.uvs) {
+        if (finite(uv)) {
+            nearest = uv;
+            break;
+        }
+    }
+    double distance = std::numeric_limits<double>::infinity();
+    const auto keep_nearest = [&](quader::QVec2 uv, double candidate_distance) {
+        if (finite(uv) && candidate_distance < distance) {
+            nearest = uv;
+            distance = candidate_distance;
+        }
+    };
+    for (const Triangle& triangle : sampler.triangles()) {
+        const quader_geometry::QTriangle3<double> geometry {
+            as_double(positions[triangle.a]), as_double(positions[triangle.b]),
+            as_double(positions[triangle.c]) };
+        const auto weights = quader_geometry::barycentric_coordinates(point, geometry);
+        if (!weights.valid || weights.u < 0.0 || weights.v < 0.0 || weights.w < 0.0) {
+            continue;
+        }
+        const auto projected = geometry.a * weights.u + geometry.b * weights.v +
+            geometry.c * weights.w;
+        const auto sampled = sampler.sample({ static_cast<float>(projected.x),
+            static_cast<float>(projected.y), static_cast<float>(projected.z) });
+        const auto a = source_face.uvs[triangle.a];
+        const auto b = source_face.uvs[triangle.b];
+        const auto c = source_face.uvs[triangle.c];
+        const quader::QVec2 interpolated {
+            static_cast<float>(a.x * weights.u + b.x * weights.v + c.x * weights.w),
+            static_cast<float>(a.y * weights.u + b.y * weights.v + c.y * weights.w) };
+        keep_nearest(sampled.has_value() && finite(*sampled) ? *sampled : interpolated,
+            quader_geometry::length_squared(point - projected));
+    }
+    for (std::size_t index = 0U; index < positions.size(); ++index) {
+        const std::size_t next = (index + 1U) % positions.size();
+        const auto closest = quader_geometry::closest_point_on_segment<double>(point,
+            { as_double(positions[index]), as_double(positions[next]) });
+        const auto first_uv = source_face.uvs[index];
+        const auto second_uv = source_face.uvs[next];
+        keep_nearest({
+            static_cast<float>(std::lerp(static_cast<double>(first_uv.x),
+                static_cast<double>(second_uv.x), closest.segment_factor)),
+            static_cast<float>(std::lerp(static_cast<double>(first_uv.y),
+                static_cast<double>(second_uv.y), closest.segment_factor)) },
+            closest.distance_squared);
+    }
+    return nearest;
+}
+
 } // namespace
 
 FaceUvSampler::FaceUvSampler(const Document& document, const Face& face)
@@ -205,6 +267,12 @@ bool face_vertex_uv_is_redundant(
 bool preserve_face_uvs(const Document& source_document, const Face& source_face,
     const Document& destination_document, Face& destination_face)
 {
+    if ((!source_face.uvs.empty() && !face_has_loop_uvs(source_face)) ||
+        std::ranges::any_of(source_face.uvs, [](quader::QVec2 uv) {
+            return !std::isfinite(uv.x) || !std::isfinite(uv.y);
+        })) {
+        return false;
+    }
     if (!face_has_loop_uvs(source_face)) {
         destination_face.uvs.clear();
         return true;
@@ -219,17 +287,29 @@ bool preserve_face_uvs(const Document& source_document, const Face& source_face,
             continue;
         }
         const Vertex* vertex = find_vertex(destination_document, vertex_id);
-        if (vertex == nullptr) {
+        if (vertex == nullptr || !std::isfinite(vertex->position.x) ||
+            !std::isfinite(vertex->position.y) || !std::isfinite(vertex->position.z)) {
             return false;
         }
         if (!sampler.has_value()) {
-            sampler.emplace(source_document, source_face);
+            const VertexLookupIndex source_lookup(source_document);
+            for (const ElementId source_id : source_face.vertices) {
+                const Vertex* source_vertex = source_lookup.find(source_id);
+                if (source_vertex == nullptr || !std::isfinite(source_vertex->position.x) ||
+                    !std::isfinite(source_vertex->position.y) ||
+                    !std::isfinite(source_vertex->position.z)) {
+                    return false;
+                }
+            }
+            sampler.emplace(source_document, source_face, source_lookup);
         }
         const auto interpolated = sampler->sample(vertex->position);
-        if (!interpolated.has_value()) {
-            return false;
-        }
-        corners.push_back(*interpolated);
+        // Geometry edits can move a new corner away from the source surface.
+        // Keep its closest chart value when exact interpolation is unavailable.
+        corners.push_back(interpolated.has_value() &&
+                std::isfinite(interpolated->x) && std::isfinite(interpolated->y)
+            ? *interpolated
+            : nearest_face_base_uv(*sampler, source_face, vertex->position));
     }
     destination_face.uvs = std::move(corners);
     return true;

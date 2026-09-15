@@ -10,6 +10,14 @@
 
 namespace quader {
 
+ModelingCommandAvailability PasteSelectionTool::custom_availability(
+    const ModelingCommandExecutionContext &context) const {
+  return context.modeling.can_paste_selection()
+             ? ModelingCommandAvailability::available()
+             : ModelingCommandAvailability::unavailable(
+                   "Copy objects and finish the active preview before pasting.");
+}
+
 ModelingCommandResult PasteSelectionTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
   return context.modeling.paste_selection();
 }

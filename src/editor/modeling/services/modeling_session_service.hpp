@@ -359,6 +359,8 @@ public:
                                   std::string label = "Destroy Entities");
   [[nodiscard]] bool has_selected_scene_aware_delete_root() const;
   ModelingCommandResult delete_component_selection();
+  [[nodiscard]] bool can_copy_selection() const;
+  [[nodiscard]] bool can_paste_selection() const;
   ModelingCommandResult copy_selection();
   ModelingCommandResult paste_selection();
   ModelingCommandResult repeat_last_action();

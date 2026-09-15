@@ -7,6 +7,7 @@
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
+#include "ui/qt_context_menu_visibility.hpp"
 #include "ui/qt_tree_relationship_presentation.hpp"
 
 #include <QAccessibilityHints>
@@ -2441,6 +2442,8 @@ void QtMaterialBrowserWindow::show_material_menu(
   }
   paste->setEnabled(action_handler && material_paste_available_);
 
+  hide_unavailable_context_menu_actions(*menu.data());
+
   QPointer<QtMaterialBrowserWindow> guard(this);
   QAction *chosen = menu->exec(global_position);
   QtMaterialBrowserAction action = QtMaterialBrowserAction::CopyTextureName;
@@ -2575,6 +2578,7 @@ void QtMaterialBrowserWindow::show_folder_menu(const QPoint &position) {
   const bool root = folder == QStringLiteral("Materials");
   rename->setEnabled(!root && static_cast<bool>(rename_folder_));
   remove->setEnabled(!root && static_cast<bool>(delete_folder_));
+  hide_unavailable_context_menu_actions(*menu.data());
   QPointer<QtMaterialBrowserWindow> guard(this);
   QAction *chosen =
       menu->exec(folder_tree_->viewport()->mapToGlobal(position));

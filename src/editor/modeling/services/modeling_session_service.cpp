@@ -4283,6 +4283,19 @@ public:
         std::move(label));
   }
 
+  [[nodiscard]] bool can_copy_selection() const {
+    return !sdk_projection_adapter_.preview_active() &&
+           sdk_projection_adapter_.selection_summary().selected_object_count !=
+               0u;
+  }
+
+  [[nodiscard]] bool can_paste_selection() const {
+    return !sdk_projection_adapter_.preview_active() &&
+           sdk_projection_adapter_.clipboard_available() &&
+           clipboard_scene_identities_.size() ==
+               sdk_projection_adapter_.clipboard_object_count();
+  }
+
   ModelingCommandResult copy_selection() {
     ModelingSdkClipboardCopyResult copied =
         sdk_projection_adapter_.copy_selection_to_clipboard();
@@ -5509,19 +5522,44 @@ public:
 
   [[nodiscard]] ModelingActionSet
   context_action_set(ModelingActionQuery query) const {
-    return context_action_service_.action_set(selection_summary(), query,
+    return context_action_service_.action_set(action_selection_summary(), query,
                                               modal_tool_owns_viewport());
+  }
+
+  [[nodiscard]] ModelingSelectionSummary action_selection_summary() const {
+    ModelingSelectionSummary summary = selection_summary();
+    if (summary.has_selection) {
+      const auto topology =
+          sdk_projection_adapter_.selection_topology_eligibility();
+      summary.selected_faces_have_open_perimeter = topology.open_face_perimeter;
+      summary.combinable_selected_faces = topology.combinable_selected_faces;
+      summary.bridge_face_pair = topology.bridge_face_pair;
+      summary.bridge_edge_pair = topology.bridge_edge_pair;
+      summary.selected_edges_belong_to_faces =
+          topology.selected_edges_belong_to_faces;
+      summary.selected_edges_are_interior = topology.selected_edges_are_interior;
+      summary.three_selected_open_boundary_edges =
+          topology.three_selected_open_boundary_edges;
+      summary.selected_vertices_belong_to_faces =
+          topology.selected_vertices_belong_to_faces;
+      summary.selected_vertices_share_face = topology.selected_vertices_share_face;
+      summary.whole_mesh_closed = topology.whole_mesh_closed;
+      summary.whole_mesh_has_open_perimeter =
+          topology.whole_mesh_has_open_perimeter;
+    }
+    return summary;
   }
 
   [[nodiscard]] std::vector<ModelingActionItem>
   context_actions(ModelingActionQuery query) const {
-    return context_action_service_.actions(selection_summary(), query,
+    return context_action_service_.actions(action_selection_summary(), query,
                                            modal_tool_owns_viewport());
   }
 
   [[nodiscard]] std::optional<ModelingActionItem>
   context_action(std::string_view action_id, ModelingActionQuery query) const {
-    return context_action_service_.action(selection_summary(), action_id, query,
+    return context_action_service_.action(action_selection_summary(), action_id,
+                                          query,
                                           modal_tool_owns_viewport());
   }
 
@@ -6161,7 +6199,8 @@ public:
 
     const ModelingContextActionResolution action =
         context_action_service_.resolve_executable_action(
-            selection_summary(), action_id, modal_tool_owns_viewport());
+            action_selection_summary(),
+            action_id, modal_tool_owns_viewport());
     if (!action.ok) {
       return {.ok = false, .message = action.message};
     }
@@ -6211,7 +6250,10 @@ public:
 
   [[nodiscard]] std::vector<ModelingInstantOperationDescriptor>
   instant_operations() const {
-    const ModelingSelectionSummary summary = selection_summary();
+    const ModelingSelectionSummary summary =
+        sdk_projection_adapter_.selection_mode() == ModelingSelectionMode::Object
+            ? selection_summary()
+            : action_selection_summary();
     std::vector<ModelingInstantOperationDescriptor> operations;
     for (const ModelingInstantOperationCatalogEntry &entry :
          modeling_instant_operation_catalog()) {
@@ -11014,6 +11056,14 @@ bool ModelingSessionService::has_selected_scene_aware_delete_root() const {
 
 ModelingCommandResult ModelingSessionService::delete_component_selection() {
   return impl_->delete_component_selection();
+}
+
+bool ModelingSessionService::can_copy_selection() const {
+  return impl_->can_copy_selection();
+}
+
+bool ModelingSessionService::can_paste_selection() const {
+  return impl_->can_paste_selection();
 }
 
 ModelingCommandResult ModelingSessionService::copy_selection() {

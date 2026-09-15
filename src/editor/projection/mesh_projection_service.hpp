@@ -37,14 +37,14 @@ public:
   [[nodiscard]] static std::optional<quader_poly::Document>
   polygon_document_from_sdk_document(
       const quader::modeling::PolygonDocument &document);
-  /** Preserves displayed UV interiors while rebasing authored mesh geometry. */
+  /** Rebases UVs where representable, otherwise retains the source corner chart. */
   [[nodiscard]] static quader::modeling::Result<quader::modeling::PolygonDocument>
   rebase_sdk_document_texture_mapping(
       const quader_poly::Document &before,
       const quader::modeling::PolygonDocument &transformed,
       const QMat4 &source_sampling, const QMat4 &destination_sampling,
       bool reflected_geometry);
-  /** Repairs complete n-gon charts after a nonsingular affine edit at acceptance. */
+  /** Tries to retain n-gon UV interiors without rejecting valid geometry edits. */
   [[nodiscard]] static quader::modeling::Result<quader::modeling::OperationResult>
   preserve_transformed_sdk_document_uv_layout(
       const quader::modeling::PolygonDocument &before,

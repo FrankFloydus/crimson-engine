@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <set>
 #include <utility>
@@ -388,6 +389,47 @@ TEST(UvPreservationFoundationTests, NormalFlipAndReflectionRetainNonaffineNgonIn
     expect_winding_change_preserves_chart(topology, true, {0.0F, 0.0F, 1.0F});
     expect_winding_change_preserves_chart(topology, true, {1.0F, 0.0F, 1.0F});
   }
+}
+
+TEST(UvPreservationFoundationTests, ReflectionKeepsCollapsedAuthoredNgonCorners) {
+  AuthoredTopology topology;
+  AuthoredTopologyFace face;
+  face.id = make_id<FaceTag>(1U);
+  for (std::uint32_t index = 0; index < 5U; ++index) {
+    const auto id = make_id<VertexTag>(index + 1U);
+    topology.vertices.push_back({id, {static_cast<float>(index), 0.0F, 0.0F}});
+    face.vertices.push_back(id);
+    face.uvs.push_back({static_cast<float>(index * index), static_cast<float>(index % 2U)});
+  }
+  topology.faces.push_back(face);
+  topology.next_vertex_id = 6U;
+  topology.next_face_id = 2U;
+  auto document = PolygonDocument::from_authored_topology(topology).or_throw();
+  const auto reflected = document.reflect_across_plane({}, {1.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(reflected.ok()) << reflected.error_message();
+  ASSERT_TRUE(reflected.value().changed);
+  const auto result = document.authored_topology().or_throw();
+  ASSERT_EQ(result.faces.size(), 1U);
+  for (std::size_t corner = 0; corner < result.faces.front().vertices.size(); ++corner) {
+    const auto id = result.faces.front().vertices[corner];
+    const auto original = std::ranges::find(face.vertices, id);
+    ASSERT_NE(original, face.vertices.end());
+    const auto index = static_cast<std::size_t>(original - face.vertices.begin());
+    EXPECT_FLOAT_EQ(result.faces.front().uvs[corner].x, face.uvs[index].x);
+    EXPECT_FLOAT_EQ(result.faces.front().uvs[corner].y, face.uvs[index].y);
+  }
+  for (std::size_t index = 0; index < result.vertices.size(); ++index) {
+    EXPECT_FLOAT_EQ(result.vertices[index].position.x, -topology.vertices[index].position.x);
+  }
+}
+
+TEST(UvPreservationFoundationTests, ReflectionRejectsNonfiniteResultWithoutChangingGeometryOrUvs) {
+  auto document = PolygonDocument::from_authored_topology(mixed_chart_topology()).or_throw();
+  const auto original = serialize_qdr_authored_topology(document).or_throw();
+  const auto result = document.reflect_across_plane(
+      {std::numeric_limits<float>::max(), 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F});
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(document).or_throw(), original);
 }
 
 } // namespace

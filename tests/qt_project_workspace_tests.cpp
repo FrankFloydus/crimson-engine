@@ -2031,12 +2031,12 @@ TEST(QtProjectWorkspaceTests,
   const auto combine = editor.commands().descriptor(
       quader::quader_command::kModelingCombineFaces);
   ASSERT_TRUE(combine.has_value());
-  ASSERT_TRUE(combine->enabled);
+  ASSERT_FALSE(combine->enabled);
   const auto invalid_geometry = editor.commands().execute(
       quader::quader_command::kModelingCombineFaces);
   ASSERT_FALSE(invalid_geometry.ok());
   EXPECT_EQ(invalid_geometry.error_message(),
-            "Combine Faces would create invalid face geometry.");
+            "Command is disabled.");
   EXPECT_FALSE(invalid_geometry.changed());
   EXPECT_EQ(editor.selection().summary().selected_face_count, 2u);
   ui.refresh({}, {});

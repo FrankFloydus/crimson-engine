@@ -495,18 +495,18 @@ quader_poly::Document sloped_texture_continuation_document() {
   // Captured sloped wall, its tapered side faces, and the separated thin cap.
   // Stable sparse IDs retain the original edge relationships without a scene file.
   quader_poly::Document document;
-  constexpr float left = 0.16870377957820892F;
-  constexpr float right = 1.5481683015823364F;
-  constexpr float lower_seam = 2.270589828491211F;
-  constexpr float upper_seam = 0.6056923866271973F;
-  constexpr float cap_front = 0.5279415249824524F;
-  constexpr float cap_back = 0.45275720953941345F;
+  constexpr float kLeft = 0.16870377957820892F;
+  constexpr float kRight = 1.5481683015823364F;
+  constexpr float kLowerSeam = 2.270589828491211F;
+  constexpr float kUpperSeam = 0.6056923866271973F;
+  constexpr float kCapFront = 0.5279415249824524F;
+  constexpr float kCapBack = 0.45275720953941345F;
   document.vertices = {
-      {26, {right, 1.5F, 0.5F}}, {32, {left, 1.5F, 0.5F}},
-      {53, {right, 1.5F, lower_seam}}, {55, {left, 1.5F, lower_seam}},
-      {1381, {right, 3.75F, cap_front}}, {1382, {right, 3.75F, cap_back}},
-      {1383, {left, 3.75F, cap_back}}, {1384, {left, 3.75F, cap_front}},
-      {1385, {left, 3.75F, upper_seam}}, {1386, {right, 3.75F, upper_seam}}};
+      {26, {kRight, 1.5F, 0.5F}}, {32, {kLeft, 1.5F, 0.5F}},
+      {53, {kRight, 1.5F, kLowerSeam}}, {55, {kLeft, 1.5F, kLowerSeam}},
+      {1381, {kRight, 3.75F, kCapFront}}, {1382, {kRight, 3.75F, kCapBack}},
+      {1383, {kLeft, 3.75F, kCapBack}}, {1384, {kLeft, 3.75F, kCapFront}},
+      {1385, {kLeft, 3.75F, kUpperSeam}}, {1386, {kRight, 3.75F, kUpperSeam}}};
   document.faces = {
       {.id = 68, .vertices = {1381, 1382, 1383, 1384}},
       {.id = 1381, .vertices = {32, 55, 1385, 1384},
@@ -3032,13 +3032,13 @@ TEST(ProjectMaterialBehaviorTests,
         static_cast<quader_poly::ElementId>(target));
     ASSERT_EQ(corners.size(), 4U);
     QVec3 interior{};
-    constexpr std::array weights{0.12F, 0.28F, 0.42F, 0.18F};
+    constexpr std::array kWeights{0.12F, 0.28F, 0.42F, 0.18F};
     for (std::size_t corner = 0; corner < corners.size(); ++corner) {
       const auto position = quader_poly::find_vertex(after, face->vertices[corner])->position;
       const auto expected = expected_uv(target, position);
       EXPECT_NEAR(corners[corner].x, expected.x, 2.0e-5F) << corner;
       EXPECT_NEAR(corners[corner].y, expected.y, 2.0e-5F) << corner;
-      interior += position * weights[corner];
+      interior += position * kWeights[corner];
     }
     const auto rendered = rendered_face_uv_at(harness.project(), object.entity,
         static_cast<quader_poly::ElementId>(target), interior);
@@ -3174,13 +3174,13 @@ TEST(ProjectMaterialBehaviorTests,
           static_cast<quader_poly::ElementId>(target));
       ASSERT_EQ(corners.size(), 4U);
       QVec3 interior{};
-      constexpr std::array weights{0.12F, 0.28F, 0.42F, 0.18F};
+      constexpr std::array kWeights{0.12F, 0.28F, 0.42F, 0.18F};
       for (std::size_t corner = 0; corner < corners.size(); ++corner) {
         const auto position = quader_poly::find_vertex(after, face->vertices[corner])->position;
         const auto expected = expected_uv(position);
         EXPECT_NEAR(corners[corner].x, expected.x, 2.0e-5F) << corner;
         EXPECT_NEAR(corners[corner].y, expected.y, 2.0e-5F) << corner;
-        interior += position * weights[corner];
+        interior += position * kWeights[corner];
       }
       // Sample both the visible interior and the edge facing the source plane.
       // These lips are disjoint, so continuation extrapolates across the gap.

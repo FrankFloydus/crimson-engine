@@ -8,6 +8,7 @@
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <array>
 #include <bit>
@@ -69,6 +70,100 @@ void compile_document_preserves_loop_uvs_material_slots_and_normals()
 
 TEST(QdrDocumentMeshUvTests, QdrDocumentMeshUvTests) {
     compile_document_preserves_loop_uvs_material_slots_and_normals();
+}
+
+TEST(QdrDocumentMeshUvTests, TopologyUvTransferProjectsCornersOutsideTheSourceSurface) {
+    Document source;
+    ASSERT_TRUE(make_uv_quad_document(source));
+    source.faces.front().uvs = {
+        {2.0F, 3.0F}, {6.0F, 4.0F}, {9.0F, 10.0F}, {1.0F, 8.0F}};
+    const Face& source_face = source.faces.front();
+    const document_internal::FaceUvSampler sampler(source, source_face);
+    const auto center_uv = sampler.sample({0.0F, 0.0F, 0.0F});
+    ASSERT_TRUE(center_uv.has_value());
+    for (const quader::QVec3 position : {
+             quader::QVec3{0.0F, 0.0F, 0.5F},
+             quader::QVec3{0.0F, 3.0F, 0.5F}}) {
+        Document destination = source;
+        const ElementId new_corner = add_vertex(destination, position);
+        Face& face = destination.faces.front();
+        face.vertices = {source_face.vertices[0], source_face.vertices[1], new_corner};
+        ASSERT_FALSE(sampler.sample(position).has_value());
+
+        ASSERT_TRUE(document_internal::preserve_face_uvs(
+            source, source_face, destination, face));
+
+        ASSERT_EQ(face.uvs.size(), face.vertices.size());
+        for (std::size_t corner = 0U; corner < 2U; ++corner) {
+            EXPECT_EQ(face.uvs[corner].x, source_face.uvs[corner].x);
+            EXPECT_EQ(face.uvs[corner].y, source_face.uvs[corner].y);
+        }
+        const auto expected = position.y == 0.0F
+            ? *center_uv : quader::QVec2{5.0F, 9.0F};
+        EXPECT_NEAR(face.uvs.back().x, expected.x, 0.0001F);
+        EXPECT_NEAR(face.uvs.back().y, expected.y, 0.0001F);
+        const auto mesh = compile_document(destination);
+        ASSERT_EQ(mesh.indices.size(), 3U);
+        for (const auto& vertex : mesh.vertices) {
+            EXPECT_TRUE(std::isfinite(vertex.uv0.x));
+            EXPECT_TRUE(std::isfinite(vertex.uv0.y));
+        }
+    }
+}
+
+TEST(QdrDocumentMeshUvTests, TopologyUvTransferRejectsUnresolvedDestinationVertices) {
+    Document source;
+    ASSERT_TRUE(make_uv_quad_document(source));
+    source.faces.front().uvs = {
+        {2.0F, 3.0F}, {6.0F, 4.0F}, {9.0F, 10.0F}, {1.0F, 8.0F}};
+    Document destination = source;
+    const ElementId missing_corner = add_vertex(destination, {0.0F, 0.0F, 0.5F});
+    destination.faces.front().vertices[2] = missing_corner;
+    destination.vertices.pop_back();
+    Face& face = destination.faces.front();
+    const auto original_uvs = face.uvs;
+
+    EXPECT_FALSE(document_internal::preserve_face_uvs(
+        source, source.faces.front(), destination, face));
+
+    ASSERT_EQ(face.uvs.size(), original_uvs.size());
+    for (std::size_t corner = 0U; corner < original_uvs.size(); ++corner) {
+        EXPECT_EQ(face.uvs[corner].x, original_uvs[corner].x);
+        EXPECT_EQ(face.uvs[corner].y, original_uvs[corner].y);
+    }
+}
+
+TEST(QdrDocumentMeshUvTests, TopologyUvTransferRejectsNonfiniteGeometryAndMalformedCharts) {
+    Document original;
+    ASSERT_TRUE(make_uv_quad_document(original));
+    original.faces.front().uvs = {
+        {2.0F, 3.0F}, {6.0F, 4.0F}, {9.0F, 10.0F}, {1.0F, 8.0F}};
+    for (const int malformed_input : {0, 1, 2, 3}) {
+        SCOPED_TRACE(malformed_input);
+        Document source = original;
+        Document destination = original;
+        const ElementId new_corner = add_vertex(destination, {0.0F, 0.0F, 0.5F});
+        destination.faces.front().vertices[2] = new_corner;
+        if (malformed_input == 0) {
+            destination.vertices.back().position.x = std::numeric_limits<float>::quiet_NaN();
+        } else if (malformed_input == 1) {
+            source.faces.front().uvs.front().x = std::numeric_limits<float>::quiet_NaN();
+        } else if (malformed_input == 2) {
+            source.faces.front().uvs.pop_back();
+        } else {
+            source.vertices.front().position.x = std::numeric_limits<float>::quiet_NaN();
+        }
+
+        EXPECT_FALSE(document_internal::preserve_face_uvs(
+            source, source.faces.front(), destination, destination.faces.front()));
+
+        const auto& uvs = destination.faces.front().uvs;
+        ASSERT_EQ(uvs.size(), original.faces.front().uvs.size());
+        for (std::size_t corner = 0U; corner < uvs.size(); ++corner) {
+            EXPECT_EQ(uvs[corner].x, original.faces.front().uvs[corner].x);
+            EXPECT_EQ(uvs[corner].y, original.faces.front().uvs[corner].y);
+        }
+    }
 }
 
 TEST(QdrDocumentMeshUvTests, FaceSettingsRotateThenDivideThenShiftBaseUvs) {

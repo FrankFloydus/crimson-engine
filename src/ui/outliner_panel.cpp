@@ -13,6 +13,7 @@
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/qt_tree_relationship_presentation.hpp"
+#include "ui/qt_context_menu_visibility.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_panel.hpp"
 
@@ -1218,7 +1219,7 @@ private:
       rename_action->setEnabled(!entity_record->is_scene_root);
 
       focus_action = add_command_action(
-          "ui.outliner.focus_selection", "Focus Selected Objects",
+          "ui.outliner.focus_selection", "Focus Selection",
           quader_command::kViewportFrameSelection,
           "outliner.action.focus_selection", !selected_objects.empty());
       menu.addSeparator();
@@ -1226,13 +1227,13 @@ private:
       const bool show_selected = !all_selected_visible;
       if (show_selected) {
         visibility_action = menu.addAction(localized(
-            "ui.outliner.show_selected", "Show Selected Objects"));
+            "ui.outliner.show_selected", "Show Objects"));
         visibility_action->setObjectName(
             QStringLiteral("outliner.action.show_selected"));
         visibility_action->setEnabled(!selected_objects.empty());
       } else {
         visibility_action = add_command_action(
-            "ui.outliner.hide_selected", "Hide Selected Objects",
+            "ui.outliner.hide_selected", "Hide Objects",
             quader_command::kSceneHideSelection,
             "outliner.action.hide_selected", !selected_objects.empty());
       }
@@ -1241,8 +1242,7 @@ private:
       lock_action = menu.addAction(localized(
           lock_selected ? "ui.outliner.lock_selected"
                         : "ui.outliner.unlock_selected",
-          lock_selected ? "Lock Selected Objects"
-                        : "Unlock Selected Objects"));
+          lock_selected ? "Lock Objects" : "Unlock Objects"));
       lock_action->setObjectName(
           lock_selected ? QStringLiteral("outliner.action.lock_selected")
                         : QStringLiteral("outliner.action.unlock_selected"));
@@ -1250,25 +1250,26 @@ private:
       menu.addSeparator();
 
       duplicate_action = add_command_action(
-          "ui.outliner.duplicate", "Duplicate Selected Objects",
+          "ui.outliner.duplicate", "Duplicate Objects",
           quader_command::kDuplicateSelection, "outliner.action.duplicate",
           has_mutable_roots);
 
       group_action = add_command_action(
-          "ui.outliner.group", "Group Selected Objects",
+          "ui.outliner.group", "Group Objects",
           quader_command::kGroupSelection, "outliner.action.group",
           has_mutable_roots);
 
       ungroup_action = add_command_action(
-          "ui.outliner.ungroup", "Ungroup Selected Groups",
+          "ui.outliner.ungroup", "Ungroup Groups",
           quader_command::kUngroupSelection, "outliner.action.ungroup",
           can_ungroup);
       menu.addSeparator();
 
       delete_action = add_command_action(
-          "ui.outliner.delete", "Delete Selected Objects",
+          "ui.outliner.delete", "Delete Objects",
           quader_command::kDeleteSelection, "outliner.action.delete",
           has_mutable_roots, false);
+      hide_unavailable_context_menu_actions(menu);
     }
 
     const std::uint64_t menu_generation = runtime_binding_generation_;

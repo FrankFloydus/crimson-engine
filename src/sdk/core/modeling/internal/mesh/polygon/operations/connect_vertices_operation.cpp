@@ -143,7 +143,7 @@ OperationResult ConnectVerticesOperation::apply(Document& document, Selection& s
 
         for (Face& replacement : replacement_faces) {
             if (!preserve_face_uvs(source, face, source, replacement)) {
-                return OperationResult::failure("Connect could not preserve the source face UVs.");
+                return OperationResult::failure("Connect Vertices encountered invalid mesh data.");
             }
         }
 

@@ -5,12 +5,14 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/poly_operation.hpp>
 #include <quader/modeling/neutral/polygon/poly_operation_descriptor.hpp>
 
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
@@ -56,6 +58,26 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
     if (selected_faces.size() < 2U) {
         return OperationResult::failure("Combine Faces needs at least two valid selected faces.");
     }
+    const VertexLookupIndex vertex_lookup(document);
+    for (const Face& face : selected_faces) {
+        if (!valid_face_texture_transform(face.texture_transform) ||
+            (!face.uvs.empty() && face.uvs.size() != face.vertices.size()) ||
+            std::ranges::any_of(face.uvs, [](quader::QVec2 uv) {
+                return !std::isfinite(uv.x) || !std::isfinite(uv.y);
+            })) {
+            return OperationResult::failure("Combine Faces encountered invalid mesh data.");
+        }
+        std::set<ElementId> distinct_vertices;
+        for (const ElementId id : face.vertices) {
+            const Vertex* vertex = vertex_lookup.find(id);
+            if (id == kInvalidElementId || vertex == nullptr ||
+                !distinct_vertices.insert(id).second ||
+                !std::isfinite(vertex->position.x) || !std::isfinite(vertex->position.y) ||
+                !std::isfinite(vertex->position.z)) {
+                return OperationResult::failure("Combine Faces encountered invalid mesh data.");
+            }
+        }
+    }
 
     const std::vector<FaceIslandBoundary> islands = selected_face_island_boundaries(document, selected_faces);
     std::set<ElementId> combined_source_face_ids;
@@ -86,7 +108,9 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
         // Boundary corners can carry UV breakpoints even when their geometry is collinear.
         // Give optional loop simplification the inherited chart before it decides what to remove.
         if (!assign_merged_face_texture_boundary(document, island.face_ids, merged_face)) {
-            return OperationResult::failure("Combine Faces could not preserve the source texture mapping.");
+            // A merged face cannot always represent every source chart. Keep the
+            // material donor's procedural mapping when boundary transfer fails.
+            merged_face.uvs.clear();
         }
 
         for (const ElementId face_id : island.face_ids) {
@@ -126,13 +150,10 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
     prune_normal_edge_states(candidate);
-    for (const FaceIslandBoundary& island : islands) {
-        if (island.face_ids.size() < 2U) {
-            continue;
-        }
-        if (Face* merged_face = find_face(candidate, island.face_ids.front());
-            merged_face != nullptr && !merged_face_preserves_source_textures(document, island.face_ids, *merged_face)) {
-            return OperationResult::failure("Combine Faces could not preserve the source texture mapping.");
+    for (const ElementId id : merged_face_ids) {
+        const Face* face = find_face(candidate, id);
+        if (face == nullptr || !face_triangulation_preserves_boundary(document, *face, vertex_lookup)) {
+            return OperationResult::failure("Combine Faces would create invalid face geometry.");
         }
     }
     if (!every_face_triangulates(candidate)) {

@@ -5508,6 +5508,64 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     ContextMenuMaterialTargetPreservesSourceFacesAndSelectionRevision) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef source =
+      create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+  const quader::QuaderModelingObjectRef target =
+      create_box_at(harness, {3.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+
+  const auto target_screen =
+      harness.camera.project_world_point({3.0f, 0.0f, 1.0f});
+  ASSERT_TRUE(target_screen.visible);
+  harness.input.mouse_local = target_screen.position;
+  harness.input.mouse_screen = target_screen.position;
+  auto target_frame = harness.frame();
+  target_frame.right_click_local = target_screen.position;
+  const auto clicked_face = harness.controller.pick_material_face_target(
+      harness.editor, target_frame);
+  ASSERT_TRUE(clicked_face.has_value());
+  ASSERT_EQ(clicked_face->object_id, target.modeling_object_id);
+
+  for (const bool multiple_faces : {false, true}) {
+    SCOPED_TRACE(multiple_faces ? "multiple selected destinations"
+                               : "one selected source");
+    ASSERT_TRUE(harness.editor.selection().select_face(source, 1).ok());
+    if (multiple_faces) {
+      ASSERT_TRUE(harness.editor.selection()
+                      .select_face(source, 2, quader::QuaderSelectionEdit::Add)
+                      .ok());
+    }
+    harness.session.history().clear();
+    const auto before = harness.editor.selection().summary();
+    const auto preserved = harness.controller.pick_context_menu_target(
+        harness.editor, harness.frame());
+    const auto after = harness.editor.selection().summary();
+    EXPECT_EQ(preserved.active_object_id, source.modeling_object_id);
+    EXPECT_EQ(preserved.active_face_id, before.active_face_id);
+    EXPECT_EQ(preserved.selected_face_count, before.selected_face_count);
+    EXPECT_EQ(after.active_object_id, before.active_object_id);
+    EXPECT_EQ(after.active_face_id, before.active_face_id);
+    EXPECT_EQ(after.selected_face_count, before.selected_face_count);
+    EXPECT_EQ(after.selection_revision, before.selection_revision);
+    EXPECT_EQ(after.content_revision, before.content_revision);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    EXPECT_FALSE(harness.editor.history().can_redo());
+  }
+
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  const auto picked_without_source = harness.controller.pick_context_menu_target(
+      harness.editor, harness.frame());
+  EXPECT_EQ(picked_without_source.active_object_id, target.modeling_object_id);
+  EXPECT_EQ(picked_without_source.active_face_id, clicked_face->face_id);
+  EXPECT_EQ(picked_without_source.selected_face_count, 1U);
+}
+
+TEST(ViewportInteractionControllerTests,
      ContextMenuPointLightBillboardPreservesSelectedHitSelection) {
     ViewportInteractionHarness harness;
     quader::QuaderCreatePointLightArgs first_args;

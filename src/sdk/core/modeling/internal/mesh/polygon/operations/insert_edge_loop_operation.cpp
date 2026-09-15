@@ -113,7 +113,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         first_split_face.normal_shading = face->normal_shading;
         first_split_face.texture_transform = face->texture_transform;
         if (!preserve_face_uvs(document, *face, candidate, first_split_face)) {
-            return OperationResult::failure("Edge loop insertion could not preserve the source face UVs.");
+            return OperationResult::failure("Edge loop insertion encountered invalid mesh data.");
         }
         split_faces.push_back(std::move(first_split_face));
 
@@ -124,7 +124,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         second_split_face.normal_shading = face->normal_shading;
         second_split_face.texture_transform = face->texture_transform;
         if (!preserve_face_uvs(document, *face, candidate, second_split_face)) {
-            return OperationResult::failure("Edge loop insertion could not preserve the source face UVs.");
+            return OperationResult::failure("Edge loop insertion encountered invalid mesh data.");
         }
         split_faces.push_back(std::move(second_split_face));
         const Edge inserted_edge = make_edge(entry_vertex, opposite_vertex);

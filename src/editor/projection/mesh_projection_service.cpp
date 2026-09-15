@@ -7,9 +7,11 @@
 #include "editor/projection/mesh_projection_service.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <string>
@@ -33,6 +35,37 @@ void replace_geometry_from_compiled(
 
 bool same_position(quader::QVec3 left, quader::QVec3 right) {
   return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+/** Checks stored attributes before attempting optional texture preservation. */
+bool valid_rebase_face(const quader_poly::Face &face,
+                       const quader_poly::document_internal::VertexLookupIndex &vertices) {
+  if (face.vertices.size() < 3U ||
+      (!face.uvs.empty() && face.uvs.size() != face.vertices.size()) ||
+      !quader_poly::valid_face_texture_transform(face.texture_transform)) {
+    return false;
+  }
+  for (const auto id : face.vertices) {
+    const auto *vertex = vertices.find(id);
+    if (vertex == nullptr || !std::isfinite(vertex->position.x) ||
+        !std::isfinite(vertex->position.y) || !std::isfinite(vertex->position.z)) {
+      return false;
+    }
+  }
+  return std::ranges::all_of(face.uvs, [](QVec2 uv) {
+    return std::isfinite(uv.x) && std::isfinite(uv.y);
+  });
+}
+
+/** Bounds the exceptional identity check when an n-gon changes loop anchors. */
+bool same_rebase_corner_ids(const quader_poly::Face &source,
+                            const quader_poly::Face &destination) {
+  if (source.vertices == destination.vertices) return true;
+  auto source_ids = source.vertices;
+  auto destination_ids = destination.vertices;
+  std::ranges::sort(source_ids);
+  std::ranges::sort(destination_ids);
+  return source_ids == destination_ids;
 }
 
 float triangle_orientation(quader::QVec3 a, quader::QVec3 b,
@@ -609,6 +642,10 @@ MeshProjectionService::rebase_sdk_document_texture_mapping(
         {.code = modeling::ErrorCode::ValidationFailed,
          .message = std::move(message)});
   };
+  if (!texture_mapping_is_valid({source_sampling}) ||
+      !texture_mapping_is_valid({destination_sampling})) {
+    return rejected("Combine Mesh requires finite nonsingular sampling transforms.");
+  }
   auto after = MeshProjectionService::polygon_document_from_sdk_document(
       transformed);
   if (!after.has_value()) {
@@ -630,20 +667,39 @@ MeshProjectionService::rebase_sdk_document_texture_mapping(
           "Combine Mesh source texture face is unavailable.");
     }
     const auto &source_face = *found->second;
+    if (source_face.vertices.size() < 3U ||
+        source_face.vertices.size() != face.vertices.size() ||
+        (!source_face.uvs.empty() && source_face.uvs.size() != source_face.vertices.size()) ||
+        face.uvs.size() != source_face.uvs.size() ||
+        !quader_poly::valid_face_texture_transform(source_face.texture_transform) ||
+        !quader_poly::valid_face_texture_transform(face.texture_transform)) {
+      return rejected("Combine Mesh found invalid face corner data.");
+    }
     const auto winding = reflected_geometry
         ? quader_poly::document_internal::FaceRebaseWinding::Reverse
         : quader_poly::document_internal::FaceRebaseWinding::Preserve;
     if (!quader_poly::document_internal::preserve_rebased_face_texture_triangulation(
             before, source_face, *after, face, winding, before_lookup,
             after_lookup)) {
-      return rejected(
-          "Combine Mesh cannot preserve this rebased face's texture interior.");
+      if (!valid_rebase_face(source_face, before_lookup) ||
+          !valid_rebase_face(face, after_lookup) ||
+          !same_rebase_corner_ids(source_face, face)) {
+        return rejected("Combine Mesh found invalid face corner data.");
+      }
+      if (reflected_geometry) {
+        quader_poly::document_internal::reverse_face_winding(
+            face, quader_poly::document_internal::FaceWindingChange::ReflectedGeometry);
+      }
     }
     const QVec3 before_normal = quader_poly::face_normal(before, source_face);
     const QVec3 after_normal = quader_poly::face_normal(*after, face);
     const auto carrier =
         quader_poly::face_texture_carrier(before, source_face, before_normal);
-    std::unordered_map<quader_poly::ElementId, QVec2> source_uvs;
+    struct SourceCorner {
+      QVec2 base;
+      QVec2 displayed;
+    };
+    std::unordered_map<quader_poly::ElementId, SourceCorner> source_uvs;
     source_uvs.reserve(source_face.vertices.size());
     for (std::size_t corner = 0; corner < source_face.vertices.size(); ++corner) {
       const auto id = source_face.vertices[corner];
@@ -658,9 +714,12 @@ MeshProjectionService::rebase_sdk_document_texture_mapping(
                             : source_face.uvs[corner];
       const QVec2 uv = quader_poly::apply_face_texture_transform(
           base, source_face.texture_transform);
-      source_uvs.emplace(id, quader_poly::evaluate_texture_mapping(
-                                  uv, vertex->position, before_normal, carrier,
-                                  from_source));
+      const QVec2 displayed = quader_poly::evaluate_texture_mapping(
+          uv, vertex->position, before_normal, carrier, from_source);
+      if (!std::isfinite(displayed.x) || !std::isfinite(displayed.y) ||
+          !source_uvs.emplace(id, SourceCorner{base, displayed}).second) {
+        return rejected("Combine Mesh found invalid source corner data.");
+      }
     }
     std::vector<QVec3> positions;
     std::vector<QVec2> desired;
@@ -674,14 +733,30 @@ MeshProjectionService::rebase_sdk_document_texture_mapping(
             "Combine Mesh texture corner correspondence was lost.");
       }
       positions.push_back(vertex->position);
-      desired.push_back(uv->second);
+      desired.push_back(uv->second.displayed);
     }
     auto solved = quader_poly::solve_face_texture_base_uvs(
         positions, desired, after_normal, face.texture_transform,
         from_destination);
     if (!solved.has_value()) {
-      return rejected(
-          "Combine Mesh cannot preserve this source's displayed texture mapping.");
+      // Keep the original authored chart when exact occurrence compensation
+      // is unavailable. Geometry does not depend on reproducing its UV interior.
+      std::vector<QVec2> retained;
+      retained.reserve(face.vertices.size());
+      for (const auto id : face.vertices) {
+        retained.push_back(source_uvs.at(id).base);
+      }
+      const auto retained_carrier = quader_poly::face_texture_carrier(
+          positions, retained, after_normal, face.texture_transform);
+      for (std::size_t index = 0; index < positions.size(); ++index) {
+        const QVec2 displayed = quader_poly::evaluate_texture_mapping(
+            quader_poly::apply_face_texture_transform(retained[index], face.texture_transform),
+            positions[index], after_normal, retained_carrier, from_destination);
+        if (!std::isfinite(displayed.x) || !std::isfinite(displayed.y)) {
+          return rejected("Combine Mesh would create non-finite texture coordinates.");
+        }
+      }
+      solved = std::move(retained);
     }
     face.uvs = std::move(*solved);
   }
@@ -756,12 +831,19 @@ MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
       return rejected("Transform candidate face identity is unavailable.");
     }
     auto &candidate = *found->second;
+    if (candidate.vertices.size() != face.vertices.size() ||
+        candidate.uvs.size() != face.uvs.size()) {
+      return rejected("Transform candidate face corner identities are invalid.");
+    }
     const auto previous_loop = candidate.vertices;
     if (!quader_poly::document_internal::preserve_rebased_face_texture_triangulation(
             *source, face, *destination, candidate,
             quader_poly::document_internal::FaceRebaseWinding::Preserve,
-            source_lookup, destination_lookup)) {
-      return rejected("Transform cannot preserve this face's texture interior.");
+            source_lookup, destination_lookup) &&
+        (!valid_rebase_face(face, source_lookup) ||
+         !valid_rebase_face(candidate, destination_lookup) ||
+         !same_rebase_corner_ids(face, candidate))) {
+      return rejected("Transform candidate face corner identities are invalid.");
     }
     if (candidate.vertices != previous_loop) {
       receipt.modified.faces.push_back(modeling::make_id<modeling::FaceTag>(face.id));

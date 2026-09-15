@@ -11,6 +11,7 @@
 #include "diagnostics/profile.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_context_menu_visibility.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
@@ -802,14 +803,14 @@ private:
 
       visibility_action = menu.addAction(localized(
           target_layer.visible ? "ui.layers.hide" : "ui.layers.show",
-          target_layer.visible ? "Hide This Layer" : "Show This Layer"));
+          target_layer.visible ? "Hide Layer" : "Show Layer"));
       visibility_action->setObjectName(
           target_layer.visible ? QStringLiteral("layers.action.hide")
                                : QStringLiteral("layers.action.show"));
 
       lock_action = menu.addAction(localized(
           target_layer.locked ? "ui.layers.unlock" : "ui.layers.lock",
-          target_layer.locked ? "Unlock This Layer" : "Lock This Layer"));
+          target_layer.locked ? "Unlock Layer" : "Lock Layer"));
       lock_action->setObjectName(
           target_layer.locked ? QStringLiteral("layers.action.unlock")
                               : QStringLiteral("layers.action.lock"));
@@ -817,7 +818,7 @@ private:
 
       add_selection_action = menu.addAction(localized(
           "ui.layers.add_selection",
-          "Add Selected Objects to This Layer"));
+          "Add Objects to Layer"));
       add_selection_action->setObjectName(
           QStringLiteral("layers.action.add_selection"));
       add_selection_action->setEnabled(
@@ -825,7 +826,7 @@ private:
 
       remove_selection_action = menu.addAction(localized(
           "ui.layers.remove_selection",
-          "Remove Selected Objects from This Layer"));
+          "Remove Objects from Layer"));
       remove_selection_action->setObjectName(
           QStringLiteral("layers.action.remove_selection"));
       remove_selection_action->setEnabled(
@@ -833,17 +834,18 @@ private:
       menu.addSeparator();
 
       empty_action =
-          menu.addAction(localized("ui.layers.empty", "Empty This Layer"));
+          menu.addAction(localized("ui.layers.empty", "Empty Layer"));
       empty_action->setObjectName(QStringLiteral("layers.action.empty"));
       empty_action->setEnabled(!layer_by_id_.at(id).members.empty());
 
       delete_action = menu.addAction(
           selected.size() > 1
               ? localized("ui.layers.delete_multiple",
-                          "Delete Selected Layers")
-              : localized("ui.layers.delete", "Delete Selected Layer"));
+                          "Delete Layers")
+              : localized("ui.layers.delete", "Delete Layer"));
       delete_action->setObjectName(QStringLiteral("layers.action.delete"));
       delete_action->setEnabled(!selected.empty());
+      hide_unavailable_context_menu_actions(menu);
     }
 
     const std::uint64_t menu_generation = runtime_binding_generation_;

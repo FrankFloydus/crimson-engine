@@ -48,7 +48,8 @@ private:
 std::optional<quader::QVec2> sample_face_base_uv(
     const Document& document, const Face& face, quader::QVec3 position);
 // Retains exact authored corners and interpolates newly inserted corners in
-// that face's own chart. Failure leaves the destination unchanged.
+// that face's own chart, falling back to its closest sample off the source surface.
+// Malformed UV arrays or vertices needed for new samples fail without changing the destination.
 bool preserve_face_uvs(const Document& source_document, const Face& source_face,
     const Document& destination_document, Face& destination_face);
 bool face_vertex_uv_is_redundant(

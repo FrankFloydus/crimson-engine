@@ -3161,22 +3161,18 @@ TEST(UiLayoutGuardrailTests,
                                    after_active_tool_call),
                   ".expected_generation = input_binding_generation");
 
-  const std::size_t context_material_query =
-      input.find("project_material_for_face(");
-  const std::size_t context_material_query_gate = input.find(
-      "runtime_binding_generation_ != input_binding_generation",
-      context_material_query);
-  const std::size_t context_material_query_result_use =
-      input.find("if (material.ok())", context_material_query);
   const std::size_t context_target_pick =
-      input.find("pick_context_menu_target(", context_material_query);
-  ASSERT_NE(context_material_query, std::string::npos);
-  ASSERT_NE(context_material_query_gate, std::string::npos);
-  ASSERT_NE(context_material_query_result_use, std::string::npos);
+      input.find("pick_context_menu_target(");
+  const std::size_t context_target_gate = input.find(
+      "runtime_binding_generation_ != input_binding_generation",
+      context_target_pick);
+  const std::size_t context_actions =
+      input.find("editor.modeling().available_action_set(query)", context_target_pick);
   ASSERT_NE(context_target_pick, std::string::npos);
-  EXPECT_LT(context_material_query, context_material_query_gate);
-  EXPECT_LT(context_material_query_gate, context_material_query_result_use);
-  EXPECT_LT(context_material_query_gate, context_target_pick);
+  ASSERT_NE(context_target_gate, std::string::npos);
+  ASSERT_NE(context_actions, std::string::npos);
+  EXPECT_LT(context_target_pick, context_target_gate);
+  EXPECT_LT(context_target_gate, context_actions);
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -3505,7 +3501,6 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_viewport_context_menu.hpp");
   const std::string presenter =
       read_source_file("src/ui/qt_viewport_context_menu.cpp");
-  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
   const std::string interaction = read_source_file(
       "src/editor/viewport/viewport_interaction_controller.cpp");
 
@@ -3591,19 +3586,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(presenter, "QStringLiteral(\"RMouse\")");
   expect_contains(presenter, "QStringLiteral(\"LMouse\")");
   expect_missing(presenter, "setShortcut(");
-  expect_contains(presenter, "menu.addMenu(");
-  expect_contains(presenter, "viewport_context_mesh_data_submenu");
-  expect_contains(presenter, "viewport_context_topology_submenu");
-  expect_contains(presenter, "viewport_context_merge_submenu");
-  expect_contains(presenter, "viewport_context_normals_submenu");
-  expect_contains(presenter, "viewport_context_arrange_submenu");
   expect_contains(presenter,
                   "viewport_context_menu_action_disposition(mode,");
   expect_contains(presenter, "find_command_presentation(command_id)");
   expect_contains(presenter, "QuaderSelectionMode::Group");
-  expect_contains(presenter,
-                  "quader_command::kSceneLayersRemoveSelection");
-  expect_contains(presenter, "\"scene.layers.remove_selection\"");
   expect_contains(presenter, "input_router.set_selection_mode(");
   expect_contains(presenter, "menu.addSeparator()");
   expect_contains(
@@ -3612,24 +3598,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(presenter, "palette(mid)");
   expect_missing(presenter, "QMenu::item");
   expect_missing(presenter, "QApplication::setStyleSheet(");
-  expect_contains(presenter,
-                  "quader_command::kViewportFrameSelection");
   expect_missing(presenter, "\"viewport.material.sample_face\"");
   expect_missing(presenter, "editor.project_assets().set_active_material(");
   expect_missing(presenter, "kApplyMaterial");
-  expect_contains(presenter,
-                  "open_material_editor(*material_under_mouse)");
   expect_missing(presenter, "show_material_browser");
   expect_contains(presenter, "quader_command::kCutSelection");
   expect_contains(presenter, "quader_command::kCopySelection");
   expect_contains(presenter, "quader_command::kPasteSelection");
-  expect_contains(panel_header, "set_open_material_editor_callback(");
-  expect_contains(panel_header, "std::function<void(ProjectAssetId)>");
-  expect_contains(panel, "open_material_editor_callback_");
-  expect_contains(ui_system,
-                  "viewport_panel_->set_open_material_editor_callback(");
-  expect_contains(ui_system, "[this](ProjectAssetId id)");
-  expect_contains(ui_system, "open_standard_material(id.str())");
   expect_missing(presenter_header, "ModelingSessionService");
   expect_missing(presenter, "ModelingSessionService");
   expect_missing(presenter, "modeling.context_actions(");

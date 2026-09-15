@@ -52,6 +52,17 @@ file except through prior written authorization from Francesco Di Blasi.
 - Reuse localization, settings descriptors, models, delegates, and signals. Call base event handlers
   on unhandled paths. Input follows [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md): Qt adaptation,
   canonical keybindings, then semantic viewport frames. Do not add a parallel `QAction` shortcut map.
+- The viewport RMB menu presents applicable modeling commands directly, separated by dividers.
+  Apply the explicit operand scope in `viewport_context_menu_policy` to catalog, supplemental,
+  and fixed actions alike before checking native availability. Activation eligibility is not menu
+  relevance: component/control selections must not expose whole-object operations. All toolbar
+  tool launchers stay outside RMB; selection operations with previews remain eligible.
+  Clipboard requires supported mesh/instance targets. Supplement
+  from canonical presentation metadata only on popup opening, deduplicate stable command IDs,
+  and keep disabled commands out. General selection, view, and UV-editing commands stay outside
+  this menu. Its three face material/texture transfers
+  retain the selected source/destinations separately from the clicked face and reuse their public
+  modeling API routes; the nested menu's revision fence protects both targets.
 - `QtStatusMessage` owns error contrast and the portable Qt system alert. Announce new failures once;
   unchanged frames, localization and runtime rebinding must not replay sounds. `UISystem` retains
   direct notifications separately from command status, with errors taking priority over tool hints.

@@ -64,11 +64,11 @@ TEST(FaceTextureWrapTests, SharedEdgeContinuesTheLocalChartOfANonAffineSource) {
   ASSERT_EQ(output.faces[1].uvs.size(), 4U);
   // The common edge's two samples and source vertex 4 define the local chart.
   // It preserves the whole seam while unfolding U=1-z/4, V=y/3+z/4 onto +X.
-  constexpr std::array<Vec2, 4> expected{{
+  constexpr std::array<Vec2, 4> kExpected{{
       {1.0F, 0.0F}, {1.5F, -0.5F}, {1.5F, 0.5F}, {1.0F, 1.0F}}};
-  for (std::size_t corner = 0; corner < expected.size(); ++corner) {
-    EXPECT_NEAR(output.faces[1].uvs[corner].x, expected[corner].x, 1.0e-6F);
-    EXPECT_NEAR(output.faces[1].uvs[corner].y, expected[corner].y, 1.0e-6F);
+  for (std::size_t corner = 0; corner < kExpected.size(); ++corner) {
+    EXPECT_NEAR(output.faces[1].uvs[corner].x, kExpected[corner].x, 1.0e-6F);
+    EXPECT_NEAR(output.faces[1].uvs[corner].y, kExpected[corner].y, 1.0e-6F);
   }
   EXPECT_EQ(serialize_qdr_authored_topology(document).or_throw(), before);
   const FaceTextureTransferFace repeated_source{

@@ -16,6 +16,17 @@ under `neutral/include/quader/modeling/neutral/polygon`; the public SDK facade u
 Owns topology and stable component IDs, material slots, generated/explicit UVs and texture
 transforms, document snapshots/patches, operations, and document-local picking geometry.
 
+Geometry edits preserve exact texture mapping where the resulting topology can represent it.
+When it cannot, retain the available boundary/corner UVs or use finite inherited mapping;
+an interpolation mismatch alone must not reject valid geometry. Connectivity, geometry and
+invalid-data failures remain errors. Operations whose purpose is editing UVs still validate
+the requested UV result strictly.
+
+Combine Faces checks that the output triangulation covers the full 3D boundary,
+including folds that collapse in a planar projection. The operation and cached
+command availability share this geometry check; a nonempty triangle list alone
+does not establish a valid merge.
+
 ## Internal Decomposition
 
 Both targets use `QUADER_CANONICAL_POLYGON_SOURCES` in root `cmake/QuaderModeling.cmake`.

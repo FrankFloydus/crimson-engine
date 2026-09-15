@@ -30,6 +30,8 @@ public:
     }
 
 private:
+  [[nodiscard]] ModelingCommandAvailability custom_availability(
+      const ModelingCommandExecutionContext &context) const override;
   ModelingCommandResult execute_custom_command(
       ModelingCommandExecutionContext &context) const override;
 };

@@ -1885,7 +1885,7 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
             const Face* original_face = find_face(document, face.id);
             if (original_face == nullptr ||
                 !preserve_face_uvs(document, *original_face, build.document, rebuilt_face)) {
-                build.message = "Knife could not preserve the source face UVs.";
+                build.message = "Knife encountered invalid mesh data.";
                 return build;
             }
             rebuilt_faces.push_back(std::move(rebuilt_face));
@@ -2067,7 +2067,7 @@ KnifeSegmentCandidate build_knife_segment_candidate(
     if (original_face == nullptr ||
         !preserve_face_uvs(document, *original_face, build.document, first_face) ||
         !preserve_face_uvs(document, *original_face, build.document, second_face)) {
-        build.message = "Knife segment could not preserve the source face UVs.";
+        build.message = "Knife segment encountered invalid mesh data.";
         return build;
     }
 

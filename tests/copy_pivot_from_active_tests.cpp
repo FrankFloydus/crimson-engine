@@ -1737,9 +1737,10 @@ TEST(CopyPivotFromActiveTests,
      ActiveModelingPreviewBlocksCopyWithoutDiscardingThePreview) {
   CopyPivotHarness harness;
   const quader::QuaderModelingObjectRef source =
-      create_asymmetric_mesh(harness, "Preview Guard Source");
+      create_box_with_bounds(harness, "Preview Guard Source", {-1.0f, -1.0f, -1.0f},
+                             {2.0f, 1.0f, 1.0f});
   const quader::QuaderModelingObjectRef target =
-      create_asymmetric_mesh(harness, "Preview Guard Target");
+      create_box(harness, "Preview Guard Target");
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects({source.entity, target.entity}, source.entity)
                   .ok());
@@ -1802,7 +1803,8 @@ TEST(CopyPivotFromActiveTests,
      ActivePreviewRestoreFailureRollsBackDirectCopyWithoutHistory) {
   CopyPivotHarness harness;
   const quader::QuaderModelingObjectRef source =
-      create_asymmetric_mesh(harness, "Rollback Source");
+      create_box_with_bounds(harness, "Rollback Source", {-1.0f, -1.0f, -1.0f},
+                             {2.0f, 1.0f, 1.0f});
   const quader::QuaderModelingObjectRef target =
       create_box(harness, "Rollback Target");
   const quader::QuaderModelingObjectRef unselected_sharer =
@@ -1866,7 +1868,8 @@ TEST(CopyPivotFromActiveTests,
      ActivePreviewRestoreFailureRollsBackUndoAndKeepsUndoRetryable) {
   CopyPivotHarness harness;
   const quader::QuaderModelingObjectRef source =
-      create_asymmetric_mesh(harness, "Undo Rollback Source");
+      create_box_with_bounds(harness, "Undo Rollback Source", {-1.0f, -1.0f, -1.0f},
+                             {2.0f, 1.0f, 1.0f});
   const quader::QuaderModelingObjectRef target =
       create_box(harness, "Undo Rollback Target");
   const quader::QuaderModelingObjectRef unselected_sharer =
@@ -1943,7 +1946,8 @@ TEST(CopyPivotFromActiveTests,
      ActivePreviewRestoreFailureRollsBackRedoAndKeepsRedoRetryable) {
   CopyPivotHarness harness;
   const quader::QuaderModelingObjectRef source =
-      create_asymmetric_mesh(harness, "Redo Rollback Source");
+      create_box_with_bounds(harness, "Redo Rollback Source", {-1.0f, -1.0f, -1.0f},
+                             {2.0f, 1.0f, 1.0f});
   const quader::QuaderModelingObjectRef target =
       create_box(harness, "Redo Rollback Target");
   const quader::QuaderModelingObjectRef unselected_sharer =

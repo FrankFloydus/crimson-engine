@@ -7,6 +7,7 @@
 #include "operation_validation_test_helpers.hpp"
 #include "test_support.hpp"
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
@@ -921,6 +922,46 @@ TEST(QdrDocumentOperationBevelEdgesTests, RetainedSurfacesKeepDistinctAuthoredCh
         }
         qdr_test::expect_valid_polygon_document_after_success(document, result);
     }
+}
+
+TEST(QdrDocumentOperationBevelEdgesTests, WarpedSourceSurfacesDoNotRejectBevelForUvInterpolation) {
+    CubePrimitiveSpec spec;
+    spec.width = 8.0F;
+    spec.height = 8.0F;
+    spec.depth = 8.0F;
+    Document document = make_cube(spec);
+    document.vertices.front().position.z += 0.5F;
+    for (Face& face : document.faces) {
+        face.uvs = {{2.0F, 3.0F}, {6.0F, 4.0F}, {9.0F, 10.0F}, {1.0F, 8.0F}};
+    }
+    const Document original = document;
+    Selection selection = edge_selection_for_edge(document_edges(document).front());
+    EdgeBevelSettings settings;
+    settings.width = 0.5F;
+
+    const OperationResult result = bevel_selected_edges(document, selection, settings);
+
+    ASSERT_TRUE(result.changed) << result.message;
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+    std::size_t projected_corners = 0U;
+    for (const Face& source : original.faces) {
+        const Face* retained = find_face(document, source.id);
+        ASSERT_NE(retained, nullptr);
+        ASSERT_EQ(retained->uvs.size(), retained->vertices.size());
+        const document_internal::FaceUvSampler sampler(original, source);
+        for (std::size_t corner = 0U; corner < retained->vertices.size(); ++corner) {
+            const auto id = retained->vertices[corner];
+            const Vertex* vertex = find_vertex(document, id);
+            ASSERT_NE(vertex, nullptr);
+            EXPECT_TRUE(std::isfinite(retained->uvs[corner].x));
+            EXPECT_TRUE(std::isfinite(retained->uvs[corner].y));
+            if (std::ranges::find(source.vertices, id) == source.vertices.end() &&
+                !sampler.sample(vertex->position).has_value()) {
+                ++projected_corners;
+            }
+        }
+    }
+    EXPECT_GT(projected_corners, 0U);
 }
 
 TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopSquareProfileKeepsClosedOutwardQuads) {

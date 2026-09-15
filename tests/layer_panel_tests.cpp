@@ -531,15 +531,21 @@ TEST(LayerPanelTests,
     }
     EXPECT_EQ(rename_action->text(), QStringLiteral("Rename Layer"));
     EXPECT_EQ(color_action->text(), QStringLiteral("Choose Layer Color"));
-    EXPECT_EQ(visibility_action->text(), QStringLiteral("Hide This Layer"));
-    EXPECT_EQ(lock_action->text(), QStringLiteral("Lock This Layer"));
+    EXPECT_EQ(visibility_action->text(), QStringLiteral("Hide Layer"));
+    EXPECT_EQ(lock_action->text(), QStringLiteral("Lock Layer"));
     EXPECT_EQ(add_action->text(),
-              QStringLiteral("Add Selected Objects to This Layer"));
+              QStringLiteral("Add Objects to Layer"));
     EXPECT_EQ(remove_action->text(),
-              QStringLiteral("Remove Selected Objects from This Layer"));
-    EXPECT_EQ(empty_action->text(), QStringLiteral("Empty This Layer"));
+              QStringLiteral("Remove Objects from Layer"));
+    EXPECT_EQ(add_action->isVisible(),
+              editor.layers().can_add_selection_to(first_layer));
+    EXPECT_EQ(remove_action->isVisible(),
+              editor.layers().can_remove_selection(first_layer));
+    EXPECT_EQ(empty_action->isVisible(),
+              !editor.layers().layer(first_layer)->members.empty());
+    EXPECT_EQ(empty_action->text(), QStringLiteral("Empty Layer"));
     EXPECT_EQ(delete_action->text(),
-              QStringLiteral("Delete Selected Layers"));
+              QStringLiteral("Delete Layers"));
     EXPECT_EQ(tree->selectionModel()->selectedRows(1).size(), 2);
     menu->setActiveAction(visibility_action);
     QKeyEvent accept_action(QEvent::KeyPress, Qt::Key_Return,

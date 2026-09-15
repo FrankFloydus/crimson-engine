@@ -4579,6 +4579,14 @@ TEST(QtMainMenuTests,
   ASSERT_NE(mirror_selection_x, nullptr);
   ASSERT_NE(recalculate_normals, nullptr);
   ASSERT_NE(shade_faces_smooth, nullptr);
+  ASSERT_NE(create_outer_hull, nullptr);
+  ASSERT_NE(half_cut, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(mesh_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(create_outer_hull->isVisible());
+  EXPECT_FALSE(create_outer_hull->isEnabled());
+  EXPECT_TRUE(half_cut->isVisible());
+  EXPECT_TRUE(half_cut->isEnabled());
   EXPECT_LT(mesh_menu->actions().indexOf(duplicate_meshes),
             mesh_menu->actions().indexOf(combine_mesh));
   EXPECT_LT(edge_menu->actions().indexOf(merge_edges),
@@ -4905,11 +4913,11 @@ TEST(QtMainMenuTests,
   ASSERT_TRUE(QMetaObject::invokeMethod(uv_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_TRUE(mirror_selection_x->text().startsWith(
-      QStringLiteral("Specchia selezione lungo l'asse X")));
+      QStringLiteral("Specchia lungo X")));
   EXPECT_TRUE(recalculate_normals->text().startsWith(
-      QStringLiteral("Ricalcola normali di mesh o facce selezionate")));
-  EXPECT_TRUE(shade_faces_smooth->text().startsWith(QStringLiteral(
-      "Imposta ombreggiatura morbida su mesh o facce selezionate")));
+      QStringLiteral("Ricalcola normali")));
+  EXPECT_TRUE(shade_faces_smooth->text().startsWith(
+      QStringLiteral("Ombreggia morbido")));
   menu.rebuild();
   EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_mesh"))->title(),
             QStringLiteral("Me&sh"));
@@ -5149,7 +5157,7 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   EXPECT_TRUE(local_visibility_action->isEnabled());
   EXPECT_TRUE(local_visibility_action->shortcut().isEmpty());
   EXPECT_EQ(local_visibility_action->text(),
-            QStringLiteral("Toggle Local Visibility\tBackslash"));
+            QStringLiteral("Toggle Local View\tBackslash"));
   auto *material_browser_action =
       menu_bar.findChild<QAction *>(QStringLiteral("action_material_browser"));
   ASSERT_NE(material_browser_action, nullptr);

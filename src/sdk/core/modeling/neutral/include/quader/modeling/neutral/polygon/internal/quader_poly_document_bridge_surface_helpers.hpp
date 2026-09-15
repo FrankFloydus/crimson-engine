@@ -47,6 +47,10 @@ bool assign_merged_face_texture_boundary(const Document& source_document,
     std::span<const ElementId> source_face_ids, Face& merged_face);
 bool merged_face_preserves_source_textures(const Document& source_document,
     std::span<const ElementId> source_face_ids, const Face& merged_face);
+// Requires the compiled triangle boundary to follow the complete 3D face perimeter;
+// triangles may span omitted corners only along an ordered straight boundary segment.
+bool face_triangulation_preserves_boundary(const Document& document, const Face& face,
+    const VertexLookupIndex& vertex_lookup);
 std::vector<ElementId> face_vertices_between(const Face& face, std::size_t start_index, std::size_t end_index);
 std::vector<ElementId> unique_valid_face_loop(std::vector<ElementId> vertices);
 std::optional<std::size_t> directed_face_edge_index(const Face& face, ElementId from_id, ElementId to_id);

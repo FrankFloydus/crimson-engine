@@ -181,13 +181,13 @@ TEST(QdrDocumentOperationNormalShadingTests, HardAndSoftNormalEdgeOperationsSpli
 
 TEST(QdrDocumentOperationNormalShadingTests,
      EdgeNormalCommandsNeverRewriteIncidentFaceShading) {
-    constexpr std::array modes {
+    constexpr std::array kModes {
         SurfaceShading::Authored,
         SurfaceShading::Flat,
         SurfaceShading::Smooth,
     };
-    for (const SurfaceShading first : modes) {
-        for (const SurfaceShading second : modes) {
+    for (const SurfaceShading first : kModes) {
+        for (const SurfaceShading second : kModes) {
             BentCornerFixture fixture = make_bent_corner_document();
             fixture.document.faces[0].normal_shading = first;
             fixture.document.faces[1].normal_shading = second;
@@ -284,10 +284,10 @@ TEST(QdrDocumentOperationNormalShadingTests,
     const CompiledMesh mesh = compile_document(fixture.document);
 
     ASSERT_EQ(mesh.vertices.size(), 8U);
-    constexpr quader::QVec3 expected { 0.2588190451F, 0.0F, 0.9659258263F };
+    constexpr quader::QVec3 kExpected { 0.2588190451F, 0.0F, 0.9659258263F };
     for (const std::size_t corner : std::array<std::size_t, 4> { 1U, 2U, 4U, 7U }) {
         EXPECT_TRUE(qdr_test::vec_nearly_equal(mesh.vertices[corner].normal,
-                                              expected));
+                                              kExpected));
     }
 }
 
@@ -301,7 +301,7 @@ TEST(QdrDocumentOperationNormalShadingTests,
         const CompiledMesh mesh = compile_document(fixture.document);
 
         ASSERT_EQ(mesh.vertices.size(), 8U);
-        constexpr quader::QVec3 expected_fan {
+        constexpr quader::QVec3 kExpectedFan {
             0.2588190451F, 0.0F, 0.9659258263F
         };
         const quader::QVec3 flat_normal = face_normal(
@@ -318,7 +318,7 @@ TEST(QdrDocumentOperationNormalShadingTests,
         }
         for (const std::size_t corner : automatic_corners) {
             EXPECT_TRUE(qdr_test::vec_nearly_equal(mesh.vertices[corner].normal,
-                                                  expected_fan));
+                                                  kExpectedFan));
         }
     }
 }
@@ -326,18 +326,18 @@ TEST(QdrDocumentOperationNormalShadingTests,
 TEST(QdrDocumentOperationNormalShadingTests,
      LoopInsertionRegeneratesAutomaticFansAndPreservesExplicitOverrides)
 {
-    constexpr std::array edge_modes {
+    constexpr std::array kEdgeModes {
         EdgeNormalMode::Default,
         EdgeNormalMode::Hard,
         EdgeNormalMode::Soft,
     };
-    constexpr std::array face_modes {
+    constexpr std::array kFaceModes {
         SurfaceShading::Authored,
         SurfaceShading::Flat,
         SurfaceShading::Smooth,
     };
-    for (const EdgeNormalMode edge_mode : edge_modes) {
-        for (const SurfaceShading face_mode : face_modes) {
+    for (const EdgeNormalMode edge_mode : kEdgeModes) {
+        for (const SurfaceShading face_mode : kFaceModes) {
             BentCornerFixture fixture = make_bent_corner_document();
             set_bend_angle(fixture, 30.0F);
             fixture.document.faces[0].normal_shading = face_mode;

@@ -1989,7 +1989,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     for (Face& face : candidate.faces) {
         if (const Face* source_face = find_face(document, face.id);
             source_face != nullptr && !preserve_face_uvs(document, *source_face, candidate, face)) {
-            return OperationResult::failure("Bevel could not preserve the source texture mapping.");
+            return OperationResult::failure("Bevel encountered invalid mesh data.");
         }
     }
     preserve_bevel_edge_descendant_normal_modes(document, candidate);

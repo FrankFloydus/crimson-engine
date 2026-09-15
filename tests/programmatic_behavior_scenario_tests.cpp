@@ -157,7 +157,7 @@ quader::QuaderPolygonDocument uv_peel_strip_document() {
 
 quader_poly::Document uv_peel_cylinder_document() {
   // Saved 32-sided cylinder coordinates and split-face IDs, independent of a scene file.
-  constexpr std::array<quader::QVec2, 32> ring{{
+  constexpr std::array<quader::QVec2, 32> kRing{{
       {0.5F, 0.0F},
       {0.49039262533187866F, 0.09754516184329987F},
       {0.4619397521018982F, 0.19134172797203064F},
@@ -190,9 +190,9 @@ quader_poly::Document uv_peel_cylinder_document() {
       {0.41573479771614075F, -0.27778515219688416F},
       {0.4619397819042206F, -0.19134171307086945F},
       {0.49039265513420105F, -0.09754511713981628F}}};
-  constexpr std::array<std::size_t, 32> middle_stations{{
+  constexpr std::array<std::size_t, 32> kMiddleStations{{
       10, 9, 11, 8, 12, 7, 13, 6, 14, 5, 15, 4, 16, 3, 17, 2, 18, 1, 19, 0, 20, 31, 21, 30, 22, 29, 23, 28, 24, 27, 25, 26}};
-  constexpr std::array<std::array<quader_poly::ElementId, 5>, 64> side_faces{{
+  constexpr std::array<std::array<quader_poly::ElementId, 5>, 64> kSideFaces{{
       {{10, 11, 10, 66, 65}},
       {{35, 43, 65, 66, 42}},
       {{11, 43, 44, 67, 65}},
@@ -258,13 +258,13 @@ quader_poly::Document uv_peel_cylinder_document() {
       {{26, 58, 59, 96, 95}},
       {{66, 26, 95, 96, 27}}}};
   quader_poly::Document document;
-  constexpr std::array heights{-0.125F, 0.875F, 0.375F};
-  for (std::size_t rail = 0; rail < heights.size(); ++rail) {
-    for (std::size_t index = 0; index < ring.size(); ++index) {
-      const auto station = rail == 2U ? middle_stations[index] : index;
+  constexpr std::array kHeights{-0.125F, 0.875F, 0.375F};
+  for (std::size_t rail = 0; rail < kHeights.size(); ++rail) {
+    for (std::size_t index = 0; index < kRing.size(); ++index) {
+      const auto station = rail == 2U ? kMiddleStations[index] : index;
       document.vertices.push_back({
-          static_cast<quader_poly::ElementId>(rail * ring.size() + index + 1U),
-          {ring[station].x, heights[rail], ring[station].y}});
+          static_cast<quader_poly::ElementId>(rail * kRing.size() + index + 1U),
+          {kRing[station].x, kHeights[rail], kRing[station].y}});
     }
   }
   quader_poly::Face bottom{.id = 33};
@@ -272,12 +272,12 @@ quader_poly::Document uv_peel_cylinder_document() {
   for (quader_poly::ElementId index = 0; index < 32; ++index) {
     bottom.vertices.push_back(index + 1);
     top.vertices.push_back(64 - index);
-    bottom.uvs.push_back({ring[index].x * 0.03125F, -ring[index].y * 0.03125F});
-    top.uvs.push_back({ring[31U - index].x * 0.03125F, ring[31U - index].y * 0.03125F});
+    bottom.uvs.push_back({kRing[index].x * 0.03125F, -kRing[index].y * 0.03125F});
+    top.uvs.push_back({kRing[31U - index].x * 0.03125F, kRing[31U - index].y * 0.03125F});
   }
   bottom.texture_transform.scale = top.texture_transform.scale = {0.125F, 0.125F};
   document.faces = {std::move(bottom), std::move(top)};
-  for (const auto &entry : side_faces) {
+  for (const auto &entry : kSideFaces) {
     document.faces.push_back({.id = entry[0],
         .vertices = {entry[1], entry[2], entry[3], entry[4]},
         .uvs = {{0.0F, 0.0F}, {0.125F, 0.0F}, {0.125F, 0.125F}, {0.0F, 0.125F}},
@@ -306,7 +306,7 @@ quader_poly::Document uv_peel_unsplit_cylinder_document() {
 }
 
 quader_poly::Document uv_peel_arch_document(bool split_depth) {
-  constexpr std::array angles{
+  constexpr std::array kAngles{
       0.0, 0.12, 0.35, 0.64, 1.02, 1.47, 1.94, 2.38, 2.77,
       3.14159265358979323846};
   const std::vector<quader::QVec2> profile = split_depth
@@ -317,18 +317,18 @@ quader_poly::Document uv_peel_arch_document(bool split_depth) {
                                  {3.0F, 0.75F}, {3.0F, -0.75F}};
   quader_poly::Document document;
   for (const auto point : profile) {
-    for (const double angle : angles) {
+    for (const double angle : kAngles) {
       (void)quader_poly::add_vertex(document,
           {point.x * static_cast<float>(std::cos(angle)),
            point.x * static_cast<float>(std::sin(angle)), point.y});
     }
   }
-  const auto vertex_id = [&angles](std::size_t rail, std::size_t station) {
-    return static_cast<quader_poly::ElementId>(rail * angles.size() + station + 1U);
+  const auto vertex_id = [&kAngles](std::size_t rail, std::size_t station) {
+    return static_cast<quader_poly::ElementId>(rail * kAngles.size() + station + 1U);
   };
   for (std::size_t rail = 0; rail < profile.size(); ++rail) {
     const auto next_rail = (rail + 1U) % profile.size();
-    for (std::size_t station = 0; station + 1U < angles.size(); ++station) {
+    for (std::size_t station = 0; station + 1U < kAngles.size(); ++station) {
       (void)quader_poly::add_face(document,
           std::array{vertex_id(rail, station), vertex_id(next_rail, station),
                      vertex_id(next_rail, station + 1U), vertex_id(rail, station + 1U)},
@@ -339,7 +339,7 @@ quader_poly::Document uv_peel_arch_document(bool split_depth) {
   std::vector<quader_poly::ElementId> last_cap;
   for (std::size_t rail = 0; rail < profile.size(); ++rail) {
     first_cap.push_back(vertex_id(profile.size() - 1U - rail, 0U));
-    last_cap.push_back(vertex_id(rail, angles.size() - 1U));
+    last_cap.push_back(vertex_id(rail, kAngles.size() - 1U));
   }
   (void)quader_poly::add_face(document, first_cap, 1U);
   (void)quader_poly::add_face(document, last_cap, 2U);
@@ -497,8 +497,8 @@ void expect_uv_peel_arch_operation(bool split_depth) {
   quader::QuaderComponentSelectionArgs guide{
       .object = object, .kind = quader::QuaderComponentKind::Edge,
       .active = {.object = object, .kind = quader::QuaderComponentKind::Edge,
-                 .edge_a = split_depth ? 11U : 5U,
-                 .edge_b = split_depth ? 12U : 15U}};
+                 .edge_a = split_depth ? 11 : 5,
+                 .edge_b = split_depth ? 12 : 15}};
   if (split_depth) {
     for (quader::QuaderElementId station = 0; station < 9U; ++station) {
       guide.edges.emplace_back(11U + station, 12U + station);
@@ -2229,15 +2229,15 @@ TEST(ProgrammaticBehaviorScenarioTests,
   expected_sampling.values[13] = 0.1249997615814209F;
   expected_sampling.values[14] = -18.0F;
   EXPECT_EQ(entity_before->texture_sampling_from_local->values, expected_sampling.values);
-  constexpr std::array<quader::QuaderElementId, 32> middle_ring{
+  constexpr std::array<quader::QuaderElementId, 32> kMiddleRing{
       84, 82, 80, 78, 76, 74, 72, 70, 68, 66, 65, 67, 69, 71, 73, 75,
       77, 79, 81, 83, 85, 87, 89, 91, 93, 95, 96, 94, 92, 90, 88, 86};
   quader::QuaderComponentSelectionArgs guide{
       .object = object, .kind = quader::QuaderComponentKind::Edge,
       .active = {.object = object, .kind = quader::QuaderComponentKind::Edge,
                  .edge_a = 65, .edge_b = 66}};
-  for (std::size_t index = 0; index < middle_ring.size(); ++index) {
-    guide.edges.emplace_back(middle_ring[index], middle_ring[(index + 1U) % middle_ring.size()]);
+  for (std::size_t index = 0; index < kMiddleRing.size(); ++index) {
+    guide.edges.emplace_back(kMiddleRing[index], kMiddleRing[(index + 1U) % kMiddleRing.size()]);
   }
   ASSERT_TRUE(api.selection().select_components(guide).ok());
   const auto settings = api.modeling().uv_peel_settings();
@@ -2296,7 +2296,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
     circumference += std::hypot(static_cast<double>(a.x) - b.x,
                                 static_cast<double>(a.z) - b.z);
   }
-  constexpr float tolerance = 1.0e-5F;
+  constexpr float kTolerance = 1.0e-5F;
   std::optional<std::array<float, 2>> seam_position;
   std::size_t seam_rows = 0;
   float minimum_v = std::numeric_limits<float>::infinity();
@@ -2310,12 +2310,12 @@ TEST(ProgrammaticBehaviorScenarioTests,
       maximum_u = std::max(maximum_u, uv.x);
       minimum_v = std::min(minimum_v, uv.y);
       maximum_v = std::max(maximum_v, uv.y);
-      EXPECT_NEAR(uv.y, samples.front().y, tolerance);
-      EXPECT_NEAR(std::abs(uv.y), std::abs(position[1] - 0.375F) * 0.5F, tolerance);
+      EXPECT_NEAR(uv.y, samples.front().y, kTolerance);
+      EXPECT_NEAR(std::abs(uv.y), std::abs(position[1] - 0.375F) * 0.5F, kTolerance);
     }
     if (maximum_u - minimum_u > circumference * 0.25) {
       ++seam_rows;
-      EXPECT_NEAR(maximum_u - minimum_u, circumference * 0.5, tolerance);
+      EXPECT_NEAR(maximum_u - minimum_u, circumference * 0.5, kTolerance);
       const std::array xz{position[0], position[2]};
       if (seam_position.has_value()) {
         EXPECT_EQ(xz, *seam_position);
@@ -2323,12 +2323,12 @@ TEST(ProgrammaticBehaviorScenarioTests,
         seam_position = xz;
       }
     } else {
-      EXPECT_NEAR(maximum_u, minimum_u, tolerance);
+      EXPECT_NEAR(maximum_u, minimum_u, kTolerance);
     }
   }
   EXPECT_EQ(seam_rows, 3U);
-  EXPECT_NEAR(minimum_v, -0.25F, tolerance);
-  EXPECT_NEAR(maximum_v, 0.25F, tolerance);
+  EXPECT_NEAR(minimum_v, -0.25F, kTolerance);
+  EXPECT_NEAR(maximum_v, 0.25F, kTolerance);
   EXPECT_EQ(api.revisions().modeling_selection_revision, selection_revision);
   s.then().selection().mode(quader::QuaderSelectionMode::Edge).edge_count(32).active_alias("cylinder");
   EXPECT_EQ(api.query().entity(object.entity)->texture_sampling_from_local->values,

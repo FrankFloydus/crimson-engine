@@ -109,6 +109,32 @@ void append_edit_actions(std::vector<ModelingActionItem> &actions,
   }
 }
 
+bool topology_impossible(const ModelingSelectionSummary &summary,
+                         std::string_view id) {
+  return (id == "thicken_faces" &&
+          summary.selected_faces_have_open_perimeter == false) ||
+         (id == "combine_faces" && summary.combinable_selected_faces == false) ||
+         ((id == "bridge_faces" || id == "interpolated_bridge_faces") &&
+          summary.bridge_face_pair == false) ||
+         (id == "fill_hole" &&
+          summary.three_selected_open_boundary_edges == false) ||
+         ((id == "bevel_edges" || id == "split_edges" ||
+           id == "dissolve_edges") &&
+          summary.selected_edges_are_interior == false) ||
+         ((id == "bridge_edges" || id == "interpolated_bridge_edges" ||
+           id == "connect_edges") &&
+          summary.selected_edges_belong_to_faces == false) ||
+         ((id == "bridge_edges" || id == "interpolated_bridge_edges") &&
+          summary.bridge_edge_pair == false) ||
+         (id == "connect_vertices" &&
+          summary.selected_vertices_share_face == false) ||
+         (id == "dissolve_vertices" &&
+          summary.selected_vertices_belong_to_faces == false) ||
+         (id == "half_cut" && summary.whole_mesh_closed == false) ||
+         (id == "create_outer_hull" &&
+          summary.whole_mesh_has_open_perimeter == false);
+}
+
 ModelingActiveSelectionKind
 from_host_active_kind(quader_host_contract::HostActiveSelectionKind kind) {
   switch (kind) {
@@ -261,6 +287,10 @@ evaluate_host_operation_availability(const ModelingSelectionSummary &summary,
 
     ModelingActionAvailabilityResult result = evaluate_availability_rule(
         summary, rule_from_host_availability(descriptor.availability));
+    if (result.visibility == ModelingActionVisibility::Enabled &&
+        topology_impossible(summary, descriptor.id)) {
+      result.visibility = ModelingActionVisibility::Hidden;
+    }
     if (result.visibility == ModelingActionVisibility::Enabled) {
       return result;
     }
@@ -281,6 +311,10 @@ ModelingActionItem action_from_host_descriptor(
     const quader_host_contract::HostActionDescriptor &descriptor) {
   ModelingActionAvailabilityResult availability = evaluate_availability_rule(
       summary, rule_from_host_availability(descriptor.availability));
+  if (availability.visibility == ModelingActionVisibility::Enabled &&
+      topology_impossible(summary, descriptor.id)) {
+    availability.visibility = ModelingActionVisibility::Hidden;
+  }
   return {
       .action_id = std::string(descriptor.id),
       .operation_id = std::string(descriptor.operation_id),

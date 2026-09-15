@@ -7,12 +7,16 @@
 """Offline workflow regressions for the daily Filament upstream check."""
 
 import copy
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import html
+import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 import check_filament_updates as checker
@@ -157,6 +161,66 @@ class FilamentUpdateTests(unittest.TestCase):
     def assert_unchanged(self, previous):
         for path, content in previous.items():
             self.assertEqual(path.read_bytes(), content, str(path))
+
+    def test_cli_git_failure_exposes_cause_and_preserves_successful_watermark(self):
+        initial = self.check()
+        before = self.snapshot(initial)
+        self.api.calls.clear()
+        diagnostics = [
+            ("fatal: detected dubious ownership in repository at 'C:/repo'\n"
+             "'C:/repo' is owned by user SID1001; current user is sandbox SID1003\n"
+             "To add an exception, call git config --global --add safe.directory C:/repo\n",
+             "detected dubious ownership", True),
+            ("fatal: cannot open '.git/config': Permission denied\n", "Permission denied", True),
+            ("error: Access is denied\n", "Access is denied", True),
+            ("fatal: not a git repository (or any parent): .git\n", "not a git repository", False),
+            ("", "Git returned no diagnostic output", False),
+        ]
+        for diagnostic, expected, needs_host_retry in diagnostics:
+            with self.subTest(diagnostic=diagnostic):
+                failure = subprocess.CalledProcessError(128, ["git", "rev-parse"],
+                                                       stderr=diagnostic)
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with patch.object(checker.sys, "argv", ["check_filament_updates.py", "--allow-network"]), \
+                        patch.object(checker, "__file__", str(self.repo / "tools/check_filament_updates.py")), \
+                        patch.object(checker.subprocess, "run", side_effect=failure) as git, \
+                        patch.object(checker, "GitHubApi") as github, \
+                        redirect_stdout(stdout), redirect_stderr(stderr):
+                    self.assertEqual(checker.main(), 1)
+                git.assert_called_once()
+                github.assert_not_called()
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn(expected, stderr.getvalue())
+                self.assertIn("exit 128", stderr.getvalue())
+                self.assertIn("watermark was not advanced", stderr.getvalue())
+                self.assertEqual("authorized host-context execution" in stderr.getvalue(), needs_host_retry)
+                self.assertNotIn("safe.directory", stderr.getvalue())
+                self.assert_unchanged(before)
+
+    def test_cli_success_preserves_opt_in_and_quiet_same_day_cache(self):
+        git_directory = self.directory / "git"
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(checker, "__file__", str(self.repo / "tools/check_filament_updates.py")), \
+                patch.object(checker.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    ["git"], 0, stdout=str(git_directory) + "\n")), \
+                patch.object(checker, "GitHubApi", return_value=self.api) as github, \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            with patch.object(checker.sys, "argv", ["check_filament_updates.py"]):
+                self.assertEqual(checker.main(), 0)
+            github.assert_not_called()
+            self.assertIn("pass --allow-network", stdout.getvalue())
+            with patch.object(checker.sys, "argv", ["check_filament_updates.py", "--allow-network"]):
+                self.assertEqual(checker.main(), 0)
+            self.assertIn("Filament baseline saved", stdout.getvalue())
+            github.assert_called_once()
+            self.api.calls.clear()
+            stdout.seek(0)
+            stdout.truncate()
+            with patch.object(checker.sys, "argv", ["check_filament_updates.py", "--allow-network"]):
+                self.assertEqual(checker.main(), 0)
+            self.assertEqual(self.api.calls, [])
+            self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_network_requires_explicit_opt_in(self):
         result = self.check(allow_network=False)

@@ -165,6 +165,22 @@ struct EdgeBevelSpec {
 struct ExtractedPolygonDocument;
 struct SplitPolygonDocuments;
 
+/** Selection geometry facts for revision-cached operation availability. */
+struct PolygonSelectionTopologyEligibility {
+  bool whole_mesh_closed = false;
+  bool whole_mesh_has_open_perimeter = false;
+  bool open_face_perimeter = false;
+  bool combinable_selected_faces = false;
+  bool bridge_face_pair = false;
+  std::uint32_t single_selected_face_edge_count = 0;
+  bool bridge_edge_pair = false;
+  bool selected_edges_belong_to_faces = false;
+  bool selected_edges_are_interior = false;
+  bool three_selected_open_boundary_edges = false;
+  bool selected_vertices_belong_to_faces = false;
+  bool selected_vertices_share_face = false;
+};
+
 /// Defines a portable polygon split plane and optional generated caps.
 struct PlaneSplitSpec {
   Vec3 a{};
@@ -232,6 +248,11 @@ public:
   [[nodiscard]] std::vector<FaceId>
   face_ids_by_normal(Vec3 direction, float tolerance = 0.01F) const;
   [[nodiscard]] PolygonSelectionSnapshot selection() const;
+  [[nodiscard]] bool selected_faces_have_open_perimeter() const;
+  [[nodiscard]] PolygonSelectionTopologyEligibility
+  selection_topology_eligibility() const;
+  [[nodiscard]] PolygonSelectionTopologyEligibility
+  whole_mesh_topology_eligibility() const;
   [[nodiscard]] Result<AuthoredPolygonPayload> authored_payload() const;
   [[nodiscard]] Result<AuthoredTopology> authored_topology() const;
   [[nodiscard]] Result<std::vector<FaceTextureSettings>>

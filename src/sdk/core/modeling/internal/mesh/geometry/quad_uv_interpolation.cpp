@@ -181,11 +181,11 @@ std::optional<QuadUvInterpolation> build_quad_uv_interpolation(
   if (!finite(result.geometry_warp) || !finite(result.uv_correction)) {
     return std::nullopt;
   }
-  constexpr std::array<QVec3f, 4> coordinates{
+  constexpr std::array<QVec3f, 4> kCoordinates{
       QVec3f{0.0f, 0.0f, 0.0f}, QVec3f{1.0f, 0.0f, 0.0f},
       QVec3f{1.0f, 1.0f, 1.0f}, QVec3f{0.0f, 1.0f, 0.0f}};
   for (std::size_t index = 0u; index < 4u; ++index) {
-    result.coordinates[(index + origin) % 4u] = coordinates[index];
+    result.coordinates[(index + origin) % 4u] = kCoordinates[index];
   }
   return result;
 }

@@ -10,6 +10,14 @@
 
 namespace quader {
 
+ModelingCommandAvailability CopySelectionTool::custom_availability(
+    const ModelingCommandExecutionContext &context) const {
+  return context.modeling.can_copy_selection()
+             ? ModelingCommandAvailability::available()
+             : ModelingCommandAvailability::unavailable(
+                   "Select objects and finish the active preview before copying.");
+}
+
 ModelingCommandResult CopySelectionTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
   return context.modeling.copy_selection();
 }

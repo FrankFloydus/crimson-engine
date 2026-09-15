@@ -147,7 +147,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             Face expanded_face = face;
             expanded_face.vertices = std::move(expanded_loop);
             if (!preserve_face_uvs(document, face, candidate, expanded_face)) {
-                return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+                return OperationResult::failure("Connect Edges encountered invalid mesh data.");
             }
             rebuilt_faces.push_back(std::move(expanded_face));
             changed = true;
@@ -164,7 +164,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             Face first_face = face;
             first_face.vertices = std::move(first_loop);
             if (!preserve_face_uvs(document, face, candidate, first_face)) {
-                return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+                return OperationResult::failure("Connect Edges encountered invalid mesh data.");
             }
             rebuilt_faces.push_back(std::move(first_face));
 
@@ -175,7 +175,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             second_face.normal_shading = face.normal_shading;
             second_face.texture_transform = face.texture_transform;
             if (!preserve_face_uvs(document, face, candidate, second_face)) {
-                return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+                return OperationResult::failure("Connect Edges encountered invalid mesh data.");
             }
             rebuilt_faces.push_back(std::move(second_face));
             add_connected_edge(
@@ -198,7 +198,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             return OperationResult::failure("Connect Edges would create invalid face geometry.");
         }
         if (!preserve_face_uvs(document, face, candidate, center_face)) {
-            return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+            return OperationResult::failure("Connect Edges encountered invalid mesh data.");
         }
         rebuilt_faces.push_back(std::move(center_face));
 
@@ -217,7 +217,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             side_face.normal_shading = face.normal_shading;
             side_face.texture_transform = face.texture_transform;
             if (!preserve_face_uvs(document, face, candidate, side_face)) {
-                return OperationResult::failure("Connect Edges could not preserve the source face UVs.");
+                return OperationResult::failure("Connect Edges encountered invalid mesh data.");
             }
             rebuilt_faces.push_back(std::move(side_face));
             add_connected_edge(expanded_loop[start], expanded_loop[end]);

@@ -57,6 +57,7 @@ using quader::modeling::KnifeTargetKind;
 using quader::modeling::ObjectId;
 using quader::modeling::OperationResult;
 using quader::modeling::PolygonDocument;
+using quader::modeling::PolygonSelectionTopologyEligibility;
 using quader::modeling::PolygonSelectionSnapshot;
 using quader::modeling::PolygonSelectionUniverse;
 using quader::modeling::PreviewId;
@@ -7525,6 +7526,114 @@ public:
     return cache_summary(std::move(summary));
   }
 
+  [[nodiscard]] bool selected_faces_have_open_perimeter() const {
+    return selection_topology_eligibility().open_face_perimeter;
+  }
+
+  [[nodiscard]] PolygonSelectionTopologyEligibility
+  selection_topology_eligibility() const {
+    const ModelingSelectionSummary summary = selection_summary();
+    if (!summary.has_selection) {
+      return {};
+    }
+    if (selection_topology_cache_key_.has_value() &&
+        *selection_topology_cache_key_ == *selection_summary_cache_key_) {
+      return selection_topology_cache_;
+    }
+
+    ++stats_.selection_topology_build_count;
+
+    PolygonSelectionTopologyEligibility result;
+    result.whole_mesh_closed = true;
+    result.whole_mesh_has_open_perimeter = true;
+    result.open_face_perimeter = true;
+    result.combinable_selected_faces = true;
+    result.bridge_face_pair = true;
+    result.bridge_edge_pair = true;
+    result.selected_edges_belong_to_faces = true;
+    result.selected_edges_are_interior = true;
+    result.selected_vertices_belong_to_faces = true;
+    bool found = false;
+    std::uint32_t selected_face_document_count = 0;
+    std::uint32_t selected_face_count = 0;
+    std::uint32_t first_single_face_edge_count = 0;
+    bool cross_document_face_pair = true;
+    const auto preview = session_.preview_summary();
+    const std::optional<ObjectId> active = active_sdk_object();
+    for (const auto &object : session_.objects()) {
+      if (!object.selected && (!active.has_value() || object.id != *active)) {
+        continue;
+      }
+      Result<PolygonDocument> document =
+          preview.active && preview.object_id == object.id
+              ? session_.preview_document_copy(preview.id)
+              : session_.document_copy(object.id);
+      if (!document.ok()) {
+        continue;
+      }
+      if (summary.mode == ModelingSelectionMode::Object) {
+        if (!object.selected) {
+          continue;
+        }
+        found = true;
+        const auto local =
+            document.value().whole_mesh_topology_eligibility();
+        result.whole_mesh_closed &= local.whole_mesh_closed;
+        result.whole_mesh_has_open_perimeter &=
+            local.whole_mesh_has_open_perimeter;
+        continue;
+      }
+      const PolygonSelectionSnapshot selection = document.value().selection();
+      const bool selected = summary.mode == ModelingSelectionMode::Vertex
+                                ? !selection.vertices.empty()
+                            : summary.mode == ModelingSelectionMode::Edge
+                                ? !selection.edges.empty()
+                                : !selection.faces.empty();
+      if (!selected) {
+        continue;
+      }
+      found = true;
+      const auto local = document.value().selection_topology_eligibility();
+      result.open_face_perimeter &= local.open_face_perimeter;
+      result.combinable_selected_faces &= local.combinable_selected_faces;
+      if (summary.mode == ModelingSelectionMode::Face) {
+        ++selected_face_document_count;
+        selected_face_count += static_cast<std::uint32_t>(selection.faces.size());
+        if (selection.faces.size() == 1U) {
+          const auto edge_count = local.single_selected_face_edge_count;
+          if (first_single_face_edge_count == 0U) {
+            first_single_face_edge_count = edge_count;
+          }
+          cross_document_face_pair &= edge_count >= 3U &&
+                                      edge_count == first_single_face_edge_count;
+        } else {
+          result.bridge_face_pair &= local.bridge_face_pair;
+          cross_document_face_pair = false;
+        }
+      }
+      result.bridge_edge_pair &= local.bridge_edge_pair;
+      result.selected_edges_belong_to_faces &=
+          local.selected_edges_belong_to_faces;
+      result.selected_edges_are_interior &= local.selected_edges_are_interior;
+      result.three_selected_open_boundary_edges |=
+          local.three_selected_open_boundary_edges;
+      result.selected_vertices_belong_to_faces &=
+          local.selected_vertices_belong_to_faces;
+      result.selected_vertices_share_face |= local.selected_vertices_share_face;
+    }
+    if (!found) {
+      result = {};
+    } else if (summary.mode == ModelingSelectionMode::Face) {
+      result.bridge_face_pair &=
+          selected_face_document_count == 1U ||
+          (selected_face_document_count == 2U && selected_face_count == 2U &&
+           cross_document_face_pair);
+    }
+    selection_topology_cache_key_ = selection_summary_cache_key_;
+    selection_topology_cache_ = result;
+    return result;
+  }
+
   [[nodiscard]] std::span<const EntityId>
   selected_component_entities() const {
     QDR_PROFILE_FUNCTION();
@@ -12814,6 +12923,8 @@ private:
   mutable std::optional<SelectionSummaryCacheKey>
       selection_summary_cache_key_;
   mutable ModelingSelectionSummary selection_summary_cache_;
+  mutable std::optional<SelectionSummaryCacheKey> selection_topology_cache_key_;
+  mutable PolygonSelectionTopologyEligibility selection_topology_cache_;
   mutable std::vector<EntityId> selected_component_entities_cache_;
   mutable std::optional<SelectionProjectionSnapshotCacheKey>
       selection_projection_snapshot_cache_key_;
@@ -13391,6 +13502,15 @@ ModelingSdkProjectionAdapter::selection_mode() const noexcept {
 ModelingSelectionSummary
 ModelingSdkProjectionAdapter::selection_summary() const {
   return impl_->selection_summary();
+}
+
+bool ModelingSdkProjectionAdapter::selected_faces_have_open_perimeter() const {
+  return impl_->selected_faces_have_open_perimeter();
+}
+
+PolygonSelectionTopologyEligibility
+ModelingSdkProjectionAdapter::selection_topology_eligibility() const {
+  return impl_->selection_topology_eligibility();
 }
 
 std::span<const EntityId>

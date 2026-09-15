@@ -63,11 +63,14 @@ constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
  * positions; later entity fields deliberately remain opaque.
  */
 struct RetiredSchema10DependencyEntity final : private flatbuffers::Table {
+  // Keep the generated FlatBuffers offset names for legacy schema comparison.
+  // NOLINTBEGIN(readability-identifier-naming)
   enum FlatBuffersVTableOffset : flatbuffers::voffset_t {
     VT_ID = 4,
     VT_EDITOR_OBJECT_ID = 8,
     VT_MATERIAL = 26,
   };
+  // NOLINTEND(readability-identifier-naming)
 
   [[nodiscard]] std::uint64_t id() const {
     return GetField<std::uint64_t>(VT_ID, 0u);
@@ -77,9 +80,10 @@ struct RetiredSchema10DependencyEntity final : private flatbuffers::Table {
     return GetPointer<const fb::MaterialComponent *>(VT_MATERIAL);
   }
 
+  // FlatBuffers verifier templates require this exact method name.
   template <bool B = false>
   [[nodiscard]] bool
-  Verify(flatbuffers::VerifierTemplate<B> &verifier) const {
+  Verify(flatbuffers::VerifierTemplate<B> &verifier) const { // NOLINT(readability-identifier-naming)
     return VerifyTableStart(verifier) &&
            VerifyField<std::uint64_t>(verifier, VT_ID, 8u) &&
            VerifyField<std::uint64_t>(verifier, VT_EDITOR_OBJECT_ID, 8u) &&
@@ -89,6 +93,8 @@ struct RetiredSchema10DependencyEntity final : private flatbuffers::Table {
 };
 
 struct RetiredSchema10DependencyPayload final : private flatbuffers::Table {
+  // Keep the generated FlatBuffers offset names for legacy schema comparison.
+  // NOLINTBEGIN(readability-identifier-naming)
   enum FlatBuffersVTableOffset : flatbuffers::voffset_t {
     VT_SCENE_ID = 4,
     VT_SCENE_NAME = 6,
@@ -96,6 +102,7 @@ struct RetiredSchema10DependencyPayload final : private flatbuffers::Table {
     VT_ROOT_ENTITIES = 16,
     VT_PROJECT_ASSET_DEPENDENCIES = 18,
   };
+  // NOLINTEND(readability-identifier-naming)
 
   [[nodiscard]] std::uint64_t scene_id() const {
     return GetField<std::uint64_t>(VT_SCENE_ID, 0u);
@@ -126,9 +133,10 @@ struct RetiredSchema10DependencyPayload final : private flatbuffers::Table {
         VT_PROJECT_ASSET_DEPENDENCIES);
   }
 
+  // FlatBuffers verifier templates require this exact method name.
   template <bool B = false>
   [[nodiscard]] bool
-  Verify(flatbuffers::VerifierTemplate<B> &verifier) const {
+  Verify(flatbuffers::VerifierTemplate<B> &verifier) const { // NOLINT(readability-identifier-naming)
     return VerifyTableStart(verifier) &&
            VerifyField<std::uint64_t>(verifier, VT_SCENE_ID, 8u) &&
            VerifyOffset(verifier, VT_SCENE_NAME) &&

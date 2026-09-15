@@ -16,7 +16,22 @@ namespace quader {
 
 enum class QuaderSelectionMode;
 
-/// Names the mode-owned modeling submenu shown by the viewport context menu.
+/// Popup-only operand facts; command activation alone does not establish scope.
+struct ViewportContextMenuScope {
+  QuaderSelectionMode mode{};
+  bool has_selection = false;
+  bool polygon_targets = false;
+  bool groupable_targets = false;
+  bool has_group_target = false;
+  bool clipboard_targets = false;
+  bool editable_curve = false;
+  bool curve_controls_selected = false;
+};
+
+[[nodiscard]] bool viewport_context_menu_allows_command(
+    const ViewportContextMenuScope &scope, std::string_view command_id);
+
+/// Names the modeling domain associated with a viewport selection mode.
 enum class ViewportContextMenuModelingSection {
   Mesh,
   Vertex,
@@ -31,10 +46,8 @@ enum class ViewportContextMenuActionBucket {
   Suppressed,
 };
 
-/// Names the semantic destination of one catalog action inside the compact
-/// viewport context menu. Primary actions stay at the first level; secondary
-/// actions live in deliberately named submenus; destructive intent is always
-/// presented last.
+/// Names a flat block of viewport context actions, separated by dividers.
+/// Primary actions appear first and destructive operations appear last.
 enum class ViewportContextMenuActionSection {
   Primary,
   MeshData,

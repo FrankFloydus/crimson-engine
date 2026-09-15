@@ -2545,14 +2545,14 @@ TEST(QdrBinarySceneCodecTests,
     ASSERT_TRUE(static_cast<bool>(coordinates >> uv.x >> uv.y)) << line;
     exported_uvs.push_back(uv);
   }
-  constexpr std::array<QVec2, 3> expected_uvs{{{1.0f, 0.0f},
-                                             {3.0f, 0.0f},
-                                             {1.0f, 3.0f}}};
-  ASSERT_EQ(exported_uvs.size(), expected_uvs.size());
+  constexpr std::array<QVec2, 3> kExpectedUvs{{{1.0f, 0.0f},
+                                            {3.0f, 0.0f},
+                                            {1.0f, 3.0f}}};
+  ASSERT_EQ(exported_uvs.size(), kExpectedUvs.size());
   // Carrier reconstruction can retain roundoff-sized cross terms at zero.
-  for (std::size_t index = 0; index < expected_uvs.size(); ++index) {
-    EXPECT_NEAR(exported_uvs[index].x, expected_uvs[index].x, 1.0e-7f);
-    EXPECT_NEAR(exported_uvs[index].y, expected_uvs[index].y, 1.0e-7f);
+  for (std::size_t index = 0; index < kExpectedUvs.size(); ++index) {
+    EXPECT_NEAR(exported_uvs[index].x, kExpectedUvs[index].x, 1.0e-7f);
+    EXPECT_NEAR(exported_uvs[index].y, kExpectedUvs[index].y, 1.0e-7f);
   }
   EXPECT_NE(obj.find("\nv 1 0 0\n"), std::string::npos);
   EXPECT_FLOAT_EQ(loaded->geometry().vertices[1].uv.x, 1.0f);

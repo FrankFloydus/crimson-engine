@@ -4038,6 +4038,94 @@ TEST(EditorApiTests,
   EXPECT_EQ(radial_align->scope_id, "viewport.selection.component");
 }
 
+TEST(EditorApiTests, ClipboardAvailabilityTracksObjectsPayloadAndPreview) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto expect_enabled = [&](quader::QuaderCommandId command,
+                                  bool expected) {
+    const auto descriptor = editor.commands().descriptor(command);
+    ASSERT_TRUE(descriptor.has_value());
+    EXPECT_EQ(descriptor->enabled, expected) << command.string();
+  };
+  expect_enabled(quader::quader_command::kCopySelection, false);
+  expect_enabled(quader::quader_command::kPasteSelection, false);
+
+  const auto box = create_selected_box(editor, "Clipboard readiness");
+  expect_enabled(quader::quader_command::kCopySelection, true);
+  expect_enabled(quader::quader_command::kPasteSelection, false);
+  ASSERT_TRUE(editor.commands().execute(quader::quader_command::kCopySelection)
+                  .ok());
+  expect_enabled(quader::quader_command::kPasteSelection, true);
+  ASSERT_TRUE(editor.selection().clear().ok());
+  expect_enabled(quader::quader_command::kCopySelection, false);
+  expect_enabled(quader::quader_command::kPasteSelection, true);
+
+  ASSERT_TRUE(editor.selection().select_object(box).ok());
+  ASSERT_TRUE(editor.commands().execute(quader::quader_command::kModelingHalfCut)
+                  .ok());
+  expect_enabled(quader::quader_command::kCopySelection, false);
+  expect_enabled(quader::quader_command::kPasteSelection, false);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  expect_enabled(quader::quader_command::kCopySelection, true);
+  expect_enabled(quader::quader_command::kPasteSelection, true);
+
+  const auto group = editor.scene().group_selection("Clipboard group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Group)
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_objects({group.value().id}).ok());
+  expect_enabled(quader::quader_command::kCopySelection, false);
+  expect_enabled(quader::quader_command::kCutSelection, false);
+
+  const auto light = editor.scene().create_point_light({.name = "Clipboard light"});
+  ASSERT_TRUE(light.ok()) << light.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_objects({light.value().id}).ok());
+  expect_enabled(quader::quader_command::kCopySelection, false);
+}
+
+TEST(EditorApiTests, ClipboardAvailabilityPreservesWholeCurveAndComponentCopies) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Component clipboard source");
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
+  const auto component_copy =
+      editor.commands().descriptor(quader::quader_command::kCopySelection);
+  ASSERT_TRUE(component_copy.has_value());
+  ASSERT_TRUE(component_copy->enabled);
+  ASSERT_TRUE(editor.modeling().copy_selection().ok());
+
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                 {.position = {3.0F, 0.0F, 0.0F}}},
+      .name = "Curve clipboard source",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  const auto curve_copy =
+      editor.commands().descriptor(quader::quader_command::kCopySelection);
+  ASSERT_TRUE(curve_copy.has_value());
+  ASSERT_TRUE(curve_copy->enabled);
+  ASSERT_TRUE(editor.modeling().copy_selection().ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const auto paste =
+      editor.commands().descriptor(quader::quader_command::kPasteSelection);
+  ASSERT_TRUE(paste.has_value());
+  ASSERT_TRUE(paste->enabled);
+  const auto pasted = editor.modeling().paste_selection();
+  ASSERT_TRUE(pasted.ok()) << pasted.error_message();
+  EXPECT_TRUE(pasted.changed());
+  EXPECT_EQ(std::ranges::count_if(editor.query().entities(),
+                                [](const auto &entity) {
+                                  return entity.has_curve;
+                                }),
+            2);
+}
+
 TEST(EditorApiTests, OutlinerContextResolvesSceneCommandsAndScopedModeling) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
@@ -10411,7 +10499,7 @@ TEST(EditorApiTests,
           quader::quader_command::kModelingDefaultEdgeNormals);
   ASSERT_TRUE(descriptor.has_value());
   EXPECT_TRUE(descriptor->enabled);
-  EXPECT_EQ(descriptor->label, "Set Selected Edge Normals to Default");
+  EXPECT_EQ(descriptor->label, "Reset Edge Normals");
   EXPECT_TRUE(descriptor->shortcut.empty());
 
   const std::vector<quader::QuaderKeybindingCatalogEntry> keybindings =
@@ -10458,7 +10546,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(reset.ok()) << reset.error_message();
   EXPECT_TRUE(reset.changed());
   EXPECT_EQ(editor.query().history().undo_label,
-            "Set Selected Edge Normals to Default");
+            "Reset Edge Normals");
 
   ASSERT_TRUE(editor.history().undo().ok());
   ASSERT_TRUE(editor.history().redo().ok());
@@ -10516,11 +10604,10 @@ TEST(EditorApiTests, ModelingActionSetExposesActiveOperationPanelForSelectionMod
   ASSERT_NE(face_panel, nullptr);
   EXPECT_EQ(face_panel->visibility, quader::QuaderActionVisibility::Enabled);
   ASSERT_FALSE(face_panel->actions.empty());
-  EXPECT_EQ(face_panel->actions.front().action_id, "bridge_faces");
   const quader::QuaderActionItem *thicken =
       find_action_item(*face_panel, "thicken_faces");
-  ASSERT_NE(thicken, nullptr);
-  EXPECT_EQ(thicken->operation_id, "thicken");
+  EXPECT_EQ(thicken, nullptr);
+  EXPECT_EQ(find_action_item(*face_panel, "bridge_faces"), nullptr);
 
   CommandTestHarness group_harness;
   create_selected_box(group_harness.editor);
@@ -10530,6 +10617,73 @@ TEST(EditorApiTests, ModelingActionSetExposesActiveOperationPanelForSelectionMod
   EXPECT_TRUE(group_harness.editor.modeling()
                   .available_action_set(query)
                   .panels.empty());
+}
+
+TEST(EditorApiTests, ContextActionsOmitImpossibleTopologyAndKeepOpenFaces) {
+  const quader::QuaderActionQuery query{
+      .surface = quader::QuaderActionSurface::ViewportContextMenu,
+      .include_disabled = false,
+      .include_hidden = false,
+  };
+
+  CommandTestHarness closed_object;
+  setup_selection_for_mode(closed_object.editor,
+                           quader::QuaderSelectionMode::Object);
+  const auto closed_object_actions =
+      closed_object.editor.modeling().available_action_set(query);
+  const auto *closed_object_panel =
+      find_action_panel(closed_object_actions, "viewport_context_menu");
+  ASSERT_NE(closed_object_panel, nullptr);
+  EXPECT_EQ(find_action_item(*closed_object_panel, "create_outer_hull"), nullptr);
+  EXPECT_NE(find_action_item(*closed_object_panel, "half_cut"), nullptr);
+
+  CommandTestHarness closed;
+  setup_selection_for_mode(closed.editor, quader::QuaderSelectionMode::Face);
+  const auto closed_actions = closed.editor.modeling().available_action_set(query);
+  const auto *closed_panel =
+      find_action_panel(closed_actions, "viewport_context_menu");
+  ASSERT_NE(closed_panel, nullptr);
+  EXPECT_EQ(find_action_item(*closed_panel, "thicken_faces"), nullptr);
+  EXPECT_EQ(find_action_item(*closed_panel, "bridge_faces"), nullptr);
+  const auto thicken_command = closed.editor.commands().descriptor(
+      quader::quader_command::kModelingThickenFaces);
+  ASSERT_TRUE(thicken_command.has_value());
+  EXPECT_FALSE(thicken_command->enabled);
+
+  CommandTestHarness open;
+  const auto mesh = create_polygon_mesh(open.editor, 4U, "Open Face");
+  ASSERT_TRUE(open.editor.selection().select_object(mesh).ok());
+  const auto open_object_actions =
+      open.editor.modeling().available_action_set(query);
+  const auto *open_object_panel =
+      find_action_panel(open_object_actions, "viewport_context_menu");
+  ASSERT_NE(open_object_panel, nullptr);
+  EXPECT_EQ(find_action_item(*open_object_panel, "half_cut"), nullptr);
+  EXPECT_NE(find_action_item(*open_object_panel, "create_outer_hull"), nullptr);
+  ASSERT_TRUE(open.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(open.editor.selection().select_face(mesh, 1).ok());
+  const auto open_actions = open.editor.modeling().available_action_set(query);
+  const auto *open_panel =
+      find_action_panel(open_actions, "viewport_context_menu");
+  ASSERT_NE(open_panel, nullptr);
+  const auto *thicken = find_action_item(*open_panel, "thicken_faces");
+  ASSERT_NE(thicken, nullptr);
+  EXPECT_EQ(thicken->visibility, quader::QuaderActionVisibility::Enabled);
+  const auto open_command = open.editor.commands().descriptor(
+      quader::quader_command::kModelingThickenFaces);
+  ASSERT_TRUE(open_command.has_value());
+  EXPECT_TRUE(open_command->enabled);
+
+  CommandTestHarness edges;
+  setup_selection_for_mode(edges.editor, quader::QuaderSelectionMode::Edge);
+  const auto edge_actions = edges.editor.modeling().available_action_set(query);
+  const auto *edge_panel =
+      find_action_panel(edge_actions, "viewport_context_menu");
+  ASSERT_NE(edge_panel, nullptr);
+  EXPECT_EQ(find_action_item(*edge_panel, "bridge_edges"), nullptr);
+  EXPECT_EQ(find_action_item(*edge_panel, "fill_hole"), nullptr);
 }
 
 TEST(EditorApiTests,
@@ -16136,7 +16290,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
         editor.commands().command_id_for_modeling_action("duplicate_meshes"));
     ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
     ASSERT_EQ(user_entity_count(editor), 2u);
-  EXPECT_EQ(editor.query().history().undo_label, "Duplicate Selected Meshes");
+  EXPECT_EQ(editor.query().history().undo_label, "Duplicate Meshes");
 
     quader::QuaderTransform moved;
     moved.position = {3.0f, 0.0f, 0.0f};
@@ -16169,7 +16323,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
 
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_EQ(user_entity_count(editor), 1u);
-  EXPECT_EQ(editor.query().history().redo_label, "Duplicate Selected Meshes");
+  EXPECT_EQ(editor.query().history().redo_label, "Duplicate Meshes");
 
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_EQ(user_entity_count(editor), 2u);
@@ -16504,7 +16658,7 @@ TEST(EditorApiTests, HalfCutPreviewExposesLiveAxisAndPartSettings) {
     ASSERT_TRUE(settings.active);
     EXPECT_TRUE(settings.preview_active);
     EXPECT_EQ(settings.tool_id, "half_cut");
-  EXPECT_EQ(settings.title, "Half-Cut Selected Meshes");
+  EXPECT_EQ(settings.title, "Half-Cut Meshes");
     EXPECT_EQ(
         settings.description,
         "Split selected meshes along a local axis and choose how the parts are "
@@ -20405,7 +20559,7 @@ TEST(EditorApiTests,
   }
 
   EXPECT_EQ(std::count_if(catalog.begin(), catalog.end(), [](const auto &entry) {
-              return entry.label == "Radially Align Selected Components";
+              return entry.label == "Radial Align Components";
             }),
             1);
   const quader::QuaderKeybindingCatalogEntry *finalize_primitive =

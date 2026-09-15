@@ -27,6 +27,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -38,6 +40,138 @@ struct BoundContextCommand final {
   std::string command_id;
   std::string source_id;
 };
+
+ViewportContextMenuActionSection presentation_section(
+    const CommandPresentationDescriptor *presentation) {
+  if (presentation == nullptr) {
+    return ViewportContextMenuActionSection::Topology;
+  }
+  if (presentation->danger == CommandPresentationDanger::Destructive) {
+    return ViewportContextMenuActionSection::Destructive;
+  }
+  switch (presentation->group) {
+  case CommandPresentationGroup::Duplication:
+  case CommandPresentationGroup::Instances:
+  case CommandPresentationGroup::Grouping:
+    return ViewportContextMenuActionSection::MeshData;
+  case CommandPresentationGroup::Merge:
+    return ViewportContextMenuActionSection::Merge;
+  case CommandPresentationGroup::Normals:
+  case CommandPresentationGroup::Shading:
+    return ViewportContextMenuActionSection::Normals;
+  case CommandPresentationGroup::Transform:
+  case CommandPresentationGroup::Arrangement:
+    return ViewportContextMenuActionSection::Arrange;
+  default:
+    return ViewportContextMenuActionSection::Topology;
+  }
+}
+
+ViewportContextMenuScope context_menu_scope(
+    QuaderEditorApi &editor, const QuaderSelectionSummary &selection,
+    bool target_hit) {
+  ViewportContextMenuScope scope{
+      .mode = selection.mode,
+      .has_selection = target_hit && selection.has_selection};
+  scope.curve_controls_selected =
+      selection.sub_selection_kind == QuaderSubSelectionKind::CurveControl &&
+      selection.selected_sub_element_count != 0u;
+  if (!scope.has_selection || scope.curve_controls_selected) {
+    return scope;
+  }
+  if (scope.mode != QuaderSelectionMode::Object &&
+      scope.mode != QuaderSelectionMode::Group) {
+    scope.polygon_targets = true;
+    return scope;
+  }
+
+  // Sample entity metadata once when opening the popup. The usual single-mesh
+  // case needs one narrow lookup; mixed/hierarchy selection needs no topology.
+  std::vector<QuaderEntitySnapshot> entities;
+  const auto active = editor.query().modeling_object_for_id(
+      selection.active_object_id);
+  if (selection.selected_object_count == 1u && active.has_value()) {
+    const auto entity = editor.query().entity(active->entity);
+    if (entity.has_value() && entity->kind != QuaderEntityKind::Empty) {
+      entities.push_back(*entity);
+    }
+  }
+  if (entities.empty()) {
+    entities = editor.query().entities();
+  }
+  std::unordered_set<EntityId> parents;
+  for (const auto &entity : entities) {
+    parents.insert(entity.parent);
+  }
+  bool any_target = false;
+  bool all_polygons = true;
+  bool all_groupable = true;
+  bool all_clipboard = true;
+  for (const auto &entity : entities) {
+    if (!entity.selected) {
+      continue;
+    }
+    any_target = true;
+    const bool editable = entity.selectable && !entity.locked &&
+                          !entity.is_scene_root && !entity.is_instance_definition;
+    const bool instance = editable && entity.has_instance_occurrence;
+    const bool polygon = editable && entity.has_modeling_object &&
+                         entity.has_mesh && !entity.has_curve && !instance;
+    const bool group = editable && entity.kind == QuaderEntityKind::Empty &&
+                       parents.contains(entity.id);
+    all_polygons &= polygon;
+    all_groupable &= polygon || group || instance;
+    all_clipboard &= polygon || instance;
+    scope.has_group_target |= group;
+    scope.editable_curve |= editable && entity.has_curve &&
+                            selection.selected_object_count == 1u;
+  }
+  scope.polygon_targets = any_target && all_polygons;
+  scope.groupable_targets = any_target && all_groupable;
+  scope.clipboard_targets = any_target && all_clipboard;
+  return scope;
+}
+
+struct SupplementalContextCommand final {
+  QuaderCommandDescriptor descriptor;
+  const CommandPresentationDescriptor *presentation = nullptr;
+};
+
+std::vector<SupplementalContextCommand> supplemental_modeling_commands(
+    QuaderEditorApi &editor, const QuaderActionSet &action_set,
+    const ViewportContextMenuScope &scope) {
+  // Catalog visibility remains authoritative even for omitted/disabled items.
+  // Reserve their command IDs so supplements never reintroduce those actions.
+  std::unordered_set<std::string> catalog_commands;
+  for (const QuaderActionPanel &panel : action_set.panels) {
+    for (const QuaderActionItem &action : panel.actions) {
+      catalog_commands.insert(
+          action.kind == QuaderActionKind::Tool
+              ? editor.commands().command_id_for_tool_activation(action.tool_id)
+              : editor.commands().command_id_for_modeling_action(action.action_id));
+    }
+  }
+
+  std::vector<SupplementalContextCommand> result;
+  for (const auto &presentation : command_presentation_catalog()) {
+    // Clipboard and empty-space creation have their own fixed block below.
+    if (presentation.group == CommandPresentationGroup::Clipboard ||
+        !has_command_presentation_surface(
+            presentation, CommandPresentationSurface::ViewportContextMenu) ||
+        !viewport_context_menu_allows_command(scope, presentation.command_id) ||
+        catalog_commands.contains(std::string(presentation.command_id.string()))) {
+      continue;
+    }
+    auto descriptor = editor.commands().descriptor(presentation.command_id);
+    if (descriptor.has_value() && descriptor->enabled) {
+      result.push_back({std::move(*descriptor), &presentation});
+    }
+  }
+  std::ranges::stable_sort(result, {}, [](const auto &command) {
+    return command.presentation->rank;
+  });
+  return result;
+}
 
 bool same_context_revision(const QuaderRevisionStamp &left,
                            const QuaderRevisionStamp &right) {
@@ -51,7 +185,7 @@ bool same_context_revision(const QuaderRevisionStamp &left,
 }
 
 QString localized_action_label(const QuaderActionItem &action,
-                               QuaderSelectionMode mode,
+                               const ViewportContextMenuScope &scope,
                                const LocalizationService &localization) {
   if (action.action_id == "duplicate_meshes") {
     return QString::fromStdString(localization.text(
@@ -59,7 +193,12 @@ QString localized_action_label(const QuaderActionItem &action,
         "Duplicate Mesh Data"));
   }
   if (action.action_id == "delete_selection") {
-    switch (mode) {
+    if (scope.curve_controls_selected) {
+      return QString::fromStdString(localization.text(
+          "ui.viewport.context_menu.command.delete_control_points",
+          "Delete Control Points"));
+    }
+    switch (scope.mode) {
     case QuaderSelectionMode::Object:
       return QString::fromStdString(localization.text(
           "ui.viewport.context_menu.command.delete_objects", "Delete Objects"));
@@ -109,6 +248,25 @@ QString localized_disabled_reason(const QuaderActionItem &action,
       action.disabled_reason_key, action.disabled_reason, {{"count", count}}));
 }
 
+QString localized_command_label(const QuaderCommandDescriptor &command,
+                                const ViewportContextMenuScope &scope,
+                                const LocalizationService &localization) {
+  if (command.id == quader_command::kDeleteSelection.string()) {
+    return localized_action_label({.action_id = "delete_selection"}, scope,
+                                  localization);
+  }
+  for (const auto &[id, key, label] : {
+           std::tuple{quader_command::kDuplicateSelection, "ui.menu.edit.duplicate", "Duplicate"},
+           std::tuple{quader_command::kGroupSelection, "ui.menu.edit.group", "Group"},
+           std::tuple{quader_command::kUngroupSelection, "ui.menu.edit.ungroup", "Ungroup"}}) {
+    if (command.id == id.string()) {
+      return QString::fromStdString(localization.text(key, label));
+    }
+  }
+  const std::string key = "keybindings.target." + command.id + ".label";
+  return QString::fromStdString(localization.text(key, command.label));
+}
+
 QString with_shortcut(QString label, std::string_view shortcut) {
   if (!shortcut.empty()) {
     QString display_shortcut = QString::fromUtf8(
@@ -117,43 +275,25 @@ QString with_shortcut(QString label, std::string_view shortcut) {
                              QStringLiteral("RMouse"));
     display_shortcut.replace(QStringLiteral("LeftMouseClick"),
                              QStringLiteral("LMouse"));
+    display_shortcut.replace(QStringLiteral("RightMouse"),
+                             QStringLiteral("RMouse"));
+    display_shortcut.replace(QStringLiteral("LeftMouse"),
+                             QStringLiteral("LMouse"));
     label.append(QLatin1Char('\t'));
     label.append(display_shortcut);
   }
   return label;
 }
 
-std::pair<std::string_view, std::string_view>
-action_section_label(ViewportContextMenuActionSection section) {
-  switch (section) {
-  case ViewportContextMenuActionSection::MeshData:
-    return {"ui.viewport.context_menu.section.mesh_data", "Mesh Data"};
-  case ViewportContextMenuActionSection::Topology:
-    return {"ui.viewport.context_menu.section.topology", "Topology"};
-  case ViewportContextMenuActionSection::Merge:
-    return {"ui.viewport.context_menu.section.merge", "Merge"};
-  case ViewportContextMenuActionSection::Normals:
-    return {"ui.viewport.context_menu.section.normals", "Normals and Shading"};
-  case ViewportContextMenuActionSection::Arrange:
-    return {"ui.viewport.context_menu.section.arrange", "Arrange"};
-  case ViewportContextMenuActionSection::Primary:
-  case ViewportContextMenuActionSection::Destructive:
-  case ViewportContextMenuActionSection::Suppressed:
-    break;
-  }
-  return {"ui.viewport.context_menu.section.topology", "Topology"};
-}
-
 std::vector<const QuaderActionItem *>
 catalog_actions_for_section(const QuaderActionSet &action_set,
-                            QuaderSelectionMode mode, QuaderEditorApi &editor,
+                            const ViewportContextMenuScope &scope,
+                            QuaderEditorApi &editor,
                             ViewportContextMenuActionSection section) {
-  const auto presentation_section = [&](const QuaderActionItem &action) {
+  const auto mode = scope.mode;
+  const auto catalog_section = [&](const QuaderActionItem &action) {
     const ViewportContextMenuActionDisposition disposition =
         viewport_context_menu_action_disposition(mode, action.action_id);
-    if (disposition == ViewportContextMenuActionDisposition::Primary) {
-      return ViewportContextMenuActionSection::Primary;
-    }
     if (disposition == ViewportContextMenuActionDisposition::Suppressed) {
       return ViewportContextMenuActionSection::Suppressed;
     }
@@ -165,27 +305,13 @@ catalog_actions_for_section(const QuaderActionSet &action_set,
                   action.action_id);
     const CommandPresentationDescriptor *presentation =
         find_command_presentation(command_id);
-    if (presentation == nullptr) {
-      return ViewportContextMenuActionSection::Topology;
+    if (!viewport_context_menu_allows_command(scope, command_id)) {
+      return ViewportContextMenuActionSection::Suppressed;
     }
-    if (presentation->danger == CommandPresentationDanger::Destructive) {
-      return ViewportContextMenuActionSection::Destructive;
+    if (disposition == ViewportContextMenuActionDisposition::Primary) {
+      return ViewportContextMenuActionSection::Primary;
     }
-    switch (presentation->group) {
-    case CommandPresentationGroup::Duplication:
-    case CommandPresentationGroup::Instances:
-      return ViewportContextMenuActionSection::MeshData;
-    case CommandPresentationGroup::Merge:
-      return ViewportContextMenuActionSection::Merge;
-    case CommandPresentationGroup::Normals:
-    case CommandPresentationGroup::Shading:
-      return ViewportContextMenuActionSection::Normals;
-    case CommandPresentationGroup::Transform:
-    case CommandPresentationGroup::Arrangement:
-      return ViewportContextMenuActionSection::Arrange;
-    default:
-      return ViewportContextMenuActionSection::Topology;
-    }
+    return presentation_section(presentation);
   };
   const auto presentation_rank = [&](const QuaderActionItem *action) {
     if (viewport_context_menu_action_disposition(mode, action->action_id) ==
@@ -205,8 +331,8 @@ catalog_actions_for_section(const QuaderActionSet &action_set,
   std::vector<const QuaderActionItem *> result;
   for (const QuaderActionPanel &panel : action_set.panels) {
     for (const QuaderActionItem &action : panel.actions) {
-      if (action.visibility == QuaderActionVisibility::Hidden ||
-          presentation_section(action) != section) {
+      if (action.visibility != QuaderActionVisibility::Enabled ||
+          catalog_section(action) != section) {
         continue;
       }
       result.push_back(&action);
@@ -235,8 +361,7 @@ void QtViewportContextMenuPresenter::show(
     QWidget &parent, const QPoint &global_point, QuaderEditorApi &editor,
     ViewportInputRouter &input_router, LocalizationService &localization,
     const QuaderActionSet &action_set, const QuaderSelectionSummary &selection,
-    bool target_hit, const std::optional<ProjectAssetId> &material_under_mouse,
-    const std::function<void(ProjectAssetId)> &open_material_editor,
+    bool target_hit, const std::optional<QuaderHoverTarget> &material_face_target,
     ViewportRuntimeBindingToken runtime_binding) const {
   QDR_PROFILE_SCOPE("Qt viewport context menu show");
 
@@ -248,7 +373,15 @@ void QtViewportContextMenuPresenter::show(
 
   QMenu menu(&parent);
   std::vector<BoundContextCommand> bound_commands;
-  QAction *edit_material_action = nullptr;
+  std::unordered_set<std::string> added_commands;
+  QAction *copy_material_to_face = nullptr;
+  QAction *copy_material_to_selection = nullptr;
+  QAction *continue_texture = nullptr;
+  QAction *apply_curve_solidify = nullptr;
+  const auto scope = context_menu_scope(editor, selection, target_hit);
+  const auto context_commands = scope.has_selection
+      ? supplemental_modeling_commands(editor, action_set, scope)
+      : std::vector<SupplementalContextCommand>{};
 
   const auto add_catalog_action = [&](QMenu &owner,
                                       const QuaderActionItem &action) {
@@ -257,8 +390,12 @@ void QtViewportContextMenuPresenter::show(
             ? editor.commands().command_id_for_tool_activation(action.tool_id)
             : editor.commands().command_id_for_modeling_action(
                   action.action_id);
+    if (!viewport_context_menu_allows_command(scope, command_id) ||
+        !added_commands.insert(command_id).second) {
+      return static_cast<QAction *>(nullptr);
+    }
     QAction *menu_action = owner.addAction(with_shortcut(
-        localized_action_label(action, selection.mode, localization),
+        localized_action_label(action, scope, localization),
         editor.commands().shortcut_for(command_id)));
     menu_action->setObjectName(QString::fromStdString(action.action_id));
     const bool enabled = action.visibility == QuaderActionVisibility::Enabled;
@@ -281,10 +418,16 @@ void QtViewportContextMenuPresenter::show(
                                       QuaderCommandId command_id,
                                       std::string_view object_name,
                                       bool omit_when_disabled = false) {
+    if (!viewport_context_menu_allows_command(scope, command_id)) {
+      return static_cast<QAction *>(nullptr);
+    }
     const std::optional<QuaderCommandDescriptor> descriptor =
         editor.commands().descriptor(command_id);
     if (omit_when_disabled &&
         (!descriptor.has_value() || !descriptor->enabled)) {
+      return static_cast<QAction *>(nullptr);
+    }
+    if (!added_commands.insert(std::string(command_id.string())).second) {
       return static_cast<QAction *>(nullptr);
     }
     const std::string shortcut =
@@ -316,63 +459,87 @@ void QtViewportContextMenuPresenter::show(
     const auto add_catalog_section =
         [&](QMenu &owner, ViewportContextMenuActionSection section) {
           const std::vector<const QuaderActionItem *> actions =
-              catalog_actions_for_section(action_set, selection.mode, editor,
-                                          section);
+              catalog_actions_for_section(action_set, scope, editor, section);
+          if (!actions.empty()) {
+            add_separator_after_content(owner);
+          }
           for (const QuaderActionItem *action : actions) {
             if (action != nullptr) {
               (void)add_catalog_action(owner, *action);
             }
           }
-          return !actions.empty();
-        };
-
-    const auto add_catalog_submenu =
-        [&](ViewportContextMenuActionSection section,
-            std::string_view object_name) {
-          const std::vector<const QuaderActionItem *> actions =
-              catalog_actions_for_section(action_set, selection.mode, editor,
-                                          section);
-          if (actions.empty()) {
-            return static_cast<QMenu *>(nullptr);
-          }
-          const auto [label_key, fallback] = action_section_label(section);
-          QMenu *submenu = menu.addMenu(
-              QString::fromStdString(localization.text(label_key, fallback)));
-          submenu->setObjectName(QString::fromUtf8(
-              object_name.data(), static_cast<qsizetype>(object_name.size())));
-          submenu->setToolTipsVisible(true);
-          for (const QuaderActionItem *action : actions) {
-            if (action != nullptr) {
-              (void)add_catalog_action(*submenu, *action);
+          bool added_supplement = false;
+          for (const auto &command : context_commands) {
+            const auto &descriptor = command.descriptor;
+            if (presentation_section(command.presentation) != section ||
+                !added_commands.insert(descriptor.id).second) {
+              continue;
             }
+            if (actions.empty() && !added_supplement) {
+              add_separator_after_content(owner);
+            }
+            QAction *action = owner.addAction(with_shortcut(
+                localized_command_label(descriptor, scope, localization),
+                descriptor.shortcut));
+            action->setObjectName(QString::fromStdString(descriptor.id));
+            bound_commands.push_back({action, descriptor.id, descriptor.id});
+            added_supplement = true;
           }
-          return submenu;
+          return !actions.empty() || added_supplement;
         };
 
     const auto add_material_actions = [&]() {
-      if (!material_under_mouse.has_value() || !open_material_editor) {
+      if (!material_face_target.has_value() ||
+          material_face_target->kind != QuaderActiveSelectionKind::Face ||
+          selection.mode != QuaderSelectionMode::Face ||
+          selection.selected_face_count == 0u) {
         return false;
       }
-      edit_material_action = menu.addAction(QString::fromStdString(localization.text(
-          "ui.viewport.context_menu.command.edit_material_under_mouse",
-          "Edit Material under Mouse")));
-      edit_material_action->setObjectName(
-          QStringLiteral("viewport.material.edit_under_mouse"));
+      const auto target = editor.query().modeling_object_for_id(
+          material_face_target->object_id);
+      const auto target_entity = target.has_value()
+          ? editor.query().entity(target->entity) : std::nullopt;
+      const auto settings = editor.modeling().face_texture_settings();
+      if (!target_entity.has_value() || !target_entity->has_mesh ||
+          target_entity->has_curve || !target_entity->selectable ||
+          target_entity->locked || !settings.editable) {
+        return false;
+      }
+      // Copying a single selected face onto itself has no useful effect.
+      if (selection.selected_face_count == 1u &&
+          selection.active_object_id == material_face_target->object_id &&
+          selection.active_face_id == material_face_target->face_id) {
+        return false;
+      }
+      add_separator_after_content(menu);
+      const auto add_transfer = [&](std::string_view id, std::string_view key,
+                                    std::string_view label) {
+        QAction *action = menu.addAction(with_shortcut(
+            QString::fromStdString(localization.text(key, label)),
+            editor.commands().shortcut_for(id)));
+        action->setObjectName(QString::fromUtf8(id.data(),
+                                               static_cast<qsizetype>(id.size())));
+        return action;
+      };
+      if (selection.selected_face_count == 1u && target_entity->selectable &&
+          !target_entity->locked) {
+        copy_material_to_face = add_transfer(
+            "viewport.material.apply_selected_face_to_face",
+            "ui.viewport.context_menu.command.copy_material_to_face",
+            "Copy Material to Face");
+        continue_texture = add_transfer(
+            "viewport.material.transfer_face_texture",
+            "ui.viewport.context_menu.command.continue_texture",
+            "Continue Texture");
+      }
+      copy_material_to_selection = add_transfer(
+          "viewport.material.apply_face_to_selection",
+          "ui.viewport.context_menu.command.copy_material_to_faces",
+          "Copy Material to Faces");
       return true;
     };
 
     if (!target_hit) {
-      // Empty-space menus are an action launcher, not a disabled summary of
-      // the selection that used to be active before the click.
-      (void)add_command_action(
-          menu, "ui.viewport.context_menu.command.create_primitive",
-          "Create Primitive", quader_command::kToolsActivateCreatePrimitive,
-          "tools.activate.create_primitive", true);
-      (void)add_command_action(menu, "ui.menu.select.all", "Select All",
-                               quader_command::kSelectAll, "select.all", true);
-      (void)add_command_action(menu, "ui.menu.view.focus_all", "Focus All",
-                               quader_command::kViewportFocusAll,
-                               "viewport.focus_all", true);
       (void)add_command_action(menu, "ui.menu.edit.paste", "Paste",
                                quader_command::kPasteSelection, "edit.paste",
                                true);
@@ -384,19 +551,19 @@ void QtViewportContextMenuPresenter::show(
             menu,
             group_mode ? "ui.viewport.context_menu.command.duplicate_group"
                        : "ui.viewport.context_menu.command.duplicate_object",
-            group_mode ? "Duplicate Group" : "Duplicate Object",
-            quader_command::kDuplicateSelection, "edit.duplicate");
+            group_mode ? "Duplicate Groups" : "Duplicate Objects",
+            quader_command::kDuplicateSelection, "edit.duplicate", true);
         (void)add_command_action(
             menu, "ui.menu.edit.create_instance", "Create Instance",
-            quader_command::kEditCreateInstance, "edit.create_instance");
+            quader_command::kEditCreateInstance, "edit.create_instance", true);
         if (group_mode) {
           (void)add_command_action(menu, "ui.menu.edit.ungroup", "Ungroup",
                                    quader_command::kUngroupSelection,
-                                   "edit.ungroup");
+                                   "edit.ungroup", true);
         } else {
           (void)add_command_action(menu, "ui.menu.edit.group", "Group",
                                    quader_command::kGroupSelection,
-                                   "edit.group");
+                                   "edit.group", true);
         }
         (void)add_command_action(menu, "ui.menu.edit.flatten_instance",
                                  "Flatten Instance",
@@ -407,65 +574,50 @@ void QtViewportContextMenuPresenter::show(
 
       (void)add_catalog_section(menu,
                                 ViewportContextMenuActionSection::Primary);
-      (void)add_catalog_submenu(ViewportContextMenuActionSection::MeshData,
-                                "viewport_context_mesh_data_submenu");
-      (void)add_catalog_submenu(ViewportContextMenuActionSection::Topology,
-                                "viewport_context_topology_submenu");
-      (void)add_catalog_submenu(ViewportContextMenuActionSection::Merge,
-                                "viewport_context_merge_submenu");
-      (void)add_catalog_submenu(ViewportContextMenuActionSection::Normals,
-                                "viewport_context_normals_submenu");
-      (void)add_catalog_submenu(ViewportContextMenuActionSection::Arrange,
-                                "viewport_context_arrange_submenu");
-
-      if ((selection.mode == QuaderSelectionMode::Object ||
-           selection.mode == QuaderSelectionMode::Group) &&
-          add_command_action(
-              menu, "ui.layers.remove_selection", "Remove Objects from Layers",
-              quader_command::kSceneLayersRemoveSelection,
-              "scene.layers.remove_selection", true) != nullptr) {
-        // Layer membership is secondary organization intent and remains
-        // adjacent to the other contextual object operations.
+      if (scope.editable_curve && !scope.curve_controls_selected) {
+        const auto settings = editor.tools().active_settings();
+        if (settings.tool_id == "curve") {
+          for (const auto &control : settings.controls) {
+            if (control.id == "curve.solidify.apply" && control.enabled &&
+                control.kind == QuaderToolSettingControlKind::Action) {
+              add_separator_after_content(menu);
+              apply_curve_solidify = menu.addAction(QString::fromStdString(
+                  localization.text("ui.viewport.context_menu.command.apply_solidify",
+                                    control.label)));
+              apply_curve_solidify->setObjectName(
+                  QStringLiteral("curve.solidify.apply"));
+            }
+          }
+        }
       }
+      (void)add_catalog_section(menu, ViewportContextMenuActionSection::MeshData);
+      (void)add_catalog_section(menu, ViewportContextMenuActionSection::Topology);
+      (void)add_catalog_section(menu, ViewportContextMenuActionSection::Merge);
+      (void)add_catalog_section(menu, ViewportContextMenuActionSection::Normals);
+      (void)add_catalog_section(menu, ViewportContextMenuActionSection::Arrange);
 
-      add_separator_after_content(menu);
-      (void)add_command_action(
-          menu, "ui.viewport.context_menu.command.center_selection",
-          "Center View on Selection", quader_command::kViewportFrameSelection,
-          "viewport.frame_selection");
-
-      if (material_under_mouse.has_value() && open_material_editor) {
-        add_separator_after_content(menu);
-        (void)add_material_actions();
-      }
+      (void)add_material_actions();
 
       add_separator_after_content(menu);
       (void)add_command_action(menu, "ui.menu.edit.cut", "Cut",
-                               quader_command::kCutSelection, "edit.cut");
+                               quader_command::kCutSelection, "edit.cut", true);
       (void)add_command_action(menu, "ui.menu.edit.copy", "Copy",
-                               quader_command::kCopySelection, "edit.copy");
+                               quader_command::kCopySelection, "edit.copy", true);
       (void)add_command_action(menu, "ui.menu.edit.paste", "Paste",
                                quader_command::kPasteSelection, "edit.paste",
                                true);
 
-      const std::vector<const QuaderActionItem *> destructive =
-          catalog_actions_for_section(
-              action_set, selection.mode, editor,
-              ViewportContextMenuActionSection::Destructive);
-      if (!destructive.empty()) {
-        add_separator_after_content(menu);
-        for (const QuaderActionItem *action : destructive) {
-          if (action != nullptr) {
-            (void)add_catalog_action(menu, *action);
-          }
-        }
-      }
-    } else {
-      // A material-only hit is possible even if selection projection rejected
-      // the target (for example, a locked mesh). Keep that menu focused on the
-      // operation that is still meaningful.
-      (void)add_material_actions();
+      (void)add_catalog_section(menu,
+                                ViewportContextMenuActionSection::Destructive);
     }
+    const auto actions = menu.actions();
+    if (!actions.empty() && actions.back()->isSeparator()) {
+      delete actions.back();
+    }
+  }
+
+  if (menu.actions().empty()) {
+    return;
   }
 
   QAction *selected_action = nullptr;
@@ -483,9 +635,45 @@ void QtViewportContextMenuPresenter::show(
     return;
   }
 
-  if (selected_action == edit_material_action &&
-      material_under_mouse.has_value() && open_material_editor) {
-    open_material_editor(*material_under_mouse);
+  if (selected_action == apply_curve_solidify) {
+    const auto settings = editor.tools().active_settings();
+    if (settings.tool_id != "curve" ||
+        !std::ranges::any_of(settings.controls, [](const auto &control) {
+          return control.id == "curve.solidify.apply" && control.enabled &&
+                 control.kind == QuaderToolSettingControlKind::Action;
+        })) {
+      return;
+    }
+    const auto result = editor.tools().execute_action("curve", "curve.solidify.apply");
+    if (!runtime_binding.current()) {
+      return;
+    }
+    if (!result.ok()) {
+      (void)editor.ui().notify({.level = QuaderNotificationLevel::Error,
+                               .message = result.error_message()});
+    }
+    return;
+  }
+
+  if (material_face_target.has_value() &&
+      (selected_action == copy_material_to_face ||
+       selected_action == copy_material_to_selection ||
+       selected_action == continue_texture)) {
+    const auto object = static_cast<QuaderModelingObjectId>(
+        material_face_target->object_id);
+    const auto face = static_cast<QuaderElementId>(material_face_target->face_id);
+    const QuaderApiVoidResult result = selected_action == copy_material_to_face
+        ? editor.modeling().apply_selected_face_material_to_face(object, face)
+        : selected_action == copy_material_to_selection
+            ? editor.modeling().apply_face_material_to_selected_faces(object, face)
+            : editor.modeling().transfer_face_texture_to_face(object, face);
+    if (!runtime_binding.current()) {
+      return;
+    }
+    if (!result.ok()) {
+      (void)editor.ui().notify({.level = QuaderNotificationLevel::Error,
+                               .message = result.error_message()});
+    }
     return;
   }
 

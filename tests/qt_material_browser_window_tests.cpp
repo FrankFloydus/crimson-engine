@@ -2241,6 +2241,7 @@ TEST(QtMaterialBrowserWindowTests,
         QStringLiteral("materialBrowser.action.editMaterial"));
     ASSERT_NE(edit, nullptr);
     EXPECT_FALSE(edit->isEnabled());
+    EXPECT_FALSE(edit->isVisible());
     EXPECT_TRUE(actions.removeOne(edit));
     ASSERT_EQ(actions.size(), 13);
     EXPECT_EQ(actions[0]->objectName(),
@@ -2301,6 +2302,7 @@ TEST(QtMaterialBrowserWindowTests,
     ASSERT_EQ(actions.size(), 13);
     for (int index : {0, 1, 3, 4}) {
       EXPECT_FALSE(actions[index]->isEnabled());
+      EXPECT_FALSE(actions[index]->isVisible());
     }
     for (int index : {6, 7, 8, 9, 10, 12}) {
       EXPECT_TRUE(actions[index]->isEnabled());
