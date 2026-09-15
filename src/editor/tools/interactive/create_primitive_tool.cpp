@@ -178,11 +178,12 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
   }
 
   const bool eligible = cube && box.primitive_controls_visible && pointer.hovered &&
-      pointer.viewport_focused && !pointer.navigation_active &&
+      !pointer.navigation_active &&
       !pointer.gizmo_consumed && !pointer.text_input_active &&
       !pointer.pointer_interaction_canceled && !modal.primary_pointer_gesture;
   interaction.hover(eligible ? interaction.hit_test(pointer.mouse_local) : -1);
-  if (eligible && pointer.left_clicked && !pointer.finalize_pressed) {
+  if (eligible && pointer.viewport_focused && pointer.left_clicked &&
+      !pointer.finalize_pressed) {
     const int hit = interaction.hit_test(pointer.left_click_local);
     if (hit >= 0) {
       modal.primitive_creation_drag_started = false;

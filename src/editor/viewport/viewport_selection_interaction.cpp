@@ -1090,8 +1090,12 @@ void ViewportSelectionInteraction::handle_frame(
   const bool gizmo_blocks_hover = gizmo_consumed || before_tool.gizmo_hovered;
   const bool selection_fallback_active =
       frame.active_tool_allows_selection_fallback;
+  // A captured navigation release still carries its centered cursor position.
+  // Picking resumes on the next frame, after the host restores the real cursor.
+  const bool navigation_active = frame.input.navigation_active ||
+                                 frame.input_result.navigation_active;
   const bool suppress_hover_work =
-      frame.input_result.navigation_active ||
+      navigation_active ||
       frame.input_result.camera_changed || frame.input.text_input_active ||
       frame.input.modal_tool_active || frame.input.active_tool_owns_viewport ||
       gizmo_blocks_hover;
@@ -1099,7 +1103,7 @@ void ViewportSelectionInteraction::handle_frame(
       selection_fallback_active && !frame.input.text_input_active &&
       !frame.input.modal_tool_active &&
       !frame.input.active_tool_owns_viewport &&
-      !frame.input_result.navigation_active &&
+      !navigation_active &&
       !frame.input_result.camera_changed && !gizmo_consumed &&
       !tool_result.handled;
   const bool can_pick =
@@ -1348,7 +1352,7 @@ void ViewportSelectionInteraction::handle_frame(
       (curve->active() || can_use_selection_fallback) &&
       !frame.input.pointer_interaction_canceled &&
       !frame.input_result.cancel_requested &&
-      !frame.input_result.navigation_active &&
+      !navigation_active &&
       !frame.input_result.camera_changed && !frame.input_result.view_changed &&
       !frame.input.text_input_active && !frame.input.modifiers.alt &&
       frame.input.curve_conversion_edges.empty() && !curve->dragging() &&
@@ -1650,7 +1654,7 @@ void ViewportSelectionInteraction::handle_frame(
       tool_result.handled &&
       frame.input_router.state().active_tool == ViewportToolId::Knife &&
       frame.input.viewport_hovered && !frame.input.text_input_active &&
-      !frame.input_result.navigation_active &&
+      !navigation_active &&
       !frame.input_result.camera_changed && !gizmo_blocks_hover;
   if (knife_authored_hover_this_frame) {
     // Knife owns component hover while its point resolver is eligible to run.

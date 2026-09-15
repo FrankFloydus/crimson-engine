@@ -109,11 +109,11 @@ application_cursor_variant(QtViewportCursorPresentation presentation) {
 
 QtViewportCursorPresentation
 qt_viewport_cursor_presentation(ViewportPointerCursor requested,
-                                bool hovered, bool focused, bool captured) {
+                                bool hovered, bool captured) {
   if (captured) {
     return QtViewportCursorPresentation::Hidden;
   }
-  if (!hovered || !focused) {
+  if (!hovered) {
     return QtViewportCursorPresentation::Default;
   }
   switch (requested) {
@@ -196,7 +196,7 @@ struct QtViewportSurface::InputAccumulator {
 void QtViewportSurface::synchronize_interaction_cursor() {
   const QtViewportCursorPresentation next = qt_viewport_cursor_presentation(
       interaction_cursor_, input_ != nullptr && input_->hovered,
-      input_ != nullptr && input_->focused, pointer_captured());
+      pointer_captured());
   const bool custom_selection_cursor =
       next == QtViewportCursorPresentation::SelectionDefault ||
       next == QtViewportCursorPresentation::SelectionAdd ||

@@ -14,6 +14,12 @@
 #include <QStyleHints>
 
 namespace quader {
+
+QColor qt_current_item_outline_color() {
+  // The orange authored in the face-selection toolbar icon.
+  return QColor(255, 143, 24);
+}
+
 namespace {
 
 void apply_shared_obsidian_roles(QPalette &palette) {

@@ -42,7 +42,6 @@
 
 class QAction;
 class QFrame;
-class QFocusFrame;
 class QLabel;
 class QMenu;
 class QMouseEvent;
@@ -292,7 +291,8 @@ private:
   ViewportSplitHandleId active_split_handle_ =
       ViewportSplitHandleId::TwoHorizontal;
   bool split_handle_dragging_ = false;
-  QFocusFrame *focused_pane_frame_ = nullptr;
+  QWidget *focused_pane_frame_ = nullptr;
+  int focused_pane_border_width_ = 0;
   // Non-owning runtime pair. UISystem abandons it without dereferencing it
   // before a runtime rebind because the previous scene services may already
   // be destroyed. Shutdown resets may use it only while the binding is live.

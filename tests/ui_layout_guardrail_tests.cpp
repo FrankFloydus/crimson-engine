@@ -2423,10 +2423,6 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(raw_input_gate, std::string::npos);
   ASSERT_NE(localized_presentation, std::string::npos);
   EXPECT_LT(raw_input_gate, localized_presentation);
-  expect_contains(panel_header, "QFocusFrame *focused_pane_frame_");
-  expect_contains(panel, "new QFocusFrame(this)");
-  expect_contains(panel, "displayed_placements_.size() <= 1u");
-  expect_contains(panel, "focused_pane_frame_->setWidget(target)");
   expect_contains(panel, "result.fly_hud_active");
   expect_contains(panel, "camera.fly_speed_is_default()");
   expect_contains(cmake,
@@ -2784,8 +2780,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel_header, "bool control_selection_valid = false");
   expect_contains(panel,
                   "pane_state.control_selection_valid &&");
-  expect_contains(panel,
-                  "if (target_changed || was_hidden)");
 }
 
 TEST(UiLayoutGuardrailTests,

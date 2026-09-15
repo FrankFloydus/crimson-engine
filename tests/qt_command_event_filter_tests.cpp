@@ -16,6 +16,7 @@
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_face_texture_panel.hpp"
+#include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -34,6 +35,7 @@
 #include <QEnterEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QListView>
 #include <QMenu>
 #include <QPointer>
 #include <QPushButton>
@@ -788,6 +790,204 @@ TEST(QtCommandEventFilterTests,
   EXPECT_EQ(notifications.back().message, notifications.front().message);
   EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
   application.removeEventFilter(&command_filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     EmbeddedMaterialBrowserRoutesToolsAndSequencesBeforeTypeAhead) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-material-browser-command-focus-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Browser Shortcut Selection");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+  const auto primitive = quader::quader_command::kToolsActivateCreatePrimitive;
+  ASSERT_EQ(editor.commands().shortcut_for(primitive), "Shift+B");
+
+  QMainWindow window;
+  window.resize(800, 900);
+  auto *dock = new QDockWidget(&window);
+  dock->setObjectName(QStringLiteral("dock_face_texture"));
+  auto *panel = new quader::QtFaceTexturePanel(dock);
+  dock->setWidget(panel);
+  window.addDockWidget(Qt::RightDockWidgetArea, dock);
+  panel->bind(editor);
+  auto *browser = dynamic_cast<quader::QtMaterialBrowserWindow *>(
+      panel->findChild<QMainWindow *>(QStringLiteral("materialBrowser.embedded")));
+  ASSERT_NE(browser, nullptr);
+  const auto first = quader::QuaderMaterialReference::embedded(111);
+  const auto second = quader::QuaderMaterialReference::embedded(222);
+  browser->set_materials({
+      {.reference = first, .stable_id = QStringLiteral("embedded:111"),
+       .name = QStringLiteral("Alpha")},
+      {.reference = second, .stable_id = QStringLiteral("embedded:222"),
+       .name = QStringLiteral("Brick")}}, first);
+  quader::QtCommandEventFilter filter(editor, {});
+  application.installEventFilter(&filter);
+  window.show();
+  QCoreApplication::processEvents();
+
+  for (bool floating : {false, true}) {
+    SCOPED_TRACE(floating);
+    dock->setFloating(floating);
+    browser->restore_presentation_state(
+        quader::QtMaterialBrowserViewMode::Grid, 64, false);
+    browser->set_selected_material(first);
+    auto *view = browser->findChild<QListView *>(
+        QStringLiteral("materialBrowser.gridView"));
+    ASSERT_NE(view, nullptr);
+    dock->window()->activateWindow();
+    view->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), view);
+    const QModelIndex selected_before = view->currentIndex();
+    ASSERT_TRUE(selected_before.isValid());
+    ASSERT_TRUE(editor.commands().execute(
+        quader::quader_command::kToolsActivateSelect).ok());
+    send_key_press(*view, Qt::Key_B, Qt::ShiftModifier, QStringLiteral("B"));
+    EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+    EXPECT_EQ(view->currentIndex(), selected_before);
+    EXPECT_EQ(browser->current_selected_material(), first);
+    EXPECT_EQ(QApplication::focusWidget(), view);
+    EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
+
+    // The browser's explicit navigation owns arrows even after a command
+    // is customized to the same chord; ordinary tool letters stay global.
+    ASSERT_TRUE(editor.commands().set_shortcut(primitive, "Down").ok());
+    ASSERT_TRUE(editor.commands().execute(
+        quader::quader_command::kToolsActivateSelect).ok());
+    const auto status_before_navigation = editor.commands().last_status_revision();
+    send_key_press(*view, Qt::Key_Down, Qt::NoModifier);
+    EXPECT_EQ(editor.commands().last_status_revision(), status_before_navigation);
+    EXPECT_EQ(editor.tools().active_tool(), "select");
+    ASSERT_TRUE(editor.commands().set_shortcut(primitive, "B").ok());
+    browser->set_selected_material(first);
+    send_key_press(*view, Qt::Key_B, Qt::NoModifier, QStringLiteral("b"));
+    EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+    EXPECT_EQ(browser->current_selected_material(), first);
+
+    ASSERT_TRUE(editor.commands().set_shortcut(primitive, "Ctrl+Alt+F24 G").ok());
+    ASSERT_TRUE(editor.commands().execute(
+        quader::quader_command::kToolsActivateSelect).ok());
+    send_key_press(*view, Qt::Key_F24, Qt::ControlModifier | Qt::AltModifier);
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    editor.commands().reset_pending_viewport_keybinding_chord();
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    send_key_press(*view, Qt::Key_G, Qt::NoModifier, QStringLiteral("g"));
+    EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+    ASSERT_TRUE(editor.commands().set_shortcut(primitive, "Ctrl+B").ok());
+    ASSERT_TRUE(editor.commands().execute(
+        quader::quader_command::kToolsActivateSelect).ok());
+    send_key_press(*view, Qt::Key_B, Qt::ControlModifier, QStringLiteral("b"));
+    EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+    EXPECT_EQ(browser->current_selected_material(), first);
+    ASSERT_TRUE(editor.commands().reset_shortcut(primitive).ok());
+  }
+  panel->unbind();
+  application.removeEventFilter(&filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     EditorPanelModeAndGridBindingsUseOwnersAndCancelActivePreviews) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-editor-panel-mode-shortcut-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Panel Mode Preview");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  QTreeWidget panel;
+  panel.setSelectionMode(QAbstractItemView::ExtendedSelection);
+  panel.addTopLevelItem(new QTreeWidgetItem({QStringLiteral("1 First item")}));
+  panel.addTopLevelItem(new QTreeWidgetItem({QStringLiteral("2 Second item")}));
+  panel.setCurrentItem(panel.topLevelItem(0));
+  panel.resize(320, 240);
+  panel.show();
+  panel.activateWindow();
+  panel.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &panel);
+  quader::QtCommandEventFilter filter(editor, {});
+  application.installEventFilter(&filter);
+
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                         quader::QuaderSelectionMode::Edge,
+                         quader::QuaderSelectionMode::Face,
+                         quader::QuaderSelectionMode::Object,
+                         quader::QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    const std::string target = editor.commands().keybinding_target_id_for_selection_mode(mode);
+    const QString mapping = QString::fromStdString(editor.commands().shortcut_for(target));
+    ASSERT_EQ(mapping.size(), 1);
+    send_key_press(panel, mapping.at(0).unicode(), Qt::NoModifier, mapping);
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+    EXPECT_EQ(panel.currentItem(), panel.topLevelItem(0));
+  }
+
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", "sphere").ok());
+  ASSERT_TRUE(editor.tools().has_active_primitive_creation());
+  send_key_press(panel, Qt::Key_3, Qt::NoModifier, QStringLiteral("3"));
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  EXPECT_FALSE(editor.tools().has_active_primitive_creation());
+  EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  const auto mesh_before = editor.query().mesh(box.value().mesh);
+  ASSERT_TRUE(mesh_before.has_value());
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+  send_key_press(panel, Qt::Key_4, Qt::NoModifier, QStringLiteral("4"));
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
+  const auto mesh_after = editor.query().mesh(box.value().mesh);
+  ASSERT_TRUE(mesh_after.has_value());
+  EXPECT_EQ(mesh_after->vertex_count, mesh_before->vertex_count);
+  EXPECT_EQ(mesh_after->primitive_count, mesh_before->primitive_count);
+
+  const std::string face_target = editor.commands().keybinding_target_id_for_selection_mode(
+      quader::QuaderSelectionMode::Face);
+  ASSERT_TRUE(editor.commands().set_shortcut(face_target, "Down").ok());
+  send_key_press(panel, Qt::Key_Down, Qt::NoModifier);
+  EXPECT_EQ(panel.currentItem(), panel.topLevelItem(1));
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  ASSERT_TRUE(editor.commands().set_shortcut(face_target, "Ctrl+Alt+F23").ok());
+  send_key_press(panel, Qt::Key_F23, Qt::ControlModifier | Qt::AltModifier);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  ASSERT_TRUE(editor.commands().reset_shortcut(face_target).ok());
+
+  const std::string grid_target = editor.commands().keybinding_target_id_for_grid_preset(2);
+  const auto grid_binding = editor.commands().set_shortcut(grid_target, "Ctrl+Alt+F24 G");
+  ASSERT_TRUE(grid_binding.ok()) << grid_binding.error_message();
+  ASSERT_TRUE(editor.viewports().set_grid_preset(6).ok());
+  send_key_press(panel, Qt::Key_F24, Qt::ControlModifier | Qt::AltModifier);
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  editor.commands().reset_pending_viewport_keybinding_chord();
+  send_key_press(panel, Qt::Key_G, Qt::NoModifier, QStringLiteral("g"));
+  EXPECT_EQ(editor.viewports().grid_preset(), 2);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  application.removeEventFilter(&filter);
 }
 
 TEST(QtCommandEventFilterTests,

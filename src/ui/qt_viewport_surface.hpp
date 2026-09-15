@@ -24,7 +24,7 @@ namespace quader {
 
 enum class ViewportPaneFocusTrigger;
 
-/** Resolved Qt presentation after focus and navigation-capture precedence. */
+/** Resolved Qt presentation after hover and navigation-capture precedence. */
 enum class QtViewportCursorPresentation {
   Default,
   SelectionDefault,
@@ -38,7 +38,7 @@ enum class QtViewportCursorPresentation {
 
 [[nodiscard]] QtViewportCursorPresentation
 qt_viewport_cursor_presentation(ViewportPointerCursor requested,
-                                bool hovered, bool focused, bool captured);
+                                bool hovered, bool captured);
 
 /**
  * One frame of toolkit input captured by a Qt viewport surface. Raw Qt events

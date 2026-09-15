@@ -74,7 +74,7 @@ bool TwoStageBoxTool::rollback_failed_preview(
 
 ViewportPointerCursor TwoStageBoxTool::pointer_cursor() const {
   // The same precision target remains meaningful before, during, and after a
-  // footprint drag. Navigation and focus policy temporarily override it at
+  // footprint drag. Navigation and hover policy temporarily override it at
   // the host boundary without making the tool aware of Qt cursors.
   return ViewportPointerCursor::PrecisionCross;
 }
@@ -346,7 +346,8 @@ ViewportToolResult TwoStageBoxTool::handle_event(
         (release != nullptr ||
          (modal_state.primary_pointer_gesture->press.sequence == 0u &&
           pointer.pointer_released_edges.empty()));
-    if (!action_consumed && matching_release &&
+    // A first drag can begin and end between two host frames.
+    if ((!action_consumed || settings_operation_started) && matching_release &&
         preview.drag_state == ModelingBoxDragState::Footprint &&
         !pointer.gizmo_consumed && !pointer.navigation_active) {
       const QVec2 release_local =

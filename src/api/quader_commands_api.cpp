@@ -224,25 +224,33 @@ constexpr std::string_view viewport_command_keybinding_context() {
 }
 
 constexpr std::string_view editor_command_keybinding_context() {
-  return "(viewportFocus || outlinerFocus) && !textInputActive && "
+  return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
          "!navigation.active";
 }
 
+bool editor_panel_can_apply_shortcut(std::string_view target_id) {
+  ViewportShortcut shortcut;
+  return viewport_shortcut_for_command_target_id(target_id, shortcut) &&
+         (shortcut.kind == ViewportShortcutKind::SetSelectionMode ||
+          shortcut.kind == ViewportShortcutKind::SetGridPreset);
+}
+
 constexpr std::string_view primitive_flip_keybinding_context() {
-  return "viewportFocus && !textInputActive && !navigation.active && "
-         "activeTool.create_primitive && "
+  return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
+         "!navigation.active && activeTool.create_primitive && "
          "primitiveCreation.active";
 }
 
 constexpr std::string_view primitive_caps_keybinding_context() {
-  return "viewportFocus && !textInputActive && !navigation.active && "
-         "activeTool.create_primitive && "
+  return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
+         "!navigation.active && activeTool.create_primitive && "
          "(primitiveCreation.cylinder || primitiveCreation.cone)";
 }
 
 constexpr std::string_view primitive_hemisphere_keybinding_context() {
-  return "viewportFocus && !textInputActive && !navigation.active && "
-         "activeTool.create_primitive && primitiveCreation.sphere";
+  return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
+         "!navigation.active && activeTool.create_primitive && "
+         "primitiveCreation.sphere";
 }
 
 bool is_primitive_caps_conflicting_tool(std::string_view command_id) {
@@ -259,14 +267,8 @@ bool is_modeling_face_flip_command(std::string_view command_id) {
          command_id == quader_command::kModelingFlipFaceNormals.string();
 }
 
-constexpr std::string_view unobstructed_viewport_keybinding_context() {
-  return "viewportFocus && !textInputActive && !navigation.active && "
-         "!modalTool.active && !activeTool.ownsViewport && "
-         "!transformDrag.active && !operationPreview.active";
-}
-
 constexpr std::string_view unobstructed_editor_command_keybinding_context() {
-  return "(viewportFocus || outlinerFocus) && !textInputActive && "
+  return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
          "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
          "!transformDrag.active && !operationPreview.active";
 }
@@ -364,13 +366,13 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return save_command_keybinding_context();
   }
   if (command_id == quader_command::kEditClearSelection.string()) {
-    return "(viewportFocus || outlinerFocus) && !textInputActive && "
+    return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
            "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
            "!transformDrag.active && !operationPreview.active && "
            "!activeTool.uv_peel && selection.allowedByTool";
   }
   if (command_id == quader_command::kViewportFrameSelection.string()) {
-    return unobstructed_viewport_keybinding_context();
+    return unobstructed_editor_command_keybinding_context();
   }
   if (command_id == quader_command::kToolsFlipPrimitiveFaces.string()) {
     return primitive_flip_keybinding_context();
@@ -382,16 +384,17 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return primitive_hemisphere_keybinding_context();
   }
   if (command_id == quader_command::kSceneHideSelection.string()) {
-    return "(viewportFocus || outlinerFocus) && !textInputActive && "
+    return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
            "!navigation.active && "
            "!primitiveCreation.sphere";
   }
   if (is_primitive_caps_conflicting_tool(command_id)) {
-    return "viewportFocus && !textInputActive && !navigation.active && "
-           "!primitiveCreation.cylinder && !primitiveCreation.cone";
+    return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
+           "!navigation.active && !primitiveCreation.cylinder && "
+           "!primitiveCreation.cone";
   }
   if (is_modeling_face_flip_command(command_id)) {
-    return "(viewportFocus || outlinerFocus) && !textInputActive && "
+    return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
            "!navigation.active && "
            "!primitiveCreation.active";
   }
@@ -405,17 +408,15 @@ default_keybinding_context_for_command(std::string_view command_id) {
           quader_command::kViewportToggleLocalVisibility.string() ||
       command_id ==
           quader_command::kViewportToggleTransformSpace.string()) {
-    return unobstructed_viewport_keybinding_context();
+    return unobstructed_editor_command_keybinding_context();
   }
   if (command_semantically_requires_viewport(command_id)) {
-    return viewport_target_requires_router_dispatch(command_id)
-               ? viewport_command_keybinding_context()
-               : editor_command_keybinding_context();
+    return editor_command_keybinding_context();
   }
   ViewportShortcut shortcut;
   if (viewport_shortcut_for_command_target_id(command_id, shortcut) &&
       shortcut.context == ViewportShortcutContext::Viewport) {
-    return viewport_command_keybinding_context();
+    return editor_command_keybinding_context();
   }
   return global_command_keybinding_context();
 }
@@ -500,6 +501,7 @@ viewport_keybinding_context(const ViewportToolState &state,
   QuaderKeybindingContext context;
   context.set("viewportFocus", viewport_focused);
   context.set("outlinerFocus", input_context.outliner_focused);
+  context.set("editorFocus", input_context.editor_focused);
   context.set("viewport.hovered", input_context.viewport_hovered);
   context.set("viewport.orthographic", input_context.orthographic_view);
   context.set("textInputActive", text_input_active);
@@ -1159,7 +1161,10 @@ public:
 #endif
     EditorCommandRegistry registry_;
     QuaderKeybindingService keybindings_;
-    bool pending_keybinding_from_outliner_ = false;
+    /// Identifies which adapter owns the shared in-progress sequence.
+    enum class KeybindingInputOwner { Viewport, Outliner, Editor };
+    KeybindingInputOwner pending_keybinding_owner_ =
+        KeybindingInputOwner::Viewport;
     QuaderKeybindingTargetCatalog keybinding_target_catalog_;
     std::optional<QuaderApiStatus> last_status_;
     std::uint64_t last_status_revision_ = 0;
@@ -1872,22 +1877,27 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
     return {};
   }
 
+  const KeybindingInputOwner input_owner = input_context.outliner_focused
+      ? KeybindingInputOwner::Outliner
+      : input_context.editor_focused ? KeybindingInputOwner::Editor
+                                     : KeybindingInputOwner::Viewport;
+  const bool panel_owns_input = input_owner != KeybindingInputOwner::Viewport;
   if (keybindings_.has_pending_chord() &&
-      pending_keybinding_from_outliner_ != input_context.outliner_focused) {
+      pending_keybinding_owner_ != input_owner) {
     reset_pending_keybinding_chord();
   }
 
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, viewport_focused, text_input_active, input_context,
       api_.history().can_undo(), api_.history().can_redo(), tools_);
-  const auto target_available = [this, &state, input_context](
+  const auto target_available = [this, &state, panel_owns_input](
                                     std::string_view target_id) {
     const bool registered = registry_.contains(target_id);
-    // A hierarchy interaction can execute public commands, but has no
-    // viewport pointer or router to consume navigation and semantic actions.
-    // Filter before sequence resolution so their prefixes cannot take input.
-    if (input_context.outliner_focused &&
-        (!registered || viewport_target_requires_router_dispatch(target_id))) {
+    // Editor panels execute commands and the two owner-only mode/grid intents.
+    // Pointer, navigation, and popup targets need the viewport's semantic router.
+    // Exclude those before resolving a sequence so they cannot take a prefix.
+    if (panel_owns_input && !registered &&
+        !editor_panel_can_apply_shortcut(target_id)) {
       return false;
     }
     if (registered && !registry_.enabled(target_id)) {
@@ -1909,9 +1919,7 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   };
   const QuaderKeybindingDispatch dispatch =
       keybindings_.dispatch(chord, context, target_available);
-  pending_keybinding_from_outliner_ =
-      dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord &&
-      input_context.outliner_focused;
+  pending_keybinding_owner_ = input_owner;
   if (dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
     return {
         .kind = QuaderViewportKeybindingDispatch::Kind::PendingChord,
@@ -1930,7 +1938,8 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   }
 
   if (registry_.contains(dispatch.target_id) &&
-      !viewport_target_requires_router_dispatch(dispatch.target_id)) {
+      (panel_owns_input ||
+       !viewport_target_requires_router_dispatch(dispatch.target_id))) {
     return {
         .kind = QuaderViewportKeybindingDispatch::Kind::Command,
         .command_id = dispatch.target_id,
@@ -2044,11 +2053,11 @@ QuaderCommandsApi::Impl::execute_native_tool_settings_intent(
 
 void QuaderCommandsApi::Impl::reset_pending_keybinding_chord() {
   keybindings_.reset_pending_chord();
-  pending_keybinding_from_outliner_ = false;
+  pending_keybinding_owner_ = KeybindingInputOwner::Viewport;
 }
 
 void QuaderCommandsApi::Impl::reset_pending_viewport_keybinding_chord() {
-  if (!pending_keybinding_from_outliner_) {
+  if (pending_keybinding_owner_ == KeybindingInputOwner::Viewport) {
     reset_pending_keybinding_chord();
   }
 }
@@ -2824,7 +2833,8 @@ void QuaderCommandsApi::Impl::register_commands() {
       command_keybinding_localization_key(
           quader_command::kViewportGridReset.string()),
       QuaderKeybindingContextKind::Viewport,
-      "viewportFocus && !textInputActive", "Alt+MiddleMouseClick");
+      "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive",
+      "Alt+MiddleMouseClick");
 
   for (const QuaderMeshArrangementDescriptor &descriptor :
        quader_mesh_arrangement_catalog()) {
@@ -2925,11 +2935,11 @@ void QuaderCommandsApi::Impl::register_viewport_view_command(
 
 void QuaderCommandsApi::Impl::register_default_keybindings() {
   constexpr std::string_view kOperationPreviewContext =
-      "viewportFocus && !textInputActive && !navigation.active && "
-      "operationPreview.active";
+      "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
+      "!navigation.active && operationPreview.active";
   constexpr std::string_view kPrimitiveToolContext =
-      "viewportFocus && !textInputActive && !navigation.active && "
-      "activeTool.create_primitive";
+      "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
+      "!navigation.active && activeTool.create_primitive";
   register_keybinding_target_metadata(
       std::string(quader_command::kModelingApplyActivePreview.string()),
       "Apply Active Preview",
@@ -2995,11 +3005,11 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
   constexpr std::string_view kViewportContext =
       "viewportFocus && !textInputActive";
   constexpr std::string_view kOperationPreviewContext =
-      "viewportFocus && !textInputActive && !navigation.active && "
-      "operationPreview.active";
+      "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
+      "!navigation.active && operationPreview.active";
   constexpr std::string_view kPrimitiveToolContext =
-      "viewportFocus && !textInputActive && !navigation.active && "
-      "activeTool.create_primitive";
+      "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
+      "!navigation.active && activeTool.create_primitive";
 
   register_keybinding_target_metadata(
       viewport_input_action_target_id("cancel_active_tool"),
@@ -3067,7 +3077,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
         target_id, std::string(mode.label),
         stable_keybinding_localization_key(target_id),
         QuaderKeybindingContextKind::Viewport,
-        std::string(viewport_command_keybinding_context()));
+        std::string(editor_command_keybinding_context()));
   }
 
   for (const ViewportGridPresetDescriptor &preset :
@@ -3083,7 +3093,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
         target_id, std::move(label),
         stable_keybinding_localization_key(target_id),
         QuaderKeybindingContextKind::Viewport,
-        std::string(viewport_command_keybinding_context()));
+        std::string(editor_command_keybinding_context()));
   }
 
   keybindings_.add_default_keybinding(
@@ -3147,26 +3157,26 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
 
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("vertex"), "1",
-      std::string(viewport_command_keybinding_context()), 5);
+      std::string(editor_command_keybinding_context()), 5);
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("edge"), "2",
-      std::string(viewport_command_keybinding_context()), 5);
+      std::string(editor_command_keybinding_context()), 5);
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("face"), "3",
-      std::string(viewport_command_keybinding_context()), 5);
+      std::string(editor_command_keybinding_context()), 5);
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("object"), "4",
-      std::string(viewport_command_keybinding_context()), 5);
+      std::string(editor_command_keybinding_context()), 5);
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("group"), "5",
-      std::string(viewport_command_keybinding_context()), 5);
+      std::string(editor_command_keybinding_context()), 5);
 
   const std::vector<ViewportGridShortcutBindingDescriptor> presets =
       viewport_grid_shortcut_binding_catalog();
   for (const ViewportGridShortcutBindingDescriptor &preset : presets) {
     keybindings_.add_default_keybinding(
         viewport_grid_preset_target_id(preset.preset), preset.shortcut,
-        std::string(viewport_command_keybinding_context()), 10);
+        std::string(editor_command_keybinding_context()), 10);
   }
 
 }
@@ -3213,6 +3223,9 @@ void QuaderCommandsApi::Impl::register_keybinding_target_metadata(
     std::string target_id, std::string label, std::string localization_key,
     QuaderKeybindingContextKind context, std::string when,
     std::string default_shortcut, std::string action_id) {
+  // Deliberately unassigned targets are still bindable, including viewport
+  // metadata registered after the compiled command-default pass.
+  keybindings_.register_target(target_id);
   keybinding_target_catalog_.register_target(
       std::move(target_id), std::move(label), std::move(localization_key),
       context, std::move(when), std::move(default_shortcut),
@@ -3231,7 +3244,7 @@ void QuaderCommandsApi::Impl::set_keybinding_selection_modes(
       (command_semantically_requires_viewport(target_id) ||
        is_primitive_caps_conflicting_tool(target_id))
           ? default_keybinding_context_for_command(target_id)
-          : viewport_command_keybinding_context());
+          : editor_command_keybinding_context());
 }
 
 void QuaderCommandsApi::Impl::set_keybinding_selection_modes_for_modeling_action(

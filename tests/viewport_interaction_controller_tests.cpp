@@ -1684,6 +1684,7 @@ TEST(ViewportInteractionControllerTests,
      SelectionModifierCursorCoversModesAndFreezesMarqueeIntent) {
   using Cursor = quader::ViewportPointerCursor;
   ViewportInteractionHarness harness;
+  harness.input.viewport_focused = false;
   const auto present_cursor = [&] {
     (void)harness.controller.handle_before_active_tool(harness.editor,
                                                        harness.frame());
@@ -1722,6 +1723,7 @@ TEST(ViewportInteractionControllerTests,
   harness.input.cycle_selection_depth_pressed = false;
   harness.input.cycle_selection_depth_modifiers = {};
 
+  harness.input.viewport_focused = true;
   harness.input.modifiers = {.shift = true};
   const quader::QVec2 start{120.0f, 140.0f};
   harness.input.mouse_local = start;
@@ -1740,6 +1742,11 @@ TEST(ViewportInteractionControllerTests,
   EXPECT_EQ(present_cursor(), Cursor::SelectionAdd);
 
   harness.input.viewport_focused = false;
+  EXPECT_EQ(present_cursor(), Cursor::SelectionAdd);
+  harness.input.viewport_hovered = false;
+  EXPECT_EQ(present_cursor(), Cursor::Default);
+  harness.input.viewport_hovered = true;
+  harness.input.text_input_active = true;
   EXPECT_EQ(present_cursor(), Cursor::Default);
 }
 
@@ -1972,6 +1979,149 @@ TEST(ViewportPointerGestureTests,
           false);
   EXPECT_FALSE(canceled_release.completed);
   EXPECT_FALSE(harness.controller.context_menu_pointer_active());
+}
+
+/// Routes real fly-camera input before resolving a synthetic right-click gesture.
+struct ContextMenuNavigationHarness final : ViewportInteractionHarness {
+  std::uint64_t pointer_sequence = 1u;
+
+  quader::ViewportContextMenuPointerResult right_frame(bool pressed, bool down,
+                                                       bool released) {
+    input.fly_navigation_active = router.fly_navigating();
+    input.navigation_active = router.navigating();
+    input.right_pressed = pressed;
+    input.right_down = down;
+    input.right_released = released;
+    input.navigation_bindings.fly_pressed = pressed;
+    input.navigation_bindings.fly_down = down;
+    input.navigation_bindings.fly_released = released;
+    input.pointer_pressed_edges.clear();
+    input.pointer_released_edges.clear();
+    const quader::ViewportPointerButtonEdge edge{
+        .button = quader::QuaderMouseButton::Right,
+        .local = input.mouse_local,
+        .sequence = pointer_sequence++,
+    };
+    if (pressed) {
+      input.pointer_pressed_edges.push_back(edge);
+    }
+    if (released) {
+      input.pointer_released_edges.push_back(edge);
+    }
+    input_result = router.handle_frame(input, camera);
+    auto interaction = frame(false, false, false, {}, pressed, down, released,
+                             input.mouse_local);
+    interaction.pointer_drag_threshold_pixels = 7.0f;
+    interaction.pointer_capture_recentered = true;
+    return controller.handle_context_menu_pointer(interaction, false);
+  }
+};
+
+TEST(ViewportPointerGestureTests,
+     FlyMovementPermanentlyConsumesRightClickUntilTheNextPress) {
+  const std::array directions{
+      quader::QVec3{1.0f, 0.0f, 0.0f}, quader::QVec3{-1.0f, 0.0f, 0.0f},
+      quader::QVec3{0.0f, 1.0f, 0.0f}, quader::QVec3{0.0f, -1.0f, 0.0f},
+      quader::QVec3{0.0f, 0.0f, 1.0f}, quader::QVec3{0.0f, 0.0f, -1.0f},
+  };
+  for (const quader::QVec3 direction : directions) {
+    for (const bool stop_before_release : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "direction " << direction.x << "," << direction.y
+                   << "," << direction.z
+                   << "; stop before release " << stop_before_release);
+      ContextMenuNavigationHarness harness;
+      const auto box = create_unit_box(harness);
+      ASSERT_TRUE(harness.editor.selection()
+                      .set_mode(quader::QuaderSelectionMode::Object)
+                      .ok());
+      harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+      ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+      harness.session.history().clear();
+      const auto selected_before = selected_entities(harness);
+      const auto eye_before = harness.camera.pose().eye;
+      harness.input.delta_seconds = 1.0f / 600.0f;
+
+      EXPECT_FALSE(harness.right_frame(true, true, false).completed);
+      ASSERT_TRUE(harness.controller.context_menu_pointer_active());
+      harness.input.fly_local_direction = direction;
+      EXPECT_FALSE(harness.right_frame(false, true, false).completed);
+      EXPECT_GT(quader::length(harness.camera.pose().eye - eye_before),
+                0.00001f);
+      if (stop_before_release) {
+        harness.input.fly_local_direction = {};
+        EXPECT_FALSE(harness.right_frame(false, true, false).completed);
+      }
+      EXPECT_FALSE(harness.right_frame(false, false, true).completed);
+      EXPECT_EQ(selected_entities(harness), selected_before);
+      EXPECT_FALSE(harness.editor.history().can_undo());
+      EXPECT_FALSE(harness.editor.history().can_redo());
+
+      harness.input.fly_local_direction = {};
+      EXPECT_FALSE(harness.right_frame(true, true, false).completed);
+      const auto click = harness.right_frame(false, false, true);
+      ASSERT_TRUE(click.completed);
+      ASSERT_TRUE(click.release_inside_viewport);
+      const auto target = harness.controller.pick_context_menu_target(
+          harness.editor, harness.frame());
+      EXPECT_TRUE(target.has_selection);
+      EXPECT_EQ(selected_entities(harness), selected_before)
+          << "the pointer still rests on the same mesh after navigation";
+    }
+  }
+}
+
+TEST(ViewportPointerGestureTests,
+     FlyLookExcursionCannotBecomeAClickByReturningToThePressPosition) {
+  for (const quader::QVec2 excursion :
+       {quader::QVec2{}, quader::QVec2{3.0f, 4.0f},
+        quader::QVec2{8.0f, 0.0f}}) {
+    SCOPED_TRACE(::testing::Message()
+                 << "excursion " << excursion.x << "," << excursion.y);
+    ContextMenuNavigationHarness harness;
+    EXPECT_FALSE(harness.right_frame(true, true, false).completed);
+    for (int idle_frame = 0; idle_frame < 3; ++idle_frame) {
+      EXPECT_FALSE(harness.right_frame(false, true, false).completed);
+    }
+    const float yaw_before = harness.camera.state().yaw_radians;
+    harness.input.mouse_delta = excursion;
+    EXPECT_FALSE(harness.right_frame(false, true, false).completed);
+    if (excursion.x != 0.0f) {
+      EXPECT_NE(harness.camera.state().yaw_radians, yaw_before);
+    }
+    harness.input.mouse_delta = excursion * -1.0f;
+    EXPECT_FALSE(harness.right_frame(false, true, false).completed);
+    harness.input.mouse_delta = {};
+    const auto release = harness.right_frame(false, false, true);
+    EXPECT_EQ(release.completed, std::hypot(excursion.x, excursion.y) <= 7.0f);
+    EXPECT_FALSE(harness.right_frame(true, true, false).completed);
+    EXPECT_TRUE(harness.right_frame(false, false, true).completed);
+  }
+}
+
+TEST(ViewportPointerGestureTests,
+     FlySpeedEditConsumesRightClickAfterWheelOrResetHasStopped) {
+  for (const bool reset_speed : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "reset speed " << reset_speed);
+    ContextMenuNavigationHarness harness;
+    if (reset_speed) {
+      harness.camera.adjust_fly_speed(1.0f);
+    }
+    const float speed_before = harness.camera.fly_speed();
+    EXPECT_FALSE(harness.right_frame(true, true, false).completed);
+    harness.input.navigation_bindings.reset_fly_speed_pressed = reset_speed;
+    harness.input.navigation_bindings.zoom_wheel = !reset_speed;
+    harness.input.mouse_wheel = reset_speed ? 0.0f : 1.0f;
+    EXPECT_FALSE(harness.right_frame(false, true, false).completed);
+    EXPECT_NE(harness.camera.fly_speed(), speed_before);
+    harness.input.navigation_bindings.reset_fly_speed_pressed = false;
+    harness.input.navigation_bindings.zoom_wheel = false;
+    harness.input.mouse_wheel = 0.0f;
+    EXPECT_FALSE(harness.right_frame(false, true, false).completed);
+    EXPECT_FALSE(harness.right_frame(false, false, true).completed);
+    EXPECT_FALSE(harness.right_frame(true, true, false).completed);
+    EXPECT_TRUE(harness.right_frame(false, false, true).completed);
+  }
 }
 
 TEST(ViewportPointerGestureTests,
@@ -7695,6 +7845,129 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportSelectionInteractionTests,
+     FlyReleaseDoesNotPickTheReticleOrAdoptItsMeshAsAHoverCandidate) {
+  struct ModeCase final {
+    quader::QuaderSelectionMode api_mode;
+    quader::ViewportSelectionMode viewport_mode;
+    quader::QuaderActiveSelectionKind hover_kind;
+    quader::QVec3 target;
+  };
+  const std::array cases{
+      ModeCase{quader::QuaderSelectionMode::Object,
+               quader::ViewportSelectionMode::Object,
+               quader::QuaderActiveSelectionKind::Object, {0.0f, 0.0f, 1.0f}},
+      ModeCase{quader::QuaderSelectionMode::Vertex,
+               quader::ViewportSelectionMode::Vertex,
+               quader::QuaderActiveSelectionKind::Vertex, {1.0f, 1.0f, 1.0f}},
+      ModeCase{quader::QuaderSelectionMode::Edge,
+               quader::ViewportSelectionMode::Edge,
+               quader::QuaderActiveSelectionKind::Edge, {1.0f, 0.0f, 1.0f}},
+      ModeCase{quader::QuaderSelectionMode::Face,
+               quader::ViewportSelectionMode::Face,
+               quader::QuaderActiveSelectionKind::Face, {0.0f, 0.0f, 1.0f}},
+  };
+  for (const auto &mode_case : cases) {
+    SCOPED_TRACE(static_cast<int>(mode_case.api_mode));
+    ContextMenuNavigationHarness harness;
+    const auto box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().set_mode(mode_case.api_mode).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    ASSERT_TRUE(harness.editor.selection().clear_hover().ok());
+    harness.router.set_selection_mode(mode_case.viewport_mode);
+    harness.session.history().clear();
+    const auto selection_before = harness.editor.selection().summary();
+    quader::ViewportSelectionInteraction interaction;
+    ViewportSelectionWorkGateHarness work_gate(harness);
+    const auto dispatch = [&]() {
+      interaction.handle_frame(
+          harness.editor,
+          harness.frame(false, false, false, {}, harness.input.right_pressed,
+                        harness.input.right_down, harness.input.right_released,
+                        harness.input.mouse_local),
+          {}, {}, work_gate.hover_port());
+    };
+    const auto source_wire_count = [&]() {
+      const auto overlay =
+          quader::test_support::visible_modeling_overlay_frame(
+              harness.session.modeling());
+      return std::count_if(overlay.lines.begin(), overlay.lines.end(),
+                           [&](const auto &line) {
+        return line.layer == quader::ViewportOverlayLayer::SourceWire &&
+               line.element.object_id == box.modeling_object_id;
+      });
+    };
+    const auto expect_no_candidate = [&]() {
+      EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+                quader::QuaderActiveSelectionKind::None);
+      EXPECT_FALSE(harness.session.selection().resolved_hover_target().has_value());
+      EXPECT_EQ(source_wire_count(), 0);
+    };
+
+    harness.input.mouse_local = {20.0f, 20.0f};
+    harness.input.mouse_screen = harness.input.mouse_local;
+    dispatch();
+    ASSERT_EQ(interaction.work_stats().hover_pick_count, 1u);
+    expect_no_candidate();
+
+    // Captured fly input uses the center reticle, not the eventual free pointer.
+    harness.input.mouse_local = {400.0f, 300.0f};
+    harness.input.mouse_screen = harness.input.mouse_local;
+    (void)harness.right_frame(true, true, false);
+    dispatch();
+    harness.input.fly_local_direction = {0.0f, 0.0f, 1.0f};
+    harness.input.delta_seconds = 1.0f / 600.0f;
+    (void)harness.right_frame(false, true, false);
+    dispatch();
+    harness.input.fly_local_direction = {};
+    (void)harness.right_frame(false, false, true);
+    ASSERT_TRUE(harness.input.navigation_active);
+    ASSERT_FALSE(harness.input_result.navigation_active);
+    ASSERT_FALSE(harness.input_result.camera_changed);
+    dispatch();
+    EXPECT_EQ(interaction.work_stats().hover_pick_count, 1u);
+    EXPECT_EQ(interaction.work_stats().paint_pick_count, 0u);
+    expect_no_candidate();
+
+    // The first uncaptured pointer sample is elsewhere and must stay empty.
+    harness.input.mouse_local = {20.0f, 20.0f};
+    harness.input.mouse_screen = harness.input.mouse_local;
+    (void)harness.right_frame(false, false, false);
+    dispatch();
+    EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+    expect_no_candidate();
+    for (int frame = 0; frame < 4; ++frame) {
+      dispatch();
+    }
+    EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+
+    const auto target = harness.camera.project_world_point(mode_case.target);
+    ASSERT_TRUE(target.visible);
+    harness.input.mouse_local = target.position;
+    harness.input.mouse_screen = target.position;
+    dispatch();
+    EXPECT_EQ(interaction.work_stats().hover_pick_count, 3u);
+    const auto hover = harness.editor.selection().hover_summary();
+    EXPECT_EQ(hover.target.kind, mode_case.hover_kind);
+    EXPECT_EQ(hover.target.object_id, box.modeling_object_id);
+    ASSERT_TRUE(harness.session.selection().resolved_hover_target().has_value());
+    if (mode_case.api_mode != quader::QuaderSelectionMode::Object) {
+      EXPECT_GT(source_wire_count(), 0);
+    }
+    for (int frame = 0; frame < 4; ++frame) {
+      dispatch();
+    }
+    EXPECT_EQ(interaction.work_stats().hover_pick_count, 3u);
+    const auto selection_after = harness.editor.selection().summary();
+    EXPECT_FALSE(selection_after.has_selection);
+    EXPECT_EQ(selection_after.selection_revision,
+              selection_before.selection_revision);
+    EXPECT_EQ(selection_after.content_revision, selection_before.content_revision);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    EXPECT_FALSE(harness.editor.history().can_redo());
+  }
+}
+
+TEST(ViewportSelectionInteractionTests,
      StationaryFallbackHoverIssuesOnePickPerWorkKey) {
   ViewportInteractionHarness harness;
   (void)create_unit_box(harness);
@@ -10650,7 +10923,7 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusHoverCachesPicksAndClea
     harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos,
                                     unavailable != 4);
     EXPECT_FALSE(hover(3).gizmo_hovered);
-    EXPECT_EQ(cursor(), unavailable == 4
+    EXPECT_EQ(cursor(), unavailable == 0 || unavailable == 4
                             ? quader::ViewportPointerCursor::SelectionDefault
                             : quader::ViewportPointerCursor::Default);
   }

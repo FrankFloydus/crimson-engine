@@ -290,7 +290,7 @@ ViewportInteractionController::handle_before_active_tool_impl(
       frame.active_tool_allows_selection_fallback ||
       frame.input.curve_controls_editable;
   const bool selection_pointer_blocked =
-      !frame.input.viewport_hovered || !frame.input.viewport_focused ||
+      !frame.input.viewport_hovered ||
       frame.input.text_input_active || frame.input.navigation_active ||
       frame.input_result.navigation_active ||
       frame.input.pointer_interaction_canceled ||
@@ -717,9 +717,30 @@ ViewportInteractionController::handle_context_menu_pointer(
   if (!context_menu_pointer_.has_value()) {
     return result;
   }
+  const bool fly_navigation_active = frame.input.fly_navigation_active ||
+                                     frame.input_result.fly_navigation_active;
+  const QVec3 fly_direction = frame.input.fly_local_direction;
+  const bool fly_movement_requested =
+      std::abs(fly_direction.x) > 0.000001f ||
+      std::abs(fly_direction.y) > 0.000001f ||
+      std::abs(fly_direction.z) > 0.000001f;
+  if ((fly_navigation_active && fly_movement_requested) ||
+      frame.input_result.fly_speed_changed) {
+    // Keep navigation ownership through the release, even after movement stops.
+    cancel_context_menu_pointer();
+    return result;
+  }
   if (frame.right_down && !frame.right_pressed) {
     context_menu_pointer_->accumulated_delta =
         context_menu_pointer_->accumulated_delta + frame.input.mouse_delta;
+    if (!viewport_pointer_within_drag_threshold(
+            *context_menu_pointer_,
+            context_menu_pointer_->press.local +
+                context_menu_pointer_->accumulated_delta)) {
+      // Returning the pointer to its press position cannot undo a drag.
+      cancel_context_menu_pointer();
+      return result;
+    }
   }
   if (!frame.right_released) {
     if (!frame.right_down && !frame.right_pressed) {

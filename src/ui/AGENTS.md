@@ -36,6 +36,10 @@ file except through prior written authorization from Francesco Di Blasi.
   the corresponding owner revisions are unchanged.
 - `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
   cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
+  Hover presents tool feedback without taking keyboard focus from panel editors. The first pointer
+  press acquires focus and performs its action in the same gesture. One masked native orange border
+  marks the focused pane, including single/maximized layouts; panel focus clears it. It shares the
+  current-material outline color and gates geometry/mask/stacking updates before widget work.
 - Its retained settings overlay shows only actual settings controls and their actions, with the
   operation title in the disclosure header. No descriptions or empty shell are shown. Expansion
   starts collapsed and is shared across operations/panes for the app session. Scene-owned origin

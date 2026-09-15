@@ -10,6 +10,9 @@
 
 namespace quader {
 
+/** Shared orange outline for the current material and active viewport pane. */
+[[nodiscard]] QColor qt_current_item_outline_color();
+
 /**
  * Builds Quader's Obsidian-inspired colors on top of Fusion's widget contract.
  *

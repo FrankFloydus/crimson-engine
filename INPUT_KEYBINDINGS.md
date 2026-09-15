@@ -57,17 +57,21 @@ command behavior record and baseline requirements.
 
 A chord is physical input, not an action. Rules select a target through app-owned boolean contexts;
 `when` supports identifiers, `!`, `&&`, `||`, and parentheses. Important context families include
-`viewportFocus`, `outlinerFocus`, `viewport.hovered`, `viewport.orthographic`, `textInputActive`, `editorTextFocus`,
+`viewportFocus`, `outlinerFocus`, `editorFocus`, `viewport.hovered`, `viewport.orthographic`, `textInputActive`, `editorTextFocus`,
 `navigation.*`, `activeTool.*`, `modalTool.active`, `transformDrag.active`, and `selectionMode.*`.
 Read `viewport_keybinding_context()` and the registration context helpers before adding another key.
 
-The Outliner supplies `outlinerFocus` while hovered or focused. Scene commands use the same
-compiled mappings and user overrides there; only registered commands executable without viewport
-pointer routing participate. Text/delegate editors retain editing input except for document Save
-commands, which settle a focused main-editor field before serializing. Popups and auxiliary tool
-windows retain input ownership. Unbound tree keys fall through to Qt navigation and renaming. Idle
-viewport frames clear only viewport-owned prefixes; they must preserve an Outliner-owned multi-key
-sequence.
+Ordinary editor panels supply `editorFocus`; the Outliner supplies `outlinerFocus` while hovered
+or focused. Registered editor commands, including tool activation, plus selection-mode and grid-preset bindings
+use the same compiled mappings and user overrides across these panels. A panel dispatches the public
+command or typed owner intent immediately. Selection-mode changes cancel active previews through the
+selection API before publishing the new mode, while
+viewport pointer, navigation, and popup targets retain their semantic router. Explicit focused-control
+keys such as item-view Ctrl+A, arrows, and activation retain local ownership; item-view type-ahead
+search runs only when no editor command matches. Text/delegate editors retain editing input except
+for document Save commands, which settle a focused main-editor field before serializing. Popups and
+auxiliary tool windows retain input ownership. Idle viewport frames clear only viewport-owned
+prefixes; they must preserve another editor panel's multi-key sequence.
 
 Stable state such as selection mode, text focus, preview, or navigation belongs in context predicates.
 Transient command availability such as selection counts, clipboard contents, or undo history is checked
@@ -147,6 +151,9 @@ cannot commit a newer gesture. Cancellation reserves the originating release unt
 so it cannot become a selection click, context menu, navigation start, or another tool's input.
 
 Keep drag-start chords immutable: pressing Shift after RMB fly navigation starts must not end it.
+An RMB gesture that moves the fly camera, changes fly speed, or exceeds its frozen drag threshold
+retires its context-menu click until release. Stopping movement or returning to the press position
+does not restore that click; a fresh stationary RMB gesture can open the menu.
 Freehand selection consumes ordered, gesture-scoped pointer samples, including press and release;
 a closed path collected between frames must not collapse to the final cursor position. Clear the
 sample stream on capture/focus loss, runtime rebinding, and coordinate-system changes.
@@ -189,6 +196,9 @@ Failed raw registration falls back to Qt while retaining capture-loss monitoring
 before fallback accumulation. Verify capture enable/disable against actual native postconditions.
 Focus loss or capture theft ends fly navigation, clears motion, restores the pre-capture cursor, and
 cancels the RMB chord without synthesizing a click. Win32 messages stay at the UI/platform boundary.
+The navigation release frame retains picking suppression while its sample still contains the
+captured pointer position. Hover and selection resume from the restored real cursor on the next
+frame; the navigation crosshair must never publish a scene hover candidate.
 
 ## Verification map
 

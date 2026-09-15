@@ -38,6 +38,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_numeric_format.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
@@ -59,12 +60,13 @@
 #include <QActionGroup>
 #include <QByteArray>
 #include <QFrame>
-#include <QFocusFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLocale>
 #include <QPalette>
+#include <QPainter>
+#include <QRegion>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPoint>
@@ -93,6 +95,35 @@ namespace quader {
 namespace {
 
 using ViewportProbeClock = std::chrono::steady_clock;
+
+/** Paints only a masked native border above the viewport's child window. */
+class QtViewportFocusFrame final : public QWidget {
+public:
+  explicit QtViewportFocusFrame(QWidget *parent) : QWidget(parent) {
+    setAttribute(Qt::WA_NativeWindow);
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    setFocusPolicy(Qt::NoFocus);
+  }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QPainter painter(this);
+    painter.fillRect(rect(), qt_current_item_outline_color());
+  }
+
+  bool nativeEvent(const QByteArray &event_type, void *message,
+                   qintptr *result) override {
+    if (result != nullptr &&
+        event_type == QByteArrayLiteral("windows_generic_MSG")) {
+      if (const auto transparent =
+              platform_transparent_overlay_input_result(message)) {
+        *result = static_cast<qintptr>(*transparent);
+        return true;
+      }
+    }
+    return QWidget::nativeEvent(event_type, message, result);
+  }
+};
 
 /// Passes native hit testing through feedback to the sibling viewport window.
 class QtViewportPrimitiveFeedbackLabel final : public QLabel {
@@ -490,12 +521,14 @@ QtViewportPanel::QtViewportPanel(QWidget *parent)
   for (Pane &pane_state : panes_) {
     create_pane(pane_state);
   }
-  focused_pane_frame_ = new QFocusFrame(this);
+  focused_pane_frame_ = new QtViewportFocusFrame(this);
   focused_pane_frame_->setObjectName(
       QStringLiteral("viewportFocusedPaneFrame"));
-  focused_pane_frame_->setAttribute(Qt::WA_NativeWindow);
-  focused_pane_frame_->setAttribute(Qt::WA_TransparentForMouseEvents);
   focused_pane_frame_->hide();
+  connect(qApp, &QApplication::focusChanged, this,
+          [this](QWidget *, QWidget *) { update_focused_pane_indicator(); });
+  connect(qApp, &QGuiApplication::focusWindowChanged, this,
+          [this](QWindow *) { update_focused_pane_indicator(); });
   for (std::size_t index = 0; index < split_handles_.size(); ++index) {
     SplitHandleHost &handle = split_handles_[index];
     handle.widget = new QWidget(this);
@@ -2147,11 +2180,11 @@ void QtViewportPanel::update_focused_pane_indicator() {
     hide_indicator();
     return;
   }
-  if (displayed_placements_.size() <= 1u) {
+  const ViewportPaneId focused_pane = workspace_->focused_pane();
+  if (!pane_surface_has_keyboard_focus(pane(focused_pane))) {
     hide_indicator();
     return;
   }
-  const ViewportPaneId focused_pane = workspace_->focused_pane();
   const auto focused = std::find_if(
       displayed_placements_.begin(), displayed_placements_.end(),
       [focused_pane](const ViewportPanePlacement &placement) {
@@ -2162,16 +2195,24 @@ void QtViewportPanel::update_focused_pane_indicator() {
     return;
   }
 
-  QWidget *target = pane(focused_pane).frame;
-  const bool target_changed = focused_pane_frame_->widget() != target;
+  const QRect bounds = pane(focused_pane).frame->geometry();
+  const bool geometry_changed = focused_pane_frame_->geometry() != bounds;
+  const int border_width = std::max(1, ui_scale_metrics_.px(2));
+  const bool width_changed = focused_pane_border_width_ != border_width;
   const bool was_hidden = focused_pane_frame_->isHidden();
-  if (target_changed) {
-    focused_pane_frame_->setWidget(target);
+  if (geometry_changed) {
+    focused_pane_frame_->setGeometry(bounds);
+  }
+  if (geometry_changed || width_changed) {
+    const QRect outer = focused_pane_frame_->rect();
+    focused_pane_frame_->setMask(QRegion(outer).subtracted(QRegion(
+        outer.adjusted(border_width, border_width, -border_width, -border_width))));
+    focused_pane_border_width_ = border_width;
   }
   if (was_hidden) {
     focused_pane_frame_->show();
   }
-  if (target_changed || was_hidden) {
+  if (geometry_changed || was_hidden) {
     focused_pane_frame_->raise();
   }
 }
@@ -2210,6 +2251,7 @@ void QtViewportPanel::request_pane_focus(
           : Qt::MouseFocusReason;
   pane_state.surface_container->setFocus(reason);
   pane_state.surface->requestActivate();
+  update_focused_pane_indicator();
 }
 
 bool QtViewportPanel::viewport_surface_has_keyboard_focus() const {
@@ -3238,7 +3280,7 @@ void QtViewportPanel::process_viewport_input(
   }
 
   const bool suppress_hover_work =
-      result.navigation_active || result.camera_changed ||
+      input.navigation_active || result.navigation_active || result.camera_changed ||
       navigation_gizmo_consumed;
   const bool point_lights_pickable =
       !suppress_hover_work && active_viewport_settings().bool_value(
@@ -4067,7 +4109,7 @@ void QtViewportPanel::process_viewport_input(
       !native_tools.pointer_dragging() &&
       !show_context_menu && !show_delete_popup && !show_quick_menu;
   primitive_feedback_input_eligible_ =
-      input.viewport_focused && !input.text_input_active &&
+      !input.text_input_active &&
       !input.pointer_interaction_canceled && !result.navigation_active &&
       (input.viewport_hovered || interaction_controller_.primitive_creation_pointer_active()) &&
       editor.preferences().gizmos_visible() &&
@@ -4078,12 +4120,16 @@ bool QtViewportPanel::sync_active_tool_from_editor(
     QuaderEditorApi &editor, ModelingSessionService &modeling,
     NativeViewportToolCoordinator &native_tools,
     ViewportRuntimeBindingToken runtime_binding) {
-  input_router_.set_selection_mode(
-      app_selection_mode_to_viewport(modeling.selection_mode()));
+  const ViewportSelectionMode selection_mode =
+      app_selection_mode_to_viewport(modeling.selection_mode());
+  const bool selection_mode_changed =
+      input_router_.state().selection_mode != selection_mode;
+  input_router_.set_selection_mode(selection_mode);
   input_router_.sync_grid_preset_snapshot(workspace_->grid_preset());
 
   const std::uint64_t revision = editor.tools().active_tool_revision();
-  if (active_tool_revision_valid_ && active_tool_revision_ == revision) {
+  if (active_tool_revision_valid_ && active_tool_revision_ == revision &&
+      !selection_mode_changed) {
     return false;
   }
   const ViewportTool *editor_tool =
@@ -4091,7 +4137,8 @@ bool QtViewportPanel::sync_active_tool_from_editor(
   const ViewportToolId active_tool = editor_tool != nullptr
                                          ? editor_tool->viewport_tool()
                                          : ViewportToolId::Select;
-  const bool changed = input_router_.state().active_tool != active_tool;
+  const bool changed = selection_mode_changed ||
+                       input_router_.state().active_tool != active_tool;
   active_tool_revision_ = revision;
   active_tool_revision_valid_ = true;
   if (changed) {
@@ -4105,12 +4152,15 @@ bool QtViewportPanel::sync_active_tool_from_editor(
       return changed;
     }
     if (!cleared_hover.ok()) {
-      LOG_ERROR("Viewport tool activation hover clear failed: {}",
+      LOG_ERROR("Viewport tool or selection mode hover clear failed: {}",
                 cleared_hover.error_message().empty()
                     ? "Hover clear failed."
                     : cleared_hover.error_message());
     }
     interaction_controller_.reset(&editor, native_tools);
+    if (!runtime_binding.current()) {
+      return changed;
+    }
     hover_controller_.invalidate();
     active_box_preview_ = {};
   }

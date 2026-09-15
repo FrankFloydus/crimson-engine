@@ -285,6 +285,10 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - An empty spatial hover sample differs from explicit lifecycle clear. Component misses and leaving
   the viewport retain the last candidate mesh wire; meshes with selected components remain sticky
   independently. Object-mode hover emits no mesh outline and never changes click-owned selection.
+  Captured navigation keeps hover/picking suppressed through its release frame: that sample still
+  contains the navigation cursor, and only the next frame has the restored real mouse position.
+  A transient crosshair hit must never become a retained candidate; see the navigation-release
+  regressions in [Qt input tests](tests/qt_input_adapter_tests.cpp).
   Gizmo hover owns immediate feedback separately from gesture consumption: the shared interaction
   controller suppresses scene picks and clears the entire hover candidate while a handle is hovered
   or consumed. Hover-only mesh wires disappear; meshes with selected components retain their wires.
@@ -350,11 +354,14 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   window-close preflight. A Save resolved while a main-editor field has focus settles that field
   before serialization; ordinary text editing and auxiliary/modal window input remain locally owned.
   Stateful chords and viewport input remain with the canonical router.
-- The Outliner resolves scene shortcuts through the canonical dispatcher using hover/focus ownership.
-  Viewport frame focus-loss cleanup must preserve an Outliner-owned pending sequence, while real
-  focus loss, text editing, or changing input owners clears it. Test a sequence across an idle
-  viewport frame, not just consecutive Qt key events; see [command filter tests](tests/qt_command_event_filter_tests.cpp)
-  and [keybinding API tests](tests/editor_api_tests.cpp).
+- Editor panels resolve registered scene/tool shortcuts through the canonical dispatcher; the
+  Outliner also supports hover ownership. Material-browser type-ahead must yield to mapped commands.
+  Viewport frame focus-loss cleanup preserves another panel's pending sequence, while real focus
+  loss, text editing, or changing input owners clears it. Test a sequence across an idle viewport
+  frame, not just consecutive Qt key events; see [command filter tests](tests/qt_command_event_filter_tests.cpp)
+  and [keybinding API tests](tests/editor_api_tests.cpp). Hover feedback preserves panel keyboard focus;
+  the first viewport press both focuses and draws. The native pane border tracks actual focus,
+  including single/maximized panes; see [focus indicator tests](tests/qt_viewport_focus_indicator_tests.cpp).
 - Knife resolves each accepted segment on a shared existing face, rebasing from the last accepted
   point. Host hits/misses are authoritative; a second differently configured picker breaks locality.
 - Radial placement hover must not require keyboard focus after toolbar activation. Retain the

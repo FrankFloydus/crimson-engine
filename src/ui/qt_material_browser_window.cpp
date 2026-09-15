@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_tree_relationship_presentation.hpp"
 
@@ -101,8 +102,7 @@ public:
     const qreal inset = border_width_ * 0.5;
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, false);
-    // The orange authored in the face-selection toolbar icon.
-    painter->setPen(QPen(QColor(255, 143, 24), border_width_, Qt::SolidLine,
+    painter->setPen(QPen(qt_current_item_outline_color(), border_width_, Qt::SolidLine,
                         Qt::SquareCap, Qt::MiterJoin));
     painter->setBrush(Qt::NoBrush);
     painter->drawRect(QRectF(decoration).adjusted(inset, inset, -inset, -inset));

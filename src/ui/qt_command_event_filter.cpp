@@ -114,14 +114,18 @@ const QAbstractItemView *focused_item_view(const QWidget *focus_widget) {
 }
 
 bool item_view_owns_key_press(const QWidget *focus_widget,
-                             const QKeyEvent &event) {
+                             const QKeyEvent &event,
+                             bool scene_selection_owner) {
   const QAbstractItemView *view = focused_item_view(focus_widget);
   if (view == nullptr) {
     return false;
   }
 
   if (event.matches(QKeySequence::SelectAll)) {
-    return view->selectionMode() != QAbstractItemView::NoSelection;
+    // The Outliner uses scene selection commands; other item views select
+    // their local rows. Both still own explicit navigation and rename keys.
+    return !scene_selection_owner &&
+           view->selectionMode() != QAbstractItemView::NoSelection;
   }
 
   Qt::KeyboardModifiers modifiers = event.modifiers();
@@ -156,9 +160,10 @@ bool item_view_owns_key_press(const QWidget *focus_widget,
     break;
   }
 
-  // QAbstractItemView uses unmodified text for its built-in keyboard search.
-  return !event.text().isEmpty() &&
-         !modifiers.testFlag(Qt::ControlModifier);
+  // Type-ahead search is a fallback after canonical editor command dispatch.
+  // It must not reserve every printable tool shortcut merely because a
+  // material card or another item view currently owns keyboard focus.
+  return false;
 }
 
 bool standard_control_owns_key_press(const QWidget *focus_widget,
@@ -251,8 +256,9 @@ bool standard_control_owns_key_press(const QWidget *focus_widget,
 }
 
 bool focused_widget_owns_key_press(QWidget *focus_widget,
-                                  const QKeyEvent &event) {
-  return item_view_owns_key_press(focus_widget, event) ||
+                                  const QKeyEvent &event,
+                                  bool scene_selection_owner) {
+  return item_view_owns_key_press(focus_widget, event, scene_selection_owner) ||
          standard_control_owns_key_press(focus_widget, event);
 }
 
@@ -456,8 +462,9 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         input_context_provider_ ? input_context_provider_()
                                 : QuaderViewportKeybindingContext{};
     input_context.outliner_focused = outliner_focused;
-    if (outliner_focused) {
-      // Tree selection can publish before the next viewport frame samples it.
+    input_context.editor_focused = !viewport_focused && !outliner_focused;
+    if (!viewport_focused && !text_input_active) {
+      // A panel can publish selection before the next viewport frame samples it.
       state.selection_mode = app_selection_mode_to_viewport(
           to_modeling_selection_mode(editor_->selection().summary().mode));
     }
@@ -502,13 +509,13 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         (qt_object_belongs_to_tool_settings_panel(focus_widget) ||
          qt_object_belongs_to_face_texture_panel(focus_widget)) &&
         (text_input_active || focused_combo_box(focus_widget) != nullptr);
-    if (outliner_focused) {
+    if (!text_input_active) {
       // Hover can transfer command ownership without a Qt focus event. Clear
-      // an outgoing viewport prefix before checking for a tree continuation.
+      // an outgoing viewport prefix before checking a panel continuation.
       editor_->commands().reset_pending_viewport_keybinding_chord();
     }
-    const bool outliner_sequence_pending =
-        outliner_focused && editor_->commands().has_pending_keybinding_chord();
+    const bool panel_sequence_pending =
+        !text_input_active && editor_->commands().has_pending_keybinding_chord();
     QuaderViewportKeybindingDispatch dispatch = [&]() {
       QDR_PROFILE_SCOPE("Qt command resolve keybinding");
       return editor_->commands().dispatch_viewport_input_binding(
@@ -526,7 +533,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       event->accept();
       return true;
     }
-    if (outliner_sequence_pending &&
+    if (panel_sequence_pending &&
         dispatch.kind == QuaderViewportKeybindingDispatch::Kind::NoMatch) {
       // A mismatched continuation belongs to the sequence that consumed its
       // prefix. Do not replay it as a fresh command through a parent widget or
@@ -582,11 +589,10 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       }
     }
 
-    if (!outliner_focused && focused_widget_owns_key_press(
-            focus_widget, *static_cast<QKeyEvent *>(event))) {
+    if (focused_widget_owns_key_press(
+            focus_widget, *static_cast<QKeyEvent *>(event), outliner_focused)) {
       // Preserve the documented key behavior of the focused Qt control,
-      // including item-view Ctrl+A, range navigation, activation, and
-      // keyboard search.
+      // including item-view Ctrl+A, range navigation, and activation.
       reset_pending_chord();
       return QObject::eventFilter(watched, event);
     }
@@ -615,7 +621,36 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       event->accept();
       return true;
     }
-    case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
+    case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut: {
+      QuaderEditorApi *const command_editor = editor_;
+      const std::optional<QuaderApiVoidResult> result = [&]()
+          -> std::optional<QuaderApiVoidResult> {
+        switch (dispatch.shortcut.kind) {
+        case ViewportShortcutKind::SetSelectionMode:
+          return command_editor->selection().set_mode(to_api_selection_mode(
+              viewport_selection_mode_to_app(dispatch.shortcut.selection_mode)));
+        case ViewportShortcutKind::SetGridPreset:
+          return command_editor->viewports().set_grid_preset(
+              dispatch.shortcut.grid_preset);
+        default:
+          return std::nullopt;
+        }
+      }();
+      if (!result.has_value()) {
+        break;
+      }
+      if (!result->ok()) {
+        LOG_ERROR("Qt editor keybinding intent failed: {}",
+                  result->error_message());
+        if (editor_ == command_editor) {
+          (void)command_editor->ui().notify(
+              {.level = QuaderNotificationLevel::Error,
+               .message = result->error_message()});
+        }
+      }
+      event->accept();
+      return true;
+    }
     case QuaderViewportKeybindingDispatch::Kind::ViewportInputAction:
     case QuaderViewportKeybindingDispatch::Kind::NoMatch:
       break;

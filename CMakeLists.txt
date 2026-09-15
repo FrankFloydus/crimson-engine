@@ -1601,6 +1601,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_settings_overlay_tests.cpp
         tests/qt_viewport_render_submission_policy_tests.cpp
         tests/qt_viewport_fly_navigation_hud_tests.cpp
+        tests/qt_viewport_focus_indicator_tests.cpp
         tests/qt_viewport_edge_length_hud_tests.cpp
         tests/qt_viewport_delete_popup_tests.cpp
         tests/qt_viewport_context_menu_tests.cpp

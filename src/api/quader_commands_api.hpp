@@ -94,6 +94,8 @@ struct QuaderViewportKeybindingContext {
   bool operation_preview_active = false;
   bool curve_controls_editable = false;
   bool outliner_focused = false;
+  /** Ordinary main-editor panel input, including an embedded material browser. */
+  bool editor_focused = false;
 };
 
 /**
@@ -209,7 +211,7 @@ public:
     QuaderApiVoidResult execute_native_tool_settings_intent(
         QuaderNativeToolSettingsIntent intent);
     void reset_pending_keybinding_chord();
-    /** Clears viewport prefixes without canceling an Outliner-owned sequence. */
+    /** Clears viewport prefixes without canceling another editor panel's sequence. */
     void reset_pending_viewport_keybinding_chord();
     [[nodiscard]] bool has_pending_keybinding_chord() const;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,

@@ -44,9 +44,10 @@ qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
 
 /**
  * Routes application-level Qt key presses through Quader's canonical command
- * and keybinding API. Viewport surfaces keep ownership of viewport-scoped
- * input; exact global commands execute at the event boundary so their effects
- * precede later window events. Focused Qt controls retain standard behavior,
+ * and keybinding API. Registered editor commands are available from every
+ * editor panel; viewport surfaces retain their semantic pointer/router input.
+ * Exact global commands execute at the event boundary so their effects precede
+ * later window events. Focused Qt controls retain explicit editing/navigation keys,
  * except that document saves settle a focused main-editor draft first.
  */
 class QtCommandEventFilter final : public QObject {
