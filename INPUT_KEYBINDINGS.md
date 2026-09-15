@@ -175,6 +175,13 @@ path. Their reserved gestures must not mutate selection or start a gizmo first. 
 freezes the ray and first-click modifiers, cancels on context loss, and commits a lone click once at
 its deadline. Rebinding/unassigning must remove the corresponding reservation/timing behavior.
 
+Face material copies share texture continuation's source-preserving pointer ownership. A selected
+source must be exactly one face; sampling into the selection can target faces across meshes.
+Copying a material retains target UVs and texture settings. Face-only copying applies on the first
+Click release, without waiting for the double-click interval. A subsequent whole-mesh double click
+applies the material to the rest of the mesh through its own normal history operation. Selection,
+scene, or binding changes before release cancel the reserved gesture.
+
 ## Windows wheel and relative pointer input
 
 Qt on Windows represents Alt+vertical-wheel as horizontal-only `angleDelta`. The adapter restores the

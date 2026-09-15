@@ -2783,19 +2783,19 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     FaceTextureTransferPointerStaysWithItsInitiatingViewportPane) {
+     MaterialTransferPointerStaysWithItsInitiatingViewportPane) {
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string focus_lock = source_slice(
       panel, "bool QtViewportPanel::pane_interaction_locked() const",
       "void QtViewportPanel::set_modal_tool_owns_viewport_snapshot(");
   expect_contains(focus_lock,
-                  "interaction_controller_.texture_transfer_pointer_active()");
+                  "interaction_controller_.material_transfer_pointer_active()");
   const std::string input_lock = source_slice(
       panel, "const bool interaction_locked =",
       "std::vector<ViewportPaneInputCandidate> pane_candidates;");
   const auto owner_gate = input_lock.find(
-      "interaction_controller_.texture_transfer_pointer_active()");
+      "interaction_controller_.material_transfer_pointer_active()");
   const auto input_sample = input_lock.find("take_input_frame(");
   ASSERT_NE(owner_gate, std::string::npos);
   ASSERT_NE(input_sample, std::string::npos);

@@ -418,6 +418,57 @@ viewport_input_action_binding_catalog() {
           .action = ViewportInputActionKind::ApplyFaceMaterialToMesh,
       },
       {
+          .target_id = viewport_input_action_target_id(
+              "material.apply_selected_face_to_face"),
+          .action_id = "viewport.material.apply_selected_face_to_face",
+          .label = "Apply Selected Face Material to Clicked Face",
+          .localization_key = "keybindings.target.viewport.material."
+                              "apply_selected_face_to_face.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Shift+RightMouseClick",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "!modalTool.active && !activeTool.ownsViewport && "
+                  "!transformDrag.active && !operationPreview.active",
+          .selection_mode_mask =
+              viewport_selection_mode_mask(ViewportSelectionMode::Face),
+          .weight = 30,
+          .action = ViewportInputActionKind::ApplySelectedFaceMaterialToFace,
+      },
+      {
+          .target_id = viewport_input_action_target_id(
+              "material.apply_selected_face_to_mesh"),
+          .action_id = "viewport.material.apply_selected_face_to_mesh",
+          .label = "Apply Selected Face Material to Clicked Mesh",
+          .localization_key = "keybindings.target.viewport.material."
+                              "apply_selected_face_to_mesh.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Shift+RightMouseDoubleClick",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "!modalTool.active && !activeTool.ownsViewport && "
+                  "!transformDrag.active && !operationPreview.active",
+          .selection_mode_mask =
+              viewport_selection_mode_mask(ViewportSelectionMode::Face),
+          .weight = 30,
+          .action = ViewportInputActionKind::ApplySelectedFaceMaterialToMesh,
+      },
+      {
+          .target_id =
+              viewport_input_action_target_id("material.apply_face_to_selection"),
+          .action_id = "viewport.material.apply_face_to_selection",
+          .label = "Apply Clicked Face Material to Selected Faces",
+          .localization_key = "keybindings.target.viewport.material."
+                              "apply_face_to_selection.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Ctrl+RightMouseClick",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "!modalTool.active && !activeTool.ownsViewport && "
+                  "!transformDrag.active && !operationPreview.active",
+          .selection_mode_mask =
+              viewport_selection_mode_mask(ViewportSelectionMode::Face),
+          .weight = 30,
+          .action = ViewportInputActionKind::ApplyFaceMaterialToSelection,
+      },
+      {
           .target_id =
               viewport_input_action_target_id("material.transfer_face_texture"),
           .action_id = "viewport.material.transfer_face_texture",
@@ -425,7 +476,7 @@ viewport_input_action_binding_catalog() {
           .localization_key = "keybindings.target.viewport.material."
                               "transfer_face_texture.label",
           .context = ViewportInputBindingContext::Viewport,
-          .shortcut = "Alt+LeftMouse",
+          .shortcut = "Alt+RightMouse",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "!modalTool.active && !activeTool.ownsViewport && "
                   "!transformDrag.active && !operationPreview.active",

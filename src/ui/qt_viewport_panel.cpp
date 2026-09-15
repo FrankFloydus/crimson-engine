@@ -2286,7 +2286,7 @@ bool QtViewportPanel::pane_interaction_locked() const {
       interaction_controller_.point_light_range_pointer_active() ||
       (interaction_native_tools_ != nullptr &&
        interaction_native_tools_->pointer_dragging()) ||
-      interaction_controller_.texture_transfer_pointer_active() ||
+      interaction_controller_.material_transfer_pointer_active() ||
       interaction_controller_.context_menu_pointer_active() ||
       modal_tool_dragging_) {
     return true;
@@ -2721,7 +2721,7 @@ void QtViewportPanel::process_viewport_input(
       interaction_controller_.transform_gizmo_pointer_active() ||
       interaction_controller_.point_light_range_pointer_active() ||
       native_tools.pointer_dragging() ||
-      interaction_controller_.texture_transfer_pointer_active() ||
+      interaction_controller_.material_transfer_pointer_active() ||
       interaction_controller_.context_menu_pointer_active() ||
       modal_dragging || navigation_gizmo_consumed;
   std::array<QtViewportInputFrame, kViewportPaneCount> samples;

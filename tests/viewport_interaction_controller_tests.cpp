@@ -263,7 +263,7 @@ public:
         .input = input,
         .input_result = input_result,
         .right_click_local = right_click_local,
-        .double_click_interval_seconds = 0.3,
+        .double_click_interval_seconds = double_click_interval_seconds,
         .monotonic_time_seconds = monotonic_time_seconds,
         .active_tool_allows_selection_fallback =
             controller.active_tool_allows_selection_fallback(
@@ -305,6 +305,7 @@ public:
   quader::ViewportInputFrame input;
   quader::ViewportInputResult input_result;
   double monotonic_time_seconds = 0.0;
+  double double_click_interval_seconds = 0.3;
 
 private:
   static void replace_all(std::string &text, std::string_view from,
@@ -2014,6 +2015,109 @@ struct ContextMenuNavigationHarness final : ViewportInteractionHarness {
     interaction.pointer_drag_threshold_pixels = 7.0f;
     interaction.pointer_capture_recentered = true;
     return controller.handle_context_menu_pointer(interaction, false);
+  }
+};
+
+/// Routes native-style mouse chords and provenance through the production resolver.
+struct MaterialGesturePointerDriver final {
+  ProjectViewportInteractionHarness &harness;
+  std::vector<quader::QuaderInputChord> suppressed;
+  double linear_remainder = 0.0;
+  double radial_remainder = 0.0;
+  std::uint64_t sequence = 1u;
+  quader::QuaderInputChord held_chord;
+
+  explicit MaterialGesturePointerDriver(
+      ProjectViewportInteractionHarness &interaction_harness)
+      : harness(interaction_harness) {}
+
+  quader::ViewportBeforeToolInteractionResult dispatch(
+      std::string_view chord_text, quader::QVec2 local, bool pressed = false,
+      bool down = false, bool released = false, int click_count = 1) {
+    auto &input = harness.input;
+    input.mouse_local = local;
+    input.mouse_screen = local;
+    input.pressed_input_chords.clear();
+    input.active_input_chords.clear();
+    input.released_input_chords.clear();
+    input.pointer_pressed_edges.clear();
+    input.pointer_released_edges.clear();
+    if (!chord_text.empty()) {
+      const auto parsed = quader::quader_input_parse_chord(chord_text);
+      EXPECT_TRUE(parsed.has_value());
+      if (parsed.has_value()) {
+        input.pressed_input_chords.push_back(*parsed);
+        if (pressed) {
+          held_chord = *parsed;
+          held_chord.gesture = quader::QuaderInputGesture::Press;
+          input.modifiers = {.primary = parsed->primary,
+                             .shift = parsed->shift,
+                             .alt = parsed->alt};
+        }
+      }
+    }
+    const bool right =
+        held_chord.mouse_button == quader::QuaderMouseButton::Right;
+    quader::QuaderInputChord drag = held_chord;
+    drag.gesture = quader::QuaderInputGesture::Drag;
+    if (pressed) {
+      input.pointer_pressed_edges.push_back({
+          .button = held_chord.mouse_button,
+          .local = local,
+          .sequence = sequence++,
+      });
+      if (right) {
+        input.pressed_input_chords.push_back(drag);
+      }
+    }
+    if (down) {
+      input.active_input_chords.push_back(held_chord);
+      if (right) {
+        input.active_input_chords.push_back(drag);
+      }
+    }
+    if (released) {
+      input.pointer_released_edges.push_back({
+          .button = held_chord.mouse_button,
+          .local = local,
+          .sequence = sequence++,
+      });
+      input.released_input_chords.push_back(held_chord);
+      if (right) {
+        input.released_input_chords.push_back(drag);
+      }
+    }
+    input.right_pressed = right && pressed;
+    input.right_down = right && down;
+    input.right_released = right && released;
+    quader::ViewportKeybindingResolver::resolve(
+        harness.editor, harness.router.state(), input, suppressed,
+        linear_remainder, radial_remainder);
+    harness.input_result = harness.router.handle_frame(input, harness.camera);
+    EXPECT_FALSE(harness.input_result.navigation_active);
+    EXPECT_FALSE(harness.input_result.camera_changed);
+    auto frame = harness.frame(local);
+    if (right) {
+      frame.right_pressed = pressed;
+      frame.right_down = down;
+      frame.right_released = released;
+      frame.right_click_count = click_count;
+    } else {
+      frame.left_pressed = pressed;
+      frame.left_down = down;
+      frame.left_released = released;
+      frame.left_click_local = local;
+      frame.left_click_count = click_count;
+    }
+    const auto menu = harness.controller.handle_context_menu_pointer(frame, false);
+    EXPECT_FALSE(menu.completed);
+    EXPECT_FALSE(harness.controller.context_menu_pointer_active());
+    return harness.dispatch_frame(frame);
+  }
+
+  void idle(double time, quader::QVec2 local) {
+    harness.monotonic_time_seconds = time;
+    (void)dispatch({}, local);
   }
 };
 
@@ -12779,6 +12883,456 @@ TEST(ViewportInteractionControllerMaterialTests,
 }
 
 TEST(ViewportInteractionControllerMaterialTests,
+     DefaultAltRightPressContinuesTextureAndAltLeftNoLongerTransfers) {
+  for (const bool right : {true, false}) {
+    SCOPED_TRACE(right ? "Alt RMB" : "old Alt LMB");
+    FaceTextureTransferScenario scenario;
+    scenario.initialize();
+    auto &harness = scenario.harness;
+    MaterialGesturePointerDriver pointer(harness);
+    const auto press = pointer.dispatch(right ? "Alt+RightMouse" : "Alt+LeftMouse",
+                                        scenario.target_screen, true, true);
+    EXPECT_EQ(press.material_transfer_consumed, right);
+    scenario.expect_target_material(right ? harness.second_material()
+                                          : default_project_material_id());
+    (void)pointer.dispatch(right ? "Alt+RightMouseClick" : "Alt+LeftMouseClick",
+                           scenario.target_screen, false, false, true);
+    EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
+    EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                  .transfer_face_texture_request_count,
+              right ? 1u : 0u);
+    if (right) {
+      scenario.expect_source_selection();
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      EXPECT_FALSE(harness.editor.history().can_undo());
+      scenario.expect_target_material(default_project_material_id());
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
+     ShiftRightClickCopiesSelectedMaterialImmediatelyWithLongDoubleClickWindow) {
+  FaceTextureTransferScenario scenario;
+  scenario.initialize();
+  auto &harness = scenario.harness;
+  harness.double_click_interval_seconds = 1.5;
+  MaterialGesturePointerDriver pointer(harness);
+  const auto selection_before = harness.editor.selection().summary();
+  const auto press = pointer.dispatch("Shift+RightMouse", scenario.target_screen,
+                                      true, true);
+  EXPECT_TRUE(press.material_transfer_consumed);
+  EXPECT_FALSE(press.material_transfer_requested);
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  const auto release = pointer.dispatch("Shift+RightMouseClick",
+                                        scenario.target_screen, false, false,
+                                        true);
+  EXPECT_TRUE(release.material_transfer_requested);
+  scenario.expect_target_material(harness.second_material());
+  EXPECT_TRUE(harness.editor.history().can_undo());
+  EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count,
+            1u);
+
+  // No later frame or expiration of the double-click window is needed.
+  harness.input.modifiers = {};
+  pointer.idle(0.2, {0.0f, 0.0f});
+  EXPECT_TRUE(harness.editor.history().can_undo());
+  pointer.idle(0.36, {0.0f, 0.0f});
+  scenario.expect_source_selection();
+  EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+            selection_before.selection_revision);
+  for (const auto face : authored_face_ids(harness, scenario.target)) {
+    const auto material = harness.editor.modeling().project_material_for_face(
+        scenario.target.modeling_object_id, face);
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    EXPECT_EQ(material.value().id, face == scenario.target_face
+                                       ? harness.second_material()
+                                       : default_project_material_id());
+  }
+  ASSERT_TRUE(harness.editor.history().can_undo());
+  const auto completed = harness.controller.material_interaction_work_stats();
+  EXPECT_EQ(completed.face_pick_count, 1u);
+  for (int frame = 0; frame < 4; ++frame) {
+    pointer.idle(1.6 + frame * 0.1, {0.0f, 0.0f});
+  }
+  EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count,
+            completed.face_pick_count);
+  EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                .copy_face_material_request_count,
+            1u);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  scenario.expect_target_material(default_project_material_id());
+  scenario.expect_source_selection();
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  scenario.expect_target_material(harness.second_material());
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
+     ShiftRightDoubleClickExtendsImmediateFaceCopyToWholeClickedMesh) {
+  FaceTextureTransferScenario scenario;
+  scenario.initialize();
+  auto &harness = scenario.harness;
+  MaterialGesturePointerDriver pointer(harness);
+  const auto selection_before = harness.editor.selection().summary();
+  const auto expect_mesh_material = [&](quader::ProjectAssetId expected) {
+    for (const auto face : authored_face_ids(harness, scenario.target)) {
+      const auto material = harness.editor.modeling().project_material_for_face(
+          scenario.target.modeling_object_id, face);
+      ASSERT_TRUE(material.ok()) << material.error_message();
+      EXPECT_EQ(material.value().id, expected);
+    }
+  };
+  (void)pointer.dispatch("Shift+RightMouse", scenario.target_screen, true, true);
+  harness.monotonic_time_seconds = 0.05;
+  (void)pointer.dispatch("Shift+RightMouseClick", scenario.target_screen,
+                         false, false, true);
+  scenario.expect_target_material(harness.second_material());
+  EXPECT_TRUE(harness.editor.history().can_undo());
+  harness.monotonic_time_seconds = 0.12;
+  const auto second = pointer.dispatch("Shift+RightMouseDoubleClick",
+                                       scenario.target_screen, true, true,
+                                       false, 2);
+  EXPECT_TRUE(second.material_transfer_consumed);
+  EXPECT_TRUE(second.material_transfer_requested);
+  expect_mesh_material(harness.second_material());
+  harness.monotonic_time_seconds = 0.17;
+  // Native Qt supplies no second Click on the double-click release.
+  (void)pointer.dispatch({}, scenario.target_screen, false, false, true, 2);
+  pointer.idle(0.6, {0.0f, 0.0f});
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
+  scenario.expect_source_selection();
+  EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+            selection_before.selection_revision);
+  expect_mesh_material(harness.second_material());
+  EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count,
+            2u);
+  EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                .copy_face_material_request_count,
+            2u);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_TRUE(harness.editor.history().can_undo());
+  for (const auto face : authored_face_ids(harness, scenario.target)) {
+    const auto material = harness.editor.modeling().project_material_for_face(
+        scenario.target.modeling_object_id, face);
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    EXPECT_EQ(material.value().id, face == scenario.target_face
+                                       ? harness.second_material()
+                                       : default_project_material_id());
+  }
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  expect_mesh_material(default_project_material_id());
+  scenario.expect_source_selection();
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  scenario.expect_target_material(harness.second_material());
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_mesh_material(harness.second_material());
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
+     ControlRightClickCopiesClickedMaterialToEverySelectedFaceOnRelease) {
+  FaceTextureTransferScenario scenario;
+  scenario.initialize();
+  auto &harness = scenario.harness;
+  const auto faces = authored_face_ids(harness, scenario.source);
+  const auto other_face = std::find_if(faces.begin(), faces.end(), [&](auto face) {
+    return face != scenario.source_face;
+  });
+  ASSERT_NE(other_face, faces.end());
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_face(scenario.source, *other_face,
+                               quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_TRUE(harness.editor.modeling()
+                  .apply_material(quader::QuaderMaterialReference::project(
+                      harness.second_material()))
+                  .ok());
+  harness.scene_session().history().clear();
+  const auto selection_before = harness.editor.selection().summary();
+  ASSERT_EQ(selection_before.selected_face_count, 2u);
+  MaterialGesturePointerDriver pointer(harness);
+  const auto expect_selected_material = [&](quader::ProjectAssetId expected) {
+    for (const auto face : {scenario.source_face, *other_face}) {
+      const auto material = harness.editor.modeling().project_material_for_face(
+          scenario.source.modeling_object_id, face);
+      ASSERT_TRUE(material.ok()) << material.error_message();
+      EXPECT_EQ(material.value().id, expected);
+    }
+  };
+  (void)pointer.dispatch("Ctrl+RightMouse", scenario.target_screen, true, true);
+  expect_selected_material(harness.second_material());
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  const auto release = pointer.dispatch("Ctrl+RightMouseClick",
+                                        scenario.target_screen, false, false,
+                                        true);
+  EXPECT_TRUE(release.material_transfer_consumed);
+  expect_selected_material(default_project_material_id());
+  scenario.expect_target_material(default_project_material_id());
+  const auto selection_after = harness.editor.selection().summary();
+  EXPECT_EQ(selection_after.selection_revision,
+            selection_before.selection_revision);
+  EXPECT_EQ(selection_after.selected_face_count,
+            selection_before.selected_face_count);
+  EXPECT_EQ(selection_after.active_face_id, selection_before.active_face_id);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  expect_selected_material(harness.second_material());
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_selected_material(default_project_material_id());
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
+     CoalescedMaterialClicksPreserveTheFollowingPressAndDoubleClickHistory) {
+  for (const bool whole_mesh : {false, true}) {
+    SCOPED_TRACE(whole_mesh ? "Shift native double" : "Ctrl release and next press");
+    FaceTextureTransferScenario scenario;
+    scenario.initialize();
+    auto &harness = scenario.harness;
+    MaterialGesturePointerDriver pointer(harness);
+    const quader::QuaderInputChord press{
+        .primary = !whole_mesh,
+        .shift = whole_mesh,
+        .device = quader::QuaderInputDevice::Mouse,
+        .mouse_button = quader::QuaderMouseButton::Right,
+        .gesture = quader::QuaderInputGesture::Press,
+    };
+    auto drag = press;
+    drag.gesture = quader::QuaderInputGesture::Drag;
+    auto click = press;
+    click.gesture = quader::QuaderInputGesture::Click;
+    auto next_press = press;
+    if (whole_mesh) {
+      next_press.gesture = quader::QuaderInputGesture::DoubleClick;
+    }
+    auto &input = harness.input;
+    input.modifiers = {.primary = !whole_mesh, .shift = whole_mesh};
+    input.pressed_input_chords = {press, drag, click, next_press, drag};
+    input.active_input_chords = {press, drag};
+    input.released_input_chords = {press, drag};
+    input.pointer_pressed_edges = {
+        {.button = quader::QuaderMouseButton::Right,
+         .local = scenario.target_screen,
+         .sequence = 1u},
+        {.button = quader::QuaderMouseButton::Right,
+         .local = scenario.target_screen,
+         .sequence = 3u},
+    };
+    input.pointer_released_edges = {{
+        .button = quader::QuaderMouseButton::Right,
+        .local = scenario.target_screen,
+        .sequence = 2u,
+    }};
+    if (whole_mesh) {
+      // Qt omits semantic Click on this final native-double release.
+      input.pointer_released_edges.push_back({
+          .button = quader::QuaderMouseButton::Right,
+          .local = scenario.target_screen,
+          .sequence = 4u,
+      });
+      input.active_input_chords.clear();
+      input.released_input_chords.insert(input.released_input_chords.end(),
+                                         {press, drag});
+    }
+    input.right_pressed = true;
+    input.right_down = !whole_mesh;
+    input.right_released = true;
+    pointer.held_chord = press;
+    pointer.sequence = whole_mesh ? 5u : 4u;
+    quader::ViewportKeybindingResolver::resolve(
+        harness.editor, harness.router.state(), input, pointer.suppressed,
+        pointer.linear_remainder, pointer.radial_remainder);
+    harness.input_result = harness.router.handle_frame(input, harness.camera);
+    EXPECT_FALSE(harness.input_result.navigation_active);
+    EXPECT_FALSE(harness.input_result.camera_changed);
+    auto frame = harness.frame(scenario.target_screen);
+    frame.right_pressed = true;
+    frame.right_down = !whole_mesh;
+    frame.right_released = true;
+    frame.right_click_count = whole_mesh ? 2 : 1;
+    EXPECT_FALSE(harness.controller.handle_context_menu_pointer(frame, false)
+                     .completed);
+    const auto coalesced = harness.dispatch_frame(frame);
+    EXPECT_TRUE(coalesced.material_transfer_consumed);
+    EXPECT_TRUE(coalesced.material_transfer_requested);
+    EXPECT_EQ(harness.controller.material_transfer_pointer_active(), !whole_mesh);
+    EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                  .copy_face_material_request_count,
+              whole_mesh ? 2u : 1u);
+    scenario.expect_source_selection();
+    const auto expect_materials = [&](bool applied) {
+      if (whole_mesh) {
+        for (const auto face : authored_face_ids(harness, scenario.target)) {
+          const auto material = harness.editor.modeling().project_material_for_face(
+              scenario.target.modeling_object_id, face);
+          ASSERT_TRUE(material.ok()) << material.error_message();
+          EXPECT_EQ(material.value().id, applied ? harness.second_material()
+                                                : default_project_material_id());
+        }
+      } else {
+        const auto material = harness.editor.modeling().project_material_for_face(
+            scenario.source.modeling_object_id, scenario.source_face);
+        ASSERT_TRUE(material.ok()) << material.error_message();
+        EXPECT_EQ(material.value().id, applied ? default_project_material_id()
+                                              : harness.second_material());
+      }
+    };
+    expect_materials(true);
+    if (!whole_mesh) {
+      // The first release cannot finish the later press; its release is still needed.
+      const auto final_release = pointer.dispatch(
+          "Ctrl+RightMouseClick", scenario.target_screen, false, false, true);
+      EXPECT_TRUE(final_release.material_transfer_consumed);
+    }
+    EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
+    pointer.idle(0.6, scenario.target_screen);
+    EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                  .copy_face_material_request_count,
+              2u);
+    expect_materials(true);
+    scenario.expect_source_selection();
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    if (whole_mesh) {
+      EXPECT_TRUE(harness.editor.history().can_undo());
+      scenario.expect_target_material(harness.second_material());
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+    }
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    expect_materials(false);
+  }
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
+     CoalescedDraggedReleasePreservesAFreshPressWithDifferentModifiers) {
+  FaceTextureTransferScenario scenario;
+  scenario.initialize();
+  auto &harness = scenario.harness;
+  MaterialGesturePointerDriver pointer(harness);
+  (void)pointer.dispatch("Shift+RightMouse", scenario.target_screen, true, true);
+  const auto old_press = pointer.held_chord;
+  auto old_drag = old_press;
+  old_drag.gesture = quader::QuaderInputGesture::Drag;
+  auto next_press = old_press;
+  next_press.primary = true;
+  next_press.shift = false;
+  auto next_drag = next_press;
+  next_drag.gesture = quader::QuaderInputGesture::Drag;
+  auto &input = harness.input;
+  input.modifiers = {.primary = true};
+  input.pressed_input_chords = {next_press, next_drag};
+  input.active_input_chords = {next_press, next_drag};
+  input.released_input_chords = {old_press, old_drag};
+  input.pointer_released_edges = {{
+      .button = quader::QuaderMouseButton::Right,
+      .local = scenario.target_screen + quader::QVec2{60.0f, 0.0f},
+      .sequence = 2u,
+  }};
+  input.pointer_pressed_edges = {{
+      .button = quader::QuaderMouseButton::Right,
+      .local = scenario.target_screen,
+      .sequence = 3u,
+  }};
+  input.right_pressed = true;
+  input.right_down = true;
+  input.right_released = true;
+  pointer.held_chord = next_press;
+  pointer.sequence = 4u;
+  quader::ViewportKeybindingResolver::resolve(
+      harness.editor, harness.router.state(), input, pointer.suppressed,
+      pointer.linear_remainder, pointer.radial_remainder);
+  harness.input_result = harness.router.handle_frame(input, harness.camera);
+  EXPECT_FALSE(harness.input_result.navigation_active);
+  EXPECT_FALSE(harness.input_result.camera_changed);
+  auto frame = harness.frame(scenario.target_screen);
+  frame.right_pressed = true;
+  frame.right_down = true;
+  frame.right_released = true;
+  EXPECT_FALSE(harness.controller.handle_context_menu_pointer(frame, false)
+                   .completed);
+  const auto coalesced = harness.dispatch_frame(frame);
+  EXPECT_TRUE(coalesced.material_transfer_consumed);
+  EXPECT_FALSE(coalesced.material_transfer_requested);
+  EXPECT_TRUE(harness.controller.material_transfer_pointer_active());
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  scenario.expect_target_material(default_project_material_id());
+  scenario.expect_source_selection();
+
+  const auto release = pointer.dispatch("Ctrl+RightMouseClick",
+                                        scenario.target_screen, false, false, true);
+  EXPECT_TRUE(release.material_transfer_requested);
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
+  const auto material = harness.editor.modeling().project_material_for_face(
+      scenario.source.modeling_object_id, scenario.source_face);
+  ASSERT_TRUE(material.ok()) << material.error_message();
+  EXPECT_EQ(material.value().id, default_project_material_id());
+  EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                .copy_face_material_request_count,
+            1u);
+  scenario.expect_source_selection();
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FALSE(harness.editor.history().can_undo());
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
+     MaterialCopyGesturesCancelBeforeReleaseWithoutSelectionOrMaterialMutation) {
+  enum class Interruption { Drag, CaptureLost, SourceChanged, BindingRemoved };
+  for (const auto interruption : {Interruption::Drag, Interruption::CaptureLost,
+                                   Interruption::SourceChanged,
+                                   Interruption::BindingRemoved}) {
+    SCOPED_TRACE(static_cast<int>(interruption));
+    FaceTextureTransferScenario scenario;
+    scenario.initialize();
+    auto &harness = scenario.harness;
+    if (interruption == Interruption::BindingRemoved) {
+      ASSERT_TRUE(harness.editor.commands()
+                      .set_keybinding_storage_path(
+                          harness.editor.project().manifest_path().parent_path() /
+                          "pending-material-keybindings.json")
+                      .ok());
+    }
+    MaterialGesturePointerDriver pointer(harness);
+    (void)pointer.dispatch("Shift+RightMouse", scenario.target_screen, true, true);
+    if (interruption == Interruption::Drag) {
+      // Native drag completion carries a physical release without Click intent.
+      (void)pointer.dispatch({}, scenario.target_screen + quader::QVec2{60.0f, 0.0f},
+                             false, true);
+      (void)pointer.dispatch({}, scenario.target_screen + quader::QVec2{60.0f, 0.0f},
+                             false, false, true);
+    } else {
+      if (interruption == Interruption::CaptureLost) {
+        harness.input.pointer_interaction_canceled = true;
+      } else if (interruption == Interruption::BindingRemoved) {
+        ASSERT_TRUE(harness.editor.commands()
+                        .remove_shortcut(
+                            "viewport.material.apply_selected_face_to_face")
+                        .ok());
+      } else {
+        ASSERT_TRUE(harness.editor.selection()
+                        .select_face(scenario.target, scenario.target_face)
+                        .ok());
+        harness.scene_session().history().clear();
+      }
+      pointer.idle(0.1, scenario.target_screen);
+      harness.input.pointer_interaction_canceled = false;
+      (void)pointer.dispatch("Shift+RightMouseClick", scenario.target_screen,
+                             false, false, true);
+    }
+    pointer.idle(0.6, scenario.target_screen);
+    scenario.expect_target_material(default_project_material_id());
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    EXPECT_FALSE(harness.controller.dragging());
+    EXPECT_FALSE(harness.controller.selection_marquee().active);
+    EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count,
+              0u);
+    EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                  .copy_face_material_request_count,
+              0u);
+    if (interruption != Interruption::SourceChanged) {
+      scenario.expect_source_selection();
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
      TransferPressUsesAcceptedClickAndPreservesSourceThroughHeldRelease) {
   FaceTextureTransferScenario scenario;
   scenario.initialize();
@@ -12791,13 +13345,13 @@ TEST(ViewportInteractionControllerMaterialTests,
   // The current cursor can already have moved away from the accepted press.
   harness.input.mouse_local = {0.0f, 0.0f};
   harness.input.modifiers.alt = true;
-  harness.input.transfer_face_texture_pressed = true;
+  harness.input.material_transfer_pressed = true;
   const auto press = harness.dispatch_frame(
       harness.left_frame(scenario.target_screen, true, true, false));
-  harness.input.transfer_face_texture_pressed = false;
-  EXPECT_TRUE(press.transfer_face_texture_consumed);
+  harness.input.material_transfer_pressed = false;
+  EXPECT_TRUE(press.material_transfer_consumed);
   EXPECT_TRUE(press.gizmo_consumed);
-  EXPECT_TRUE(harness.controller.texture_transfer_pointer_active());
+  EXPECT_TRUE(harness.controller.material_transfer_pointer_active());
   scenario.expect_target_material(harness.second_material());
   scenario.expect_source_selection();
   EXPECT_EQ(harness.editor.selection().summary().selection_revision,
@@ -12811,15 +13365,15 @@ TEST(ViewportInteractionControllerMaterialTests,
   for (int frame = 0; frame < 3; ++frame) {
     const auto held = harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, false, true, false));
-    EXPECT_TRUE(held.transfer_face_texture_consumed);
+    EXPECT_TRUE(held.material_transfer_consumed);
     EXPECT_FALSE(harness.controller.dragging());
     EXPECT_FALSE(harness.controller.selection_marquee().active);
     scenario.expect_source_selection();
   }
   const auto release = harness.dispatch_frame(
       harness.left_frame(scenario.target_screen, false, false, true));
-  EXPECT_TRUE(release.transfer_face_texture_consumed);
-  EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+  EXPECT_TRUE(release.material_transfer_consumed);
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
   scenario.expect_source_selection();
   const auto after_release = harness.controller.material_interaction_work_stats();
   EXPECT_EQ(after_release.face_pick_count, 1u);
@@ -12862,11 +13416,11 @@ TEST(ViewportInteractionControllerMaterialTests,
                                     : gizmo->info.screen_pivot;
     harness.scene_session().history().clear();
     harness.input.mouse_local = click;
-    harness.input.transfer_face_texture_pressed = true;
+    harness.input.material_transfer_pressed = true;
     const auto press = harness.dispatch_frame(
         harness.left_frame(click, true, true, false));
-    harness.input.transfer_face_texture_pressed = false;
-    EXPECT_TRUE(press.transfer_face_texture_consumed);
+    harness.input.material_transfer_pressed = false;
+    EXPECT_TRUE(press.material_transfer_consumed);
     harness.input.mouse_local = click + quader::QVec2{130.0f, 70.0f};
     (void)harness.dispatch_frame(harness.left_frame(click, false, true, false));
     EXPECT_FALSE(harness.controller.dragging());
@@ -12909,11 +13463,11 @@ TEST(ViewportInteractionControllerMaterialTests,
     }
     harness.scene_session().history().clear();
     const auto before = harness.editor.selection().summary();
-    harness.input.transfer_face_texture_pressed = true;
+    harness.input.material_transfer_pressed = true;
     const auto press = harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, true, true, false));
-    harness.input.transfer_face_texture_pressed = false;
-    EXPECT_TRUE(press.transfer_face_texture_consumed);
+    harness.input.material_transfer_pressed = false;
+    EXPECT_TRUE(press.material_transfer_consumed);
     (void)harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, false, true, false));
     (void)harness.dispatch_frame(
@@ -12936,7 +13490,7 @@ TEST(ViewportInteractionControllerMaterialTests,
   FaceTextureTransferScenario scenario;
   scenario.initialize();
   auto &harness = scenario.harness;
-  harness.input.transfer_face_texture_pressed = true;
+  harness.input.material_transfer_pressed = true;
   const std::array input_blockers{
       &quader::ViewportInputFrame::text_input_active,
       &quader::ViewportInputFrame::navigation_active,
@@ -13004,13 +13558,13 @@ TEST(ViewportInteractionControllerMaterialTests,
       harness.left_frame(start, true, true, false));
   EXPECT_TRUE(pending.gizmo_consumed);
   EXPECT_FALSE(harness.controller.dragging());
-  harness.input.transfer_face_texture_pressed = true;
+  harness.input.material_transfer_pressed = true;
   const auto held = harness.dispatch_frame(
       harness.left_frame(start, false, true, false));
-  EXPECT_FALSE(held.transfer_face_texture_consumed);
-  EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+  EXPECT_FALSE(held.material_transfer_consumed);
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
   EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count, 0u);
-  harness.input.transfer_face_texture_pressed = false;
+  harness.input.material_transfer_pressed = false;
   (void)harness.dispatch_frame(harness.left_frame(start, false, false, true));
   scenario.expect_source_selection();
 
@@ -13019,11 +13573,11 @@ TEST(ViewportInteractionControllerMaterialTests,
   harness.input.mouse_local = start + quader::QVec2{120.0f, 0.0f};
   (void)harness.dispatch_frame(harness.left_frame(start, false, true, false));
   ASSERT_TRUE(harness.controller.dragging());
-  harness.input.transfer_face_texture_pressed = true;
+  harness.input.material_transfer_pressed = true;
   (void)harness.dispatch_frame(harness.left_frame(start, false, true, false));
   EXPECT_TRUE(harness.controller.dragging());
   EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count, 0u);
-  harness.input.transfer_face_texture_pressed = false;
+  harness.input.material_transfer_pressed = false;
   ASSERT_TRUE(harness.controller.cancel_active_drag(harness.editor));
   (void)harness.dispatch_frame(harness.left_frame(start, false, false, true));
 
@@ -13033,14 +13587,14 @@ TEST(ViewportInteractionControllerMaterialTests,
   const quader::QVec2 corner{10.0f, 10.0f};
   harness.input.mouse_local = corner;
   (void)harness.dispatch_frame(harness.left_frame(corner, true, true, false));
-  harness.input.transfer_face_texture_pressed = true;
+  harness.input.material_transfer_pressed = true;
   harness.input.mouse_local = {790.0f, 590.0f};
   const auto marquee = harness.dispatch_frame(
       harness.left_frame(corner, false, true, false));
-  EXPECT_FALSE(marquee.transfer_face_texture_consumed);
+  EXPECT_FALSE(marquee.material_transfer_consumed);
   EXPECT_TRUE(harness.controller.selection_marquee().active);
   EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count, 0u);
-  harness.input.transfer_face_texture_pressed = false;
+  harness.input.material_transfer_pressed = false;
   (void)harness.dispatch_frame(harness.left_frame(corner, false, false, true));
   scenario.expect_target_material(default_project_material_id());
 }
@@ -13073,11 +13627,11 @@ TEST(ViewportInteractionControllerMaterialTests,
   };
   harness.input.pressed_input_chords = *press;
   resolve();
-  EXPECT_TRUE(harness.input.transfer_face_texture_pointer_reserved);
-  EXPECT_FALSE(harness.input.transfer_face_texture_pressed);
+  EXPECT_TRUE(harness.input.material_transfer_pointer_reserved);
+  EXPECT_FALSE(harness.input.material_transfer_pressed);
   (void)harness.dispatch_frame(
       harness.left_frame(scenario.target_screen, true, true, false));
-  EXPECT_TRUE(harness.controller.texture_transfer_pointer_active());
+  EXPECT_TRUE(harness.controller.material_transfer_pointer_active());
   EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count, 0u);
   scenario.expect_source_selection();
   scenario.expect_target_material(default_project_material_id());
@@ -13091,10 +13645,10 @@ TEST(ViewportInteractionControllerMaterialTests,
   harness.input.released_input_chords = *press;
   harness.input.pressed_input_chords = *click;
   resolve();
-  EXPECT_TRUE(harness.input.transfer_face_texture_pressed);
+  EXPECT_TRUE(harness.input.material_transfer_pressed);
   (void)harness.dispatch_frame(
       harness.left_frame(scenario.target_screen, false, false, true));
-  EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
                 .transfer_face_texture_request_count,
             1u);
@@ -13116,12 +13670,11 @@ TEST(ViewportInteractionControllerMaterialTests,
                         harness.editor.project().manifest_path().parent_path() /
                         "double-transfer-keybindings.json")
                     .ok());
-    if (use_click_binding) {
-      ASSERT_TRUE(harness.editor.commands()
-                      .set_shortcut("viewport.material.transfer_face_texture",
-                                    "Alt+LeftMouseClick")
-                      .ok());
-    }
+    ASSERT_TRUE(harness.editor.commands()
+                    .set_shortcut("viewport.material.transfer_face_texture",
+                                  use_click_binding ? "Alt+LeftMouseClick"
+                                                    : "Alt+LeftMouse")
+                    .ok());
     std::vector<quader::QuaderInputChord> suppressed;
     double linear_remainder = 0.0;
     double radial_remainder = 0.0;
@@ -13154,15 +13707,15 @@ TEST(ViewportInteractionControllerMaterialTests,
     // Qt emits only DoubleClick on its second press, and no Click at all on
     // the second release. Do not replace this with two synthetic Press edges.
     resolve("Alt+LeftMouseDoubleClick");
-    EXPECT_EQ(harness.input.transfer_face_texture_pointer_reserved,
+    EXPECT_EQ(harness.input.material_transfer_pointer_reserved,
               use_click_binding);
-    EXPECT_EQ(harness.input.transfer_face_texture_pressed, !use_click_binding);
+    EXPECT_EQ(harness.input.material_transfer_pressed, !use_click_binding);
     auto second_press =
         harness.left_frame(scenario.target_screen, true, true, false);
     second_press.left_click_count = 2;
     const auto before_second = harness.dispatch_frame(second_press);
-    EXPECT_TRUE(before_second.transfer_face_texture_consumed);
-    EXPECT_TRUE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_TRUE(before_second.material_transfer_consumed);
+    EXPECT_TRUE(harness.controller.material_transfer_pointer_active());
     scenario.expect_source_selection();
     resolve({});
     harness.input.mouse_local = scenario.target_screen + quader::QVec2{100.0f, 50.0f};
@@ -13174,7 +13727,7 @@ TEST(ViewportInteractionControllerMaterialTests,
         harness.left_frame(scenario.target_screen, false, false, true);
     second_release.left_click_count = 2;
     (void)harness.dispatch_frame(second_release);
-    EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
     scenario.expect_source_selection();
     EXPECT_EQ(harness.controller.material_interaction_work_stats()
                   .transfer_face_texture_request_count,
@@ -13190,10 +13743,10 @@ TEST(ViewportInteractionControllerMaterialTests,
   scenario.initialize();
   auto &harness = scenario.harness;
   harness.input.modifiers = {};
-  harness.input.transfer_face_texture_pressed = true;
+  harness.input.material_transfer_pressed = true;
   // Existing material gestures use this right-click point; transfer must not.
   (void)harness.dispatch_frame(harness.frame({0.0f, 0.0f}));
-  EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
                 .transfer_face_texture_request_count,
             1u);
@@ -13207,7 +13760,7 @@ TEST(ViewportInteractionControllerMaterialTests,
     FaceTextureTransferScenario scenario;
     scenario.initialize();
     auto &harness = scenario.harness;
-    harness.input.transfer_face_texture_pointer_reserved = true;
+    harness.input.material_transfer_pointer_reserved = true;
     harness.input.pointer_pressed_edges = {{
         .button = quader::QuaderMouseButton::Left,
         .local = scenario.target_screen,
@@ -13215,11 +13768,11 @@ TEST(ViewportInteractionControllerMaterialTests,
     }};
     const auto press = harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, true, true, false));
-    EXPECT_TRUE(press.transfer_face_texture_consumed);
-    EXPECT_FALSE(press.transfer_face_texture_requested);
-    ASSERT_TRUE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_TRUE(press.material_transfer_consumed);
+    EXPECT_FALSE(press.material_transfer_requested);
+    ASSERT_TRUE(harness.controller.material_transfer_pointer_active());
 
-    harness.input.transfer_face_texture_pointer_reserved = false;
+    harness.input.material_transfer_pointer_reserved = false;
     harness.input.pointer_pressed_edges.clear();
     harness.input.pointer_released_edges = {{
         .button = quader::QuaderMouseButton::Right,
@@ -13228,9 +13781,9 @@ TEST(ViewportInteractionControllerMaterialTests,
     }};
     const auto foreign = harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, false, true, false));
-    EXPECT_TRUE(foreign.transfer_face_texture_consumed);
-    EXPECT_FALSE(foreign.transfer_face_texture_requested);
-    EXPECT_TRUE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_TRUE(foreign.material_transfer_consumed);
+    EXPECT_FALSE(foreign.material_transfer_requested);
+    EXPECT_TRUE(harness.controller.material_transfer_pointer_active());
 
     harness.input.pointer_released_edges = {{
         .button = quader::QuaderMouseButton::Left,
@@ -13239,18 +13792,18 @@ TEST(ViewportInteractionControllerMaterialTests,
     }};
     harness.input.mouse_local = {0.0f, 0.0f};
     harness.input.mouse_screen = harness.input.mouse_local;
-    harness.input.transfer_face_texture_pressed = true;
+    harness.input.material_transfer_pressed = true;
     const auto release = harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, false, false, true));
-    harness.input.transfer_face_texture_pressed = false;
+    harness.input.material_transfer_pressed = false;
     harness.input.pointer_released_edges.clear();
-    EXPECT_TRUE(release.transfer_face_texture_consumed);
-    EXPECT_TRUE(release.transfer_face_texture_requested);
-    EXPECT_FLOAT_EQ(release.transfer_face_texture_local.x,
+    EXPECT_TRUE(release.material_transfer_consumed);
+    EXPECT_TRUE(release.material_transfer_requested);
+    EXPECT_FLOAT_EQ(release.material_transfer_local.x,
                     scenario.target_screen.x);
-    EXPECT_FLOAT_EQ(release.transfer_face_texture_local.y,
+    EXPECT_FLOAT_EQ(release.material_transfer_local.y,
                     scenario.target_screen.y);
-    EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
     EXPECT_EQ(harness.controller.material_interaction_work_stats()
                   .transfer_face_texture_request_count,
               1u);
@@ -13261,7 +13814,7 @@ TEST(ViewportInteractionControllerMaterialTests,
     FaceTextureTransferScenario scenario;
     scenario.initialize();
     auto &harness = scenario.harness;
-    harness.input.transfer_face_texture_pointer_reserved = true;
+    harness.input.material_transfer_pointer_reserved = true;
     harness.input.pointer_pressed_edges = {{
         .button = quader::QuaderMouseButton::Left,
         .local = scenario.target_screen,
@@ -13269,21 +13822,21 @@ TEST(ViewportInteractionControllerMaterialTests,
     }};
     (void)harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, true, true, false));
-    ASSERT_TRUE(harness.controller.texture_transfer_pointer_active());
+    ASSERT_TRUE(harness.controller.material_transfer_pointer_active());
 
-    harness.input.transfer_face_texture_pointer_reserved = false;
+    harness.input.material_transfer_pointer_reserved = false;
     harness.input.pointer_pressed_edges.clear();
     harness.input.pointer_released_edges = {{
         .button = quader::QuaderMouseButton::Left,
         .local = scenario.target_screen,
         .sequence = 200u,
     }};
-    harness.input.transfer_face_texture_pressed = true;
+    harness.input.material_transfer_pressed = true;
     const auto stale = harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, false, false, true));
-    EXPECT_TRUE(stale.transfer_face_texture_consumed);
-    EXPECT_FALSE(stale.transfer_face_texture_requested);
-    EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_TRUE(stale.material_transfer_consumed);
+    EXPECT_FALSE(stale.material_transfer_requested);
+    EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
 
     harness.input.pointer_released_edges = {{
         .button = quader::QuaderMouseButton::Left,
@@ -13292,10 +13845,10 @@ TEST(ViewportInteractionControllerMaterialTests,
     }};
     const auto orphan = harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, false, false, true));
-    harness.input.transfer_face_texture_pressed = false;
+    harness.input.material_transfer_pressed = false;
     harness.input.pointer_released_edges.clear();
-    EXPECT_TRUE(orphan.transfer_face_texture_consumed);
-    EXPECT_FALSE(orphan.transfer_face_texture_requested);
+    EXPECT_TRUE(orphan.material_transfer_consumed);
+    EXPECT_FALSE(orphan.material_transfer_requested);
     EXPECT_EQ(harness.controller.material_interaction_work_stats()
                   .transfer_face_texture_request_count,
               0u);
@@ -13351,9 +13904,9 @@ TEST(ViewportInteractionControllerMaterialTests,
           .local = scenario.target_screen,
           .sequence = sequence,
       };
-      harness.input.transfer_face_texture_pressed = false;
-      harness.input.transfer_face_texture_pointer_reserved = true;
-      harness.input.transfer_face_texture_edges = {{
+      harness.input.material_transfer_pressed = false;
+      harness.input.material_transfer_pointer_reserved = true;
+      harness.input.material_transfer_edges = {{
           .kind = quader::ViewportSemanticPointerEdgeKind::ReservePress,
           .semantic_chord = semantic,
           .pointer_edge = edge,
@@ -13369,11 +13922,11 @@ TEST(ViewportInteractionControllerMaterialTests,
         EXPECT_FALSE(harness.controller.context_menu_pointer_active());
       }
       const auto reserved = harness.dispatch_frame(frame);
-      EXPECT_TRUE(reserved.transfer_face_texture_consumed);
-      EXPECT_FALSE(reserved.transfer_face_texture_requested);
-      EXPECT_TRUE(harness.controller.texture_transfer_pointer_active());
-      harness.input.transfer_face_texture_pointer_reserved = false;
-      harness.input.transfer_face_texture_edges.clear();
+      EXPECT_TRUE(reserved.material_transfer_consumed);
+      EXPECT_FALSE(reserved.material_transfer_requested);
+      EXPECT_TRUE(harness.controller.material_transfer_pointer_active());
+      harness.input.material_transfer_pointer_reserved = false;
+      harness.input.material_transfer_edges.clear();
       harness.input.pointer_pressed_edges.clear();
     };
     const auto semantic_release = [&](std::uint64_t sequence) {
@@ -13382,8 +13935,8 @@ TEST(ViewportInteractionControllerMaterialTests,
           .local = scenario.target_screen,
           .sequence = sequence,
       };
-      harness.input.transfer_face_texture_pressed = true;
-      harness.input.transfer_face_texture_edges = {{
+      harness.input.material_transfer_pressed = true;
+      harness.input.material_transfer_edges = {{
           .kind = quader::ViewportSemanticPointerEdgeKind::Trigger,
           .semantic_chord = semantic,
           .pointer_edge = edge,
@@ -13398,8 +13951,8 @@ TEST(ViewportInteractionControllerMaterialTests,
         EXPECT_FALSE(harness.controller.context_menu_pointer_active());
       }
       const auto result = harness.dispatch_frame(frame);
-      harness.input.transfer_face_texture_pressed = false;
-      harness.input.transfer_face_texture_edges.clear();
+      harness.input.material_transfer_pressed = false;
+      harness.input.material_transfer_edges.clear();
       harness.input.pointer_released_edges.clear();
       return result;
     };
@@ -13416,17 +13969,17 @@ TEST(ViewportInteractionControllerMaterialTests,
     }};
     const auto foreign =
         harness.dispatch_frame(pointer_frame(false, true, false));
-    EXPECT_TRUE(foreign.transfer_face_texture_consumed);
-    EXPECT_FALSE(foreign.transfer_face_texture_requested);
-    EXPECT_TRUE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_TRUE(foreign.material_transfer_consumed);
+    EXPECT_FALSE(foreign.material_transfer_requested);
+    EXPECT_TRUE(harness.controller.material_transfer_pointer_active());
 
     const auto stale = semantic_release(99u);
-    EXPECT_TRUE(stale.transfer_face_texture_consumed);
-    EXPECT_FALSE(stale.transfer_face_texture_requested);
-    EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_TRUE(stale.material_transfer_consumed);
+    EXPECT_FALSE(stale.material_transfer_requested);
+    EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
     const auto orphan = semantic_release(102u);
-    EXPECT_TRUE(orphan.transfer_face_texture_consumed);
-    EXPECT_FALSE(orphan.transfer_face_texture_requested);
+    EXPECT_TRUE(orphan.material_transfer_consumed);
+    EXPECT_FALSE(orphan.material_transfer_requested);
     EXPECT_EQ(harness.controller.material_interaction_work_stats()
                   .transfer_face_texture_request_count,
               0u);
@@ -13435,9 +13988,9 @@ TEST(ViewportInteractionControllerMaterialTests,
 
     reserve_press(200u);
     const auto matching = semantic_release(201u);
-    EXPECT_TRUE(matching.transfer_face_texture_consumed);
-    EXPECT_TRUE(matching.transfer_face_texture_requested);
-    EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+    EXPECT_TRUE(matching.material_transfer_consumed);
+    EXPECT_TRUE(matching.material_transfer_requested);
+    EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
     EXPECT_EQ(harness.controller.material_interaction_work_stats()
                   .transfer_face_texture_request_count,
               1u);
@@ -13452,49 +14005,49 @@ TEST(ViewportInteractionControllerMaterialTests,
   scenario.initialize();
   auto &harness = scenario.harness;
   const auto reserve_press = [&]() {
-    harness.input.transfer_face_texture_pointer_reserved = true;
+    harness.input.material_transfer_pointer_reserved = true;
     (void)harness.dispatch_frame(
         harness.left_frame(scenario.target_screen, true, true, false));
-    harness.input.transfer_face_texture_pointer_reserved = false;
-    EXPECT_TRUE(harness.controller.texture_transfer_pointer_active());
+    harness.input.material_transfer_pointer_reserved = false;
+    EXPECT_TRUE(harness.controller.material_transfer_pointer_active());
   };
   reserve_press();
   harness.controller.cancel_pending_material_interaction();
-  EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
-  harness.input.transfer_face_texture_pressed = true;
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
+  harness.input.material_transfer_pressed = true;
   const auto canceled_release = harness.dispatch_frame(
       harness.left_frame(scenario.target_screen, false, false, true));
-  EXPECT_TRUE(canceled_release.transfer_face_texture_consumed);
-  EXPECT_FALSE(canceled_release.transfer_face_texture_requested);
-  harness.input.transfer_face_texture_pressed = false;
+  EXPECT_TRUE(canceled_release.material_transfer_consumed);
+  EXPECT_FALSE(canceled_release.material_transfer_requested);
+  harness.input.material_transfer_pressed = false;
   reserve_press();
   harness.controller.reset(&harness.editor);
-  EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
-  harness.input.transfer_face_texture_pressed = true;
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
+  harness.input.material_transfer_pressed = true;
   const auto reset_release = harness.dispatch_frame(
       harness.left_frame(scenario.target_screen, false, false, true));
-  EXPECT_FALSE(reset_release.transfer_face_texture_requested);
-  harness.input.transfer_face_texture_pressed = false;
+  EXPECT_FALSE(reset_release.material_transfer_requested);
+  harness.input.material_transfer_pressed = false;
   reserve_press();
   ASSERT_TRUE(harness.editor.selection()
                   .select_face(scenario.target, scenario.target_face)
                   .ok());
-  harness.input.transfer_face_texture_pressed = true;
+  harness.input.material_transfer_pressed = true;
   const auto changed_source_release = harness.dispatch_frame(
       harness.left_frame(scenario.target_screen, false, false, true));
-  EXPECT_FALSE(changed_source_release.transfer_face_texture_requested);
-  harness.input.transfer_face_texture_pressed = false;
+  EXPECT_FALSE(changed_source_release.material_transfer_requested);
+  harness.input.material_transfer_pressed = false;
   ASSERT_TRUE(harness.editor.selection()
                   .select_face(scenario.source, scenario.source_face)
                   .ok());
   reserve_press();
   ASSERT_TRUE(harness.editor.scene_documents().new_scene().ok());
-  harness.input.transfer_face_texture_pressed = true;
+  harness.input.material_transfer_pressed = true;
   const auto stale = harness.dispatch_frame(
       harness.left_frame(scenario.target_screen, false, false, true));
-  EXPECT_TRUE(stale.transfer_face_texture_consumed);
-  EXPECT_FALSE(stale.transfer_face_texture_requested);
-  EXPECT_FALSE(harness.controller.texture_transfer_pointer_active());
+  EXPECT_TRUE(stale.material_transfer_consumed);
+  EXPECT_FALSE(stale.material_transfer_requested);
+  EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
   EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count, 0u);
   EXPECT_TRUE(harness.editor.modeling().objects().empty());
   EXPECT_FALSE(harness.editor.history().can_undo());

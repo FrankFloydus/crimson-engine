@@ -81,6 +81,7 @@ bool material_face_source_gesture_mode(ViewportSelectionMode mode) {
 
 bool material_input_blocked(const ViewportInteractionFrame &frame) {
   return !frame.input.viewport_focused || frame.input.text_input_active ||
+         frame.input.pointer_interaction_canceled ||
          frame.input.navigation_active || frame.input_result.navigation_active ||
          frame.input.modal_tool_active ||
          frame.input.active_tool_owns_viewport ||
@@ -92,7 +93,8 @@ bool material_interaction_blocked(
     const ViewportInteractionFrame &frame,
     const ViewportToolResult &tool_result,
     const ViewportBeforeToolInteractionResult &before_tool) {
-  return material_input_blocked(frame) || before_tool.gizmo_consumed ||
+  return material_input_blocked(frame) ||
+         (before_tool.gizmo_consumed && !before_tool.material_transfer_consumed) ||
          tool_result.handled;
 }
 
@@ -204,17 +206,31 @@ const ViewportPointerButtonEdge *exact_pointer_release_after(
   return matching;
 }
 
-const ViewportSemanticPointerEdge *texture_transfer_edge(
+const ViewportSemanticPointerEdge *material_transfer_edge(
     const ViewportInputFrame &input, ViewportSemanticPointerEdgeKind kind) {
   const auto found = std::find_if(
-      input.transfer_face_texture_edges.rbegin(),
-      input.transfer_face_texture_edges.rend(),
+      input.material_transfer_edges.rbegin(),
+      input.material_transfer_edges.rend(),
       [kind](const auto &edge) { return edge.kind == kind; });
-  return found == input.transfer_face_texture_edges.rend() ? nullptr
+  return found == input.material_transfer_edges.rend() ? nullptr
                                                            : &*found;
 }
 
-bool texture_transfer_trigger_matches(
+ViewportInputActionKind material_pointer_action(
+    const ViewportSemanticPointerEdge &edge) {
+  return edge.action == ViewportInputActionKind::None
+             ? ViewportInputActionKind::TransferFaceTexture
+             : edge.action;
+}
+
+bool same_pointer_modifiers(const QuaderInputChord &left,
+                            const QuaderInputChord &right) {
+  return left.mouse_button == right.mouse_button &&
+         left.primary == right.primary && left.shift == right.shift &&
+         left.alt == right.alt;
+}
+
+bool material_transfer_trigger_matches(
     const ViewportSemanticPointerEdge &trigger,
     const ViewportPointerGesture &gesture,
     const PointerButtonFrameState &button_state,
@@ -270,7 +286,7 @@ ViewportInteractionController::handle_before_active_tool_impl(
   interaction_cursor_ = ViewportPointerCursor::Default;
   if (!point_light_range_.pointer_active()) {
     if (const auto transfer =
-            reserve_face_texture_transfer(editor, frame, native_tools)) {
+            reserve_material_transfer(editor, frame, native_tools)) {
       return *transfer;
     }
   }
@@ -351,7 +367,108 @@ ViewportInteractionController::handle_before_active_tool_impl(
 }
 
 std::optional<ViewportBeforeToolInteractionResult>
-ViewportInteractionController::reserve_face_texture_transfer(
+ViewportInteractionController::reserve_material_transfer(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    NativeViewportToolCoordinator *native_tools) {
+  const auto retire_released_pointer = [&](std::uint64_t before_sequence = 0u) {
+    if (!material_transfer_pointer_.has_value()) {
+      return;
+    }
+    const auto *release = exact_pointer_release_after(
+        frame.input.pointer_released_edges, material_transfer_pointer_->pointer.press);
+    if (release != nullptr &&
+        (before_sequence == 0u ||
+         (release->sequence != 0u && release->sequence < before_sequence))) {
+      material_transfer_pointer_.reset();
+      transfer_release_suppression_.clear();
+    }
+  };
+  if (frame.input.material_transfer_edges.size() < 2u) {
+    if (!frame.input.material_transfer_edges.empty()) {
+      const auto &edge = frame.input.material_transfer_edges.front();
+      if (edge.pointer_edge.has_value() && edge.pointer_edge->sequence != 0u &&
+          (edge.kind == ViewportSemanticPointerEdgeKind::ReservePress ||
+           edge.semantic_chord.gesture != QuaderInputGesture::Click)) {
+        retire_released_pointer(edge.pointer_edge->sequence);
+      }
+    }
+    auto result = reserve_material_pointer_edge(editor, frame, native_tools);
+    retire_released_pointer();
+    return result;
+  }
+
+  // A release and the following press can arrive in one host sample. Apply
+  // ownership in physical order so the later press cannot steal that release.
+  ViewportInputFrame input = frame.input;
+  ViewportBeforeToolInteractionResult result;
+  for (const auto &edge : frame.input.material_transfer_edges) {
+    const bool press = edge.kind == ViewportSemanticPointerEdgeKind::ReservePress ||
+                       edge.semantic_chord.gesture != QuaderInputGesture::Click;
+    const auto physical = edge.pointer_edge.value_or(ViewportPointerButtonEdge{
+        .button = edge.semantic_chord.mouse_button,
+        .local = frame.input.mouse_local,
+    });
+    if (press && physical.sequence != 0u) {
+      retire_released_pointer(physical.sequence);
+    }
+    input.material_transfer_edges = {edge};
+    input.material_transfer_pressed =
+        edge.kind == ViewportSemanticPointerEdgeKind::Trigger;
+    input.material_transfer_pointer_reserved = !input.material_transfer_pressed;
+    input.material_transfer_action = material_pointer_action(edge);
+    input.pointer_pressed_edges = press ? std::vector{physical}
+                                       : std::vector<ViewportPointerButtonEdge>{};
+    input.pointer_released_edges = press ? std::vector<ViewportPointerButtonEdge>{}
+                                        : std::vector{physical};
+    input.active_input_chords.clear();
+    if (press) {
+      input.active_input_chords.push_back(edge.semantic_chord);
+    }
+    input.middle_pressed = input.middle_down =
+        press && physical.button == QuaderMouseButton::Middle;
+    input.middle_released = !press && physical.button == QuaderMouseButton::Middle;
+    input.right_pressed = input.right_down =
+        press && physical.button == QuaderMouseButton::Right;
+    input.right_released = !press && physical.button == QuaderMouseButton::Right;
+    input.mouse_local = physical.local;
+    ViewportInteractionFrame event{
+        .input_router = frame.input_router,
+        .camera = frame.camera,
+        .settings = frame.settings,
+        .input = input,
+        .input_result = frame.input_result,
+    };
+    event.left_click_local = event.right_click_local = physical.local;
+    event.left_pressed = event.left_down =
+        press && physical.button == QuaderMouseButton::Left;
+    event.left_released = !press && physical.button == QuaderMouseButton::Left;
+    event.right_pressed = event.right_down = input.right_pressed;
+    event.right_released = input.right_released;
+    event.pointer_drag_threshold_pixels = frame.pointer_drag_threshold_pixels;
+    event.selection_state = frame.selection_state;
+    const auto accepted = reserve_material_pointer_edge(editor, event, native_tools);
+    if (!accepted.has_value()) {
+      continue;
+    }
+    result.gizmo_consumed = result.gizmo_consumed || accepted->gizmo_consumed;
+    result.material_transfer_consumed = true;
+    if (accepted->material_transfer_requested) {
+      result.material_transfer_requested = true;
+      result.material_transfer_local = accepted->material_transfer_local;
+      auto request = edge;
+      request.pointer_edge = physical;
+      request.pointer_edge->local = accepted->material_transfer_local;
+      result.material_transfer_requests.push_back(request);
+    }
+  }
+  retire_released_pointer();
+  return result.material_transfer_consumed
+             ? std::optional{std::move(result)}
+             : std::nullopt;
+}
+
+std::optional<ViewportBeforeToolInteractionResult>
+ViewportInteractionController::reserve_material_pointer_edge(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     NativeViewportToolCoordinator *native_tools) {
   if (transfer_release_suppression_.active()) {
@@ -363,14 +480,14 @@ ViewportInteractionController::reserve_face_texture_transfer(
             suppressed_button, suppressed.pressed, suppressed.down,
             suppressed.released)) {
       return ViewportBeforeToolInteractionResult{
-          .gizmo_consumed = true, .transfer_face_texture_consumed = true};
+          .gizmo_consumed = true, .material_transfer_consumed = true};
     }
   }
-  const ViewportSemanticPointerEdge *trigger = texture_transfer_edge(
+  const ViewportSemanticPointerEdge *trigger = material_transfer_edge(
       frame.input, ViewportSemanticPointerEdgeKind::Trigger);
-  const ViewportSemanticPointerEdge *reserve = texture_transfer_edge(
+  const ViewportSemanticPointerEdge *reserve = material_transfer_edge(
       frame.input, ViewportSemanticPointerEdgeKind::ReservePress);
-  if (transfer_face_texture_pointer_.has_value()) {
+  if (material_transfer_pointer_.has_value()) {
     // Consume the release even if focus, scene, or mode changes. No click was
     // started for selection or a gizmo, so none may be synthesized on release.
     const bool source_context_matches =
@@ -378,29 +495,40 @@ ViewportInteractionController::reserve_face_texture_transfer(
         !frame.input_result.camera_changed &&
         frame.input_router.state().selection_mode == ViewportSelectionMode::Face &&
         frame.selection_state.summary.selection_revision ==
-            transfer_face_texture_pointer_->selection_revision &&
+            material_transfer_pointer_->selection_revision &&
+        editor.commands().keybindings_revision() ==
+            material_transfer_pointer_->keybindings_revision &&
         editor.scene_documents().active_scene_id().value_or(SceneSessionId{}) ==
-            transfer_face_texture_pointer_->scene_session_id;
+            material_transfer_pointer_->scene_session_id;
     const QuaderMouseButton button =
-        transfer_face_texture_pointer_->pointer.press.button;
+        material_transfer_pointer_->pointer.press.button;
     const PointerButtonFrameState button_state =
         pointer_button_state(frame, button);
     const ViewportPointerButtonEdge *release = exact_pointer_release_after(
         frame.input.pointer_released_edges,
-        transfer_face_texture_pointer_->pointer.press);
+        material_transfer_pointer_->pointer.press);
     const bool matching_release = release != nullptr ||
-                                  (transfer_face_texture_pointer_->pointer.press
+                                  (material_transfer_pointer_->pointer.press
                                                .sequence == 0u &&
                                    button_state.released);
     const QVec2 release_local =
         release != nullptr ? release->local : frame.input.mouse_local;
     const bool trigger_matches =
         trigger != nullptr &&
-        texture_transfer_trigger_matches(
-            *trigger, transfer_face_texture_pointer_->pointer, button_state,
+        same_pointer_modifiers(trigger->semantic_chord,
+                               material_transfer_pointer_->semantic_chord) &&
+        (material_pointer_action(*trigger) ==
+             material_transfer_pointer_->action ||
+         (trigger->semantic_chord.gesture == QuaderInputGesture::DoubleClick &&
+          material_transfer_pointer_->action ==
+              ViewportInputActionKind::ApplySelectedFaceMaterialToFace &&
+          material_pointer_action(*trigger) ==
+              ViewportInputActionKind::ApplySelectedFaceMaterialToMesh)) &&
+        material_transfer_trigger_matches(
+            *trigger, material_transfer_pointer_->pointer, button_state,
             release);
     const bool legacy_release_trigger =
-        trigger == nullptr && frame.input.transfer_face_texture_pressed &&
+        trigger == nullptr && frame.input.material_transfer_pressed &&
         matching_release;
 
     // A second physical press can be Qt's DoubleClick edge. Replace the
@@ -408,33 +536,34 @@ ViewportInteractionController::reserve_face_texture_transfer(
     // same Settings-resolved button.
     if (trigger_matches && trigger->pointer_edge.has_value() &&
         trigger->semantic_chord.gesture != QuaderInputGesture::Click) {
-      transfer_face_texture_pointer_->pointer.press = *trigger->pointer_edge;
-      transfer_face_texture_pointer_->semantic_chord =
+      material_transfer_pointer_->pointer.press = *trigger->pointer_edge;
+      material_transfer_pointer_->semantic_chord =
           trigger->semantic_chord;
+      material_transfer_pointer_->action = material_pointer_action(*trigger);
     }
 
     if (button_state.released || !button_state.down ||
         !source_context_matches) {
       transfer_release_suppression_.begin(button, button_state.down);
-      transfer_face_texture_pointer_.reset();
+      material_transfer_pointer_.reset();
     }
     return ViewportBeforeToolInteractionResult{
         .gizmo_consumed = true,
-        .transfer_face_texture_consumed = true,
-        .transfer_face_texture_requested =
+        .material_transfer_consumed = true,
+        .material_transfer_requested =
             source_context_matches &&
             (legacy_release_trigger ||
              (trigger_matches &&
               (trigger->semantic_chord.gesture != QuaderInputGesture::Click ||
                matching_release))),
-        .transfer_face_texture_local =
+        .material_transfer_local =
             trigger_matches && trigger->pointer_edge.has_value()
                 ? trigger->pointer_edge->local
                 : release_local,
     };
   }
-  if ((!frame.input.transfer_face_texture_pressed &&
-       !frame.input.transfer_face_texture_pointer_reserved &&
+  if ((!frame.input.material_transfer_pressed &&
+       !frame.input.material_transfer_pointer_reserved &&
        trigger == nullptr && reserve == nullptr) ||
       frame.input_router.state().selection_mode != ViewportSelectionMode::Face ||
       material_input_blocked(frame) || frame.input_result.cancel_requested ||
@@ -445,21 +574,26 @@ ViewportInteractionController::reserve_face_texture_transfer(
     return std::nullopt;
   }
 
+  const bool coalesced_click =
+      trigger != nullptr && reserve != nullptr &&
+      trigger->semantic_chord.gesture == QuaderInputGesture::Click &&
+      same_pointer_modifiers(trigger->semantic_chord, reserve->semantic_chord) &&
+      material_pointer_action(*trigger) == material_pointer_action(*reserve);
   const ViewportSemanticPointerEdge *pointer_action =
-      trigger != nullptr ? trigger : reserve;
+      coalesced_click ? reserve : (trigger != nullptr ? trigger : reserve);
   if (pointer_action != nullptr) {
     const QuaderInputChord &semantic = pointer_action->semantic_chord;
     if (semantic.device != QuaderInputDevice::Mouse ||
         semantic.mouse_button == QuaderMouseButton::None) {
       return ViewportBeforeToolInteractionResult{
-          .gizmo_consumed = true, .transfer_face_texture_consumed = true};
+          .gizmo_consumed = true, .material_transfer_consumed = true};
     }
     // A Click can execute only through the exact press retained by this
     // owner. A stale/orphan semantic release is consumed without mutation.
     if (pointer_action->kind == ViewportSemanticPointerEdgeKind::Trigger &&
         semantic.gesture == QuaderInputGesture::Click) {
       return ViewportBeforeToolInteractionResult{
-          .gizmo_consumed = true, .transfer_face_texture_consumed = true};
+          .gizmo_consumed = true, .material_transfer_consumed = true};
     }
 
     selection_.cancel_pending_click();
@@ -471,7 +605,7 @@ ViewportInteractionController::reserve_face_texture_transfer(
             .local = pointer_press_fallback_local(frame,
                                                   semantic.mouse_button),
         });
-    transfer_face_texture_pointer_ = FaceTextureTransferPointer{
+    material_transfer_pointer_ = MaterialTransferPointer{
         .pointer = {
             .press = accepted_edge,
             .press_screen = frame.input.mouse_screen,
@@ -479,19 +613,33 @@ ViewportInteractionController::reserve_face_texture_transfer(
             .drag_threshold_pixels = frame.pointer_drag_threshold_pixels,
         },
         .semantic_chord = semantic,
+        .action = material_pointer_action(*pointer_action),
         .scene_session_id =
             editor.scene_documents().active_scene_id().value_or(SceneSessionId{}),
         .selection_revision = frame.selection_state.summary.selection_revision,
+        .keybindings_revision = editor.commands().keybindings_revision(),
     };
-    if (!button_state.down && !button_state.pressed) {
-      transfer_face_texture_pointer_.reset();
+    const bool coalesced_trigger_matches =
+        coalesced_click && material_transfer_trigger_matches(
+                               *trigger, material_transfer_pointer_->pointer,
+                               button_state,
+                               exact_pointer_release_after(
+                                   frame.input.pointer_released_edges,
+                                   accepted_edge));
+    if (!button_state.down &&
+        (!button_state.pressed || coalesced_trigger_matches)) {
+      material_transfer_pointer_.reset();
     }
     return ViewportBeforeToolInteractionResult{
         .gizmo_consumed = true,
-        .transfer_face_texture_consumed = true,
-        .transfer_face_texture_requested =
-            pointer_action->kind == ViewportSemanticPointerEdgeKind::Trigger,
-        .transfer_face_texture_local = accepted_edge.local,
+        .material_transfer_consumed = true,
+        .material_transfer_requested =
+            pointer_action->kind == ViewportSemanticPointerEdgeKind::Trigger ||
+            coalesced_trigger_matches,
+        .material_transfer_local =
+            coalesced_trigger_matches && trigger->pointer_edge.has_value()
+                ? trigger->pointer_edge->local
+                : accepted_edge.local,
     };
   }
 
@@ -513,7 +661,7 @@ ViewportInteractionController::reserve_face_texture_transfer(
     const PointerButtonFrameState legacy_state =
         pointer_button_state(frame, legacy_button);
     legacy_fresh_press = legacy_state.pressed;
-    transfer_face_texture_pointer_ = FaceTextureTransferPointer{
+    material_transfer_pointer_ = MaterialTransferPointer{
         .pointer = viewport_pointer_gesture_from_latest_edge(
             frame.input.pointer_pressed_edges, legacy_button,
             pointer_press_fallback_local(frame, legacy_button),
@@ -522,25 +670,26 @@ ViewportInteractionController::reserve_face_texture_transfer(
         .semantic_chord = {
             .device = QuaderInputDevice::Mouse,
             .mouse_button = legacy_button,
-            .gesture = frame.input.transfer_face_texture_pointer_reserved
+            .gesture = frame.input.material_transfer_pointer_reserved
                            ? QuaderInputGesture::Click
                            : QuaderInputGesture::Press,
         },
         .scene_session_id =
             editor.scene_documents().active_scene_id().value_or(SceneSessionId{}),
         .selection_revision = frame.selection_state.summary.selection_revision,
+        .keybindings_revision = editor.commands().keybindings_revision(),
     };
     if (!legacy_state.down && !legacy_state.pressed) {
-      transfer_face_texture_pointer_.reset();
+      material_transfer_pointer_.reset();
     }
   }
   return ViewportBeforeToolInteractionResult{
       .gizmo_consumed = true,
-      .transfer_face_texture_consumed = true,
-      .transfer_face_texture_requested =
-          frame.input.transfer_face_texture_pressed &&
+      .material_transfer_consumed = true,
+      .material_transfer_requested =
+          frame.input.material_transfer_pressed &&
           (legacy_fresh_press || frame.input.pointer_released_edges.empty()),
-      .transfer_face_texture_local =
+      .material_transfer_local =
           legacy_button != QuaderMouseButton::None
               ? pointer_press_fallback_local(frame, legacy_button)
               : frame.input.mouse_local,
@@ -608,15 +757,43 @@ void ViewportInteractionController::handle_material_interactions(
   if (!runtime_binding.current()) {
     return;
   }
-  if (frame.input.transfer_face_texture_pressed) {
-    if (!before_tool.transfer_face_texture_requested ||
+  const bool batched = !before_tool.material_transfer_requests.empty();
+  if (batched) {
+    ViewportInputFrame input = frame.input;
+    input.apply_face_material_to_mesh_pressed = false;
+    ViewportBeforeToolInteractionResult accepted = before_tool;
+    accepted.material_transfer_requests.clear();
+    for (const auto &request : before_tool.material_transfer_requests) {
+      input.material_transfer_pressed = true;
+      input.material_transfer_edges = {request};
+      input.material_transfer_action = material_pointer_action(request);
+      accepted.material_transfer_local = request.pointer_edge->local;
+      ViewportInteractionFrame event{
+          .input_router = frame.input_router,
+          .camera = frame.camera,
+          .settings = frame.settings,
+          .input = input,
+          .input_result = frame.input_result,
+      };
+      event.double_click_interval_seconds = frame.double_click_interval_seconds;
+      event.monotonic_time_seconds = frame.monotonic_time_seconds;
+      event.scene_surfaces = frame.scene_surfaces;
+      event.selection_state = frame.selection_state;
+      handle_material_interactions(editor, event, tool_result, accepted, runtime_binding);
+      if (!runtime_binding.current()) {
+        return;
+      }
+    }
+  }
+  if (!batched && frame.input.material_transfer_pressed) {
+    if (!before_tool.material_transfer_requested ||
         material_input_blocked(frame) || frame.input_result.cancel_requested ||
         frame.input_result.camera_changed || tool_result.handled ||
         !frame.input.viewport_hovered ||
         frame.input_router.state().selection_mode != ViewportSelectionMode::Face) {
       return;
     }
-    const QVec2 local_mouse = before_tool.transfer_face_texture_local;
+    const QVec2 local_mouse = before_tool.material_transfer_local;
     // Routing a held gesture to its original pane can retain logical hover;
     // a release outside that pane still must not edit through an outside ray.
     if (!(local_mouse.x >= 0.0f && local_mouse.y >= 0.0f &&
@@ -626,18 +803,44 @@ void ViewportInteractionController::handle_material_interactions(
     }
     if (const std::optional<QuaderHoverTarget> target =
             pick_material_face_target(editor, frame, local_mouse)) {
-      ++material_interaction_work_stats_.transfer_face_texture_request_count;
-      const QuaderApiVoidResult transferred =
-          editor.modeling().transfer_face_texture_to_face(
-              static_cast<QuaderModelingObjectId>(target->object_id),
-              static_cast<QuaderElementId>(target->face_id));
+      const auto action = frame.input.material_transfer_action;
+      const auto object = static_cast<QuaderModelingObjectId>(target->object_id);
+      const auto face = static_cast<QuaderElementId>(target->face_id);
+      QuaderApiVoidResult transferred;
+      if (action == ViewportInputActionKind::TransferFaceTexture) {
+        ++material_interaction_work_stats_.transfer_face_texture_request_count;
+        transferred = editor.modeling().transfer_face_texture_to_face(object, face);
+      } else {
+        ++material_interaction_work_stats_.copy_face_material_request_count;
+        switch (action) {
+        case ViewportInputActionKind::ApplySelectedFaceMaterialToFace:
+          transferred = editor.modeling().apply_selected_face_material_to_face(
+              object, face);
+          break;
+        case ViewportInputActionKind::ApplySelectedFaceMaterialToMesh:
+          transferred = editor.modeling().apply_selected_face_material_to_mesh(
+              object, face);
+          break;
+        case ViewportInputActionKind::ApplyFaceMaterialToSelection:
+          transferred = editor.modeling().apply_face_material_to_selected_faces(
+              object, face);
+          break;
+        default:
+          return;
+        }
+      }
       if (!runtime_binding.current()) {
         return;
       }
-      log_material_interaction_failure("Continue texture from selected face",
-                                       transferred);
+      log_material_interaction_failure(
+          action == ViewportInputActionKind::TransferFaceTexture
+              ? "Continue texture from selected face"
+              : "Copy face material",
+          transferred);
     }
-    return;
+    if (!frame.input.apply_face_material_to_mesh_pressed) {
+      return;
+    }
   }
 
   if (!frame.input.apply_face_material_to_mesh_pressed) {
@@ -664,11 +867,11 @@ void ViewportInteractionController::handle_material_interactions(
 }
 
 void ViewportInteractionController::cancel_pending_material_interaction() {
-  if (transfer_face_texture_pointer_.has_value()) {
+  if (material_transfer_pointer_.has_value()) {
     transfer_release_suppression_.begin(
-        transfer_face_texture_pointer_->pointer.press.button, true);
+        material_transfer_pointer_->pointer.press.button, true);
   }
-  transfer_face_texture_pointer_.reset();
+  material_transfer_pointer_.reset();
 }
 
 ViewportContextMenuPointerResult
@@ -681,17 +884,17 @@ ViewportInteractionController::handle_context_menu_pointer(
     return result;
   }
 
-  const bool texture_transfer_owns_right =
-      (transfer_face_texture_pointer_.has_value() &&
-       transfer_face_texture_pointer_->pointer.press.button ==
+  const bool material_transfer_owns_right =
+      (material_transfer_pointer_.has_value() &&
+       material_transfer_pointer_->pointer.press.button ==
            QuaderMouseButton::Right) ||
       std::ranges::any_of(
-          frame.input.transfer_face_texture_edges, [](const auto &edge) {
+          frame.input.material_transfer_edges, [](const auto &edge) {
             return edge.semantic_chord.device == QuaderInputDevice::Mouse &&
                    edge.semantic_chord.mouse_button ==
                        QuaderMouseButton::Right;
           });
-  if (texture_transfer_owns_right) {
+  if (material_transfer_owns_right) {
     cancel_context_menu_pointer();
     return result;
   }

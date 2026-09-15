@@ -65,6 +65,7 @@ public:
     std::uint64_t face_pick_count = 0;
     std::uint64_t apply_face_to_mesh_request_count = 0;
     std::uint64_t transfer_face_texture_request_count = 0;
+    std::uint64_t copy_face_material_request_count = 0;
   };
 
   [[nodiscard]] ViewportBeforeToolInteractionResult
@@ -113,9 +114,9 @@ public:
       const ViewportCameraController &camera, float raster_scale);
   /// Synchronizes live glyph presentation even when no pane receives tool input.
   void set_primitive_creation_decrement(bool decrement);
-  /// Keeps a texture-transfer press and its release in the initiating pane.
-  [[nodiscard]] bool texture_transfer_pointer_active() const {
-    return transfer_face_texture_pointer_.has_value();
+  /// Keeps a material press and its release in the initiating pane.
+  [[nodiscard]] bool material_transfer_pointer_active() const {
+    return material_transfer_pointer_.has_value();
   }
   [[nodiscard]] ViewportContextMenuPointerResult
   handle_context_menu_pointer(const ViewportInteractionFrame &frame,
@@ -179,11 +180,13 @@ public:
 
 private:
   /// Keeps the original scene and selected source for a reserved mouse gesture.
-  struct FaceTextureTransferPointer final {
+  struct MaterialTransferPointer final {
     ViewportPointerGesture pointer;
     QuaderInputChord semantic_chord;
+    ViewportInputActionKind action = ViewportInputActionKind::TransferFaceTexture;
     SceneSessionId scene_session_id;
     std::uint64_t selection_revision = 0;
+    std::uint64_t keybindings_revision = 0;
   };
 
   [[nodiscard]] ViewportBeforeToolInteractionResult
@@ -205,7 +208,11 @@ private:
       const ViewportBeforeToolInteractionResult &before_tool,
       ViewportRuntimeBindingToken runtime_binding);
   [[nodiscard]] std::optional<ViewportBeforeToolInteractionResult>
-  reserve_face_texture_transfer(
+  reserve_material_transfer(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      NativeViewportToolCoordinator *native_tools);
+  [[nodiscard]] std::optional<ViewportBeforeToolInteractionResult>
+  reserve_material_pointer_edge(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       NativeViewportToolCoordinator *native_tools);
   [[nodiscard]] std::optional<QuaderHoverTarget> pick_material_face_target(
@@ -218,7 +225,7 @@ private:
   PointLightRangeInteraction point_light_range_;
   ViewportSelectionInteraction selection_;
   // Ownership only: transfer happens on the semantic trigger, never while held.
-  std::optional<FaceTextureTransferPointer> transfer_face_texture_pointer_;
+  std::optional<MaterialTransferPointer> material_transfer_pointer_;
   // A reset drops pane ownership, but the old release must not become a click
   // in the new scene. The shared pointer primitive retires it on release or a
   // fresh press.

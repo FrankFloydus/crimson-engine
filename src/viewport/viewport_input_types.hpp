@@ -132,6 +132,8 @@ struct ViewportSemanticPointerEdge {
       ViewportSemanticPointerEdgeKind::Trigger;
   QuaderInputChord semantic_chord = {};
   std::optional<ViewportPointerButtonEdge> pointer_edge;
+  // Material copy and texture continuation share source-preserving ownership.
+  ViewportInputActionKind action = ViewportInputActionKind::None;
 };
 
 using ViewportCurveConversionEdgeKind = ViewportSemanticPointerEdgeKind;
@@ -186,13 +188,15 @@ struct ViewportInputFrame {
   int linear_array_copy_delta = 0;
   std::vector<ViewportRadialArrayInputEvent> radial_array_events;
   bool apply_face_material_to_mesh_pressed = false;
-  bool transfer_face_texture_pressed = false;
+  bool material_transfer_pressed = false;
   // Canonical mouse Click/DoubleClick counterparts and Qt's substituted second
   // press reserve pointer ownership before selection can replace the source.
-  bool transfer_face_texture_pointer_reserved = false;
+  bool material_transfer_pointer_reserved = false;
+  ViewportInputActionKind material_transfer_action =
+      ViewportInputActionKind::TransferFaceTexture;
   // Retains the exact Settings-resolved button, gesture, and physical edge.
   // The interaction owner uses this instead of assuming a left-button action.
-  std::vector<ViewportSemanticPointerEdge> transfer_face_texture_edges;
+  std::vector<ViewportSemanticPointerEdge> material_transfer_edges;
   // An unconsumed first left click can wait for any bound depth double-click.
   bool selection_click_delay_for_double_click = false;
   // Physical first-click modifiers, before they can change for the double-click.

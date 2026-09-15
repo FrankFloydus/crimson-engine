@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <vector>
 
 #include <quader/modeling/neutral/polygon/document_model.hpp>
 
@@ -120,12 +121,14 @@ struct ViewportBeforeToolInteractionResult {
   bool gizmo_consumed = false;
   /// A visible handle owns hover feedback without consuming an ordinary click.
   bool gizmo_hovered = false;
-  /// Distinguishes a texture transfer's pointer claim from a transform gizmo.
-  bool transfer_face_texture_consumed = false;
+  /// Distinguishes a material gesture's pointer claim from a transform gizmo.
+  bool material_transfer_consumed = false;
   /// Only an eligible semantic action may dispatch; cancelled releases cannot.
-  bool transfer_face_texture_requested = false;
+  bool material_transfer_requested = false;
   /// Exact initiating press or matching release position for the transfer.
-  QVec2 transfer_face_texture_local = {};
+  QVec2 material_transfer_local = {};
+  /// Ordered material requests when several physical edges share a host frame.
+  std::vector<ViewportSemanticPointerEdge> material_transfer_requests;
   bool selection_click_requested = false;
   QVec2 selection_click_local = {};
   int selection_click_count = 1;

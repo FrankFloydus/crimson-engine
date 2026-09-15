@@ -151,7 +151,11 @@ void mark_action_pressed(ViewportInputFrame &input,
     input.apply_face_material_to_mesh_pressed = true;
     break;
   case ViewportInputActionKind::TransferFaceTexture:
-    input.transfer_face_texture_pressed = true;
+  case ViewportInputActionKind::ApplySelectedFaceMaterialToFace:
+  case ViewportInputActionKind::ApplySelectedFaceMaterialToMesh:
+  case ViewportInputActionKind::ApplyFaceMaterialToSelection:
+    input.material_transfer_pressed = true;
+    input.material_transfer_action = action;
     break;
   case ViewportInputActionKind::ToggleCurvePointSmoothness:
     // Ordered Curve conversion events retain both semantic intent and exact
@@ -353,23 +357,30 @@ void record_curve_conversion_trigger(ViewportInputFrame &input,
   }
 }
 
-void record_face_texture_transfer_trigger(
+void record_material_transfer_trigger(
     ViewportInputFrame &input, ViewportInputActionKind action,
     const QuaderInputChord &chord,
     std::optional<ViewportPointerButtonEdge> pointer_edge) {
-  if (action == ViewportInputActionKind::TransferFaceTexture &&
+  if ((action == ViewportInputActionKind::TransferFaceTexture ||
+       action == ViewportInputActionKind::ApplySelectedFaceMaterialToFace ||
+       action == ViewportInputActionKind::ApplySelectedFaceMaterialToMesh ||
+       action == ViewportInputActionKind::ApplyFaceMaterialToSelection) &&
       chord.device == QuaderInputDevice::Mouse &&
       chord.mouse_button != QuaderMouseButton::None) {
-    input.transfer_face_texture_edges.push_back({
+    input.material_transfer_edges.push_back({
         .kind = ViewportSemanticPointerEdgeKind::Trigger,
         .semantic_chord = chord,
         .pointer_edge = pointer_edge,
+        .action = action,
     });
   }
 }
 
 bool owns_deferred_pointer(ViewportInputActionKind action) {
   return action == ViewportInputActionKind::TransferFaceTexture ||
+         action == ViewportInputActionKind::ApplySelectedFaceMaterialToFace ||
+         action == ViewportInputActionKind::ApplySelectedFaceMaterialToMesh ||
+         action == ViewportInputActionKind::ApplyFaceMaterialToSelection ||
          action == ViewportInputActionKind::ToggleCurvePointSmoothness;
 }
 
@@ -396,15 +407,19 @@ bool reserve_action_pointer(ViewportInputFrame &input,
                                 pointer_edge) {
   switch (action) {
   case ViewportInputActionKind::TransferFaceTexture:
+  case ViewportInputActionKind::ApplySelectedFaceMaterialToFace:
+  case ViewportInputActionKind::ApplySelectedFaceMaterialToMesh:
+  case ViewportInputActionKind::ApplyFaceMaterialToSelection:
     if (chord.device != QuaderInputDevice::Mouse ||
         chord.mouse_button == QuaderMouseButton::None) {
       return false;
     }
-    input.transfer_face_texture_pointer_reserved = true;
-    input.transfer_face_texture_edges.push_back({
+    input.material_transfer_pointer_reserved = true;
+    input.material_transfer_edges.push_back({
         .kind = ViewportSemanticPointerEdgeKind::ReservePress,
         .semantic_chord = chord,
         .pointer_edge = pointer_edge,
+        .action = action,
     });
     return true;
   case ViewportInputActionKind::ToggleCurvePointSmoothness:
@@ -446,7 +461,7 @@ void reserve_deferred_action_pointer(
           owns_deferred_pointer(action)) {
         record_curve_conversion_trigger(input, action, candidate,
                                         pointer_edge);
-        record_face_texture_transfer_trigger(input, action, candidate,
+        record_material_transfer_trigger(input, action, candidate,
                                              pointer_edge);
         suppress_owned_pointer_navigation_drag(action, candidate,
                                                suppressed_chords);
@@ -693,9 +708,10 @@ void ViewportKeybindingResolver::resolve(
   input.linear_array_copy_delta = 0;
   input.radial_array_events.clear();
   input.apply_face_material_to_mesh_pressed = false;
-  input.transfer_face_texture_pressed = false;
-  input.transfer_face_texture_pointer_reserved = false;
-  input.transfer_face_texture_edges.clear();
+  input.material_transfer_pressed = false;
+  input.material_transfer_pointer_reserved = false;
+  input.material_transfer_action = ViewportInputActionKind::TransferFaceTexture;
+  input.material_transfer_edges.clear();
   input.curve_conversion_edges.clear();
   input.command_pointer_edges.clear();
   input.selection_click_delay_for_double_click = false;
@@ -845,7 +861,7 @@ void ViewportKeybindingResolver::resolve(
                   }
                 }
               } else {
-                record_face_texture_transfer_trigger(input, action, candidate,
+                record_material_transfer_trigger(input, action, candidate,
                                                      pointer_edge);
                 record_curve_conversion_trigger(input, action, candidate,
                                                 pointer_edge);

@@ -4340,7 +4340,7 @@ TEST(CurveToolServiceTests, CanonicalAltClickConvertsOnceWithoutDraggingOrSelect
   ASSERT_EQ(harness.input.curve_conversion_edges.size(), 1u);
   EXPECT_EQ(harness.input.curve_conversion_edges[0].kind,
             ViewportCurveConversionEdgeKind::Trigger);
-  EXPECT_FALSE(harness.input.transfer_face_texture_pressed);
+  EXPECT_FALSE(harness.input.material_transfer_pressed);
   const auto press = harness.frame(true, true, false);
   EXPECT_TRUE(press.claim_interaction_pane);
   EXPECT_TRUE(press.curve_consumed);

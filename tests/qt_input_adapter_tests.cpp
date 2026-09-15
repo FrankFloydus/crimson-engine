@@ -2499,7 +2499,7 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
-     CtrlRightClickReleaseAndDoubleClickStayDistinctFromDrag) {
+     MaterialRightClickReleaseAndDoubleClickStayDistinctFromDrag) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-viewport-material-click-tests";
@@ -2507,98 +2507,105 @@ TEST(QtViewportSurfaceInputTests,
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
 
-  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
-  const QPointF press_local{24.0, 32.0};
-  const QPointF press_global{124.0, 232.0};
-  const Qt::KeyboardModifiers modifiers = Qt::ControlModifier;
-  const auto has_right_gesture = [](const quader::QtViewportInputFrame &frame,
-                                    QuaderInputGesture gesture) {
-    return std::any_of(
-        frame.input.pressed_input_chords.begin(),
-        frame.input.pressed_input_chords.end(),
-        [&](const QuaderInputChord &chord) {
-          return chord.primary && !chord.shift && !chord.alt &&
-                 chord.mouse_button == QuaderMouseButton::Right &&
-                 chord.gesture == gesture;
-        });
-  };
+  for (const Qt::KeyboardModifiers modifiers : {
+           Qt::KeyboardModifiers(Qt::ControlModifier),
+           Qt::KeyboardModifiers(Qt::ShiftModifier),
+       }) {
+    SCOPED_TRACE(modifiers == Qt::ControlModifier ? "Ctrl RMB" : "Shift RMB");
+    quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+    const QPointF press_local{24.0, 32.0};
+    const QPointF press_global{124.0, 232.0};
+    const auto has_right_gesture = [&](const quader::QtViewportInputFrame &frame,
+                                      QuaderInputGesture gesture) {
+      return std::any_of(
+          frame.input.pressed_input_chords.begin(),
+          frame.input.pressed_input_chords.end(),
+          [&](const QuaderInputChord &chord) {
+            return chord.primary == modifiers.testFlag(Qt::ControlModifier) &&
+                   chord.shift == modifiers.testFlag(Qt::ShiftModifier) &&
+                   !chord.alt &&
+                   chord.mouse_button == QuaderMouseButton::Right &&
+                   chord.gesture == gesture;
+          });
+    };
 
-  QMouseEvent stationary_press(
-      QEvent::MouseButtonPress, press_local, press_global,
-      Qt::RightButton, Qt::RightButton, modifiers);
-  QApplication::sendEvent(&surface, &stationary_press);
-  const quader::QtViewportInputFrame press_frame =
-      surface.take_input_frame(0.0f, false);
-  ASSERT_EQ(press_frame.input.pointer_pressed_edges.size(), 1u);
-  EXPECT_EQ(press_frame.input.pointer_pressed_edges.front().button,
-            QuaderMouseButton::Right);
-  EXPECT_FLOAT_EQ(press_frame.input.pointer_pressed_edges.front().local.x,
-                  static_cast<float>(press_local.x() * surface.devicePixelRatio()));
-  EXPECT_FLOAT_EQ(press_frame.input.pointer_pressed_edges.front().local.y,
-                  static_cast<float>(press_local.y() * surface.devicePixelRatio()));
-  EXPECT_NE(press_frame.input.pointer_pressed_edges.front().sequence, 0u);
-  EXPECT_TRUE(has_right_gesture(press_frame, QuaderInputGesture::Drag));
-  EXPECT_FALSE(has_right_gesture(press_frame, QuaderInputGesture::Click));
+    QMouseEvent stationary_press(
+        QEvent::MouseButtonPress, press_local, press_global,
+        Qt::RightButton, Qt::RightButton, modifiers);
+    QApplication::sendEvent(&surface, &stationary_press);
+    const quader::QtViewportInputFrame press_frame =
+        surface.take_input_frame(0.0f, false);
+    ASSERT_EQ(press_frame.input.pointer_pressed_edges.size(), 1u);
+    EXPECT_EQ(press_frame.input.pointer_pressed_edges.front().button,
+              QuaderMouseButton::Right);
+    EXPECT_FLOAT_EQ(press_frame.input.pointer_pressed_edges.front().local.x,
+                    static_cast<float>(press_local.x() * surface.devicePixelRatio()));
+    EXPECT_FLOAT_EQ(press_frame.input.pointer_pressed_edges.front().local.y,
+                    static_cast<float>(press_local.y() * surface.devicePixelRatio()));
+    EXPECT_NE(press_frame.input.pointer_pressed_edges.front().sequence, 0u);
+    EXPECT_TRUE(has_right_gesture(press_frame, QuaderInputGesture::Drag));
+    EXPECT_FALSE(has_right_gesture(press_frame, QuaderInputGesture::Click));
 
-  QMouseEvent stationary_release(
-      QEvent::MouseButtonRelease, press_local, press_global,
-      Qt::RightButton, Qt::NoButton, modifiers);
-  QApplication::sendEvent(&surface, &stationary_release);
-  const quader::QtViewportInputFrame click_frame =
-      surface.take_input_frame(0.0f, false);
-  ASSERT_EQ(click_frame.input.pointer_released_edges.size(), 1u);
-  EXPECT_EQ(click_frame.input.pointer_released_edges.front().button,
-            QuaderMouseButton::Right);
-  EXPECT_GT(click_frame.input.pointer_released_edges.front().sequence,
-            press_frame.input.pointer_pressed_edges.front().sequence);
-  EXPECT_TRUE(has_right_gesture(click_frame, QuaderInputGesture::Click));
-  EXPECT_FALSE(
-      has_right_gesture(click_frame, QuaderInputGesture::DoubleClick));
+    QMouseEvent stationary_release(
+        QEvent::MouseButtonRelease, press_local, press_global,
+        Qt::RightButton, Qt::NoButton, modifiers);
+    QApplication::sendEvent(&surface, &stationary_release);
+    const quader::QtViewportInputFrame click_frame =
+        surface.take_input_frame(0.0f, false);
+    ASSERT_EQ(click_frame.input.pointer_released_edges.size(), 1u);
+    EXPECT_EQ(click_frame.input.pointer_released_edges.front().button,
+              QuaderMouseButton::Right);
+    EXPECT_GT(click_frame.input.pointer_released_edges.front().sequence,
+              press_frame.input.pointer_pressed_edges.front().sequence);
+    EXPECT_TRUE(has_right_gesture(click_frame, QuaderInputGesture::Click));
+    EXPECT_FALSE(
+        has_right_gesture(click_frame, QuaderInputGesture::DoubleClick));
 
-  QMouseEvent double_click(
-      QEvent::MouseButtonDblClick, press_local, press_global,
-      Qt::RightButton, Qt::RightButton, modifiers);
-  QApplication::sendEvent(&surface, &double_click);
-  const quader::QtViewportInputFrame double_click_frame =
-      surface.take_input_frame(0.0f, false);
-  EXPECT_TRUE(has_right_gesture(double_click_frame,
-                                QuaderInputGesture::DoubleClick));
-  EXPECT_FALSE(
-      has_right_gesture(double_click_frame, QuaderInputGesture::Click));
+    QMouseEvent double_click(
+        QEvent::MouseButtonDblClick, press_local, press_global,
+        Qt::RightButton, Qt::RightButton, modifiers);
+    QApplication::sendEvent(&surface, &double_click);
+    const quader::QtViewportInputFrame double_click_frame =
+        surface.take_input_frame(0.0f, false);
+    EXPECT_TRUE(has_right_gesture(double_click_frame,
+                                  QuaderInputGesture::DoubleClick));
+    EXPECT_FALSE(
+        has_right_gesture(double_click_frame, QuaderInputGesture::Click));
 
-  QMouseEvent double_release(
-      QEvent::MouseButtonRelease, press_local, press_global,
-      Qt::RightButton, Qt::NoButton, modifiers);
-  QApplication::sendEvent(&surface, &double_release);
-  const quader::QtViewportInputFrame double_release_frame =
-      surface.take_input_frame(0.0f, false);
-  EXPECT_FALSE(
-      has_right_gesture(double_release_frame, QuaderInputGesture::Click));
+    QMouseEvent double_release(
+        QEvent::MouseButtonRelease, press_local, press_global,
+        Qt::RightButton, Qt::NoButton, modifiers);
+    QApplication::sendEvent(&surface, &double_release);
+    const quader::QtViewportInputFrame double_release_frame =
+        surface.take_input_frame(0.0f, false);
+    EXPECT_FALSE(
+        has_right_gesture(double_release_frame, QuaderInputGesture::Click));
 
-  QMouseEvent drag_press(QEvent::MouseButtonPress, press_local, press_global,
-                         Qt::RightButton, Qt::RightButton, modifiers);
-  QApplication::sendEvent(&surface, &drag_press);
-  (void)surface.take_input_frame(0.0f, false);
+    QMouseEvent drag_press(QEvent::MouseButtonPress, press_local, press_global,
+                           Qt::RightButton, Qt::RightButton, modifiers);
+    QApplication::sendEvent(&surface, &drag_press);
+    (void)surface.take_input_frame(0.0f, false);
 
-  const qreal drag_distance =
-      static_cast<qreal>(QApplication::startDragDistance() + 2);
-  const QPointF drag_local = press_local + QPointF{drag_distance, 0.0};
-  const QPointF drag_global = press_global + QPointF{drag_distance, 0.0};
-  QMouseEvent drag_move(QEvent::MouseMove, drag_local, drag_global,
-                        Qt::NoButton, Qt::RightButton, modifiers);
-  QApplication::sendEvent(&surface, &drag_move);
-  const auto drag_move_frame = surface.take_input_frame(0.0f, false);
-  ASSERT_EQ(drag_move_frame.input.pointer_drag_started_edges.size(), 1u);
-  EXPECT_EQ(drag_move_frame.input.pointer_drag_started_edges.front().button,
-            QuaderMouseButton::Right);
+    const qreal drag_distance =
+        static_cast<qreal>(QApplication::startDragDistance() + 2);
+    const QPointF drag_local = press_local + QPointF{drag_distance, 0.0};
+    const QPointF drag_global = press_global + QPointF{drag_distance, 0.0};
+    QMouseEvent drag_move(QEvent::MouseMove, drag_local, drag_global,
+                          Qt::NoButton, Qt::RightButton, modifiers);
+    QApplication::sendEvent(&surface, &drag_move);
+    const auto drag_move_frame = surface.take_input_frame(0.0f, false);
+    ASSERT_EQ(drag_move_frame.input.pointer_drag_started_edges.size(), 1u);
+    EXPECT_EQ(drag_move_frame.input.pointer_drag_started_edges.front().button,
+              QuaderMouseButton::Right);
 
-  QMouseEvent drag_release(QEvent::MouseButtonRelease, drag_local, drag_global,
-                           Qt::RightButton, Qt::NoButton, modifiers);
-  QApplication::sendEvent(&surface, &drag_release);
-  const quader::QtViewportInputFrame drag_release_frame =
-      surface.take_input_frame(0.0f, false);
-  EXPECT_FALSE(has_right_gesture(drag_release_frame,
-                                 QuaderInputGesture::Click));
+    QMouseEvent drag_release(QEvent::MouseButtonRelease, drag_local, drag_global,
+                             Qt::RightButton, Qt::NoButton, modifiers);
+    QApplication::sendEvent(&surface, &drag_release);
+    const quader::QtViewportInputFrame drag_release_frame =
+        surface.take_input_frame(0.0f, false);
+    EXPECT_FALSE(has_right_gesture(drag_release_frame,
+                                   QuaderInputGesture::Click));
+  }
 }
 
 TEST(QtViewportSurfaceInputTests,

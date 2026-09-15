@@ -54,6 +54,12 @@ struct ModelingProjectMaterialQueryResult final {
   ProjectAssetId material;
 };
 
+/// Resolves a face material without restricting it to project-owned assets.
+struct ModelingFaceMaterialQueryResult final {
+  ModelingCommandResult command;
+  MaterialReference material;
+};
+
 /// Identifies one mesh vertex resolved by the retained world-space picker.
 struct ModelingMeshVertexSnapTarget final {
   int modeling_object_id = -1;
@@ -379,6 +385,9 @@ public:
       MaterialReference source, MaterialReference replacement);
   [[nodiscard]] ModelingProjectMaterialQueryResult
   project_material_for_face(int modeling_object_id, int face_id) const;
+  [[nodiscard]] ModelingFaceMaterialQueryResult
+  material_for_face(int modeling_object_id, int face_id) const;
+  [[nodiscard]] ModelingFaceMaterialQueryResult selected_face_material() const;
   ModelingCommandResult apply_face_material_to_mesh(int modeling_object_id,
                                                     int face_id);
   [[nodiscard]] bool modal_tool_owns_viewport() const;

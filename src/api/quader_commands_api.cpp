@@ -276,6 +276,9 @@ constexpr std::string_view unobstructed_editor_command_keybinding_context() {
 bool is_material_viewport_action(
     const QuaderKeybindingActionKey &action) {
   return action.action_id == "viewport.material.apply_face_to_mesh" ||
+         action.action_id == "viewport.material.apply_selected_face_to_face" ||
+         action.action_id == "viewport.material.apply_selected_face_to_mesh" ||
+         action.action_id == "viewport.material.apply_face_to_selection" ||
          action.action_id == "viewport.material.transfer_face_texture";
 }
 
@@ -300,10 +303,11 @@ bool material_assignment_uses_reserved_bare_right_mouse(
              sequence, is_reserved_bare_right_mouse_material_chord);
 }
 
-bool face_texture_transfer_assignment_uses_unsupported_pointer_gesture(
+bool source_preserving_material_assignment_uses_unsupported_pointer_gesture(
     const QuaderKeybindingActionKey &action,
     const std::vector<QuaderInputChord> &sequence) {
-  if (action.action_id != "viewport.material.transfer_face_texture") {
+  if (!is_material_viewport_action(action) ||
+      action.action_id == "viewport.material.apply_face_to_mesh") {
     return false;
   }
   return std::ranges::any_of(sequence, [](const QuaderInputChord &chord) {
@@ -1523,10 +1527,10 @@ QuaderCommandsApi::Impl::analyze_shortcut_assignment(
         "navigation and context menus.";
     return analysis;
   }
-  if (face_texture_transfer_assignment_uses_unsupported_pointer_gesture(
+  if (source_preserving_material_assignment_uses_unsupported_pointer_gesture(
           action, *proposed)) {
     analysis.message =
-        "Continue Texture requires a mouse button press, click, or "
+        "Face material transfer requires a mouse button press, click, or "
         "double-click; drag and wheel gestures do not identify one exact "
         "owned pointer edge.";
     return analysis;

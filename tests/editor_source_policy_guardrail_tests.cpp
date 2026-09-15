@@ -555,7 +555,7 @@ TEST(ViewportToolGuardrailTests,
       "void ViewportInteractionController::handle_material_interactions(",
       "if (!frame.input.apply_face_material_to_mesh_pressed)");
   const auto input_gate = transfer.find(
-      "if (frame.input.transfer_face_texture_pressed)");
+      "if (!batched && frame.input.material_transfer_pressed)");
   const auto target_pick = transfer.find("pick_material_face_target(");
   const auto mutation = transfer.find(
       "editor.modeling().transfer_face_texture_to_face(");
@@ -574,7 +574,7 @@ TEST(ViewportToolGuardrailTests,
   const std::string reserve_action = source_slice(
       resolver, "bool reserve_action_pointer(",
       "void reserve_deferred_action_pointer(");
-  EXPECT_NE(reserve_action.find("transfer_face_texture_edges.push_back"),
+  EXPECT_NE(reserve_action.find("material_transfer_edges.push_back"),
             std::string::npos);
   EXPECT_NE(reserve_action.find("chord.mouse_button == QuaderMouseButton::None"),
             std::string::npos);
@@ -582,17 +582,17 @@ TEST(ViewportToolGuardrailTests,
             std::string::npos);
   const std::string pointer_owner = source_slice(
       controller,
-      "ViewportInteractionController::reserve_face_texture_transfer(",
+      "ViewportInteractionController::reserve_material_transfer(",
       "void ViewportInteractionController::handle_after_active_tool(");
   EXPECT_NE(pointer_owner.find("ViewportSemanticPointerEdgeKind::Trigger"),
             std::string::npos);
   EXPECT_NE(pointer_owner.find("pointer.press.button"), std::string::npos);
   EXPECT_NE(pointer_owner.find("exact_pointer_release_after("),
             std::string::npos);
-  EXPECT_NE(controller.find("texture_transfer_owns_right"),
+  EXPECT_NE(controller.find("material_transfer_owns_right"),
             std::string::npos);
   EXPECT_NE(commands.find(
-                "face_texture_transfer_assignment_uses_unsupported_pointer_gesture"),
+                "source_preserving_material_assignment_uses_unsupported_pointer_gesture"),
             std::string::npos);
   EXPECT_NE(commands.find(
                 "drag and wheel gestures do not identify one exact"),

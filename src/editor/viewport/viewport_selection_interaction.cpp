@@ -35,7 +35,7 @@ namespace quader {
 namespace {
 
 // The plane-cut API and implementation remain available; its viewport gesture
-// is intentionally dormant while Alt+LMB continues the selected face texture.
+// remains intentionally dormant; material gestures use the keybinding resolver.
 constexpr bool kFacePlaneCutGestureEnabled = false;
 
 ModelingSelectionEdit selection_edit_to_modeling(

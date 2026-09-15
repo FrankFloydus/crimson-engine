@@ -5135,6 +5135,30 @@ public:
     };
   }
 
+  [[nodiscard]] ModelingFaceMaterialQueryResult
+  material_for_face(int modeling_object_id, int face_id) const {
+    FaceMaterialTarget target = resolve_face_material(modeling_object_id, face_id);
+    return {.command = std::move(target.command), .material = target.material};
+  }
+
+  [[nodiscard]] ModelingFaceMaterialQueryResult selected_face_material() const {
+    const ModelingSelectionSummary summary = selection_summary();
+    if (summary.mode == ModelingSelectionMode::Face &&
+        summary.selected_face_count == 1u) {
+      const ModelingSelectionExport selection = export_selection();
+      for (const ModelingSelectionExportObject &object : selection.objects) {
+        if (object.selected_faces.size() == 1u) {
+          return material_for_face(
+              object.modeling_object_id,
+              static_cast<int>(object.selected_faces.front().id));
+        }
+      }
+    }
+    return {.command = {
+                .ok = false,
+                .message = "Select exactly one source face before copying material."}};
+  }
+
   ModelingCommandResult apply_face_material_to_mesh(int modeling_object_id,
                                                     int face_id) {
     const FaceMaterialTarget target =
@@ -11082,6 +11106,16 @@ ModelingSessionService::project_material_for_face(int modeling_object_id,
 ModelingCommandResult ModelingSessionService::apply_face_material_to_mesh(
     int modeling_object_id, int face_id) {
   return impl_->apply_face_material_to_mesh(modeling_object_id, face_id);
+}
+
+ModelingFaceMaterialQueryResult ModelingSessionService::material_for_face(
+    int modeling_object_id, int face_id) const {
+  return impl_->material_for_face(modeling_object_id, face_id);
+}
+
+ModelingFaceMaterialQueryResult
+ModelingSessionService::selected_face_material() const {
+  return impl_->selected_face_material();
 }
 
 bool ModelingSessionService::modal_tool_owns_viewport() const {

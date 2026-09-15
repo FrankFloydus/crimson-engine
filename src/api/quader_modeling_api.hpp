@@ -767,6 +767,15 @@ public:
   QuaderApiVoidResult apply_material_to_face(
       QuaderModelingObjectId object_id, QuaderElementId face_id,
       QuaderMaterialReference material);
+  /// Copies the sole selected face's material without changing texture mapping.
+  QuaderApiVoidResult apply_selected_face_material_to_face(
+      QuaderModelingObjectId object_id, QuaderElementId face_id);
+  /// Copies the sole selected face's material to every face of the target mesh.
+  QuaderApiVoidResult apply_selected_face_material_to_mesh(
+      QuaderModelingObjectId object_id, QuaderElementId face_id);
+  /// Samples the target face's material and assigns it to all selected faces.
+  QuaderApiVoidResult apply_face_material_to_selected_faces(
+      QuaderModelingObjectId object_id, QuaderElementId face_id);
   [[nodiscard]] QuaderApiResult<QuaderFaceProjectMaterial>
   project_material_for_face(QuaderModelingObjectId object_id,
                             QuaderElementId face_id) const;

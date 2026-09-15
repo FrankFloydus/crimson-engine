@@ -200,6 +200,9 @@ enum class ViewportInputActionKind {
     RadialArrayToggleInstances,
     RadialArrayIncreaseRepeats,
     RadialArrayDecreaseRepeats,
+    ApplySelectedFaceMaterialToFace,
+    ApplySelectedFaceMaterialToMesh,
+    ApplyFaceMaterialToSelection,
 };
 
 /**

@@ -201,6 +201,22 @@ MaterialReference native_material_reference(QuaderMaterialReference material) {
              : MaterialReference(material.embedded_asset);
 }
 
+/// Samples deleted project references using the same visible fallback as rendering.
+QuaderMaterialReference copied_face_material(QuaderApiSession session,
+                                            MaterialReference material) {
+  if (material.embedded()) {
+    return QuaderMaterialReference::embedded(material.embedded_asset());
+  }
+  const ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session);
+  const ProjectAssetId id =
+      project != nullptr && project->manifest() != nullptr
+          ? ProjectMaterialReferenceResolver::canonical_material_id(
+                *project->manifest(), material.project_asset())
+          : material.project_asset();
+  return QuaderMaterialReference::project(id);
+}
+
 bool assignment_material_exists(QuaderApiSession api_session,
                                 QuaderMaterialReference material) {
   if (!material.valid()) {
@@ -2539,6 +2555,61 @@ QuaderApiVoidResult QuaderModelingApi::apply_material_to_face(
           native_material_reference(material),
           ApplyMaterialToTargetHistoryCommand::Scope::Face),
       "Assign Material to Face");
+}
+
+QuaderApiVoidResult QuaderModelingApi::apply_selected_face_material_to_face(
+    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return mutations_.modeling_content_blocked_status("copying face materials.");
+  }
+  const ModelingFaceMaterialQueryResult source =
+      session.modeling().selected_face_material();
+  if (!source.command.ok) {
+    return invalid_api_status(session_, source.command.message);
+  }
+  return apply_material_to_face(object_id, face_id,
+                               copied_face_material(session_, source.material));
+}
+
+QuaderApiVoidResult QuaderModelingApi::apply_selected_face_material_to_mesh(
+    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return mutations_.modeling_content_blocked_status("copying face materials.");
+  }
+  const ModelingFaceMaterialQueryResult source =
+      session.modeling().selected_face_material();
+  if (!source.command.ok) {
+    return invalid_api_status(session_, source.command.message);
+  }
+  return apply_material_to_mesh(object_id, face_id,
+                               copied_face_material(session_, source.material));
+}
+
+QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_selected_faces(
+    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return mutations_.modeling_content_blocked_status("copying face materials.");
+  }
+  const ModelingFaceMaterialQueryResult source =
+      session.modeling().material_for_face(object_id, face_id);
+  if (!source.command.ok) {
+    return invalid_api_status(session_, source.command.message);
+  }
+  return apply_material_to_selected_faces(
+      copied_face_material(session_, source.material), mutations_.scene_session_id(),
+      session.modeling().face_texture_settings().selection_token);
 }
 
 QuaderApiResult<QuaderFaceProjectMaterial>
