@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
+#include "render/overlay/overlay_renderable_builder.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
@@ -170,6 +171,110 @@ ViewportOverlaySubmissionRequest submission_request(
       .overlays_visible = true,
       .scene_overlay_requested = true,
   };
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     WireframeRetainsRearVerticesWithoutChangingSolidOcclusionOrSharedSources) {
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  ViewportOverlayFrame selection;
+  selection.triangles.push_back({
+      .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+      .a = {-2.0f, -2.0f, -1.0f},
+      .b = {2.0f, -2.0f, -1.0f},
+      .c = {0.0f, 2.0f, -1.0f},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 1},
+  });
+  selection.points.push_back({
+      .layer = ViewportOverlayLayer::SelectedVertex,
+      .position = {0.0f, 0.0f, -3.0f},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 1, .vertex_id = 1},
+      .outline_growth_pixels = 0.0f,
+  });
+  StaticSelectionFrameProvider selection_provider{selection};
+  ViewportOverlayFrame volatile_modeling = selection;
+  volatile_modeling.points.front().layer = ViewportOverlayLayer::HoverVertex;
+  volatile_modeling.points.front().source = ViewportOverlaySource::ComponentHover;
+  RenderOverlaySelectionSnapshot scene;
+  CurveToolPreviewState curve;
+  auto request = submission_request(selection_provider, scene, volatile_modeling, curve);
+  request.camera = {
+      .eye = {0.0f, 0.0f, 0.0f},
+      .forward = {0.0f, 0.0f, -1.0f},
+      .right = {1.0f, 0.0f, 0.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .projection = ViewportOverlayProjection::Perspective,
+  };
+  request.style_selection_context = ViewportOverlaySelectionContext::Vertex;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Vertex;
+  // Mode filtering must also work without a scene-overlay snapshot request.
+  request.scene_overlay_requested = false;
+  const auto stamps = [](const ViewportOverlayFrame &frame) {
+    return std::ranges::count_if(frame.triangles, [](const auto &triangle) {
+      return triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp;
+    });
+  };
+  const auto expect_visibility = [&](bool wireframe) {
+    for (const bool dynamic : {false, true}) {
+      const auto &frame = dynamic ? target.dynamic_frame : target.persistent_frame;
+      EXPECT_EQ(stamps(frame), wireframe ? 0 : 1);
+      const auto plan = OverlayRenderableBuilder::build_layer(
+          frame, request.camera, dynamic ? ViewportOverlayLayer::HoverVertex
+                                         : ViewportOverlayLayer::SelectedVertex);
+      EXPECT_EQ(plan.point_batches.empty(), !wireframe);
+      for (const auto &batch : plan.point_batches) {
+        EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+        EXPECT_TRUE(batch.state.depth_culling);
+        EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+        EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
+      }
+    }
+  };
+  auto result = coordinator.submit(request, settings, target);
+  ASSERT_TRUE(result.persistent_submitted);
+  ASSERT_TRUE(result.dynamic_submitted);
+  expect_visibility(false);
+  const auto initial_work = coordinator.work_counters();
+  const int initial_builds = selection_provider.build_count;
+  request.wireframe_pane = true;
+  result = coordinator.submit(request, settings, target);
+  EXPECT_TRUE(result.persistent_submitted);
+  EXPECT_TRUE(result.dynamic_submitted);
+  EXPECT_FALSE(result.selection_source_refreshed);
+  expect_visibility(true);
+  ASSERT_NE(result.edge_hud_frame, nullptr);
+  EXPECT_EQ(stamps(*result.edge_hud_frame), 1);
+  EXPECT_EQ(stamps(volatile_modeling), 1);
+  EXPECT_EQ(selection_provider.build_count, initial_builds);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            initial_work.dynamic_source_compose_count);
+  for (int frame = 0; frame < 8; ++frame) {
+    EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  }
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            initial_work.dynamic_source_compose_count);
+  request.wireframe_pane = false;
+  result = coordinator.submit(request, settings, target);
+  EXPECT_TRUE(result.persistent_submitted);
+  EXPECT_TRUE(result.dynamic_submitted);
+  expect_visibility(false);
+  EXPECT_EQ(selection_provider.build_count, initial_builds);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            initial_work.dynamic_source_compose_count);
+
+  // Another pane must retain solid occlusion even while the first is wireframe.
+  request.wireframe_pane = true;
+  (void)coordinator.submit(request, settings, target);
+  request.viewport_index = 0u;
+  request.wireframe_pane = false;
+  result = coordinator.submit(request, settings, target);
+  EXPECT_FALSE(result.selection_source_refreshed);
+  expect_visibility(false);
+  EXPECT_EQ(selection_provider.build_count, initial_builds);
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,

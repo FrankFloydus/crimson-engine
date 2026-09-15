@@ -87,7 +87,7 @@ public:
     filament::Engine::destroy(&engine_);
   }
 
-  bool initialize() {
+  bool initialize(float wall_min_z = -0.02f) {
     const std::filesystem::path resources(
         QCoreApplication::applicationDirPath().toStdWString());
     engine_ = filament::Engine::create(filament::Engine::Backend::VULKAN);
@@ -131,7 +131,7 @@ public:
 
     QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
     const auto wall = api.modeling().create_box(
-        {.min = {-100.0f, -100.0f, -0.02f},
+        {.min = {-100.0f, -100.0f, wall_min_z},
          .max = {100.0f, 100.0f, 0.0f}}, "Selection visibility wall");
     if (!wall.ok()) return false;
     const auto material = api.assets().add_material(QuaderMaterialAsset{
@@ -170,7 +170,7 @@ public:
     // The editable mesh is an inward room; the opaque wall is a different
     // scene object. This is the exact old failure: camera-inside detection
     // promoted every room vertex above the unrelated wall's GPU depth.
-    append_inward_room_stamps(provider.frame);
+    append_box_depth_stamps(provider.frame, -1.0f, 2.0f, true);
     constexpr auto kCyan = rgba8(40, 225, 255);
     provider.frame.points = {
         {.layer = ViewportOverlayLayer::UnselectedVertex,
@@ -203,6 +203,59 @@ public:
          .selection_frame_provider = &provider,
          .style_selection_context = ViewportOverlaySelectionContext::Vertex,
          .overlays_visible = true},
+        ViewportSettings::defaults());
+  }
+
+  bool set_selected_vertex_sample(float eye_distance,
+                                  ViewportProjection projection, int side) {
+    camera_.view_axis(ViewportViewAxis::Z, side);
+    camera_.focus_origin(eye_distance);
+    if (projection == ViewportProjection::Perspective &&
+        !camera_.restore_perspective_pose({
+            .eye = {0.0f, 0.0f, side * eye_distance},
+            .target = {}, .up = {0.0f, 1.0f, 0.0f}})) {
+      return false;
+    }
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    selected_vertex_frame_.frame = {};
+    append_box_depth_stamps(selected_vertex_frame_.frame, -0.25f, 0.0f, false);
+    const float near_z = side > 0 ? 0.0f : -0.25f;
+    const float far_z = side > 0 ? -0.25f : 0.0f;
+    selected_vertex_frame_.frame.points = {
+        {.layer = ViewportOverlayLayer::SelectedVertex,
+         .position = point_at_plane(kVisiblePixel, near_z),
+         .color = rgba8(40, 225, 255),
+         .size_pixels = 9.0f,
+         .style_role = ViewportOverlayStyleRole::ExplicitColor,
+         .source = ViewportOverlaySource::ComponentSelection,
+         .element = {.object_id = 1, .vertex_id = 0}},
+        {.layer = ViewportOverlayLayer::SelectedVertex,
+         .position = point_at_plane(kHiddenPixel, far_z),
+         .color = rgba8(40, 225, 255),
+         .size_pixels = 9.0f,
+         .style_role = ViewportOverlayStyleRole::ExplicitColor,
+         .source = ViewportOverlaySource::ComponentSelection,
+         .element = {.object_id = 1, .vertex_id = 1}},
+    };
+    ++revision_;
+    return true;
+  }
+
+  void present_selected_vertex_sample(bool wireframe) {
+    // Match the production pane: wireframe hides solid surfaces while the
+    // semantic selection frame still supplies the editable object's topology.
+    view_.set_scene_visible(!wireframe);
+    (void)bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u),
+         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .selection_source = {.source_identity = 105u,
+                              .selection_revision = revision_},
+         .selection_frame_provider = &selected_vertex_frame_,
+         .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = ViewportOverlaySelectionContext::Vertex,
+         .overlays_visible = true,
+         .wireframe_pane = wireframe},
         ViewportSettings::defaults());
   }
 
@@ -239,10 +292,14 @@ public:
   }
 
 private:
-  static void append_inward_room_stamps(ViewportOverlayFrame &frame) {
+  static void append_box_depth_stamps(ViewportOverlayFrame &frame,
+                                      float min_z, float max_z, bool inward) {
     const auto quad = [&](QVec3 a, QVec3 b, QVec3 c, QVec3 d) {
-      for (const auto &triangle :
-           std::array<std::array<QVec3, 3>, 2>{{{a, c, b}, {a, d, c}}}) {
+      for (auto triangle :
+           std::array<std::array<QVec3, 3>, 2>{{{a, b, c}, {a, c, d}}}) {
+        if (inward) {
+          std::swap(triangle[1], triangle[2]);
+        }
         frame.triangles.push_back({
             .layer = ViewportOverlayLayer::SourceWireDepthStamp,
             .a = triangle[0], .b = triangle[1], .c = triangle[2],
@@ -251,13 +308,18 @@ private:
         });
       }
     };
-    // Outward quads are reversed by quad() to model an authored inward room.
-    quad({-100, -100, 2}, {100, -100, 2}, {100, 100, 2}, {-100, 100, 2});
-    quad({100, -100, -1}, {-100, -100, -1}, {-100, 100, -1}, {100, 100, -1});
-    quad({-100, -100, -1}, {-100, -100, 2}, {-100, 100, 2}, {-100, 100, -1});
-    quad({100, -100, 2}, {100, -100, -1}, {100, 100, -1}, {100, 100, 2});
-    quad({-100, -100, -1}, {100, -100, -1}, {100, -100, 2}, {-100, -100, 2});
-    quad({-100, 100, 2}, {100, 100, 2}, {100, 100, -1}, {-100, 100, -1});
+    quad({-100, -100, max_z}, {100, -100, max_z},
+         {100, 100, max_z}, {-100, 100, max_z});
+    quad({100, -100, min_z}, {-100, -100, min_z},
+         {-100, 100, min_z}, {100, 100, min_z});
+    quad({-100, -100, min_z}, {-100, -100, max_z},
+         {-100, 100, max_z}, {-100, 100, min_z});
+    quad({100, -100, max_z}, {100, -100, min_z},
+         {100, 100, min_z}, {100, 100, max_z});
+    quad({-100, -100, min_z}, {100, -100, min_z},
+         {100, -100, max_z}, {-100, -100, max_z});
+    quad({-100, 100, max_z}, {100, 100, max_z},
+         {100, 100, min_z}, {-100, 100, min_z});
   }
 
   /** Retains CPU bytes until Filament invokes its asynchronous release callback. */
@@ -292,6 +354,7 @@ private:
   SceneRenderBridge bridge_;
   ViewportRenderer view_;
   ViewportCameraController camera_;
+  SelectionRuntimeFrame selected_vertex_frame_;
   std::uint64_t revision_ = 0;
 };
 
@@ -355,6 +418,78 @@ TEST(SelectionOverlayRuntimeTests,
   ASSERT_TRUE(control.save(QDir(output_directory).filePath(
       QStringLiteral("near_on_top_control.png"))));
   EXPECT_GE(cyan_pixels(control, SelectionOverlayRuntimeHarness::kHiddenPixel), 9);
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanWireframeShowsSelectedBackVerticesAndSolidRestoresOcclusion) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 to read "
+                    "and capture production offscreen Vulkan selection overlays.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-wireframe-selection-overlay-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(-0.25f));
+  QString output_directory =
+      qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (output_directory.isEmpty()) {
+    output_directory = QDir(QCoreApplication::applicationDirPath())
+                           .absoluteFilePath(QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(output_directory));
+
+  for (const ViewportProjection projection :
+       {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    for (const int side : {1, -1}) {
+      for (const auto &[distance_label, distance] :
+           std::array<std::pair<const char *, float>, 2>{{
+               {"near", 0.5f}, {"far", 20.0f}}}) {
+        const QString sample =
+            QStringLiteral("selected_vertices_%1_%2_%3")
+                .arg(projection == ViewportProjection::Perspective
+                         ? QStringLiteral("perspective")
+                         : QStringLiteral("orthographic"))
+                .arg(side > 0 ? QStringLiteral("front") : QStringLiteral("back"))
+                .arg(QString::fromLatin1(distance_label));
+        SCOPED_TRACE(sample.toStdString());
+        ASSERT_TRUE(harness.set_selected_vertex_sample(distance, projection, side));
+        // Keep selection and geometry revisions fixed through both shading
+        // transitions: the pane mode alone must refresh its retained overlay.
+        for (int phase = 0; phase < 3; ++phase) {
+          const bool wireframe = phase == 1;
+          SCOPED_TRACE(phase);
+          harness.present_selected_vertex_sample(wireframe);
+          const QImage image = harness.capture();
+          ASSERT_FALSE(image.isNull());
+          const QString suffix = phase == 0 ? QStringLiteral("_solid.png")
+              : wireframe ? QStringLiteral("_wireframe.png")
+                          : QStringLiteral("_solid_restored.png");
+          const QString path = QDir(output_directory).filePath(sample + suffix);
+          ASSERT_TRUE(image.save(path));
+          const int visible = cyan_pixels(
+              image, SelectionOverlayRuntimeHarness::kVisiblePixel);
+          const int hidden = cyan_pixels(
+              image, SelectionOverlayRuntimeHarness::kHiddenPixel);
+          EXPECT_GE(visible, 9) << "The nearest selected vertex stays visible.";
+          if (wireframe) {
+            EXPECT_GE(hidden, 9)
+                << "A selected back vertex must remain visible when wireframe hides surfaces.";
+          } else {
+            EXPECT_EQ(hidden, 0)
+                << "Solid geometry must occlude the back vertex without an X-ray fallback.";
+          }
+          std::cout << "Selection GPU " << sample.toStdString()
+                    << " phase=" << phase << ": visible_cyan=" << visible
+                    << ", hidden_cyan=" << hidden << ", png="
+                    << path.toStdString() << '\n';
+        }
+      }
+    }
+  }
 }
 
 } // namespace

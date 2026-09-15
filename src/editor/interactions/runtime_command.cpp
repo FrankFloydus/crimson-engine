@@ -301,6 +301,7 @@ CommandResult update_insert_edge_loop_hover(
     return {true, activation.applied || activation.transform_preview_cancelled,
             ""};
   }
+	const bool had_preview = runtime.status().insert_edge_loop_has_preview;
 	const bool preview_changed = settings.resolved_hit.has_value()
 		? runtime.set_insert_edge_loop_preview_from_hit(
 			selection.objects(), *settings.resolved_hit, settings.resolved_factor, false)
@@ -308,7 +309,8 @@ CommandResult update_insert_edge_loop_hover(
 			selection.objects(), settings.ray, settings.grid_size, settings.vertex_radius,
 			settings.edge_radius, settings.snap_enabled, false,
 			settings.target_object_id);
-	return { true, activation.applied || activation.transform_preview_cancelled || preview_changed, "" };
+	return { true, activation.applied || activation.transform_preview_cancelled || preview_changed ||
+		had_preview != runtime.status().insert_edge_loop_has_preview, "" };
 }
 
 CommandResult begin_insert_edge_loop_drag(
@@ -346,13 +348,14 @@ CommandResult update_insert_edge_loop_drag(
 	if (!runtime.insert_edge_loop_state().dragging) {
 		return { true, false, "" };
 	}
+	const bool had_preview = runtime.status().insert_edge_loop_has_preview;
 	const bool changed = settings.resolved_factor_from_world
 		? runtime.update_insert_edge_loop_drag_factor_from_world(
 			selection.objects(), settings.resolved_factor)
 		: runtime.update_insert_edge_loop_drag_factor(
 			selection.objects(), settings.ray, settings.grid_size,
 			settings.snap_enabled);
-	return { true, changed, "" };
+	return { true, changed || had_preview != runtime.status().insert_edge_loop_has_preview, "" };
 }
 
 CommandResult cancel_insert_edge_loop(EditorRuntime& runtime)

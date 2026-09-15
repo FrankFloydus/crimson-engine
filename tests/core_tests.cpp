@@ -18876,6 +18876,133 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     InsertEdgeLoopHoverKeepsWorldGridAcrossPickRadiusAndClick) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Edge Loop Pick Boundary",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  TransformComponent transform;
+  transform.position = {8.0f, 6.0f, 2.0f};
+  transform.rotation_euler = {0.0f, 0.0f, 1.57079632679f};
+  transform.scale = {2.0f, 0.4f, 1.5f};
+  scene.set_transform(box.object.entity, transform);
+  const QMat4 world_from_object = scene.world_transform_matrix(box.object.entity);
+  const auto event_at = [&](float local_x) {
+    const QVec3 world =
+        transform_point(world_from_object, {local_x, -0.6f, 1.0f});
+    auto event = test_insert_edge_loop_event();
+    event.ray.origin = world + QVec3{0.0f, 0.0f, 5.0f};
+    event.edge_radius = 0.1;
+    event.grid_size = 1.0;
+    event.snap_enabled = true;
+    return event;
+  };
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+  ASSERT_TRUE(service.update_insert_edge_loop_hover(event_at(0.94f)).ok);
+  EXPECT_FALSE(service.tool_status().insert_edge_loop_has_preview);
+
+  std::size_t preview_line_count = 0u;
+  for (const float local_x : {0.96f, 0.94f, 0.96f, 0.94f}) {
+    SCOPED_TRACE(local_x);
+    const auto result = service.update_insert_edge_loop_hover(event_at(local_x));
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+    const auto frame = service.volatile_overlay_snapshot();
+    ASSERT_NE(frame.frame, nullptr);
+    if (preview_line_count == 0u) {
+      preview_line_count = frame.frame->lines.size();
+      ASSERT_GT(preview_line_count, 0u);
+    }
+    EXPECT_EQ(frame.frame->lines.size(), preview_line_count);
+  }
+
+  ASSERT_TRUE(service.begin_insert_edge_loop_drag(event_at(0.94f)).ok);
+  ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+  const auto committed = service.commit_insert_edge_loop_drag();
+  ASSERT_TRUE(committed.ok) << committed.message;
+  ASSERT_TRUE(committed.changed);
+  const auto mesh = service.compile_object_mesh(box.object.modeling_object_id);
+  ASSERT_TRUE(mesh.has_value());
+  EXPECT_TRUE(std::ranges::any_of(mesh->geometry().vertices,
+                                [](const MeshVertex &vertex) {
+                                  return std::abs(vertex.position.y) < 0.001f;
+                                }));
+  for (const auto &vertex : mesh->geometry().vertices) {
+    EXPECT_TRUE(std::abs(vertex.position.y) < 0.001f ||
+                std::abs(std::abs(vertex.position.y) - 1.0f) < 0.001f);
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     InsertEdgeLoopPublishesPreviewRemovalAndRestoration) {
+  for (const bool dragging : {false, true}) {
+    SCOPED_TRACE(dragging);
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    ASSERT_TRUE(service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Edge Loop Preview Publication",
+    }).ok);
+    ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+    auto event = test_insert_edge_loop_event();
+    event.snap_enabled = true;
+    event.grid_size = 0.5;
+    ASSERT_TRUE((dragging ? service.begin_insert_edge_loop_drag(event)
+                         : service.update_insert_edge_loop_hover(event)).ok);
+    ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+    const auto before = service.volatile_overlay_snapshot();
+    ASSERT_NE(before.frame, nullptr);
+    const auto midpoint_loop_lines = [](const ModelingVolatileOverlaySnapshot &snapshot) {
+      return std::ranges::count_if(snapshot.frame->lines,
+                                  [](const ViewportOverlayLine &line) {
+                                    return std::abs(line.start.y) < 0.001f &&
+                                           std::abs(line.end.y) < 0.001f;
+                                  });
+    };
+    ASSERT_EQ(midpoint_loop_lines(before), 4);
+    const auto update = [&] {
+      return dragging ? service.update_insert_edge_loop_drag(event)
+                      : service.update_insert_edge_loop_hover(event);
+    };
+    event.ray.origin.y = -0.95f;
+    const auto cleared = update();
+    ASSERT_TRUE(cleared.ok) << cleared.message;
+    EXPECT_TRUE(cleared.changed);
+    EXPECT_FALSE(service.tool_status().insert_edge_loop_has_preview);
+    const auto hidden = service.volatile_overlay_snapshot();
+    ASSERT_NE(hidden.frame, nullptr);
+    EXPECT_GT(hidden.source.publication_revision, before.source.publication_revision);
+    EXPECT_EQ(midpoint_loop_lines(hidden), 0);
+    for (int frame = 0; frame < 4; ++frame) {
+      const auto repeated = update();
+      EXPECT_TRUE(repeated.ok);
+      EXPECT_FALSE(service.tool_status().insert_edge_loop_has_preview);
+      const auto repeated_frame = service.volatile_overlay_snapshot();
+      EXPECT_EQ(midpoint_loop_lines(repeated_frame), 0);
+      if (dragging) {
+        EXPECT_FALSE(repeated.changed);
+        EXPECT_EQ(repeated_frame.frame, hidden.frame);
+      }
+    }
+    event.ray.origin.y = 0.0f;
+    const auto restored = update();
+    ASSERT_TRUE(restored.ok) << restored.message;
+    EXPECT_TRUE(restored.changed);
+    EXPECT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+    const auto after = service.volatile_overlay_snapshot();
+    EXPECT_GT(after.source.publication_revision, hidden.source.publication_revision);
+    EXPECT_EQ(midpoint_loop_lines(after), 4);
+  }
+}
+
+TEST(ModelingSessionServiceTests,
      VisibleOverlayComposesPersistentSelectionAndVolatileToolStreams) {
   SceneDocument scene;
   AssetRegistry assets;

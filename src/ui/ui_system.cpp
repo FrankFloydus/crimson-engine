@@ -1964,6 +1964,9 @@ void UISystem::refresh_face_texture_browser_selection() {
   face_texture_browser_selection_pending_ =
       stamp.selected_face_count == 1u && stamp.reference.valid() &&
       !face_texture_panel_->browser().reveal_material(stamp.reference);
+  if (stamp.selected_face_count == 0u) {
+    face_texture_panel_->browser().set_selected_material({});
+  }
   face_texture_browser_selection_catalog_revision_ =
       material_presentation_catalog_revision_;
   face_texture_browser_selection_presenter_.mark_presented(stamp);

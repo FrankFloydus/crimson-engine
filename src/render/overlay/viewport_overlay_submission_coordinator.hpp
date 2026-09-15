@@ -140,6 +140,7 @@ struct ViewportOverlayDynamicSubmissionStamp final {
       ViewportOverlaySelectionContext::Any;
   ViewportOverlayProjection projection =
       ViewportOverlayProjection::Perspective;
+  bool wireframe_pane = false;
 
   friend bool operator==(const ViewportOverlayDynamicSubmissionStamp &,
                          const ViewportOverlayDynamicSubmissionStamp &) =

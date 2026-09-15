@@ -7198,19 +7198,47 @@ public:
   }
 
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
-  pick_tool_target(const ModelingToolRayEvent &event,
-                   quader_poly::SelectionMode mode,
-                   int target_object_id = -1) const {
+  pick_insert_edge_loop_target(const ModelingToolRayEvent &event) const {
     quader_poly::PickOptions options =
         quader_editor_core::selection_pick_options_from_radii(
             event.vertex_radius, event.edge_radius);
-    options.mode = mode;
-    return quader_editor_core::pick_nearest(
+    options.mode = quader_poly::SelectionMode::Edge;
+    const auto hit = quader_editor_core::pick_nearest(
         cached_scene_transformed_objects_for_picking(),
         {.ray = to_runtime(event.ray),
-         .options = options,
-         .target_object_id = target_object_id},
+         .options = options},
         cached_pick_object_bounds(), cached_pick_face_geometry(options));
+    if (hit.has_value()) {
+      return hit;
+    }
+
+    // Leaving the pick radius continues sliding the retained seed. Resolve
+    // that seed in world space too, so its grid and distance metric do not
+    // change at the boundary on rotated or nonuniformly scaled objects.
+    const auto &state = runtime_.insert_edge_loop_state();
+    if (!quader_editor_core::insert_edge_loop_tool_has_seed(state)) {
+      return std::nullopt;
+    }
+    const auto &objects = cached_scene_transformed_objects_for_picking();
+    const auto object = std::ranges::find(objects, state.object_id,
+                                         &quader_editor_core::PolygonObject::id);
+    if (object == objects.end()) {
+      return std::nullopt;
+    }
+    const auto *start = quader_poly::find_vertex(object->document, state.edge.a);
+    const auto *end = quader_poly::find_vertex(object->document, state.edge.b);
+    if (start == nullptr || end == nullptr) {
+      return std::nullopt;
+    }
+    const float factor = quader_poly::edge_factor_from_ray(
+        object->document, state.edge, to_runtime(event.ray)).value_or(state.factor);
+    return quader_editor_core::PickHitRecord{
+        .hit = true,
+        .object_id = state.object_id,
+        .kind = quader_poly::ElementKind::Edge,
+        .edge = state.edge,
+        .local_position = start->position + (end->position - start->position) * factor,
+    };
   }
 
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
@@ -7941,7 +7969,7 @@ public:
   ModelingCommandResult
   update_insert_edge_loop_hover(const ModelingToolRayEvent &event) {
     const std::optional<quader_editor_core::PickHitRecord> world_hit =
-        pick_tool_target(event, quader_poly::SelectionMode::Edge);
+        pick_insert_edge_loop_target(event);
     const int target_object_id = world_hit.has_value()
                                      ? world_hit->object_id
                                      : std::max(runtime_.insert_edge_loop_state()
@@ -7973,7 +8001,7 @@ public:
   ModelingCommandResult
   begin_insert_edge_loop_drag(const ModelingToolRayEvent &event) {
     const std::optional<quader_editor_core::PickHitRecord> world_hit =
-        pick_tool_target(event, quader_poly::SelectionMode::Edge);
+        pick_insert_edge_loop_target(event);
     const int target_object_id = world_hit.has_value()
                                      ? world_hit->object_id
                                      : std::max(runtime_.insert_edge_loop_state()

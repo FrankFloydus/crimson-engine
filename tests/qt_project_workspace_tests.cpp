@@ -3044,8 +3044,33 @@ TEST(QtProjectWorkspaceTests,
   }
 
   ASSERT_TRUE(editor.selection().clear().ok());
+  const auto revisions_after_deselect = editor.revisions();
+  const auto history_after_deselect = editor.history().snapshot();
+  ui.refresh({}, {});
+  EXPECT_FALSE(embedded->selected_material().valid());
+  EXPECT_FALSE(embedded->current_selected_material().valid());
+  EXPECT_TRUE(grid->selectionModel()->selectedRows().isEmpty());
+  EXPECT_FALSE(grid->selectionModel()->currentIndex().isValid());
+  EXPECT_EQ(windowed->selected_material(), first);
+  EXPECT_EQ(editor.revisions().modeling_content_revision,
+            revisions_after_deselect.modeling_content_revision);
+  EXPECT_EQ(editor.history().snapshot().undo_label, history_after_deselect.undo_label);
+  EXPECT_EQ(editor.history().snapshot().redo_label, history_after_deselect.redo_label);
+
+  // Deselecting clears the old face highlight once. A subsequent browser choice
+  // remains available to primitive creation throughout unchanged refreshes.
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   ui.refresh({}, {});
+  embedded->set_selected_material(second);
+  const auto usage_after_deselect = project.material_usage().work_stats();
+  const int resets_after_deselect = catalog_resets;
+  for (int frame = 0; frame < 12; ++frame) {
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(embedded->current_selected_material(), second);
+  EXPECT_EQ(windowed->selected_material(), first);
+  EXPECT_EQ(catalog_resets, resets_after_deselect);
+  EXPECT_EQ(project.material_usage().work_stats(), usage_after_deselect);
   auto *surface = viewport->surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
   surface->resize(800, 600);

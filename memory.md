@@ -319,7 +319,10 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   and geometry member. A sibling instance, different member, or different object remains an occluder.
 - Editable vertex markers and their outlines remain depth-tested inside inward-facing rooms.
   Camera containment must never enable X-ray rendering; retain inward boundary points for GPU
-  occlusion. Coverage: `OverlayPointMeshBuilderTests.InwardRoomVertex*` in
+  occlusion. Wireframe panes remove source-face CPU occlusion metadata only from submitted copies;
+  shared sources and solid panes retain it. Shading switches invalidate both overlay streams without
+  rebuilding semantic sources or changing the distance-safe point shader bias.
+  Coverage: `OverlayPointMeshBuilderTests.InwardRoomVertex*` in
   [render extraction](tests/render_extraction_tests.cpp).
 - Inversion is XOR over the host-resolved eligible universe. Excluded components keep their state,
   an empty universe is an exact no-op, and emptied participants remain enrolled for a second inverse.
@@ -417,7 +420,8 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - Selecting a single face reveals its assigned material in the embedded browser without assignment.
   Gate this synchronization by selection/material identity, independently of catalog refresh and UV
   previews, so subsequent browsing remains available for primitive creation. Revealing clears only
-  constraints hiding the target; zero/multiple selected faces retain the user's browser choice.
+  constraints hiding the target. Deselecting clears the embedded highlight once; later manual
+  browser choices survive unchanged refreshes, and multiple selected faces retain the choice.
 - The canvas plane uses projected world Y as up and world X as the horizontal-face fallback,
   independently of boundary ordering, UV rotation or the viewport camera. Usable affine mappings
   supply the absolute texture angle. Scale modifiers and pixel shifts retain their existing units;
