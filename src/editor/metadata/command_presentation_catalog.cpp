@@ -49,6 +49,10 @@ constexpr std::string_view kClearSelectionAliases[]{"deselect all", "select none
 constexpr std::string_view kDuplicateAliases[]{"clone"};
 constexpr std::string_view kInstanceAliases[]{"linked duplicate", "reference"};
 constexpr std::string_view kFlattenInstanceAliases[]{"make unique", "unlink instance"};
+constexpr std::string_view kBakeTransformsAliases[]{"apply transforms"};
+constexpr std::string_view kBakeLocationAliases[]{"apply location"};
+constexpr std::string_view kBakeRotationAliases[]{"apply rotation"};
+constexpr std::string_view kBakeScaleAliases[]{"apply scale"};
 constexpr std::string_view kRemoveDoublesAliases[]{"weld duplicate vertices"};
 constexpr std::string_view kMergeDistanceAliases[]{"weld nearby", "remove doubles"};
 constexpr std::string_view kOuterHullAliases[]{"solidify"};
@@ -339,6 +343,22 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  kMenuViewportPalette),
     presentation(quader_command::kModelingSnapMeshesToFloor, Domain::Object,
                  Group::Transform, 250u, kMenuViewportPalette),
+    presentation(quader_command::kModelingBakeTransforms, Domain::Object,
+                 Group::Transform, 260u, kMenuViewportPalette,
+                 Palette::Searchable, Activation::Immediate, Danger::None,
+                 kBakeTransformsAliases),
+    presentation(quader_command::kModelingBakeLocation, Domain::Object,
+                 Group::Transform, 270u, kMenuViewportPalette,
+                 Palette::Searchable, Activation::Immediate, Danger::None,
+                 kBakeLocationAliases),
+    presentation(quader_command::kModelingBakeRotation, Domain::Object,
+                 Group::Transform, 280u, kMenuViewportPalette,
+                 Palette::Searchable, Activation::Immediate, Danger::None,
+                 kBakeRotationAliases),
+    presentation(quader_command::kModelingBakeScale, Domain::Object,
+                 Group::Transform, 290u, kMenuViewportPalette,
+                 Palette::Searchable, Activation::Immediate, Danger::None,
+                 kBakeScaleAliases),
     presentation(quader_command::kModelingAlignXMin, Domain::Object,
                  Group::Arrangement, 300u, kMenuViewportPalette),
     presentation(quader_command::kModelingAlignXCenter, Domain::Object,

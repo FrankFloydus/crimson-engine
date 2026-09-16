@@ -36,6 +36,7 @@
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/transform/mesh_arrangement_service.hpp"
+#include "editor/transform/mesh_transform_bake_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
 #include "io/project/project_material_reference_resolver.hpp"
@@ -394,11 +395,44 @@ bool copy_pivot_from_active_is_available(const SceneSession &session) {
          session.pivot().can_copy_pivot_from_active(session.selection());
 }
 
+std::optional<MeshTransformBakeMode>
+to_mesh_transform_bake_mode(QuaderTransformBakeMode mode) {
+  switch (mode) {
+  case QuaderTransformBakeMode::Transforms:
+    return MeshTransformBakeMode::Transforms;
+  case QuaderTransformBakeMode::Location:
+    return MeshTransformBakeMode::Location;
+  case QuaderTransformBakeMode::Rotation:
+    return MeshTransformBakeMode::Rotation;
+  case QuaderTransformBakeMode::Scale:
+    return MeshTransformBakeMode::Scale;
+  }
+  return std::nullopt;
+}
+
+std::string_view transform_bake_label(QuaderTransformBakeMode mode) {
+  switch (mode) {
+  case QuaderTransformBakeMode::Transforms:
+    return "Bake Transforms";
+  case QuaderTransformBakeMode::Location:
+    return "Bake Location";
+  case QuaderTransformBakeMode::Rotation:
+    return "Bake Rotation";
+  case QuaderTransformBakeMode::Scale:
+    return "Bake Scale";
+  }
+  return "Bake Transforms";
+}
+
 /// Selects the narrow owner predicate used by one native modeling action.
 enum class NativeModelingActionAvailability {
   SnapMeshesToFloor,
   CopyPivotFromActive,
   SnapVerticesToFloor,
+  BakeTransforms,
+  BakeLocation,
+  BakeRotation,
+  BakeScale,
 };
 
 /// Defines relative placement inside retained native action collections.
@@ -428,7 +462,7 @@ struct NativeModelingActionDescriptor final {
   bool rebuilds_mesh_on_success = true;
 };
 
-constexpr std::array<NativeModelingActionDescriptor, 3>
+constexpr std::array<NativeModelingActionDescriptor, 7>
     kNativeModelingActions{{
         {
             .action_id = "snap_meshes_to_floor",
@@ -445,6 +479,74 @@ constexpr std::array<NativeModelingActionDescriptor, 3>
                 "modeling.action.disabled.snap_to_floor_active_tool",
             .instance_edit_reason_key = {},
             .rebuilds_mesh_on_success = false,
+        },
+        {
+            .action_id = "bake_transforms",
+            .label = "Bake Transforms",
+            .selection_mode = ModelingSelectionMode::Object,
+            .panel_id = "object_operations",
+            .availability = NativeModelingActionAvailability::BakeTransforms,
+            .operations_placement = NativeModelingActionPlacement::AfterAnchor,
+            .context_placement = NativeModelingActionPlacement::AfterAnchor,
+            .anchor_action_id = "snap_meshes_to_floor",
+            .unavailable_reason_key =
+                "modeling.action.disabled.bake_transforms_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.bake_transforms_active_tool",
+            .instance_edit_reason_key =
+                "modeling.action.disabled.bake_transforms_instance_edit",
+            .rebuilds_mesh_on_success = true,
+        },
+        {
+            .action_id = "bake_location",
+            .label = "Bake Location",
+            .selection_mode = ModelingSelectionMode::Object,
+            .panel_id = "object_operations",
+            .availability = NativeModelingActionAvailability::BakeLocation,
+            .operations_placement = NativeModelingActionPlacement::AfterAnchor,
+            .context_placement = NativeModelingActionPlacement::AfterAnchor,
+            .anchor_action_id = "bake_transforms",
+            .unavailable_reason_key =
+                "modeling.action.disabled.bake_transforms_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.bake_transforms_active_tool",
+            .instance_edit_reason_key =
+                "modeling.action.disabled.bake_transforms_instance_edit",
+            .rebuilds_mesh_on_success = true,
+        },
+        {
+            .action_id = "bake_rotation",
+            .label = "Bake Rotation",
+            .selection_mode = ModelingSelectionMode::Object,
+            .panel_id = "object_operations",
+            .availability = NativeModelingActionAvailability::BakeRotation,
+            .operations_placement = NativeModelingActionPlacement::AfterAnchor,
+            .context_placement = NativeModelingActionPlacement::AfterAnchor,
+            .anchor_action_id = "bake_location",
+            .unavailable_reason_key =
+                "modeling.action.disabled.bake_transforms_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.bake_transforms_active_tool",
+            .instance_edit_reason_key =
+                "modeling.action.disabled.bake_transforms_instance_edit",
+            .rebuilds_mesh_on_success = true,
+        },
+        {
+            .action_id = "bake_scale",
+            .label = "Bake Scale",
+            .selection_mode = ModelingSelectionMode::Object,
+            .panel_id = "object_operations",
+            .availability = NativeModelingActionAvailability::BakeScale,
+            .operations_placement = NativeModelingActionPlacement::AfterAnchor,
+            .context_placement = NativeModelingActionPlacement::AfterAnchor,
+            .anchor_action_id = "bake_rotation",
+            .unavailable_reason_key =
+                "modeling.action.disabled.bake_transforms_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.bake_transforms_active_tool",
+            .instance_edit_reason_key =
+                "modeling.action.disabled.bake_transforms_instance_edit",
+            .rebuilds_mesh_on_success = true,
         },
         {
             .action_id = "copy_pivot_from_active",
@@ -494,6 +596,18 @@ bool native_modeling_action_is_available(
     return session.pivot().can_copy_pivot_from_active(session.selection());
   case NativeModelingActionAvailability::SnapVerticesToFloor:
     return session.snap_to_floor().can_snap_selected_vertices_to_floor();
+  case NativeModelingActionAvailability::BakeTransforms:
+    return session.mesh_transform_bake().can_bake(
+        session.selection(), MeshTransformBakeMode::Transforms);
+  case NativeModelingActionAvailability::BakeLocation:
+    return session.mesh_transform_bake().can_bake(
+        session.selection(), MeshTransformBakeMode::Location);
+  case NativeModelingActionAvailability::BakeRotation:
+    return session.mesh_transform_bake().can_bake(
+        session.selection(), MeshTransformBakeMode::Rotation);
+  case NativeModelingActionAvailability::BakeScale:
+    return session.mesh_transform_bake().can_bake(
+        session.selection(), MeshTransformBakeMode::Scale);
   }
   return false;
 }
@@ -1978,6 +2092,31 @@ QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
   return mutations_.run_document_command(
       session.pivot().copy_pivot_from_active(session.selection()),
       "Copy Pivot From Active");
+}
+
+bool QuaderModelingApi::can_bake_transforms(QuaderTransformBakeMode mode) const {
+  const SceneSession &session = scene_session(session_);
+  const auto native_mode = to_mesh_transform_bake_mode(mode);
+  return native_mode.has_value() &&
+         native_modeling_action_execution_is_available(session) &&
+         session.mesh_transform_bake().can_bake(session.selection(),
+                                                *native_mode);
+}
+
+QuaderApiVoidResult
+QuaderModelingApi::bake_transforms(QuaderTransformBakeMode mode) {
+  SceneSession &session = scene_session(session_);
+  const auto native_mode = to_mesh_transform_bake_mode(mode);
+  if (!native_mode.has_value()) {
+    return invalid_api_status(session_, "Invalid transform bake mode.");
+  }
+  if (!native_modeling_action_execution_is_available(session)) {
+    return invalid_api_status(
+        session_, "Finish or cancel the active tool before baking transforms.");
+  }
+  return mutations_.run_document_command(
+      session.mesh_transform_bake().bake(session.selection(), *native_mode),
+      std::string(transform_bake_label(mode)));
 }
 
 bool QuaderModelingApi::can_snap_selected_meshes_to_floor() const {

@@ -702,7 +702,19 @@ private:
         require_ok(editor().selection().select_object(object),
                    "Select canonical outer-hull surface");
       } else {
-        (void)create_selected_box("Selected Object");
+        const QuaderModelingObjectRef object =
+            create_selected_box("Selected Object");
+        if (command_id_ == quader_command::kModelingBakeTransforms.string() ||
+            command_id_ == quader_command::kModelingBakeLocation.string() ||
+            command_id_ == quader_command::kModelingBakeRotation.string() ||
+            command_id_ == quader_command::kModelingBakeScale.string()) {
+          require_ok(editor().scene().set_transform(
+                         object.entity,
+                         QuaderTransform{.position = {3.0f, -2.0f, 5.0f},
+                                         .rotation_euler = {0.3f, 0.6f, -0.4f},
+                                         .scale = {1.5f, 0.75f, 2.0f}}),
+                     "Set canonical mesh transforms before baking");
+        }
       }
       break;
     case CanonicalCommandFixture::ObjectPairSelection:

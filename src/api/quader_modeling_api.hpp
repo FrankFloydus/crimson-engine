@@ -37,6 +37,9 @@ class QuaderVertexSelection;
 class QuaderEdgeSelection;
 class QuaderFaceSelection;
 
+/// Selects the object transform channels baked into the selected mesh geometry.
+enum class QuaderTransformBakeMode { Transforms, Location, Rotation, Scale };
+
 /**
  * Names one edge for native public modeling component APIs.
  */
@@ -692,6 +695,11 @@ public:
   QuaderApiVoidResult remove_doubles();
   [[nodiscard]] bool can_copy_pivot_from_active() const;
   QuaderApiVoidResult copy_pivot_from_active();
+
+  /// Bakes current object transforms without changing the visible mesh shape.
+  /// Location and rotation reset to zero; scale resets to one.
+  [[nodiscard]] bool can_bake_transforms(QuaderTransformBakeMode mode) const;
+  QuaderApiVoidResult bake_transforms(QuaderTransformBakeMode mode);
   [[nodiscard]] bool can_snap_selected_meshes_to_floor() const;
   QuaderApiVoidResult snap_selected_meshes_to_floor();
   [[nodiscard]] bool can_snap_selected_vertices_to_floor() const;

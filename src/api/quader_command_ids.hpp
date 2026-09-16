@@ -196,6 +196,14 @@ inline constexpr QuaderCommandId kModelingCopyPivotFromActive{
     "modeling.copy_pivot_from_active"};
 inline constexpr QuaderCommandId kModelingSnapMeshesToFloor{
     "modeling.snap_meshes_to_floor"};
+inline constexpr QuaderCommandId kModelingBakeTransforms{
+    "modeling.bake_transforms"};
+inline constexpr QuaderCommandId kModelingBakeLocation{
+    "modeling.bake_location"};
+inline constexpr QuaderCommandId kModelingBakeRotation{
+    "modeling.bake_rotation"};
+inline constexpr QuaderCommandId kModelingBakeScale{
+    "modeling.bake_scale"};
 inline constexpr QuaderCommandId kModelingSnapVerticesToFloor{
     "modeling.snap_vertices_to_floor"};
 inline constexpr QuaderCommandId kModelingMergeVerticesToActive{
@@ -506,6 +514,10 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingCombineMeshes,
     kModelingCopyPivotFromActive,
     kModelingSnapMeshesToFloor,
+    kModelingBakeTransforms,
+    kModelingBakeLocation,
+    kModelingBakeRotation,
+    kModelingBakeScale,
     kModelingSnapVerticesToFloor,
     kModelingMergeVerticesToActive,
     kModelingMergeVerticesToCenter,

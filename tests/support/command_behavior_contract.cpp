@@ -387,6 +387,22 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kModelingSnapMeshesToFloor,
                Fixture::ObjectSelection, kTransformDomains,
                Outcome::ChangeRequired, UndoRepeat::Undoable),
+      contract(quader_command::kModelingBakeTransforms,
+               Fixture::ObjectSelection,
+               kTransformDomains | Domain::ModelingContent | Domain::Assets,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
+      contract(quader_command::kModelingBakeLocation,
+               Fixture::ObjectSelection,
+               kTransformDomains | Domain::ModelingContent | Domain::Assets,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
+      contract(quader_command::kModelingBakeRotation,
+               Fixture::ObjectSelection,
+               kTransformDomains | Domain::ModelingContent | Domain::Assets,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
+      contract(quader_command::kModelingBakeScale,
+               Fixture::ObjectSelection,
+               kTransformDomains | Domain::ModelingContent | Domain::Assets,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
       contract(quader_command::kModelingMergeVerticesToActive,
                Fixture::VertexPairSelection, kTopologyDomains,
                Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
@@ -781,9 +797,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 215U);
+  static_assert(std::size(kContracts) == 219U);
 #else
-  static_assert(std::size(kContracts) == 214U);
+  static_assert(std::size(kContracts) == 218U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

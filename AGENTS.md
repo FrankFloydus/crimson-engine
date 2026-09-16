@@ -41,6 +41,7 @@ sandbox account.
 | Build/test tooling | [tools/AGENTS.md](tools/AGENTS.md), [cmake/AGENTS.md](cmake/AGENTS.md) |
 | Serious known defects | [tasklist.md](tasklist.md) |
 | Resources, examples, dependencies or benchmarks | Nearest local `AGENTS.md` |
+| TrenchBroom behavior or implementation | Search the [local source checkout](C:/Users/Drako/Desktop/TrenchBroom-master/TrenchBroom-master) first |
 
 Whenever the user asks for work on Quader's Godot plugin, load the bridge skill above
 before investigating or changing it, even if the skill is absent from the current

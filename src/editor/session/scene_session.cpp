@@ -18,6 +18,7 @@
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/transform/mesh_transform_bake_service.hpp"
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/placement/snap_to_floor_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
@@ -179,6 +180,8 @@ void SceneSession::rebuild_services() {
                 viewport_local_visibility_->allows_selection_entity(entity));
       });
   pivot_ = std::make_unique<PivotToolService>(
+      document_.scene(), document_.assets(), *history_, *modeling_);
+  mesh_transform_bake_ = std::make_unique<MeshTransformBakeService>(
       document_.scene(), document_.assets(), *history_, *modeling_);
   linear_array_ = std::make_unique<LinearArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,

@@ -51,10 +51,14 @@ struct NativeModelingActionCommand final {
   QuaderCommandId command_id;
 };
 
-constexpr std::array<NativeModelingActionCommand, 3>
+constexpr std::array<NativeModelingActionCommand, 7>
     kNativeModelingActionCommands{{
         {"snap_meshes_to_floor",
          quader_command::kModelingSnapMeshesToFloor},
+        {"bake_transforms", quader_command::kModelingBakeTransforms},
+        {"bake_location", quader_command::kModelingBakeLocation},
+        {"bake_rotation", quader_command::kModelingBakeRotation},
+        {"bake_scale", quader_command::kModelingBakeScale},
         {"copy_pivot_from_active",
          quader_command::kModelingCopyPivotFromActive},
         {"snap_vertices_to_floor",
@@ -2373,6 +2377,56 @@ void QuaderCommandsApi::Impl::register_commands() {
   set_keybinding_selection_modes(
       quader_command::kModelingSnapMeshesToFloor.string(),
       kSelectionModeObject);
+  // Baking is deliberately unassigned by default and remains user-bindable
+  // only in Mesh/Object selection mode.
+  register_command(
+      quader_command::kModelingBakeTransforms, "Bake Transforms",
+      [this] {
+        return api_.modeling().bake_transforms(
+            QuaderTransformBakeMode::Transforms);
+      },
+      {}, [this] {
+        return api_.modeling().can_bake_transforms(
+            QuaderTransformBakeMode::Transforms);
+      });
+  set_keybinding_selection_modes(
+      quader_command::kModelingBakeTransforms.string(), kSelectionModeObject);
+  register_command(
+      quader_command::kModelingBakeLocation, "Bake Location",
+      [this] {
+        return api_.modeling().bake_transforms(
+            QuaderTransformBakeMode::Location);
+      },
+      {}, [this] {
+        return api_.modeling().can_bake_transforms(
+            QuaderTransformBakeMode::Location);
+      });
+  set_keybinding_selection_modes(
+      quader_command::kModelingBakeLocation.string(), kSelectionModeObject);
+  register_command(
+      quader_command::kModelingBakeRotation, "Bake Rotation",
+      [this] {
+        return api_.modeling().bake_transforms(
+            QuaderTransformBakeMode::Rotation);
+      },
+      {}, [this] {
+        return api_.modeling().can_bake_transforms(
+            QuaderTransformBakeMode::Rotation);
+      });
+  set_keybinding_selection_modes(
+      quader_command::kModelingBakeRotation.string(), kSelectionModeObject);
+  register_command(
+      quader_command::kModelingBakeScale, "Bake Scale",
+      [this] {
+        return api_.modeling().bake_transforms(
+            QuaderTransformBakeMode::Scale);
+      },
+      {}, [this] {
+        return api_.modeling().can_bake_transforms(
+            QuaderTransformBakeMode::Scale);
+      });
+  set_keybinding_selection_modes(
+      quader_command::kModelingBakeScale.string(), kSelectionModeObject);
   register_command(
       quader_command::kModelingSnapVerticesToFloor,
       "Snap Vertices to Floor",

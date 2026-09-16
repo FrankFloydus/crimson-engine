@@ -379,6 +379,7 @@ add_library(quader_editor_services STATIC
     src/editor/tools/native_viewport_tool_coordinator.cpp
     src/editor/tools/uv_peel_tool_service.cpp
     src/editor/transform/mesh_arrangement_service.cpp
+    src/editor/transform/mesh_transform_bake_service.cpp
     src/editor/transform/scene_transform_drag_service.cpp
     src/editor/commands/document/scene_texture_mapping_plan.cpp
 )
@@ -1571,6 +1572,7 @@ if(QUADER_BUILD_TESTS)
         tests/snap_to_floor_tests.cpp
         tests/scene_surface_query_tests.cpp
         tests/copy_pivot_from_active_tests.cpp
+        tests/mesh_transform_bake_tests.cpp
         tests/obj_export_tests.cpp
         tests/layer_panel_tests.cpp
         tests/outliner_panel_tests.cpp

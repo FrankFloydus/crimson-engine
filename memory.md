@@ -385,6 +385,13 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 
 ## Transform frames, pivots, and texture mapping
 
+- Explicit mesh Bake operations reset only the chosen stored TRS channels while
+  preserving world geometry. Rotation baking with retained nonuniform scale uses
+  `inverse(S) * R * S`; selected hierarchies require original world snapshots.
+  Keep geometry, shared-asset isolation, texture mapping and child compensation in
+  one undoable publication. See the [bake owner contract](src/editor/transform/README.md)
+  and [behavior tests](tests/mesh_transform_bake_tests.cpp).
+
 - Object rotation fields author absolute local Euler values; retain the primary's requested
   values through preview/commit, with quaternion differences for selected peers. Subtracting
   Euler components and treating the difference as a world rotation breaks mixed-axis edits

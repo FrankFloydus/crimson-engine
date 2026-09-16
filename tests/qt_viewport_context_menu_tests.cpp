@@ -317,6 +317,14 @@ void expect_no_whole_object_operations(const ContextMenuSnapshot &menu) {
            QStringLiteral("modeling.shade_smooth_mesh"),
            QStringLiteral("modeling.shade_flat_mesh"),
            QStringLiteral("snap_meshes_to_floor"),
+           QStringLiteral("bake_transforms"),
+           QStringLiteral("bake_location"),
+           QStringLiteral("bake_rotation"),
+           QStringLiteral("bake_scale"),
+           QStringLiteral("modeling.bake_transforms"),
+           QStringLiteral("modeling.bake_location"),
+           QStringLiteral("modeling.bake_rotation"),
+           QStringLiteral("modeling.bake_scale"),
            QStringLiteral("copy_pivot_from_active")}) {
     EXPECT_EQ(find_top_level(menu, command_id), nullptr)
         << command_id.toStdString();
@@ -359,6 +367,87 @@ std::vector<std::array<double, 2>> face_uv_coordinates(const quader_poly::Face &
 }
 
 } // namespace
+
+TEST(QtViewportContextMenuTests,
+     BakeOperationsAppearForMeshSelectionAndDispatchTheSelectedCommand) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-bake-context-menu-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto mesh = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Bake Menu Mesh");
+  ASSERT_TRUE(mesh.ok());
+  ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
+  ASSERT_TRUE(editor.scene().set_transform(
+      mesh.value().entity,
+      {.position = {3.0f, -2.0f, 5.0f},
+       .rotation_euler = {0.3f, 0.6f, -0.4f},
+       .scale = {1.5f, 0.75f, 2.0f}}).ok());
+  quader::ViewportInputRouter input_router;
+  quader::LocalizationService localization = loaded_localization();
+  quader::QtViewportContextMenuPresenter presenter;
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  owner.resize(320, 240);
+  owner.show();
+  QCoreApplication::processEvents();
+  const auto native_actions = [&] {
+    return editor.modeling().available_action_set({
+        .surface = quader::QuaderActionSurface::ViewportContextMenu});
+  };
+  const auto mesh_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, native_actions(),
+      editor.selection().summary(), true);
+  ASSERT_TRUE(mesh_menu.opened);
+  for (const auto &[action_id, label] : {
+           std::pair{QStringLiteral("bake_transforms"),
+                     QStringLiteral("Bake Transforms")},
+           std::pair{QStringLiteral("bake_location"),
+                     QStringLiteral("Bake Location")},
+           std::pair{QStringLiteral("bake_rotation"),
+                     QStringLiteral("Bake Rotation")},
+           std::pair{QStringLiteral("bake_scale"),
+                     QStringLiteral("Bake Scale")}}) {
+    const auto *action = find_top_level(mesh_menu, action_id);
+    ASSERT_NE(action, nullptr) << action_id.toStdString();
+    EXPECT_EQ(action->text, label);
+    EXPECT_TRUE(action->enabled);
+    EXPECT_TRUE(action->shortcut_empty);
+    EXPECT_TRUE(action->children.empty());
+  }
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(mesh.value(), 1).ok());
+  const auto face_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, native_actions(),
+      editor.selection().summary(), true);
+  ASSERT_TRUE(face_menu.opened);
+  expect_no_whole_object_operations(face_menu);
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
+  const auto baked_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, native_actions(),
+      editor.selection().summary(), true, {}, QStringLiteral("bake_rotation"));
+  ASSERT_TRUE(baked_menu.opened);
+  const auto baked = editor.query().entity(mesh.value().entity);
+  ASSERT_TRUE(baked.has_value());
+  EXPECT_FLOAT_EQ(baked->transform.rotation_euler.x, 0.0f);
+  EXPECT_FLOAT_EQ(baked->transform.rotation_euler.y, 0.0f);
+  EXPECT_FLOAT_EQ(baked->transform.rotation_euler.z, 0.0f);
+  EXPECT_FLOAT_EQ(baked->transform.position.x, 3.0f);
+  EXPECT_FLOAT_EQ(baked->transform.position.y, -2.0f);
+  EXPECT_FLOAT_EQ(baked->transform.position.z, 5.0f);
+  EXPECT_FLOAT_EQ(baked->transform.scale.x, 1.5f);
+  EXPECT_FLOAT_EQ(baked->transform.scale.y, 0.75f);
+  EXPECT_FLOAT_EQ(baked->transform.scale.z, 2.0f);
+  EXPECT_EQ(editor.history().snapshot().undo_label, "Bake Rotation");
+}
 
 TEST(QtViewportContextMenuTests,
      BuildsFlatEmptyObjectGroupAndComponentMenus) {

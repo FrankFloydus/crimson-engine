@@ -28,6 +28,7 @@ class EditorSelectionService;
 class LinearArrayToolService;
 class LightCreationToolService;
 class ModelingSessionService;
+class MeshTransformBakeService;
 class NativeViewportToolCoordinator;
 struct PathArraySessionDefaults;
 class PathArrayToolService;
@@ -127,6 +128,10 @@ public:
   const SceneInstanceService &instances() const { return *instances_; }
   PivotToolService &pivot() { return *pivot_; }
   const PivotToolService &pivot() const { return *pivot_; }
+  MeshTransformBakeService &mesh_transform_bake() { return *mesh_transform_bake_; }
+  const MeshTransformBakeService &mesh_transform_bake() const {
+    return *mesh_transform_bake_;
+  }
   LinearArrayToolService &linear_array() { return *linear_array_; }
   const LinearArrayToolService &linear_array() const { return *linear_array_; }
   RadialArrayToolService &radial_array() { return *radial_array_; }
@@ -240,6 +245,7 @@ private:
   InstanceEditContext instance_edit_context_;
   std::unique_ptr<SceneInstanceService> instances_;
   std::unique_ptr<PivotToolService> pivot_;
+  std::unique_ptr<MeshTransformBakeService> mesh_transform_bake_;
   std::unique_ptr<LinearArrayToolService> linear_array_;
   std::unique_ptr<RadialArrayToolService> radial_array_;
   std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;

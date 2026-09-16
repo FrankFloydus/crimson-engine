@@ -10852,6 +10852,169 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
+     BakeCommandsUseDedicatedIdsUnassignedMeshScopesAndNativeActions) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto object = create_selected_box(editor, "Bake Command Discovery");
+  ASSERT_TRUE(editor.scene().set_transform(
+      object.entity, {.position = {3.0f, -2.0f, 5.0f},
+                      .rotation_euler = {0.3f, 0.6f, -0.4f},
+                      .scale = {1.5f, 0.75f, 2.0f}}).ok());
+  struct BakeCommand {
+    quader::QuaderCommandId command;
+    quader::QuaderTransformBakeMode mode;
+    std::string_view action;
+    std::string_view label;
+  };
+  constexpr std::array kCommands{
+      BakeCommand{quader::quader_command::kModelingBakeTransforms,
+                  quader::QuaderTransformBakeMode::Transforms,
+                  "bake_transforms", "Bake Transforms"},
+      BakeCommand{quader::quader_command::kModelingBakeLocation,
+                  quader::QuaderTransformBakeMode::Location,
+                  "bake_location", "Bake Location"},
+      BakeCommand{quader::quader_command::kModelingBakeRotation,
+                  quader::QuaderTransformBakeMode::Rotation,
+                  "bake_rotation", "Bake Rotation"},
+      BakeCommand{quader::quader_command::kModelingBakeScale,
+                  quader::QuaderTransformBakeMode::Scale,
+                  "bake_scale", "Bake Scale"},
+  };
+  const auto typed = typed_command_ids();
+  const auto bindings = editor.commands().keybinding_catalog();
+  for (const auto &command : kCommands) {
+    SCOPED_TRACE(command.command.string());
+    EXPECT_TRUE(typed.contains(std::string(command.command.string())));
+    const auto descriptor = editor.commands().descriptor(command.command);
+    ASSERT_TRUE(descriptor.has_value());
+    EXPECT_EQ(descriptor->label, command.label);
+    EXPECT_TRUE(descriptor->shortcut.empty());
+    EXPECT_TRUE(descriptor->enabled);
+    EXPECT_TRUE(editor.modeling().can_bake_transforms(command.mode));
+    EXPECT_EQ(editor.commands().command_id_for_modeling_action(command.action),
+              command.command.string());
+    const auto *binding =
+        find_keybinding_catalog_entry(bindings, command.command.string());
+    ASSERT_NE(binding, nullptr);
+    EXPECT_EQ(binding->scope_id, "viewport.selection.object");
+    EXPECT_TRUE(binding->default_shortcut.empty());
+    EXPECT_TRUE(binding->unassigned);
+    const auto *presentation =
+        quader::find_command_presentation(command.command);
+    ASSERT_NE(presentation, nullptr);
+    EXPECT_EQ(presentation->domain, quader::CommandPresentationDomain::Object);
+    EXPECT_EQ(presentation->group, quader::CommandPresentationGroup::Transform);
+    for (const auto surface : {
+             quader::CommandPresentationSurface::MainMenu,
+             quader::CommandPresentationSurface::ViewportContextMenu,
+             quader::CommandPresentationSurface::CommandPalette}) {
+      EXPECT_TRUE(quader::has_command_presentation_surface(*presentation,
+                                                           surface));
+    }
+  }
+  for (const auto surface : {quader::QuaderActionSurface::OperationsPanel,
+                             quader::QuaderActionSurface::ViewportContextMenu}) {
+    const auto actions = editor.modeling().available_action_set({
+        .surface = surface, .include_disabled = true});
+    const auto *panel = find_action_panel(
+        actions, surface == quader::QuaderActionSurface::OperationsPanel
+                     ? "object_operations" : "viewport_context_menu");
+    ASSERT_NE(panel, nullptr);
+    for (const auto &command : kCommands) {
+      const auto *action = find_action_item(*panel, command.action);
+      ASSERT_NE(action, nullptr) << command.action;
+      EXPECT_EQ(action->label, command.label);
+      EXPECT_EQ(action->kind, quader::QuaderActionKind::Operation);
+      EXPECT_EQ(action->visibility, quader::QuaderActionVisibility::Enabled);
+      EXPECT_TRUE(action->operation_id.empty());
+      EXPECT_TRUE(action->rebuilds_mesh_on_success);
+    }
+  }
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kModelingBakeRotation, "Ctrl+Alt+F24").ok());
+  const quader::ViewportToolState tool_state;
+  const auto resolve_bake = [&](bool navigating = false) {
+    return editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F24"), tool_state, false, false,
+        {.navigation_active = navigating, .outliner_focused = true});
+  };
+  EXPECT_EQ(resolve_bake().command_id,
+            quader::quader_command::kModelingBakeRotation.string());
+  EXPECT_EQ(resolve_bake(true).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Group}) {
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    EXPECT_EQ(resolve_bake().kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    for (const auto &command : kCommands) {
+      EXPECT_FALSE(editor.commands().descriptor(command.command)->enabled);
+      EXPECT_FALSE(editor.modeling().can_bake_transforms(command.mode));
+    }
+    for (const auto &action : editor.modeling().available_actions({
+             .surface = quader::QuaderActionSurface::ViewportContextMenu,
+             .include_disabled = true})) {
+      for (const auto &command : kCommands) {
+        EXPECT_NE(action.action_id, command.action);
+      }
+    }
+  }
+}
+
+TEST(EditorApiTests, BakeCommandsRejectUnavailableSelectionAndActivePreview) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  constexpr std::array kModes{quader::QuaderTransformBakeMode::Transforms,
+                             quader::QuaderTransformBakeMode::Location,
+                             quader::QuaderTransformBakeMode::Rotation,
+                             quader::QuaderTransformBakeMode::Scale};
+  const auto expect_rejected = [&] {
+    const auto before = quader::test::capture_command_observable_state(editor);
+    for (const auto mode : kModes) {
+      EXPECT_FALSE(editor.modeling().can_bake_transforms(mode));
+      const auto result = editor.modeling().bake_transforms(mode);
+      EXPECT_FALSE(result.ok());
+      EXPECT_FALSE(result.changed());
+    }
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+  };
+  expect_rejected();
+  const auto object = create_selected_box(editor);
+  ASSERT_TRUE(editor.scene().set_locked(object.entity, true).ok());
+  expect_rejected();
+  ASSERT_TRUE(editor.scene().set_locked(object.entity, false).ok());
+  ASSERT_TRUE(editor.selection().select_object(object).ok());
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("half_cut")).ok());
+  ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+  expect_rejected();
+  const auto actions = editor.modeling().available_action_set({
+      .surface = quader::QuaderActionSurface::OperationsPanel,
+      .include_disabled = true});
+  const auto *panel = find_action_panel(actions, "object_operations");
+  ASSERT_NE(panel, nullptr);
+  for (const auto action_id : {"bake_transforms", "bake_location",
+                               "bake_rotation", "bake_scale"}) {
+    const auto *action = find_action_item(*panel, action_id);
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->visibility, quader::QuaderActionVisibility::Disabled);
+    EXPECT_EQ(action->disabled_reason_key,
+              "modeling.action.disabled.bake_transforms_active_tool");
+  }
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  const auto invalid_mode = static_cast<quader::QuaderTransformBakeMode>(99);
+  const auto before = quader::test::capture_command_observable_state(editor);
+  EXPECT_FALSE(editor.modeling().can_bake_transforms(invalid_mode));
+  const auto invalid = editor.modeling().bake_transforms(invalid_mode);
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_FALSE(invalid.changed());
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+}
+
+TEST(EditorApiTests,
      SnapToFloorSelectionHandlesReplaceSelectionAndRoutePublicIntent) {
   {
     CommandTestHarness harness;
@@ -20397,9 +20560,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 215u);
+  EXPECT_EQ(commands.size(), 219u);
 #else
-  EXPECT_EQ(commands.size(), 214u);
+  EXPECT_EQ(commands.size(), 218u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
