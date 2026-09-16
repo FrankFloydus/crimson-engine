@@ -15,6 +15,8 @@
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/transform/scene_transform_drag_service.hpp"
+#include "math/glm_bridge.hpp"
 #include "scene/light_properties.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/qt_color_swatch_button.hpp"
@@ -3704,6 +3706,433 @@ TEST(InspectorPanelTests,
       QStringLiteral("inspector.general.name"));
   ASSERT_NE(name, nullptr);
   EXPECT_EQ(name->text(), QStringLiteral("Second Document Object"));
+}
+
+TEST(InspectorPanelTests,
+     ExternalTransformPreviewUpdatesRetainedFieldsBeforeCommitWithoutEdits) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-live-transform-preview-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  constexpr float kDegreesToRadians = 0.017453292519943295f;
+  constexpr std::array<const char *, 9> kFields{{
+      "inspector.transform.position.x", "inspector.transform.position.y",
+      "inspector.transform.position.z", "inspector.transform.rotation.x",
+      "inspector.transform.rotation.y", "inspector.transform.rotation.z",
+      "inspector.transform.scale.x", "inspector.transform.scale.y",
+      "inspector.transform.scale.z"}};
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto box = editor.modeling().create_box(
+      QuaderBounds{.min = {-1.0f, -2.0f, -3.0f},
+                   .max = {1.0f, 2.0f, 3.0f}},
+      "Live Inspector Transform Mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  const EntityId entity = box.value().entity;
+  const TransformComponent baseline = *session.scene().transform(entity);
+  const std::size_t undo_before = session.history().undo_count();
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext preview{.document = session.scene(),
+                                    .assets = session.assets()};
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .inspector_preview = &preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto refresh = [&]() {
+    panel.refresh(context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  refresh();
+  std::array<QPointer<QDoubleSpinBox>, 9> retained;
+  int value_changed_count = 0;
+  int editing_finished_count = 0;
+  for (std::size_t index = 0; index < kFields.size(); ++index) {
+    auto *field = panel.findChild<QDoubleSpinBox *>(QString::fromUtf8(kFields[index]));
+    ASSERT_NE(field, nullptr);
+    retained[index] = field;
+    QObject::connect(field, &QDoubleSpinBox::valueChanged, &panel,
+                     [&](double) { ++value_changed_count; });
+    QObject::connect(field, &QDoubleSpinBox::editingFinished, &panel,
+                     [&]() { ++editing_finished_count; });
+  }
+  const auto expect_fields = [&](const TransformComponent &transform) {
+    const std::array<double, 9> expected{{
+        transform.position.x, transform.position.y, transform.position.z,
+        transform.rotation_euler.x / kDegreesToRadians,
+        transform.rotation_euler.y / kDegreesToRadians,
+        transform.rotation_euler.z / kDegreesToRadians,
+        transform.scale.x, transform.scale.y, transform.scale.z}};
+    for (std::size_t index = 0; index < kFields.size(); ++index) {
+      SCOPED_TRACE(kFields[index]);
+      auto *field = panel.findChild<QDoubleSpinBox *>(QString::fromUtf8(kFields[index]));
+      ASSERT_NE(field, nullptr);
+      EXPECT_FALSE(retained[index].isNull());
+      EXPECT_EQ(field, retained[index].data());
+      EXPECT_NEAR(field->value(), expected[index], 0.001);
+    }
+    EXPECT_EQ(value_changed_count, 0);
+    EXPECT_EQ(editing_finished_count, 0);
+  };
+  const std::array<TransformComponent, 2> samples{{
+      {.position = {2.0f, 3.0f, 4.0f},
+       .rotation_euler = {15.0f * kDegreesToRadians, 35.0f * kDegreesToRadians,
+                          55.0f * kDegreesToRadians},
+       .scale = {1.2f, 1.4f, 1.6f}},
+      {.position = {3.0f, 4.0f, 5.0f},
+       .rotation_euler = {25.0f * kDegreesToRadians, 45.0f * kDegreesToRadians,
+                          65.0f * kDegreesToRadians},
+       .scale = {2.0f, 3.0f, 4.0f}},
+  }};
+  const auto refresh_live = [&]() {
+    panel.refresh_transform_preview(context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  SceneTransformDragService drag;
+  ASSERT_TRUE(drag.begin(session.scene(), {}, true, "Gizmo Transform",
+                         {}, &session.assets()));
+  for (const TransformComponent &sample : samples) {
+    const auto update = drag.preview_transform(entity, sample);
+    ASSERT_TRUE(update.ok) << update.message;
+    ASSERT_TRUE(drag.preview_active());
+    refresh_live();
+    expect_fields(sample);
+    EXPECT_EQ(session.history().undo_count(), undo_before);
+    const auto scene_revision = session.scene().revision();
+    for (int frame = 0; frame < 4; ++frame) {
+      refresh_live();
+      expect_fields(sample);
+    }
+    EXPECT_EQ(session.scene().revision(), scene_revision);
+    EXPECT_EQ(session.history().undo_count(), undo_before);
+  }
+
+  ASSERT_TRUE(drag.cancel().ok);
+  refresh();
+  expect_fields(baseline);
+  EXPECT_EQ(session.history().undo_count(), undo_before);
+
+  ASSERT_TRUE(drag.begin(session.scene(), {}, true, "Gizmo Transform",
+                         {}, &session.assets()));
+  ASSERT_TRUE(drag.preview_transform(entity, samples.back()).ok);
+  refresh_live();
+  expect_fields(samples.back());
+  ASSERT_TRUE(drag.commit(editor).ok());
+  refresh();
+  expect_fields(samples.back());
+  EXPECT_EQ(session.history().undo_count(), undo_before + 1u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  refresh();
+  expect_fields(baseline);
+  ASSERT_TRUE(editor.history().redo().ok());
+  refresh();
+  expect_fields(samples.back());
+  EXPECT_EQ(session.history().undo_count(), undo_before + 1u);
+
+  auto *position_x = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("inspector.transform.position.x"));
+  ASSERT_NE(position_x, nullptr);
+  position_x->setValue(7.5);
+  position_x->editingFinished();
+  refresh();
+  const auto edited = editor.query().entity(entity);
+  ASSERT_TRUE(edited.has_value());
+  EXPECT_NEAR(edited->transform.position.x, 7.5f, 0.0001f);
+  EXPECT_NEAR(edited->transform.position.y, samples.back().position.y, 0.0001f);
+  EXPECT_NEAR(edited->transform.position.z, samples.back().position.z, 0.0001f);
+  EXPECT_EQ(session.history().undo_count(), undo_before + 2u);
+  EXPECT_EQ(value_changed_count, 1);
+  EXPECT_EQ(editing_finished_count, 1);
+}
+
+TEST(InspectorPanelTests,
+     ExternalTransformPreviewChangesMixedFieldsToNumericAndBack) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-live-mixed-transform-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto first = editor.scene().create_empty();
+  const auto second = editor.scene().create_empty();
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(editor.scene()
+                  .select({first.value().id, second.value().id}, first.value().id)
+                  .ok());
+  const std::size_t undo_before = session.history().undo_count();
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext preview{.document = session.scene(),
+                                    .assets = session.assets()};
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .inspector_preview = &preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.refresh(context);
+  const QString field_name = QStringLiteral("inspector.transform.position.x");
+  ASSERT_NE(panel.findChild<QDoubleSpinBox *>(field_name), nullptr);
+  const auto refresh_live = [&]() {
+    panel.refresh_transform_preview(context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  SceneTransformDragService drag;
+  ASSERT_TRUE(drag.begin(session.scene(), {}, true, "Gizmo Transform"));
+  ASSERT_TRUE(drag.preview_transform(second.value().id,
+                                    {.position = {2.0f, 0.0f, 0.0f}}).ok);
+  refresh_live();
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(field_name), nullptr);
+  auto *mixed = panel.findChild<QLineEdit *>(field_name);
+  ASSERT_NE(mixed, nullptr);
+  EXPECT_EQ(mixed->text(), QStringLiteral("Mixed"));
+  EXPECT_TRUE(mixed->isReadOnly());
+  EXPECT_FALSE(mixed->isEnabled());
+
+  ASSERT_TRUE(drag.preview_transform(second.value().id, {}).ok);
+  refresh_live();
+  auto *numeric = panel.findChild<QDoubleSpinBox *>(field_name);
+  ASSERT_NE(numeric, nullptr);
+  EXPECT_DOUBLE_EQ(numeric->value(), 0.0);
+  QPointer<QDoubleSpinBox> retained(numeric);
+  refresh_live();
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(field_name), retained.data());
+  ASSERT_TRUE(drag.preview_transform(second.value().id,
+                                    {.position = {3.0f, 0.0f, 0.0f}}).ok);
+  refresh_live();
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(field_name), nullptr);
+  ASSERT_NE(panel.findChild<QLineEdit *>(field_name), nullptr);
+  ASSERT_TRUE(drag.cancel().ok);
+  panel.refresh(context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  numeric = panel.findChild<QDoubleSpinBox *>(field_name);
+  ASSERT_NE(numeric, nullptr);
+  EXPECT_DOUBLE_EQ(numeric->value(), 0.0);
+  EXPECT_EQ(session.history().undo_count(), undo_before);
+}
+
+TEST(InspectorPanelTests,
+     MeshQuarterTurnRemainsRequestedAfterEditingFinishesAndRefreshes) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-mesh-quarter-turn-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  constexpr float kHalfPi = 1.57079632679f;
+  constexpr std::array<const char *, 3> kFields{{
+      "inspector.transform.rotation.x", "inspector.transform.rotation.y",
+      "inspector.transform.rotation.z"}};
+
+  for (std::size_t axis = 0; axis < kFields.size(); ++axis) {
+    SCOPED_TRACE(kFields[axis]);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto box = editor.modeling().create_box(
+        QuaderBounds{.min = {-1.0f, -2.0f, -3.0f},
+                     .max = {1.0f, 2.0f, 3.0f}},
+        "Inspector Quarter Turn Mesh");
+    ASSERT_TRUE(box.ok()) << box.error_message();
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    UISettings ui_settings = UISettings::defaults();
+    ViewportSettings viewport_settings = ViewportSettings::defaults();
+    LocalizationService localization = loaded_localization();
+    UIInspectorPreviewContext preview{.document = session.scene(),
+                                      .assets = session.assets()};
+    UIContext context{
+        .intent = {.editor = editor},
+        .scene = {.document = session.scene(),
+                  .assets = session.assets(),
+                  .modeling = session.modeling(),
+                  .selection = session.selection()},
+        .inspector_preview = &preview,
+        .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+        .localization = localization,
+    };
+    InspectorPanel panel;
+    panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+    const auto refresh = [&]() {
+      panel.refresh(context);
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    };
+    refresh();
+    auto *rotation = panel.findChild<QDoubleSpinBox *>(
+        QString::fromUtf8(kFields[axis]));
+    ASSERT_NE(rotation, nullptr);
+    const std::size_t undo_before = session.history().undo_count();
+    rotation->setValue(90.0);
+    EXPECT_EQ(session.history().undo_count(), undo_before);
+    rotation->editingFinished();
+    refresh();
+
+    const auto snapshot = editor.query().entity(box.value().entity);
+    ASSERT_TRUE(snapshot.has_value());
+    const QVec3 stored = snapshot->transform.rotation_euler;
+    const std::array<float, 3> components{{stored.x, stored.y, stored.z}};
+    for (std::size_t component = 0; component < kFields.size(); ++component) {
+      auto *field = panel.findChild<QDoubleSpinBox *>(
+          QString::fromUtf8(kFields[component]));
+      ASSERT_NE(field, nullptr);
+      EXPECT_NEAR(field->value(), component == axis ? 90.0 : 0.0, 0.001);
+      EXPECT_NEAR(components[component], component == axis ? kHalfPi : 0.0f,
+                  0.0001f);
+    }
+    EXPECT_EQ(session.history().undo_count(), undo_before + 1u);
+    QPointer<QDoubleSpinBox> retained(panel.findChild<QDoubleSpinBox *>(
+        QString::fromUtf8(kFields[axis])));
+    const auto scene_revision = session.scene().revision();
+    refresh();
+    refresh();
+    EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(
+                  QString::fromUtf8(kFields[axis])),
+              retained.data());
+    EXPECT_EQ(session.scene().revision(), scene_revision);
+    EXPECT_EQ(session.history().undo_count(), undo_before + 1u);
+  }
+}
+
+TEST(InspectorPanelTests,
+     MixedMeshRotationUsesAbsoluteFieldsAndZeroRestoresOriginalBasis) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-mixed-mesh-rotation-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  constexpr float kDegreesToRadians = 0.017453292519943295f;
+  constexpr std::array<const char *, 3> kFields{{
+      "inspector.transform.rotation.x", "inspector.transform.rotation.y",
+      "inspector.transform.rotation.z"}};
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto box = editor.modeling().create_box(
+      QuaderBounds{.min = {-1.0f, -2.0f, -3.0f},
+                   .max = {1.0f, 2.0f, 3.0f}},
+      "Inspector Mixed Rotation Mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  const EntityId entity = box.value().entity;
+  const auto original_mesh = editor.query().compiled_object_mesh(box.value());
+  ASSERT_TRUE(original_mesh.has_value());
+  const QMat4 original_world = session.scene().world_transform_matrix(entity);
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(entity,
+                                 {.rotation_euler =
+                                      {20.0f * kDegreesToRadians,
+                                       35.0f * kDegreesToRadians,
+                                       50.0f * kDegreesToRadians}})
+                  .ok());
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext preview{.document = session.scene(),
+                                    .assets = session.assets()};
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .inspector_preview = &preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto refresh = [&]() {
+    panel.refresh(context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  const auto edit_axis = [&](std::size_t axis, double degrees) {
+    auto *field = panel.findChild<QDoubleSpinBox *>(
+        QString::fromUtf8(kFields[axis]));
+    ASSERT_NE(field, nullptr);
+    field->setValue(degrees);
+    field->editingFinished();
+    refresh();
+  };
+  const auto expect_angles = [&](const std::array<double, 3> &degrees) {
+    const auto snapshot = editor.query().entity(entity);
+    ASSERT_TRUE(snapshot.has_value());
+    const QVec3 stored = snapshot->transform.rotation_euler;
+    const std::array<float, 3> components{{stored.x, stored.y, stored.z}};
+    for (std::size_t axis = 0; axis < kFields.size(); ++axis) {
+      auto *field = panel.findChild<QDoubleSpinBox *>(
+          QString::fromUtf8(kFields[axis]));
+      ASSERT_NE(field, nullptr);
+      EXPECT_NEAR(field->value(), degrees[axis], 0.001);
+      EXPECT_NEAR(components[axis], degrees[axis] * kDegreesToRadians, 0.0001);
+    }
+  };
+  refresh();
+  edit_axis(0u, 70.0);
+  expect_angles({70.0, 35.0, 50.0});
+  edit_axis(0u, 0.0);
+  expect_angles({0.0, 35.0, 50.0});
+  edit_axis(1u, 0.0);
+  expect_angles({0.0, 0.0, 50.0});
+  edit_axis(2u, 0.0);
+  expect_angles({0.0, 0.0, 0.0});
+
+  const auto expect_original_geometry = [&]() {
+    const auto mesh = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(mesh.has_value());
+    ASSERT_EQ(mesh->vertices.size(), original_mesh->vertices.size());
+    EXPECT_EQ(mesh->indices, original_mesh->indices);
+    for (std::size_t index = 0; index < mesh->vertices.size(); ++index) {
+      const QVec3 original = original_mesh->vertices[index].position;
+      const QVec3 actual = mesh->vertices[index].position;
+      EXPECT_FLOAT_EQ(actual.x, original.x);
+      EXPECT_FLOAT_EQ(actual.y, original.y);
+      EXPECT_FLOAT_EQ(actual.z, original.z);
+    }
+    const QMat4 restored = session.scene().world_transform_matrix(entity);
+    for (const QVec3 axis : std::array<QVec3, 3>{{
+             {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}}) {
+      const QVec3 expected = transform_vector(original_world, axis);
+      const QVec3 actual = transform_vector(restored, axis);
+      EXPECT_NEAR(actual.x, expected.x, 0.0001f);
+      EXPECT_NEAR(actual.y, expected.y, 0.0001f);
+      EXPECT_NEAR(actual.z, expected.z, 0.0001f);
+    }
+  };
+  expect_original_geometry();
+  ASSERT_TRUE(editor.history().undo().ok());
+  refresh();
+  expect_angles({0.0, 0.0, 50.0});
+  ASSERT_TRUE(editor.history().redo().ok());
+  refresh();
+  expect_angles({0.0, 0.0, 0.0});
+  expect_original_geometry();
 }
 
 TEST(InspectorPanelTests,

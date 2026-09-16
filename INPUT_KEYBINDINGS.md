@@ -196,6 +196,13 @@ Camera zoom and Fly speed consume that same ordered stream. `pixelDelta` follows
 continuous path; never divide it by 120 or merge it with angle accumulation. Relative/reset grid
 bindings resolve to semantic `SetGridPreset` shortcuts using the synchronized current preset.
 
+Camera depth samples actual surfaces within the view's clip range, only at navigation gestures and
+wheel events. Ordinary zoom prefers the view center, then the event's cursor surface if the center
+is empty; cursor zoom uses the reverse priority. Each event retains its own surface hint.
+Empty-space drags may use the center surface, while absent surfaces retain the current pivot.
+Whole-scene bounds are not evidence of navigation depth. Wheel input can recover a severely stale
+distance in either direction; an orbit press must not inflate its radius to a farther background hit.
+
 Captured fly navigation uses unbounded relative motion. Classify each Win32 raw packet before its
 legacy Qt move: relative packets add raw deltas and suppress duplicates; absolute-device packets use
 translated Qt motion. Preserve genuine raw and fallback deltas together and drain them once per frame.

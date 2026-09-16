@@ -280,9 +280,8 @@ inline std::optional<TransformComponent> try_transform_component_from_matrix(
   orientation = glm::normalize(orientation);
   TransformComponent result{
       .position = from_glm(glm::vec3{translation}),
-      .rotation_euler = equivalent_euler_radians_closest_to(
-          from_glm(glm::vec3{glm::eulerAngles(orientation)}),
-          reference_euler_radians),
+      .rotation_euler = euler_radians_from_rotation_closest_to(
+          orientation, reference_euler_radians),
       .scale = from_glm(glm::vec3{scale}),
   };
   if (!scene_transform_is_finite(result)) {

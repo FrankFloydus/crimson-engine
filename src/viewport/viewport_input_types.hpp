@@ -71,6 +71,8 @@ struct ViewportNavigationWheelEvent {
   QVec2 local = {};
   /// An active tool may claim this resolved packet before camera navigation.
   bool consumed = false;
+  /// Visible surface sampled for this event's navigation position.
+  std::optional<QVec3> navigation_anchor;
 };
 
 /**
@@ -223,9 +225,8 @@ struct ViewportInputFrame {
   // A gesture-local world-space depth/pivot hint. The UI samples it only when
   // navigation starts; the camera owns the resulting navigation state.
   std::optional<QVec3> navigation_anchor;
-  // Whole-scene depth is only a legacy-state repair fallback. It may pull a
-  // severely poisoned target inward, but must never replace a valid nearer
-  // orbit/pan target with distant scene bounds.
+  // Conservative synthetic hints may only repair a severely distant target.
+  // Production navigation uses actual visible surfaces, never global bounds.
   bool navigation_anchor_repair_only = false;
   int grid_preset = 6;
   ViewportModifiers modifiers = {};

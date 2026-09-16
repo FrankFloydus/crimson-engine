@@ -51,6 +51,7 @@
 #include <QCoreApplication>
 #include <QDataStream>
 #include <QDockWidget>
+#include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFrame>
@@ -74,6 +75,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
+#include <QPointer>
 #include <QPushButton>
 #include <QPixmap>
 #include <QScreen>
@@ -89,6 +91,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -2894,6 +2897,148 @@ TEST(QtProjectWorkspaceTests,
               catalog_before.value()[index].project_relative_path);
   }
   EXPECT_FALSE(windowed->isVisible());
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     InspectorShowsGizmoRotationDuringDragWithoutReplacingRetainedFields) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-inspector-live-gizmo-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-inspector-live-gizmo-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto project_root = isolated_profile / "Live Transform Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  const auto created = editor.project().create(project_root);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto box = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-1.0f, -2.0f, -3.0f},
+                           .max = {1.0f, 2.0f, 3.0f}},
+      "Live Inspector Rotation Mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &scene = *project.active_scene()->session;
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  ui.install_runtime_hooks(
+      editor, scene.scene(), scene.assets(), scene.modeling(), scene.selection(),
+      scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  ui.show();
+  ASSERT_TRUE(editor.ui().show_panel("inspector").ok());
+  application.processEvents();
+  ui.refresh({}, {});
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  auto *dock = ui.main_window()->findChild<QDockWidget *>(
+      QStringLiteral("dock_inspector"));
+  ASSERT_NE(dock, nullptr);
+  ASSERT_TRUE(dock->isVisible());
+  const auto rotation_field = [&]() {
+    return dock->findChild<QDoubleSpinBox *>(
+        QStringLiteral("inspector.transform.rotation.z"));
+  };
+  QPointer<QDoubleSpinBox> retained_rotation(rotation_field());
+  ASSERT_NE(retained_rotation, nullptr);
+  EXPECT_NEAR(retained_rotation->value(), 0.0, 0.001);
+  const std::size_t undo_before = scene.history().undo_count();
+  int field_signals = 0;
+  QObject::connect(retained_rotation.data(), &QDoubleSpinBox::valueChanged, dock,
+                   [&](double) { ++field_signals; });
+  const quader::QuaderViewportCamera camera{
+      .orthographic = true,
+      .origin = {0.0f, 0.0f, 8.0f},
+      .x_axis = {1.0f, 0.0f, 0.0f},
+      .y_axis = {0.0f, 1.0f, 0.0f},
+      .z_axis = {0.0f, 0.0f, 1.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .orthographic_size = 8.0,
+      .fov_degrees = 60.0,
+  };
+  const quader::QuaderRay ray{
+      .origin = {0.0f, 0.0f, 8.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  const auto begin = editor.modeling().begin_transform_drag({
+      .tool = quader::QuaderTransformTool::Rotate,
+      .axis = quader::QuaderTransformAxis::Z,
+      .screen_position = {120.0f, 100.0f},
+      .screen_pivot = {100.0f, 100.0f},
+      .screen_tip = {120.0f, 100.0f},
+      .has_world_direction = true,
+      .world_direction = {0.0f, 0.0f, 1.0f},
+      .ray = ray,
+      .camera = camera,
+      .vertex_snap_radius = 0.0,
+      .grid_snap_enabled = false,
+      .rotation_snap_degrees = 0.0,
+  });
+  ASSERT_TRUE(begin.ok()) << begin.error_message();
+  ASSERT_TRUE(begin.value().active);
+  ASSERT_TRUE(begin.value().scene_transform);
+  double previous_display = 0.0;
+  for (const quader::QVec2 point :
+       std::array<quader::QVec2, 2>{{{140.0f, 80.0f}, {100.0f, 80.0f}}}) {
+    const auto update = editor.modeling().update_transform_drag({
+        .screen_position = point,
+        .ray = ray,
+        .camera = camera,
+        .vertex_snap_radius = 0.0,
+        .grid_snap_enabled = false,
+        .rotation_snap_degrees = 0.0,
+    });
+    ASSERT_TRUE(update.ok()) << update.error_message();
+    ASSERT_TRUE(update.value().changed);
+    ASSERT_TRUE(scene.modeling().transform_drag_active());
+    const auto entity = editor.query().entity(box.value().entity);
+    ASSERT_TRUE(entity.has_value());
+    double expected = std::fmod(
+        static_cast<double>(entity->transform.rotation_euler.z) *
+            57.29577951308232,
+        360.0);
+    if (expected < 0.0) {
+      expected += 360.0;
+    }
+    ASSERT_GT(std::abs(expected - previous_display), 1.0);
+    const auto revision_before_refresh = scene.scene().revision();
+    ui.refresh({}, {});
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    ASSERT_NE(retained_rotation, nullptr);
+    EXPECT_EQ(rotation_field(), retained_rotation.data());
+    EXPECT_NEAR(retained_rotation->value(), expected, 0.001);
+    EXPECT_EQ(scene.scene().revision(), revision_before_refresh);
+    EXPECT_EQ(scene.history().undo_count(), undo_before);
+    EXPECT_EQ(field_signals, 0);
+    for (int frame = 0; frame < 3; ++frame) {
+      ui.refresh({}, {});
+    }
+    EXPECT_EQ(rotation_field(), retained_rotation.data());
+    EXPECT_NEAR(retained_rotation->value(), expected, 0.001);
+    EXPECT_EQ(scene.scene().revision(), revision_before_refresh);
+    EXPECT_EQ(scene.history().undo_count(), undo_before);
+    EXPECT_EQ(field_signals, 0);
+    previous_display = expected;
+  }
+  const auto commit = editor.modeling().commit_transform_drag();
+  ASSERT_TRUE(commit.ok()) << commit.error_message();
+  EXPECT_FALSE(scene.modeling().transform_drag_active());
+  ui.refresh({}, {});
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  ASSERT_NE(rotation_field(), nullptr);
+  EXPECT_NEAR(rotation_field()->value(), previous_display, 0.001);
+  EXPECT_EQ(scene.history().undo_count(), undo_before + 1u);
   ui.shutdown();
 }
 

@@ -2993,11 +2993,10 @@ void QtViewportPanel::process_viewport_input(
     }
   }
 
-  // Navigation samples scene depth once, at gesture start. The render-visible
-  // surface under the exact press wins so an occluded distant selection cannot
-  // inflate the orbit or pan radius; an on-screen selection remains the stable
-  // fallback when the pointer is over empty space. Keep the snapshot lazy and
-  // share it with later interaction picking.
+  // Navigation depth comes from surfaces in this view. The exact press wins,
+  // with the visible center surface covering gestures beside the subject.
+  // Plain wheel prefers the center, then the pointer when that center is empty.
+  // Keep the snapshot lazy and share it with later interaction picking.
   const ViewportLocalVisibilitySnapshot local_visibility =
       workspace_->local_visibility_snapshot();
   std::optional<SceneSurfaceQuerySnapshot> scene_surfaces;
@@ -3018,9 +3017,22 @@ void QtViewportPanel::process_viewport_input(
       return std::nullopt;
     }
     const ViewportRay ray = camera.ray_from_viewport_point(local_position);
+    const ViewportCameraPose camera_pose = camera.pose();
+    const QVec3 forward = normalize(camera_pose.target - camera_pose.eye);
+    const float forward_per_ray_unit = dot(ray.direction, forward);
+    if (!std::isfinite(forward_per_ray_unit) ||
+        forward_per_ray_unit <= 0.000001f) {
+      return std::nullopt;
+    }
+    const float origin_depth = dot(ray.origin - camera_pose.eye, forward);
     const std::optional<SceneSurfaceHit> hit = surfaces->nearest_hit({
         .world_origin = ray.origin,
         .world_direction = ray.direction,
+        .min_distance = std::max(
+            0.0f, (camera.state().near_plane - origin_depth) /
+                      forward_per_ray_unit),
+        .max_distance = (camera.state().far_plane - origin_depth) /
+                        forward_per_ray_unit,
         .include_backfaces = false,
         .eligibility = SceneSurfaceEligibility::RenderVisible,
     });
@@ -3069,22 +3081,15 @@ void QtViewportPanel::process_viewport_input(
     }
     return center;
   };
-  const auto scene_depth_navigation_anchor = [&]() -> std::optional<QVec3> {
-    const std::optional<ViewportFocusBounds> bounds =
-        ViewportSceneProjection::world_bounds(document, assets,
-                                              local_visibility);
-    if (!bounds.has_value()) {
-      return std::nullopt;
+  std::optional<QVec3> center_surface_anchor;
+  bool center_surface_sampled = false;
+  const auto center_navigation_anchor = [&]() -> std::optional<QVec3> {
+    if (!center_surface_sampled) {
+      center_surface_anchor =
+          surface_navigation_anchor(input.viewport_size * 0.5f);
+      center_surface_sampled = true;
     }
-    const QVec3 center = (bounds->min + bounds->max) * 0.5f;
-    const ViewportCameraPose camera_pose = camera.pose();
-    const QVec3 forward =
-        normalize(camera_pose.target - camera_pose.eye);
-    const float depth = dot(center - camera_pose.eye, forward);
-    if (!std::isfinite(depth) || depth <= 0.0001f) {
-      return std::nullopt;
-    }
-    return camera_pose.eye + forward * depth;
+    return center_surface_anchor;
   };
   const ViewportNavigationPress navigation_press =
       viewport_navigation_press(input.navigation_bindings);
@@ -3101,9 +3106,7 @@ void QtViewportPanel::process_viewport_input(
           visible_selection_anchor(navigation_press_local);
     }
     if (!input.navigation_anchor.has_value()) {
-      input.navigation_anchor = scene_depth_navigation_anchor();
-      input.navigation_anchor_repair_only =
-          input.navigation_anchor.has_value();
+      input.navigation_anchor = center_navigation_anchor();
     }
   } else if (navigation_press.action == ViewportInputActionKind::Pan) {
     input.navigation_anchor = surface_navigation_anchor(navigation_press_local);
@@ -3112,23 +3115,45 @@ void QtViewportPanel::process_viewport_input(
           visible_selection_anchor(navigation_press_local);
     }
     if (!input.navigation_anchor.has_value()) {
-      input.navigation_anchor = scene_depth_navigation_anchor();
-      input.navigation_anchor_repair_only =
-          input.navigation_anchor.has_value();
+      input.navigation_anchor = center_navigation_anchor();
     }
-  } else if (!input.fly_navigation_active &&
-             (input.mouse_wheel != 0.0f ||
-              !input.navigation_bindings.wheel_events.empty()) &&
-             (input.navigation_bindings.zoom_wheel ||
-              input.navigation_bindings.zoom_to_cursor_wheel)) {
-    if (input.navigation_bindings.zoom_to_cursor_wheel) {
-      input.navigation_anchor = surface_navigation_anchor(input.mouse_local);
-      if (!input.navigation_anchor.has_value()) {
-        input.navigation_anchor = visible_selection_anchor(input.mouse_local);
+  }
+  if (!input.fly_navigation_active &&
+      navigation_press.action != ViewportInputActionKind::Fly) {
+    const auto wheel_navigation_anchor =
+        [&](ViewportInputActionKind action,
+            QVec2 local_position) -> std::optional<QVec3> {
+      if (action == ViewportInputActionKind::ZoomToCursor) {
+        if (const std::optional<QVec3> anchor =
+                surface_navigation_anchor(local_position)) {
+          return anchor;
+        }
+      } else if (action == ViewportInputActionKind::Zoom) {
+        if (const std::optional<QVec3> anchor = center_navigation_anchor()) {
+          return anchor;
+        }
+        return surface_navigation_anchor(local_position);
+      } else {
+        return std::nullopt;
       }
-    }
-    if (!input.navigation_anchor.has_value()) {
-      input.navigation_anchor = scene_depth_navigation_anchor();
+      return center_navigation_anchor();
+    };
+    if (!input.navigation_bindings.wheel_events.empty()) {
+      for (ViewportNavigationWheelEvent &event :
+           input.navigation_bindings.wheel_events) {
+        if (!event.consumed && std::abs(event.steps) > 0.000001f) {
+          event.navigation_anchor =
+              wheel_navigation_anchor(event.action, event.local);
+        }
+      }
+    } else if (input.mouse_wheel != 0.0f &&
+               (input.navigation_bindings.zoom_wheel ||
+                input.navigation_bindings.zoom_to_cursor_wheel)) {
+      input.navigation_anchor = wheel_navigation_anchor(
+          input.navigation_bindings.zoom_to_cursor_wheel
+              ? ViewportInputActionKind::ZoomToCursor
+              : ViewportInputActionKind::Zoom,
+          input.mouse_local);
     }
   }
 

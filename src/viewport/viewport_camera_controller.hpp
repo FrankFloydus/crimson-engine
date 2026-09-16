@@ -128,6 +128,7 @@ public:
     void update_drag(QVec2 mouse);
     void update_drag(QVec2 mouse, ViewportDragMode mode);
     void end_drag();
+    /// Optional wheel depth must come from a visible surface, never scene bounds.
     void scroll(float wheel_delta,
                 std::optional<QVec3> navigation_anchor = std::nullopt);
     void scroll_to_cursor(
@@ -187,9 +188,11 @@ public:
     void extend_zoom_envelope_to_current_view();
     void ensure_perspective_target_within_clip_range();
     void apply_clip_plane_constraints();
-    std::optional<QVec3> rebase_navigation_depth(QVec3 navigation_anchor);
+    std::optional<QVec3> rebase_navigation_depth(
+        QVec3 navigation_anchor, bool allow_outward = false);
     std::optional<QVec3>
-    repair_navigation_depth(QVec3 navigation_anchor);
+    repair_navigation_depth(QVec3 navigation_anchor,
+                            bool allow_outward = false);
     std::optional<QVec3> accept_pending_navigation_anchor();
     void clear_orbit_snap_source();
 

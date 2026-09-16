@@ -66,9 +66,8 @@ QVec3 euler_radians_after_local_rotation_delta(
       to_glm(quat_from_euler_radians(current_euler_radians));
   const glm::quat delta =
       to_glm(quat_from_euler_radians(local_rotation_delta_radians));
-  return equivalent_euler_radians_closest_to(
-      from_glm(glm::eulerAngles(glm::normalize(current * delta))),
-      current_euler_radians);
+  return euler_radians_from_rotation_closest_to(current * delta,
+                                               current_euler_radians);
 }
 
 QVec3 clamp_scale(QVec3 scale) {
@@ -151,8 +150,67 @@ std::optional<TransformComponent> transformed_target_from_world_delta(
   const QMat4 parent_world_transform =
       parent == kInvalidEntityId ? scene_transform_identity_matrix()
                                  : document.world_transform_matrix(parent);
-  return try_scene_local_transform_preserving_world(
-      parent_world_transform, preview_scene_transform, target.transform);
+  std::optional<TransformComponent> transformed =
+      try_scene_local_transform_preserving_world(
+          parent_world_transform, preview_scene_transform, target.transform);
+  const std::optional<QMat4> parent_from_world =
+      try_scene_matrix_inverse(parent_world_transform);
+  if (!transformed.has_value() || !parent_from_world.has_value()) {
+    return std::nullopt;
+  }
+  // Decomposition may move a pair of scale signs into a half-turn. Preserve
+  // the authored signs when handedness is unchanged, so zeroing rotation still
+  // restores the same local mesh basis after rotating a mirrored object.
+  const auto scale_sign_adjustment = [](float next, float captured) {
+    return std::signbit(next) == std::signbit(captured) ? 1.0f : -1.0f;
+  };
+  const QVec3 sign_adjustment{
+      scale_sign_adjustment(transformed->scale.x, target.transform.scale.x),
+      scale_sign_adjustment(transformed->scale.y, target.transform.scale.y),
+      scale_sign_adjustment(transformed->scale.z, target.transform.scale.z),
+  };
+  if (sign_adjustment.x * sign_adjustment.y * sign_adjustment.z > 0.0f &&
+      (sign_adjustment.x < 0.0f || sign_adjustment.y < 0.0f ||
+       sign_adjustment.z < 0.0f)) {
+    glm::dmat3 rotation = glm::mat3_cast(glm::dquat{
+        to_glm(quat_from_euler_radians(transformed->rotation_euler))});
+    rotation[0] *= static_cast<double>(sign_adjustment.x);
+    rotation[1] *= static_cast<double>(sign_adjustment.y);
+    rotation[2] *= static_cast<double>(sign_adjustment.z);
+    transformed->rotation_euler = euler_radians_from_rotation_closest_to(
+        glm::quat_cast(rotation), target.transform.rotation_euler);
+    transformed->scale =
+        multiply_components(transformed->scale, sign_adjustment);
+  }
+  // A TRS decomposition can discard shear. Never publish that lossy result as
+  // though it were the requested gizmo transform.
+  QMat4 requested_local_transform = scene_transform_multiply(
+      *parent_from_world, preview_scene_transform);
+  QMat4 represented_local_transform =
+      compose_transform(transformed->spatial_transform());
+  // Compare each basis at the requested scale so small objects cannot hide
+  // large relative deformation beneath the matrix's absolute tolerance.
+  for (std::size_t column = 0; column < 3; ++column) {
+    const std::size_t offset = 4 * column;
+    const double magnitude = std::hypot(
+        static_cast<double>(requested_local_transform.values[offset]),
+        static_cast<double>(requested_local_transform.values[offset + 1]),
+        static_cast<double>(requested_local_transform.values[offset + 2]));
+    if (!std::isfinite(magnitude) || magnitude <= 0.0) {
+      return std::nullopt;
+    }
+    for (std::size_t row = 0; row < 3; ++row) {
+      requested_local_transform.values[offset + row] = static_cast<float>(
+          requested_local_transform.values[offset + row] / magnitude);
+      represented_local_transform.values[offset + row] = static_cast<float>(
+          represented_local_transform.values[offset + row] / magnitude);
+    }
+  }
+  if (!scene_matrix_near_equal(represented_local_transform,
+                               requested_local_transform)) {
+    return std::nullopt;
+  }
+  return transformed;
 }
 
 void pin_target_local_pivot_to_world_point(
@@ -192,6 +250,35 @@ build_target_transform_edits(const SceneDocument &document,
     });
   }
   return edits;
+}
+
+std::vector<DocumentTransformEdit> build_primary_rotation_edits(
+    const SceneDocument &document,
+    std::span<const SceneTransformDragTarget> targets, EntityId primary,
+    QVec3 captured_primary_euler, QVec3 requested_primary_euler,
+    QVec3 world_pivot) {
+  const glm::quat previous =
+      to_glm(quat_from_euler_radians(captured_primary_euler));
+  const glm::quat requested =
+      to_glm(quat_from_euler_radians(requested_primary_euler));
+  const glm::quat delta = glm::normalize(requested * glm::conjugate(previous));
+  return build_target_transform_edits(
+      document, targets, [&](const SceneTransformDragTarget &target) {
+        TransformComponent next = target.transform;
+        // Numeric fields author an absolute local orientation. Selected peers
+        // follow its relative rotation in their own parent-coordinate frame.
+        if (target.entity == primary) {
+          next.rotation_euler = requested_primary_euler;
+        } else {
+          const glm::quat current =
+              to_glm(quat_from_euler_radians(target.transform.rotation_euler));
+          next.rotation_euler = euler_radians_from_rotation_closest_to(
+              delta * current, target.transform.rotation_euler);
+        }
+        pin_target_local_pivot_to_world_point(
+            document, target, next, target.local_pivot, world_pivot);
+        return next;
+      });
 }
 
 QuaderApiVoidResult unchanged_transform_api_result(QuaderEditorApi &editor,
@@ -368,18 +455,12 @@ SceneTransformDragService::preview_selected_to_primary_euler(
     return document_command_missing_entity_result();
   }
 
-  const QVec3 previous_euler =
-      positive_euler_radians(primary_transform->rotation_euler);
-  const QVec3 delta = next_primary_euler_radians - previous_euler;
-  std::vector<DocumentTransformEdit> edits = build_target_transform_edits(
-      document, targets_, [&](const SceneTransformDragTarget &target) {
-        TransformComponent next = target.transform;
-        next.rotation_euler = euler_radians_after_world_rotation_delta(
-            next.rotation_euler, delta);
-        pin_target_local_pivot_to_world_point(
-            document, target, next, target.local_pivot, world_pivot_);
-        return next;
-      });
+  if (!finite_vector(next_primary_euler_radians)) {
+    return document_command_invalid_request_result("Rotation must be finite");
+  }
+  std::vector<DocumentTransformEdit> edits = build_primary_rotation_edits(
+      document, targets_, primary, primary_transform->rotation_euler,
+      next_primary_euler_radians, world_pivot_);
   return preview_->preview_transforms(std::move(edits), SceneTextureTransformKind::Rotation);
 }
 
@@ -673,10 +754,10 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
           parent == kInvalidEntityId
               ? scene_transform_identity_matrix()
               : document.world_transform_matrix(parent);
-      const std::optional<TransformComponent> translation_preview_transform =
+      const std::optional<TransformComponent> validated_local_transform =
           try_scene_local_transform_preserving_world(
               parent_world, scene_world_transform, *selected_transform);
-      if (!translation_preview_transform.has_value()) {
+      if (!validated_local_transform.has_value()) {
         targets_.clear();
         return CaptureTargetsStatus::Invalid;
       }
@@ -707,7 +788,9 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
       targets_.push_back(SceneTransformDragTarget{
           .entity = entity,
           .transform = *selected_transform,
-          .translation_preview_transform = *translation_preview_transform,
+          // Translation changes position only. Re-decomposing the captured TRS
+          // would rewrite authored Euler values and mirrored scale signs.
+          .translation_preview_transform = *selected_transform,
           .local_pivot = transform_point(*world_inverse, world_pivot),
           .local_visible_pivot =
               transform_point(*world_inverse, display_visible_pivot),
@@ -782,11 +865,11 @@ QuaderApiVoidResult SceneTransformDragService::
     return unchanged_transform_api_result(editor, label_);
   }
 
+  if (!finite_vector(next_primary_euler_radians)) {
+    return invalid_transform_api_result(editor, "Rotation must be finite");
+  }
   const QVec3 world_pivot =
       selected_transform_pivot(document, assets, primary, *primary_transform);
-  const QVec3 previous_euler =
-      positive_euler_radians(primary_transform->rotation_euler);
-  const QVec3 delta = next_primary_euler_radians - previous_euler;
   const CaptureTargetsStatus capture = capture_targets(document, world_pivot);
   if (capture != CaptureTargetsStatus::Captured) {
     reset();
@@ -797,15 +880,9 @@ QuaderApiVoidResult SceneTransformDragService::
     return unchanged_transform_api_result(editor, label_);
   }
 
-  const std::vector<DocumentTransformEdit> edits = build_target_transform_edits(
-      document, targets_, [&](const SceneTransformDragTarget &target) {
-        TransformComponent next = target.transform;
-        next.rotation_euler = euler_radians_after_world_rotation_delta(
-            next.rotation_euler, delta);
-        pin_target_local_pivot_to_world_point(
-            document, target, next, target.local_pivot, world_pivot);
-        return next;
-      });
+  const std::vector<DocumentTransformEdit> edits = build_primary_rotation_edits(
+      document, targets_, primary, primary_transform->rotation_euler,
+      next_primary_euler_radians, world_pivot);
   QuaderApiVoidResult result =
       commit_edits(editor, document, edits, SceneTextureTransformKind::Rotation);
   reset();

@@ -480,6 +480,13 @@ struct InspectorPanel::Impl {
     double numeric_maximum = 0.0;
   };
 
+  /// Retains the displayed axes and the values used by their edit callbacks.
+  struct TransformRow {
+    std::array<QPointer<QDoubleSpinBox>, 3> fields;
+    std::array<bool, 3> mixed;
+    std::shared_ptr<std::array<double, 3>> values;
+  };
+
   explicit Impl(InspectorPanel &panel) : panel_(panel) {
     panel_.setObjectName(
         QString::fromLatin1(ui_panel_stable_id(UIPanelId::Inspector)));
@@ -658,7 +665,8 @@ struct InspectorPanel::Impl {
       return;
     }
 
-    if (!layout_changed && refresh_light_properties()) {
+    if (!layout_changed &&
+        (refresh_transform_properties() || refresh_light_properties())) {
       return;
     }
 
@@ -667,6 +675,26 @@ struct InspectorPanel::Impl {
     }
 
     rebuild(summary);
+  }
+
+  void refresh_transform_preview(UIContext &context) {
+    const SceneDocument &document = context.scene.document;
+    if (document_ != &document || modeling_ != &context.scene.modeling ||
+        built_scene_selection_revision_ != document.selection_revision() ||
+        built_modeling_selection_revision_ !=
+            context.scene.modeling.selection_revision() || force_rebuild_) {
+      refresh(context);
+      return;
+    }
+    // Check the owner before selection walks, formatting, or retained setters.
+    if (presented_transform_revision_ == document.transform_revision() ||
+        active_transform_edit_.has_value() || continuous_edit_active_) {
+      return;
+    }
+    if (!synchronize_transform_rows()) {
+      // A Mixed/numeric transition changes the field type, so rebuild once.
+      refresh(context);
+    }
   }
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
@@ -786,6 +814,7 @@ private:
 
   void clear_content() {
     material_rows_.clear();
+    transform_rows_.clear();
     light_range_field_ = nullptr;
     light_intensity_field_ = {};
     light_falloff_field_ = {};
@@ -795,6 +824,64 @@ private:
     light_color_mode_combo_ = nullptr;
     presented_light_.reset();
     tree_->clear();
+  }
+
+  bool synchronize_transform_rows() {
+    if (transform_rows_.empty()) {
+      presented_transform_revision_ = document_->transform_revision();
+      return true;
+    }
+    const TransformComponent *transform = document_->transform(primary_);
+    if (transform == nullptr) {
+      return false;
+    }
+    const std::array<std::array<bool, 3>, 3> mixed{
+        mixed_position_axes(*document_, selection_, *transform),
+        mixed_rotation_axes(*document_, selection_, *transform),
+        mixed_scale_axes(*document_, selection_, *transform),
+    };
+    for (std::size_t index = 0; index < transform_rows_.size(); ++index) {
+      if (transform_rows_[index].mixed != mixed[index]) {
+        return false;
+      }
+    }
+    const QVec3 rotation = positive_euler_radians(transform->rotation_euler);
+    const std::array<std::array<double, 3>, 3> values{{
+        {transform->position.x, transform->position.y, transform->position.z},
+        {rotation.x * kRadToDeg, rotation.y * kRadToDeg,
+         rotation.z * kRadToDeg},
+        {transform->scale.x, transform->scale.y, transform->scale.z},
+    }};
+    for (std::size_t index = 0; index < transform_rows_.size(); ++index) {
+      TransformRow &row = transform_rows_[index];
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        if ((*row.values)[axis] == values[index][axis]) {
+          continue;
+        }
+        (*row.values)[axis] = values[index][axis];
+        if (row.fields[axis] != nullptr) {
+          const QSignalBlocker blocker(row.fields[axis].data());
+          row.fields[axis]->setValue(values[index][axis]);
+        }
+      }
+    }
+    presented_transform_revision_ = document_->transform_revision();
+    return true;
+  }
+
+  bool refresh_transform_properties() {
+    const std::uint64_t scene_revision = document_->revision();
+    const std::uint64_t transform_revision = document_->transform_revision();
+    if (scene_revision <= built_scene_revision_ ||
+        transform_revision <= built_transform_revision_ ||
+        scene_revision - built_scene_revision_ !=
+            transform_revision - built_transform_revision_ ||
+        !synchronize_transform_rows()) {
+      return false;
+    }
+    built_scene_revision_ = scene_revision;
+    built_transform_revision_ = transform_revision;
+    return true;
   }
 
   bool refresh_light_properties() {
@@ -872,6 +959,9 @@ private:
 
     built_scene_revision_ = document_->revision();
     built_light_property_revision_ = document_->light_property_revision();
+    built_transform_revision_ = document_->transform_revision();
+    presented_transform_revision_ = built_transform_revision_;
+    built_scene_selection_revision_ = document_->selection_revision();
     built_modeling_content_revision_ = summary.content_revision;
     built_modeling_selection_revision_ = summary.selection_revision;
     built_material_presentation_revision_ = material_presentation_.revision;
@@ -1765,6 +1855,7 @@ private:
                          const std::array<bool, 3> &mixed, double step,
                          double minimum, double maximum) {
     auto values = std::make_shared<std::array<double, 3>>(initial_values);
+    TransformRow row{.mixed = mixed, .values = values};
     auto *field = new QWidget(section.editor_parent);
     field->setObjectName(stable_name(stable_id));
     field->setMinimumWidth(0);
@@ -1804,6 +1895,7 @@ private:
       }
 
       auto *spin = new InspectorDoubleSpinBox(field);
+      row.fields[axis] = spin;
       spin->setObjectName(stable_name(stable_id + "." + kAxes[axis]));
       spin->setRange(minimum, maximum);
       spin->setSingleStep(step);
@@ -1835,6 +1927,7 @@ private:
         }
       };
     }
+    transform_rows_.push_back(std::move(row));
     add_row(section, stable_id, label, field);
   }
 
@@ -2589,6 +2682,7 @@ private:
   const AssetRegistry *preview_assets_ = nullptr;
   InspectorMaterialPresentationSnapshot material_presentation_;
   std::vector<MaterialRow> material_rows_;
+  std::vector<TransformRow> transform_rows_;
   QPointer<QDoubleSpinBox> light_range_field_;
   NumberSlider light_intensity_field_;
   NumberSlider light_falloff_field_;
@@ -2607,6 +2701,12 @@ private:
   std::uint64_t built_scene_revision_ =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_light_property_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t built_transform_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t presented_transform_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t built_scene_selection_revision_ =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_modeling_content_revision_ =
       std::numeric_limits<std::uint64_t>::max();
@@ -2656,5 +2756,9 @@ bool InspectorPanel::event(QEvent *event) {
 }
 
 void InspectorPanel::refresh(UIContext &context) { impl_->refresh(context); }
+
+void InspectorPanel::refresh_transform_preview(UIContext &context) {
+  impl_->refresh_transform_preview(context);
+}
 
 } // namespace quader

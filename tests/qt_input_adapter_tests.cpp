@@ -120,6 +120,53 @@ void expect_history_unchanged(const quader::QuaderHistorySnapshot &actual,
   EXPECT_EQ(actual.redo_label, before.redo_label);
 }
 
+/// Drives navigation through the production Qt panel without a visible window.
+struct NavigationPanelTestContext {
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor{
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session)};
+  quader::QtViewportPanel panel;
+  quader::QtViewportSurface *surface = nullptr;
+  quader::ViewportCameraController &camera =
+      session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+
+  NavigationPanelTestContext() {
+    EXPECT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    panel.attach_workspace(session.viewport_workspace());
+    surface = panel.surface(quader::ViewportPaneId::Perspective);
+    if (surface == nullptr) {
+      return;
+    }
+    surface->resize(800, 600);
+    QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+    QFocusEvent focus(QEvent::FocusIn);
+    QApplication::sendEvent(surface, &enter);
+    QApplication::sendEvent(surface, &focus);
+  }
+
+  void process(double delta_seconds = 1.0 / 60.0) {
+    panel.process_input(editor, session.scene(), session.assets(),
+                        session.modeling(), {}, session.native_tools(),
+                        &session.point_placement(), delta_seconds);
+  }
+
+  void wheel(QPointF local, int angle_delta,
+             Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QWheelEvent event(local, local + QPointF{100, 100}, {},
+                      QPoint{0, angle_delta}, Qt::NoButton, modifiers,
+                      Qt::NoScrollPhase, false);
+    QApplication::sendEvent(surface, &event);
+  }
+
+  void mouse(QEvent::Type type, QPointF local, Qt::MouseButton button,
+             Qt::MouseButtons buttons,
+             Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QMouseEvent event(type, local, local + QPointF{100, 100}, button,
+                      buttons, modifiers);
+    QApplication::sendEvent(surface, &event);
+  }
+};
+
 } // namespace
 
 TEST(QtInputAdapterTests, MapsEveryLetterAndTopRowDigit) {
@@ -3344,14 +3391,13 @@ TEST(QtViewportSurfaceInputTests,
   restore_stale_pose();
   process_input();
 
-  // Plain wheel repair uses the complete scene depth (the scene-root origin
-  // plus this box produces a depth of three), rather than either the surface
-  // under the cursor or the stale target 158 units away.
+  // Plain wheel uses the actual center-view surface, independent of the
+  // scene-root origin and the stale target 158 units away.
   QWheelEvent wheel_in(center, center_global, {}, QPoint{0, 120}, Qt::NoButton,
                        Qt::NoModifier, Qt::NoScrollPhase, false);
   QApplication::sendEvent(surface, &wheel_in);
   process_input();
-  EXPECT_NEAR(camera.state().distance, 3.0f / 1.18f, 0.01f);
+  EXPECT_NEAR(camera.state().distance, 4.0f / 1.18f, 0.01f);
 
   restore_stale_pose();
   const quader::ViewportScreenPoint anchor_before =
@@ -3747,9 +3793,8 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(surface, &hierarchy_release);
   process_input();
 
-  // Empty-background orbit falls back to whole-scene depth. That fallback may
-  // repair a poisoned far target, but distant bounds must never inflate an
-  // already valid nearby orbit radius.
+  // Empty-background orbit falls back to the visible center surface. The
+  // nearby box remains authoritative despite distant scene bounds.
   ASSERT_TRUE(camera.restore_perspective_pose({
       .eye = {0.0f, 0.0f, 0.0f},
       .target = {0.0f, 0.0f, -5.0f},
@@ -3773,7 +3818,7 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(surface, &blank_move);
   process_input();
 
-  EXPECT_NEAR(camera.state().distance, 5.0f, 0.0001f);
+  EXPECT_NEAR(camera.state().distance, 4.0f, 0.0001f);
   EXPECT_NEAR(
       std::acos(std::clamp(
           quader::dot(
@@ -3789,6 +3834,199 @@ TEST(QtViewportSurfaceInputTests,
                             Qt::NoButton, Qt::NoModifier);
   QApplication::sendEvent(surface, &blank_release);
   process_input();
+}
+
+TEST(QtViewportSurfaceInputTests,
+     WheelUsesVisibleSurfaceAndRecoversTinyNavigationScale) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-visible-navigation-scale-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  const auto subject = context.editor.modeling().create_box(
+      {.min = {-1, -1, -6}, .max = {1, 1, -4}});
+  ASSERT_TRUE(subject.ok());
+  // This object is behind the eye and far outside the view. Together with the
+  // subject it puts the whole-scene bounds center only 0.1 units ahead.
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {999, -1, 3.8f}, .max = {1001, 1, 5.8f}}).ok());
+  ASSERT_TRUE(context.editor.selection().clear().ok());
+  ASSERT_TRUE(context.camera.restore_perspective_pose(
+      {.eye = {}, .target = {0, 0, -100}, .up = {0, 1, 0}}));
+  context.process();
+
+  const quader::ViewportCameraPose before = context.camera.pose();
+  context.wheel({20, 20}, 120);
+  context.process();
+  EXPECT_NEAR(context.camera.state().distance, 4.0f / 1.18f, 0.001f);
+  EXPECT_GT(quader::length(context.camera.pose().eye - before.eye), 0.5f);
+
+  ASSERT_TRUE(context.camera.restore_perspective_pose(
+      {.eye = {}, .target = {0, 0, -0.05f}, .up = {0, 1, 0}}));
+  context.wheel({20, 20}, -120);
+  context.process();
+  EXPECT_NEAR(context.camera.state().distance, 4.0f * 1.18f, 0.001f);
+  EXPECT_GT(context.camera.pose().eye.z, 0.5f);
+
+  // Moving to an off-center subject also repairs tiny depth when the center
+  // is empty; plain wheel still moves straight along the view direction.
+  ASSERT_TRUE(context.session.scene().set_visible(subject.value().entity, false));
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {3.8f, -0.2f, -10.2f}, .max = {4.2f, 0.2f, -10}}).ok());
+  ASSERT_TRUE(context.editor.selection().clear().ok());
+  ASSERT_TRUE(context.camera.restore_perspective_pose(
+      {.eye = {}, .target = {0, 0, -0.05f}, .up = {0, 1, 0}}));
+  const auto off_center = context.camera.project_world_point({4, 0, -10});
+  ASSERT_TRUE(off_center.visible);
+  const qreal pixel_ratio = context.surface->devicePixelRatio();
+  context.wheel({off_center.position.x / pixel_ratio,
+                  off_center.position.y / pixel_ratio}, -120);
+  context.process();
+  EXPECT_NEAR(context.camera.state().distance, 10.0f * 1.18f, 0.001f);
+  EXPECT_NEAR(context.camera.pose().eye.x, 0.0f, 0.0001f);
+  ASSERT_TRUE(context.session.scene().set_visible(subject.value().entity, true));
+
+  // A clipped foreground surface must not hide the usable surface behind it.
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {-1, -1, -0.04f}, .max = {1, 1, -0.01f}}).ok());
+  ASSERT_TRUE(context.editor.selection().clear().ok());
+  ASSERT_TRUE(context.camera.restore_perspective_pose(
+      {.eye = {}, .target = {0, 0, -100}, .up = {0, 1, 0}}));
+  context.wheel({20, 20}, 120);
+  context.process();
+  EXPECT_NEAR(context.camera.state().distance, 4.0f / 1.18f, 0.001f);
+
+  // Backfaces of a one-sided enclosing mesh are not rendered and must not
+  // replace the visible subject's navigation depth.
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}).ok());
+  ASSERT_TRUE(context.editor.selection().clear().ok());
+  ASSERT_TRUE(context.camera.restore_perspective_pose(
+      {.eye = {}, .target = {0, 0, -100}, .up = {0, 1, 0}}));
+  context.wheel({20, 20}, 120);
+  context.process();
+  EXPECT_NEAR(context.camera.state().distance, 4.0f / 1.18f, 0.001f);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PanFlyThenBackgroundOrbitUsesTheNearbySubjectWithoutReset) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-navigation-transition-depth-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {-3, -3, -6}, .max = {3, 3, -4}}).ok());
+  // After the fly move, this offscreen object leaves the global bounds center
+  // behind the eye. The old fallback then kept the entire 100-unit orbit.
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {999, -1, 98}, .max = {1001, 1, 100}}).ok());
+  ASSERT_TRUE(context.editor.selection().clear().ok());
+  ASSERT_TRUE(context.camera.restore_perspective_pose(
+      {.eye = {0, 0, 96}, .target = {0, 0, -4}, .up = {0, 1, 0}}));
+  (void)context.camera.set_default_fly_speed(96.0f);
+  context.camera.reset_fly_speed();
+  context.process();
+
+  context.mouse(QEvent::MouseButtonPress, {400, 300}, Qt::MiddleButton,
+                Qt::MiddleButton, Qt::ShiftModifier);
+  context.process();
+  context.mouse(QEvent::MouseMove, {401, 300}, Qt::NoButton,
+                Qt::MiddleButton, Qt::ShiftModifier);
+  context.process();
+  context.mouse(QEvent::MouseButtonRelease, {401, 300}, Qt::MiddleButton,
+                Qt::NoButton, Qt::ShiftModifier);
+  context.process();
+  ASSERT_NEAR(context.camera.state().distance, 100.0f, 0.001f);
+
+  context.mouse(QEvent::MouseButtonPress, {400, 300}, Qt::RightButton,
+                Qt::RightButton);
+  context.process();
+  QKeyEvent forward_press(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+  QApplication::sendEvent(context.surface, &forward_press);
+  for (int frame = 0; frame < 10; ++frame) {
+    context.process(0.1);
+  }
+  QKeyEvent forward_release(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+  QApplication::sendEvent(context.surface, &forward_release);
+  context.mouse(QEvent::MouseButtonRelease, {400, 300}, Qt::RightButton,
+                Qt::NoButton);
+  context.process();
+  ASSERT_NEAR(context.camera.pose().eye.z, 0.0f, 0.001f);
+  ASSERT_NEAR(context.camera.state().distance, 100.0f, 0.001f);
+
+  // The next press misses the subject. Its center-view surface must repair
+  // the stale fly depth before even a small orbit moves the eye.
+  const quader::ViewportCameraPose before_orbit = context.camera.pose();
+  context.mouse(QEvent::MouseButtonPress, {20, 20}, Qt::MiddleButton,
+                Qt::MiddleButton);
+  context.process();
+  context.mouse(QEvent::MouseMove, {25, 20}, Qt::NoButton, Qt::MiddleButton);
+  context.process();
+  context.mouse(QEvent::MouseButtonRelease, {25, 20}, Qt::MiddleButton,
+                Qt::NoButton);
+  context.process();
+  EXPECT_NEAR(context.camera.state().distance, 4.0f, 0.001f);
+  const float angle = 5.0f * static_cast<float>(
+      quader::viewport_host_defaults().orbit_radians_per_pixel);
+  EXPECT_LE(quader::length(context.camera.pose().eye - before_orbit.eye),
+            8.0f * std::sin(angle * 0.5f) + 0.001f);
+  EXPECT_FALSE(context.panel.command_input_context().navigation_active);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     QueuedCursorWheelEventsRetainTheirOwnSurfaceAnchors) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-navigation-wheel-anchor-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {-1.2f, -0.2f, -2.2f}, .max = {-0.8f, 0.2f, -2.0f}}).ok());
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {49, -1, -101}, .max = {51, 1, -100}}).ok());
+  ASSERT_TRUE(context.editor.selection().clear().ok());
+  ASSERT_TRUE(context.camera.restore_perspective_pose(
+      {.eye = {}, .target = {0, 0, -100}, .up = {0, 1, 0}}));
+  context.process();
+
+  constexpr quader::QVec3 kNearAnchor{-1, 0, -2};
+  constexpr quader::QVec3 kFarAnchor{50, 0, -100};
+  const auto near_screen = context.camera.project_world_point(kNearAnchor);
+  const auto far_screen = context.camera.project_world_point(kFarAnchor);
+  ASSERT_TRUE(near_screen.visible);
+  ASSERT_TRUE(far_screen.visible);
+  quader::ViewportCameraController expected;
+  expected.set_viewport_size(800, 600);
+  ASSERT_TRUE(expected.restore_perspective_pose(context.camera.pose()));
+  expected.scroll_to_cursor(1.0f, near_screen.position, kNearAnchor);
+  expected.scroll_to_cursor(1.0f, far_screen.position, kFarAnchor);
+
+  const qreal pixel_ratio = context.surface->devicePixelRatio();
+  context.wheel({near_screen.position.x / pixel_ratio,
+                  near_screen.position.y / pixel_ratio},
+                120, Qt::ControlModifier);
+  context.wheel({far_screen.position.x / pixel_ratio,
+                  far_screen.position.y / pixel_ratio},
+                120, Qt::ControlModifier);
+  // Later pointer motion must not select one shared anchor for both events.
+  context.mouse(QEvent::MouseMove, {400, 300}, Qt::NoButton, Qt::NoButton);
+  context.process();
+
+  EXPECT_NEAR(context.camera.state().distance, expected.state().distance, 0.01f);
+  EXPECT_NEAR(quader::length(context.camera.pose().eye - expected.pose().eye),
+              0.0f, 0.01f);
+  EXPECT_NEAR(quader::length(context.camera.pose().target - expected.pose().target),
+              0.0f, 0.01f);
 }
 
 TEST(QtViewportSurfaceInputTests,

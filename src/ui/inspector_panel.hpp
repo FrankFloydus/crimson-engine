@@ -51,6 +51,8 @@ public:
   void abandon_runtime() noexcept;
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void refresh(UIContext &context);
+  /// Presents live transform previews without rebuilding unrelated properties.
+  void refresh_transform_preview(UIContext &context);
 
 protected:
   bool event(QEvent *event) override;

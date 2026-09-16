@@ -969,6 +969,38 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     InspectorLiveTransformsGateOwnerQueriesAndRetainUnrelatedPresentation) {
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string inspector = read_source_file("src/ui/inspector_panel.cpp");
+  const std::string live_branch = source_slice(
+      ui, "if ((edit_drag_active || numeric_interaction_active) &&",
+      "if (!edit_drag_active && !numeric_interaction_active &&");
+  expect_contains(live_branch, "panel_presented(UIPanelId::Inspector)");
+  expect_contains(live_branch, "refresh_transform_preview(context)");
+  expect_missing(live_branch, "refresh_material_presentation_cache");
+  expect_missing(live_branch, "refresh_inspector_material_presentation");
+  expect_missing(live_branch, "mark_presented");
+  const std::string preview = source_slice(
+      inspector, "void refresh_transform_preview(UIContext &context)",
+      "void apply_ui_scale(");
+  const auto owner_gate = preview.find(
+      "presented_transform_revision_ == document.transform_revision()");
+  const auto synchronization = preview.find("synchronize_transform_rows()");
+  ASSERT_NE(owner_gate, std::string::npos);
+  ASSERT_NE(synchronization, std::string::npos);
+  EXPECT_LT(owner_gate, synchronization);
+  expect_missing(preview, "selected_entities()");
+  expect_missing(preview, "selection_summary()");
+  const std::string fields = source_slice(
+      inspector, "bool synchronize_transform_rows()",
+      "bool refresh_transform_properties()");
+  expect_contains(fields, "QSignalBlocker");
+  expect_contains(fields, "(*row.values)[axis] == values[index][axis]");
+  expect_missing(fields, "rebuild(");
+  expect_missing(fields, "clear_content(");
+}
+
+TEST(UiLayoutGuardrailTests,
      InspectorColorRowsUseTheSharedFullWidthLiveSwatchButton) {
   const std::string inspector =
       read_source_file("src/ui/inspector_panel.cpp");
@@ -2559,11 +2591,18 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "input.mouse_wheel != 0.0f");
   expect_contains(panel, "point_placement->surface_snapshot(document, assets)");
   expect_contains(panel, "SceneSurfaceEligibility::RenderVisible");
-  expect_contains(panel, ".include_backfaces = false");
   expect_contains(panel, "kSelectionAnchorLogicalRadius");
-  EXPECT_EQ(count_occurrences(
-                panel, "input.navigation_anchor_repair_only ="),
-            2u);
+  // Camera depth must not depend on unrelated scene bounds. The behavioral
+  // panel tests cover surface choice, while this gate protects lazy sampling.
+  expect_missing(panel, "scene_depth_navigation_anchor");
+  const std::size_t wheel_gate = panel.find(
+      "if (!input.fly_navigation_active", selection_anchor);
+  const std::size_t wheel_sample = panel.find(
+      "wheel_navigation_anchor(event.action, event.local)", wheel_gate);
+  ASSERT_NE(wheel_gate, std::string::npos);
+  ASSERT_NE(wheel_sample, std::string::npos);
+  EXPECT_LT(wheel_gate, wheel_sample);
+  EXPECT_LT(wheel_sample, router);
 
   const std::size_t dpi_event =
       surface.find("event->type() == QEvent::DevicePixelRatioChange");

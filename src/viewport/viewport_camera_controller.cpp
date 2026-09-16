@@ -558,7 +558,7 @@ void ViewportCameraController::scroll(
     return;
   }
   if (navigation_anchor.has_value()) {
-    (void)repair_navigation_depth(*navigation_anchor);
+    (void)repair_navigation_depth(*navigation_anchor, true);
   }
   QDR_PROFILE_SCOPE("Viewport camera zoom");
   quader_editor_core::ViewportZoomInput input;
@@ -588,7 +588,7 @@ void ViewportCameraController::scroll_to_cursor(float wheel_delta,
     return;
   }
   if (navigation_anchor.has_value()) {
-    (void)repair_navigation_depth(*navigation_anchor);
+    (void)repair_navigation_depth(*navigation_anchor, true);
   }
 
   QDR_PROFILE_SCOPE("Viewport camera zoom to cursor");
@@ -1029,18 +1029,19 @@ void ViewportCameraController::apply_clip_plane_constraints() {
 }
 
 std::optional<QVec3> ViewportCameraController::rebase_navigation_depth(
-    QVec3 navigation_anchor) {
+    QVec3 navigation_anchor, bool allow_outward) {
   const ViewportCameraPose current_pose = pose();
   const float anchor_depth =
       dot(navigation_anchor - current_pose.eye, camera_forward_);
-  if (!std::isfinite(anchor_depth) || anchor_depth <= kMinCameraDistance) {
+  if (!std::isfinite(anchor_depth) ||
+      anchor_depth < kMinimumRenderablePerspectiveDistance) {
     return std::nullopt;
   }
   // A gesture may begin over geometry behind the camera's current target.
   // Keep a valid nearby target authoritative so that a fresh orbit cannot
   // inflate its radius to the depth of that farther surface. Closer anchors
   // still repair stale outward targets and preserve scene-scale navigation.
-  if (std::isfinite(state_.distance) && state_.distance > 0.0f &&
+  if (!allow_outward && std::isfinite(state_.distance) && state_.distance > 0.0f &&
       anchor_depth > state_.distance) {
     return std::nullopt;
   }
@@ -1063,18 +1064,27 @@ std::optional<QVec3> ViewportCameraController::rebase_navigation_depth(
 }
 
 std::optional<QVec3> ViewportCameraController::repair_navigation_depth(
-    QVec3 navigation_anchor) {
+    QVec3 navigation_anchor, bool allow_outward) {
+  // Orthographic scale is independent of perspective target depth. Surface
+  // sampling must not rewrite a locked view's eye or navigation distance.
+  if (state_.projection != ViewportProjection::Perspective) {
+    return std::nullopt;
+  }
   const ViewportCameraPose current_pose = pose();
   const float anchor_depth =
       dot(navigation_anchor - current_pose.eye, camera_forward_);
-  if (!std::isfinite(anchor_depth) || anchor_depth <= kMinCameraDistance) {
+  if (!std::isfinite(anchor_depth) ||
+      anchor_depth < kMinimumRenderablePerspectiveDistance) {
     return std::nullopt;
   }
-  // The legacy defect only poisoned cameras by ratcheting their stored target
-  // far behind nearby visible content. A legitimately close view of a scene
-  // with distant bounds must not be pulled outward to that distant depth.
-  if (state_.distance / anchor_depth >= kSevereDepthRepairRatio) {
-    return rebase_navigation_depth(navigation_anchor);
+  // A wheel anchor is an actual visible surface, not the centre of global
+  // bounds. Repair both stale distant targets and collapsed scales left behind
+  // when navigating to another subject. A fresh orbit remains inward-only so
+  // a background hit cannot turn a small drag into a distant sweep.
+  if (state_.distance / anchor_depth >= kSevereDepthRepairRatio ||
+      (allow_outward &&
+       anchor_depth / state_.distance >= kSevereDepthRepairRatio)) {
+    return rebase_navigation_depth(navigation_anchor, allow_outward);
   }
   return std::nullopt;
 }

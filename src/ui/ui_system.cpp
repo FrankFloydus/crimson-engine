@@ -2938,9 +2938,10 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   QDR_PROFILE_SCOPE("UI system refresh");
   frame_timing_ = frame_timing;
   render_performance_ = render_performance;
-  // Keep retained property/command presentation stable during a pointer drag.
+  // Keep structural property/command presentation stable during a pointer drag.
   // Curve previews publish geometry each sample just like transform previews;
-  // their final revisions are presented once the gesture ends.
+  // their final revisions are presented once the gesture ends. Inspector
+  // transform fields have a separate retained path for live preview values.
   const NativeViewportToolPresentationSnapshot frame_native_tools =
       native_tools_ != nullptr
           ? native_tools_->presentation_snapshot()
@@ -3113,6 +3114,10 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         layer_panel_->refresh(context);
         layers_presenter_.mark_presented(stamp);
       }
+    }
+    if ((edit_drag_active || numeric_interaction_active) &&
+        panel_presented(UIPanelId::Inspector)) {
+      inspector_panel_->refresh_transform_preview(context);
     }
     if (!edit_drag_active && !numeric_interaction_active &&
         panel_presented(UIPanelId::Inspector)) {

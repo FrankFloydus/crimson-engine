@@ -385,6 +385,22 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 
 ## Transform frames, pivots, and texture mapping
 
+- Object rotation fields author absolute local Euler values; retain the primary's requested
+  values through preview/commit, with quaternion differences for selected peers. Subtracting
+  Euler components and treating the difference as a world rotation breaks mixed-axis edits
+  and zero resets. Gizmo quaternion extraction uses one shared singularity decision for X/Z
+  near Y = +/-90 degrees; independent float pitch/roll branches can introduce a half-turn.
+  Object edits retain mesh-local geometry and authored scale signs through rotation;
+  translation copies captured rotation/scale without decomposing them. Reject world gizmo
+  matrices whose local TRS recomposition loses shear instead of silently changing shape/scale.
+  Contracts: [object transform workflows](tests/scene_transform_tests.cpp),
+  [Inspector edit completion](tests/qt_settings_dialog_tests.cpp).
+- Inspector transform fields follow live gizmo and numeric-tool previews through their
+  retained controls. Gate on transform/selection/binding revisions before querying values;
+  keep the full material/property refresh deferred during drags. Synchronize the row's edit
+  callback values under blocked widget signals so the next axis edit cannot restore stale
+  sibling values. Contracts: [live UI workflow](tests/qt_project_workspace_tests.cpp),
+  [retained Inspector fields](tests/qt_settings_dialog_tests.cpp).
 - Use the displayed affine world basis, including hierarchy shear/reflection and instance transforms.
   Local Move shares the active frame; Rotate/Scale use each target's pinned frame/pivot. Use full
   inverse-basis math, not orthonormal dot-product shortcuts. Freeze active component frames at press.
@@ -534,8 +550,15 @@ Tests: [transform/texture workflows](tests/editor_api_tests.cpp),
 - Tight world bounds transform actual vertices, not only a local AABB, and include every visible
   instance member. Multi-mesh selection retains each topology outline alongside the aggregate cage.
 - Camera target is the canonical navigation pivot. A visible gesture anchor may repair a stale target
-  inward, but a farther surface must not inflate an already-valid nearby orbit radius. Perspective/
-  orthographic shading choices are session-only per-pane slots; temporary Alt-orbit orthographic
+  inward, but a farther surface must not inflate an already-valid nearby orbit radius. Wheel depth
+  comes from actual clipped surfaces: ordinary zoom prefers view center and falls back to the
+  packet's cursor surface; cursor zoom uses the reverse priority. Never use whole-scene bounds
+  (including offscreen objects and entity origins) as
+  navigation depth. Wheel repair handles severely oversized and collapsed distances; orthographic
+  wheel input preserves the view's depth. Empty-space drags can use the center surface to recover
+  a nearby subject. Cover mixed-scale navigation without resetting the pose between gestures in
+  `ViewportCameraTests` and `QtViewportSurfaceInputTests`.
+- Perspective/orthographic shading choices are session-only per-pane slots; temporary Alt-orbit orthographic
   snaps retain the perspective slot. Explicitly selecting that same axis still transitions to a
   manual orthographic view.
 

@@ -82,14 +82,59 @@ equivalent_euler_radians_closest_to(QVec3 euler_radians,
   return score(alternate) < score(primary) ? alternate : primary;
 }
 
+/**
+ * Extracts equivalent XYZ angles using one shared decision at the Y singularity.
+ * Independent pitch/roll singularity checks can select incompatible branches
+ * for float quaternions and change the represented orientation by half a turn.
+ */
+template <typename Scalar, glm::qualifier Qualifier>
+inline QVec3 euler_radians_from_rotation_closest_to(
+    const glm::qua<Scalar, Qualifier> &rotation,
+    QVec3 reference_euler_radians) {
+  const glm::dquat normalized = glm::normalize(glm::dquat{rotation});
+  const glm::dmat3 basis = glm::mat3_cast(normalized);
+  const double cosine_y = std::hypot(basis[0][0], basis[0][1]);
+
+  // Float-authored rotations need a shared tolerance around gimbal lock.
+  // Collapsing this band to the singular frame changes orientation by at most
+  // about two microradians, while retaining the reference-nearest coupled X/Z.
+  constexpr double kGimbalCosineTolerance = 0.000001;
+  if (cosine_y <= kGimbalCosineTolerance) {
+    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kTwoPi = 2.0 * kPi;
+    const double sign_y = basis[0][2] < 0.0 ? 1.0 : -1.0;
+    const double reference_x = reference_euler_radians.x;
+    const double reference_z = reference_euler_radians.z;
+    const double reference_coupling = reference_x - sign_y * reference_z;
+    const double coupling = std::atan2(-basis[2][1], basis[1][1]);
+    const double closest_coupling =
+        coupling +
+        kTwoPi * std::round((reference_coupling - coupling) / kTwoPi);
+    const double adjustment = 0.5 * (closest_coupling - reference_coupling);
+    const double y = sign_y * 0.5 * kPi;
+    return {
+        static_cast<float>(reference_x + adjustment),
+        static_cast<float>(
+            y + kTwoPi * std::round((reference_euler_radians.y - y) / kTwoPi)),
+        static_cast<float>(reference_z - sign_y * adjustment),
+    };
+  }
+
+  return equivalent_euler_radians_closest_to(
+      {static_cast<float>(std::atan2(basis[1][2], basis[2][2])),
+       static_cast<float>(std::atan2(-basis[0][2], cosine_y)),
+       static_cast<float>(std::atan2(basis[0][1], basis[0][0]))},
+      reference_euler_radians);
+}
+
 inline QVec3
 euler_radians_after_world_rotation_delta(QVec3 current_euler_radians,
                                          QVec3 world_rotation_delta_radians) {
   const glm::quat delta = glm::quat(to_glm(world_rotation_delta_radians));
   const glm::quat current =
       to_glm(quat_from_euler_radians(current_euler_radians));
-  return equivalent_euler_radians_closest_to(
-      from_glm(glm::eulerAngles(glm::normalize(delta * current))),
+  return euler_radians_from_rotation_closest_to(
+      glm::normalize(delta * current),
       current_euler_radians);
 }
 

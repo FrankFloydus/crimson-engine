@@ -655,10 +655,10 @@ ViewportInputRouter::handle_frame(const ViewportInputFrame &input,
       }
       if (event.action == ViewportInputActionKind::ZoomToCursor) {
         camera.scroll_to_cursor(event.steps, event.local,
-                                input.navigation_anchor);
+                                event.navigation_anchor);
         result.zoomed_to_cursor = true;
       } else if (event.action == ViewportInputActionKind::Zoom) {
-        camera.scroll(event.steps, input.navigation_anchor);
+        camera.scroll(event.steps, event.navigation_anchor);
       } else {
         continue;
       }
