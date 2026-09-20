@@ -1182,6 +1182,7 @@ void QtViewportPanel::prepare_viewports(
       native_presentation.linear_array_handle;
   const RadialArrayCenterState &radial_array_center =
       native_presentation.radial_array_center;
+  const auto &extrusion_handle = native_presentation.extrusion_handle;
   const bool pivot_handle_editing =
       pivot_handle.visible && pivot_handle.editing;
   render_bridge.update_mesh_surface_grid(grid_world_size, settings);
@@ -1362,6 +1363,7 @@ void QtViewportPanel::prepare_viewports(
         .pivot_handle_visible = pivot_handle.visible,
         .native_tool_overlay_visible =
             linear_array_handle.visible || radial_array_center_visible ||
+            extrusion_handle.active ||
             (native_presentation.curve_preview != nullptr &&
              native_presentation.curve_preview->active) ||
             assets.curve_count() != 0u,
@@ -1401,6 +1403,7 @@ void QtViewportPanel::prepare_viewports(
             .selection_marquee = &selection_marquee,
             .pivot_handle = &pivot_handle,
             .linear_array_handle = &linear_array_handle,
+            .extrusion_handle = &extrusion_handle,
             .radial_array_center = &radial_array_center,
             .revisions = dynamic_tool_revisions,
             .interaction_pane = pane_state.id == interaction_pane_id_,
@@ -3235,6 +3238,9 @@ void QtViewportPanel::process_viewport_input(
             .activation_requested = true,
             .tool_changed = result.tool_changed,
             .editor_tool_matches_requested = editor_tool_matches_requested,
+            .repeat_activation_when_active =
+                active_tool != nullptr &&
+                active_tool->descriptor().repeat_activation_when_active,
         })) {
       hover_controller_.invalidate();
       const QuaderApiVoidResult activation =

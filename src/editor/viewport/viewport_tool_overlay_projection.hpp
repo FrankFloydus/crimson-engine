@@ -22,6 +22,7 @@ struct TransformGizmoFrame;
 namespace quader {
 
 struct LinearArrayHandleState;
+struct ExtrudeHandleState;
 struct PivotHandleState;
 struct PrimitiveCreationControlsFrame;
 struct RadialArrayCenterState;
@@ -61,6 +62,7 @@ struct ViewportToolOverlaySourceInputs final {
   const ViewportSelectionMarquee *selection_marquee = nullptr;
   const PivotHandleState *pivot_handle = nullptr;
   const LinearArrayHandleState *linear_array_handle = nullptr;
+  const ExtrudeHandleState *extrusion_handle = nullptr;
   const RadialArrayCenterState *radial_array_center = nullptr;
   ViewportToolOverlaySourceRevisions revisions;
   bool interaction_pane = false;
@@ -116,6 +118,9 @@ public:
                                   float raster_scale = 1.0f);
   static void append_linear_array_handle(
       ViewportOverlayFrame &frame, const LinearArrayHandleState &handle);
+  static void append_extrusion_handle(
+      ViewportOverlayFrame &frame, const ViewportCameraController &camera,
+      const ExtrudeHandleState &handle, float raster_scale = 1.0F);
   static void append_radial_array_center(
       ViewportOverlayFrame &frame, const RadialArrayCenterState &center);
 

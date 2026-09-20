@@ -5520,6 +5520,686 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 
+namespace face_extrusion_projection {
+
+/// Exercises the native publication boundary through the owning service.
+class FaceExtrusionProjectionTests : public testing::Test {
+protected:
+  ModelingCreateBoxResult add_strip(std::string name = "Extrusion strip") {
+    return service_.create_mesh({.document = service_uv_peel_strip_document(),
+                                .name = std::move(name)});
+  }
+
+  void select_strip_faces(const ModelingObjectRecord &object,
+                          ModelingSelectionEdit edit = ModelingSelectionEdit::Replace) {
+    ASSERT_TRUE(service_.set_component_selection({
+        .modeling_object_id = object.modeling_object_id,
+        .mode = ModelingSelectionMode::Face,
+        .faces = {1, 2},
+        .edit = edit,
+        .active_kind = ModelingActiveSelectionKind::Face,
+        .active_face = 2}).ok);
+  }
+
+  MeshGeometryContentId geometry(EntityId entity) const {
+    return service_.compile_object_mesh(
+        *service_.modeling_object_for_entity(entity))->geometry().content_id();
+  }
+
+  SceneDocument scene_;
+  AssetRegistry assets_;
+  ModelingSessionService service_{scene_, assets_};
+};
+
+TEST_F(FaceExtrusionProjectionTests, AdjustmentsRegenerateOriginalAndZeroRestoresSource) {
+  const auto mesh = add_strip();
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  select_strip_faces(mesh.object);
+  const auto original = geometry(mesh.object.entity);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  ASSERT_TRUE(captured.source.valid());
+  EXPECT_EQ(captured.face_count, 2u);
+  expect_vec3_eq(captured.direction_world, {0, 0, 1});
+  const auto initial_revision = service_.content_revision();
+  const auto zero = service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 0.0);
+  ASSERT_TRUE(zero.ok) << zero.message;
+  EXPECT_FALSE(zero.changed);
+  EXPECT_EQ(service_.content_revision(), initial_revision);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Individual, 2.15).ok);
+  const auto individual = geometry(mesh.object.entity);
+  const MeshGeometryPayload individual_geometry =
+      assets_.mesh(scene_.mesh(mesh.object.entity)->mesh)->geometry();
+  const auto caps = service_.export_selection().objects.front().selected_faces;
+  ASSERT_EQ(caps.size(), 2u);
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 1.0).ok);
+  EXPECT_NE(geometry(mesh.object.entity), individual);
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Individual, 2.15).ok);
+  const auto &regenerated = assets_.mesh(scene_.mesh(mesh.object.entity)->mesh)->geometry();
+  ASSERT_EQ(regenerated.vertices.size(), individual_geometry.vertices.size());
+  for (std::size_t index = 0; index < regenerated.vertices.size(); ++index) {
+    expect_vec3_eq(regenerated.vertices[index].position,
+                   individual_geometry.vertices[index].position);
+  }
+  const auto unchanged_geometry = geometry(mesh.object.entity);
+  const auto unchanged_revision = service_.content_revision();
+  EXPECT_FALSE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Individual, 2.15).changed);
+  EXPECT_EQ(service_.content_revision(), unchanged_revision);
+  EXPECT_EQ(geometry(mesh.object.entity), unchanged_geometry);
+  const auto repeated_caps = service_.export_selection().objects.front().selected_faces;
+  ASSERT_EQ(repeated_caps.size(), caps.size());
+  for (std::size_t index = 0; index < caps.size(); ++index) {
+    EXPECT_EQ(repeated_caps[index].id, caps[index].id);
+  }
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Individual, 0.0).ok);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  EXPECT_EQ(service_.selection_summary().selected_face_count, 2u);
+  EXPECT_FALSE(service_.face_extrusion_preview_active());
+}
+
+TEST_F(FaceExtrusionProjectionTests, SourcePivotWeightsUniqueVerticesAcrossObjects) {
+  const auto strip = add_strip();
+  ASSERT_TRUE(strip.ok) << strip.message;
+  quader_poly::Document quad_document;
+  const std::array quad_vertices{
+      quader_poly::add_vertex(quad_document, {9.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(quad_document, {11.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(quad_document, {11.0f, 1.0f, 0.0f}),
+      quader_poly::add_vertex(quad_document, {9.0f, 1.0f, 0.0f})};
+  (void)quader_poly::add_face(quad_document, quad_vertices);
+  const auto quad = service_.create_mesh({.document = std::move(quad_document),
+                                        .name = "Pivot quad"});
+  ASSERT_TRUE(quad.ok) << quad.message;
+  select_strip_faces(strip.object);
+  ASSERT_TRUE(service_.set_component_selection({
+      .modeling_object_id = quad.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {1},
+      .edit = ModelingSelectionEdit::Add,
+      .active_kind = ModelingActiveSelectionKind::Face,
+      .active_face = 1}).ok);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  EXPECT_EQ(captured.face_count, 3u);
+  // Six strip vertices at mean X=0 and four quad vertices at mean X=10.
+  expect_vec3_eq(captured.center_world, {4.0f, 0.0f, 0.0f});
+  expect_vec3_eq(captured.direction_world, {0.0f, 0.0f, 1.0f});
+  expect_vec3_eq(captured.handle_direction_world, captured.direction_world);
+}
+
+TEST_F(FaceExtrusionProjectionTests,
+       OpposingNormalsUseWorldUpHandleAndActiveFaceOperationDirection) {
+  const auto first = add_strip("Positive normal strip");
+  const auto second = add_strip("Mirrored normal strip");
+  ASSERT_TRUE(first.ok && second.ok);
+  ASSERT_TRUE(scene_.set_transform(second.object.entity, {
+      .position = {6.0f, 0.0f, 0.0f}, .scale = {-2.0f, 1.0f, 1.0f}}));
+  select_strip_faces(first.object);
+  select_strip_faces(second.object, ModelingSelectionEdit::Add);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  EXPECT_EQ(captured.face_count, 4u);
+  expect_vec3_eq(captured.center_world, {3.0f, 0.0f, 0.0f});
+  expect_vec3_eq(captured.direction_world, {0.0f, 0.0f, -1.0f});
+  expect_vec3_eq(captured.handle_direction_world, {0.0f, 1.0f, 0.0f});
+  const auto extruded = service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 1.0);
+  ASSERT_TRUE(extruded.ok) << extruded.message;
+  const auto caps = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(caps.ok) << caps.message;
+  expect_vec3_eq(caps.center_world, {3.0f, 0.0f, -1.0f});
+  expect_vec3_eq(caps.handle_direction_world, {0.0f, 1.0f, 0.0f});
+}
+
+TEST_F(FaceExtrusionProjectionTests, PreviewCancelAndCommitKeepSourceReusable) {
+  const auto mesh = add_strip();
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  select_strip_faces(mesh.object);
+  const auto original = geometry(mesh.object.entity);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  const auto begin_preview = [&] {
+    const auto result = service_.begin_face_extrusion_preview(captured.source);
+    EXPECT_TRUE(result.ok) << result.message;
+    return result.ok;
+  };
+  ASSERT_TRUE(begin_preview());
+  EXPECT_TRUE(service_.face_extrusion_preview_active());
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::AlongNormals, 2.0).ok);
+  EXPECT_NE(geometry(mesh.object.entity), original);
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::AlongNormals, 0.0).ok);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  const auto unchanged = service_.commit_face_extrusion_preview();
+  ASSERT_TRUE(unchanged.ok) << unchanged.message;
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_FALSE(service_.face_extrusion_preview_active());
+
+  EXPECT_TRUE(service_.face_extrusion_source_current(captured.source));
+  ASSERT_TRUE(begin_preview());
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Individual, 1.5).ok);
+  ASSERT_TRUE(service_.cancel_face_extrusion_preview().ok);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  EXPECT_TRUE(service_.face_extrusion_source_current(captured.source));
+  ASSERT_TRUE(begin_preview());
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Individual, 1.5).ok);
+  const auto candidate = geometry(mesh.object.entity);
+  ASSERT_TRUE(service_.commit_face_extrusion_preview().ok);
+  EXPECT_EQ(geometry(mesh.object.entity), candidate);
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, -0.75).ok);
+  EXPECT_NE(geometry(mesh.object.entity), candidate);
+}
+
+TEST_F(FaceExtrusionProjectionTests, MultiObjectFailurePreservesCommittedAdjustment) {
+  const auto first = add_strip("First strip");
+  const auto second = add_strip("Second strip");
+  ASSERT_TRUE(first.ok && second.ok);
+  select_strip_faces(first.object);
+  select_strip_faces(second.object, ModelingSelectionEdit::Add);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  ASSERT_EQ(captured.face_count, 4u);
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 1.0).ok);
+  const auto first_before = geometry(first.object.entity);
+  const auto second_before = geometry(second.object.entity);
+  const auto content_before = service_.content_revision();
+  const auto selection_before = service_.selection_revision();
+  const auto assets_before = assets_.revision();
+  const auto scene_before = scene_.revision();
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+                             ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+                             ModelingSdkProjectionFailurePoint::CommittedSceneNotify,
+                             ModelingSdkProjectionFailurePoint::BeforeCommit}) {
+    SCOPED_TRACE(static_cast<int>(failure));
+    service_.set_modeling_sdk_projection_failure_for_tests(failure);
+    const auto result = service_.apply_face_extrusion(
+        captured.source, modeling::FaceExtrudeMode::Individual, 2.15);
+    EXPECT_FALSE(result.ok);
+    EXPECT_FALSE(result.changed);
+    EXPECT_EQ(geometry(first.object.entity), first_before);
+    EXPECT_EQ(geometry(second.object.entity), second_before);
+    EXPECT_EQ(service_.content_revision(), content_before);
+    EXPECT_EQ(service_.selection_revision(), selection_before);
+    EXPECT_EQ(assets_.revision(), assets_before);
+    EXPECT_EQ(scene_.revision(), scene_before);
+  }
+  service_.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  EXPECT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Individual, 2.15).ok);
+}
+
+TEST_F(FaceExtrusionProjectionTests,
+       AdjustmentPreviewUsesCommittedBaselineForCancelAndUnchangedCommit) {
+  const auto mesh = add_strip();
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  select_strip_faces(mesh.object);
+  const auto original = geometry(mesh.object.entity);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 2.15).ok);
+  const auto committed = geometry(mesh.object.entity);
+  const auto begin_adjustment = [&] {
+    const auto result = service_.begin_face_extrusion_adjustment_preview(captured.source);
+    EXPECT_TRUE(result.ok) << result.message;
+    return result.ok;
+  };
+
+  ASSERT_TRUE(begin_adjustment());
+  const auto unchanged_update = service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 2.15);
+  ASSERT_TRUE(unchanged_update.ok) << unchanged_update.message;
+  EXPECT_FALSE(unchanged_update.changed);
+  const auto unchanged_commit = service_.commit_face_extrusion_preview();
+  ASSERT_TRUE(unchanged_commit.ok) << unchanged_commit.message;
+  EXPECT_FALSE(unchanged_commit.changed);
+  EXPECT_EQ(geometry(mesh.object.entity), committed);
+  EXPECT_TRUE(service_.face_extrusion_source_current(captured.source));
+
+  ASSERT_TRUE(begin_adjustment());
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 4.0).ok);
+  ASSERT_TRUE(service_.cancel_face_extrusion_preview().ok);
+  EXPECT_EQ(geometry(mesh.object.entity), committed);
+  EXPECT_TRUE(service_.face_extrusion_source_current(captured.source));
+  EXPECT_FALSE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 2.15).changed);
+
+  ASSERT_TRUE(begin_adjustment());
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 4.0).ok);
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 2.15).ok);
+  const auto returned = service_.commit_face_extrusion_preview();
+  ASSERT_TRUE(returned.ok) << returned.message;
+  EXPECT_FALSE(returned.changed);
+  EXPECT_EQ(geometry(mesh.object.entity), committed);
+
+  ASSERT_TRUE(begin_adjustment());
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 0.0).ok);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  ASSERT_TRUE(service_.cancel_face_extrusion_preview().ok);
+  EXPECT_EQ(geometry(mesh.object.entity), committed);
+
+  ASSERT_TRUE(begin_adjustment());
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 0.0).ok);
+  const auto removed = service_.commit_face_extrusion_preview();
+  ASSERT_TRUE(removed.ok) << removed.message;
+  EXPECT_TRUE(removed.changed);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  EXPECT_TRUE(service_.face_extrusion_source_current(captured.source));
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 3.0).ok);
+  EXPECT_NE(geometry(mesh.object.entity), original);
+}
+
+TEST_F(FaceExtrusionProjectionTests,
+       FailedAdjustmentPreviewRestoresAllCommittedObjectsAndSourceEligibility) {
+  const auto first = add_strip("First adjustment strip");
+  const auto second = add_strip("Second adjustment strip");
+  ASSERT_TRUE(first.ok && second.ok);
+  select_strip_faces(first.object);
+  select_strip_faces(second.object, ModelingSelectionEdit::Add);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  ASSERT_TRUE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 2.15).ok);
+  const auto first_committed = geometry(first.object.entity);
+  const auto second_committed = geometry(second.object.entity);
+  ASSERT_TRUE(service_.begin_face_extrusion_adjustment_preview(captured.source).ok);
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Individual, 3.0).ok);
+  service_.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  const auto failed = service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Individual, 4.0);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_FALSE(service_.face_extrusion_preview_active());
+  EXPECT_EQ(geometry(first.object.entity), first_committed);
+  EXPECT_EQ(geometry(second.object.entity), second_committed);
+  EXPECT_TRUE(service_.face_extrusion_source_current(captured.source));
+  service_.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const auto unchanged = service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 2.15);
+  ASSERT_TRUE(unchanged.ok) << unchanged.message;
+  EXPECT_FALSE(unchanged.changed);
+  ASSERT_TRUE(service_.begin_face_extrusion_adjustment_preview(captured.source).ok);
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 1.0).ok);
+  ASSERT_TRUE(service_.commit_face_extrusion_preview().ok);
+  EXPECT_NE(geometry(first.object.entity), first_committed);
+  EXPECT_NE(geometry(second.object.entity), second_committed);
+}
+
+TEST_F(FaceExtrusionProjectionTests,
+       DynamicPreviewKeepsStableIdsAndPublishesTheAssetOnlyOnRelease) {
+  const auto mesh = add_strip();
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  select_strip_faces(mesh.object);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  const auto asset_id = scene_.mesh(mesh.object.entity)->mesh;
+  const auto durable = assets_.mesh(asset_id)->geometry().content_id();
+  ASSERT_TRUE(service_.begin_face_extrusion_preview(captured.source).ok);
+  const auto before = service_.modeling_sdk_projection_stats_for_tests();
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 1.0).ok);
+  const auto first = service_.tool_preview_meshes();
+  ASSERT_EQ(first.size(), 1u);
+  EXPECT_EQ(first.front().source_entity, mesh.object.entity);
+  EXPECT_TRUE(first.front().suppress_source);
+  EXPECT_TRUE(first.front().dynamic_positions);
+  ASSERT_NE(first.front().dynamic_position_payload, nullptr);
+  const auto first_positions = *first.front().dynamic_position_payload;
+  const auto first_document = first.front().mesh.authored_polygon_document;
+  ASSERT_NE(first_document, nullptr);
+  auto position_revision = first.front().position_revision;
+  auto render_signature = service_.tool_preview_signature();
+
+  for (const double amount : {1.001, 1.002, 1.125, 3.125, -0.125}) {
+    ASSERT_TRUE(service_.update_face_extrusion_preview(
+        captured.source, modeling::FaceExtrudeMode::Region, amount).ok);
+    const auto visible = service_.tool_preview_meshes();
+    ASSERT_EQ(visible.size(), 1u);
+    EXPECT_NE(service_.tool_preview_signature(), render_signature);
+    render_signature = service_.tool_preview_signature();
+    EXPECT_GT(visible.front().position_revision, position_revision);
+    position_revision = visible.front().position_revision;
+    const auto &document = *visible.front().mesh.authored_polygon_document;
+    ASSERT_EQ(document.vertices.size(), first_document->vertices.size());
+    ASSERT_EQ(document.faces.size(), first_document->faces.size());
+    for (std::size_t index = 0; index < document.vertices.size(); ++index) {
+      EXPECT_EQ(document.vertices[index].id, first_document->vertices[index].id);
+    }
+    for (std::size_t index = 0; index < document.faces.size(); ++index) {
+      EXPECT_EQ(document.faces[index].id, first_document->faces[index].id);
+    }
+    EXPECT_EQ(visible.front().layout_key, first.front().layout_key);
+    EXPECT_EQ(assets_.mesh(asset_id)->geometry().content_id(), durable);
+    EXPECT_EQ(geometry(mesh.object.entity),
+              visible.front().mesh.geometry().content_id());
+    const auto selection = service_.export_selection();
+    ASSERT_EQ(selection.objects.size(), 1u);
+    ASSERT_EQ(selection.objects.front().selected_faces.size(), 2u);
+    for (const auto &face : selection.objects.front().selected_faces) {
+      for (const auto vertex_id : face.vertices) {
+        const auto *vertex = quader_poly::find_vertex(document, vertex_id);
+        ASSERT_NE(vertex, nullptr);
+        EXPECT_NEAR(vertex->position.z, amount, 1.0e-5);
+      }
+    }
+    const auto overlay = service_.selection_overlay_frame();
+    ASSERT_FALSE(overlay.triangles.empty());
+    std::size_t selected_triangles = 0;
+    for (const auto &triangle : overlay.triangles) {
+      if (triangle.element.object_id != mesh.object.modeling_object_id) continue;
+      // Source-wire depth stamps also cover stationary bases and perimeter
+      // walls. Only selection fill and mask triangles describe selected caps.
+      if (triangle.layer != ViewportOverlayLayer::SelectedVisibleFace &&
+          triangle.layer != ViewportOverlayLayer::SelectedFaceMask) continue;
+      EXPECT_TRUE(std::ranges::any_of(
+          selection.objects.front().selected_faces,
+          [&](const auto &face) { return face.id == triangle.element.face_id; }));
+      ++selected_triangles;
+      EXPECT_NEAR(triangle.a.z, amount, 1.0e-5);
+      EXPECT_NEAR(triangle.b.z, amount, 1.0e-5);
+      EXPECT_NEAR(triangle.c.z, amount, 1.0e-5);
+    }
+    EXPECT_GT(selected_triangles, 0u);
+    for (const auto &face : selection.objects.front().selected_faces) {
+      EXPECT_TRUE(std::ranges::any_of(overlay.triangles, [&](const auto &triangle) {
+        return triangle.element.object_id == mesh.object.modeling_object_id &&
+               triangle.element.face_id == face.id &&
+               triangle.layer == ViewportOverlayLayer::SelectedVisibleFace;
+      }));
+    }
+  }
+  ASSERT_EQ(first.front().dynamic_position_payload->size(), first_positions.size());
+  for (std::size_t index = 0; index < first_positions.size(); ++index) {
+    expect_vec3_eq((*first.front().dynamic_position_payload)[index], first_positions[index]);
+  }
+  const auto accepted = service_.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(accepted.asset_publication_count, before.asset_publication_count);
+  EXPECT_EQ(accepted.scene_publication_count, before.scene_publication_count);
+  const auto content = service_.content_revision();
+  const auto visible = service_.tool_preview_meshes().front();
+  const auto overlay_builds = accepted.native_selection_projection_build_count;
+  const auto unchanged = service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, -0.125);
+  ASSERT_TRUE(unchanged.ok) << unchanged.message;
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(service_.content_revision(), content);
+  EXPECT_EQ(service_.modeling_sdk_projection_stats_for_tests().preview_publication_count,
+            accepted.preview_publication_count);
+  EXPECT_EQ(service_.tool_preview_meshes().front().dynamic_position_payload,
+            visible.dynamic_position_payload);
+  EXPECT_EQ(service_.tool_preview_meshes().front().position_revision,
+            position_revision);
+  EXPECT_EQ(service_.tool_preview_signature(), render_signature);
+  (void)service_.selection_overlay_frame();
+  EXPECT_EQ(service_.modeling_sdk_projection_stats_for_tests().native_selection_projection_build_count,
+            overlay_builds);
+  ASSERT_TRUE(service_.commit_face_extrusion_preview().ok);
+  EXPECT_TRUE(service_.tool_preview_meshes().empty());
+  EXPECT_NE(service_.tool_preview_signature(), render_signature);
+  EXPECT_EQ(geometry(mesh.object.entity), visible.mesh.geometry().content_id());
+  EXPECT_EQ(service_.modeling_sdk_projection_stats_for_tests().asset_publication_count,
+            before.asset_publication_count + 1u);
+}
+
+TEST_F(FaceExtrusionProjectionTests, ZeroRetiresPreparedIdsBeforeAnotherExtrusion) {
+  const auto mesh = add_strip();
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  select_strip_faces(mesh.object);
+  const auto original = service_.compile_object_mesh(mesh.object.modeling_object_id);
+  ASSERT_TRUE(original.has_value());
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  ASSERT_TRUE(service_.begin_face_extrusion_preview(captured.source).ok);
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Individual, 1.0).ok);
+  const auto first = service_.compile_object_mesh(mesh.object.modeling_object_id);
+  const auto cursor = first->authored_polygon_document->next_vertex_id;
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Individual, 0.0).ok);
+  EXPECT_EQ(geometry(mesh.object.entity), original->geometry().content_id());
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Individual, -1.0).ok);
+  const auto second = service_.compile_object_mesh(mesh.object.modeling_object_id);
+  const auto &document = *second->authored_polygon_document;
+  for (const auto &vertex : document.vertices) {
+    const bool was_original = std::ranges::any_of(
+        original->authored_polygon_document->vertices,
+        [&](const auto &source) { return source.id == vertex.id; });
+    if (!was_original) EXPECT_GE(vertex.id, cursor);
+  }
+  ASSERT_TRUE(service_.cancel_face_extrusion_preview().ok);
+  EXPECT_TRUE(service_.tool_preview_meshes().empty());
+  EXPECT_EQ(geometry(mesh.object.entity), original->geometry().content_id());
+}
+
+TEST_F(FaceExtrusionProjectionTests,
+       FailedDynamicPreparationAndCommitPreserveTheAcceptedCandidate) {
+  const auto mesh = add_strip();
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  select_strip_faces(mesh.object);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  const auto original = geometry(mesh.object.entity);
+  ASSERT_TRUE(service_.begin_face_extrusion_preview(captured.source).ok);
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 1.0).ok);
+  const auto accepted = service_.tool_preview_meshes().front();
+  const auto invalid = service_.update_face_extrusion_preview(
+      captured.source, static_cast<modeling::FaceExtrudeMode>(999), 2.0);
+  EXPECT_FALSE(invalid.ok);
+  EXPECT_EQ(service_.tool_preview_meshes().front().dynamic_position_payload,
+            accepted.dynamic_position_payload);
+  ASSERT_TRUE(service_.update_face_extrusion_preview(
+      captured.source, modeling::FaceExtrudeMode::Region, 2.0).ok);
+  EXPECT_EQ(service_.tool_preview_meshes().front().layout_key, accepted.layout_key);
+  service_.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedAssetReplace);
+  const auto failed = service_.commit_face_extrusion_preview();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_TRUE(service_.face_extrusion_preview_active());
+  EXPECT_EQ(assets_.mesh(scene_.mesh(mesh.object.entity)->mesh)->geometry().content_id(),
+            original);
+  EXPECT_FALSE(service_.tool_preview_meshes().empty());
+  service_.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  ASSERT_TRUE(service_.cancel_face_extrusion_preview().ok);
+  EXPECT_TRUE(service_.tool_preview_meshes().empty());
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+}
+
+TEST_F(FaceExtrusionProjectionTests,
+       NewPreviewRetainsPriorAdjustmentOnlyAfterCancelOrUnchangedCommit) {
+  for (const int outcome : {0, 1, 2, 3}) {
+    SCOPED_TRACE(outcome);
+    SceneDocument local_scene;
+    AssetRegistry local_assets;
+    ModelingSessionService projection(local_scene, local_assets);
+    const auto mesh = projection.create_mesh({
+        .document = service_uv_peel_strip_document(), .name = "Retained source"});
+    ASSERT_TRUE(mesh.ok) << mesh.message;
+    ASSERT_TRUE(projection.set_component_selection({
+        .modeling_object_id = mesh.object.modeling_object_id,
+        .mode = ModelingSelectionMode::Face,
+        .faces = {1, 2},
+        .active_kind = ModelingActiveSelectionKind::Face,
+        .active_face = 2}).ok);
+    const auto prior = projection.capture_face_extrusion_source();
+    ASSERT_TRUE(prior.ok) << prior.message;
+    ASSERT_TRUE(projection.apply_face_extrusion(
+        prior.source, modeling::FaceExtrudeMode::Region, 2.15).ok);
+    const auto committed = local_assets.mesh(
+        local_scene.mesh(mesh.object.entity)->mesh)->geometry().content_id();
+    const auto next = projection.capture_face_extrusion_source();
+    ASSERT_TRUE(next.ok) << next.message;
+    ASSERT_TRUE(projection.begin_face_extrusion_preview(next.source, prior.source).ok);
+    ASSERT_TRUE(projection.update_face_extrusion_preview(
+        next.source, modeling::FaceExtrudeMode::Region, 1.0).ok);
+    if (outcome == 0) {
+      ASSERT_TRUE(projection.cancel_face_extrusion_preview().ok);
+    } else if (outcome == 1) {
+      ASSERT_TRUE(projection.update_face_extrusion_preview(
+          next.source, modeling::FaceExtrudeMode::Region, 0.0).ok);
+      const auto unchanged = projection.commit_face_extrusion_preview();
+      ASSERT_TRUE(unchanged.ok) << unchanged.message;
+      EXPECT_FALSE(unchanged.changed);
+    } else if (outcome == 2) {
+      projection.set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+      const auto failed = projection.update_face_extrusion_preview(
+          next.source, modeling::FaceExtrudeMode::Region, 3.0);
+      EXPECT_FALSE(failed.ok);
+      EXPECT_FALSE(failed.changed);
+      projection.set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::None);
+    } else {
+      ASSERT_TRUE(projection.commit_face_extrusion_preview().ok);
+    }
+    EXPECT_EQ(projection.face_extrusion_source_current(prior.source), outcome != 3);
+    if (outcome != 3) {
+      EXPECT_EQ(local_assets.mesh(local_scene.mesh(mesh.object.entity)->mesh)
+                    ->geometry().content_id(), committed);
+      ASSERT_TRUE(projection.begin_face_extrusion_adjustment_preview(prior.source).ok);
+      ASSERT_TRUE(projection.update_face_extrusion_preview(
+          prior.source, modeling::FaceExtrudeMode::Region, 4.0).ok);
+      ASSERT_TRUE(projection.cancel_face_extrusion_preview().ok);
+    }
+  }
+}
+
+TEST_F(FaceExtrusionProjectionTests, MissingSourceAndInvalidAmountDoNotMutate) {
+  const auto empty = service_.capture_face_extrusion_source();
+  EXPECT_TRUE(empty.ok);
+  EXPECT_FALSE(empty.source.valid());
+  const auto mesh = add_strip();
+  ASSERT_TRUE(mesh.ok);
+  select_strip_faces(mesh.object);
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  const auto original = geometry(mesh.object.entity);
+  EXPECT_FALSE(service_.apply_face_extrusion(captured.source,
+      modeling::FaceExtrudeMode::Region,
+      std::numeric_limits<double>::quiet_NaN()).ok);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  service_.reset_from_scene();
+  EXPECT_FALSE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Region, 1.0).ok);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+}
+
+TEST_F(FaceExtrusionProjectionTests, ContextAndSelectionChangesRetireSourceFence) {
+  const auto mesh = add_strip();
+  ASSERT_TRUE(mesh.ok);
+  select_strip_faces(mesh.object);
+  ModelingInstanceEditScope scope;
+  service_.set_instance_edit_scope_provider([&scope] { return scope; });
+  const auto captured = service_.capture_face_extrusion_source();
+  ASSERT_TRUE(captured.ok) << captured.message;
+  EXPECT_TRUE(service_.face_extrusion_source_current(captured.source));
+  const auto original = geometry(mesh.object.entity);
+  const auto validation = service_.validate_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Individual, 2.15);
+  EXPECT_TRUE(validation.ok) << validation.message;
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  scope = {.occurrence = mesh.object.entity, .definition = mesh.object.entity};
+  EXPECT_FALSE(service_.face_extrusion_source_current(captured.source));
+  EXPECT_FALSE(service_.apply_face_extrusion(
+      captured.source, modeling::FaceExtrudeMode::Individual, 2.15).ok);
+  EXPECT_EQ(geometry(mesh.object.entity), original);
+  scope = {};
+  ASSERT_TRUE(service_.clear_selection().ok);
+  EXPECT_FALSE(service_.face_extrusion_source_current(captured.source));
+}
+
+TEST_F(FaceExtrusionProjectionTests, CleanScenePreviewCancelZeroAndFailureRemainClean) {
+  for (const bool adjust_existing : {false, true}) {
+    SCOPED_TRACE(adjust_existing);
+    for (const int outcome : {0, 1, 2, 3}) {
+      SCOPED_TRACE(outcome);
+      SceneSession session;
+      auto &modeling = session.modeling();
+      const auto mesh = modeling.create_mesh({
+          .document = service_uv_peel_strip_document(),
+          .name = "Clean extrusion strip"});
+      ASSERT_TRUE(mesh.ok) << mesh.message;
+      ASSERT_TRUE(modeling.set_component_selection({
+          .modeling_object_id = mesh.object.modeling_object_id,
+          .mode = ModelingSelectionMode::Face,
+          .faces = {1, 2},
+          .active_kind = ModelingActiveSelectionKind::Face,
+          .active_face = 2}).ok);
+      const auto captured = modeling.capture_face_extrusion_source();
+      ASSERT_TRUE(captured.ok) << captured.message;
+      if (adjust_existing) {
+        ASSERT_TRUE(modeling.apply_face_extrusion(
+            captured.source, modeling::FaceExtrudeMode::Region, 2.15).ok);
+      }
+      session.mark_clean();
+      const auto history_steps = session.history().undo_count();
+      ASSERT_FALSE(session.dirty());
+      const auto begun = adjust_existing
+                             ? modeling.begin_face_extrusion_adjustment_preview(captured.source)
+                             : modeling.begin_face_extrusion_preview(captured.source);
+      ASSERT_TRUE(begun.ok) << begun.message;
+      ASSERT_TRUE(modeling.update_face_extrusion_preview(
+          captured.source, modeling::FaceExtrudeMode::Region, 1.0).ok);
+      EXPECT_FALSE(session.dirty());
+      if (outcome == 0) {
+        ASSERT_TRUE(modeling.cancel_face_extrusion_preview().ok);
+      } else if (outcome == 1) {
+        ASSERT_TRUE(modeling.update_face_extrusion_preview(
+            captured.source, modeling::FaceExtrudeMode::Region,
+            adjust_existing ? 2.15 : 0.0).ok);
+        const auto committed = modeling.commit_face_extrusion_preview();
+        ASSERT_TRUE(committed.ok) << committed.message;
+        EXPECT_FALSE(committed.changed);
+      } else if (outcome == 2) {
+        modeling.set_modeling_sdk_projection_failure_for_tests(
+            ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+        const auto failed = modeling.update_face_extrusion_preview(
+            captured.source, modeling::FaceExtrudeMode::Region, 2.0);
+        EXPECT_FALSE(failed.ok);
+        EXPECT_FALSE(failed.changed);
+        EXPECT_FALSE(modeling.face_extrusion_preview_active());
+      } else {
+        const auto unrelated = session.scene().create_entity(
+            "Concurrent edit", EntityKind::Empty);
+        ASSERT_NE(unrelated, kInvalidEntityId);
+        ASSERT_TRUE(modeling.cancel_face_extrusion_preview().ok);
+        EXPECT_TRUE(session.scene().exists(unrelated));
+      }
+      EXPECT_EQ(session.dirty(), outcome == 3);
+      EXPECT_EQ(session.history().undo_count(), history_steps);
+    }
+  }
+}
+
+} // namespace face_extrusion_projection
+
 namespace curve_projection {
 
 using namespace quader::test::curve;

@@ -625,6 +625,7 @@ if(QUADER_BUILD_TESTS)
         tests/sdk/modeling_curve_session_tests.cpp
         tests/sdk/modeling_curve_tube_tests.cpp
         tests/sdk/modeling_sdk_consumer_tests.cpp
+        tests/sdk/modeling_sdk_face_extrude_tests.cpp
         tests/sdk/dissolve_saved_scene_tests.cpp
         tests/sdk/uv_peel_saved_scene_tests.cpp
         tests/sdk/uv_preservation_foundation_tests.cpp

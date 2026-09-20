@@ -11,9 +11,11 @@
 #include "core/undo_redo_execute_options.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -37,6 +39,10 @@ public:
     [[nodiscard]] std::size_t undo_count() const { return undo_stack_.size(); }
     [[nodiscard]] std::size_t redo_count() const { return redo_stack_.size(); }
     [[nodiscard]] std::size_t max_steps() const { return max_steps_; }
+    /// Monotonic history epoch, including undo/redo even when the head returns.
+    [[nodiscard]] std::uint64_t revision() const { return revision_; }
+    /// Tests the latest applied command without executing or changing history.
+    [[nodiscard]] bool latest_merge_key_matches(std::string_view key) const;
 
     // Bounds the combined retained undo/redo chain. Zero disables retention.
     // Pruning releases commands without executing them or changing live state.
@@ -56,6 +62,7 @@ private:
     std::vector<StackEntry> undo_stack_;
     std::vector<StackEntry> redo_stack_;
     std::size_t max_steps_ = std::numeric_limits<std::size_t>::max();
+    std::uint64_t revision_ = 0;
 
     void trim_to_limit();
 };

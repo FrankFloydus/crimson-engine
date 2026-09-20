@@ -35,6 +35,13 @@
 #include <utility>
 
 namespace quader::modeling {
+
+/** Owns the source snapshot and immutable neutral extrusion generation. */
+struct PreparedFaceExtrusionImpl {
+  PolygonDocument source;
+  quader_poly::FaceExtrusionPreparation preparation;
+};
+
 namespace {
 
 [[nodiscard]] quader::QVec2 to_native(Vec2 value) {
@@ -3103,6 +3110,90 @@ Result<OperationResult> PolygonDocument::extrude_selected_faces(float distance) 
         return quader_poly::extrude_selected_faces(document, selection,
                                                    distance);
       });
+}
+
+Result<OperationResult> PolygonDocument::extrude_selected_faces(
+    const FaceExtrudeOptions &options) {
+  quader_poly::FaceExtrudeOptions native_options;
+  native_options.mode = static_cast<quader_poly::FaceExtrudeMode>(options.mode);
+  native_options.amount = options.amount;
+  native_options.extrusion_from_local = to_native(options.extrusion_from_local);
+  if (options.region_direction) {
+    native_options.region_direction = to_native(*options.region_direction);
+  }
+  return apply_operation(
+      *impl_, [&native_options](quader_poly::Document &document,
+                               quader_poly::Selection &selection) {
+        return quader_poly::extrude_selected_faces(document, selection,
+                                                  native_options);
+      });
+}
+
+Result<PreparedFaceExtrusion> PolygonDocument::prepare_face_extrusion(
+    FaceExtrudeMode mode, const Transform3 &extrusion_from_local) const {
+  auto prepared = std::make_shared<PreparedFaceExtrusionImpl>();
+  const auto result = quader_poly::prepare_face_extrusion(
+      *impl_->document, *impl_->selection,
+      static_cast<quader_poly::FaceExtrudeMode>(mode),
+      to_native(extrusion_from_local), prepared->preparation);
+  if (!result.success) {
+    return Result<PreparedFaceExtrusion>::failure(
+        make_error(ErrorCode::ValidationFailed, result.message));
+  }
+  prepared->source = *this;
+  PreparedFaceExtrusion value;
+  value.impl_ = std::move(prepared);
+  return Result<PreparedFaceExtrusion>::success(std::move(value));
+}
+
+Result<FaceExtrusionEvaluation> PreparedFaceExtrusion::evaluate(
+    float amount, std::optional<Vec3> region_direction) const {
+  if (!valid()) {
+    return Result<FaceExtrusionEvaluation>::failure(
+        make_error(ErrorCode::InvalidArgument, "Extrusion preparation is unavailable."));
+  }
+  std::optional<quader::QVec3> direction;
+  if (region_direction) {
+    direction = to_native(*region_direction);
+  }
+  quader_poly::Document document;
+  quader_poly::Selection selection;
+  const auto operated = quader_poly::evaluate_face_extrusion(
+      impl_->preparation, amount, direction, document, selection);
+  if (!operated.success) {
+    return Result<FaceExtrusionEvaluation>::failure(
+        make_error(ErrorCode::ValidationFailed, operated.message));
+  }
+  FaceExtrusionEvaluation value{.document = impl_->source,
+                                .receipt = adapt_operation_result(operated)};
+  if (operated.changed) {
+    auto &candidate = *value.document.impl_;
+    const bool selection_changed = !same_native_selection(*candidate.selection, selection);
+    value.receipt.dirty.selection = selection_changed;
+    candidate.document = std::make_shared<const quader_poly::Document>(std::move(document));
+    candidate.selection = std::make_shared<const quader_poly::Selection>(std::move(selection));
+    bump_content(candidate, true);
+    bump_selection(candidate, selection_changed);
+  }
+  return Result<FaceExtrusionEvaluation>::success(std::move(value));
+}
+
+Result<PolygonFaceExtrudeFrame> PolygonDocument::selected_face_extrude_frame(
+    const Transform3 &extrusion_from_local) const {
+  quader_poly::FaceExtrudeFrame frame;
+  const auto result = quader_poly::selected_face_extrude_frame(
+      *impl_->document, *impl_->selection, to_native(extrusion_from_local), frame);
+  if (!result.success) {
+    return Result<PolygonFaceExtrudeFrame>::failure(
+        make_error(ErrorCode::ValidationFailed, result.message));
+  }
+  return Result<PolygonFaceExtrudeFrame>::success({
+      .center = from_native(frame.center),
+      .summed_normal = from_native(frame.summed_normal),
+      .active_normal = from_native(frame.active_normal),
+      .face_count = frame.face_count,
+      .vertex_count = frame.vertex_count,
+  });
 }
 
 Result<OperationResult> PolygonDocument::detach_selected_faces() {

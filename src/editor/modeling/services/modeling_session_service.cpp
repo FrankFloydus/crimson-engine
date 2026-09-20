@@ -1513,6 +1513,9 @@ public:
   }
 
   ~Impl() {
+    if (face_extrusion_preview_checkpoint_active_) {
+      (void)cancel_face_extrusion_preview();
+    }
     if (face_texture_gesture_begin_.has_value()) {
       (void)cancel_face_texture_gesture();
     }
@@ -3295,7 +3298,8 @@ public:
         active_scene_selection_is_owned_outside_modeling();
     options.persistent_source_wire_object_id =
         persistent_tool_source_wire_object_id(selection_projection_snapshot());
-    return overlay_service_.selection_overlay_signature(runtime_, options);
+    return overlay_service_.selection_overlay_signature(runtime_, options) ^
+           sdk_projection_adapter_.selection_overlay_preview_signature();
   }
 
   [[nodiscard]] std::optional<ModelingTransform3>
@@ -3460,14 +3464,20 @@ public:
 
   [[nodiscard]] std::uint64_t tool_preview_signature() const {
     ++tool_preview_work_stats_.signature_enumeration_count;
-    return overlay_service_.tool_preview_signature(runtime_);
+    return overlay_service_.tool_preview_signature(runtime_) ^
+           (sdk_projection_adapter_.face_extrusion_preview_revision() *
+            1099511628211ULL);
   }
 
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes() const {
     ++tool_preview_work_stats_.mesh_extraction_count;
-    return overlay_service_.tool_preview_meshes(runtime_,
-                                                sdk_projection_adapter_);
+    auto meshes = overlay_service_.tool_preview_meshes(runtime_,
+                                                       sdk_projection_adapter_);
+    auto extrusion = sdk_projection_adapter_.face_extrusion_preview_meshes();
+    meshes.insert(meshes.end(), std::make_move_iterator(extrusion.begin()),
+                  std::make_move_iterator(extrusion.end()));
+    return meshes;
   }
 
   [[nodiscard]] ModelingToolPreviewWorkStats
@@ -3693,6 +3703,9 @@ public:
   }
 
   void reset_from_scene() {
+    if (face_extrusion_preview_checkpoint_active_) {
+      (void)cancel_face_extrusion_preview();
+    }
     if (face_texture_gesture_begin_.has_value()) {
       (void)cancel_face_texture_gesture();
     }
@@ -3737,6 +3750,7 @@ public:
   void set_instance_edit_scope_provider(
       std::function<ModelingInstanceEditScope()> provider) {
     instance_edit_scope_provider_ = provider;
+    sdk_projection_adapter_.set_instance_edit_scope_provider(provider);
     selection_service_.set_instance_edit_scope_provider(std::move(provider));
     volatile_overlay_cache_.valid = false;
   }
@@ -6666,6 +6680,9 @@ public:
 
   ModelingCommandResult
   commit_transform_preview(bool auto_merge_vertices = false) {
+    if (face_extrusion_preview_checkpoint_active_) {
+      return commit_face_extrusion_preview();
+    }
     if (face_texture_gesture_begin_.has_value()) {
       return commit_face_texture_gesture();
     }
@@ -6681,6 +6698,9 @@ public:
   }
 
   ModelingCommandResult cancel_transform_preview() {
+    if (face_extrusion_preview_checkpoint_active_) {
+      return cancel_face_extrusion_preview();
+    }
     if (face_texture_gesture_begin_.has_value()) {
       return cancel_face_texture_gesture();
     }
@@ -8895,6 +8915,128 @@ public:
     return result;
   }
 
+  [[nodiscard]] ModelingFaceExtrusionSourceResult
+  capture_face_extrusion_source() const {
+    return sdk_projection_adapter_.capture_face_extrusion_source();
+  }
+
+  [[nodiscard]] bool face_extrusion_source_current(
+      const ModelingFaceExtrusionSource &source) const {
+    return sdk_projection_adapter_.face_extrusion_source_current(source);
+  }
+
+  [[nodiscard]] ModelingCommandResult validate_face_extrusion(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction) const {
+    return sdk_projection_adapter_.validate_face_extrusion(
+        source, mode, amount_internal, world_direction);
+  }
+
+  [[nodiscard]] bool selected_face_extrusion_hit(
+      const ModelingPickSelectRequest &request) const {
+    if (app_selection_mode_ != ModelingSelectionMode::Face) {
+      return false;
+    }
+    const auto hover = preview_selection_hover({
+        .ray = request.ray,
+        .vertex_radius = request.vertex_radius,
+        .edge_radius = request.edge_radius,
+        .select_backfaces = request.select_backfaces});
+    return hover.target.kind == ModelingActiveSelectionKind::Face &&
+           hover.target_selected;
+  }
+
+  ModelingCommandResult apply_face_extrusion(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction) {
+    auto result = sdk_projection_adapter_.apply_face_extrusion(
+        source, mode, amount_internal, world_direction);
+    if (result.ok && result.changed) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  ModelingCommandResult begin_face_extrusion_preview(
+      const ModelingFaceExtrusionSource &source, bool adjust_existing = false,
+      const ModelingFaceExtrusionSource &retained_cancellation_source = {}) {
+    if (transform_drag_active() || sdk_projection_adapter_.preview_active()) {
+      return {.ok = false, .message = "Complete the active transform first."};
+    }
+    begin_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    observe_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    auto result = adjust_existing
+                      ? sdk_projection_adapter_.begin_face_extrusion_adjustment_preview(source)
+                      : sdk_projection_adapter_.begin_face_extrusion_preview(
+                            source, retained_cancellation_source);
+    record_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    if (!result.ok && !sdk_projection_adapter_.face_extrusion_preview_active()) {
+      finish_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_,
+                                        !result.changed);
+    }
+    if (result.ok) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  ModelingCommandResult update_face_extrusion_preview(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction) {
+    const auto visible_before = sdk_projection_adapter_.face_extrusion_preview_revision();
+    observe_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    auto result = sdk_projection_adapter_.update_face_extrusion_preview(
+        source, mode, amount_internal, world_direction);
+    record_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    if (!sdk_projection_adapter_.face_extrusion_preview_active()) {
+      // A failed publication can already have restored and retired its SDK
+      // preview. Settle that checkpoint without leaving the scene dirty.
+      finish_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_,
+                                        !result.changed);
+    }
+    if ((result.ok && result.changed) || visible_before !=
+            sdk_projection_adapter_.face_extrusion_preview_revision()) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  [[nodiscard]] bool face_extrusion_preview_active() const {
+    return sdk_projection_adapter_.face_extrusion_preview_active();
+  }
+
+  ModelingCommandResult commit_face_extrusion_preview() {
+    const auto visible_before = sdk_projection_adapter_.face_extrusion_preview_revision();
+    observe_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    auto result = sdk_projection_adapter_.commit_face_extrusion_preview();
+    record_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    if (result.ok || !sdk_projection_adapter_.face_extrusion_preview_active()) {
+      finish_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_,
+                                        !result.changed);
+    }
+    if (result.ok || visible_before !=
+            sdk_projection_adapter_.face_extrusion_preview_revision()) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  ModelingCommandResult cancel_face_extrusion_preview() {
+    const auto visible_before = sdk_projection_adapter_.face_extrusion_preview_revision();
+    observe_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    auto result = sdk_projection_adapter_.cancel_face_extrusion_preview();
+    record_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_);
+    if (result.ok || !sdk_projection_adapter_.face_extrusion_preview_active()) {
+      finish_preview_content_checkpoint(face_extrusion_preview_checkpoint_active_,
+                                        result.ok || !result.changed);
+    }
+    if ((result.ok && result.changed) || visible_before !=
+            sdk_projection_adapter_.face_extrusion_preview_revision()) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
   TransformedDuplicateBatchResult execute_transformed_duplicate_batch(
       std::span<const TransformedDuplicateSourcePlan> source_plans,
       std::string_view operation_name, std::string success_message) {
@@ -10475,6 +10617,7 @@ private:
   mutable ModelingUvPeelSettings uv_peel_settings_cache_;
   bool uv_peel_preview_active_ = false;
   bool uv_peel_preview_checkpoint_active_ = false;
+  bool face_extrusion_preview_checkpoint_active_ = false;
   bool uv_peel_preview_valid_ = false;
   std::string uv_peel_preview_error_;
   ModelingUvPeelOptions uv_peel_preview_options_;
@@ -11666,6 +11809,64 @@ ModelingCommandResult ModelingSessionService::cancel_curve_document_preview() {
 
 bool ModelingSessionService::curve_document_preview_active() const {
   return impl_->curve_document_preview_active();
+}
+
+ModelingFaceExtrusionSourceResult
+ModelingSessionService::capture_face_extrusion_source() const {
+  return impl_->capture_face_extrusion_source();
+}
+
+bool ModelingSessionService::face_extrusion_source_current(
+    const ModelingFaceExtrusionSource &source) const {
+  return impl_->face_extrusion_source_current(source);
+}
+
+ModelingCommandResult ModelingSessionService::validate_face_extrusion(
+    const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+    double amount_internal, std::optional<QVec3> world_direction) const {
+  return impl_->validate_face_extrusion(source, mode, amount_internal, world_direction);
+}
+
+bool ModelingSessionService::selected_face_extrusion_hit(
+    const ModelingPickSelectRequest &request) const {
+  return impl_->selected_face_extrusion_hit(request);
+}
+
+ModelingCommandResult ModelingSessionService::apply_face_extrusion(
+    const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+    double amount_internal, std::optional<QVec3> world_direction) {
+  return impl_->apply_face_extrusion(source, mode, amount_internal, world_direction);
+}
+
+ModelingCommandResult ModelingSessionService::begin_face_extrusion_preview(
+    const ModelingFaceExtrusionSource &source,
+    const ModelingFaceExtrusionSource &retained_cancellation_source) {
+  return impl_->begin_face_extrusion_preview(source, false,
+                                           retained_cancellation_source);
+}
+
+ModelingCommandResult ModelingSessionService::begin_face_extrusion_adjustment_preview(
+    const ModelingFaceExtrusionSource &source) {
+  return impl_->begin_face_extrusion_preview(source, true);
+}
+
+ModelingCommandResult ModelingSessionService::update_face_extrusion_preview(
+    const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+    double amount_internal, std::optional<QVec3> world_direction) {
+  return impl_->update_face_extrusion_preview(source, mode, amount_internal,
+                                            world_direction);
+}
+
+bool ModelingSessionService::face_extrusion_preview_active() const {
+  return impl_->face_extrusion_preview_active();
+}
+
+ModelingCommandResult ModelingSessionService::commit_face_extrusion_preview() {
+  return impl_->commit_face_extrusion_preview();
+}
+
+ModelingCommandResult ModelingSessionService::cancel_face_extrusion_preview() {
+  return impl_->cancel_face_extrusion_preview();
 }
 
 ModelingCommandResult ModelingSessionService::replace_mesh_document(

@@ -400,6 +400,10 @@ inline constexpr QuaderCommandId kToolsActivateCreateCurve{
     "tools.activate.create_curve"};
 inline constexpr QuaderCommandId kToolsActivateExtrude{
     "tools.activate.extrude"};
+inline constexpr QuaderCommandId kToolsActivateExtrudeIndividual{
+    "tools.activate.extrude_individual"};
+inline constexpr QuaderCommandId kToolsActivateExtrudeAlongNormals{
+    "tools.activate.extrude_along_normals"};
 inline constexpr QuaderCommandId kToolsActivateInsertEdgeLoop{
     "tools.activate.insert_edge_loop"};
 inline constexpr QuaderCommandId kToolsActivateKnife{"tools.activate.knife"};
@@ -627,6 +631,8 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kToolsActivateCreateCone,
     kToolsActivateCreateCurve,
     kToolsActivateExtrude,
+    kToolsActivateExtrudeIndividual,
+    kToolsActivateExtrudeAlongNormals,
     kToolsActivateInsertEdgeLoop,
     kToolsActivateKnife,
     kToolsActivateCut,

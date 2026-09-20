@@ -458,6 +458,16 @@ std::size_t EditorHistoryService::max_steps() const {
   return undo_redo_->max_steps();
 }
 
+std::uint64_t EditorHistoryService::revision() const {
+  return undo_redo_->revision();
+}
+
+bool EditorHistoryService::can_merge_with_latest(
+    std::string_view merge_key, std::uint64_t revision) const {
+  return active_transaction_ == nullptr && undo_redo_->revision() == revision &&
+         undo_redo_->latest_merge_key_matches(merge_key);
+}
+
 void EditorHistoryService::set_max_steps(std::size_t max_steps) {
   undo_redo_->set_max_steps(std::min(max_steps, kMaximumMaxSteps));
 }

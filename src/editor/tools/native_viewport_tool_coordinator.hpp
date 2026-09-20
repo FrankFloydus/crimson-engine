@@ -11,6 +11,8 @@
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/placement/snap_to_floor_tool_state_port.hpp"
 #include "editor/tools/light_creation_tool_service.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
+#include "editor/tools/extrude_viewport_interaction.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "editor/tools/viewport_curve_interaction_port.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
@@ -42,6 +44,7 @@ struct NativeViewportToolPresentationSnapshot final {
   PivotHandleState pivot_handle;
   LinearArrayHandleState linear_array_handle;
   RadialArrayCenterState radial_array_center;
+  ExtrudeHandleState extrusion_handle;
   const CurveToolPreviewState *curve_preview = nullptr;
   bool curve_controls_editable = false;
   bool curve_dragging = false;
@@ -65,7 +68,8 @@ public:
                                 EditorSelectionService &selection,
                                 ModelingSessionService &modeling,
                                 CurveToolService &curve,
-                                UvPeelToolService &uv_peel);
+                                UvPeelToolService &uv_peel,
+                                ExtrudeToolService &extrude);
   NativeViewportToolCoordinator(const NativeViewportToolCoordinator &) = delete;
   NativeViewportToolCoordinator &
   operator=(const NativeViewportToolCoordinator &) = delete;
@@ -130,6 +134,8 @@ public:
   }
 
   CommandResult activate(std::string_view tool_id, double grid_world_size);
+  /// Starts a new extrusion in the requested mode through the existing owner.
+  CommandResult activate_extrude(modeling::FaceExtrudeMode mode);
   CommandResult begin_light_creation(LightCreationKind kind);
   CommandResult
   complete_active_light_creation(LightCreationOperation operation);
@@ -154,8 +160,10 @@ private:
   ModelingSessionService &modeling_;
   CurveToolService &curve_;
   UvPeelToolService &uv_peel_;
+  ExtrudeToolService &extrude_;
   ViewportToolRuntime runtime_;
   ViewportNativeToolInteraction interaction_;
+  ExtrudeViewportInteraction extrude_interaction_;
   std::unique_ptr<ViewportCurveInteractionPort> curve_interaction_;
 };
 

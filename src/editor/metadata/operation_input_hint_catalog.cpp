@@ -134,8 +134,41 @@ viewport_tool_input_hints(std::string_view tool_id) {
   } else if (tool_id == "uv_peel") {
     append_selection_click_hints(hints);
     append_modal_completion_hints(hints);
+  } else if (tool_id == "extrude") {
+    hints.push_back({Gesture::Command, quader_command::kToolsActivateExtrude,
+                     "operation.hints.tool.extrude", "Extrude"});
+    hints.push_back({Gesture::Command, quader_command::kToolsActivateExtrudeIndividual,
+                     "extrude.type.individual", "Extrude individually"});
+    hints.push_back({Gesture::Command, quader_command::kToolsActivateExtrudeAlongNormals,
+                     "extrude.type.along_normals", "Extrude along normals"});
+    hints.push_back(gesture_hint(Gesture::PrimaryDrag,
+                                 "operation.hints.extrude.handles",
+                                 "Adjust extrusion"));
+    hints.push_back(gesture_hint(Gesture::ControlPrimaryDrag,
+                                 "operation.hints.extrude.snap", "Snap to grid"));
+    hints.push_back(gesture_hint(Gesture::ShiftPrimaryDrag,
+                                 "operation.hints.extrude.precision", "Precision"));
+    hints.push_back(keybinding_hint("viewport.transform.vertex_snap",
+                                    "keybindings.target.viewport.transform.vertex_snap.label",
+                                    "Hold Vertex Snap"));
+    append_selection_click_hints(hints);
+    for (const auto &[target, key, fallback] : {
+             std::tuple{"viewport.extrude.constraint_x",
+                        "keybindings.target.viewport.extrude.constraint_x.label",
+                        "Constrain X"},
+             std::tuple{"viewport.extrude.constraint_y",
+                        "keybindings.target.viewport.extrude.constraint_y.label",
+                        "Constrain Y"},
+             std::tuple{"viewport.extrude.constraint_z",
+                        "keybindings.target.viewport.extrude.constraint_z.label",
+                        "Constrain Z"}}) {
+      hints.push_back(keybinding_hint(target, key, fallback));
+    }
+    hints.push_back(keybinding_hint("viewport.cancel_active_tool",
+                                    "operation.hints.cancel", "Cancel"));
+    append_selection_keybinding_hints(hints);
   } else if (tool_id == "move" || tool_id == "rotate" ||
-             tool_id == "scale" || tool_id == "extrude") {
+             tool_id == "scale") {
     const std::string_view key =
         tool_id == "move"       ? "operation.hints.tool.move"
         : tool_id == "rotate"   ? "operation.hints.tool.rotate"

@@ -8,9 +8,11 @@
 #include "render/filament_material_library.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
+#include "render/overlay/overlay_proxy_factory.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/texture_binding_service.hpp"
 #include "render/viewport_renderer.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
 
 #include <gtest/gtest.h>
 
@@ -52,6 +54,7 @@ public:
     engine_->pumpMessageQueues();
     viewport_.shutdown();
     destroy_patch();
+    overlay_factory_.shutdown();
     factory_.shutdown();
     materials_.shutdown();
     textures_.shutdown();
@@ -286,6 +289,70 @@ public:
     return true;
   }
 
+  struct ToolHandlePixelSample {
+    QVec2 center;
+    float radius = 0.0f;
+  };
+
+  std::optional<ToolHandlePixelSample>
+  create_tool_handle_grid_sample(ViewportProjection projection) {
+    if (!create_grid_sample(projection, false, true, 0.0f)) {
+      return std::nullopt;
+    }
+    if (!overlay_factory_.initialized()) {
+      const std::filesystem::path resources(
+          qEnvironmentVariable("QT_PLUGIN_PATH").toStdWString());
+      overlay_factory_.initialize(
+          *engine_, *scene_, library_.vertex_color_overlay(),
+          library_.overlay_line(), library_.edit_wire_line(),
+          library_.overlay_point(), library_.overlay_icon(), resources);
+    }
+    const auto camera =
+        ViewportCameraAdapter::overlay_camera(camera_, camera_.viewport_size());
+    // Place an opaque tool disk above a major ground-grid line. The real
+    // ToolHandle batch uses overlay ordering and does not write scene depth.
+    const QVec3 center{2.0f, 0.25f, 0.5f};
+    constexpr float kRadius = 0.75f;
+    constexpr int kSegments = 32;
+    constexpr float kTau = 6.2831853071795864769f;
+    const auto rim = [&](int index) {
+      const float angle = kTau * static_cast<float>(index) / kSegments;
+      return center + camera.right * (std::cos(angle) * kRadius) +
+             camera.up * (std::sin(angle) * kRadius);
+    };
+    ViewportOverlayFrame frame;
+    for (int index = 0; index < kSegments; ++index) {
+      frame.triangles.push_back({
+          .layer = ViewportOverlayLayer::ToolHandle,
+          .a = center,
+          .b = rim(index),
+          .c = rim(index + 1),
+          .color = rgba8(255, 255, 132, 255),
+          .style_role = ViewportOverlayStyleRole::ExplicitColor,
+          .source = ViewportOverlaySource::Tool,
+      });
+    }
+    const auto plan = OverlayRenderableBuilder::build_layer(
+        frame, camera, ViewportOverlayLayer::ToolHandle);
+    tool_handle_proxies_ =
+        overlay_factory_.create_layer_proxies(plan, kViewportOverlayLayerMask);
+    if (tool_handle_proxies_.empty() ||
+        std::any_of(tool_handle_proxies_.begin(), tool_handle_proxies_.end(),
+                    [](const auto &proxy) { return proxy.entity_id == 0u; })) {
+      return std::nullopt;
+    }
+    const auto projected_center = camera_.project_world_point(center);
+    const auto projected_rim = camera_.project_world_point(rim(0));
+    if (!projected_center.visible || !projected_rim.visible) {
+      return std::nullopt;
+    }
+    const QVec2 radius = projected_rim.position - projected_center.position;
+    return ToolHandlePixelSample{
+        .center = projected_center.position,
+        .radius = std::hypot(radius.x, radius.y),
+    };
+  }
+
   void set_grid_scene_visible(bool visible) {
     viewport_.set_scene_visible(visible);
   }
@@ -441,6 +508,10 @@ public:
 
 private:
   void destroy_patch() {
+    for (auto &proxy : tool_handle_proxies_) {
+      overlay_factory_.destroy(proxy);
+    }
+    tool_handle_proxies_.clear();
     for (auto *proxy : {&patch_, &overlay_depth_patch_}) {
       if (*proxy) factory_.destroy(**proxy);
       proxy->reset();
@@ -515,6 +586,8 @@ private:
   TextureBindingService textures_;
   MaterialBindingService materials_;
   MeshRenderableFactory factory_;
+  OverlayProxyFactory overlay_factory_;
+  std::vector<OverlayRenderableProxy> tool_handle_proxies_;
   TextureRegistry registry_;
   ViewportRenderer viewport_;
   ViewportCameraController camera_;
@@ -533,6 +606,90 @@ private:
   }};
   const std::array<std::uint32_t, 6u> indices_{0u, 1u, 2u, 0u, 2u, 3u};
 };
+
+TEST(RenderGroundGridRuntimeTests, OpaqueToolHandleDiskStaysAboveTheGroundGrid) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for windowless Vulkan "
+                   "ground-grid compositing coverage";
+  }
+  FogRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(256u, true));
+  ViewportSettings grid_settings = ViewportSettings::defaults();
+  for (const auto color : {ViewportColorSettingId::GridMinor,
+                           ViewportColorSettingId::GridMajor}) {
+    grid_settings.set_color(color, {0.05f, 0.05f, 0.05f, 1.0f});
+  }
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_GRID_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(output_directory));
+  }
+  for (const ViewportProjection projection :
+       {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    const QString name = projection == ViewportProjection::Perspective
+        ? "tool_handle_perspective" : "tool_handle_orthographic";
+    SCOPED_TRACE(name.toStdString());
+    const auto disk = harness.create_tool_handle_grid_sample(projection);
+    ASSERT_TRUE(disk.has_value());
+    ASSERT_GT(disk->radius, 12.0f);
+    const QImage without_grid =
+        harness.capture_grid(false, false, false, &grid_settings);
+    const QImage with_grid =
+        harness.capture_grid(false, true, false, &grid_settings);
+    ASSERT_FALSE(without_grid.isNull());
+    ASSERT_FALSE(with_grid.isNull());
+    ASSERT_EQ(with_grid.size(), without_grid.size());
+    if (!output_directory.isEmpty()) {
+      ASSERT_TRUE(without_grid.save(QDir(output_directory).filePath(
+          name + "_grid_off.png")));
+      ASSERT_TRUE(with_grid.save(QDir(output_directory).filePath(
+          name + "_grid_on.png")));
+    }
+    int maximum_interior_difference = 0;
+    int maximum_exterior_difference = 0;
+    std::size_t interior_pixels = 0u;
+    std::size_t yellow_interior_pixels = 0u;
+    std::size_t changed_exterior_pixels = 0u;
+    for (int y = 0; y < with_grid.height(); ++y) {
+      for (int x = 0; x < with_grid.width(); ++x) {
+        const QRgb before = without_grid.pixel(x, y);
+        const QRgb after = with_grid.pixel(x, y);
+        const int difference = std::max({
+            std::abs(qRed(after) - qRed(before)),
+            std::abs(qGreen(after) - qGreen(before)),
+            std::abs(qBlue(after) - qBlue(before)),
+            std::abs(qAlpha(after) - qAlpha(before))});
+        const float distance = std::hypot(
+            static_cast<float>(x) + 0.5f - disk->center.x,
+            static_cast<float>(y) + 0.5f - disk->center.y);
+        if (distance <= disk->radius - 3.0f) {
+          ++interior_pixels;
+          yellow_interior_pixels +=
+              qRed(before) > 200 && qGreen(before) > 200 &&
+                      qBlue(before) + 30 < qRed(before)
+                  ? 1u : 0u;
+          maximum_interior_difference =
+              std::max(maximum_interior_difference, difference);
+        } else if (distance >= disk->radius + 3.0f) {
+          changed_exterior_pixels += difference > 1 ? 1u : 0u;
+          maximum_exterior_difference =
+              std::max(maximum_exterior_difference, difference);
+        }
+      }
+    }
+    ASSERT_GT(interior_pixels, 300u);
+    ASSERT_EQ(yellow_interior_pixels, interior_pixels)
+        << "The baseline must contain the actual opaque yellow tool fill";
+    EXPECT_LE(maximum_interior_difference, 1)
+        << "Ground-grid lines must not tint an opaque ToolHandle interior";
+    EXPECT_GT(changed_exterior_pixels, 20u)
+        << "Grid toggling must visibly change pixels outside the tool disk";
+    EXPECT_GT(maximum_exterior_difference, 4);
+    std::cout << "Ground grid GPU " << name.toStdString()
+              << ": disk_max_delta=" << maximum_interior_difference
+              << ", exterior_changed=" << changed_exterior_pixels << '\n';
+  }
+}
 
 TEST(RenderGroundGridRuntimeTests,
      DepthBiasShowsCoplanarGridAndPerspectiveOccludesRaisedSurfaces) {

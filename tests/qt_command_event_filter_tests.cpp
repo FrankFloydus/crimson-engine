@@ -23,6 +23,7 @@
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <QApplication>
 #include <QComboBox>
@@ -34,9 +35,11 @@
 #include <QWindow>
 #include <QEnterEvent>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLineEdit>
 #include <QListView>
 #include <QMenu>
+#include <QMenuBar>
 #include <QPointer>
 #include <QPushButton>
 #include <QTabBar>
@@ -97,6 +100,114 @@ TEST(QtCommandEventFilterTests,
     return true;
   }));
   EXPECT_EQ(queries, 1);
+}
+
+TEST(QtCommandEventFilterTests,
+     NativeViewportReservesAltModeShortcutsBeforeMenuMnemonics) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-viewport-menu-mnemonic-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Mnemonic Extrusion Source");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+  const auto tool_state = [&editor]() {
+    quader::ViewportToolState state{
+        .selection_mode = quader::ViewportSelectionMode::Face};
+    EXPECT_TRUE(quader::viewport_tool_from_contract_id(
+        editor.tools().active_tool(), state.active_tool));
+    return state;
+  };
+  quader::QtCommandEventFilter filter(editor, tool_state);
+  application.installEventFilter(&filter);
+
+  QMainWindow window;
+  window.resize(480, 320);
+  QMenu *edit_menu = window.menuBar()->addMenu(QStringLiteral("&Edit"));
+  edit_menu->addAction(QStringLiteral("Edit Action"));
+  EXPECT_EQ(QKeySequence::mnemonic(edit_menu->title()),
+            QKeySequence(QStringLiteral("Alt+E")));
+  int menu_openings = 0;
+  QObject::connect(edit_menu, &QMenu::aboutToShow, [&menu_openings]() {
+    ++menu_openings;
+  });
+  auto *surface = new quader::QtViewportSurface(quader::ViewportPaneId::Perspective);
+  QWidget *container = QWidget::createWindowContainer(surface, &window);
+  container->setObjectName(QStringLiteral("viewportSurfaceContainer_mnemonic"));
+  container->setFocusPolicy(Qt::StrongFocus);
+  container->installEventFilter(surface);
+  window.setCentralWidget(container);
+  window.show();
+  window.activateWindow();
+  container->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+
+  for (const bool native_surface : {true, false}) {
+    SCOPED_TRACE(native_surface);
+    const int key = native_surface ? Qt::Key_E : Qt::Key_R;
+    if (!native_surface) {
+      ASSERT_TRUE(editor.commands().set_shortcut(
+          quader::quader_command::kToolsActivateExtrudeAlongNormals,
+          "Alt+R").ok());
+      edit_menu->setTitle(QStringLiteral("&Region"));
+    }
+    QObject *receiver = native_surface ? static_cast<QObject *>(surface)
+                                      : static_cast<QObject *>(container);
+    // This is Qt's negotiation before shortcut/mnemonic activation. Native
+    // child-window focus must reserve the chord just like its widget proxy.
+    QKeyEvent override_event(QEvent::ShortcutOverride, key, Qt::AltModifier);
+    override_event.ignore();
+    QCoreApplication::sendEvent(receiver, &override_event);
+    ASSERT_TRUE(override_event.isAccepted());
+    const auto before = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(before.has_value());
+    QKeyEvent press(QEvent::KeyPress, key, Qt::AltModifier);
+    QCoreApplication::sendEvent(receiver, &press);
+    const auto frame = surface->take_input_frame(0.0F, false);
+    ASSERT_EQ(frame.input.pressed_input_chords.size(), 1u);
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        frame.input.pressed_input_chords.front(), tool_state(), true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    ASSERT_EQ(dispatch.command_id,
+              quader::quader_command::kToolsActivateExtrudeAlongNormals.string());
+    ASSERT_TRUE(editor.commands().execute(dispatch.command_id).ok());
+    const auto after = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(after.has_value());
+    EXPECT_GT(after->indices.size(), before->indices.size());
+    EXPECT_EQ(editor.tools().active_tool(), "extrude");
+    EXPECT_EQ(menu_openings, 0);
+    QKeyEvent release(QEvent::KeyRelease, key, Qt::AltModifier);
+    QCoreApplication::sendEvent(receiver, &release);
+    (void)surface->take_input_frame(0.0F, false);
+  }
+
+  QKeyEvent close_override(QEvent::ShortcutOverride, Qt::Key_F4, Qt::AltModifier);
+  close_override.ignore();
+  QCoreApplication::sendEvent(surface, &close_override);
+  EXPECT_FALSE(close_override.isAccepted());
+  QLineEdit text_editor(&window);
+  text_editor.show();
+  text_editor.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  QKeyEvent text_override(QEvent::ShortcutOverride, Qt::Key_R, Qt::AltModifier);
+  text_override.ignore();
+  QCoreApplication::sendEvent(&text_editor, &text_override);
+  EXPECT_FALSE(text_override.isAccepted());
+  const auto command_revision = editor.commands().last_status_revision();
+  send_key_press(text_editor, Qt::Key_R, Qt::AltModifier);
+  EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
+  application.removeEventFilter(&filter);
 }
 
 TEST(QtCommandEventFilterTests,

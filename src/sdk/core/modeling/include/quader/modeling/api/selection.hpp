@@ -144,6 +144,7 @@ public:
   [[nodiscard]] PreviewHandle slice_quads(SliceQuadOptions options = {}) const;
   [[nodiscard]] PreviewHandle thicken(ThickenOptions options = {}) const;
   [[nodiscard]] OperationReceipt extrude(ExtrudeOptions options = {}) const;
+  [[nodiscard]] OperationReceipt extrude(FaceExtrudeOptions options) const;
   [[nodiscard]] OperationReceipt inset(InsetOptions options = {}) const;
   [[nodiscard]] OperationReceipt delete_faces() const;
 

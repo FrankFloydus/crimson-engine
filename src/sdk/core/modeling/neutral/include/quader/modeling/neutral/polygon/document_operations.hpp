@@ -10,7 +10,10 @@
 
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -54,6 +57,59 @@ struct OperationResult {
     return result;
   }
 };
+
+/** Selects the topology and displacement policy for dedicated face extrusion. */
+enum class FaceExtrudeMode {
+  Region,
+  AlongNormals,
+  Individual,
+};
+
+/** Defines face displacement in the supplied affine operation-space metric. */
+struct FaceExtrudeOptions {
+  FaceExtrudeMode mode = FaceExtrudeMode::Region;
+  float amount = 1.0F;
+  std::optional<quader::QVec3> region_direction;
+  Transform3 extrusion_from_local{};
+};
+
+/** Summarizes selected face geometry without authoring an extrusion. */
+struct FaceExtrudeFrame {
+  quader::QVec3 center{};
+  quader::QVec3 summed_normal{};
+  quader::QVec3 active_normal{};
+  std::size_t face_count = 0;
+  std::size_t vertex_count = 0;
+};
+
+[[nodiscard]] OperationResult selected_face_extrude_frame(
+    const Document &document, const Selection &selection,
+    const Transform3 &extrusion_from_local, FaceExtrudeFrame &frame);
+
+struct FaceExtrusionPreparationData;
+
+/** Retains immutable extrusion topology and source displacement coefficients. */
+class FaceExtrusionPreparation final {
+public:
+  [[nodiscard]] bool valid() const noexcept { return data_ != nullptr; }
+
+private:
+  std::shared_ptr<const FaceExtrusionPreparationData> data_;
+  friend OperationResult prepare_face_extrusion(
+      const Document &, const Selection &, FaceExtrudeMode, const Transform3 &,
+      FaceExtrusionPreparation &);
+  friend OperationResult evaluate_face_extrusion(
+      const FaceExtrusionPreparation &, float, std::optional<quader::QVec3>,
+      Document &, Selection &);
+};
+
+[[nodiscard]] OperationResult prepare_face_extrusion(
+    const Document &document, const Selection &selection, FaceExtrudeMode mode,
+    const Transform3 &extrusion_from_local, FaceExtrusionPreparation &prepared);
+[[nodiscard]] OperationResult evaluate_face_extrusion(
+    const FaceExtrusionPreparation &prepared, float amount,
+    std::optional<quader::QVec3> region_direction,
+    Document &document, Selection &selection);
 
 /**
  * Enumerates PlaneCutMode values used by the modeling layer.
@@ -290,6 +346,8 @@ inset_selected_elements(Document &document, Selection &selection,
 [[nodiscard]] OperationResult extrude_selected_faces(Document &document,
                                                      Selection &selection,
                                                      float distance = 0.45F);
+[[nodiscard]] OperationResult extrude_selected_faces(
+    Document &document, Selection &selection, const FaceExtrudeOptions &options);
 [[nodiscard]] OperationResult detach_selected_faces(Document &document,
                                                     Selection &selection);
 [[nodiscard]] ExtractFacesResult extract_selected_faces(Document &document,

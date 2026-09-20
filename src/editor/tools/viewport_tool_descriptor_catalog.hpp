@@ -48,6 +48,7 @@ struct ToolDescriptor {
     bool allows_selection_fallback = false;
     bool supports_transform_gizmo = false;
     bool editor_owned_native_lifecycle = false;
+    bool repeat_activation_when_active = false;
 };
 
 [[nodiscard]] std::span<const ToolDescriptor> viewport_tool_descriptors();

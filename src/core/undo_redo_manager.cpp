@@ -48,6 +48,7 @@ UndoRedoResult UndoRedoManager::execute(std::unique_ptr<IUndoableCommand> comman
     if (!result.ok || !result.changed) {
         return result;
     }
+    ++revision_;
 
     if (!options.merge_key.empty() && !undo_stack_.empty() &&
         undo_stack_.back().merge_key == options.merge_key &&
@@ -79,6 +80,7 @@ UndoRedoManager::record_executed(std::unique_ptr<IUndoableCommand> command) {
       .command = std::move(command),
       .merge_key = {},
   });
+  ++revision_;
   redo_stack_.clear();
   trim_to_limit();
   return command_changed_result();
@@ -98,6 +100,7 @@ UndoRedoResult UndoRedoManager::undo() {
   }
 
   redo_stack_.push_back(std::move(entry));
+  ++revision_;
   return result;
 }
 
@@ -115,6 +118,7 @@ UndoRedoResult UndoRedoManager::redo() {
   }
 
   undo_stack_.push_back(std::move(entry));
+  ++revision_;
   return result;
 }
 
@@ -132,7 +136,15 @@ const std::string *UndoRedoManager::redo_label() const {
   return &redo_stack_.back().command->label();
 }
 
+bool UndoRedoManager::latest_merge_key_matches(std::string_view key) const {
+  return !key.empty() && redo_stack_.empty() && !undo_stack_.empty() &&
+         undo_stack_.back().merge_key == key;
+}
+
 void UndoRedoManager::set_max_steps(std::size_t max_steps) {
+  if (max_steps_ != max_steps) {
+    ++revision_;
+  }
   max_steps_ = max_steps;
   trim_to_limit();
 }
@@ -158,6 +170,7 @@ void UndoRedoManager::trim_to_limit() {
 }
 
 void UndoRedoManager::clear() {
+  ++revision_;
   undo_stack_.clear();
   redo_stack_.clear();
 }

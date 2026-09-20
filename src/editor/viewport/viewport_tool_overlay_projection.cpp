@@ -10,6 +10,8 @@
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
 #include "editor/pivot/pivot_types.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
+#include "editor/tools/extrude_handle_layout.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/overlay/viewport_box_overlay_builder.hpp"
@@ -399,7 +401,8 @@ std::uint64_t tool_overlay_publication_revision(
   const bool camera_affects_frame =
       (inputs.interaction_pane && inputs.tool_overlay_visible) ||
       transform_gizmo_visible || marquee_visible || pivot_visible ||
-      primitive_creation_visible;
+      primitive_creation_visible ||
+      (inputs.extrusion_handle != nullptr && inputs.extrusion_handle->active);
   signature.add_bool(camera_affects_frame);
   if (camera_affects_frame) {
     add_camera(signature, inputs.overlay_camera);
@@ -427,6 +430,15 @@ std::uint64_t tool_overlay_publication_revision(
   }
   add_pivot_handle(signature, inputs.pivot_handle);
   add_linear_array_handle(signature, inputs.linear_array_handle);
+  signature.add_bool(inputs.extrusion_handle != nullptr);
+  if (inputs.extrusion_handle != nullptr) {
+    signature.add_bool(inputs.extrusion_handle->active)
+        .add_value(inputs.extrusion_handle->revision)
+        .add_vec3(inputs.extrusion_handle->world_position)
+        .add_vec3(inputs.extrusion_handle->world_direction)
+        .add_bool(inputs.extrusion_handle->new_hovered)
+        .add_bool(inputs.extrusion_handle->dragging);
+  }
   if (inputs.radial_array_center_visible) {
     add_radial_array_center(signature, inputs.radial_array_center);
   }
@@ -484,6 +496,11 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
   if (inputs_.linear_array_handle != nullptr) {
     ViewportToolOverlayProjection::append_linear_array_handle(
         frame, *inputs_.linear_array_handle);
+  }
+  if (inputs_.viewport_camera != nullptr && inputs_.extrusion_handle != nullptr) {
+    ViewportToolOverlayProjection::append_extrusion_handle(
+        frame, *inputs_.viewport_camera, *inputs_.extrusion_handle,
+        inputs_.raster_scale);
   }
   if (inputs_.radial_array_center_visible &&
       inputs_.radial_array_center != nullptr) {
@@ -580,6 +597,58 @@ void ViewportToolOverlayProjection::append_linear_array_handle(
       .source = ViewportOverlaySource::Tool,
       .outline_growth_pixels = 2.0f,
   });
+}
+
+void ViewportToolOverlayProjection::append_extrusion_handle(
+    ViewportOverlayFrame &frame, const ViewportCameraController &camera,
+    const ExtrudeHandleState &handle, float raster_scale) {
+  const ExtrudeHandleLayout layout =
+      build_extrude_handle_layout(camera, handle, raster_scale);
+  if (!layout.valid) {
+    return;
+  }
+  const auto line = [&](QVec3 start, QVec3 end, std::uint32_t color, float width) {
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::ToolHandle,
+        .start = start,
+        .end = end,
+        .color = color,
+        .width_pixels = width * layout.raster_scale,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool,
+    });
+  };
+  const auto triangle = [&](QVec3 a, QVec3 b, QVec3 c, std::uint32_t color) {
+    // ToolHandle fills are explicitly supported by OverlayRenderableBuilder;
+    // this layer keeps the filled disk above scene geometry.
+    frame.triangles.push_back({
+        .layer = ViewportOverlayLayer::ToolHandle,
+        .a = a,
+        .b = b,
+        .c = c,
+        .color = color,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool,
+    });
+  };
+  const std::uint32_t color = handle.new_hovered ? rgba8(255, 255, 255, 255)
+                                                : rgba8(255, 255, 132, 255);
+  line(layout.pivot, layout.button_center, color, 1.0F);
+
+  constexpr int kCircleSegments = 32;
+  constexpr float kTau = 6.2831853071795864769F;
+  const auto circle_point = [&](int index) {
+    const float angle = kTau * static_cast<float>(index) /
+                        static_cast<float>(kCircleSegments);
+    return layout.button_center +
+           layout.camera_right * (std::cos(angle) * layout.button_world_radius) +
+           layout.camera_up * (std::sin(angle) * layout.button_world_radius);
+  };
+  for (int index = 0; index < kCircleSegments; ++index) {
+    const QVec3 start = circle_point(index);
+    const QVec3 end = circle_point(index + 1);
+    triangle(layout.button_center, start, end, color);
+  }
 }
 
 void ViewportToolOverlayProjection::append_radial_array_center(

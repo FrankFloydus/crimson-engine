@@ -998,6 +998,202 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     MouseReleaseRetainsRemappedVertexSnapAcrossCoalescedKeyTransitions) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-release-held-snap-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::Extrude,
+      .selection_mode = quader::ViewportSelectionMode::Face};
+  const auto capture = [](int key, bool held_at_release) {
+    quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+    surface.resize(800, 600);
+    const auto send_key = [&](QEvent::Type type) {
+      QKeyEvent event(type, key, Qt::NoModifier);
+      QApplication::sendEvent(&surface, &event);
+    };
+    const auto send_mouse = [&](QEvent::Type type, Qt::MouseButtons held) {
+      QMouseEvent event(type, QPointF{120, 180}, QPointF{220, 280},
+                        Qt::LeftButton, held, Qt::NoModifier);
+      QApplication::sendEvent(&surface, &event);
+    };
+    send_key(QEvent::KeyPress);
+    send_mouse(QEvent::MouseButtonPress, Qt::LeftButton);
+    (void)surface.take_input_frame(0.0F, false);
+    if (!held_at_release) {
+      send_key(QEvent::KeyRelease);
+    }
+    send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
+    send_key(held_at_release ? QEvent::KeyRelease : QEvent::KeyPress);
+    return surface.take_input_frame(0.0F, false).input;
+  };
+  const auto resolve = [&](quader::ViewportInputFrame &input,
+                           std::vector<quader::QuaderInputChord> &suppressed) {
+    double linear_remainder = 0.0;
+    double radial_remainder = 0.0;
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed, linear_remainder, radial_remainder);
+  };
+  for (const int key : {Qt::Key_V, Qt::Key_F18}) {
+    SCOPED_TRACE(key);
+    ASSERT_TRUE(editor.preferences().set_shortcut(
+        "viewport.transform.vertex_snap", key == Qt::Key_V ? "V" : "F18").ok());
+    for (const bool held_at_release : {true, false}) {
+      SCOPED_TRACE(held_at_release);
+      auto input = capture(key, held_at_release);
+      ASSERT_EQ(input.pointer_released_edges.size(), 1u);
+      ASSERT_TRUE(input.pointer_released_edges.front().held_input.has_value());
+      EXPECT_EQ(input.pointer_released_edges.front().held_input->active_input_chords.size(),
+                held_at_release ? 1u : 0u);
+      const auto raw = input;
+      std::vector<quader::QuaderInputChord> suppressed;
+      resolve(input, suppressed);
+      EXPECT_EQ(input.transform_vertex_snap_down, !held_at_release);
+      EXPECT_EQ(input.pointer_released_edges.front().held_input->transform_vertex_snap_down,
+                held_at_release);
+      if (!held_at_release) {
+        continue;
+      }
+
+      auto suppressed_input = raw;
+      suppressed = raw.pointer_released_edges.front().held_input->active_input_chords;
+      resolve(suppressed_input, suppressed);
+      EXPECT_FALSE(suppressed_input.pointer_released_edges.front()
+                       .held_input->transform_vertex_snap_down);
+      EXPECT_TRUE(suppressed.empty()) << "Key-up retires suppression after the snapshot resolves.";
+      for (int blocked_context = 0; blocked_context < 3; ++blocked_context) {
+        auto blocked = raw;
+        blocked.viewport_focused = blocked_context != 0;
+        blocked.text_input_active = blocked_context == 1;
+        blocked.navigation_active = blocked_context == 2;
+        blocked.pointer_released_edges.front().held_input->transform_vertex_snap_down = true;
+        resolve(blocked, suppressed);
+        EXPECT_FALSE(blocked.pointer_released_edges.front()
+                         .held_input->transform_vertex_snap_down);
+      }
+    }
+  }
+  auto old_binding = capture(Qt::Key_V, true);
+  std::vector<quader::QuaderInputChord> suppressed;
+  resolve(old_binding, suppressed);
+  EXPECT_FALSE(old_binding.pointer_released_edges.front()
+                   .held_input->transform_vertex_snap_down);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     RepeatedExtrudeShortcutCommitsSelectedFacesThroughTheProductionPanel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-repeated-extrude-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const bool coalesced : {false, true}) {
+    SCOPED_TRACE(coalesced);
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto box = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
+    ASSERT_TRUE(box.ok()) << box.error_message();
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Front).ok());
+
+    quader::QtViewportPanel panel;
+    panel.attach_workspace(session.viewport_workspace());
+    auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+    ASSERT_NE(surface, nullptr);
+    surface->resize(800, 600);
+    session.viewport_workspace().camera(quader::ViewportPaneId::Perspective)
+        .focus_origin(8.0f);
+    const QPointF local{400.0, 300.0};
+    const QPointF global{500.0, 400.0};
+    QEnterEvent enter(local, local, global);
+    QFocusEvent focus(QEvent::FocusIn);
+    QApplication::sendEvent(surface, &enter);
+    QApplication::sendEvent(surface, &focus);
+    const auto process_input = [&] {
+      panel.process_input(
+          editor, session.scene(), session.assets(), session.modeling(), {},
+          session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+    };
+    const auto press_extrude = [&] {
+      QKeyEvent press(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier);
+      QKeyEvent release(QEvent::KeyRelease, Qt::Key_E, Qt::NoModifier);
+      QApplication::sendEvent(surface, &press);
+      if (!coalesced) {
+        process_input();
+      }
+      QApplication::sendEvent(surface, &release);
+      process_input();
+    };
+    process_input();
+    session.history().clear();
+    const auto original = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(original.has_value());
+
+    press_extrude();
+    ASSERT_EQ(editor.tools().active_tool(), "extrude");
+    EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::Extrude);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+    EXPECT_EQ(session.history().undo_count(), 0u);
+
+    QMouseEvent select_press(QEvent::MouseButtonPress, local, global,
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent select_release(QEvent::MouseButtonRelease, local, global,
+                               Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(surface, &select_press);
+    if (!coalesced) {
+      process_input();
+    }
+    QApplication::sendEvent(surface, &select_release);
+    process_input();
+    ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
+    const auto selected = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(selected.has_value());
+    EXPECT_EQ(selected->indices, original->indices);
+    EXPECT_EQ(selected->vertices.size(), original->vertices.size());
+    const auto steps_before_extrude = session.history().undo_count();
+
+    press_extrude();
+    const auto first = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(first.has_value());
+    EXPECT_GT(first->indices.size(), original->indices.size());
+    EXPECT_EQ(session.history().undo_count(), steps_before_extrude + 1u);
+    EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
+    ASSERT_EQ(editor.tools().active_tool(), "extrude");
+
+    press_extrude();
+    const auto second = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(second.has_value());
+    EXPECT_GT(second->indices.size(), first->indices.size());
+    EXPECT_EQ(session.history().undo_count(), steps_before_extrude + 2u);
+    EXPECT_EQ(editor.tools().active_tool(), "extrude");
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto undo_second = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(undo_second.has_value());
+    EXPECT_EQ(undo_second->indices, first->indices);
+    EXPECT_EQ(undo_second->vertices.size(), first->vertices.size());
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto undo_first = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(undo_first.has_value());
+    EXPECT_EQ(undo_first->indices, original->indices);
+    EXPECT_EQ(undo_first->vertices.size(), original->vertices.size());
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      ProductionPanelSelectionCursorTracksRingModifiersWithoutPointerMotion) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

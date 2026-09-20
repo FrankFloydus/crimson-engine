@@ -392,6 +392,10 @@ Result<OperationReceipt> CheckedOperationsApi::split_edges() {
   return checked_receipt([&] { return OperationsApi(context_).split_edges(); });
 }
 
+Result<OperationReceipt> CheckedOperationsApi::extrude(FaceExtrudeOptions options) {
+  return checked_receipt([&] { return OperationsApi(context_).extrude(options); });
+}
+
 Result<OperationReceipt> CheckedOperationsApi::default_edge_normals() {
   return checked_receipt(
       [&] { return OperationsApi(context_).default_edge_normals(); });

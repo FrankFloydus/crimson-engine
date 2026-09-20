@@ -705,6 +705,11 @@ void ViewportKeybindingResolver::resolve(
   input.resolved_shortcuts.clear();
   input.navigation_bindings = {};
   input.transform_vertex_snap_down = false;
+  for (auto &release : input.pointer_released_edges) {
+    if (release.held_input) {
+      release.held_input->transform_vertex_snap_down = false;
+    }
+  }
   input.linear_array_copy_delta = 0;
   input.radial_array_events.clear();
   input.apply_face_material_to_mesh_pressed = false;
@@ -958,6 +963,24 @@ void ViewportKeybindingResolver::resolve(
     ViewportInputActionKind action = ViewportInputActionKind::None;
     if (resolve_action(editor, state, input, chord, action)) {
       mark_action_down(input, action);
+    }
+  }
+  // Resolve event-time holds before key-up retires suppressed chords. The
+  // snapshot can differ from this frame's final held-key state in either order.
+  for (auto &release : input.pointer_released_edges) {
+    if (!release.held_input) {
+      continue;
+    }
+    for (const auto &chord : release.held_input->active_input_chords) {
+      if (input_chord_is_suppressed(suppressed_chords, chord)) {
+        continue;
+      }
+      ViewportInputActionKind action = ViewportInputActionKind::None;
+      if (resolve_action(editor, state, input, chord, action) &&
+          action == ViewportInputActionKind::TransformVertexSnap) {
+        release.held_input->transform_vertex_snap_down = true;
+        break;
+      }
     }
   }
   for (const QuaderInputChord &chord : input.released_input_chords) {

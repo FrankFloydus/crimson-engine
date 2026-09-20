@@ -59,6 +59,9 @@ scope_for_context(QuaderKeybindingContextKind context) {
   case QuaderKeybindingContextKind::CurveTool:
     return {"viewport.tool.curve", "Viewport › Curve",
             "keybindings.scope.viewport.tool.curve", context};
+  case QuaderKeybindingContextKind::ExtrudeTool:
+    return {"viewport.tool.extrude", "Viewport › Extrude",
+            "keybindings.scope.viewport.tool.extrude", context};
   case QuaderKeybindingContextKind::Custom:
     return {"custom", "Custom", "keybindings.scope.custom", context};
   }

@@ -12,9 +12,11 @@
 #include "core/undo_redo_execute_options.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -96,6 +98,10 @@ public:
     [[nodiscard]] std::size_t undo_count() const;
     [[nodiscard]] std::size_t redo_count() const;
     [[nodiscard]] std::size_t max_steps() const;
+    [[nodiscard]] std::uint64_t revision() const;
+    /// True only while the expected committed head is still eligible to merge.
+    [[nodiscard]] bool can_merge_with_latest(std::string_view merge_key,
+                                             std::uint64_t revision) const;
 
     // A committed transaction counts as one step. Its provisional children stay
     // available for rollback even when retention is disabled during a gesture.

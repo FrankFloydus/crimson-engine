@@ -70,6 +70,7 @@ enum class ViewportInputBindingContext {
   LinearArrayTool,
   RadialArrayTool,
   CurveTool,
+  ExtrudeTool,
 };
 
 /**

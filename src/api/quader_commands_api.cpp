@@ -350,6 +350,8 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
          command_id == quader_command::kToolsActivateCreateTorus.string() ||
          command_id == quader_command::kToolsActivateCreateCone.string() ||
          command_id == quader_command::kToolsActivateCreateCurve.string() ||
+         command_id == quader_command::kToolsActivateExtrudeIndividual.string() ||
+         command_id == quader_command::kToolsActivateExtrudeAlongNormals.string() ||
          command_id == quader_command::kToolsFlipPrimitiveFaces.string() ||
          command_id == quader_command::kToolsTogglePrimitiveCaps.string() ||
          command_id == quader_command::kToolsTogglePrimitiveHemisphere.string() ||
@@ -377,7 +379,7 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
            "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
            "!transformDrag.active && !operationPreview.active && "
-           "!activeTool.uv_peel && selection.allowedByTool";
+           "!activeTool.uv_peel && !activeTool.extrude && selection.allowedByTool";
   }
   if (command_id == quader_command::kViewportFrameSelection.string()) {
     return unobstructed_editor_command_keybinding_context();
@@ -741,6 +743,12 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kToolsActivateCreateCurve)) {
     return "Activate New Curve Creation Tool";
   }
+  if (is(quader_command::kToolsActivateExtrudeIndividual)) {
+    return "Activate Extrude Individually";
+  }
+  if (is(quader_command::kToolsActivateExtrudeAlongNormals)) {
+    return "Activate Extrude Along Normals";
+  }
   if (const std::optional<std::string_view> tool_id =
           quader_tool_id_from_activation_command_target(command_id)) {
     if (*tool_id == "create_primitive") {
@@ -999,6 +1007,8 @@ QuaderKeybindingContextKind keybinding_context_kind_for_viewport_input(
     return QuaderKeybindingContextKind::RadialArrayTool;
   case ViewportInputBindingContext::CurveTool:
     return QuaderKeybindingContextKind::CurveTool;
+  case ViewportInputBindingContext::ExtrudeTool:
+    return QuaderKeybindingContextKind::ExtrudeTool;
   }
   return QuaderKeybindingContextKind::Custom;
 }
@@ -2632,6 +2642,23 @@ void QuaderCommandsApi::Impl::register_commands() {
         return scene_documents_.has_active_scene() &&
                tools_.can_begin_new_curve_creation();
       });
+  const auto register_extrude_mode_command =
+      [this](QuaderCommandId command_id, std::string label,
+             std::string shortcut, QuaderExtrudeMode mode) {
+        register_command(
+            command_id, std::move(label),
+            [this, mode] { return tools_.activate_extrude(mode); },
+            std::move(shortcut), [this] {
+              return scene_documents_.has_active_scene() &&
+                     tools_.can_activate(ViewportToolId::Extrude);
+            });
+      };
+  register_extrude_mode_command(
+      quader_command::kToolsActivateExtrudeIndividual, "Extrude Individually",
+      "Ctrl+E", QuaderExtrudeMode::Individual);
+  register_extrude_mode_command(
+      quader_command::kToolsActivateExtrudeAlongNormals, "Extrude Along Normals",
+      "Alt+E", QuaderExtrudeMode::AlongNormals);
   register_command(
       quader_command::kSceneHideSelection, "Hide Selection",
       [this] {
@@ -3075,7 +3102,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       QuaderKeybindingContextKind::ModalTool,
       "viewportFocus && !textInputActive && !navigation.active && "
       "(modalTool.active || activeTool.ownsViewport || "
-      "transformDrag.active || activeTool.uv_peel)",
+      "transformDrag.active || activeTool.uv_peel || activeTool.extrude)",
       {}, "tools.cancel");
   register_keybinding_target_metadata(
       viewport_input_action_target_id("toggle_maximized"),
@@ -3168,7 +3195,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       viewport_input_action_target_id("cancel_active_tool"), "Escape",
       "viewportFocus && !textInputActive && !navigation.active && "
       "(modalTool.active || activeTool.ownsViewport || "
-      "transformDrag.active || activeTool.uv_peel)",
+      "transformDrag.active || activeTool.uv_peel || activeTool.extrude)",
       10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("toggle_maximized"), "Space",

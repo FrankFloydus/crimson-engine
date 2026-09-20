@@ -19,6 +19,7 @@ file except through prior written authorization from Francesco Di Blasi.
 | Native modeling projection and picking | [runtime guide](modeling/runtime/README.md) |
 | Descriptor catalogs | [metadata guide](metadata/README.md) |
 | Native tool lifecycle and semantic input | `tools/`, then [input guide](../../INPUT_KEYBINDINGS.md) |
+| Face extrusion, remembered options and editable committed results | `tools/extrude_tool_service.*`; geometry and source snapshots stay in the modeling owner |
 | Light range and live scene-color previews | `viewport/point_light_range_interaction.*`, `commands/document_command_service.*` |
 | Live material albedo drafts | `material/standard_material_edit_session_service.*`, `render/standard_material_render_snapshot_adapter.*` |
 | Material folders and permanent deletion | `material/project_material_organization_service.*`, `material/project_material_deletion_service.*` |
@@ -33,6 +34,8 @@ file except through prior written authorization from Francesco Di Blasi.
   scene-aware document route for objects, groups, and selected roots other than the scene root.
 - Tools own state machines; UI dispatches intent. Cover preview cancel/commit, selection, overlays,
   and undo/redo with focused synthetic behavior tests under the root verification contract.
+  Geometry previews must also satisfy the [preview projection contract](modeling/runtime/README.md#live-preview-projection-contract)
+  through the retained viewport submission, including when committed assets do not change.
 - Scene color previews publish through the existing property-preview checkpoint and record history
   only on acceptance. Material color previews remain drafts; scene saves and inactive-tab closure
   must not cancel the material picker. Preserve saved material texture identity during live tint edits.

@@ -124,6 +124,31 @@ struct ModelingResolvedVertexPositionBatch final {
   std::vector<quader::modeling::VertexPositionUpdate> positions;
 };
 
+/// Pins immutable source faces while their committed extrusion is adjustable.
+class ModelingFaceExtrusionSource final {
+public:
+  ModelingFaceExtrusionSource() = default;
+  [[nodiscard]] bool valid() const noexcept;
+
+private:
+  friend class ModelingSdkProjectionAdapter;
+  struct Impl;
+  explicit ModelingFaceExtrusionSource(std::shared_ptr<const Impl> impl);
+  std::shared_ptr<const Impl> impl_;
+};
+
+/// Reports source capture and its operation-space placement for a tool handle.
+struct ModelingFaceExtrusionSourceResult final {
+  bool ok = false;
+  std::string message;
+  ModelingFaceExtrusionSource source;
+  QVec3 center_world{};
+  QVec3 direction_world{0.0f, 1.0f, 0.0f};
+  /// Handle orientation falls back to world up when selected normals cancel.
+  QVec3 handle_direction_world{0.0f, 1.0f, 0.0f};
+  std::size_t face_count = 0;
+};
+
 /// Selects the portable mutation used to produce an interactive transform preview.
 enum class ModelingSdkTransformPreviewKind {
   Transform,
@@ -265,6 +290,8 @@ public:
 
   void set_modeling_object_world_transform_resolver(
       std::function<std::optional<QMat4>(int)> resolver);
+  void set_instance_edit_scope_provider(
+      std::function<ModelingInstanceEditScope()> provider);
   /// Resolves displayed sampling while retaining the active occurrence scope.
   void set_modeling_object_texture_sampling_resolver(
       std::function<std::optional<QMat4>(int)> resolver);
@@ -289,6 +316,8 @@ public:
   /** Borrows the revision-cached immutable selection read model. */
   [[nodiscard]] const ModelingSelectionProjectionSnapshot &
   selection_projection_snapshot() const;
+  /// Hashes the acknowledged polygon preview identity and payload publication.
+  [[nodiscard]] std::uint64_t selection_overlay_preview_signature() const noexcept;
   [[nodiscard]] std::optional<EntityId> pick_object_entity(
       const ModelingPickSelectRequest &request,
       std::optional<EntityId> competing_native = std::nullopt) const;
@@ -426,6 +455,34 @@ public:
   selected_vertices_snapshot() const;
   [[nodiscard]] ModelingCommandResult apply_resolved_vertex_positions(
       std::span<const ModelingResolvedVertexPositionBatch> batches);
+
+  [[nodiscard]] ModelingFaceExtrusionSourceResult
+  capture_face_extrusion_source() const;
+  [[nodiscard]] bool face_extrusion_source_current(
+      const ModelingFaceExtrusionSource &source) const;
+  [[nodiscard]] ModelingCommandResult validate_face_extrusion(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction = {}) const;
+  /// Amount is already converted from displayed units to native world units.
+  [[nodiscard]] ModelingCommandResult apply_face_extrusion(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction = {});
+  [[nodiscard]] ModelingCommandResult begin_face_extrusion_preview(
+      const ModelingFaceExtrusionSource &source,
+      const ModelingFaceExtrusionSource &retained_cancellation_source = {});
+  /// Pins the current result for cancel while regenerating the original faces.
+  [[nodiscard]] ModelingCommandResult begin_face_extrusion_adjustment_preview(
+      const ModelingFaceExtrusionSource &source);
+  [[nodiscard]] ModelingCommandResult update_face_extrusion_preview(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction = {});
+  [[nodiscard]] bool face_extrusion_preview_active() const;
+  /// Derived meshes replace the visible source only for the active gesture.
+  [[nodiscard]] std::vector<ModelingToolPreviewMesh>
+  face_extrusion_preview_meshes() const;
+  [[nodiscard]] std::uint64_t face_extrusion_preview_revision() const;
+  [[nodiscard]] ModelingCommandResult commit_face_extrusion_preview();
+  [[nodiscard]] ModelingCommandResult cancel_face_extrusion_preview();
 
   [[nodiscard]] ModelingCommandResult
   begin_translate_preview(bool duplicate_selected = false,

@@ -24,6 +24,7 @@
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/light_creation_tool_service.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/uv_peel_tool_service.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
@@ -50,8 +51,11 @@ SceneSession::SceneSession(SceneContentDocument document)
                    std::move(document)) {}
 
 SceneSession::SceneSession(
-    std::shared_ptr<PathArraySessionDefaults> path_array_defaults)
-    : path_array_defaults_(std::move(path_array_defaults)) {
+    std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
+    std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults)
+    : path_array_defaults_(std::move(path_array_defaults)),
+      extrude_defaults_(extrude_defaults ? std::move(extrude_defaults)
+                                        : std::make_shared<ExtrudeSessionDefaults>()) {
   if (!path_array_defaults_) {
     path_array_defaults_ = std::make_shared<PathArraySessionDefaults>();
   }
@@ -62,9 +66,12 @@ SceneSession::SceneSession(
 
 SceneSession::SceneSession(
     std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
-    SceneContentDocument document)
+    SceneContentDocument document,
+    std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults)
     : document_(std::move(document)),
-      path_array_defaults_(std::move(path_array_defaults)) {
+      path_array_defaults_(std::move(path_array_defaults)),
+      extrude_defaults_(extrude_defaults ? std::move(extrude_defaults)
+                                        : std::make_shared<ExtrudeSessionDefaults>()) {
   if (!path_array_defaults_) {
     path_array_defaults_ = std::make_shared<PathArraySessionDefaults>();
   }
@@ -218,10 +225,12 @@ void SceneSession::rebuild_services() {
   });
   light_creation_ = std::make_unique<LightCreationToolService>();
   uv_peel_ = std::make_unique<UvPeelToolService>(*history_, *selection_, *modeling_);
+  extrude_ = std::make_unique<ExtrudeToolService>(
+      document_.scene(), *modeling_, *history_, *extrude_defaults_);
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *path_array_,
       *primitive_creation_, *light_creation_,
-      *selection_, *modeling_, *curve_, *uv_peel_);
+      *selection_, *modeling_, *curve_, *uv_peel_, *extrude_);
   viewport_local_visibility_ =
       std::make_unique<ViewportLocalVisibilityService>(
           document_.scene(), document_.assets(), *modeling_, *instances_,
@@ -465,22 +474,24 @@ void SceneSession::mark_clean_at(SceneContentRevisionStamp stamp) noexcept {
 }
 
 SceneSessionService::SceneSessionService()
-    : path_array_defaults_(std::make_shared<PathArraySessionDefaults>()) {}
+    : path_array_defaults_(std::make_shared<PathArraySessionDefaults>()),
+      extrude_defaults_(std::make_shared<ExtrudeSessionDefaults>()) {}
 
 std::unique_ptr<SceneSession> SceneSessionService::create_session() const {
-  return std::make_unique<SceneSession>(path_array_defaults_);
+  return std::make_unique<SceneSession>(path_array_defaults_, extrude_defaults_);
 }
 
 std::unique_ptr<SceneSession>
 SceneSessionService::create_session(SceneContentDocumentRecord record) const {
   return std::make_unique<SceneSession>(
-      path_array_defaults_, SceneContentDocument(std::move(record)));
+      path_array_defaults_, SceneContentDocument(std::move(record)),
+      extrude_defaults_);
 }
 
 std::unique_ptr<SceneSession>
 SceneSessionService::open_session(SceneContentDocument document) const {
   return std::make_unique<SceneSession>(path_array_defaults_,
-                                        std::move(document));
+                                        std::move(document), extrude_defaults_);
 }
 
 } // namespace quader

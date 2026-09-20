@@ -586,6 +586,12 @@ OperationReceipt SelectionApi::clear() {
   return receipt;
 }
 
+OperationReceipt FaceSelection::extrude(FaceExtrudeOptions options) const {
+  return direct_mutate_selection(*context_, selection_, [&](PolygonDocument &document) {
+    return document.extrude_selected_faces(options);
+  });
+}
+
 OperationReceipt SelectionApi::select_all() {
   std::vector<MeshHandle> meshes = MeshCollection(context_).all();
   if (meshes.empty()) {

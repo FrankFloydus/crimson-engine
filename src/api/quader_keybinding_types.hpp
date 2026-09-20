@@ -28,6 +28,7 @@ enum class QuaderKeybindingContextKind {
   RadialArrayTool,
   Custom,
   CurveTool,
+  ExtrudeTool,
 };
 
 /**

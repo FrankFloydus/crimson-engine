@@ -12307,6 +12307,18 @@ TEST(ViewportHostInteractionPolicyTests,
       .tool_changed = false,
       .editor_tool_matches_requested = true,
   }));
+  EXPECT_TRUE(should_dispatch_viewport_tool_activation({
+      .activation_requested = true,
+      .tool_changed = false,
+      .editor_tool_matches_requested = true,
+      .repeat_activation_when_active = true,
+  }));
+  EXPECT_FALSE(should_dispatch_viewport_tool_activation({
+      .activation_requested = false,
+      .tool_changed = false,
+      .editor_tool_matches_requested = true,
+      .repeat_activation_when_active = true,
+  }));
 }
 
 TEST(ViewportHostInteractionPolicyTests,

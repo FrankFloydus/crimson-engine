@@ -168,6 +168,7 @@ public:
   [[nodiscard]] OperationReceipt rotate_selection(RotateOptions options);
   [[nodiscard]] OperationReceipt scale_selection(ScaleOptions options);
   [[nodiscard]] OperationReceipt extrude(ExtrudeOptions options);
+  [[nodiscard]] OperationReceipt extrude(FaceExtrudeOptions options);
   [[nodiscard]] OperationReceipt inset(InsetOptions options);
   [[nodiscard]] OperationReceipt mirror_selection(Axis axis);
   [[nodiscard]] OperationReceipt flip_horizontal();
@@ -328,6 +329,7 @@ public:
   [[nodiscard]] Result<OperationReceipt> rotate_selection(RotateOptions options);
   [[nodiscard]] Result<OperationReceipt> scale_selection(ScaleOptions options);
   [[nodiscard]] Result<OperationReceipt> extrude(ExtrudeOptions options);
+  [[nodiscard]] Result<OperationReceipt> extrude(FaceExtrudeOptions options);
   [[nodiscard]] Result<OperationReceipt> inset(InsetOptions options);
   [[nodiscard]] Result<OperationReceipt> mirror_selection(Axis axis);
   [[nodiscard]] Result<OperationReceipt> flip_horizontal();

@@ -80,10 +80,12 @@ struct ViewportNativeToolInteractionFrame final {
   bool left_down = false;
   bool left_released = false;
   QVec2 left_click_local = {};
+  int left_click_count = 1;
   float pointer_drag_threshold_pixels = 4.0f;
   float viewport_pixel_scale = 1.0f;
   bool scene_snap_enabled = false;
   bool grid_snap_enabled = false;
+  double scene_vertex_snap_radius = 0.0;
   const ViewportCurveControlPickingPort *curve_control_picker = nullptr;
   const ViewportPathArraySourcePickingPort *path_array_source_picker = nullptr;
   bool select_backfaces = true;
@@ -113,6 +115,13 @@ struct ViewportNativeToolInteractionResult final {
   std::optional<QVec3> light_creation_world_position;
   bool command_attempted = false;
   CommandResult command_result;
+  /// Releases a deferred native face click to the existing selection owner.
+  bool selection_click_requested = false;
+  QVec2 selection_click_local = {};
+  ViewportModifiers selection_click_modifiers = {};
+  int selection_click_count = 1;
+  bool selection_cycle_depth = false;
+  ViewportModifiers selection_cycle_depth_modifiers = {};
 };
 
 /**

@@ -25,6 +25,8 @@ namespace quader {
 class AssetCommandService;
 class CurveToolService;
 class EditorSelectionService;
+class ExtrudeToolService;
+struct ExtrudeSessionDefaults;
 class LinearArrayToolService;
 class LightCreationToolService;
 class ModelingSessionService;
@@ -84,9 +86,11 @@ public:
   SceneSession();
   explicit SceneSession(SceneContentDocument document);
   explicit SceneSession(
-      std::shared_ptr<PathArraySessionDefaults> path_array_defaults);
+      std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
+      std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults = {});
   SceneSession(std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
-               SceneContentDocument document);
+               SceneContentDocument document,
+               std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults = {});
   ~SceneSession();
 
   SceneSession(const SceneSession &) = delete;
@@ -142,6 +146,8 @@ public:
   const CurveToolService &curve() const { return *curve_; }
   UvPeelToolService &uv_peel() { return *uv_peel_; }
   const UvPeelToolService &uv_peel() const { return *uv_peel_; }
+  ExtrudeToolService &extrude() { return *extrude_; }
+  const ExtrudeToolService &extrude() const { return *extrude_; }
   PrimitiveCreationToolService &primitive_creation() {
     return *primitive_creation_;
   }
@@ -252,6 +258,8 @@ private:
   std::unique_ptr<PathArrayToolService> path_array_;
   std::unique_ptr<CurveToolService> curve_;
   std::unique_ptr<UvPeelToolService> uv_peel_;
+  std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults_;
+  std::unique_ptr<ExtrudeToolService> extrude_;
   std::unique_ptr<PrimitiveCreationToolService> primitive_creation_;
   std::unique_ptr<LightCreationToolService> light_creation_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
@@ -279,6 +287,7 @@ public:
 
 private:
   std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;
+  std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults_;
 };
 
 } // namespace quader

@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -22,6 +23,9 @@ namespace quader::modeling {
 
 struct PolygonDocumentImpl;
 class PolygonDocumentNativeAccess;
+class PreparedFaceExtrusion;
+struct PreparedFaceExtrusionImpl;
+struct FaceExtrusionEvaluation;
 
 /**
  * Enumerates SDK polygon component selection modes.
@@ -354,6 +358,14 @@ public:
   inset_selected_faces(float amount = 0.18F);
   [[nodiscard]] Result<OperationResult>
   extrude_selected_faces(float distance = 0.45F);
+  [[nodiscard]] Result<OperationResult>
+  extrude_selected_faces(const FaceExtrudeOptions &options);
+  /// Captures this source, its allocation cursors, and fixed extrusion topology.
+  /// Reconcile retired IDs before preparing a new extrusion lifecycle.
+  [[nodiscard]] Result<PreparedFaceExtrusion> prepare_face_extrusion(
+      FaceExtrudeMode mode, const Transform3 &extrusion_from_local = {}) const;
+  [[nodiscard]] Result<PolygonFaceExtrudeFrame> selected_face_extrude_frame(
+      const Transform3 &extrusion_from_local = {}) const;
   [[nodiscard]] Result<OperationResult> detach_selected_faces();
   [[nodiscard]] Result<ExtractedPolygonDocument> extract_selected_faces();
   [[nodiscard]] Result<SplitPolygonDocuments>
@@ -368,10 +380,36 @@ public:
 
 private:
   friend class PolygonDocumentNativeAccess;
+  friend class PreparedFaceExtrusion;
 
   explicit PolygonDocument(std::unique_ptr<PolygonDocumentImpl> impl);
 
   std::unique_ptr<PolygonDocumentImpl> impl_;
+};
+
+/** An evaluated candidate and its complete receipt relative to the captured source. */
+struct FaceExtrusionEvaluation {
+  PolygonDocument document;
+  OperationResult receipt;
+};
+
+/**
+ * Immutable prepared extrusion; all nonzero evaluations retain its generated IDs.
+ * Zero returns the original source. Once a host publishes zero or retires this
+ * topology, it must reconcile allocation high-water and prepare a new lifecycle.
+ * Failures specific to nonzero extrusion are reported by evaluate(), allowing
+ * zero to preserve otherwise valid source geometry with cancelling normals.
+ * Evaluation never changes an earlier candidate or the preparation on failure.
+ */
+class PreparedFaceExtrusion final {
+public:
+  [[nodiscard]] bool valid() const noexcept { return impl_ != nullptr; }
+  [[nodiscard]] Result<FaceExtrusionEvaluation> evaluate(
+      float amount, std::optional<Vec3> region_direction = {}) const;
+
+private:
+  friend class PolygonDocument;
+  std::shared_ptr<const PreparedFaceExtrusionImpl> impl_;
 };
 
 /**

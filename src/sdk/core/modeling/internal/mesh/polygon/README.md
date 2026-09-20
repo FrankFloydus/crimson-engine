@@ -62,3 +62,24 @@ corner attributes, selection identity and loose vertices. The fixed native Move 
 0.001 local units; previews stay outside this operation. Unlike the explicit Merge by Distance
 command, auto-merge never relocates the survivor to a centroid. Its topology and SDK receipt
 contracts are covered by the auto-merge document-operation and SDK consumer suites.
+
+Dedicated face extrusion uses the typed `FaceExtrudeOptions` contract and the shared cap/wall
+builder in `quader_poly_document_surface_operations.cpp`. Its affine operation space owns both
+the amount metric and geometric winding, including mirrored transforms. Region displacement
+uses equal unit-face weights; Along Normals uses selected corner-angle weights with unit-length
+vertex displacement. Region modes retain fully open source regions; Individual keeps independent
+caps attached to their original base edges. The options path validates authored connectivity,
+identities and finite attributes atomically. Selected source/result caps must triangulate in an
+anchored, normalized face metric; document location and uniform scale do not change this check.
+Finite thin or tangent side walls remain authored faces, and unchanged unselected geometric
+defects remain intact. Strict document diagnostics and the older vector/float routes retain
+their behavior. Coverage lives in
+`QdrDocumentOperationExtrudeFacesTests` and `ModelingSdkFaceExtrudeTests`.
+
+Prepared face extrusion retains one immutable source, a zero-displacement topology template,
+and the captured operation-space directions. Preparation validates source and connectivity;
+each signed sample evaluates absolute positions and validates only its moved caps, wall crossings,
+and position-dependent texture mapping. The template's IDs are stable while it remains live.
+Zero evaluates to the source; publishing zero or retiring a generation requires a fresh preparation
+above the observed allocation high-water. The public SDK evaluator returns both the candidate and
+the complete source-relative receipt, leaving preview publication and history with the session.

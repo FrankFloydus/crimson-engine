@@ -153,12 +153,14 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
        {"api", "assets", "core", "editor_interactions", "editor_metadata",
         "editor_modeling", "editor_tools", "viewport"}},
       {"editor_modeling",
-       // Peel coordinates modeling previews and chronological history, like
-       // primitive creation; its placement beside viewport tools does not
+       // Peel and extrusion coordinate modeling and chronological history, like
+       // primitive creation; their placement beside viewport tools does not
        // grant the generic pointer/catalog layer access to history owners.
        {"src/editor/modeling/",
         "src/editor/tools/uv_peel_tool_service.cpp",
-        "src/editor/tools/uv_peel_tool_service.hpp"},
+        "src/editor/tools/uv_peel_tool_service.hpp",
+        "src/editor/tools/extrude_tool_service.cpp",
+        "src/editor/tools/extrude_tool_service.hpp"},
        {"assets", "core", "diagnostics", "editor_commands", "editor_history",
         "editor_interactions", "editor_metadata", "editor_modeling",
         "editor_projection", "editor_selection", "editor_tools",

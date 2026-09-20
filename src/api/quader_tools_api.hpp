@@ -21,6 +21,13 @@
 
 namespace quader {
 
+/// Selects the geometry mode when starting a new dedicated extrusion.
+enum class QuaderExtrudeMode {
+  Region,
+  AlongNormals,
+  Individual,
+};
+
 /**
  * Describes optional history behavior for one numeric Tool Settings edit.
  *
@@ -44,6 +51,8 @@ public:
 
     QuaderApiVoidResult activate(std::string_view tool_id);
     QuaderApiVoidResult activate(ViewportToolId tool);
+    /// Starts a new extrusion with this mode while retaining the remembered amount.
+    QuaderApiVoidResult activate_extrude(QuaderExtrudeMode mode);
     [[nodiscard]] bool can_activate(std::string_view tool_id) const;
     [[nodiscard]] bool can_activate(ViewportToolId tool) const;
     /** Enters primitive placement with the requested shape selected atomically. */

@@ -536,6 +536,59 @@ bool ModelingSdkTransformHistoryDelta::valid() const noexcept {
   return impl_ != nullptr && !impl_->objects.empty();
 }
 
+[[nodiscard]] bool same_polygon_selection(
+    const PolygonSelectionSnapshot &left,
+    const PolygonSelectionSnapshot &right) {
+  return left.kind == right.kind && left.vertices == right.vertices &&
+         left.edges == right.edges && left.faces == right.faces &&
+         left.has_active == right.has_active &&
+         left.active_vertex == right.active_vertex &&
+         left.active_edge == right.active_edge &&
+         left.active_face == right.active_face;
+}
+
+/// Keeps source documents private to the publication owner across adjustments.
+struct ModelingFaceExtrusionSource::Impl {
+  /// Revision proofs are bookkeeping; all source documents remain immutable.
+  struct Fence {
+    std::uint64_t content = 0;
+    std::uint64_t selection = 0;
+    std::uint64_t mesh_bindings = 0;
+    std::uint64_t assets = 0;
+    std::uint64_t object_map = 0;
+    std::uint64_t transforms = 0;
+    ModelingInstanceEditScope scope;
+    friend bool operator==(const Fence &, const Fence &) = default;
+  };
+  struct Object {
+    ObjectId object{};
+    int native_id = kInvalidModelingObjectId;
+    EntityId entity = kInvalidEntityId;
+    modeling::Transform3 world_from_local{};
+    PolygonDocument document;
+  };
+
+  const void *owner = nullptr;
+  std::uint64_t generation = 0;
+  std::vector<Object> objects;
+  QVec3 direction_world{};
+  mutable Fence fence;
+  struct Request {
+    modeling::FaceExtrudeMode mode = modeling::FaceExtrudeMode::Region;
+    float amount = 0.0f;
+    QVec3 direction{};
+  };
+  mutable std::optional<Request> last_request;
+};
+
+ModelingFaceExtrusionSource::ModelingFaceExtrusionSource(
+    std::shared_ptr<const Impl> impl)
+    : impl_(std::move(impl)) {}
+
+bool ModelingFaceExtrusionSource::valid() const noexcept {
+  return impl_ != nullptr && !impl_->objects.empty();
+}
+
 /// Implements one workspace-scoped SDK session and its host projection map.
 class ModelingSdkProjectionAdapter::Impl final {
 private:
@@ -582,6 +635,14 @@ private:
     std::unordered_map<std::uint32_t, QVec3> base_positions;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
         face_vertices;
+  };
+
+  /// Immutable SDK preparation and cancellation origin for one drag participant.
+  struct FaceExtrusionPreviewObject {
+    ObjectId object;
+    PolygonDocument baseline;
+    modeling::FaceExtrudeMode mode = modeling::FaceExtrudeMode::Region;
+    std::optional<modeling::PreparedFaceExtrusion> prepared;
   };
 
   [[nodiscard]] static Result<OperationResult>
@@ -737,6 +798,8 @@ private:
     PreviewId preview{};
     std::string operation_id;
     std::uint64_t preview_content_revision = 0U;
+    // Derived during the existing participant walk, never a separate counter.
+    std::uint64_t polygon_content_revision = 0U;
     std::vector<PreviewSdkObjectFence> preview_objects;
 
     friend bool operator==(const PreviewSdkFence &,
@@ -902,6 +965,11 @@ public:
     modeling_object_world_transform_resolver_ = std::move(resolver);
   }
 
+  void set_instance_edit_scope_provider(
+      std::function<ModelingInstanceEditScope()> provider) {
+    instance_edit_scope_provider_ = std::move(provider);
+  }
+
   void set_modeling_object_texture_sampling_resolver(
       std::function<std::optional<QMat4>(int)> resolver) {
     modeling_object_texture_sampling_resolver_ = std::move(resolver);
@@ -929,6 +997,7 @@ public:
   }
 
   void reset_from_scene() {
+    ++face_extrusion_generation_;
     ++stats_.full_scene_reset_count;
     // Workspace replacement allocates fresh SDK objects. Retain only allocation
     // cursors from still-matching native identities, including canceled preview
@@ -964,6 +1033,8 @@ public:
     curve_preview_sharing_proof_ = {};
     transient_transform_payload_participants_.clear();
     transient_transform_payload_active_ = false;
+    face_extrusion_preview_objects_.clear();
+    clear_face_extrusion_preview_projection();
     committed_transform_history_delta_ = {};
     committed_transform_undo_mark_.reset();
     ++transient_transform_payload_revision_;
@@ -1197,8 +1268,42 @@ public:
     return &session_;
   }
 
+  [[nodiscard]] std::uint64_t selection_overlay_preview_signature() const noexcept {
+    if (!mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->fence_acknowledged ||
+        !session_.preview_active(mesh_preview_host_baseline_->preview_id)) {
+      return 0U;
+    }
+    const auto &fence = mesh_preview_host_baseline_->acknowledged_sdk;
+    if (fence.polygon_content_revision == 0U) {
+      return 0U;
+    }
+    std::uint64_t signature = 1469598103934665603ULL;
+    signature = (signature ^ fence.preview.index) * 1099511628211ULL;
+    signature = (signature ^ fence.preview.generation) * 1099511628211ULL;
+    return (signature ^ fence.polygon_content_revision) * 1099511628211ULL;
+  }
+
+  /// Read the visible extrusion candidate without replacing its durable asset.
+  [[nodiscard]] Result<PolygonDocument>
+  query_polygon_document(ObjectId object) const {
+    if (face_extrusion_preview_active() &&
+        std::ranges::find(face_extrusion_preview_objects_, object,
+                          &FaceExtrusionPreviewObject::object) !=
+            face_extrusion_preview_objects_.end()) {
+      return session_.preview_document_copy(session_.preview_summary().id, object);
+    }
+    return session_.document_copy(object);
+  }
+
   [[nodiscard]] std::optional<MeshAsset>
   compile_object_mesh(int modeling_object_id) const {
+    const auto extrusion = std::ranges::find(
+        face_extrusion_preview_meshes_, modeling_object_id,
+        &ModelingToolPreviewMesh::source_object_id);
+    if (extrusion != face_extrusion_preview_meshes_.end()) {
+      return extrusion->mesh;
+    }
     const std::optional<EntityId> entity =
         object_map_.entity_for_modeling_object(modeling_object_id);
     const MeshComponent *binding =
@@ -1413,6 +1518,12 @@ public:
       const MeshAsset *mesh = binding != nullptr
                                   ? assets_.mesh(binding->mesh)
                                   : nullptr;
+      const auto extrusion = std::ranges::find(
+          face_extrusion_preview_meshes_, native_id,
+          &ModelingToolPreviewMesh::source_object_id);
+      if (extrusion != face_extrusion_preview_meshes_.end()) {
+        mesh = &extrusion->mesh;
+      }
       if (!entity.has_value() || !scene_.exists(*entity) || mesh == nullptr ||
           !mesh->has_authored_polygon_document ||
           !mesh->authored_polygon_document) {
@@ -1431,7 +1542,11 @@ public:
       object.selected = summary != summaries.end() && summary->selected;
       object.document.share(mesh->authored_polygon_document);
 
-      Result<PolygonDocument> document = session_.document_copy(object_id);
+      Result<PolygonDocument> document =
+          extrusion != face_extrusion_preview_meshes_.end()
+              ? session_.preview_document_copy(session_.preview_summary().id,
+                                               object_id)
+              : session_.document_copy(object_id);
       if (document.ok()) {
         const PolygonSelectionSnapshot selected = document.value().selection();
         switch (selected.kind) {
@@ -2417,6 +2532,509 @@ public:
         },
         "Modeling mesh document could not be replaced.", false, false, false,
         preserve_selection, preserve_selection);
+  }
+
+  [[nodiscard]] ModelingFaceExtrusionSource::Impl::Fence
+  face_extrusion_fence() const {
+    return {.content = session_.content_revision(),
+            .selection = selection_revision(),
+            .mesh_bindings = scene_.mesh_binding_revision(),
+            .assets = assets_.revision(),
+            .object_map = object_map_.revision(),
+            .transforms = scene_.transform_revision(),
+            .scope = instance_edit_scope_provider_
+                         ? instance_edit_scope_provider_()
+                         : ModelingInstanceEditScope{}};
+  }
+
+  [[nodiscard]] ModelingFaceExtrusionSourceResult
+  capture_face_extrusion_source() const {
+    if (preview_active()) {
+      return {.message = "Commit or cancel the active preview first."};
+    }
+    if (selection_mode_ != ModelingSelectionMode::Face) {
+      return {.ok = true};
+    }
+    const std::vector<ObjectId> selected = selected_component_objects();
+    if (selected.empty()) {
+      return {.ok = true};
+    }
+    auto documents = session_.document_copies(selected);
+    if (!documents.ok()) {
+      return {.message = documents.error_message()};
+    }
+    auto source = std::make_shared<ModelingFaceExtrusionSource::Impl>();
+    source->owner = this;
+    source->generation = face_extrusion_generation_;
+    source->fence = face_extrusion_fence();
+    ModelingFaceExtrusionSourceResult result;
+    std::size_t vertex_count = 0;
+    QVec3 summed_normal{};
+    QVec3 fallback_normal{};
+    for (std::size_t index = 0; index < selected.size(); ++index) {
+      PolygonDocument &document = documents.value()[index];
+      if (document.selection().faces.empty()) {
+        continue;
+      }
+      const auto native = native_object(selected[index]);
+      const auto entity = native.has_value()
+                              ? object_map_.entity_for_modeling_object(*native)
+                              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() ||
+          !scene_.exists(*entity) || scene_.mesh(*entity) == nullptr ||
+          scene_.is_effectively_locked(*entity)) {
+        return {.message = "A selected extrusion mesh is not editable."};
+      }
+      const auto world = modeling_object_world_transform_resolver_
+                             ? modeling_object_world_transform_resolver_(*native)
+                             : std::optional{scene_.world_transform_matrix(*entity)};
+      if (!world.has_value()) {
+        return {.message = "An extrusion occurrence transform is unavailable."};
+      }
+      const auto frame = document.selected_face_extrude_frame(to_sdk(*world));
+      if (!frame.ok()) {
+        return {.message = frame.error_message()};
+      }
+      const auto &value = frame.value();
+      result.center_world += QVec3{value.center.x, value.center.y, value.center.z} *
+                             static_cast<float>(value.vertex_count);
+      vertex_count += value.vertex_count;
+      result.face_count += value.face_count;
+      summed_normal += QVec3{value.summed_normal.x, value.summed_normal.y,
+                            value.summed_normal.z};
+      if (source->objects.empty() || *native == active_native_object_id_) {
+        fallback_normal = {value.active_normal.x, value.active_normal.y,
+                           value.active_normal.z};
+      }
+      source->objects.push_back({.object = selected[index],
+                                  .native_id = *native,
+                                  .entity = *entity,
+                                  .world_from_local = to_sdk(*world),
+                                  .document = std::move(document)});
+    }
+    if (result.face_count == 0) {
+      return {.ok = true};
+    }
+    const float normal_length = length(summed_normal);
+    result.direction_world = normal_length > 1.0e-6f
+                                 ? summed_normal / normal_length
+                                 : fallback_normal;
+    result.handle_direction_world = normal_length > 1.0e-6f
+                                        ? result.direction_world
+                                        : QVec3{0.0f, 1.0f, 0.0f};
+    result.center_world = result.center_world / static_cast<float>(vertex_count);
+    source->direction_world = result.direction_world;
+    result.source = ModelingFaceExtrusionSource{std::move(source)};
+    result.ok = true;
+    return result;
+  }
+
+  [[nodiscard]] bool face_extrusion_source_current(
+      const ModelingFaceExtrusionSource &source) const {
+    return source.valid() && source.impl_->owner == this &&
+           source.impl_->generation == face_extrusion_generation_ &&
+           source.impl_->fence == face_extrusion_fence();
+  }
+
+  [[nodiscard]] bool face_extrusion_source_live(
+      const ModelingFaceExtrusionSource &source) const {
+    if (!face_extrusion_source_current(source)) {
+      return false;
+    }
+    for (const auto &entry : source.impl_->objects) {
+      if (sdk_object(entry.native_id) != std::optional{entry.object} ||
+          object_map_.entity_for_modeling_object(entry.native_id) !=
+              std::optional{entry.entity} ||
+          !scene_.exists(entry.entity) || scene_.mesh(entry.entity) == nullptr ||
+          assets_.mesh(scene_.mesh(entry.entity)->mesh) == nullptr ||
+          scene_.is_effectively_locked(entry.entity)) {
+        return false;
+      }
+      const auto world = modeling_object_world_transform_resolver_
+                             ? modeling_object_world_transform_resolver_(entry.native_id)
+                             : std::optional{scene_.world_transform_matrix(entry.entity)};
+      if (!world.has_value() ||
+          !same_transform_request(entry.world_from_local, to_sdk(*world))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  [[nodiscard]] Result<OperationResult> prepare_face_extrusion_document(
+      const ModelingFaceExtrusionSource::Impl::Object &entry,
+      PolygonDocument &document, modeling::FaceExtrudeMode mode,
+      float amount_internal, QVec3 world_direction) const {
+    PolygonDocument candidate = entry.document;
+    // Existing source cap faces keep their IDs. Newly regenerated walls and
+    // vertices must not alias IDs retired by a previous extrusion candidate.
+    candidate.preserve_identity_high_water(document);
+    auto result = candidate.extrude_selected_faces({
+        .mode = mode,
+        .amount = amount_internal,
+        .region_direction = to_sdk(world_direction),
+        .extrusion_from_local = entry.world_from_local});
+    if (!result.ok() || !result.value().success) {
+      return result;
+    }
+    auto &receipt = result.value();
+    receipt.changed = !candidate.has_same_geometry(document) ||
+                      !same_polygon_selection(candidate.selection(),
+                                              document.selection());
+    if (receipt.changed) {
+      receipt.dirty = {.topology = true, .geometry = true, .selection = true,
+                       .materials = true, .overlays = true};
+    }
+    document = std::move(candidate);
+    return result;
+  }
+
+  [[nodiscard]] bool same_face_extrusion_request(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      float amount, QVec3 direction) const {
+    const auto &last = source.impl_->last_request;
+    return last.has_value() && last->mode == mode && last->amount == amount &&
+           last->direction.x == direction.x && last->direction.y == direction.y &&
+           last->direction.z == direction.z;
+  }
+
+  [[nodiscard]] ModelingCommandResult validate_face_extrusion(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction) const {
+    if (preview_active() || !face_extrusion_source_live(source)) {
+      return failure("The extrusion source is no longer available.");
+    }
+    if (!std::isfinite(amount_internal) ||
+        std::abs(amount_internal) > std::numeric_limits<float>::max()) {
+      return failure("Extrusion amount must be finite.");
+    }
+    for (const auto &entry : source.impl_->objects) {
+      auto current = session_.document_copy(entry.object);
+      if (!current.ok()) {
+        return failure(current.error_message());
+      }
+      auto prepared = prepare_face_extrusion_document(
+          entry, current.value(), mode, static_cast<float>(amount_internal),
+          world_direction.value_or(source.impl_->direction_world));
+      if (!prepared.ok() || !prepared.value().success) {
+        return from_sdk(prepared, "Extrusion preparation failed.");
+      }
+    }
+    return {.ok = true};
+  }
+
+  [[nodiscard]] ModelingCommandResult apply_face_extrusion(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction) {
+    if (preview_active() || !face_extrusion_source_live(source)) {
+      return failure("The extrusion source is no longer available.");
+    }
+    if (!std::isfinite(amount_internal) ||
+        std::abs(amount_internal) > std::numeric_limits<float>::max()) {
+      return failure("Extrusion amount must be finite.");
+    }
+    const QVec3 direction = world_direction.value_or(source.impl_->direction_world);
+    if (same_face_extrusion_request(source, mode,
+                                    static_cast<float>(amount_internal), direction)) {
+      return {.ok = true};
+    }
+    std::vector<ObjectId> objects;
+    objects.reserve(source.impl_->objects.size());
+    for (const auto &entry : source.impl_->objects) {
+      objects.push_back(entry.object);
+    }
+    auto result = mutate_documents_by_object(
+        objects,
+        [this, &source, mode, amount_internal, world_direction](
+            ObjectId object, PolygonDocument &document) {
+          const auto entry = std::ranges::find(source.impl_->objects, object,
+              &ModelingFaceExtrusionSource::Impl::Object::object);
+          return prepare_face_extrusion_document(
+              *entry, document, mode, static_cast<float>(amount_internal),
+              world_direction.value_or(source.impl_->direction_world));
+        },
+        "Extrusion could not be published.", false, false, false, true);
+    if (result.ok) {
+      source.impl_->fence = face_extrusion_fence();
+      source.impl_->last_request = ModelingFaceExtrusionSource::Impl::Request{
+          .mode = mode, .amount = static_cast<float>(amount_internal),
+          .direction = direction};
+    }
+    return result;
+  }
+
+  [[nodiscard]] ModelingCommandResult begin_face_extrusion_preview(
+      const ModelingFaceExtrusionSource &source, bool adjust_existing = false,
+      const ModelingFaceExtrusionSource &retained_cancellation_source = {}) {
+    if (preview_active() || !face_extrusion_source_live(source) ||
+        (retained_cancellation_source.valid() &&
+         !face_extrusion_source_live(retained_cancellation_source))) {
+      return failure("The extrusion source cannot begin a preview.");
+    }
+    std::vector<ObjectId> objects;
+    PreparedMeshPreviewBatch prepared;
+    std::vector<FaceExtrusionPreviewObject> preview_objects;
+    for (const auto &entry : source.impl_->objects) {
+      auto current = session_.document_copy(entry.object);
+      if (!current.ok()) {
+        return failure(current.error_message());
+      }
+      if (!adjust_existing &&
+          (!entry.document.has_same_geometry(current.value()) ||
+           !same_polygon_selection(entry.document.selection(),
+                                   current.value().selection()))) {
+        return failure("Select current faces before beginning an extrusion drag.");
+      }
+      objects.push_back(entry.object);
+      preview_objects.push_back({.object = entry.object,
+                                 .baseline = current.value()});
+      prepared.updates.push_back({.object = entry.object,
+                                 // Cancellation keeps allocation cursors above
+                                 // all retired preview IDs. The source geometry
+                                 // is unchanged, but its old cursors are stale.
+                                 .document = std::move(current).value(),
+                                 .receipt = {.success = true}});
+    }
+    auto begun = begin_prepared_mesh_preview_transaction(
+        objects, std::move(prepared), "face_extrusion");
+    if (begun.ok) {
+      face_extrusion_preview_objects_ = std::move(preview_objects);
+      clear_face_extrusion_preview_projection();
+      face_extrusion_preview_source_ = source.impl_;
+      // A new gesture advances owner revisions even when canceled. Register
+      // only the prior source proven current before begin; compensation may
+      // refresh its fence without making arbitrary stale sources eligible.
+      face_extrusion_retained_cancellation_source_ =
+          retained_cancellation_source.impl_;
+      face_extrusion_preview_request_before_ = source.impl_->last_request;
+      source.impl_->fence = face_extrusion_fence();
+      if (!adjust_existing) {
+        source.impl_->last_request.reset();
+      }
+    } else if (!begun.changed && !preview_active()) {
+      source.impl_->fence = face_extrusion_fence();
+      if (retained_cancellation_source.valid()) {
+        retained_cancellation_source.impl_->fence = face_extrusion_fence();
+      }
+    }
+    return begun;
+  }
+
+  [[nodiscard]] bool face_extrusion_preview_active() const {
+    return preview_active() && active_preview_operation_id_ == "face_extrusion";
+  }
+
+  [[nodiscard]] std::vector<ModelingToolPreviewMesh>
+  face_extrusion_preview_meshes() const {
+    return face_extrusion_preview_meshes_;
+  }
+
+  [[nodiscard]] std::uint64_t face_extrusion_preview_revision() const {
+    return face_extrusion_preview_revision_;
+  }
+
+  void clear_face_extrusion_preview_projection() {
+    if (!face_extrusion_preview_meshes_.empty()) {
+      face_extrusion_preview_meshes_.clear();
+      ++face_extrusion_preview_revision_;
+    }
+  }
+
+  /// Publishes only derived render data; authored candidates stay in the SDK.
+  [[nodiscard]] bool project_face_extrusion_preview() {
+    QDR_PROFILE_SCOPE("Extrusion preview derive dynamic meshes");
+    const auto payload = session_.preview_transaction_payload();
+    if (!payload.ok() || !face_extrusion_preview_source_) {
+      return false;
+    }
+    std::vector<ModelingToolPreviewMesh> meshes;
+    meshes.reserve(payload.value().objects.size());
+    for (const auto &object : payload.value().objects) {
+      const auto entry = std::ranges::find(
+          face_extrusion_preview_source_->objects, object.object_id,
+          &ModelingFaceExtrusionSource::Impl::Object::object);
+      const auto *compiled =
+          std::get_if<modeling::ToolPreviewPayload>(&object.payload);
+      if (entry == face_extrusion_preview_source_->objects.end() ||
+          compiled == nullptr || !compiled->valid) {
+        return false;
+      }
+      const auto document = session_.preview_document_copy(payload.value().id,
+                                                           object.object_id);
+      const auto *binding = scene_.mesh(entry->entity);
+      const auto *current = binding != nullptr ? assets_.mesh(binding->mesh) : nullptr;
+      if (!document.ok() || current == nullptr) {
+        return false;
+      }
+      auto mesh = MeshProjectionService::mesh_asset_from_sdk_payload(
+          compiled->mesh, document.value());
+      if (!mesh.has_value() || !assets_.validate_mesh(*mesh).ok) {
+        return false;
+      }
+      mesh->name = current->name;
+      auto positions = std::make_shared<std::vector<QVec3>>();
+      positions->reserve(mesh->geometry().vertices.size());
+      for (const auto &vertex : mesh->geometry().vertices) {
+        positions->push_back(vertex.position);
+      }
+      const auto *material = scene_.material(entry->entity);
+      const auto layout = transform_mesh_layout_key(object.object_id,
+                                                     mesh->geometry().vertices);
+      meshes.push_back({
+          .source_object_id = entry->native_id,
+          .source_entity = entry->entity,
+          .material = material != nullptr ? *material : MaterialComponent{},
+          .mesh = std::move(*mesh),
+          .transform = modeling_object_world_transform_resolver_
+                           ? modeling_object_world_transform_resolver_(entry->native_id)
+                                 .value_or(scene_.world_transform_matrix(entry->entity))
+                           : scene_.world_transform_matrix(entry->entity),
+          .double_sided = binding->double_sided,
+          .dynamic_positions = true,
+          .suppress_source = true,
+          .layout_key = layout,
+          .position_revision = object.content_revision,
+          .dynamic_position_payload = std::move(positions)});
+    }
+    face_extrusion_preview_meshes_ = std::move(meshes);
+    ++face_extrusion_preview_revision_;
+    return true;
+  }
+
+  [[nodiscard]] ModelingCommandResult update_face_extrusion_preview(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction) {
+    if (!face_extrusion_preview_active() ||
+        face_extrusion_preview_source_ != source.impl_ ||
+        !face_extrusion_source_live(source)) {
+      return failure("No matching extrusion preview is active.");
+    }
+    if (!std::isfinite(amount_internal) ||
+        std::abs(amount_internal) > std::numeric_limits<float>::max()) {
+      return failure("Extrusion amount must be finite.");
+    }
+    const auto preview = session_.preview_summary();
+    const QVec3 direction = world_direction.value_or(source.impl_->direction_world);
+    if (same_face_extrusion_request(source, mode,
+                                    static_cast<float>(amount_internal), direction)) {
+      return {.ok = true};
+    }
+    if (!preflight_preview_mutation(preview.id)) {
+      return failure("Extrusion preview participants changed outside the gesture.");
+    }
+    PreparedMeshPreviewBatch prepared;
+    auto next_objects = face_extrusion_preview_objects_;
+    const float amount = static_cast<float>(amount_internal);
+    for (std::size_t index = 0; index < source.impl_->objects.size(); ++index) {
+      const auto &entry = source.impl_->objects[index];
+      auto current = session_.preview_document_copy(preview.id, entry.object);
+      if (!current.ok()) {
+        return failure(current.error_message());
+      }
+      auto &participant = next_objects[index];
+      if (!participant.prepared.has_value() || participant.mode != mode) {
+        PolygonDocument origin = entry.document;
+        origin.preserve_identity_high_water(current.value());
+        auto operation = origin.prepare_face_extrusion(mode, entry.world_from_local);
+        if (!operation.ok()) {
+          return failure(operation.error_message());
+        }
+        participant.prepared = std::move(operation).value();
+        participant.mode = mode;
+      }
+      auto evaluated = participant.prepared->evaluate(amount, to_sdk(direction));
+      if (!evaluated.ok() || !evaluated.value().receipt.success) {
+        return failure(evaluated.ok() ? evaluated.value().receipt.message
+                                     : evaluated.error_message());
+      }
+      auto document = std::move(evaluated.value().document);
+      auto receipt = std::move(evaluated.value().receipt);
+      if (amount == 0.0F) {
+        document.preserve_identity_high_water(current.value());
+        participant.prepared.reset();
+        receipt.dirty = {.topology = true, .geometry = true, .selection = true,
+                         .materials = true, .overlays = true};
+      }
+      // The SDK receipt is relative to the immutable extrusion source. A redo
+      // drag may instead begin at a committed extrusion, including when zero
+      // removes it. Exact cancellation-origin equivalence is checked once on
+      // release, without parsing whole meshes for every pointer sample.
+      receipt.changed = true;
+      prepared.changed = true;
+      prepared.updates.push_back({.object = entry.object,
+                                 .document = std::move(document),
+                                 .receipt = std::move(receipt)});
+    }
+    const auto request_before = face_extrusion_preview_request_before_;
+    const auto retained_source = face_extrusion_retained_cancellation_source_;
+    auto result = update_prepared_mesh_preview_transaction(
+        std::move(prepared), "Extrusion preview updated.", true);
+    if (result.ok) {
+      face_extrusion_preview_objects_ = std::move(next_objects);
+      source.impl_->fence = face_extrusion_fence();
+      source.impl_->last_request = ModelingFaceExtrusionSource::Impl::Request{
+          .mode = mode, .amount = static_cast<float>(amount_internal),
+          .direction = direction};
+    } else if (!result.changed && !face_extrusion_preview_active()) {
+      // The bounded publication owner already compensated this failed update
+      // to the gesture baseline. The same source may still adjust that result.
+      source.impl_->fence = face_extrusion_fence();
+      source.impl_->last_request = request_before;
+      if (retained_source) {
+        retained_source->fence = face_extrusion_fence();
+      }
+    }
+    return result;
+  }
+
+  [[nodiscard]] ModelingCommandResult commit_face_extrusion_preview() {
+    if (!face_extrusion_preview_active()) {
+      return failure("No extrusion preview is active.");
+    }
+    const auto preview = session_.preview_summary();
+    bool changed = false;
+    for (const auto &entry : face_extrusion_preview_objects_) {
+      const auto current = session_.preview_document_copy(preview.id, entry.object);
+      if (!current.ok()) {
+        return failure(current.error_message());
+      }
+      changed = changed || !current.value().has_same_geometry(entry.baseline) ||
+                !same_polygon_selection(current.value().selection(),
+                                        entry.baseline.selection());
+    }
+    preview_changed_ = changed;
+    const auto source = face_extrusion_preview_source_;
+    const auto retained_source = face_extrusion_retained_cancellation_source_;
+    const auto request_before = face_extrusion_preview_request_before_;
+    auto result = commit_translate_preview();
+    if (result.ok && source) {
+      source->fence = face_extrusion_fence();
+    } else if (!result.changed && !preview_active() && source) {
+      source->fence = face_extrusion_fence();
+      source->last_request = request_before;
+    }
+    if (!result.changed && !preview_active() && retained_source) {
+      retained_source->fence = face_extrusion_fence();
+    }
+    return result;
+  }
+
+  [[nodiscard]] ModelingCommandResult cancel_face_extrusion_preview() {
+    if (!face_extrusion_preview_active()) {
+      return {.ok = true};
+    }
+    const auto source = face_extrusion_preview_source_;
+    const auto retained_source = face_extrusion_retained_cancellation_source_;
+    const auto request_before = face_extrusion_preview_request_before_;
+    auto result = cancel_translate_preview();
+    if (result.ok && source) {
+      source->fence = face_extrusion_fence();
+      source->last_request = request_before;
+    }
+    if (result.ok && retained_source) {
+      retained_source->fence = face_extrusion_fence();
+    }
+    return result;
   }
 
   [[nodiscard]] ModelingCommandResult execute_operation(
@@ -7237,7 +7855,8 @@ public:
       }
       preview_changed_ = true;
     }
-    if ((transient_transform_payload_active_ || prepared_document_changes) &&
+    if ((transient_transform_payload_active_ || prepared_document_changes ||
+         face_extrusion_preview_active()) &&
         !project_preview_object(true, true)) {
       return abort_preview_publication(
           preview.id,
@@ -7446,7 +8065,7 @@ public:
       Result<PolygonDocument> document =
           preview.active && preview.object_id == object.id
               ? session_.preview_document_copy(preview.id)
-              : session_.document_copy(object.id);
+              : query_polygon_document(object.id);
       if (!document.ok()) {
         continue;
       }
@@ -7567,7 +8186,7 @@ public:
       Result<PolygonDocument> document =
           preview.active && preview.object_id == object.id
               ? session_.preview_document_copy(preview.id)
-              : session_.document_copy(object.id);
+              : query_polygon_document(object.id);
       if (!document.ok()) {
         continue;
       }
@@ -7674,7 +8293,7 @@ public:
         exported.objects.push_back(std::move(object));
         continue;
       }
-      Result<PolygonDocument> document = session_.document_copy(object_id);
+      Result<PolygonDocument> document = query_polygon_document(object_id);
       Result<AuthoredTopology> topology =
           document.ok() ? document.value().authored_topology()
                         : Result<AuthoredTopology>::failure(
@@ -7765,7 +8384,7 @@ public:
         Result<PolygonDocument> document =
             preview.active && preview.object_id == object.id
                 ? session_.preview_document_copy(preview.id)
-                : session_.document_copy(object.id);
+                : query_polygon_document(object.id);
         if (!document.ok()) {
           continue;
         }
@@ -11759,6 +12378,10 @@ private:
     fence.preview_objects.reserve(preview.objects.size());
     for (const modeling::PreviewTransactionObjectSummary &object :
          preview.objects) {
+      if (object.kind == modeling::SessionObjectKind::Mesh) {
+        fence.polygon_content_revision =
+            std::max(fence.polygon_content_revision, object.content_revision);
+      }
       fence.preview_objects.push_back({
           .object = object.object_id,
           .action = object.action,
@@ -12194,7 +12817,9 @@ private:
     const bool publish_host_projection =
         preview_changed_ || prepared.changed || updated.value().changed;
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
-        (publish_host_projection && !project_preview_object())) {
+        (publish_host_projection &&
+         !(face_extrusion_preview_active() ? project_face_extrusion_preview()
+                                           : project_preview_object()))) {
       return abort_preview_publication(
           preview.id, "SDK operation preview publication failed.");
     }
@@ -12865,6 +13490,11 @@ private:
   }
 
   void clear_preview_checkpoints() {
+    face_extrusion_preview_objects_.clear();
+    clear_face_extrusion_preview_projection();
+    face_extrusion_preview_source_.reset();
+    face_extrusion_retained_cancellation_source_.reset();
+    face_extrusion_preview_request_before_.reset();
     mesh_preview_host_baseline_.reset();
     structural_preview_host_state_.reset();
     preview_changed_ = false;
@@ -12886,9 +13516,20 @@ private:
   ModelingMeshSyncService &mesh_sync_;
   std::function<std::optional<QMat4>(int)>
       modeling_object_world_transform_resolver_;
+  std::function<ModelingInstanceEditScope()> instance_edit_scope_provider_;
   std::function<std::optional<QMat4>(int)>
       modeling_object_texture_sampling_resolver_;
   quader::modeling::ModelingSession session_;
+  std::uint64_t face_extrusion_generation_ = 0;
+  std::shared_ptr<const ModelingFaceExtrusionSource::Impl>
+      face_extrusion_preview_source_;
+  std::shared_ptr<const ModelingFaceExtrusionSource::Impl>
+      face_extrusion_retained_cancellation_source_;
+  std::optional<ModelingFaceExtrusionSource::Impl::Request>
+      face_extrusion_preview_request_before_;
+  std::vector<FaceExtrusionPreviewObject> face_extrusion_preview_objects_;
+  std::vector<ModelingToolPreviewMesh> face_extrusion_preview_meshes_;
+  std::uint64_t face_extrusion_preview_revision_ = 0;
   int next_native_object_id_ = 1;
   int active_native_object_id_ = kInvalidModelingObjectId;
   ModelingSelectionMode selection_mode_ = ModelingSelectionMode::Object;
@@ -12951,6 +13592,11 @@ void ModelingSdkProjectionAdapter::set_modeling_object_world_transform_resolver(
 void ModelingSdkProjectionAdapter::set_modeling_object_texture_sampling_resolver(
     std::function<std::optional<QMat4>(int)> resolver) {
   impl_->set_modeling_object_texture_sampling_resolver(std::move(resolver));
+}
+
+void ModelingSdkProjectionAdapter::set_instance_edit_scope_provider(
+    std::function<ModelingInstanceEditScope()> provider) {
+  impl_->set_instance_edit_scope_provider(std::move(provider));
 }
 
 void ModelingSdkProjectionAdapter::reset_from_scene() {
@@ -13118,6 +13764,69 @@ ModelingCommandResult ModelingSdkProjectionAdapter::replace_mesh_document(
     bool preserve_selection) {
   return impl_->replace_mesh_document(modeling_object_id, document,
                                       preserve_selection);
+}
+
+ModelingFaceExtrusionSourceResult
+ModelingSdkProjectionAdapter::capture_face_extrusion_source() const {
+  return impl_->capture_face_extrusion_source();
+}
+
+bool ModelingSdkProjectionAdapter::face_extrusion_source_current(
+    const ModelingFaceExtrusionSource &source) const {
+  return impl_->face_extrusion_source_current(source);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::validate_face_extrusion(
+    const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+    double amount_internal, std::optional<QVec3> world_direction) const {
+  return impl_->validate_face_extrusion(source, mode, amount_internal, world_direction);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_extrusion(
+    const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+    double amount_internal, std::optional<QVec3> world_direction) {
+  return impl_->apply_face_extrusion(source, mode, amount_internal, world_direction);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::begin_face_extrusion_preview(
+    const ModelingFaceExtrusionSource &source,
+    const ModelingFaceExtrusionSource &retained_cancellation_source) {
+  return impl_->begin_face_extrusion_preview(source, false,
+                                           retained_cancellation_source);
+}
+
+ModelingCommandResult
+ModelingSdkProjectionAdapter::begin_face_extrusion_adjustment_preview(
+    const ModelingFaceExtrusionSource &source) {
+  return impl_->begin_face_extrusion_preview(source, true);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::update_face_extrusion_preview(
+    const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+    double amount_internal, std::optional<QVec3> world_direction) {
+  return impl_->update_face_extrusion_preview(source, mode, amount_internal,
+                                            world_direction);
+}
+
+bool ModelingSdkProjectionAdapter::face_extrusion_preview_active() const {
+  return impl_->face_extrusion_preview_active();
+}
+
+std::vector<ModelingToolPreviewMesh>
+ModelingSdkProjectionAdapter::face_extrusion_preview_meshes() const {
+  return impl_->face_extrusion_preview_meshes();
+}
+
+std::uint64_t ModelingSdkProjectionAdapter::face_extrusion_preview_revision() const {
+  return impl_->face_extrusion_preview_revision();
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::commit_face_extrusion_preview() {
+  return impl_->commit_face_extrusion_preview();
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::cancel_face_extrusion_preview() {
+  return impl_->cancel_face_extrusion_preview();
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::execute_operation(
@@ -13547,6 +14256,10 @@ bool ModelingSdkProjectionAdapter::
 
 std::uint64_t ModelingSdkProjectionAdapter::content_revision() const {
   return impl_->content_revision();
+}
+
+std::uint64_t ModelingSdkProjectionAdapter::selection_overlay_preview_signature() const noexcept {
+  return impl_->selection_overlay_preview_signature();
 }
 
 std::uint64_t ModelingSdkProjectionAdapter::selection_revision() const {

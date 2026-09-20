@@ -552,7 +552,7 @@ viewport_input_action_binding_catalog() {
           .shortcut = "V",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "(transformDrag.active || activeTool.move || "
-                  "curveControls.editable)",
+                  "activeTool.extrude || curveControls.editable)",
           .weight = 40,
           .action = ViewportInputActionKind::TransformVertexSnap,
       },
@@ -568,6 +568,45 @@ viewport_input_action_binding_catalog() {
                   "activeTool.linear_array",
           .weight = 40,
           .action = ViewportInputActionKind::ToolConstraintX,
+      },
+      {
+          .target_id =
+              viewport_input_action_target_id("extrude.constraint_x"),
+          .label = "Extrude X Constraint",
+          .localization_key =
+              "keybindings.target.viewport.extrude.constraint_x.label",
+          .context = ViewportInputBindingContext::ExtrudeTool,
+          .shortcut = "X",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.extrude",
+          .weight = 40,
+          .action = ViewportInputActionKind::ToolConstraintX,
+      },
+      {
+          .target_id =
+              viewport_input_action_target_id("extrude.constraint_y"),
+          .label = "Extrude Y Constraint",
+          .localization_key =
+              "keybindings.target.viewport.extrude.constraint_y.label",
+          .context = ViewportInputBindingContext::ExtrudeTool,
+          .shortcut = "Y",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.extrude",
+          .weight = 40,
+          .action = ViewportInputActionKind::ToolConstraintY,
+      },
+      {
+          .target_id =
+              viewport_input_action_target_id("extrude.constraint_z"),
+          .label = "Extrude Z Constraint",
+          .localization_key =
+              "keybindings.target.viewport.extrude.constraint_z.label",
+          .context = ViewportInputBindingContext::ExtrudeTool,
+          .shortcut = "Z",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.extrude",
+          .weight = 40,
+          .action = ViewportInputActionKind::ToolConstraintZ,
       },
       {
           .target_id =

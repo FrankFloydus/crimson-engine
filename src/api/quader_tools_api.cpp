@@ -30,6 +30,7 @@
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/uv_peel_tool_service.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
 #include "scene/scene_document.hpp"
 #include "math/glm_bridge.hpp"
 
@@ -88,6 +89,7 @@ enum class ActiveToolSettingsSourceKind : std::uint8_t {
   Pivot,
   Curve,
   UvPeel,
+  Extrude,
 };
 
 /// Couples a settings owner identity with its monotonic presentation revision.
@@ -145,6 +147,15 @@ MaterialReference primitive_creation_material(
 
 ActiveToolSettingsSource
 active_tool_settings_source(const SceneSession &session) {
+  const ExtrudeToolService &extrude = session.extrude();
+  if (extrude.active()) {
+    return {
+        .identity = &extrude,
+        .revision = extrude.tool_settings_revision(),
+        .dependent_revision = session.modeling().selection_revision(),
+        .kind = ActiveToolSettingsSourceKind::Extrude,
+    };
+  }
   const UvPeelToolService &uv_peel = session.uv_peel();
   if (uv_peel.active()) {
     return {
@@ -566,6 +577,46 @@ QuaderToolSettingControl action_control(std::string id, std::string label) {
       .id = std::move(id),
       .label = std::move(label),
   };
+}
+
+QuaderToolSettingsTarget extrude_tool_settings_target(
+    const ExtrudeToolService &extrude) {
+  const auto mode = extrude.mode();
+  const std::string mode_id =
+      mode == modeling::FaceExtrudeMode::AlongNormals ? "along_normals"
+      : mode == modeling::FaceExtrudeMode::Individual ? "individual" : "region";
+  QuaderToolSettingsTarget result{
+      .active = true,
+      .preview_active = extrude.dragging(),
+      .tool_id = "extrude",
+      .title = "Extrude",
+      .can_reset = !extrude.dragging(),
+      .apply_visible = false,
+      .can_cancel = false,
+  };
+  auto type = choice_control(
+      "extrude.type", "Type", mode_id,
+      {{.id = "region", .label = "Extrude", .value = 0.0},
+       {.id = "along_normals", .label = "Extrude along normals", .value = 1.0},
+       {.id = "individual", .label = "Extrude individually", .value = 2.0}},
+      QuaderToolSettingChoicePresentation::Dropdown);
+  type.enabled = !extrude.dragging();
+  result.controls.push_back(std::move(type));
+  auto amount = number_control(
+      "extrude.amount", "Amount", extrude.amount(),
+      -std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+      0.0001, QuaderToolSettingNumberInteraction::Continuous,
+      QuaderToolSettingNumberPresentation::SpinBoxOnly);
+  amount.enabled = !extrude.dragging();
+  amount.tooltip = "Extrusion distance in displayed scene units. Negative values extrude inward.";
+  result.controls.push_back(std::move(amount));
+  auto action = action_control("extrude.apply", "Extrude");
+  action.enabled = !extrude.dragging() && extrude.has_selected_faces();
+  result.controls.push_back(std::move(action));
+  for (auto &control : result.controls) {
+    control.label_key = "tool_settings." + control.id;
+  }
+  return result;
 }
 
 QuaderToolSettingsTarget uv_peel_tool_settings_target(
@@ -1421,6 +1472,36 @@ QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
   return activate(viewport_tool_catalog_id(tool));
 }
 
+QuaderApiVoidResult QuaderToolsApi::activate_extrude(QuaderExtrudeMode mode) {
+  const QuaderSettingsOperationOriginCapture origin(session_);
+  SceneSession &session = scene_session(session_);
+  if (session.document_commands().property_edit_active()) {
+    return quader_api_failure_status(
+        session, "Finish the active property edit before changing tools.");
+  }
+  modeling::FaceExtrudeMode native_mode;
+  switch (mode) {
+  case QuaderExtrudeMode::Region:
+    native_mode = modeling::FaceExtrudeMode::Region;
+    break;
+  case QuaderExtrudeMode::AlongNormals:
+    native_mode = modeling::FaceExtrudeMode::AlongNormals;
+    break;
+  case QuaderExtrudeMode::Individual:
+    native_mode = modeling::FaceExtrudeMode::Individual;
+    break;
+  default:
+    return quader_api_failure_status(session, "Unknown extrusion mode.");
+  }
+  auto result = api_status_from_command(
+      session, session.native_tools().activate_extrude(native_mode),
+      QuaderMutationKind::Runtime, "Extrude");
+  if (result.ok() && result.changed()) {
+    origin.publish();
+  }
+  return result;
+}
+
 bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
   SceneSession &session = scene_session(session_);
   if (session.document_commands().property_edit_active()) {
@@ -1553,6 +1634,9 @@ QuaderToolsApi::begin_light_creation(QuaderLightType type) {
 
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const SceneSession &session = scene_session(session_);
+  if (session.extrude().active()) {
+    return extrude_tool_settings_target(session.extrude());
+  }
   if (session.uv_peel().active()) {
     return uv_peel_tool_settings_target(session.uv_peel());
   }
@@ -1682,6 +1766,27 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  QuaderToolSettingEditOptions
                                                      options) {
   SceneSession &session = scene_session(session_);
+  if (session.extrude().active()) {
+    if (!tool_id.empty() && tool_id != "extrude") {
+      return quader_api_failure_status(
+          session, "Tool setting does not belong to Extrude.");
+    }
+    if (name == "extrude.amount") {
+      return api_status_from_command(
+          session, session.extrude().set_amount(value),
+          QuaderMutationKind::Modeling, "Set Extrusion Amount");
+    }
+    if (name == "extrude.type" &&
+        (value == 0.0 || value == 1.0 || value == 2.0)) {
+      const auto mode = value == 1.0 ? modeling::FaceExtrudeMode::AlongNormals
+                        : value == 2.0 ? modeling::FaceExtrudeMode::Individual
+                                       : modeling::FaceExtrudeMode::Region;
+      return api_status_from_command(
+          session, session.extrude().set_mode(mode),
+          QuaderMutationKind::Modeling, "Set Extrusion Type");
+    }
+    return quader_api_failure_status(session, "Invalid Extrusion setting.");
+  }
   if (session.uv_peel().active()) {
     if (!tool_id.empty() && tool_id != "uv_peel") {
       return quader_api_failure_status(
@@ -2035,6 +2140,13 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  std::string_view value) {
   SceneSession &session = scene_session(session_);
+  if (session.extrude().active() && name == "extrude.type") {
+    if (value != "region" && value != "along_normals" && value != "individual") {
+      return quader_api_failure_status(session, "Invalid Extrusion type.");
+    }
+    return set_setting(tool_id, name, value == "along_normals" ? 1.0
+                                      : value == "individual" ? 2.0 : 0.0);
+  }
   if (session.uv_peel().active() && name == "uv_peel.axis") {
     if (value != "u" && value != "v") {
       return quader_api_failure_status(session, "Invalid UV Peel axis.");
@@ -2120,6 +2232,16 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
 QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
                                                     std::string_view action_id) {
   SceneSession &session = scene_session(session_);
+  if (tool_id == "extrude" && action_id == "extrude.apply") {
+    const QuaderSettingsOperationOriginCapture origin(session_);
+    auto result = api_status_from_command(
+        session, session.extrude().extrude(),
+        QuaderMutationKind::Modeling, "Extrude");
+    if (result.ok() && result.changed()) {
+      origin.publish();
+    }
+    return result;
+  }
   if (tool_id == kCurveToolId && action_id == kCurveNewAction) {
     return api_status_from_command(session, session.curve().new_curve(),
                                     QuaderMutationKind::Runtime, "New Curve");
@@ -2139,6 +2261,11 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
 
 QuaderApiVoidResult QuaderToolsApi::reset_active_settings() {
   SceneSession &session = scene_session(session_);
+  if (session.extrude().active()) {
+    return api_status_from_command(
+        session, session.extrude().reset_settings(),
+        QuaderMutationKind::Modeling, "Reset Extrusion Settings");
+  }
   if (session.uv_peel().active()) {
     return api_status_from_command(
         session, session.uv_peel().reset_settings(),

@@ -12,6 +12,9 @@ file except through prior written authorization from Francesco Di Blasi.
   belong here. Scene, assets, and modeling remain authoritative; render caches never mutate them.
 - `RenderSourceStamp` gates extraction; `RenderSceneSnapshot` feeds `SceneRenderBridge` and caches.
   Put dirty/revision checks before topology hashes, geometry compilation, snapshots, or uploads.
+- Apply the [preview projection contract](../editor/modeling/runtime/README.md#live-preview-projection-contract)
+  to dynamic meshes and every associated wire, selection, silhouette and depth stream. Stable
+  topology or committed asset revisions do not imply stable preview positions.
 - Snapshot spans need explicit lifetime: pin immutable payloads with their owners, or document and
   enforce same-frame borrowing. Filament asynchronous uploads retain owned bytes until completion;
   use `filament_buffer_descriptor_factory.*` instead of borrowing temporary vectors.

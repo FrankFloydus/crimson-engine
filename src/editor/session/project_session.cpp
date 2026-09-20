@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/session/project_session.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
 
 #include "core/qstr.hpp"
 #include "core/user_config_paths.hpp"
@@ -346,7 +347,8 @@ void rollback_new_project(
 
 ProjectSession::ProjectSession(std::filesystem::path recent_scene_storage)
     : path_array_defaults_(std::make_shared<PathArraySessionDefaults>()),
-      fallback_scene_(path_array_defaults_),
+      extrude_defaults_(std::make_shared<ExtrudeSessionDefaults>()),
+      fallback_scene_(path_array_defaults_, extrude_defaults_),
       recent_scene_store_(recent_scene_storage.empty()
                               ? quader_user_config_directory({}) /
                                     "recent-scenes.json"
@@ -1664,7 +1666,8 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
     std::optional<ProjectRelativePath> path, SceneContentDocument document,
     std::optional<ViewportCameraPose> viewport_camera_pose) {
   auto session = std::make_unique<SceneSession>(path_array_defaults_,
-                                                 std::move(document));
+                                                 std::move(document),
+                                                 extrude_defaults_);
   session->set_history_max_steps(history_max_steps_);
   (void)session->restore_persisted_viewport_camera_pose(
       viewport_camera_pose);

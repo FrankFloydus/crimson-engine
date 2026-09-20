@@ -77,6 +77,9 @@ architecture migration program. Completed plans are in Git history; do not resta
 - Gate expensive queries, snapshot/topology work and retained Qt setters by owner revisions
   before allocation or formatting. Never enumerate broad command catalogs every frame.
   UI/render details and verification live in their package guides.
+- For any live geometry preview, follow the [preview projection contract](src/editor/modeling/runtime/README.md#live-preview-projection-contract).
+  Verify the retained viewport submission as well as the modeling result; a fresh getter alone
+  does not prove that displayed outlines, selection or depth geometry were updated.
 - Keep raw Qt input at the UI adapter; lower owners consume canonical/semantic input.
   Command changes must reconcile IDs, defaults or deliberate unassignment, context/conflicts,
   Settings, menus/tooltips, localization, persistence compatibility and tests together.

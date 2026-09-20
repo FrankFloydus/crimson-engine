@@ -74,11 +74,12 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
     PrimitiveCreationToolService &primitives,
     LightCreationToolService &light_creation,
     EditorSelectionService &selection, ModelingSessionService &modeling,
-    CurveToolService &curve, UvPeelToolService &uv_peel)
+    CurveToolService &curve, UvPeelToolService &uv_peel,
+    ExtrudeToolService &extrude)
     : pivot_(pivot), linear_array_(linear_array), radial_array_(radial_array),
       path_array_(path_array), primitives_(primitives),
       light_creation_(light_creation), selection_(selection),
-      modeling_(modeling), curve_(curve), uv_peel_(uv_peel),
+      modeling_(modeling), curve_(curve), uv_peel_(uv_peel), extrude_(extrude),
       curve_interaction_(
           std::make_unique<CurveViewportInteractionAdapter>(curve_)) {
   // Registration order preserves commit/cancel precedence. active_priority
@@ -263,6 +264,23 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .cancel = [&] { return uv_peel_.cancel(); },
       .reset = [&] { (void)uv_peel_.cancel(); },
   });
+  (void)runtime_.register_native_lifecycle({
+      .tool = ViewportToolId::Extrude,
+      .active_priority = 7,
+      .commit_label = "Extrude",
+      .can_activate = [] { return true; },
+      .active = [&] { return extrude_.active(); },
+      .pending = [&] { return extrude_.active(); },
+      .pending_history_preview = [&] { return extrude_.dragging(); },
+      .blocks_modeling_content_mutation = [&] { return extrude_.dragging(); },
+      .blocks_document_mutation = [&](EntityId) { return extrude_.dragging(); },
+      .activate = [&](double) { return extrude_.activate(); },
+      .commit = [&] {
+        return extrude_.dragging() ? extrude_.end_drag() : extrude_.extrude();
+      },
+      .cancel = [&] { return extrude_.cancel(); },
+      .reset = [&] { (void)extrude_.cancel(); },
+  });
   assert(runtime_.native_lifecycle_catalog_complete());
 }
 
@@ -308,6 +326,7 @@ CommandResult NativeViewportToolCoordinator::refresh() {
   const CommandResult path = path_array_.refresh();
   const CommandResult curve = curve_.refresh();
   const CommandResult uv_peel = uv_peel_.refresh();
+  const CommandResult extrude = extrude_.refresh();
 
   if (linear.changed || path.changed ||
       (curve.changed && !curve_.dragging())) {
@@ -316,7 +335,7 @@ CommandResult NativeViewportToolCoordinator::refresh() {
 
   const auto first_failure = [&]() -> const CommandResult * {
     for (const CommandResult *candidate : {&linear, &radial, &path, &curve,
-                                           &uv_peel}) {
+                                           &uv_peel, &extrude}) {
       if (!candidate->ok) {
         return candidate;
       }
@@ -327,7 +346,7 @@ CommandResult NativeViewportToolCoordinator::refresh() {
       .ok = first_failure == nullptr,
       .changed =
           linear.changed || radial.changed || path.changed || curve.changed ||
-          uv_peel.changed,
+          uv_peel.changed || extrude.changed,
       .message = first_failure != nullptr ? first_failure->message
                                           : std::string{},
   };
@@ -335,10 +354,14 @@ CommandResult NativeViewportToolCoordinator::refresh() {
 
 NativeViewportToolPresentationSnapshot
 NativeViewportToolCoordinator::presentation_snapshot() const {
+  ExtrudeHandleState extrusion = extrude_.handle_state();
+  extrusion.new_hovered = extrude_interaction_.hovered_part() ==
+                          ExtrudeHandlePart::NewExtrusion;
   return {
       .pivot_handle = pivot_.handle_state(),
       .linear_array_handle = linear_array_.handle_state(),
       .radial_array_center = radial_array_.center_state(),
+      .extrusion_handle = extrusion,
       .curve_preview = &curve_.preview_state(),
       .curve_controls_editable = curve_.controls_editable(),
       .curve_dragging = curve_.dragging(),
@@ -353,6 +376,10 @@ NativeViewportToolCoordinator::handle_pointer_frame(
     ViewportPointPlacementService *point_placement,
     ViewportCameraController &camera,
     const ViewportNativeToolInteractionFrame &frame) {
+  if (extrude_.active() || extrude_interaction_.dragging() ||
+      extrude_interaction_.suppressing_release()) {
+    return extrude_interaction_.handle_frame(extrude_, camera, frame, &modeling_);
+  }
   if (uv_peel_.active()) {
     if (frame.input_result.cancel_requested) {
       const CommandResult canceled = cancel_active();
@@ -387,14 +414,19 @@ NativeViewportToolCoordinator::handle_pointer_frame(
 
 void NativeViewportToolCoordinator::clear_pointer_drag_state() {
   interaction_.clear_drag_state();
+  extrude_interaction_.clear_drag_state();
+  (void)extrude_.cancel_drag();
   (void)curve_.set_preset_hover(std::nullopt);
 }
 
 bool NativeViewportToolCoordinator::pointer_dragging() const {
-  return interaction_.dragging();
+  return interaction_.dragging() || extrude_interaction_.dragging();
 }
 
 ViewportPointerCursor NativeViewportToolCoordinator::pointer_cursor() const {
+  if (extrude_.active()) {
+    return extrude_interaction_.pointer_cursor();
+  }
   if (light_creation_.active()) {
     return ViewportPointerCursor::PrecisionCross;
   }
@@ -415,9 +447,26 @@ bool NativeViewportToolCoordinator::curve_control_gizmo_start_allowed(
 
 CommandResult NativeViewportToolCoordinator::activate(
     std::string_view tool_id, double grid_world_size) {
+  if (tool_id == kExtrudeToolId && extrude_.active()) {
+    return extrude_.extrude();
+  }
   return runtime_.activate_native_lifecycle(
       tool_id, grid_world_size,
       [&] { return cancel_competing_state_for_tool_activation(); });
+}
+
+CommandResult NativeViewportToolCoordinator::activate_extrude(
+    modeling::FaceExtrudeMode mode) {
+  if (extrude_.active()) {
+    return extrude_.activate(mode);
+  }
+  const CommandResult canceled = cancel_competing_state_for_tool_activation();
+  if (!canceled.ok) {
+    return canceled;
+  }
+  CommandResult activated = extrude_.activate(mode);
+  activated.changed = activated.changed || canceled.changed;
+  return activated;
 }
 
 CommandResult NativeViewportToolCoordinator::begin_light_creation(
@@ -470,6 +519,7 @@ NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
     };
   }
   interaction_.clear_drag_state();
+  extrude_interaction_.clear_drag_state();
   return {
       .ok = true,
       .changed = modeling_cancel.changed || native_cancel.changed ||
@@ -494,6 +544,13 @@ CommandResult NativeViewportToolCoordinator::redo_active() {
 }
 
 CommandResult NativeViewportToolCoordinator::cancel_active() {
+  if (extrude_.dragging()) {
+    const CommandResult result = extrude_.cancel_drag();
+    if (result.ok) {
+      extrude_interaction_.clear_drag_state();
+    }
+    return result;
+  }
   const CommandResult native = runtime_.cancel_native_lifecycles();
   const CommandResult light = light_creation_.cancel();
   const CommandResult result{
@@ -504,6 +561,7 @@ CommandResult NativeViewportToolCoordinator::cancel_active() {
   };
   if (result.ok) {
     interaction_.clear_drag_state();
+    extrude_interaction_.clear_drag_state();
   }
   return result;
 }

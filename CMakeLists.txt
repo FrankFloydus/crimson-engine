@@ -378,6 +378,9 @@ add_library(quader_editor_services STATIC
     src/editor/session/viewport_local_visibility_service.cpp
     src/editor/tools/native_viewport_tool_coordinator.cpp
     src/editor/tools/uv_peel_tool_service.cpp
+    src/editor/tools/extrude_tool_service.cpp
+    src/editor/tools/extrude_viewport_interaction.cpp
+    src/editor/tools/extrude_handle_layout.cpp
     src/editor/transform/mesh_arrangement_service.cpp
     src/editor/transform/mesh_transform_bake_service.cpp
     src/editor/transform/scene_transform_drag_service.cpp
@@ -1566,6 +1569,11 @@ if(QUADER_BUILD_TESTS)
         tests/path_array_layout_tests.cpp
         tests/path_array_tool_service_tests.cpp
         tests/uv_peel_tool_service_tests.cpp
+        tests/extrude_tool_service_tests.cpp
+        tests/extrude_viewport_interaction_tests.cpp
+        tests/extrude_handle_layout_tests.cpp
+        tests/extrude_preview_performance_tests.cpp
+        tests/qt_extrude_tool_settings_tests.cpp
         tests/path_array_ui_catalog_tests.cpp
         tests/math_types_tests.cpp
         tests/mesh_arrangement_tests.cpp

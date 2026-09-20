@@ -6,21 +6,30 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "assets/asset_registry.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
+#include "math/glm_bridge.hpp"
 #include "render/overlay/instance_selection_overlay_cache.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_mesh_outline_cache.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "scene/scene_document.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
+
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -75,6 +84,276 @@ struct OutlinePresentationHarness {
                                    outline_only);
   }
 };
+
+/// Uses the native selection owner only when the production coordinator asks
+/// for a new frame; direct getter calls would hide a stale outer source gate.
+class ExtrudeOutlineProvider final : public ViewportOverlaySelectionFrameProvider {
+public:
+  explicit ExtrudeOutlineProvider(SceneSession &session) : session_(session) {}
+  ViewportOverlayFrame build_selection_overlay_frame() const override {
+    ++builds;
+    return session_.modeling().selection_overlay_frame();
+  }
+  mutable std::uint64_t builds = 0u;
+
+private:
+  SceneSession &session_;
+};
+
+/// Captures styled coordinates at the renderer-neutral submission boundary.
+class ExtrudeOutlineTarget final : public ViewportOverlaySubmissionTarget {
+public:
+  ViewportOverlayCameraUpdate update_overlay_cameras(
+      std::size_t, std::uint8_t, ViewportOverlayCamera) override {
+    return {true, true};
+  }
+  void submit_persistent_overlay(std::size_t, std::uint8_t,
+      ViewportOverlayFrame frame, ViewportOverlayCamera) override {
+    persistent = std::move(frame);
+    ++submissions;
+  }
+  void submit_dynamic_overlay(std::size_t, std::uint8_t,
+      ViewportOverlayFrame, ViewportOverlayCamera) override {}
+  ViewportOverlayFrame persistent;
+  std::uint64_t submissions = 0u;
+};
+
+/// Exercises Face-mode source wires and selected-cap edges with durable assets
+/// unchanged during the same dynamic preview used by the viewport.
+struct ExtrudeOutlineHarness {
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  ExtrudeOutlineProvider provider{session};
+  ExtrudeOutlineTarget target;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  ViewportSettings settings = ViewportSettings::defaults();
+  QuaderModelingObjectRef object;
+
+  void seed(modeling::FaceExtrudeMode mode, double amount = 1.0) {
+    quader_poly::Document document;
+    const std::array vertices{
+        quader_poly::add_vertex(document, {0, 0, 0}),
+        quader_poly::add_vertex(document, {1, 0, 0}),
+        quader_poly::add_vertex(document, {2, 0, 0}),
+        quader_poly::add_vertex(document, {0, 1, 0}),
+        quader_poly::add_vertex(document, {1, 1, 0}),
+        quader_poly::add_vertex(document, {2, 1, 0})};
+    const auto first = quader_poly::add_face(
+        document, std::array{vertices[0], vertices[1], vertices[4], vertices[3]});
+    const auto second = quader_poly::add_face(
+        document, std::array{vertices[1], vertices[2], vertices[5], vertices[4]});
+    const auto created = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Extrusion outline strip"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    object = created.value();
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().select_faces(object,
+        {static_cast<QuaderElementId>(first),
+         static_cast<QuaderElementId>(second)}).ok());
+    ASSERT_TRUE(session.extrude().set_mode(mode).ok);
+    ASSERT_TRUE(session.extrude().set_amount(amount).ok);
+    ASSERT_TRUE(session.extrude().activate().ok);
+    (void)settings.set_color(ViewportColorSettingId::SourceWire, {0, 1, 1, 1});
+    (void)settings.set_color(ViewportColorSettingId::SelectionWire, {1, 1, 0, 1});
+  }
+
+  ViewportOverlaySelectionSourceStamp source_stamp() const {
+    auto &modeling = session.modeling();
+    return {
+        .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+        .content_revision = modeling.content_revision(),
+        .selection_revision = modeling.selection_revision(),
+        .scene_revision = session.scene().revision(),
+        .asset_revision = session.assets().revision(),
+        .overlay_signature = modeling.selection_overlay_signature(),
+        .selection_context = ViewportOverlaySelectionContext::Face,
+    };
+  }
+
+  ViewportOverlaySubmissionResult submit(std::size_t pane = 0u) {
+    return coordinator.submit({
+        .viewport_index = pane,
+        .layer_mask = static_cast<std::uint8_t>(1u << pane),
+        .selection_source = source_stamp(),
+        .selection_frame_provider = &provider,
+        .scene_selection_mode = RenderOverlaySelectionMode::Component,
+        .style_selection_context = ViewportOverlaySelectionContext::Face,
+        .overlays_visible = true,
+    }, settings, target);
+  }
+
+  void expect_visible_coordinates(double displayed_amount) {
+    const auto previews = session.modeling().tool_preview_meshes();
+    std::vector<QVec3> positions;
+    if (!previews.empty()) {
+      ASSERT_EQ(previews.size(), 1u);
+      const auto &preview = previews.front();
+      EXPECT_EQ(preview.source_entity, object.entity);
+      for (std::size_t index = 0; index < preview.mesh.geometry().vertices.size(); ++index) {
+        const QVec3 local = preview.dynamic_position_payload
+            ? (*preview.dynamic_position_payload)[index]
+            : preview.mesh.geometry().vertices[index].position;
+        positions.push_back(transform_point(preview.transform, local));
+      }
+    } else {
+      const auto mesh = editor.query().compiled_object_mesh(object);
+      ASSERT_TRUE(mesh.has_value());
+      for (const auto &vertex : mesh->vertices) positions.push_back(vertex.position);
+    }
+    const float height = static_cast<float>(displayed_amount /
+        viewport_host_defaults().map_units_per_world_unit);
+    std::size_t source_wires = 0u;
+    std::size_t cap_wires = 0u;
+    for (const auto &line : target.persistent.lines) {
+      if (line.element.object_id != object.modeling_object_id) continue;
+      if (line.layer != ViewportOverlayLayer::SourceWire &&
+          line.layer != ViewportOverlayLayer::SelectedFaceEdge) continue;
+      for (const auto endpoint : {line.start, line.end}) {
+        EXPECT_TRUE(std::ranges::any_of(positions, [&](QVec3 position) {
+          return length_squared(position - endpoint) < 1.0e-14F;
+        })) << "Stale submitted endpoint at " << endpoint.x << ", "
+            << endpoint.y << ", " << endpoint.z;
+      }
+      if (line.layer == ViewportOverlayLayer::SelectedFaceEdge) {
+        ++cap_wires;
+        EXPECT_NEAR(line.start.z, height, 1.0e-7F);
+        EXPECT_NEAR(line.end.z, height, 1.0e-7F);
+        EXPECT_EQ(line.color & 0x00ffffffu, rgba8(255, 255, 0) & 0x00ffffffu);
+      } else {
+        ++source_wires;
+        EXPECT_EQ(line.color & 0x00ffffffu, rgba8(0, 255, 255) & 0x00ffffffu);
+      }
+    }
+    EXPECT_GT(cap_wires, 0u);
+    if (displayed_amount != 0.0) EXPECT_GT(source_wires, 0u);
+  }
+
+  void expect_unchanged() {
+    const auto builds = provider.builds;
+    const auto submissions = target.submissions;
+    const auto projection = session.modeling().modeling_sdk_projection_stats_for_tests();
+    const auto preview_work = session.modeling().tool_preview_work_stats();
+    const auto work = coordinator.work_counters();
+    for (int frame = 0; frame < 20; ++frame) {
+      const auto result = submit();
+      EXPECT_FALSE(result.selection_source_refreshed);
+      EXPECT_FALSE(result.persistent_submitted);
+      EXPECT_FALSE(result.dynamic_submitted);
+    }
+    EXPECT_EQ(provider.builds, builds);
+    EXPECT_EQ(target.submissions, submissions);
+    EXPECT_EQ(session.modeling().modeling_sdk_projection_stats_for_tests()
+                  .native_selection_projection_build_count,
+              projection.native_selection_projection_build_count);
+    EXPECT_EQ(session.modeling().tool_preview_work_stats().signature_enumeration_count,
+              preview_work.signature_enumeration_count);
+    EXPECT_EQ(session.modeling().tool_preview_work_stats().mesh_extraction_count,
+              preview_work.mesh_extraction_count);
+    EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+              work.dynamic_source_compose_count);
+  }
+};
+
+TEST(SelectedMeshOutlinePresentationTests,
+     ExtrusionPreviewSubmitsCurrentSourceAndSelectedWiresWithStableIds) {
+  for (const double initial_amount : {0.0, 1.0}) {
+    SCOPED_TRACE(initial_amount);
+    for (const auto mode : {modeling::FaceExtrudeMode::Region,
+                            modeling::FaceExtrudeMode::AlongNormals,
+                            modeling::FaceExtrudeMode::Individual}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      ExtrudeOutlineHarness harness;
+      ASSERT_NO_FATAL_FAILURE(harness.seed(mode, initial_amount));
+      ASSERT_TRUE(harness.submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(initial_amount));
+      const auto begun = initial_amount == 0.0
+          ? harness.session.extrude().begin_drag()
+          : harness.session.extrude().begin_adjust_drag();
+      ASSERT_TRUE(begun.ok) << begun.message;
+      std::vector<std::uint32_t> source_ids;
+      std::vector<std::uint32_t> indices;
+      const auto durable = harness.source_stamp();
+      for (const double amount : {2.15, 2.1501, 3.25, 1.25}) {
+        SCOPED_TRACE(amount);
+        ASSERT_TRUE(harness.session.extrude().update_drag(amount).ok);
+        const auto visible = harness.session.modeling().tool_preview_meshes();
+        ASSERT_EQ(visible.size(), 1u);
+        ASSERT_NE(visible.front().dynamic_position_payload, nullptr);
+        const auto &geometry = visible.front().mesh.geometry();
+        std::vector<std::uint32_t> current_ids;
+        for (const auto &vertex : geometry.vertices) {
+          current_ids.push_back(vertex.source_vertex_id);
+        }
+        if (source_ids.empty()) {
+          source_ids = current_ids;
+          indices = geometry.indices;
+        } else {
+          EXPECT_EQ(current_ids, source_ids);
+          EXPECT_EQ(geometry.indices, indices);
+        }
+        const auto current = harness.source_stamp();
+        EXPECT_EQ(current.content_revision, durable.content_revision);
+        EXPECT_EQ(current.selection_revision, durable.selection_revision);
+        EXPECT_EQ(current.scene_revision, durable.scene_revision);
+        EXPECT_EQ(current.asset_revision, durable.asset_revision);
+        const auto submitted = harness.submit();
+        EXPECT_TRUE(submitted.selection_source_refreshed);
+        EXPECT_TRUE(submitted.persistent_submitted);
+        ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(amount));
+        const auto builds = harness.provider.builds;
+        EXPECT_TRUE(harness.submit(1u).persistent_submitted);
+        EXPECT_EQ(harness.provider.builds, builds);
+        ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(amount));
+        ASSERT_TRUE(harness.session.extrude().update_drag(amount).ok);
+        ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+      }
+      ASSERT_TRUE(harness.session.extrude().end_drag().ok);
+      (void)harness.submit();
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(1.25));
+      ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+    }
+  }
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
+     ExtrusionWiresRetirePreviewCoordinatesOnZeroCancelAndFailure) {
+  ExtrudeOutlineHarness harness;
+  ASSERT_NO_FATAL_FAILURE(harness.seed(modeling::FaceExtrudeMode::Region));
+  (void)harness.submit();
+  auto &tool = harness.session.extrude();
+  for (const bool fail : {false, true}) {
+    SCOPED_TRACE(fail);
+    ASSERT_TRUE(tool.begin_adjust_drag().ok);
+    ASSERT_TRUE(tool.update_drag(2.15).ok);
+    (void)harness.submit();
+    ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(2.15));
+    if (fail) {
+      harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+      const auto rejected = tool.update_drag(3.25);
+      harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::None);
+      ASSERT_FALSE(rejected.ok);
+      EXPECT_TRUE(harness.submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(1.0));
+      ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+    } else {
+      ASSERT_TRUE(tool.update_drag(0.0).ok);
+      EXPECT_TRUE(harness.submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(0.0));
+      ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+      ASSERT_TRUE(tool.update_drag(-2.15).ok);
+      EXPECT_TRUE(harness.submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(-2.15));
+    }
+    ASSERT_TRUE(tool.cancel_drag().ok);
+    const auto retired = harness.submit();
+    if (!fail) EXPECT_TRUE(retired.persistent_submitted);
+    ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(1.0));
+    ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+  }
+}
 
 TEST(SelectedMeshOutlinePresentationTests,
      OptInSuppressesBothWireRoutesInWireframeWhileRetainingFillAndLegacyRecords) {

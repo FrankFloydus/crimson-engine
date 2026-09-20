@@ -6,6 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/png_texture_loader.hpp"
@@ -14,6 +19,8 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "render/viewport_renderer.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
+
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <gtest/gtest.h>
 
@@ -34,6 +41,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -65,7 +73,8 @@ public:
 };
 
 /** Runs the production scene and overlay passes on a readable Vulkan surface. */
-class SelectionOverlayRuntimeHarness final {
+class SelectionOverlayRuntimeHarness final
+    : public ViewportOverlaySelectionFrameProvider {
 public:
   static constexpr std::uint32_t kWidth = 640u;
   static constexpr std::uint32_t kHeight = 480u;
@@ -87,7 +96,8 @@ public:
     filament::Engine::destroy(&engine_);
   }
 
-  bool initialize(float wall_min_z = -0.02f) {
+  bool initialize(float wall_min_z = -0.02f,
+                  bool create_visibility_wall = true) {
     const std::filesystem::path resources(
         QCoreApplication::applicationDirPath().toStdWString());
     engine_ = filament::Engine::create(filament::Engine::Backend::VULKAN);
@@ -128,6 +138,8 @@ public:
     settings.post_process.bloom = false;
     settings.post_process.tone_mapping = SceneToneMapping::Linear;
     view_.apply_scene_settings(settings, true, ViewportSettings::defaults());
+
+    if (!create_visibility_wall) return true;
 
     QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
     const auto wall = api.modeling().create_box(
@@ -259,6 +271,91 @@ public:
         ViewportSettings::defaults());
   }
 
+  bool create_extrusion_sample(modeling::FaceExtrudeMode mode) {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    quader_poly::Document document;
+    const std::array vertices{
+        quader_poly::add_vertex(document, {-0.75f, -0.5f, 0.0f}),
+        quader_poly::add_vertex(document, {0.75f, -0.5f, 0.0f}),
+        quader_poly::add_vertex(document, {0.75f, 0.5f, 0.0f}),
+        quader_poly::add_vertex(document, {-0.75f, 0.5f, 0.0f})};
+    (void)quader_poly::add_face(document, vertices);
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Extrusion outline pixel regression"});
+    if (!object.ok() || !editor.selection().set_mode(QuaderSelectionMode::Face).ok() ||
+        !editor.selection().clear().ok() || !session_.extrude().activate(mode).ok ||
+        !editor.selection().select_faces(object.value(), {1}).ok()) return false;
+
+    // The oblique view separates the fixed base and moving cap on screen.
+    camera_.view_axis(ViewportViewAxis::Z, 1);
+    camera_.set_view_direction({0.0f, 3.0f, -2.0f});
+    camera_.focus_origin(3.0f);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  ExtrudeToolService &extrusion() { return session_.extrude(); }
+
+  bool present_extrusion_sample() {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok() ||
+        !QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(), bridge_).ok()) {
+      return false;
+    }
+    const auto &modeling = session_.modeling();
+    (void)bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u),
+         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .selection_source = {
+             .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+             .content_revision = modeling.content_revision(),
+             .selection_revision = modeling.selection_revision(),
+             .scene_revision = session_.scene().revision(),
+             .asset_revision = session_.assets().revision(),
+             .overlay_signature = modeling.selection_overlay_signature(),
+             .selection_context = ViewportOverlaySelectionContext::Face},
+         .selection_frame_provider = this,
+         .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = ViewportOverlaySelectionContext::Face,
+         .overlays_visible = true},
+        ViewportSettings::defaults());
+    return true;
+  }
+
+  ViewportOverlayFrame build_selection_overlay_frame() const override {
+    ++selection_frame_builds_;
+    return session_.modeling().selection_overlay_frame();
+  }
+
+  std::uint64_t selection_frame_builds() const { return selection_frame_builds_; }
+
+  std::optional<QVec2> front_cap_edge_pixel() const {
+    std::optional<QVec2> result;
+    // Derive the expected pixel from current authoritative cap geometry, not
+    // from the retained frame whose invalidation is being tested.
+    for (const auto &line : session_.modeling().selection_overlay_frame().lines) {
+      if (line.layer != ViewportOverlayLayer::SelectedFaceEdge) continue;
+      const auto projected = camera_.project_world_point((line.start + line.end) * 0.5f);
+      if (projected.visible && (!result || projected.position.y > result->y)) {
+        result = projected.position;
+      }
+    }
+    if (result) {
+      // capture() mirrors the Vulkan readback vertically. Convert the camera's
+      // viewport pixel to that image space after choosing the visible front edge.
+      const float viewport_y = result->y;
+      result->y = static_cast<float>(kHeight - 1u) - viewport_y;
+      std::cout << "Extrusion outline GPU probe: viewport=(" << result->x
+                << ',' << viewport_y << "), image=(" << result->x << ','
+                << result->y << ")\n";
+    }
+    return result;
+  }
+
   QImage capture() {
     for (int frame = 0; frame < 5; ++frame) {
       if (!begin_frame()) return {};
@@ -356,6 +453,7 @@ private:
   ViewportCameraController camera_;
   SelectionRuntimeFrame selected_vertex_frame_;
   std::uint64_t revision_ = 0;
+  mutable std::uint64_t selection_frame_builds_ = 0;
 };
 
 int cyan_pixels(const QImage &image, QVec2 center) {
@@ -418,6 +516,20 @@ TEST(SelectionOverlayRuntimeTests,
   ASSERT_TRUE(control.save(QDir(output_directory).filePath(
       QStringLiteral("near_on_top_control.png"))));
   EXPECT_GE(cyan_pixels(control, SelectionOverlayRuntimeHarness::kHiddenPixel), 9);
+}
+
+int yellow_pixels(const QImage &image, QVec2 center) {
+  int count = 0;
+  for (int y = int(center.y) - 3; y <= int(center.y) + 3; ++y) {
+    for (int x = int(center.x) - 3; x <= int(center.x) + 3; ++x) {
+      if (x < 0 || y < 0 || x >= image.width() || y >= image.height()) continue;
+      const QColor pixel = image.pixelColor(x, y);
+      if (pixel.red() > 130 && pixel.green() > 110 &&
+          pixel.red() > pixel.blue() + 50 &&
+          pixel.green() > pixel.blue() + 35) ++count;
+    }
+  }
+  return count;
 }
 
 TEST(SelectionOverlayRuntimeTests,
@@ -489,6 +601,106 @@ TEST(SelectionOverlayRuntimeTests,
         }
       }
     }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanExtrusionCapOutlineFollowsPreviewAndLeavesNoOldYellowEdge) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 to read "
+                    "and capture production offscreen Vulkan selection overlays.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-extrusion-outline-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString output_directory =
+      qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (output_directory.isEmpty()) {
+    output_directory = QDir(QCoreApplication::applicationDirPath())
+                           .absoluteFilePath(QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(output_directory));
+
+  for (const auto &[mode, label] :
+       std::array<std::pair<modeling::FaceExtrudeMode, const char *>, 3>{{
+           {modeling::FaceExtrudeMode::Region, "region"},
+           {modeling::FaceExtrudeMode::AlongNormals, "normals"},
+           {modeling::FaceExtrudeMode::Individual, "individual"}}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_extrusion_sample(mode));
+    ASSERT_TRUE(harness.present_extrusion_sample());
+    const auto source_pixel = harness.front_cap_edge_pixel();
+    ASSERT_TRUE(source_pixel.has_value());
+    const QImage source = harness.capture();
+    ASSERT_FALSE(source.isNull());
+    EXPECT_GE(yellow_pixels(source, *source_pixel), 3);
+    const auto save = [&](const QImage &image, const char *phase) {
+      const QString path = QDir(output_directory).filePath(
+          QStringLiteral("extrude_%1_%2.png")
+              .arg(QString::fromLatin1(label), QString::fromLatin1(phase)));
+      EXPECT_TRUE(image.save(path));
+      std::cout << "Extrusion outline GPU png=" << path.toStdString() << '\n';
+    };
+    save(source, "source");
+
+    ASSERT_TRUE(harness.extrusion().begin_drag().ok);
+    QVec2 previous_pixel = *source_pixel;
+    for (const auto &[amount, phase] :
+         std::array<std::pair<double, const char *>, 2>{{
+             {0.25, "preview_first"}, {0.6, "preview_moved"}}}) {
+      SCOPED_TRACE(phase);
+      ASSERT_TRUE(harness.extrusion().update_drag_world_amount(amount).ok);
+      ASSERT_TRUE(harness.present_extrusion_sample());
+      const auto cap_pixel = harness.front_cap_edge_pixel();
+      ASSERT_TRUE(cap_pixel.has_value());
+      ASSERT_GT(std::abs(cap_pixel->y - previous_pixel.y), 15.0f);
+      const QImage preview = harness.capture();
+      ASSERT_FALSE(preview.isNull());
+      save(preview, phase);
+      EXPECT_GE(yellow_pixels(preview, *cap_pixel), 3)
+          << "Selected cap outline must follow the rendered preview cap.";
+      EXPECT_EQ(yellow_pixels(preview, previous_pixel), 0)
+          << "The previous selected cap outline must disappear.";
+      EXPECT_EQ(yellow_pixels(preview, *source_pixel), 0)
+          << "Stationary base wires may remain cyan, but must not remain selected.";
+      const auto builds = harness.selection_frame_builds();
+      ASSERT_TRUE(harness.present_extrusion_sample());
+      EXPECT_EQ(harness.selection_frame_builds(), builds)
+          << "An unchanged preview must reuse the retained selection frame.";
+      previous_pixel = *cap_pixel;
+    }
+
+    ASSERT_TRUE(harness.extrusion().end_drag().ok);
+    ASSERT_TRUE(harness.present_extrusion_sample());
+    const QImage committed = harness.capture();
+    ASSERT_FALSE(committed.isNull());
+    EXPECT_GE(yellow_pixels(committed, previous_pixel), 3);
+    save(committed, "committed");
+
+    ASSERT_TRUE(harness.extrusion().begin_adjust_drag().ok);
+    ASSERT_TRUE(harness.extrusion().update_drag_world_amount(0.35).ok);
+    ASSERT_TRUE(harness.present_extrusion_sample());
+    const auto adjusted_pixel = harness.front_cap_edge_pixel();
+    ASSERT_TRUE(adjusted_pixel.has_value());
+    ASSERT_GT(std::abs(adjusted_pixel->y - previous_pixel.y), 15.0f);
+    const QImage adjusted = harness.capture();
+    ASSERT_FALSE(adjusted.isNull());
+    EXPECT_GE(yellow_pixels(adjusted, *adjusted_pixel), 3);
+    EXPECT_EQ(yellow_pixels(adjusted, previous_pixel), 0);
+    save(adjusted, "adjusted");
+
+    ASSERT_TRUE(harness.extrusion().cancel_drag().ok);
+    ASSERT_TRUE(harness.present_extrusion_sample());
+    const QImage restored = harness.capture();
+    ASSERT_FALSE(restored.isNull());
+    EXPECT_GE(yellow_pixels(restored, previous_pixel), 3);
+    EXPECT_EQ(yellow_pixels(restored, *adjusted_pixel), 0);
+    save(restored, "restored");
   }
 }
 

@@ -22,3 +22,37 @@ The local `quader_editor_core` namespace does not make it the SDK boundary.
 
 Use the matching `tests/modeling_domain/tool` and runtime suites for host interaction, and SDK
 consumer/parity tests for portable behavior. Real window/GPU output follows the root smoke workflow.
+
+## Live preview projection contract
+
+Before adding or changing an operation that displays temporary geometry, trace its candidate
+through every retained consumer. Filled mesh geometry, component/source wires, selected edges
+and faces, object silhouettes, depth masks, picking and bounds must describe the same accepted
+candidate and occurrence transform. Keeping the committed asset unchanged during a drag is valid;
+using that asset's revision as the only freshness key for a preview consumer is not.
+
+- The modeling owner supplies a cheap projection revision/signature that changes whenever the
+  visible candidate changes, even when topology, element IDs, selection and committed content
+  revisions stay identical. The signature must cover preview removal and failure compensation too.
+- Carry that owner signature through **every** outer frame/submission gate and inner snapshot/GPU
+  cache that retains derived geometry. Invalidating a service's private cache is insufficient if
+  an outer viewport stamp prevents the provider from being called. Audit persistent and volatile
+  overlays separately, including the component wires used in Face/Edge/Vertex mode.
+- Begin, accepted updates, zero displacement, commit, cancel, undo/redo, and compensated failures
+  must either publish the matching projection or retire it. Failed preparation that preserves the
+  last accepted candidate must preserve its display. Keep these transitions with their existing
+  owner; do not patch them with tool-specific Qt invalidations, unconditional frame rebuilds or
+  asset writes on every mouse move.
+- A regression must pass the public owner signature and provider through the production retained
+  submission coordinator. Warm its caches, change only preview positions several times with stable
+  IDs and unchanged committed revisions, then assert **submitted** wire/selection coordinates match
+  the candidate and stale coordinates disappear. Also verify cancel/commit/zero/failure cleanup and
+  that repeated unchanged frames do not call providers, rebuild geometry or upload it again.
+
+A direct `selection_overlay()` assertion can pass while the screen remains stale. Protect the
+complete stamp → provider → retained submission chain, and add a GPU/pixel check where submission
+data alone cannot establish the displayed result. Measure complete preview submission, including
+retained overlays, when reporting viewport performance.
+
+Regression examples: [submitted extrusion wires](../../../../tests/selected_mesh_outline_presentation_tests.cpp)
+and [Vulkan outline pixels](../../../../tests/selection_overlay_runtime_tests.cpp).

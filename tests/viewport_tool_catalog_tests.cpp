@@ -402,7 +402,8 @@ TEST(ViewportToolCatalogTests,
     state.active_tool = descriptor.tool;
     const auto dispatch = editor.commands().dispatch_viewport_input_binding(
         chords->front(), state, true, false);
-    if (descriptor.tool == ViewportToolId::UvPeel) {
+    if (descriptor.tool == ViewportToolId::UvPeel ||
+        descriptor.tool == ViewportToolId::Extrude) {
       EXPECT_EQ(dispatch.kind,
                 QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
       EXPECT_EQ(dispatch.shortcut.kind, ViewportShortcutKind::CancelActiveTool);
@@ -806,7 +807,8 @@ TEST(ViewportToolRuntimeTests,
     EXPECT_EQ(coordinator.active_tool_id(), descriptor.id);
     EXPECT_TRUE(coordinator.has_pending_tool());
     EXPECT_EQ(coordinator.has_pending_history_preview(),
-              descriptor.tool != ViewportToolId::Curve);
+              descriptor.tool != ViewportToolId::Curve &&
+                  descriptor.tool != ViewportToolId::Extrude);
     const auto local_history = coordinator.active_history_state();
     EXPECT_EQ(local_history.has_value(),
               descriptor.tool == ViewportToolId::CreatePrimitive);
@@ -1047,7 +1049,8 @@ TEST(ViewportToolRuntimeTests,
              .pointer_drag_threshold_pixels = 4.0f});
       }
       if (scenario.interruption == Interruption::Escape &&
-          descriptor.tool != ViewportToolId::UvPeel) {
+          descriptor.tool != ViewportToolId::UvPeel &&
+          descriptor.tool != ViewportToolId::Extrude) {
         const QuaderApiVoidResult canceled =
             editor.tools().cancel_active_tool_preview();
         ASSERT_TRUE(canceled.ok()) << canceled.error_message();

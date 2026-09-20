@@ -50,10 +50,13 @@ constexpr std::array<ToolDescriptor, 18> kViewportToolDescriptors{{
         .modeling_tool = ModelingViewportTool::Extrude,
         .id = "extrude",
         .label = "Extrude",
+        .shortcut = "E",
         .kind = ToolKind::Transform,
         .menu_group = ToolMenuGroup::Modeling,
         .transform_tool = ModelingTransformTool::Move,
         .allows_selection_fallback = true,
+        .editor_owned_native_lifecycle = true,
+        .repeat_activation_when_active = true,
     },
     {
         .tool = ViewportToolId::Rotate,

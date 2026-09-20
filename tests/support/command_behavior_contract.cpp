@@ -763,8 +763,14 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Fixture::Viewport, kToolDomains | Domain::Selection,
                Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivateExtrude,
-               Fixture::SingleFaceSelection, kToolDomains,
-               Outcome::SuccessRequired, UndoRepeat::None),
+               Fixture::SingleFaceSelection, kToolDomains | kTopologyDomains,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
+      contract(quader_command::kToolsActivateExtrudeIndividual,
+               Fixture::SingleFaceSelection, kToolDomains | kTopologyDomains,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
+      contract(quader_command::kToolsActivateExtrudeAlongNormals,
+               Fixture::SingleFaceSelection, kToolDomains | kTopologyDomains,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
       contract(quader_command::kToolsActivateInsertEdgeLoop,
                Fixture::SingleEdgeSelection, kToolDomains,
                Outcome::SuccessRequired, UndoRepeat::None),
@@ -797,9 +803,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 219U);
+  static_assert(std::size(kContracts) == 221U);
 #else
-  static_assert(std::size(kContracts) == 218U);
+  static_assert(std::size(kContracts) == 220U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

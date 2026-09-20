@@ -69,6 +69,10 @@ constexpr std::string_view kFileKeywords[]{"file", "document"};
 constexpr std::string_view kExportKeywords[]{"export", "wavefront", "obj"};
 constexpr std::string_view kSelectionKeywords[]{"selection", "select"};
 constexpr std::string_view kNormalKeywords[]{"normal", "orientation"};
+constexpr std::string_view kExtrudeIndividualKeywords[]{
+    "extrude", "face", "individual", "separate"};
+constexpr std::string_view kExtrudeAlongNormalsKeywords[]{
+    "extrude", "face", "normal", "connected"};
 constexpr std::string_view kShadingKeywords[]{"shade", "surface"};
 constexpr std::string_view kTextureKeywords[]{"texture", "uv"};
 constexpr std::string_view kMirrorFaceUvKeywords[]{
@@ -431,6 +435,14 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Group::Tools, 10u, kMenuViewportToolbarPalette,
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, {}, "tool_settings"),
+    presentation(quader_command::kToolsActivateExtrudeIndividual,
+                 Domain::Mesh, Group::Tools, 11u, kMenuViewportPalette,
+                 Palette::Searchable, Activation::InteractiveTool,
+                 Danger::None, {}, kExtrudeIndividualKeywords, "tool_settings"),
+    presentation(quader_command::kToolsActivateExtrudeAlongNormals,
+                 Domain::Mesh, Group::Tools, 12u, kMenuViewportPalette,
+                 Palette::Searchable, Activation::InteractiveTool,
+                 Danger::None, {}, kExtrudeAlongNormalsKeywords, "tool_settings"),
     presentation(quader_command::kToolsActivateKnife, Domain::Mesh,
                  Group::Tools, 20u, kMenuViewportToolbarPalette,
                  Palette::Searchable, Activation::InteractiveTool,

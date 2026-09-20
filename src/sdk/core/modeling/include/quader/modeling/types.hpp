@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace quader::modeling {
@@ -39,6 +40,34 @@ struct Transform3 {
   Vec3 y_axis{0.0F, 1.0F, 0.0F};
   Vec3 z_axis{0.0F, 0.0F, 1.0F};
   Vec3 origin{};
+};
+
+/** Selects connected-region, vertex-normal, or independent-face extrusion. */
+enum class FaceExtrudeMode {
+  Region,
+  AlongNormals,
+  Individual,
+};
+
+/** Defines signed face displacement in an affine operation-space metric. */
+struct FaceExtrudeOptions {
+  FaceExtrudeMode mode = FaceExtrudeMode::Region;
+  float amount = 1.0F;
+  // An explicit Region direction is normalized in operation space.
+  std::optional<Vec3> region_direction;
+  Transform3 extrusion_from_local{};
+};
+
+/**
+ * Summarizes selected face geometry in operation space. The center averages unique
+ * selected vertices; summed_normal adds unit face normals without normalizing the sum.
+ */
+struct PolygonFaceExtrudeFrame {
+  Vec3 center{};
+  Vec3 summed_normal{};
+  Vec3 active_normal{};
+  std::size_t face_count = 0;
+  std::size_t vertex_count = 0;
 };
 
 /**

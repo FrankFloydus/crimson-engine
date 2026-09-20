@@ -191,6 +191,17 @@ TEST(OperationInputHintTests, UvPeelRoutesCompletionBeforeAnyGuideIsSelected) {
                                 QuaderCommandId{"viewport.cancel_active_tool"}));
 }
 
+TEST(OperationInputHintTests, ExtrusionDescribesAdjustmentAndExplicitSnapModifiers) {
+  const auto hints = viewport_tool_input_hints("extrude");
+  EXPECT_TRUE(contains_command(hints, quader_command::kToolsActivateExtrude));
+  EXPECT_TRUE(contains_command(hints, quader_command::kToolsActivateExtrudeIndividual));
+  EXPECT_TRUE(contains_command(hints, quader_command::kToolsActivateExtrudeAlongNormals));
+  EXPECT_TRUE(contains_command(hints, QuaderCommandId{"viewport.transform.vertex_snap"}));
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::PrimaryDrag));
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::ControlPrimaryDrag));
+  EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::ShiftPrimaryDrag));
+}
+
 TEST(OperationInputHintTests, AuditedViewportToolsPublishLocalizedActions) {
   const std::array<std::string_view, 14> tool_ids{
       "select",          "lasso_select", "move",   "rotate", "scale",

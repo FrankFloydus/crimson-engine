@@ -101,6 +101,20 @@ that capability rather than a tool-name list. Active transform drags, previews, 
 cancellation priority; a subsequent Escape clears selection. The existing selection owner handles
 object/group history and component selection. Clear Selection remains remappable through Settings.
 Tool IDs used by input contexts come from the same descriptor catalog as tool activation and presentation.
+The persistent Extrude tool reserves Escape even while idle: it exits the tool and
+keeps committed geometry and selected caps. During an extrusion drag, Escape cancels
+only that drag and keeps Extrude active; a subsequent Escape exits the tool.
+E starts a new extrusion using remembered settings. Ctrl+E starts one in Individual
+mode and Alt+E starts one Along Normals; all three bindings are canonical and remappable.
+The yellow disk and selected-face dragging adjust the latest eligible extrusion;
+with no eligible result, they start the first extrusion at zero distance. E starts
+the next extrusion, while Amount also adjusts the latest result.
+Extrusion dragging is unsnapped by default. Holding Ctrl snaps the total extrusion
+amount to the current grid size, including an existing result's starting amount;
+pressing Ctrl can therefore move an off-grid amount to its nearest grid multiple.
+Shift reduces subsequent motion to one tenth. Vertex snapping requires its explicit
+hold binding. The release event's modifiers and held snap binding determine the committed value. Modified
+face clicks keep selection behavior; the disk accepts Ctrl and Shift when pressed.
 
 ## Settings and persistence
 
@@ -165,9 +179,12 @@ precedence. Interaction hit tests share the frame's frozen `SceneSurfaceQuerySna
 
 Held actions use `active_input_chords`, not remembered press edges. In particular,
 `viewport.transform.vertex_snap` produces `transform_vertex_snap_down` while its keyboard chord is
-physically held and the Move/Curve/transform context applies. A press released before sampling is not
+physically held and the Move/Curve/Extrude/transform context applies. A press released before sampling is not
 held; release, focus loss, or context loss clears it. This action accepts exactly one keyboard press
 chord; invalid persisted sequences or mouse mappings fall back to its compiled default.
+Mouse-release edges also retain their event-time held keyboard chords. The canonical
+resolver derives the edge's vertex-snap state before retiring suppressed key releases;
+Extrude commits from that edge even when snap-key release coalesces into the same frame.
 
 Some actions must reserve constituent presses before their Click/DoubleClick resolves. Preserve the
 material-transfer, Curve-conversion, and orthographic Mesh-depth-selection tests when modifying that

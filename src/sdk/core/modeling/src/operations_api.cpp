@@ -619,6 +619,12 @@ OperationReceipt OperationsApi::split_edges() {
                       : unsupported(*context_, "No selected mesh.");
 }
 
+OperationReceipt OperationsApi::extrude(FaceExtrudeOptions options) {
+  MeshHandle mesh = MeshCollection(context_).first_selected();
+  return mesh.valid() ? mesh.faces().selected().extrude(options)
+                      : unsupported(*context_, "No selected mesh.");
+}
+
 OperationReceipt OperationsApi::default_edge_normals() {
   MeshHandle mesh = MeshCollection(context_).first_selected();
   return mesh.valid() ? mesh.edges().selected().reset_normals_to_default()

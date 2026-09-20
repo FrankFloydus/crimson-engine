@@ -35,6 +35,7 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -65,6 +66,21 @@ ViewportModifiers viewport_modifiers(const QKeyEvent &event) {
 bool is_native_window_close_shortcut(const QKeyEvent &event) {
   return event.key() == Qt::Key_F4 &&
          event.modifiers().testFlag(Qt::AltModifier);
+}
+
+bool accept_viewport_shortcut_override(QEvent *event) {
+  if (event == nullptr || event->type() != QEvent::ShortcutOverride) {
+    return false;
+  }
+  auto &key = *static_cast<QKeyEvent *>(event);
+  if (is_native_window_close_shortcut(key) ||
+      !quader_key_code_from_qt_key(key.key(), key.modifiers()).has_value()) {
+    return false;
+  }
+  // Native QWindow focus and its QWidget container must reserve the same
+  // physical keys before Qt menu mnemonics can bypass the canonical resolver.
+  key.accept();
+  return true;
 }
 
 using ViewportSurfaceProbeClock = std::chrono::steady_clock;
@@ -642,6 +658,9 @@ bool QtViewportSurface::pointer_captured() const {
 }
 
 bool QtViewportSurface::event(QEvent *event) {
+  if (accept_viewport_shortcut_override(event)) {
+    return true;
+  }
   if (event != nullptr && event->type() == QEvent::PlatformSurface) {
     auto *surface_event = static_cast<QPlatformSurfaceEvent *>(event);
     if (surface_event->surfaceEventType() ==
@@ -746,10 +765,7 @@ bool QtViewportSurface::eventFilter(QObject *watched, QEvent *event) {
       record_key_release(*static_cast<QKeyEvent *>(event));
       return true;
     case QEvent::ShortcutOverride: {
-      auto &key = *static_cast<QKeyEvent *>(event);
-      if (!is_native_window_close_shortcut(key) &&
-          quader_key_code_from_qt_key(key.key(), key.modifiers()).has_value()) {
-        key.accept();
+      if (accept_viewport_shortcut_override(event)) {
         return true;
       }
       break;
@@ -1051,11 +1067,18 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
           static_cast<int>(*button)) > 0u) {
     return;
   }
+  ViewportPointerHeldInputState held_input;
+  held_input.active_input_chords.reserve(input_->active_keys.size());
+  for (const auto &[key, chord] : input_->active_keys) {
+    (void)key;
+    held_input.active_input_chords.push_back(chord);
+  }
   input_->pointer_released_edges.push_back({
       .button = *button,
       .local = input_->mouse_local,
       .sequence = ++input_->pointer_event_sequence,
       .modifiers = input_->modifiers,
+      .held_input = std::move(held_input),
   });
   const auto click =
       input_->click_candidates.find(static_cast<int>(*button));

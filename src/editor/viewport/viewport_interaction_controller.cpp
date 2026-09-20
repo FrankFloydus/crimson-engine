@@ -15,6 +15,7 @@
 #include "editor/viewport/viewport_path_array_source_picking.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_pixel_scale.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1265,11 +1266,15 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   }
 
   ViewportNativeToolInteractionFrame native_frame = frame.native_tool;
+  native_frame.left_click_count = interaction.left_click_count;
   native_frame.handles_visible =
       interaction.settings.bool_value(ViewportBoolSettingId::ShowGizmos);
   native_frame.scene_surface_revision =
       interaction.scene_surfaces ? interaction.scene_surfaces->revision() : 0;
   native_frame.viewport_pixel_scale = interaction.viewport_pixel_scale;
+  native_frame.scene_vertex_snap_radius = viewport_scaled_world_pick_radius(
+      interaction.settings.float_value(ViewportFloatSettingId::PickVertexRadius),
+      interaction.viewport_pixel_scale, interaction.input.device_pixel_ratio);
   native_frame.select_backfaces = interaction.settings.bool_value(
       ViewportBoolSettingId::BackfaceSelection);
   const ViewportCurveControlPickingAdapter curve_control_picker(
@@ -1340,6 +1345,19 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
        (!light_range_prepass && !output.curve_gizmo_prepass &&
         output.native_tool.blocks_transform_gizmo))) {
     interaction_cursor_ = native_tools.pointer_cursor();
+  }
+  if (output.native_tool.selection_click_requested) {
+    output.before_tool.selection_click_requested = true;
+    output.before_tool.selection_click_local =
+        output.native_tool.selection_click_local;
+    output.before_tool.selection_click_modifiers =
+        output.native_tool.selection_click_modifiers;
+    output.before_tool.selection_click_count =
+        output.native_tool.selection_click_count;
+    output.before_tool.selection_cycle_depth =
+        output.native_tool.selection_cycle_depth;
+    output.before_tool.selection_cycle_depth_modifiers =
+        output.native_tool.selection_cycle_depth_modifiers;
   }
   return output;
 }

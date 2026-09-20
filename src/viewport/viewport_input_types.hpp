@@ -27,6 +27,12 @@ enum class ViewportPointerCursor {
   ClosedHand,
 };
 
+/// Retains keyboard holds at a pointer edge and their canonical snap intent.
+struct ViewportPointerHeldInputState {
+  std::vector<QuaderInputChord> active_input_chords;
+  bool transform_vertex_snap_down = false;
+};
+
 /// Carries one canonical mouse-button edge with its event-time pane position.
 struct ViewportPointerButtonEdge {
   QuaderMouseButton button = QuaderMouseButton::None;
@@ -37,6 +43,9 @@ struct ViewportPointerButtonEdge {
   // Hosts supply event-time modifiers; synthetic callers may retain the
   // frame-modifier fallback by leaving this unset.
   std::optional<ViewportModifiers> modifiers;
+  // Real mouse releases capture holds before later key events can change them.
+  // An empty state means no held keys; absence retains synthetic frame fallback.
+  std::optional<ViewportPointerHeldInputState> held_input;
 };
 
 /// Preserves a freehand pointer path when a complete gesture occurs in one frame.

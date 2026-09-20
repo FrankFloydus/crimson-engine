@@ -42,6 +42,11 @@ constexpr ViewportSettingColor kGroundGrid1024Color = {
 // mesh occlusion. The perspective material applies it in homogeneous space.
 constexpr float kGroundGridDepthBias = 0.005f;
 constexpr float kHalfPi = 1.57079632679f;
+// The grid belongs below overlay fills and handles. Filament's default
+// priority is 4; priority 3 avoids tying the first overlay blend order, while
+// global ordering prevents camera distance from overriding this layer order.
+constexpr std::uint8_t kGroundGridRenderablePriority = 3u;
+constexpr std::uint16_t kGroundGridBlendOrder = 0u;
 
 /**
  * Represents a Ground Grid Vertex value used by the render extraction and Filament resource layer.
@@ -380,6 +385,9 @@ void ViewportGridRenderer::create_ground_grid() {
       .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                 creation_guard.vertex_buffer, creation_guard.index_buffer)
       .material(0, creation_guard.material_instance)
+      .priority(kGroundGridRenderablePriority)
+      .blendOrder(0, kGroundGridBlendOrder)
+      .globalBlendOrderEnabled(0, true)
       .layerMask(kViewportAllLayerMask, grid_layer_mask_)
       .boundingBox(ground_grid_bounds(kViewportGridDefaultPlaneSize,
                                      kViewportGridDefaultPlaneSize))

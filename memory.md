@@ -155,6 +155,39 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
 
 ## Modeling publication and preview transactions
 
+- Dedicated Extrusion commits immediately; its settings regenerate from immutable source
+  documents and merge into that extrusion's one editor-history entry. Selection, history,
+  scene or tool changes retire adjustment before another edit can publish. Escape only
+  cancels an unfinished pointer drag; leaving the idle tool retains committed geometry.
+  Session defaults are shared across scenes, separate from each scene's adjustable result.
+  Physical E needs the descriptor's repeated-activation capability at the viewport dispatch
+  gate. Native QWindow focus must reserve ShortcutOverride like its widget container so
+  Alt+E reaches the canonical resolver before the Edit-menu mnemonic.
+  E starts a new step; the yellow disk and settings adjust that step from its original
+  source while cancellation restores the committed result and its adjustment eligibility.
+  Extrusion dragging is free by default; event-time Ctrl snaps the total amount to the
+  grid and Shift scales new movement for precision. Automatic scene snapping must not
+  override free movement; the explicit vertex-snap hold remains available. Mouse-up
+  retains its own canonical held-key snapshot, so a later V release in the same frame
+  cannot change the committed snap state (including remapped bindings).
+  Preview baselines must therefore be the live document, not the immutable source.
+  Nonzero drag samples reuse SDK-prepared topology and IDs; publishing zero retires
+  that generation. Dynamic render previews keep assets unchanged until release.
+  Their projection revision must reach every retained gate, including Qt's persistent
+  selection source stamp and compensated failures that clear the preview. A fresh
+  `selection_overlay_frame()` getter does not prove the cached viewport submitted it;
+  test `ViewportOverlaySubmissionCoordinator` with the owner-provided signature.
+  Follow the [preview projection contract](src/editor/modeling/runtime/README.md#live-preview-projection-contract).
+  Region adjustment handles follow the saved axis.
+  Extrusion validation permits structurally valid thin/tangent side walls and unchanged
+  authored defects, but rejects properly crossing new wall boundaries and validates
+  affected caps in anchored, scale-normalized coordinates. Region pointer projection
+  stays linear in the press-time camera frame; per-pointer ray/axis intersections can
+  diverge and reverse near the vanishing point.
+  Owners: `ExtrudeToolService` and the SDK projection adapter. Tests:
+  `tests/extrude_tool_service_tests.cpp`, `tests/qt_extrude_tool_settings_tests.cpp`,
+  `tests/qt_input_adapter_tests.cpp`, `tests/qt_command_event_filter_tests.cpp`.
+
 - Polygon operation success and mutation are separate. A rejected operation must carry explicit
   failure through `polygon_document.cpp` and native adapters; `changed=false` also describes valid
   no-ops. Combine Faces around an opening exposed a lost failure that reached the UI as normal text.

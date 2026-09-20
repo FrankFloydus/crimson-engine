@@ -536,6 +536,30 @@ public:
   ModelingCommandResult replace_mesh_document(
       int modeling_object_id, quader_poly::Document document,
       bool preserve_selection = false);
+  [[nodiscard]] ModelingFaceExtrusionSourceResult
+  capture_face_extrusion_source() const;
+  [[nodiscard]] bool face_extrusion_source_current(
+      const ModelingFaceExtrusionSource &source) const;
+  [[nodiscard]] ModelingCommandResult validate_face_extrusion(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction = {}) const;
+  [[nodiscard]] bool selected_face_extrusion_hit(
+      const ModelingPickSelectRequest &request) const;
+  /// Consumes native world units; presentation converts displayed units once.
+  ModelingCommandResult apply_face_extrusion(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction = {});
+  ModelingCommandResult begin_face_extrusion_preview(
+      const ModelingFaceExtrusionSource &source,
+      const ModelingFaceExtrusionSource &retained_cancellation_source = {});
+  ModelingCommandResult begin_face_extrusion_adjustment_preview(
+      const ModelingFaceExtrusionSource &source);
+  ModelingCommandResult update_face_extrusion_preview(
+      const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
+      double amount_internal, std::optional<QVec3> world_direction = {});
+  [[nodiscard]] bool face_extrusion_preview_active() const;
+  ModelingCommandResult commit_face_extrusion_preview();
+  ModelingCommandResult cancel_face_extrusion_preview();
   ModelingLinearArrayResult
   create_linear_array(const ModelingLinearArrayRequest &request);
   ModelingRadialArrayResult

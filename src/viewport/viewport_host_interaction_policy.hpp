@@ -152,13 +152,15 @@ struct ViewportToolActivationDispatchRequest {
   bool activation_requested = false;
   bool tool_changed = false;
   bool editor_tool_matches_requested = false;
+  bool repeat_activation_when_active = false;
 };
 
-/// Restarts a tool only when its shortcut requests a real editor transition.
+/// Dispatches activation for a transition or a tool that accepts repeated intent.
 [[nodiscard]] constexpr bool should_dispatch_viewport_tool_activation(
     const ViewportToolActivationDispatchRequest &request) {
   return request.activation_requested &&
-         (request.tool_changed || !request.editor_tool_matches_requested);
+         (request.tool_changed || !request.editor_tool_matches_requested ||
+          request.repeat_activation_when_active);
 }
 
 /// Identifies the semantic edge represented by one canonical input chord.
