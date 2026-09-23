@@ -8,6 +8,7 @@
 
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_texture_info_window.hpp"
 
 #include <QAction>
@@ -545,14 +546,23 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
             controls.slider, &QSlider::sliderReleased, this,
             [this, component]() { flush_texture_transform_edit(component); });
         QObject::connect(
+            controls.spin, &QDoubleSpinBox::editingFinished, this,
+            [this, component]() { flush_texture_transform_edit(component); });
+        auto &numeric_controller = qt_install_numeric_spin_box(*controls.spin);
+        numeric_controller.interaction_canceled = [this, component]() {
+          flush_texture_transform_edit(component);
+        };
+        QObject::connect(
             controls.spin, &QDoubleSpinBox::valueChanged, this,
-            [this, component, slider = controls.slider](double value) {
+            [this, component, slider = controls.slider,
+             controller = &numeric_controller](double value) {
               {
                 const QSignalBlocker blocker(slider);
                 slider->setValue(
                     static_cast<int>(std::lround(value * kScalarSliderScale)));
               }
-              dispatch_texture_transform_edit(component, value, false);
+              dispatch_texture_transform_edit(component, value,
+                                              controller->is_dragging());
             });
         QObject::connect(
             controls.slider, &QSlider::valueChanged, this,
@@ -636,7 +646,8 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   QObject::connect(albedo_button_, &QPushButton::clicked, this,
                    [this]() { choose_albedo_color(); });
   const auto configure_scalar_live_dispatch =
-      [this](QtStandardMaterialScalar scalar, QSlider *slider) {
+      [this](QtStandardMaterialScalar scalar, QSlider *slider,
+             QDoubleSpinBox *spin) {
         LiveNumberDispatch &live_dispatch =
             scalar_live_dispatches_[scalar_index(scalar)];
         live_dispatch.timer = new QTimer(slider);
@@ -648,23 +659,28 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
                          [this, scalar]() { flush_scalar_edit(scalar); });
         QObject::connect(slider, &QSlider::sliderReleased, this,
                          [this, scalar]() { flush_scalar_edit(scalar); });
+        QObject::connect(spin, &QDoubleSpinBox::editingFinished, this,
+                         [this, scalar]() { flush_scalar_edit(scalar); });
+        qt_install_numeric_spin_box(*spin).interaction_canceled =
+            [this, scalar]() { flush_scalar_edit(scalar); };
       };
   configure_scalar_live_dispatch(QtStandardMaterialScalar::Roughness,
-                                 roughness_slider_);
+                                 roughness_slider_, roughness_spin_);
   configure_scalar_live_dispatch(QtStandardMaterialScalar::Metallic,
-                                 metallic_slider_);
+                                 metallic_slider_, metallic_spin_);
   configure_scalar_live_dispatch(QtStandardMaterialScalar::NormalStrength,
-                                 normal_strength_slider_);
+                                 normal_strength_slider_, normal_strength_spin_);
   QObject::connect(
       roughness_spin_, &QDoubleSpinBox::valueChanged, this,
-      [this](double value) {
+      [this, controller = &qt_install_numeric_spin_box(*roughness_spin_)](
+          double value) {
         {
           const QSignalBlocker blocker(roughness_slider_);
           roughness_slider_->setValue(
               static_cast<int>(std::lround(value * kScalarSliderScale)));
         }
         dispatch_scalar_edit(QtStandardMaterialScalar::Roughness, value,
-                             false);
+                             controller->is_dragging());
       });
   QObject::connect(roughness_slider_, &QSlider::valueChanged, this,
                    [this](int slider_value) {
@@ -680,14 +696,15 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
                     });
   QObject::connect(
       metallic_spin_, &QDoubleSpinBox::valueChanged, this,
-      [this](double value) {
+      [this, controller = &qt_install_numeric_spin_box(*metallic_spin_)](
+          double value) {
         {
           const QSignalBlocker blocker(metallic_slider_);
           metallic_slider_->setValue(
               static_cast<int>(std::lround(value * kScalarSliderScale)));
         }
         dispatch_scalar_edit(QtStandardMaterialScalar::Metallic, value,
-                             false);
+                             controller->is_dragging());
       });
   QObject::connect(
       metallic_slider_, &QSlider::valueChanged, this, [this](int slider_value) {
@@ -702,14 +719,15 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
       });
   QObject::connect(
       normal_strength_spin_, &QDoubleSpinBox::valueChanged, this,
-      [this](double value) {
+      [this, controller = &qt_install_numeric_spin_box(*normal_strength_spin_)](
+          double value) {
         {
           const QSignalBlocker blocker(normal_strength_slider_);
           normal_strength_slider_->setValue(
               static_cast<int>(std::lround(value * kScalarSliderScale)));
         }
         dispatch_scalar_edit(QtStandardMaterialScalar::NormalStrength, value,
-                             false);
+                             controller->is_dragging());
       });
   QObject::connect(normal_strength_slider_, &QSlider::valueChanged, this,
                    [this](int slider_value) {
@@ -961,6 +979,13 @@ void QtStandardMaterialEditorWindow::clear_document() {
 
 void QtStandardMaterialEditorWindow::abandon_interactions() {
   ++interaction_generation_;
+  for (QDoubleSpinBox *spin :
+       {roughness_spin_, metallic_spin_, normal_strength_spin_}) {
+    qt_install_numeric_spin_box(*spin).abandon_interaction();
+  }
+  for (TextureTransformControls &controls : texture_transform_controls_) {
+    qt_install_numeric_spin_box(*controls.spin).abandon_interaction();
+  }
   if (active_albedo_dialog_ != nullptr) {
     const QPointer<QColorDialog> dialog = active_albedo_dialog_;
     active_albedo_dialog_.clear();

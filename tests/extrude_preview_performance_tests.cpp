@@ -17,14 +17,22 @@
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
 #include "support/curve_modeling_test_support.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <gtest/gtest.h>
-#include <QCoreApplication>
+#include <QApplication>
+#include <QDoubleSpinBox>
+#include <QEventLoop>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QMouseEvent>
 #include <QString>
+#include <QTimer>
 
 #include <filament/RenderableManager.h>
 #include <filament/SwapChain.h>
@@ -156,6 +164,7 @@ public:
   }
 
   ExtrudeToolService &tool() { return session_.extrude(); }
+  QuaderEditorApi &editor() { return editor_; }
   SceneRenderResourceDiagnostics diagnostics() const { return bridge_.diagnostics(); }
   std::size_t renderables() const {
     return engine_->getRenderableManager().getComponentCount();
@@ -570,6 +579,325 @@ void measure_path(bool preview, PerformanceResult &result) {
   ASSERT_TRUE(harness.sync());
   harness.expect_selection_overlay_height(amount + 0.002, amount);
   EXPECT_TRUE(harness.preview_suppression_empty());
+}
+
+/// Measures the existing dispatch slot without changing its connection order or
+/// replacing the production numeric gesture and tool-setting adapters.
+class NumericDispatchProbe final : public QObject {
+public:
+  NumericDispatchProbe(QTimer &timer, std::vector<double> &samples)
+      : samples_(samples) {
+    timer.installEventFilter(this);
+    QObject::connect(&timer, &QTimer::timeout, this, [this] {
+      samples_.push_back(milliseconds(start_));
+    });
+  }
+
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (event->type() == QEvent::Timer) {
+      start_ = PerformanceClock::now();
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+private:
+  std::vector<double> &samples_;
+  PerformanceClock::time_point start_;
+};
+
+struct NumericInputSample final {
+  double value = 0.0;
+  PerformanceClock::time_point received;
+};
+
+struct NumericDragPerformanceResult final {
+  QuaderMeshAsset mesh;
+  std::vector<double> candidate_values;
+};
+
+void send_numeric_mouse(QLineEdit &editor, QEvent::Type type,
+                        QPoint position, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+  const QPointF global = editor.mapToGlobal(position);
+  QMouseEvent event(type, QPointF(position), global, button, buttons,
+                    Qt::NoModifier);
+  QCoreApplication::sendEvent(&editor, &event);
+}
+
+QPoint begin_numeric_drag(QLineEdit &editor) {
+  const QPoint press = editor.rect().center();
+  send_numeric_mouse(editor, QEvent::MouseButtonPress, press,
+                      Qt::LeftButton, Qt::LeftButton);
+  const QPoint start = press + QPoint(QApplication::startDragDistance() + 1, 0);
+  send_numeric_mouse(editor, QEvent::MouseMove, start,
+                      Qt::NoButton, Qt::LeftButton);
+  return start;
+}
+
+void process_numeric_events_for(int duration_ms) {
+  QEventLoop loop;
+  QTimer::singleShot(duration_ms, &loop, &QEventLoop::quit);
+  loop.exec();
+}
+
+void measure_numeric_drag(bool legacy_cadence,
+                          NumericDragPerformanceResult &result) {
+  ExtrudePerformanceHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  ASSERT_TRUE(harness.editor().tools().activate(ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(harness.tool().set_amount(1.0).ok);
+  ASSERT_TRUE(harness.sync());
+  ASSERT_TRUE(harness.render());
+  ASSERT_TRUE(harness.finish_gpu());
+  const auto initial_undo = harness.undo_count();
+
+  QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_expanded(true);
+  panel.bind(harness.editor());
+  panel.show();
+  panel.resize(panel.sizeHint());
+  QCoreApplication::processEvents();
+  auto *spin = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.extrude.amount"));
+  ASSERT_NE(spin, nullptr);
+  auto *line = spin->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const auto dispatch_timers = spin->parentWidget()->findChildren<QTimer *>(
+      QString(), Qt::FindDirectChildrenOnly);
+  ASSERT_EQ(dispatch_timers.size(), 1);
+  QTimer &dispatch = *dispatch_timers.front();
+  if (legacy_cadence) {
+    // Replay the previous UI pacing in the same binary and same scene. The
+    // production case deliberately retains the owner's configured interval.
+    dispatch.setInterval(50);
+  }
+  const int dispatch_interval = dispatch.interval();
+  ASSERT_GT(dispatch_interval, 0);
+  ASSERT_DOUBLE_EQ(spin->value(), 1.0);
+
+  std::vector<double> input_cpu_ms;
+  std::vector<double> dispatch_cpu_ms;
+  std::vector<double> sync_cpu_ms;
+  std::vector<double> render_cpu_ms;
+  std::vector<double> displayed_input_age_ms;
+  std::vector<double> accepted_input_latency_ms;
+  std::vector<double> submission_intervals_ms;
+  NumericDispatchProbe dispatch_probe(dispatch, dispatch_cpu_ms);
+  constexpr int kPointerSamples = 240;
+  std::vector<NumericInputSample> inputs;
+  inputs.reserve(kPointerSamples + 1u);
+  result.candidate_values.reserve(kPointerSamples);
+  const QPoint origin = begin_numeric_drag(*line);
+  ASSERT_TRUE(qt_install_numeric_spin_box(*spin).is_dragging());
+  const auto started = PerformanceClock::now();
+  inputs.push_back({spin->value(), started});
+  auto previous_submission_at = started;
+  auto presented_revision = harness.preview_submission_revision();
+  const auto initial_geometry_updates =
+      harness.tool().work_stats_for_tests().geometry_update_count;
+  std::size_t published_frames = 0u;
+  std::size_t frame_count = 0u;
+  int pointer_index = 0;
+  QPoint position = origin;
+  bool completed = false;
+  QEventLoop loop;
+  QTimer pointer_timer;
+  QTimer frame_timer;
+  QTimer deadline;
+  pointer_timer.setTimerType(Qt::PreciseTimer);
+  pointer_timer.setInterval(4);
+  frame_timer.setTimerType(Qt::PreciseTimer);
+  frame_timer.setInterval(16);
+  deadline.setSingleShot(true);
+  deadline.setInterval(10'000);
+  QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+  QObject::connect(&pointer_timer, &QTimer::timeout, &loop, [&] {
+    ++pointer_index;
+    // Identical one-pixel samples with a reversal halfway through both runs.
+    const int travel = pointer_index <= kPointerSamples / 2
+                           ? pointer_index
+                           : kPointerSamples - pointer_index;
+    position = origin + QPoint(travel, 0);
+    const auto received = PerformanceClock::now();
+    send_numeric_mouse(*line, QEvent::MouseMove, position,
+                        Qt::NoButton, Qt::LeftButton);
+    input_cpu_ms.push_back(milliseconds(received));
+    inputs.push_back({spin->value(), received});
+    result.candidate_values.push_back(spin->value());
+    if (pointer_index == kPointerSamples) {
+      completed = true;
+      loop.quit();
+    }
+  });
+  QObject::connect(&frame_timer, &QTimer::timeout, &loop, [&] {
+    const double amount = harness.tool().amount();
+    const auto sync_begin = PerformanceClock::now();
+    if (!harness.sync()) {
+      ADD_FAILURE() << "Numeric drag failed to synchronize the viewport";
+      loop.quit();
+      return;
+    }
+    sync_cpu_ms.push_back(milliseconds(sync_begin));
+    const auto render_begin = PerformanceClock::now();
+    if (!harness.render()) {
+      ADD_FAILURE() << "Numeric drag failed to submit the viewport";
+      loop.quit();
+      return;
+    }
+    render_cpu_ms.push_back(milliseconds(render_begin));
+    const auto submitted_at = PerformanceClock::now();
+    ++frame_count;
+    const auto input = std::find_if(inputs.rbegin(), inputs.rend(),
+        [amount](const NumericInputSample &sample) {
+          return std::abs(sample.value - amount) < 0.000000001;
+        });
+    if (input == inputs.rend()) {
+      ADD_FAILURE() << "The viewport published a value outside the input stream";
+      loop.quit();
+      return;
+    }
+    const double age = std::chrono::duration<double, std::milli>(
+                           submitted_at - input->received).count();
+    // Include frames that still show an older sample: measuring only newly
+    // accepted values hides the visible staleness between dispatches.
+    displayed_input_age_ms.push_back(age);
+    const auto revision = harness.preview_submission_revision();
+    if (revision != presented_revision) {
+      ++published_frames;
+      accepted_input_latency_ms.push_back(age);
+      submission_intervals_ms.push_back(
+          std::chrono::duration<double, std::milli>(
+              submitted_at - previous_submission_at).count());
+      previous_submission_at = submitted_at;
+      presented_revision = revision;
+      harness.expect_selection_overlay_height(amount);
+    }
+  });
+  frame_timer.start();
+  pointer_timer.start();
+  deadline.start();
+  loop.exec();
+  pointer_timer.stop();
+  frame_timer.stop();
+  deadline.stop();
+  const double elapsed_ms = milliseconds(started);
+  ASSERT_TRUE(completed) << "Numeric input benchmark exceeded its bounded run";
+  ASSERT_FALSE(::testing::Test::HasFailure());
+  const double final_value = spin->value();
+  send_numeric_mouse(*line, QEvent::MouseButtonRelease, position,
+                      Qt::LeftButton, Qt::NoButton);
+  EXPECT_FALSE(qt_install_numeric_spin_box(*spin).is_dragging());
+  EXPECT_DOUBLE_EQ(harness.tool().amount(), final_value);
+  EXPECT_EQ(harness.undo_count(), initial_undo);
+  ASSERT_TRUE(harness.sync());
+  harness.expect_selection_overlay_height(final_value);
+  ASSERT_TRUE(harness.render());
+  ASSERT_TRUE(harness.finish_gpu());
+  const auto final_geometry = harness.sample_geometry();
+  ASSERT_TRUE(final_geometry.has_value());
+  const float expected_z = static_cast<float>(final_value /
+      viewport_host_defaults().map_units_per_world_unit);
+  EXPECT_NEAR(final_geometry->cap_min_z, expected_z, 0.0000002F);
+  EXPECT_NEAR(final_geometry->cap_max_z, expected_z, 0.0000002F);
+
+  ASSERT_FALSE(input_cpu_ms.empty());
+  ASSERT_FALSE(dispatch_cpu_ms.empty());
+  ASSERT_FALSE(sync_cpu_ms.empty());
+  ASSERT_FALSE(render_cpu_ms.empty());
+  ASSERT_FALSE(accepted_input_latency_ms.empty());
+  std::cout << std::fixed << std::setprecision(3)
+            << "NUMERIC_DRAG_PERF mode="
+            << (legacy_cadence ? "legacy_50ms" : "production")
+            << " faces=" << kGridSide * kGridSide
+            << " selected=" << kSelectedSide * kSelectedSide
+            << " dispatch_interval_ms=" << dispatch_interval
+            << " input_samples=" << pointer_index
+            << " frames=" << frame_count
+            << " changed_submissions=" << published_frames
+            << " geometry_updates="
+            << harness.tool().work_stats_for_tests().geometry_update_count -
+                   initial_geometry_updates
+            << " wall_ms=" << elapsed_ms
+            << " changed_submission_hz=" << published_frames * 1000.0 / elapsed_ms
+            << " displayed_input_age_p50_ms=" << percentile(displayed_input_age_ms, 0.50)
+            << " displayed_input_age_p95_ms=" << percentile(displayed_input_age_ms, 0.95)
+            << " accepted_input_latency_p50_ms=" << percentile(accepted_input_latency_ms, 0.50)
+            << " accepted_input_latency_p95_ms=" << percentile(accepted_input_latency_ms, 0.95)
+            << " changed_submission_interval_p50_ms=" << percentile(submission_intervals_ms, 0.50)
+            << " changed_submission_interval_p95_ms=" << percentile(submission_intervals_ms, 0.95)
+            << " input_cpu_p50_ms=" << percentile(input_cpu_ms, 0.50)
+            << " input_cpu_p95_ms=" << percentile(input_cpu_ms, 0.95)
+            << " dispatch_cpu_p50_ms=" << percentile(dispatch_cpu_ms, 0.50)
+            << " dispatch_cpu_p95_ms=" << percentile(dispatch_cpu_ms, 0.95)
+            << " sync_cpu_p50_ms=" << percentile(sync_cpu_ms, 0.50)
+            << " sync_cpu_p95_ms=" << percentile(sync_cpu_ms, 0.95)
+            << " submit_cpu_p50_ms=" << percentile(render_cpu_ms, 0.50)
+            << " submit_cpu_p95_ms=" << percentile(render_cpu_ms, 0.95) << '\n';
+
+  // Cancellation must restore the latest accepted scalar through the real
+  // retained render gates, with no delayed sample resurrecting the draft.
+  const QPoint cancel_origin = begin_numeric_drag(*line);
+  send_numeric_mouse(*line, QEvent::MouseMove, cancel_origin + QPoint(8, 0),
+                      Qt::NoButton, Qt::LeftButton);
+  process_numeric_events_for(dispatch_interval + 32);
+  EXPECT_GT(harness.tool().amount(), final_value);
+  ASSERT_TRUE(harness.sync());
+  const auto canceled_submission = harness.preview_submission_revision();
+  QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(line, &escape);
+  EXPECT_DOUBLE_EQ(harness.tool().amount(), final_value);
+  ASSERT_TRUE(harness.sync());
+  EXPECT_GT(harness.preview_submission_revision(), canceled_submission);
+  harness.expect_selection_overlay_height(final_value);
+  const auto idle_submission = harness.preview_submission_revision();
+  const auto idle_overlay_builds = harness.selection_overlay_builds();
+  const auto idle_updates = harness.tool().work_stats_for_tests().geometry_update_count;
+  const auto idle_diagnostics = harness.diagnostics();
+  process_numeric_events_for(dispatch_interval * 2 + 16);
+  for (int frame = 0; frame < 3; ++frame) {
+    ASSERT_TRUE(harness.sync());
+    ASSERT_TRUE(harness.render());
+  }
+  EXPECT_EQ(harness.tool().work_stats_for_tests().geometry_update_count, idle_updates);
+  EXPECT_EQ(harness.preview_submission_revision(), idle_submission);
+  EXPECT_EQ(harness.selection_overlay_builds(), idle_overlay_builds);
+  EXPECT_EQ(harness.diagnostics().gpu_geometry_upload_count,
+            idle_diagnostics.gpu_geometry_upload_count);
+  EXPECT_DOUBLE_EQ(harness.tool().amount(), final_value);
+  EXPECT_EQ(harness.undo_count(), initial_undo);
+  panel.unbind();
+  ASSERT_TRUE(harness.tool().commit_preview().ok);
+  EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
+  ASSERT_TRUE(harness.sync());
+  ASSERT_TRUE(harness.finish_gpu());
+  const auto mesh = harness.mesh();
+  ASSERT_TRUE(mesh.has_value());
+  result.mesh = *mesh;
+}
+
+TEST(ExtrudePreviewPerformanceTests,
+     NumericDragCadenceReportsSameSceneLatencyAndPreservesFinalGeometry) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_EXTRUDE_PERFORMANCE") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_EXTRUDE_PERFORMANCE=1 for the controlled "
+                   "numeric input and windowless Vulkan extrusion benchmark";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-numeric-drag-performance-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  NumericDragPerformanceResult legacy;
+  NumericDragPerformanceResult production;
+  measure_numeric_drag(true, legacy);
+  ASSERT_FALSE(HasFatalFailure());
+  measure_numeric_drag(false, production);
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_EQ(legacy.candidate_values, production.candidate_values);
+  test::curve::expect_same_mesh_geometry(legacy.mesh, production.mesh);
 }
 
 TEST(ExtrudePreviewPerformanceTests,

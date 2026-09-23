@@ -34,6 +34,7 @@
 #include "ui/qt_command_palette.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_main_window.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_material_find_replace_dialog.hpp"
@@ -55,6 +56,7 @@
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <QApplication>
 #include <QByteArray>
@@ -386,6 +388,11 @@ void UISystem::bind_scene_backed_panels() {
 }
 
 void UISystem::clear_editor_runtime_hooks() {
+  if (auto *application =
+          qobject_cast<QApplication *>(QCoreApplication::instance());
+      application != nullptr && main_window_ != nullptr) {
+    qt_set_numeric_snap_increment_provider(*application, *main_window_, {});
+  }
   if (editor_ == nullptr) {
     return;
   }
@@ -936,6 +943,19 @@ void UISystem::install_runtime_hooks(
     viewport_panel_->abandon_interactions();
   }
   editor_ = &editor;
+  if (auto *application =
+          qobject_cast<QApplication *>(QCoreApplication::instance());
+      application != nullptr && main_window_ != nullptr) {
+    qt_set_numeric_snap_increment_provider(
+        *application, *main_window_, [this]() {
+          const int preset = editor_ != nullptr
+                                 ? editor_->viewports().grid_preset()
+                                 : viewport_default_grid_preset();
+          // Most numeric distances use scene units; displayed-map-unit fields
+          // adapt this increment at their presentation boundary.
+          return viewport_grid_world_size_from_contract(preset);
+        });
+  }
   if (operation_input_hints_ != nullptr) {
     operation_input_hints_->invalidate();
   }
@@ -2952,7 +2972,10 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   const bool edit_drag_active =
       (modeling_ != nullptr && modeling_->transform_drag_active()) ||
       frame_native_tools.curve_dragging;
+  const auto *application =
+      qobject_cast<QApplication *>(QCoreApplication::instance());
   const bool numeric_interaction_active =
+      (application != nullptr && qt_numeric_drag_active(*application)) ||
       (tool_settings_panel_ != nullptr &&
        tool_settings_panel_->numeric_interaction_active()) ||
       (face_texture_panel_ != nullptr &&

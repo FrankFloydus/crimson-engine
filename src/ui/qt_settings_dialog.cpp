@@ -14,6 +14,7 @@
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_controller.hpp"
+#include "ui/qt_spin_box.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -42,7 +43,6 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QShowEvent>
-#include <QSpinBox>
 #include <QStackedWidget>
 #include <QStringList>
 #include <QTableView>
@@ -1699,7 +1699,7 @@ struct QtSettingsDialog::Impl {
     QFormLayout *scale_form = create_group(page, "interface_scale",
         "ui.settings.group.interface_scale", "Interface Scaling");
     interface_scale_label = new QLabel(scale_form->parentWidget());
-    interface_scale_spin_box = new QSpinBox(scale_form->parentWidget());
+    interface_scale_spin_box = new QtSpinBox(scale_form->parentWidget());
     interface_scale_spin_box->setObjectName(
         QStringLiteral("settingsInterfaceScale"));
     interface_scale_spin_box->setRange(50, 300);
@@ -1738,7 +1738,7 @@ struct QtSettingsDialog::Impl {
     QFormLayout *form = create_group(page, "undo",
         "ui.settings.group.undo", "Undo History");
     undo_steps_label = new QLabel(form->parentWidget());
-    undo_steps_spin_box = new QSpinBox(form->parentWidget());
+    undo_steps_spin_box = new QtSpinBox(form->parentWidget());
     undo_steps_spin_box->setObjectName(QStringLiteral("settingsUndoSteps"));
     undo_steps_spin_box->setRange(SessionPreferences::kMinimumUndoSteps,
                                   SessionPreferences::kMaximumUndoSteps);
@@ -1762,7 +1762,7 @@ struct QtSettingsDialog::Impl {
     autosave_check_box->setObjectName(QStringLiteral("settingsAutosaveEnabled"));
     form->addRow(autosave_check_box);
     autosave_interval_label = new QLabel(form->parentWidget());
-    autosave_interval_spin_box = new QSpinBox(form->parentWidget());
+    autosave_interval_spin_box = new QtSpinBox(form->parentWidget());
     autosave_interval_spin_box->setObjectName(
         QStringLiteral("settingsAutosaveInterval"));
     autosave_interval_spin_box->setRange(
@@ -1771,7 +1771,7 @@ struct QtSettingsDialog::Impl {
     autosave_interval_label->setBuddy(autosave_interval_spin_box);
     form->addRow(autosave_interval_label, autosave_interval_spin_box);
     autosave_max_files_label = new QLabel(form->parentWidget());
-    autosave_max_files_spin_box = new QSpinBox(form->parentWidget());
+    autosave_max_files_spin_box = new QtSpinBox(form->parentWidget());
     autosave_max_files_spin_box->setObjectName(
         QStringLiteral("settingsAutosaveMaxFiles"));
     autosave_max_files_spin_box->setRange(

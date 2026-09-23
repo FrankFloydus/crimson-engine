@@ -950,6 +950,7 @@ add_library(quader_ui STATIC
     src/ui/qt_operation_input_hints.cpp
     src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
+    src/ui/qt_horizontal_pointer_capture.cpp
     src/ui/qt_retained_message_box.cpp
     src/ui/qt_status_message.cpp
     src/ui/qt_tree_relationship_presentation.cpp
@@ -966,6 +967,7 @@ add_library(quader_ui STATIC
     src/ui/qt_settings_dialog.cpp
     src/ui/qt_settings_controller.cpp
     src/ui/qt_tool_settings_drag_spinner.cpp
+    src/ui/qt_numeric_spin_box.cpp
     src/ui/qt_tool_settings_number_slider.cpp
     src/ui/qt_tool_settings_panel.cpp
     src/ui/qt_unsaved_confirmation_dialog.cpp
@@ -1603,11 +1605,14 @@ if(QUADER_BUILD_TESTS)
         tests/qt_navigation_gizmo_tests.cpp
         tests/qt_project_workspace_tests.cpp
         tests/qt_relative_pointer_input_tests.cpp
+        tests/qt_horizontal_pointer_capture_tests.cpp
         tests/qt_retained_message_box_tests.cpp
         tests/qt_settings_controller_tests.cpp
         tests/qt_settings_dialog_tests.cpp
         tests/qt_startup_presentation_tests.cpp
         tests/qt_tool_settings_number_slider_tests.cpp
+        tests/qt_numeric_spin_box_tests.cpp
+        tests/qt_inspector_numeric_drag_tests.cpp
         tests/qt_viewport_pane_activation_tests.cpp
         tests/qt_viewport_settings_overlay_tests.cpp
         tests/qt_viewport_render_submission_policy_tests.cpp

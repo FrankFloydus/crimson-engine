@@ -9,8 +9,6 @@
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
-#include <quader/modeling/neutral/polygon/face_texture_scale_steps.hpp>
-
 #include <QDoubleSpinBox>
 #include <QFocusEvent>
 #include <QFrame>
@@ -18,6 +16,7 @@
 #include <QLineEdit>
 #include <QLocale>
 #include <QMargins>
+#include <QPointer>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QToolButton>
@@ -184,15 +183,35 @@ class QtMixedNumberSpinBox final : public QtDoubleSpinBox {
 public:
   explicit QtMixedNumberSpinBox(double step_origin,
                                   QWidget *parent = nullptr,
-                                  bool scale_steps = false)
+                                  bool fixed_scale_format = false)
       : QtDoubleSpinBox(parent), step_origin_(step_origin),
-        scale_steps_(scale_steps) {
+        fixed_scale_format_(fixed_scale_format) {
     setKeyboardTracking(false);
-    setDecimals(scale_steps_ ? 13 : 6);
+    setDecimals(fixed_scale_format_ ? 13 : 6);
     setRange(-std::numeric_limits<float>::max(),
              std::numeric_limits<float>::max());
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     set_scalable_minimum_width(*this, 88);
+    auto &numeric = qt_install_numeric_spin_box(*this);
+    numeric.drag_origin = [this]() {
+      return mixed_ ? step_origin_ : value();
+    };
+    numeric.apply_drag_value = [this](double next_value) {
+      const bool resolving_mixed = mixed_;
+      const double previous = value();
+      mixed_ = false;
+      const QPointer<QtMixedNumberSpinBox> guard(this);
+      setValue(next_value);
+      if (guard && resolving_mixed && value() == previous) {
+        // Resolving a mixed field is an edit even when its retained scalar
+        // already matches; Qt does not emit valueChanged in that case.
+        lineEdit()->setText(formatted_value(value()));
+        const auto callback = edited;
+        if (callback) {
+          callback(value());
+        }
+      }
+    };
     QObject::connect(this, &QDoubleSpinBox::valueChanged, this,
                      [this](double value) {
                        const bool was_mixed = mixed_;
@@ -240,7 +259,10 @@ public:
   }
 
   /// Clears native text interpretation state when the host abandons a draft.
-  void abandon_edit() { discard_text_edit(); }
+  void abandon_edit() {
+    qt_install_numeric_spin_box(*this).abandon_interaction();
+    discard_text_edit();
+  }
 
   std::function<void(std::optional<double>)> edited;
 
@@ -279,35 +301,12 @@ protected:
       const QSignalBlocker blocker(this);
       setValue(step_origin_);
     }
-    if (scale_steps_) {
-      interpretText();
-      setValue(quader_poly::stepped_face_texture_scale(value(), steps));
-    } else {
-      QtDoubleSpinBox::stepBy(steps);
-    }
-  }
-
-  StepEnabled stepEnabled() const override {
-    if (!scale_steps_) {
-      return QtDoubleSpinBox::stepEnabled();
-    }
-    if (isReadOnly()) {
-      return StepNone;
-    }
-    const double current = mixed_ ? step_origin_ : value();
-    StepEnabled enabled = StepNone;
-    if (quader_poly::stepped_face_texture_scale(current, 1) != current) {
-      enabled |= StepUpEnabled;
-    }
-    if (quader_poly::stepped_face_texture_scale(current, -1) != current) {
-      enabled |= StepDownEnabled;
-    }
-    return enabled;
+    QtDoubleSpinBox::stepBy(steps);
   }
 
 private:
   [[nodiscard]] QString formatted_value(double value) const {
-    if (!scale_steps_) {
+    if (!fixed_scale_format_) {
       return QtDoubleSpinBox::textFromValue(value);
     }
     QLocale number_locale = locale();
@@ -319,7 +318,7 @@ private:
   double step_origin_ = 0.0;
   QString missing_text_ = QStringLiteral("--");
   bool mixed_ = false;
-  bool scale_steps_ = false;
+  bool fixed_scale_format_ = false;
 };
 
 } // namespace quader::qt_settings_detail

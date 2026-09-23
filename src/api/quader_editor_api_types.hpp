@@ -227,6 +227,8 @@ struct QuaderToolSettingControl {
   std::string label_key;
   // Reject nonpositive drafts without clamping the numeric editor's range.
   bool number_positive_only = false;
+  // Converts the world-space grid interval into this field's displayed units.
+  double number_grid_scale = 1.0;
 };
 
 /**

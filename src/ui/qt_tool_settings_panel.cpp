@@ -12,7 +12,9 @@
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
 #include "ui/qt_double_spin_box.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
+#include "ui/qt_spin_box.hpp"
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -73,7 +75,7 @@ using namespace qt_settings_detail;
 // Geometry previews can be substantially slower than raw pointer delivery.
 // Pointer drags publish the latest value at this bounded cadence; keyboard,
 // wheel, and spin edits use it as a trailing coalescing window.
-constexpr int kNumberDispatchIntervalMs = 50;
+constexpr int kNumberDispatchIntervalMs = 16;
 
 QString qtext(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -198,6 +200,7 @@ bool same_control_structure(const QuaderToolSettingControl &left,
       left.number_interaction != right.number_interaction ||
       left.number_presentation != right.number_presentation ||
       left.number_positive_only != right.number_positive_only ||
+      left.number_grid_scale != right.number_grid_scale ||
       left.choice_presentation != right.choice_presentation ||
       left.choices.size() != right.choices.size()) {
     return false;
@@ -346,6 +349,7 @@ struct QtToolSettingsPanel::Impl {
   struct Vector3ComponentWidget {
     std::string id;
     QDoubleSpinBox *spin = nullptr;
+    QtNumericSpinBoxController *numeric_controller = nullptr;
     QTimer *dispatch_timer = nullptr;
     std::optional<double> pending_value;
     std::optional<NumberDispatchLifecycle> pending_lifecycle;
@@ -368,6 +372,7 @@ struct QtToolSettingsPanel::Impl {
     QCheckBox *toggle = nullptr;
     QSpinBox *integer = nullptr;
     QDoubleSpinBox *floating = nullptr;
+    QtNumericSpinBoxController *numeric_controller = nullptr;
     QtMixedNumberSpinBox *spinbox_only = nullptr;
     bool invalid_number_draft = false;
     QtToolSettingsDragSpinner *number_drag_spinner = nullptr;
@@ -639,9 +644,13 @@ struct QtToolSettingsPanel::Impl {
               binding.vector3_components.begin(),
               binding.vector3_components.end(),
               [](const Vector3ComponentWidget &component) {
-                return component.pending_value.has_value();
+                return component.pending_value.has_value() ||
+                       (component.numeric_controller != nullptr &&
+                        component.numeric_controller->is_dragging());
               });
           return binding.pending_number_value.has_value() || vector_pending ||
+                 (binding.numeric_controller != nullptr &&
+                  binding.numeric_controller->is_dragging()) ||
                  (binding.number_drag_spinner != nullptr &&
                    (binding.number_drag_spinner->is_dragging() ||
                     binding.number_drag_spinner->is_editing())) ||
@@ -891,6 +900,21 @@ private:
     controls_[control_index].continuous_number_merge_key.clear();
   }
 
+  /// Share one history identity from the first scrub sample through release.
+  void bind_number_interaction(QAbstractSpinBox &spin, ControlWidget &binding,
+                               std::size_t control_index, double grid_scale) {
+    auto &controller = qt_install_numeric_spin_box(spin);
+    controller.set_drag_snap_scale(grid_scale);
+    binding.numeric_controller = &controller;
+    controller.drag_started = [this, control_index]() {
+      begin_number_continuous_edit(control_index);
+    };
+    controller.editing_started = controller.drag_started;
+    controller.interaction_canceled = [this, control_index]() {
+      finish_number_continuous_edit(control_index);
+    };
+  }
+
   void begin_vector3_continuous_edit(std::size_t control_index,
                                      std::size_t component_index) {
     if (control_index >= controls_.size() || component_index >= 3U) {
@@ -981,6 +1005,8 @@ private:
         return;
       }
       const bool pointer_drag =
+          (binding.numeric_controller != nullptr &&
+           binding.numeric_controller->is_dragging()) ||
           (binding.number_drag_spinner != nullptr &&
            binding.number_drag_spinner->is_dragging()) ||
           (binding.number_slider != nullptr &&
@@ -1020,7 +1046,11 @@ private:
     }
     component.pending_value = value;
     if (component.dispatch_timer != nullptr) {
-      component.dispatch_timer->start();
+      const bool pointer_drag = component.numeric_controller != nullptr &&
+                                component.numeric_controller->is_dragging();
+      if (!pointer_drag || !component.dispatch_timer->isActive()) {
+        component.dispatch_timer->start();
+      }
     }
   }
 
@@ -1224,6 +1254,9 @@ private:
       return;
     }
     ControlWidget &binding = controls_[control_index];
+    if (binding.numeric_controller != nullptr) {
+      binding.numeric_controller->abandon_interaction();
+    }
     binding.pending_number_value.reset();
     binding.pending_number_lifecycle.reset();
     binding.continuous_number_merge_key.clear();
@@ -1235,6 +1268,9 @@ private:
       binding.number_dispatch_timer->stop();
     }
     for (Vector3ComponentWidget &component : binding.vector3_components) {
+      if (component.numeric_controller != nullptr) {
+        component.numeric_controller->abandon_interaction();
+      }
       component.pending_value.reset();
       component.pending_lifecycle.reset();
       component.continuous_merge_key.clear();
@@ -1437,6 +1473,7 @@ private:
       auto *dispatch_timer = new QTimer(row);
       dispatch_timer->setSingleShot(true);
       dispatch_timer->setInterval(kNumberDispatchIntervalMs);
+      dispatch_timer->setTimerType(Qt::PreciseTimer);
       binding.number_dispatch_timer = dispatch_timer;
       binding.number_dispatch = send_number_to_editor;
       QObject::connect(dispatch_timer, &QTimer::timeout, &panel_,
@@ -1447,6 +1484,8 @@ private:
       if (control.number_presentation ==
           QuaderToolSettingNumberPresentation::SpinBoxOnly) {
         auto *spin = new QtMixedNumberSpinBox(0.0, row);
+        bind_number_interaction(*spin, binding, control_index,
+                                control.number_grid_scale);
         spin->setObjectName(object_name);
         spin->setAccessibleName(label);
         spin->setRange(control.min_value, control.max_value);
@@ -1481,7 +1520,7 @@ private:
                            if (!synchronizing_ &&
                                control_index < controls_.size() &&
                                !controls_[control_index].invalid_number_draft) {
-                             flush_number_dispatch(control_index);
+                             finish_number_continuous_edit(control_index);
                            }
                          });
         row_layout->addWidget(spin, 1, 0, 1, 2);
@@ -1505,6 +1544,8 @@ private:
         spinner->set_range(slider_mapping.slider_minimum,
                            slider_mapping.slider_maximum);
         spinner->set_single_step(integer_single_step(control.step));
+        qt_install_numeric_spin_box(*spinner->spin_box())
+            .set_drag_snap_scale(control.number_grid_scale);
         spinner->spin_box()->setKeyboardTracking(false);
         spinner->set_value(qt_tool_settings_number_slider_position(
             slider_mapping, control.number_value));
@@ -1563,7 +1604,9 @@ private:
                        });
 
       if (integer_control) {
-        auto *spin = new QSpinBox(row);
+        auto *spin = new QtSpinBox(row);
+        bind_number_interaction(*spin, binding, control_index,
+                                control.number_grid_scale);
         spin->setObjectName(object_name);
         spin->setAccessibleName(label);
         spin->setRange(slider_mapping.slider_minimum,
@@ -1626,6 +1669,8 @@ private:
         binding.integer = spin;
       } else {
         auto *spin = new QtDoubleSpinBox(row);
+        bind_number_interaction(*spin, binding, control_index,
+                                control.number_grid_scale);
         spin->setObjectName(object_name);
         spin->setAccessibleName(label);
         const double minimum = std::min(control.min_value, control.max_value);
@@ -1762,10 +1807,20 @@ private:
         auto *dispatch_timer = new QTimer(spin);
         dispatch_timer->setSingleShot(true);
         dispatch_timer->setInterval(kNumberDispatchIntervalMs);
+        dispatch_timer->setTimerType(Qt::PreciseTimer);
         Vector3ComponentWidget &component_binding =
             binding.vector3_components[axis];
         component_binding.id = component.id;
         component_binding.spin = spin;
+        auto &numeric_controller = qt_install_numeric_spin_box(*spin);
+        component_binding.numeric_controller = &numeric_controller;
+        numeric_controller.drag_started = [this, control_index, axis]() {
+          begin_vector3_continuous_edit(control_index, axis);
+        };
+        numeric_controller.editing_started = numeric_controller.drag_started;
+        numeric_controller.interaction_canceled = [this, control_index, axis]() {
+          finish_vector3_continuous_edit(control_index, axis);
+        };
         component_binding.dispatch_timer = dispatch_timer;
         component_binding.enabled = component.enabled;
         component_binding.dispatch =
@@ -2154,9 +2209,15 @@ private:
         binding.container->setEnabled(control.enabled);
       }
       const bool integer_editing =
-          !preview_completed && widget_or_descendant_has_focus(binding.integer);
+          !preview_completed &&
+          (widget_or_descendant_has_focus(binding.integer) ||
+           (binding.integer != nullptr && binding.numeric_controller != nullptr &&
+            binding.numeric_controller->is_dragging()));
       const bool floating_editing =
-          !preview_completed && widget_or_descendant_has_focus(binding.floating);
+          !preview_completed &&
+          (widget_or_descendant_has_focus(binding.floating) ||
+           (binding.floating != nullptr && binding.numeric_controller != nullptr &&
+            binding.numeric_controller->is_dragging()));
       const bool slider_editing =
           binding.number_slider != nullptr &&
           binding.number_slider->isSliderDown();
@@ -2185,7 +2246,9 @@ private:
         }
         const bool component_editing =
             (!preview_completed &&
-             widget_or_descendant_has_focus(component_binding.spin)) ||
+             (widget_or_descendant_has_focus(component_binding.spin) ||
+              (component_binding.numeric_controller != nullptr &&
+               component_binding.numeric_controller->is_dragging()))) ||
             component_binding.pending_value.has_value();
         if (component_editing) {
           continue;

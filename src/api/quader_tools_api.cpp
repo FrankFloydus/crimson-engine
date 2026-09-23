@@ -33,6 +33,7 @@
 #include "editor/tools/extrude_tool_service.hpp"
 #include "scene/scene_document.hpp"
 #include "math/glm_bridge.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <editor/modeling/runtime/tool_runtime_policy.hpp>
 
@@ -609,6 +610,7 @@ QuaderToolSettingsTarget extrude_tool_settings_target(
       0.0001, QuaderToolSettingNumberInteraction::Continuous,
       QuaderToolSettingNumberPresentation::SpinBoxOnly);
   amount.enabled = !extrude.dragging();
+  amount.number_grid_scale = viewport_host_defaults().map_units_per_world_unit;
   amount.tooltip = "Extrusion distance in displayed scene units. Negative values extrude inward.";
   result.controls.push_back(std::move(amount));
   for (auto &control : result.controls) {

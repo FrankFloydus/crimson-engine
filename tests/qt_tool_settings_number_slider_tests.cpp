@@ -16,6 +16,7 @@
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
@@ -715,7 +716,7 @@ TEST(QtToolSettingsDragSpinnerTests,
 }
 
 TEST(QtToolSettingsDragSpinnerTests,
-     DragDiscardsThresholdThenMapsEightLogicalPixelsPerStepAndClampsLive) {
+     SmallRangeDragUsesSixteenPixelsPerUnitRegardlessOfArrowStep) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-drag-spinner-scrub-tests";
@@ -725,7 +726,7 @@ TEST(QtToolSettingsDragSpinnerTests,
 
   quader::QtToolSettingsDragSpinner spinner;
   spinner.set_range(2, 20);
-  spinner.set_single_step(1);
+  spinner.set_single_step(2);
   spinner.set_value(10);
   spinner.setAttribute(Qt::WA_DontShowOnScreen, true);
   spinner.resize(240, 32);
@@ -752,20 +753,20 @@ TEST(QtToolSettingsDragSpinnerTests,
   EXPECT_EQ(spinner.value(), 10)
       << "the gesture threshold must not be converted into value travel";
 
-  const QPoint seven_pixels_after_origin(crossed.x() + 7, crossed.y());
-  send_mouse_event(*editor, QEvent::MouseMove, seven_pixels_after_origin,
+  const QPoint fifteen_pixels_after_origin(crossed.x() + 15, crossed.y());
+  send_mouse_event(*editor, QEvent::MouseMove, fifteen_pixels_after_origin,
                    Qt::NoButton, Qt::LeftButton);
   EXPECT_EQ(spinner.value(), 10);
-  const QPoint eight_pixels_after_origin(crossed.x() + 8, crossed.y());
-  send_mouse_event(*editor, QEvent::MouseMove, eight_pixels_after_origin,
+  const QPoint sixteen_pixels_after_origin(crossed.x() + 16, crossed.y());
+  send_mouse_event(*editor, QEvent::MouseMove, sixteen_pixels_after_origin,
                    Qt::NoButton, Qt::LeftButton);
   EXPECT_EQ(spinner.value(), 11);
-  const QPoint twenty_four_pixels_after_origin(crossed.x() + 24,
-                                                crossed.y());
-  send_mouse_event(*editor, QEvent::MouseMove, twenty_four_pixels_after_origin,
+  const QPoint forty_eight_pixels_after_origin(crossed.x() + 48,
+                                               crossed.y());
+  send_mouse_event(*editor, QEvent::MouseMove, forty_eight_pixels_after_origin,
                    Qt::NoButton, Qt::LeftButton);
   EXPECT_EQ(spinner.value(), 13)
-      << "each eight logical horizontal pixels must advance one singleStep";
+      << "small integer ranges scrub one unit per sixteen pixels, ignoring arrow step";
 
   const QPoint far_right(crossed.x() + 10'000, crossed.y());
   send_mouse_event(*editor, QEvent::MouseMove, far_right, Qt::NoButton,
@@ -783,6 +784,75 @@ TEST(QtToolSettingsDragSpinnerTests,
   EXPECT_GE(spinner.value(), spinner.minimum());
   EXPECT_LE(spinner.value(), spinner.maximum());
 
+  spinner.hide();
+}
+
+TEST(QtToolSettingsDragSpinnerTests,
+     ExternalValueAndRangeChangesRebaseTheSharedDrag) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-drag-spinner-rebase-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QtToolSettingsDragSpinner spinner;
+  spinner.set_range(2, 20);
+  spinner.set_value(10);
+  spinner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  spinner.show();
+  QCoreApplication::processEvents();
+  auto *editor = spinner.findChild<QLineEdit *>(
+      QStringLiteral("drag_spinner.editor.line_edit"));
+  ASSERT_NE(editor, nullptr);
+  const QPoint press = editor->rect().center();
+  const QPoint crossed(press.x() + QApplication::startDragDistance() + 1,
+                       press.y());
+  const QPoint two_steps(crossed.x() + 32, crossed.y());
+  send_mouse_event(*editor, QEvent::MouseButtonPress, press, Qt::LeftButton,
+                   Qt::LeftButton);
+  send_mouse_event(*editor, QEvent::MouseMove, crossed, Qt::NoButton,
+                   Qt::LeftButton);
+  send_mouse_event(*editor, QEvent::MouseMove, two_steps, Qt::NoButton,
+                   Qt::LeftButton);
+  ASSERT_TRUE(spinner.is_dragging());
+  ASSERT_EQ(spinner.value(), 12);
+
+  spinner.set_range(8, 11);
+  EXPECT_EQ(spinner.value(), 11);
+  send_mouse_event(*editor, QEvent::MouseMove, two_steps, Qt::NoButton,
+                   Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), 11);
+  const QPoint reverse_one_step(two_steps.x() - 16, two_steps.y());
+  send_mouse_event(*editor, QEvent::MouseMove, reverse_one_step, Qt::NoButton,
+                   Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), 10);
+  send_key_event(*editor, Qt::Key_Escape);
+  EXPECT_FALSE(spinner.is_dragging());
+  EXPECT_EQ(spinner.value(), 11)
+      << "cancel must retain the value established by the replacement range";
+  send_mouse_event(*editor, QEvent::MouseButtonRelease, reverse_one_step,
+                   Qt::LeftButton, Qt::NoButton);
+
+  send_mouse_event(*editor, QEvent::MouseButtonPress, press, Qt::LeftButton,
+                   Qt::LeftButton);
+  send_mouse_event(*editor, QEvent::MouseMove, crossed, Qt::NoButton,
+                   Qt::LeftButton);
+  ASSERT_TRUE(spinner.is_dragging());
+  spinner.set_value(8);
+  send_mouse_event(*editor, QEvent::MouseMove, crossed, Qt::NoButton,
+                   Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), 8);
+  send_mouse_event(*editor, QEvent::MouseMove, reverse_one_step, Qt::NoButton,
+                   Qt::LeftButton);
+  EXPECT_EQ(spinner.value(), 9);
+  send_key_event(*editor, Qt::Key_Escape);
+  EXPECT_FALSE(spinner.is_dragging());
+  EXPECT_EQ(spinner.value(), 8)
+      << "cancel must restore the owner's replacement, not the drag's old value";
+  send_mouse_event(*editor, QEvent::MouseButtonRelease, reverse_one_step,
+                   Qt::LeftButton, Qt::NoButton);
+  EXPECT_EQ(spinner.value(), 8);
   spinner.hide();
 }
 
@@ -822,7 +892,7 @@ TEST(QtToolSettingsDragSpinnerTests,
 }
 
 TEST(QtToolSettingsDragSpinnerTests,
-     ArrowButtonsApplyExactlyOneStepAndDisableAtTheirBounds) {
+     SharedHoverArrowsApplyExactlyOneStepAndDisableAtTheirBounds) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-drag-spinner-arrow-tests";
@@ -840,11 +910,17 @@ TEST(QtToolSettingsDragSpinnerTests,
   QCoreApplication::processEvents();
 
   QToolButton *left = spinner.findChild<QToolButton *>(
-      QStringLiteral("drag_spinner.decrease"));
+      QStringLiteral("numeric_spin_box.decrease"));
   QToolButton *right = spinner.findChild<QToolButton *>(
-      QStringLiteral("drag_spinner.increase"));
+      QStringLiteral("numeric_spin_box.increase"));
   ASSERT_NE(left, nullptr);
   ASSERT_NE(right, nullptr);
+  EXPECT_EQ(left->parentWidget(), spinner.spin_box());
+  EXPECT_EQ(right->parentWidget(), spinner.spin_box());
+  QEvent leave(QEvent::Leave);
+  QCoreApplication::sendEvent(spinner.spin_box(), &leave);
+  EXPECT_FALSE(left->isVisible());
+  EXPECT_FALSE(right->isVisible());
   EXPECT_TRUE(left->isEnabled());
   EXPECT_TRUE(right->isEnabled());
 
@@ -867,7 +943,7 @@ TEST(QtToolSettingsDragSpinnerTests,
 }
 
 TEST(QtToolSettingsDragSpinnerTests,
-     LiveInterfaceScaleUpdatesArrowHitTargetsWithoutDrift) {
+     LiveInterfaceScalePreservesCompactFiveDigitSizingWithoutDrift) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-drag-spinner-scale-tests";
@@ -877,41 +953,34 @@ TEST(QtToolSettingsDragSpinnerTests,
   quader::QtUiScaleApplicationController scale_controller(application);
 
   quader::QtToolSettingsDragSpinner spinner;
-  auto *decrease = spinner.findChild<QToolButton *>(
-      QStringLiteral("drag_spinner.decrease"));
-  auto *increase = spinner.findChild<QToolButton *>(
-      QStringLiteral("drag_spinner.increase"));
-  ASSERT_NE(decrease, nullptr);
-  ASSERT_NE(increase, nullptr);
-
-  const auto expected_extent = [&spinner]() {
-    return std::max(
-        spinner.style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr,
-                                     &spinner),
-        spinner.spin_box()->sizeHint().height());
+  spinner.set_range(0, 99'999);
+  spinner.set_value(99'999);
+  spinner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  spinner.show();
+  QCoreApplication::processEvents();
+  auto *editor = spinner.findChild<QLineEdit *>(
+      QStringLiteral("drag_spinner.editor.line_edit"));
+  ASSERT_NE(editor, nullptr);
+  const auto check_five_digit_width = [&]() {
+    spinner.resize(spinner.sizeHint());
+    spinner.layout()->activate();
+    EXPECT_GE(editor->contentsRect().width(),
+              editor->fontMetrics().horizontalAdvance(QStringLiteral("99999")));
   };
-  const int baseline_extent = expected_extent();
-  EXPECT_EQ(decrease->minimumWidth(), baseline_extent);
-  EXPECT_EQ(decrease->maximumWidth(), baseline_extent);
-  EXPECT_EQ(increase->minimumWidth(), baseline_extent);
-  EXPECT_EQ(increase->maximumWidth(), baseline_extent);
+  const QSize baseline_size = spinner.sizeHint();
+  check_five_digit_width();
 
   ASSERT_TRUE(scale_controller.apply_factor(2.0F));
   QCoreApplication::processEvents();
-  const int doubled_extent = expected_extent();
-  EXPECT_GT(doubled_extent, baseline_extent);
-  EXPECT_EQ(decrease->minimumWidth(), doubled_extent);
-  EXPECT_EQ(decrease->maximumWidth(), doubled_extent);
-  EXPECT_EQ(increase->minimumWidth(), doubled_extent);
-  EXPECT_EQ(increase->maximumWidth(), doubled_extent);
+  EXPECT_GT(spinner.sizeHint().width(), baseline_size.width());
+  EXPECT_GT(spinner.sizeHint().height(), baseline_size.height());
+  check_five_digit_width();
 
   ASSERT_TRUE(scale_controller.apply_factor(1.0F));
   QCoreApplication::processEvents();
-  EXPECT_EQ(expected_extent(), baseline_extent);
-  EXPECT_EQ(decrease->minimumWidth(), baseline_extent);
-  EXPECT_EQ(decrease->maximumWidth(), baseline_extent);
-  EXPECT_EQ(increase->minimumWidth(), baseline_extent);
-  EXPECT_EQ(increase->maximumWidth(), baseline_extent);
+  EXPECT_EQ(spinner.sizeHint(), baseline_size);
+  check_five_digit_width();
+  spinner.hide();
 }
 
 TEST(QtToolSettingsDragSpinnerTests,
@@ -952,9 +1021,9 @@ TEST(QtToolSettingsDragSpinnerTests,
   auto *line_edit = spinner->findChild<QLineEdit *>(
       QStringLiteral("drag_spinner.editor.line_edit"));
   auto *decrease = spinner->findChild<QToolButton *>(
-      QStringLiteral("drag_spinner.decrease"));
+      QStringLiteral("numeric_spin_box.decrease"));
   auto *increase = spinner->findChild<QToolButton *>(
-      QStringLiteral("drag_spinner.increase"));
+      QStringLiteral("numeric_spin_box.increase"));
   ASSERT_NE(center, nullptr);
   ASSERT_NE(line_edit, nullptr);
   ASSERT_NE(decrease, nullptr);
@@ -991,7 +1060,7 @@ TEST(QtToolSettingsDragSpinnerTests,
   const QPoint press = line_edit->rect().center();
   const QPoint crossed(press.x() + QApplication::startDragDistance() + 1,
                        press.y());
-  const QPoint three_steps(crossed.x() + 24, crossed.y());
+  const QPoint three_steps(crossed.x() + 6, crossed.y());
   send_mouse_event(*line_edit, QEvent::MouseButtonPress, press,
                    Qt::LeftButton, Qt::LeftButton);
   send_mouse_event(*line_edit, QEvent::MouseMove, crossed, Qt::NoButton,
@@ -1017,6 +1086,29 @@ TEST(QtToolSettingsDragSpinnerTests,
                     "tool_settings.control.path_array.count.spinner"))),
             retained_spinner.data());
   EXPECT_EQ(spinner->value(), 8);
+
+  // A scrub can publish intermediate geometry before release. Escape must
+  // send the starting value back through the same coalesced owner gesture.
+  const QPoint cancel_press = line_edit->rect().center();
+  const QPoint cancel_crossed(
+      cancel_press.x() + QApplication::startDragDistance() + 1,
+      cancel_press.y());
+  const QPoint cancel_two_steps(cancel_crossed.x() + 4, cancel_crossed.y());
+  send_mouse_event(*line_edit, QEvent::MouseButtonPress, cancel_press,
+                   Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(*line_edit, QEvent::MouseMove, cancel_crossed,
+                   Qt::NoButton, Qt::LeftButton);
+  send_mouse_event(*line_edit, QEvent::MouseMove, cancel_two_steps,
+                   Qt::NoButton, Qt::LeftButton);
+  ASSERT_TRUE(spinner->is_dragging());
+  ASSERT_TRUE(process_events_until([&] { return owner_count() == 10; }, 1000));
+  send_key_event(*line_edit, Qt::Key_Escape);
+  EXPECT_FALSE(spinner->is_dragging());
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  EXPECT_EQ(spinner->value(), 8);
+  EXPECT_EQ(owner_count(), 8);
+  process_events_for(75);
+  EXPECT_EQ(owner_count(), 8);
 
   panel.unbind();
   panel.hide();
@@ -1065,7 +1157,7 @@ TEST(QtToolSettingsDragSpinnerTests,
   const QPoint press = line_edit->rect().center();
   const QPoint crossed(press.x() + QApplication::startDragDistance() + 1,
                        press.y());
-  const QPoint one_step(crossed.x() + 8, crossed.y());
+  const QPoint one_step(crossed.x() + 2, crossed.y());
   send_mouse_event(*line_edit, QEvent::MouseButtonPress, press,
                    Qt::LeftButton, Qt::LeftButton);
   send_mouse_event(*line_edit, QEvent::MouseMove, crossed, Qt::NoButton,
@@ -1224,6 +1316,92 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_TRUE(rotation_header->isChecked())
       << "a descriptor rebuild must restore disclosure state by stable id";
   EXPECT_EQ(rotation_header->text(), QStringLiteral("Rotazione"));
+
+  panel.unbind();
+  panel.hide();
+}
+
+TEST(QtToolSettingsPanelTests,
+     ExtrudeCtrlScrubConvertsTheLiveWorldGridToDisplayedSceneUnits) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-extrude-numeric-grid-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Extrude Numeric Grid Source");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.set_expanded(true);
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+  auto *amount = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.extrude.amount"));
+  ASSERT_NE(amount, nullptr);
+  auto *line_edit = amount->findChild<QLineEdit *>();
+  ASSERT_NE(line_edit, nullptr);
+  double world_grid = 1.0;
+  quader::qt_set_numeric_snap_increment_provider(
+      application, panel, [&world_grid]() { return world_grid; });
+  const auto send_ctrl_mouse = [&](QEvent::Type type, QPoint position,
+                                   Qt::MouseButton button,
+                                   Qt::MouseButtons buttons) {
+    QMouseEvent event(type, QPointF(position),
+                      QPointF(line_edit->mapToGlobal(position)), button,
+                      buttons, Qt::ControlModifier);
+    QCoreApplication::sendEvent(line_edit, &event);
+  };
+
+  for (const auto [grid, displayed_amount] :
+       std::array{std::pair{1.0, 32.0}, std::pair{0.5, 16.0}}) {
+    SCOPED_TRACE(grid);
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("extrude", "extrude.amount", 0.0)
+                    .ok());
+    panel.refresh();
+    ASSERT_DOUBLE_EQ(amount->value(), 0.0);
+    // The provider is live: changing the scene grid must affect an already
+    // constructed Amount editor, whose displayed units are 32 per world unit.
+    world_grid = grid;
+    const QPoint press = line_edit->rect().center();
+    const QPoint crossed(press.x() + QApplication::startDragDistance() + 1,
+                         press.y());
+    const QPoint moved(crossed.x() + 170, crossed.y());
+    send_ctrl_mouse(QEvent::MouseButtonPress, press, Qt::LeftButton,
+                    Qt::LeftButton);
+    send_ctrl_mouse(QEvent::MouseMove, crossed, Qt::NoButton, Qt::LeftButton);
+    send_ctrl_mouse(QEvent::MouseMove, moved, Qt::NoButton, Qt::LeftButton);
+    EXPECT_DOUBLE_EQ(amount->value(), displayed_amount);
+    send_ctrl_mouse(QEvent::MouseButtonRelease, moved, Qt::LeftButton,
+                    Qt::NoButton);
+    EXPECT_FALSE(panel.numeric_interaction_active());
+
+    const auto settings = editor.tools().active_settings();
+    const auto *owner_amount = find_setting(settings, "extrude.amount");
+    ASSERT_NE(owner_amount, nullptr);
+    EXPECT_DOUBLE_EQ(owner_amount->number_value, displayed_amount);
+    const auto mesh = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(mesh.has_value());
+    float maximum_extent = 0.0F;
+    for (const auto &vertex : mesh->vertices) {
+      maximum_extent = std::max(
+          {maximum_extent, std::abs(vertex.position.x),
+           std::abs(vertex.position.y), std::abs(vertex.position.z)});
+    }
+    EXPECT_NEAR(maximum_extent, 1.0 + grid, 1.0e-5)
+        << "one snapped grid step must move the cap by the physical world grid";
+  }
 
   panel.unbind();
   panel.hide();
@@ -2219,24 +2397,17 @@ TEST(QtFaceTextureControlsTests,
 }
 
 TEST(QtFaceTextureControlsTests,
-     TextureScaleSpinnersTraverseExactBinaryStepsAndRetainHistory) {
+     TextureScaleSpinnersUseHundredthsWithFixedPrecisionAndRetainHistory) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const QLocale previous_locale;
   const auto restore_locale =
       qScopeGuard([previous_locale] { QLocale::setDefault(previous_locale); });
   QLocale::setDefault(QLocale::c());
   int argc = 1;
-  char executable[] = "quader-texture-binary-scale-tests";
+  char executable[] = "quader-texture-hundredth-scale-tests";
   char *argv[] = {executable, nullptr};
   QApplication application(argc, argv);
   QApplication::setStyle(QStringLiteral("Fusion"));
-  constexpr std::array<const char *, 24> kExpectedText{{
-      "0.0001", "0.0002", "0.0005", "0.0010", "0.0020", "0.0039",
-      "0.0078", "0.0156", "0.0313", "0.0625", "0.1250", "0.2500",
-      "0.5000", "1.0000", "2.0000", "4.0000", "8.0000", "16.0000",
-      "32.0000", "64.0000", "128.0000", "256.0000", "512.0000",
-      "1024.0000",
-  }};
   using Field = quader::QuaderFaceTextureField;
   const std::array<std::pair<const char *, Field>, 2> axes{{
       {"x", Field::ScaleX}, {"y", Field::ScaleY},
@@ -2250,7 +2421,7 @@ TEST(QtFaceTextureControlsTests,
     ASSERT_TRUE(editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
-    ASSERT_TRUE(set_face_texture_field(editor, field, 1.0 / 8192.0).ok());
+    ASSERT_TRUE(set_face_texture_field(editor, field, 1.0).ok());
     quader::QtFaceTextureControls panel;
     panel.setAttribute(Qt::WA_DontShowOnScreen, true);
     panel.bind(editor);
@@ -2262,15 +2433,17 @@ TEST(QtFaceTextureControlsTests,
         QStringLiteral("face_texture.edit_texture.message"));
     ASSERT_NE(spin, nullptr);
     ASSERT_NE(message, nullptr);
-    const auto expect_scale = [&](int exponent) {
-      const double expected = std::ldexp(1.0, exponent);
+    EXPECT_DOUBLE_EQ(spin->singleStep(), 0.01);
+    const auto expect_scale = [&](double expected, const char *text) {
       const auto settings = editor.modeling().face_texture_settings();
-      EXPECT_EQ(field == Field::ScaleX ? settings.scale_x : settings.scale_y,
-                std::optional<double>(expected));
+      const auto actual = field == Field::ScaleX ? settings.scale_x
+                                                 : settings.scale_y;
+      ASSERT_TRUE(actual.has_value());
+      EXPECT_NEAR(*actual, expected, 0.000001);
       EXPECT_EQ(field == Field::ScaleX ? settings.scale_y : settings.scale_x,
                 std::optional<double>(1.0));
-      EXPECT_DOUBLE_EQ(spin->value(), expected);
-      EXPECT_EQ(spin->text(), QString::fromLatin1(kExpectedText[exponent + 13]));
+      EXPECT_NEAR(spin->value(), expected, 0.000001);
+      EXPECT_EQ(spin->text(), QString::fromLatin1(text));
       EXPECT_TRUE(message->isHidden());
     };
     const auto step = [&](bool upward) {
@@ -2281,54 +2454,41 @@ TEST(QtFaceTextureControlsTests,
       }
       finish_spin_edit(*spin);
     };
-    const auto expect_endpoint_no_op = [&](bool upward, int exponent) {
-      const auto revisions = editor.revisions();
-      const auto history = editor.history().snapshot();
-      step(upward);
-      step(upward);
-      expect_scale(exponent);
-      const auto after = editor.revisions();
-      EXPECT_EQ(after.project_revision, revisions.project_revision);
-      EXPECT_EQ(after.scene_revision, revisions.scene_revision);
-      EXPECT_EQ(after.scene_layer_revision, revisions.scene_layer_revision);
-      EXPECT_EQ(after.asset_revision, revisions.asset_revision);
-      EXPECT_EQ(after.modeling_content_revision,
-                revisions.modeling_content_revision);
-      EXPECT_EQ(after.modeling_selection_revision,
-                revisions.modeling_selection_revision);
-      const auto after_history = editor.history().snapshot();
-      EXPECT_EQ(after_history.can_undo, history.can_undo);
-      EXPECT_EQ(after_history.can_redo, history.can_redo);
-      EXPECT_EQ(after_history.undo_label, history.undo_label);
-      EXPECT_EQ(after_history.redo_label, history.redo_label);
-    };
-
-    expect_scale(-13);
-    for (int exponent = -12; exponent <= 10; ++exponent) {
-      SCOPED_TRACE(exponent);
-      step(true);
-      expect_scale(exponent);
-    }
-    expect_endpoint_no_op(true, 10);
+    expect_scale(1.0, "1.0000");
+    step(true);
+    expect_scale(1.01, "1.0100");
+    send_key_event(*spin, Qt::Key_Up);
+    finish_spin_edit(*spin);
+    expect_scale(1.02, "1.0200");
     ASSERT_TRUE(editor.history().undo().ok());
     panel.refresh();
-    expect_scale(9);
+    expect_scale(1.01, "1.0100");
     ASSERT_TRUE(editor.history().redo().ok());
     panel.refresh();
-    expect_scale(10);
-
-    for (int exponent = 9; exponent >= -13; --exponent) {
-      SCOPED_TRACE(exponent);
-      step(false);
-      expect_scale(exponent);
-    }
-    expect_endpoint_no_op(false, -13);
+    expect_scale(1.02, "1.0200");
+    step(false);
+    expect_scale(1.01, "1.0100");
+    send_key_event(*spin, Qt::Key_Down);
+    finish_spin_edit(*spin);
+    expect_scale(1.0, "1.0000");
     ASSERT_TRUE(editor.history().undo().ok());
     panel.refresh();
-    expect_scale(-12);
+    expect_scale(1.01, "1.0100");
     ASSERT_TRUE(editor.history().redo().ok());
     panel.refresh();
-    expect_scale(-13);
+    expect_scale(1.0, "1.0000");
+
+    ASSERT_TRUE(set_face_texture_field(editor, field, 0.01).ok());
+    panel.refresh();
+    const auto before_zero = editor.revisions().modeling_content_revision;
+    // Re-enter the exact decimal before stepping: the model's float storage
+    // can otherwise leave a tiny remainder after subtracting 0.01.
+    type_spin_text(*spin, QStringLiteral("0.01"));
+    spin->stepDown();
+    EXPECT_DOUBLE_EQ(spin->value(), 0.0);
+    finish_spin_edit(*spin);
+    expect_scale(0.01, "0.0100");
+    EXPECT_EQ(editor.revisions().modeling_content_revision, before_zero);
     panel.unbind();
   }
 }
@@ -2381,10 +2541,12 @@ TEST(QtFaceTextureControlsTests,
       }
       finish_spin_edit(*spin);
       const auto settings = editor.modeling().face_texture_settings();
-      EXPECT_EQ(field == Field::ScaleX ? settings.scale_x : settings.scale_y,
-                std::optional<double>(upward ? 2.0 : 0.5));
-      EXPECT_EQ(spin->text(), upward ? QStringLiteral("2.0000")
-                                    : QStringLiteral("0.5000"));
+      const auto actual = field == Field::ScaleX ? settings.scale_x
+                                                 : settings.scale_y;
+      ASSERT_TRUE(actual.has_value());
+      EXPECT_NEAR(*actual, upward ? 1.01 : 0.99, 0.000001);
+      EXPECT_EQ(spin->text(), upward ? QStringLiteral("1.0100")
+                                    : QStringLiteral("0.9900"));
       ASSERT_TRUE(editor.history().undo().ok());
       panel.refresh();
       EXPECT_EQ(spin->text(), QStringLiteral("--"));
@@ -2404,7 +2566,7 @@ TEST(QtFaceTextureControlsTests,
 }
 
 TEST(QtFaceTextureControlsTests,
-     TextureScaleManualValuesRemainUnrestrictedAndArrowsPreserveNegativeSigns) {
+     TextureScaleManualValuesRemainUnrestrictedAndArrowsAddToNegativeValues) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const QLocale previous_locale;
   const auto restore_locale =
@@ -2448,11 +2610,13 @@ TEST(QtFaceTextureControlsTests,
     EXPECT_EQ(stored_value(), std::optional<double>(-1.5));
     spin->stepUp();
     finish_spin_edit(*spin);
-    EXPECT_EQ(stored_value(), std::optional<double>(-3.0));
-    EXPECT_EQ(spin->text(), QStringLiteral("-3.0000"));
+    ASSERT_TRUE(stored_value().has_value());
+    EXPECT_NEAR(*stored_value(), -1.49, 0.000001);
+    EXPECT_EQ(spin->text(), QStringLiteral("-1.4900"));
     spin->stepDown();
     finish_spin_edit(*spin);
-    EXPECT_EQ(stored_value(), std::optional<double>(-1.5));
+    ASSERT_TRUE(stored_value().has_value());
+    EXPECT_NEAR(*stored_value(), -1.5, 0.000001);
     EXPECT_EQ(spin->text(), QStringLiteral("-1.5000"));
   }
   panel.unbind();
@@ -2586,14 +2750,6 @@ TEST(QtFaceTextureControlsTests,
                   1.0 / 8192.0).ok());
   panel.refresh();
   const auto failure_revision = editor.revisions().modeling_content_revision;
-  const auto failure_history = editor.history().snapshot();
-  scale->stepDown();
-  finish_spin_edit(*scale);
-  EXPECT_EQ(editor.revisions().modeling_content_revision, failure_revision);
-  EXPECT_EQ(editor.history().snapshot().undo_label, failure_history.undo_label);
-  EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
-            std::optional<double>(1.0 / 8192.0));
-  EXPECT_TRUE(message->isHidden());
   const auto notifications_before_failure = notifications.size();
   editor.preferences().set_runtime_hooks({
       .rotation_snap_degrees = [] { return 0.0; },
@@ -3867,7 +4023,7 @@ TEST(QtToolSettingsPanelTests,
   auto *resolution_increase =
       resolution_spinner != nullptr
           ? resolution_spinner->findChild<QToolButton *>(
-                QStringLiteral("drag_spinner.increase"))
+                QStringLiteral("numeric_spin_box.increase"))
           : nullptr;
   auto *radius_slider = panel.findChild<QSlider *>(QStringLiteral(
       "tool_settings.control.curve.solidify.radius.slider"));
@@ -3894,9 +4050,9 @@ TEST(QtToolSettingsPanelTests,
   const QPoint resolution_crossed(
       resolution_press.x() + QApplication::startDragDistance() + 1,
       resolution_press.y());
-  const QPoint resolution_first(resolution_crossed.x() + 8,
+  const QPoint resolution_first(resolution_crossed.x() + 2,
                                 resolution_crossed.y());
-  const QPoint resolution_second(resolution_crossed.x() + 24,
+  const QPoint resolution_second(resolution_crossed.x() + 6,
                                  resolution_crossed.y());
   send_mouse_event(*resolution_editor, QEvent::MouseButtonPress,
                    resolution_press, Qt::LeftButton, Qt::LeftButton);

@@ -21,7 +21,9 @@
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_auxiliary_window_state.hpp"
+#include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_project_home_page.hpp"
@@ -65,6 +67,7 @@
 #include <QKeyEvent>
 #include <QMainWindow>
 #include <QListView>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaObject>
@@ -2505,6 +2508,97 @@ TEST(QtProjectWorkspaceTests,
     position_changed = position_changed || a.x != b.x || a.y != b.y || a.z != b.z;
   }
   EXPECT_TRUE(position_changed);
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     StandaloneNumericDragDefersStructuralInspectorRefreshUntilRelease) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-ui-numeric-drag-retained-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-numeric-drag-retained-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  const auto project_root = isolated_profile / "Numeric drag project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  ASSERT_TRUE(editor.project().create(project_root).ok());
+  const auto source = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Before numeric drag");
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &scene = *project.active_scene()->session;
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+  ui.show();
+  ASSERT_TRUE(editor.ui().show_panel("inspector").ok());
+  application.processEvents();
+  ui.refresh({}, {});
+  auto *dock = ui.main_window()->findChild<QDockWidget *>(
+      QStringLiteral("dock_inspector"));
+  ASSERT_NE(dock, nullptr);
+  QPointer<QLineEdit> retained_name = dock->findChild<QLineEdit *>(
+      QStringLiteral("inspector.general.name"));
+  QPointer<QDoubleSpinBox> retained_position = dock->findChild<QDoubleSpinBox *>(
+      QStringLiteral("inspector.transform.position.x"));
+  ASSERT_NE(retained_name, nullptr);
+  ASSERT_NE(retained_position, nullptr);
+  ASSERT_EQ(retained_name->text(), QStringLiteral("Before numeric drag"));
+
+  // A modal or settings field has no tool-panel interaction owner. Its shared
+  // numeric gesture must still protect expensive structural presentation.
+  quader::QtDoubleSpinBox field;
+  field.setAttribute(Qt::WA_DontShowOnScreen, true);
+  field.resize(220, 32);
+  field.show();
+  application.processEvents();
+  auto *line = field.findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const QPoint start = line->rect().center();
+  const QPoint crossed = start + QPoint(QApplication::startDragDistance() + 1, 0);
+  send_mouse_event(*line, QEvent::MouseButtonPress, start,
+                   Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(*line, QEvent::MouseMove, crossed,
+                   Qt::NoButton, Qt::LeftButton);
+  ASSERT_TRUE(quader::qt_install_numeric_spin_box(field).is_dragging());
+  ASSERT_TRUE(editor.scene().rename(source.value().entity,
+                                     "After numeric drag").ok());
+  for (int frame = 0; frame < 5; ++frame) {
+    ui.refresh({}, {});
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    ASSERT_NE(retained_name, nullptr);
+    ASSERT_NE(retained_position, nullptr);
+    EXPECT_EQ(retained_name->text(), QStringLiteral("Before numeric drag"));
+    EXPECT_EQ(dock->findChild<QDoubleSpinBox *>(
+                  QStringLiteral("inspector.transform.position.x")),
+              retained_position.data());
+  }
+
+  send_mouse_event(*line, QEvent::MouseButtonRelease, crossed,
+                   Qt::LeftButton, Qt::NoButton);
+  ASSERT_FALSE(quader::qt_install_numeric_spin_box(field).is_dragging());
+  ui.refresh({}, {});
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  auto *updated_name = dock->findChild<QLineEdit *>(
+      QStringLiteral("inspector.general.name"));
+  ASSERT_NE(updated_name, nullptr);
+  EXPECT_EQ(updated_name->text(), QStringLiteral("After numeric drag"));
+  EXPECT_EQ(retained_name, nullptr);
+  EXPECT_EQ(retained_position, nullptr);
   ui.shutdown();
 }
 

@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_settings_control_widgets.hpp"
 #include "ui/qt_status_message.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -34,7 +35,7 @@ namespace {
 using namespace qt_settings_detail;
 
 // Coalesce numeric edits while preserving their captured target revision.
-constexpr int kNumberDispatchIntervalMs = 50;
+constexpr int kNumberDispatchIntervalMs = 16;
 
 QString qtext(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -90,10 +91,10 @@ struct TextureControlDescription {
 
 constexpr std::array<TextureControlDescription, 5> kTextureControls{{
     {QuaderFaceTextureField::ScaleX, "scale_x",
-     "tool_settings.texture_scale_x", "Scale U", 1.0, 1.0,
+     "tool_settings.texture_scale_x", "Scale U", 0.01, 1.0,
      "Texture width (U) scale; its screen direction follows the mapped texture. Larger magnitudes enlarge the texture; negative values mirror it. Authored UVs and material tiling also affect visible density."},
     {QuaderFaceTextureField::ScaleY, "scale_y",
-     "tool_settings.texture_scale_y", "Scale V", 1.0, 1.0,
+     "tool_settings.texture_scale_y", "Scale V", 0.01, 1.0,
      "Texture height (V) scale; its screen direction follows the mapped texture. Larger magnitudes enlarge the texture; negative values mirror it. Authored UVs and material tiling also affect visible density."},
     {QuaderFaceTextureField::ShiftX, "shift_x",
      "tool_settings.texture_shift_x", "Shift U (px)", 1.0, 0.0,
@@ -227,6 +228,7 @@ struct QtFaceTextureControls::Impl {
     std::string merge_key;
     bool editing = false;
     bool invalid_value = false;
+    bool defer_drag_publication = false;
   };
 
   explicit Impl(QtFaceTextureControls &panel) : panel_(panel) {
@@ -570,10 +572,10 @@ private:
       binding.label = new QLabel(texture_section_->content());
       binding.label->setObjectName(name + QStringLiteral(".label"));
       binding.label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+      const bool scale = binding.field == QuaderFaceTextureField::ScaleX ||
+                         binding.field == QuaderFaceTextureField::ScaleY;
       binding.spin = new QtMixedNumberSpinBox(
-          description.step_origin, texture_section_->content(),
-          binding.field == QuaderFaceTextureField::ScaleX ||
-              binding.field == QuaderFaceTextureField::ScaleY);
+          description.step_origin, texture_section_->content(), scale);
       binding.spin->setObjectName(name);
       binding.spin->setSingleStep(description.step);
       set_scalable_minimum_width(*binding.spin, 64);
@@ -586,10 +588,57 @@ private:
       binding.dispatch_timer = new QTimer(binding.spin);
       binding.dispatch_timer->setSingleShot(true);
       binding.dispatch_timer->setInterval(kNumberDispatchIntervalMs);
+      binding.dispatch_timer->setTimerType(Qt::PreciseTimer);
       QObject::connect(binding.dispatch_timer, &QTimer::timeout, &panel_,
                        [this, index]() { flush_texture_dispatch(index); });
       binding.spin->edited = [this, index](std::optional<double> value) {
         queue_texture_dispatch(index, value);
+      };
+      auto &numeric = qt_install_numeric_spin_box(*binding.spin);
+      if (scale) {
+        numeric.set_drag_sensitivity(description.step);
+      }
+      numeric.drag_started = [this, index]() {
+        TextureControlWidget &current = texture_controls_[index];
+        if (editor_ == nullptr || texture_synchronizing_ ||
+            !texture_settings_.has_value() || !texture_revision_.has_value() ||
+            *texture_revision_ !=
+                editor_->modeling().face_texture_settings_revision()) {
+          discard_texture_dispatch(current);
+          refresh_texture_settings(true);
+          return;
+        }
+        // A mixed field has no single value to restore on cancellation. Keep
+        // its draft local until release; ordinary numeric drags stay live.
+        current.defer_drag_publication =
+            (current.field == QuaderFaceTextureField::ScaleX &&
+             !texture_settings_->scale_x.has_value()) ||
+            (current.field == QuaderFaceTextureField::ScaleY &&
+             !texture_settings_->scale_y.has_value()) ||
+            (current.field == QuaderFaceTextureField::Rotate &&
+             texture_settings_->rotation_mixed);
+        if (!current.gesture_revision.has_value()) {
+          current.gesture_revision = *texture_revision_;
+          current.selection_token = texture_settings_->selection_token;
+          current.merge_key = next_texture_edit_merge_key();
+        }
+        current.editing = true;
+      };
+      numeric.interaction_canceled = [this, index]() {
+        if (texture_synchronizing_) {
+          return;
+        }
+        const std::uint64_t generation = binding_generation_;
+        if (!texture_controls_[index].defer_drag_publication) {
+          // The control restored its original scalar through edited(). Flush
+          // that final sample before releasing the existing merge identity.
+          flush_texture_dispatch(index);
+        }
+        if (generation != binding_generation_) {
+          return;
+        }
+        discard_texture_dispatch(texture_controls_[index]);
+        refresh_texture_settings(true);
       };
       QObject::connect(binding.spin, &QDoubleSpinBox::editingFinished, &panel_,
                        [this, index]() {
@@ -623,6 +672,10 @@ private:
     if (!binding.spin->isEnabled()) {
       return;
     }
+    if (binding.defer_drag_publication &&
+        qt_install_numeric_spin_box(*binding.spin).is_canceling()) {
+      return;
+    }
     binding.editing = true;
     if (!binding.gesture_revision.has_value()) {
       binding.gesture_revision = *texture_revision_;
@@ -644,13 +697,23 @@ private:
     }
     binding.last_requested_value = value;
     binding.pending_value = value;
-    binding.dispatch_timer->start();
+    if (!binding.defer_drag_publication) {
+      const bool dragging =
+          qt_install_numeric_spin_box(*binding.spin).is_dragging();
+      if (!dragging || !binding.dispatch_timer->isActive()) {
+        binding.dispatch_timer->start();
+      }
+    }
   }
 
   bool flush_texture_dispatch(std::size_t index) {
     TextureControlWidget &binding = texture_controls_[index];
     if (!binding.pending_value.has_value()) {
       return !binding.invalid_value;
+    }
+    if (binding.defer_drag_publication &&
+        qt_install_numeric_spin_box(*binding.spin).is_dragging()) {
+      return true;
     }
     binding.dispatch_timer->stop();
     if (editor_ == nullptr || !binding.gesture_revision.has_value() ||
@@ -790,6 +853,7 @@ private:
     binding.merge_key.clear();
     binding.editing = false;
     binding.invalid_value = false;
+    binding.defer_drag_publication = false;
   }
 
   void discard_texture_dispatches() {

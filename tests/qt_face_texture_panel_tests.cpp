@@ -12,6 +12,7 @@
 #include "ui/qt_face_texture_controls.hpp"
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 
 #include <gtest/gtest.h>
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -41,6 +42,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace quader {
@@ -103,6 +105,33 @@ protected:
   QDoubleSpinBox *number(const char *name) const {
     return panel_->findChild<QDoubleSpinBox *>(
         QStringLiteral("face_texture.texture.%1").arg(QString::fromLatin1(name)));
+  }
+
+  void send_numeric_mouse(QLineEdit &line, QEvent::Type type,
+                          const QPoint &position,
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    const bool move = type == QEvent::MouseMove;
+    const bool release = type == QEvent::MouseButtonRelease;
+    QMouseEvent event(type, position, line.mapToGlobal(position),
+                       move ? Qt::NoButton : Qt::LeftButton,
+                       release ? Qt::NoButton : Qt::LeftButton,
+                       modifiers);
+    QCoreApplication::sendEvent(&line, &event);
+  }
+
+  QPoint begin_numeric_drag(QLineEdit &line,
+                            Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    const QPoint press = line.rect().center();
+    send_numeric_mouse(line, QEvent::MouseButtonPress, press, modifiers);
+    const QPoint threshold = press + QPoint(QApplication::startDragDistance(), 0);
+    send_numeric_mouse(line, QEvent::MouseMove, threshold, modifiers);
+    return threshold;
+  }
+
+  void flush_numeric_timer(QDoubleSpinBox &spin) {
+    auto *timer = spin.findChild<QTimer *>(QString(), Qt::FindDirectChildrenOnly);
+    ASSERT_NE(timer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
   }
 
   void move_canvas_handle(int distance) {
@@ -197,6 +226,226 @@ protected:
   QuaderModelingObjectRef object_;
   std::unique_ptr<QtFaceTexturePanel> panel_;
 };
+
+TEST_F(QtFaceTexturePanelTests,
+       ScaleScrubUsesHundredthsAndPublishesOneUndoableGestureOnRelease) {
+  for (const char *axis : {"scale_x", "scale_y"}) {
+    SCOPED_TRACE(axis);
+    const bool horizontal = std::string_view(axis) == "scale_x";
+    const auto field = horizontal ? QuaderFaceTextureField::ScaleX
+                                  : QuaderFaceTextureField::ScaleY;
+    ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+        .field = field, .value = 1.0,
+        .selection_token = editor().modeling().face_texture_settings().selection_token,
+    }).ok());
+    panel_->refresh();
+    auto *spin = number(axis);
+    ASSERT_NE(spin, nullptr);
+    auto *line = spin->findChild<QLineEdit *>();
+    ASSERT_NE(line, nullptr);
+    const QPoint anchor = begin_numeric_drag(*line);
+    ASSERT_TRUE(qt_install_numeric_spin_box(*spin).is_dragging());
+    send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(1, 0));
+    EXPECT_DOUBLE_EQ(spin->value(), 1.01);
+    flush_numeric_timer(*spin);
+    const auto live = editor().modeling().face_texture_settings();
+    EXPECT_NEAR((horizontal ? live.scale_x : live.scale_y).value_or(0.0),
+                1.01, 0.000001);
+    panel_->refresh();
+    EXPECT_TRUE(panel_->numeric_interaction_active());
+    send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(2, 0));
+    EXPECT_DOUBLE_EQ(spin->value(), 1.02);
+    send_numeric_mouse(*line, QEvent::MouseButtonRelease, anchor + QPoint(2, 0));
+    EXPECT_FALSE(panel_->numeric_interaction_active());
+    const auto committed = editor().modeling().face_texture_settings();
+    EXPECT_NEAR((horizontal ? committed.scale_x : committed.scale_y).value_or(0.0),
+                1.02, 0.000001);
+    ASSERT_TRUE(editor().history().undo().ok());
+    const auto restored = editor().modeling().face_texture_settings();
+    EXPECT_EQ(horizontal ? restored.scale_x : restored.scale_y,
+              std::optional<double>(1.0));
+    panel_->refresh();
+    const QPoint fine_anchor = begin_numeric_drag(*line, Qt::ShiftModifier);
+    send_numeric_mouse(*line, QEvent::MouseMove, fine_anchor + QPoint(1, 0),
+                        Qt::ShiftModifier);
+    EXPECT_DOUBLE_EQ(spin->value(), 1.001);
+    send_numeric_mouse(*line, QEvent::MouseButtonRelease,
+                        fine_anchor + QPoint(1, 0), Qt::ShiftModifier);
+    const auto fine = editor().modeling().face_texture_settings();
+    EXPECT_NEAR((horizontal ? fine.scale_x : fine.scale_y).value_or(0.0),
+                1.001, 0.000001);
+    ASSERT_TRUE(editor().history().undo().ok());
+    panel_->refresh();
+  }
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       ContinuousTextureScrubPublishesWhileSamplesKeepArriving) {
+  auto *spin = number("shift_x");
+  ASSERT_NE(spin, nullptr);
+  auto *line = spin->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const double original = editor().modeling().face_texture_settings().shift_x;
+  const QPoint anchor = begin_numeric_drag(*line);
+  ASSERT_TRUE(qt_install_numeric_spin_box(*spin).is_dragging());
+  QEventLoop loop;
+  QTimer samples;
+  samples.setTimerType(Qt::PreciseTimer);
+  samples.setInterval(4);
+  QTimer deadline;
+  deadline.setSingleShot(true);
+  int sample_count = 0;
+  bool published_while_sampling = false;
+  QObject::connect(&samples, &QTimer::timeout, &loop, [&] {
+    ++sample_count;
+    send_numeric_mouse(*line, QEvent::MouseMove,
+                        anchor + QPoint(sample_count * 8, 0));
+    if (editor().modeling().face_texture_settings().shift_x != original) {
+      published_while_sampling = true;
+      loop.quit();
+    }
+  });
+  QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+  samples.start();
+  deadline.start(500);
+  loop.exec();
+  samples.stop();
+  deadline.stop();
+  EXPECT_TRUE(published_while_sampling)
+      << "Continued pointer samples must not restart the dispatch timer";
+  EXPECT_GT(sample_count, 1);
+  EXPECT_TRUE(qt_install_numeric_spin_box(*spin).is_dragging());
+  EXPECT_TRUE(panel_->numeric_interaction_active());
+  const double final_value = spin->value();
+  send_numeric_mouse(*line, QEvent::MouseButtonRelease,
+                      anchor + QPoint(sample_count * 8, 0));
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  EXPECT_NEAR(editor().modeling().face_texture_settings().shift_x,
+              final_value, 0.000001);
+  ASSERT_TRUE(editor().history().undo().ok());
+  EXPECT_DOUBLE_EQ(editor().modeling().face_texture_settings().shift_x, original);
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       ControlScaleScrubUsesApplicationGrid) {
+  QObject grid_context;
+  qt_set_numeric_snap_increment_provider(*application_, grid_context,
+                                          [] { return 2.0; });
+  ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+      .field = QuaderFaceTextureField::ScaleX, .value = 1.0,
+      .selection_token = editor().modeling().face_texture_settings().selection_token,
+  }).ok());
+  panel_->refresh();
+  auto *spin = number("scale_x");
+  ASSERT_NE(spin, nullptr);
+  auto *line = spin->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const QPoint anchor = begin_numeric_drag(*line, Qt::ControlModifier);
+  send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(400, 0),
+                      Qt::ControlModifier);
+  EXPECT_DOUBLE_EQ(spin->value(), 6.0);
+  send_numeric_mouse(*line, QEvent::MouseButtonRelease, anchor + QPoint(400, 0),
+                      Qt::ControlModifier);
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x,
+            std::optional<double>(6.0));
+  ASSERT_TRUE(editor().history().undo().ok());
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x,
+            std::optional<double>(1.0));
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       CancelingScaleScrubRestoresPublishedValueAndDiscardsTrailingRelease) {
+  auto *spin = number("scale_x");
+  ASSERT_NE(spin, nullptr);
+  auto *line = spin->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const double original = spin->value();
+  const QPoint anchor = begin_numeric_drag(*line);
+  send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(16, 0));
+  ASSERT_NE(spin->value(), original);
+  flush_numeric_timer(*spin);
+  ASSERT_NE(editor().modeling().face_texture_settings().scale_x,
+            std::optional<double>(original));
+  QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(line, &cancel);
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x,
+            std::optional<double>(original));
+  EXPECT_DOUBLE_EQ(spin->value(), original);
+  const auto revision = editor().revisions().modeling_content_revision;
+  send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(24, 0));
+  send_numeric_mouse(*line, QEvent::MouseButtonRelease, anchor + QPoint(24, 0));
+  flush_numeric_timer(*spin);
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       MixedScaleScrubCancelsWithoutReplacingDistinctFaceValues) {
+  for (const auto [face, scale] :
+       {std::pair{1, 2.0}, std::pair{2, 8.0}}) {
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+        .field = QuaderFaceTextureField::ScaleX, .value = scale,
+        .selection_token = editor().modeling().face_texture_settings().selection_token,
+    }).ok());
+  }
+  ASSERT_TRUE(editor().selection().select_faces(object_, {1, 2}).ok());
+  panel_->refresh();
+  ASSERT_FALSE(editor().modeling().face_texture_settings().scale_x.has_value());
+  auto *spin = number("scale_x");
+  ASSERT_NE(spin, nullptr);
+  auto *line = spin->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const auto revision = editor().revisions().modeling_content_revision;
+  const QPoint anchor = begin_numeric_drag(*line);
+  send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(16, 0));
+  EXPECT_DOUBLE_EQ(spin->value(), 1.16);
+  flush_numeric_timer(*spin);
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(line, &cancel);
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  EXPECT_EQ(spin->text(), QStringLiteral("--"));
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  for (const auto [face, scale] :
+       {std::pair{1, 2.0}, std::pair{2, 8.0}}) {
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    EXPECT_EQ(editor().modeling().face_texture_settings().scale_x,
+              std::optional<double>(scale));
+  }
+  ASSERT_TRUE(editor().selection().select_faces(object_, {1, 2}).ok());
+  panel_->refresh();
+  const QPoint committed_anchor = begin_numeric_drag(*line);
+  send_numeric_mouse(*line, QEvent::MouseMove, committed_anchor + QPoint(16, 0));
+  send_numeric_mouse(*line, QEvent::MouseButtonRelease,
+                      committed_anchor + QPoint(16, 0));
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  EXPECT_NEAR(editor().modeling().face_texture_settings().scale_x.value_or(0.0),
+              1.16, 0.000001);
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       SelectionChangeAbandonsHeldScrubBeforeRetainedFieldTargetsAnotherFace) {
+  auto *spin = number("scale_x");
+  ASSERT_NE(spin, nullptr);
+  auto *line = spin->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const QPoint anchor = begin_numeric_drag(*line);
+  send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(16, 0));
+  ASSERT_TRUE(panel_->numeric_interaction_active());
+  ASSERT_TRUE(editor().selection().select_face(object_, 2).ok());
+  const auto settings = editor().modeling().face_texture_settings();
+  panel_->refresh();
+  EXPECT_FALSE(qt_install_numeric_spin_box(*spin).is_dragging());
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  const auto revision = editor().revisions().modeling_content_revision;
+  send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(24, 0));
+  send_numeric_mouse(*line, QEvent::MouseButtonRelease, anchor + QPoint(24, 0));
+  flush_numeric_timer(*spin);
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, settings.scale_x);
+}
 
 TEST_F(QtFaceTexturePanelTests,
        NumericAndActionRowsKeepMatchingCompactGapsAtEveryInterfaceScale) {

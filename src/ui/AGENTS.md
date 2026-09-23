@@ -69,11 +69,17 @@ file except through prior written authorization from Francesco Di Blasi.
   direct notifications separately from command status, with errors taking priority over tool hints.
   Direct user actions publish failures through `editor.ui().notify`; command dispatch already owns
   its status. Tool result ports identify explicit attempts so hover/preview refreshes remain silent.
-- Floating numeric inputs use `QtDoubleSpinBox`; other numeric control text uses
+- Numeric fields use `QtSpinBox` or `QtDoubleSpinBox` and the shared
+  [`QtNumericSpinBoxController`](NUMERIC_INPUTS.md). It owns hover arrows, horizontal scrubbing and
+  text-entry transitions while the native spin box owns values, validation,
+  accessibility and virtual stepping. The application polish filter also adapts
+  Qt-created fields in dialogs and item editors. Keep gesture logic here rather
+  than adding panel-specific drag handlers; tool-setting wrappers only adapt
+  owner edit lifecycles. Other numeric control text uses
   `qt_format_number`. Show at most four decimal places without trailing zeroes, while retaining
   owner-defined precision and ranges. Unedited rounded text must not change the stored value.
-  Face texture Scale U/V deliberately retain four decimal places and share bounded binary steps
-  with the SDK texture actions; Shift and Rotate retain compact formatting.
+  Face texture Scale U/V deliberately retain four decimal places and use additive 0.01 steps;
+  Shift and Rotate retain compact formatting.
 - Settings categories group existing descriptors by user purpose. Undo/autosave share
   `SessionPreferences`: stage changes, merge per field, persist, then publish SessionCommit.
   File > Recover > Auto Save opens the native file picker in the owner-provided autosave folder;

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "ui/qt_numeric_format.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 
 #include <QDoubleSpinBox>
 #include <QLineEdit>
@@ -23,10 +24,26 @@ public:
                        text_edited_ = true;
                        edit_value_ = value();
                      });
+    QObject::connect(lineEdit(), &QLineEdit::textChanged, this,
+                     [this]() {
+                       if (!lineEdit()->isModified()) {
+                         text_edited_ = false;
+                       }
+                     });
     QObject::connect(this, &QDoubleSpinBox::valueChanged, this,
                      [this]() { text_edited_ = false; });
     QObject::connect(this, &QDoubleSpinBox::editingFinished, this,
                      [this]() { text_edited_ = false; });
+    qt_install_numeric_spin_box(*this, true);
+  }
+
+  [[nodiscard]] QSize sizeHint() const override {
+    return qt_numeric_spin_box_size_hint(*this, QDoubleSpinBox::sizeHint());
+  }
+
+  [[nodiscard]] QSize minimumSizeHint() const override {
+    return qt_numeric_spin_box_size_hint(*this,
+                                         QDoubleSpinBox::minimumSizeHint());
   }
 
 protected:

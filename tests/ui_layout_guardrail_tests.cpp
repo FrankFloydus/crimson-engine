@@ -1115,7 +1115,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "const QSignalBlocker slider_blocker(slider)");
   expect_contains(tool,
                   "std::max(4, decimal_places_for_step(control.step))");
-  expect_contains(tool, "constexpr int kNumberDispatchIntervalMs = 50");
+  expect_contains(tool, "dispatch_timer->setTimerType(Qt::PreciseTimer)");
   expect_contains(tool, "binding.pending_number_value = value");
   expect_contains(tool, "const bool pointer_drag =");
   expect_contains(tool, "!binding.number_dispatch_timer->isActive()");

@@ -10,20 +10,16 @@
 
 #include <functional>
 
-class QEvent;
-class QLineEdit;
 class QSpinBox;
 class QString;
-class QToolButton;
 
 namespace quader {
 
+class QtNumericSpinBoxController;
+
 /**
- * Compact integer editor with Blender-style horizontal value scrubbing.
- *
- * The child QSpinBox remains the text, validation, locale, keyboard, IME, and
- * accessibility owner. This wrapper adds one-step arrow buttons and turns a
- * display-mode horizontal drag into an absolute, bounded value scrub.
+ * Compact tool-settings facade over the shared numeric input control.
+ * Retains the panel's gesture callbacks and five-digit sizing contract.
  */
 class QtToolSettingsDragSpinner final : public QWidget {
 public:
@@ -50,39 +46,9 @@ public:
   std::function<void()> drag_started;
   std::function<void()> drag_finished;
 
-protected:
-  bool event(QEvent *event) override;
-  bool eventFilter(QObject *watched, QEvent *event) override;
-
 private:
-  void step_once(int direction);
-  void begin_editing();
-  void commit_editing();
-  void cancel_editing();
-  void finish_editing(bool canceled = false);
-  void begin_drag(double pointer_x);
-  void update_drag(double pointer_x);
-  void finish_drag();
-  void apply_value(int value);
-  void refresh_button_extents();
-  void synchronize_buttons();
-  void synchronize_editor_cursor();
-
-  QToolButton *decrease_button_ = nullptr;
   QSpinBox *spin_box_ = nullptr;
-  QLineEdit *line_edit_ = nullptr;
-  QToolButton *increase_button_ = nullptr;
-
-  bool press_pending_ = false;
-  bool editing_ = false;
-  bool dragging_ = false;
-  bool finishing_edit_ = false;
-  double press_pointer_x_ = 0.0;
-  double drag_anchor_x_ = 0.0;
-  double last_pointer_x_ = 0.0;
-  int press_value_ = 0;
-  int drag_anchor_value_ = 0;
-  int edit_original_value_ = 0;
+  QtNumericSpinBoxController *numeric_controller_ = nullptr;
 };
 
 } // namespace quader

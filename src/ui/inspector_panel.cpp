@@ -18,6 +18,7 @@
 #include "scene/transform_pivot.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -79,6 +80,7 @@ namespace {
 
 constexpr float kRadToDeg = 57.29577951308232f;
 constexpr float kDegToRad = 0.017453292519943295f;
+constexpr int kInspectorNumericDispatchIntervalMs = 16;
 constexpr float kInspectorLightRangeMin = 0.001f;
 constexpr float kInspectorLightRangeSliderMax = 100.0f;
 constexpr int kInspectorMinimumValueColumnWidth = 96;
@@ -342,7 +344,7 @@ QIcon material_action_icon(InspectorMaterialActionIcon action,
   return icon;
 }
 
-/// Extends the stock spin box with an explicit cancel callback for previews.
+/// Routes numeric cancellation through the Inspector's preview owner.
 class InspectorDoubleSpinBox final : public QtDoubleSpinBox {
 public:
   explicit InspectorDoubleSpinBox(QWidget *parent = nullptr)
@@ -354,12 +356,19 @@ protected:
   void keyPressEvent(QKeyEvent *event) override {
     if (event != nullptr && event->key() == Qt::Key_Escape &&
         cancel_handler != nullptr) {
-      cancel_handler();
-      clearFocus();
+      if (!qt_install_numeric_spin_box(*this).cancel_interaction()) {
+        const QPointer<InspectorDoubleSpinBox> guard(this);
+        const auto cancel = cancel_handler;
+        cancel();
+        if (guard != nullptr) {
+          const QSignalBlocker blocker(this);
+          clearFocus();
+        }
+      }
       event->accept();
       return;
     }
-    QDoubleSpinBox::keyPressEvent(event);
+    QtDoubleSpinBox::keyPressEvent(event);
   }
 };
 
@@ -487,6 +496,14 @@ struct InspectorPanel::Impl {
     std::shared_ptr<std::array<double, 3>> values;
   };
 
+  /// Latest absolute pointer sample within one live transform preview.
+  struct PendingTransformPreview {
+    TransformEditKind kind = TransformEditKind::Position;
+    std::array<double, 3> values{};
+    std::uint64_t binding_generation = 0;
+    std::uint64_t selection_revision = 0;
+  };
+
   explicit Impl(InspectorPanel &panel) : panel_(panel) {
     panel_.setObjectName(
         QString::fromLatin1(ui_panel_stable_id(UIPanelId::Inspector)));
@@ -521,6 +538,15 @@ struct InspectorPanel::Impl {
     tree_->header()->resizeSection(0, 140);
     root_layout->addWidget(tree_);
 
+    transform_dispatch_timer_ = new QTimer(&panel_);
+    transform_dispatch_timer_->setObjectName(
+        QStringLiteral("inspector.transform.dispatchTimer"));
+    transform_dispatch_timer_->setSingleShot(true);
+    transform_dispatch_timer_->setTimerType(Qt::PreciseTimer);
+    transform_dispatch_timer_->setInterval(kInspectorNumericDispatchIntervalMs);
+    QObject::connect(transform_dispatch_timer_, &QTimer::timeout, &panel_,
+                     [this]() { flush_transform_preview(); });
+
     const auto remember_section_state = [this](QTreeWidgetItem *item,
                                                 bool expanded) {
       if (rebuilding_ || item == nullptr) {
@@ -554,6 +580,9 @@ struct InspectorPanel::Impl {
     QObject::disconnect(tree_, nullptr, &panel_, nullptr);
     QObject::disconnect(tree_->header(), nullptr, &panel_, nullptr);
     rebuilding_ = true;
+    discard_pending_transform_preview();
+    delete transform_dispatch_timer_;
+    transform_dispatch_timer_ = nullptr;
     material_rows_.clear();
     delete tree_;
     tree_ = nullptr;
@@ -582,6 +611,10 @@ struct InspectorPanel::Impl {
 
   void abandon_runtime() noexcept {
     ++runtime_binding_generation_;
+    discard_pending_transform_preview();
+    for (QDoubleSpinBox *spin : panel_.findChildren<QDoubleSpinBox *>()) {
+      qt_install_numeric_spin_box(*spin).abandon_interaction();
+    }
     active_transform_preview_.abandon();
     active_transform_edit_.reset();
     active_continuous_edit_.reset();
@@ -813,6 +846,7 @@ private:
   }
 
   void clear_content() {
+    discard_pending_transform_preview();
     material_rows_.clear();
     transform_rows_.clear();
     light_range_field_ = nullptr;
@@ -1314,16 +1348,17 @@ private:
           active_continuous_id_ = stable_id;
           changed(next, merge_key);
         });
-    QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
-                     [this, stable_id]() {
-                       if (rebuilding_ || active_continuous_id_ != stable_id) {
-                         return;
-                       }
-                       active_continuous_edit_.reset();
-                       continuous_edit_active_ = false;
-                       active_continuous_id_.clear();
-                       force_rebuild_ = true;
-                     });
+    const auto finish = [this, stable_id]() {
+      if (rebuilding_ || active_continuous_id_ != stable_id) {
+        return;
+      }
+      active_continuous_edit_.reset();
+      continuous_edit_active_ = false;
+      active_continuous_id_.clear();
+      force_rebuild_ = true;
+    };
+    QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_, finish);
+    qt_install_numeric_spin_box(*spin).interaction_canceled = finish;
     return spin;
   }
 
@@ -1421,6 +1456,7 @@ private:
       active_continuous_id_.clear();
     };
     QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_, finish);
+    qt_install_numeric_spin_box(*spin).interaction_canceled = finish;
     if (field.slider != nullptr) {
       QObject::connect(field.slider.data(), &QSlider::valueChanged, &panel_,
                        [this, field, update, finish](int position) {
@@ -1900,6 +1936,10 @@ private:
       spin->setRange(minimum, maximum);
       spin->setSingleStep(step);
       spin->setDecimals(3);
+      auto &numeric = qt_install_numeric_spin_box(*spin);
+      if (kind != TransformEditKind::Rotation) {
+        numeric.set_drag_sensitivity(0.01);
+      }
       spin->setKeyboardTracking(true);
       spin->setValue((*values)[axis]);
       spin->setMinimumWidth(0);
@@ -1907,12 +1947,19 @@ private:
       layout->addWidget(spin, 0, field_column);
 
       QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
-                       [this, kind, axis, values](double next) {
+                       [this, kind, axis, values,
+                        controller = &numeric](double next) {
                          if (rebuilding_) {
                            return;
                          }
                          (*values)[axis] = next;
-                         preview_transform_edit(kind, *values);
+                         if (controller->is_canceling()) {
+                           discard_pending_transform_preview();
+                         } else if (controller->is_dragging()) {
+                           queue_transform_preview(kind, *values);
+                         } else {
+                           preview_transform_edit(kind, *values);
+                         }
                        });
       QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
                        [this, kind]() {
@@ -1924,6 +1971,17 @@ private:
         if (active_transform_edit_ && active_transform_edit_->kind == kind) {
           cancel_active_transform_edit();
           force_rebuild_ = true;
+        }
+      };
+      qt_install_numeric_spin_box(*spin).interaction_canceled = [spin]() {
+        const QPointer<InspectorDoubleSpinBox> guard(spin);
+        const auto cancel = spin->cancel_handler;
+        if (cancel) {
+          cancel();
+        }
+        if (guard != nullptr) {
+          const QSignalBlocker blocker(spin);
+          spin->clearFocus();
         }
       };
     }
@@ -1939,6 +1997,10 @@ private:
 
   bool begin_transform_edit(TransformEditKind kind,
                             const std::array<double, 3> &values) {
+    if (document_ == nullptr ||
+        document_->selection_revision() != built_scene_selection_revision_) {
+      return false;
+    }
     if (transform_edit_matches(kind) &&
         active_transform_preview_.preview_active()) {
       return true;
@@ -2031,7 +2093,58 @@ private:
     }
   }
 
+  /// Capture the original owner state once, then replace unpublished samples.
+  void queue_transform_preview(TransformEditKind kind,
+                               const std::array<double, 3> &values) {
+    if (!begin_transform_edit(kind, values)) {
+      force_rebuild_ = true;
+      return;
+    }
+    pending_transform_preview_ = PendingTransformPreview{
+        .kind = kind,
+        .values = values,
+        .binding_generation = runtime_binding_generation_,
+        .selection_revision = document_->selection_revision(),
+    };
+    if (!transform_dispatch_timer_->isActive()) {
+      transform_dispatch_timer_->start();
+    }
+  }
+
+  /// Publish at the timer deadline or synchronously before committing release.
+  void flush_transform_preview() {
+    const auto pending = std::exchange(pending_transform_preview_, std::nullopt);
+    transform_dispatch_timer_->stop();
+    if (!pending.has_value() || rebuilding_ || document_ == nullptr ||
+        pending->binding_generation != runtime_binding_generation_ ||
+        pending->selection_revision != document_->selection_revision() ||
+        !transform_edit_matches(pending->kind)) {
+      return;
+    }
+    preview_transform_edit(pending->kind, pending->values);
+  }
+
+  /// Drop deferred work without touching a potentially outgoing document.
+  void discard_pending_transform_preview() {
+    pending_transform_preview_.reset();
+    if (transform_dispatch_timer_ != nullptr) {
+      transform_dispatch_timer_->stop();
+    }
+  }
+
   void finish_transform_edit(TransformEditKind kind) {
+    const std::uint64_t generation = runtime_binding_generation_;
+    QPointer<InspectorPanel> guard(&panel_);
+    flush_transform_preview();
+    if (guard == nullptr || generation != runtime_binding_generation_) {
+      return;
+    }
+    if (document_ == nullptr ||
+        document_->selection_revision() != built_scene_selection_revision_) {
+      cancel_active_transform_edit();
+      force_rebuild_ = true;
+      return;
+    }
     if (!transform_edit_matches(kind)) {
       return;
     }
@@ -2043,6 +2156,7 @@ private:
   }
 
   void cancel_active_transform_edit() {
+    discard_pending_transform_preview();
     if (active_transform_preview_.preview_active()) {
       (void)active_transform_preview_.cancel();
     }
@@ -2693,6 +2807,8 @@ private:
   std::optional<LightComponent> presented_light_;
   SceneTransformDragService active_transform_preview_;
   std::optional<TransformEditState> active_transform_edit_;
+  std::optional<PendingTransformPreview> pending_transform_preview_;
+  QTimer *transform_dispatch_timer_ = nullptr;
   UIContinuousEditTracker active_continuous_edit_;
   QColorDialog *active_color_dialog_ = nullptr;
   std::vector<EntityId> selection_;

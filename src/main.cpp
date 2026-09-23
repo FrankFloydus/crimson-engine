@@ -12,6 +12,7 @@
 #include "quader_app_version.hpp"
 #include "ui/qt_application_cursor.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 
 #include <QApplication>
 #include <QIcon>
@@ -141,6 +142,7 @@ int main(int argc, char** argv) {
   quader::apply_qt_obsidian_application_theme(
       fusion_style->standardPalette());
   quader::install_qt_application_default_cursor(qt_application);
+  quader::qt_install_default_numeric_spin_boxes(qt_application);
   const QIcon application_icon = quader_application_icon();
   if (application_icon.isNull()) {
     return 1;
