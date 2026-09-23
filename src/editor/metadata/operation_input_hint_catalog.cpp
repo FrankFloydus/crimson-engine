@@ -164,8 +164,7 @@ viewport_tool_input_hints(std::string_view tool_id) {
                         "Constrain Z"}}) {
       hints.push_back(keybinding_hint(target, key, fallback));
     }
-    hints.push_back(keybinding_hint("viewport.cancel_active_tool",
-                                    "operation.hints.cancel", "Cancel"));
+    append_modal_completion_hints(hints);
     append_selection_keybinding_hints(hints);
   } else if (tool_id == "move" || tool_id == "rotate" ||
              tool_id == "scale") {

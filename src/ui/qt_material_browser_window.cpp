@@ -5,6 +5,8 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_material_browser_window.hpp"
+
+#include "ui/qt_apply_cancel_input_filter.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_context_menu_visibility.hpp"
@@ -1182,6 +1184,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
 }
 
 QtMaterialBrowserWindow::~QtMaterialBrowserWindow() {
+  lifecycle_commands_provider_ = {};
   QObject::disconnect(qApp, nullptr, this, nullptr);
   // A Qt::Popup child owns a native window and can outlive ordinary child
   // teardown ordering. Retire it while the browser controls referenced by its
@@ -1192,6 +1195,11 @@ QtMaterialBrowserWindow::~QtMaterialBrowserWindow() {
   if (thumbnail_size_popup_) {
     delete thumbnail_size_popup_.data();
   }
+}
+
+void QtMaterialBrowserWindow::set_lifecycle_commands_provider(
+    LifecycleCommandsProvider provider) {
+  lifecycle_commands_provider_ = std::move(provider);
 }
 
 void QtMaterialBrowserWindow::set_labels(QtMaterialBrowserLabels labels) {
@@ -2256,15 +2264,18 @@ void QtMaterialBrowserWindow::show_filter_popup() {
                        if (popup_guard) {
                          popup_guard->close();
                        }
-                     });
+                      });
+    new QtApplyCancelInputFilter(
+        *popup, *apply, *cancel, [guard]() -> QuaderCommandsApi * {
+          return guard && guard->lifecycle_commands_provider_
+              ? guard->lifecycle_commands_provider_() : nullptr;
+        });
   }
-  auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), popup);
-  escape->setContext(Qt::WidgetWithChildrenShortcut);
   if (host_ == QtMaterialBrowserHost::Embedded) {
+    auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), popup);
+    escape->setContext(Qt::WidgetWithChildrenShortcut);
     QObject::connect(escape, &QShortcut::activated, popup,
-                     dismiss_embedded_popup);
-  } else {
-    QObject::connect(escape, &QShortcut::activated, popup, &QWidget::close);
+                      dismiss_embedded_popup);
   }
   QObject::connect(popup, &QObject::destroyed, this,
                    [restore_button_state]() { restore_button_state(); });

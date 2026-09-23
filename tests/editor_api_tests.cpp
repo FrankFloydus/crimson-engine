@@ -35,6 +35,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -3392,6 +3393,138 @@ TEST(EditorApiTests,
   EXPECT_TRUE(applied.changed());
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_EQ(editor.query().modeling_objects().size(), 4u);
+}
+
+TEST(EditorApiTests, NativeSettingsLifecycleProbesPreserveSequencesAndOverrides) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto object = create_selected_box(editor, "Settings lifecycle chords");
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+  const quader::ViewportToolState state{.active_tool = quader::ViewportToolId::Extrude};
+  using Kind = quader::QuaderNativeToolSettingsDispatch::Kind;
+  using Intent = quader::QuaderNativeToolSettingsIntent;
+
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      "viewport.modal_tool.finalize", "Ctrl+K A").ok());
+  EXPECT_EQ(editor.commands().resolve_native_tool_settings_input_binding(
+      single_input_chord("Space"), state).kind, Kind::NoMatch);
+  for (int probe = 0; probe < 3; ++probe) {
+    EXPECT_EQ(editor.commands().resolve_native_tool_settings_input_binding(
+        single_input_chord("Ctrl+K"), state).kind, Kind::PendingChord);
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  }
+  ASSERT_EQ(editor.commands().dispatch_native_tool_settings_input_binding(
+      single_input_chord("Ctrl+K"), state).kind, Kind::PendingChord);
+  editor.commands().reset_pending_viewport_keybinding_chord();
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  for (int probe = 0; probe < 3; ++probe) {
+    const auto resolved = editor.commands().resolve_native_tool_settings_input_binding(
+        single_input_chord("A"), state);
+    EXPECT_EQ(resolved.kind, Kind::Intent);
+    EXPECT_EQ(resolved.intent, Intent::Apply);
+    EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  }
+  EXPECT_EQ(editor.commands().dispatch_native_tool_settings_input_binding(
+      single_input_chord("A"), state).intent, Intent::Apply);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  ASSERT_EQ(editor.commands().dispatch_native_tool_settings_input_binding(
+      single_input_chord("Ctrl+K"), state).kind, Kind::PendingChord);
+  EXPECT_EQ(editor.commands().resolve_native_tool_settings_input_binding(
+      single_input_chord("9"), state).kind, Kind::Consumed);
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(editor.commands().dispatch_native_tool_settings_input_binding(
+      single_input_chord("9"), state).kind, Kind::Consumed);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(editor.commands().dispatch_native_tool_settings_input_binding(
+      single_input_chord("9"), state).kind, Kind::NoMatch);
+  ASSERT_TRUE(editor.preferences().remove_shortcut("viewport.modal_tool.finalize").ok());
+  EXPECT_EQ(editor.commands().resolve_native_tool_settings_input_binding(
+      single_input_chord("Ctrl+K"), state).kind, Kind::NoMatch);
+  EXPECT_EQ(editor.commands().dispatch_native_tool_settings_input_binding(
+      single_input_chord("Space"), state).kind, Kind::NoMatch);
+
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      quader::quader_command::kViewportGridIncrement, "Ctrl+J M").ok());
+  EXPECT_EQ(editor.commands().dispatch_native_tool_settings_input_binding(
+      single_input_chord("Ctrl+J"), state).kind, Kind::NoMatch);
+  ASSERT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+J"), state, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  EXPECT_EQ(editor.commands().dispatch_native_tool_settings_input_binding(
+      single_input_chord("M"), state).kind, Kind::NoMatch);
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("M"), state, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+}
+
+TEST(EditorApiTests, ModalLifecycleBindingsRemainScopedAndIndependentOfTools) {
+  CommandTestHarness harness;
+  auto &commands = harness.editor.commands();
+  auto &preferences = harness.editor.preferences();
+  ASSERT_TRUE(commands.set_keybinding_storage_path({}).ok());
+  using Kind = quader::QuaderNativeToolSettingsDispatch::Kind;
+  using Intent = quader::QuaderNativeToolSettingsIntent;
+  EXPECT_EQ(commands.resolve_modal_lifecycle_input_binding(
+      single_input_chord("Space")).intent, Intent::Apply);
+  EXPECT_EQ(commands.resolve_modal_lifecycle_input_binding(
+      single_input_chord("Escape")).intent, Intent::Cancel);
+  EXPECT_EQ(commands.resolve_modal_lifecycle_input_binding(
+      single_input_chord("W")).kind, Kind::NoMatch);
+  ASSERT_TRUE(preferences.set_shortcut("viewport.modal_tool.finalize", "Ctrl+K A").ok());
+  EXPECT_EQ(commands.resolve_modal_lifecycle_input_binding(
+      single_input_chord("Ctrl+K")).kind, Kind::PendingChord);
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
+  ASSERT_EQ(commands.dispatch_modal_lifecycle_input_binding(
+      single_input_chord("Ctrl+K")).kind, Kind::PendingChord);
+  commands.reset_pending_viewport_keybinding_chord();
+  commands.reset_pending_non_modal_keybinding_chord();
+  EXPECT_TRUE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.resolve_modal_lifecycle_input_binding(
+      single_input_chord("A")).intent, Intent::Apply);
+  EXPECT_TRUE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.dispatch_modal_lifecycle_input_binding(
+      single_input_chord("A")).intent, Intent::Apply);
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
+  ASSERT_EQ(commands.dispatch_modal_lifecycle_input_binding(
+      single_input_chord("Ctrl+K")).kind, Kind::PendingChord);
+  EXPECT_EQ(commands.resolve_modal_lifecycle_input_binding(
+      single_input_chord("Space")).kind, Kind::Consumed);
+  EXPECT_TRUE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.dispatch_modal_lifecycle_input_binding(
+      single_input_chord("Space")).kind, Kind::Consumed);
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.dispatch_modal_lifecycle_input_binding(
+      single_input_chord("Space")).kind, Kind::NoMatch);
+  ASSERT_TRUE(preferences.set_shortcut("viewport.cancel_active_tool", "F18").ok());
+  EXPECT_EQ(commands.resolve_modal_lifecycle_input_binding(
+      single_input_chord("Escape")).kind, Kind::NoMatch);
+  EXPECT_EQ(commands.dispatch_modal_lifecycle_input_binding(
+      single_input_chord("F18")).intent, Intent::Cancel);
+  ASSERT_TRUE(preferences.remove_shortcut("viewport.modal_tool.finalize").ok());
+  EXPECT_EQ(commands.dispatch_modal_lifecycle_input_binding(
+      single_input_chord("Space")).kind, Kind::NoMatch);
+  EXPECT_EQ(commands.dispatch_modal_lifecycle_input_binding(
+      single_input_chord("Ctrl+K")).kind, Kind::NoMatch);
+
+  ASSERT_TRUE(preferences.set_shortcut(
+      quader::quader_command::kToolsActivateMove, "Ctrl+J M").ok());
+  ASSERT_EQ(commands.dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+J"), {}, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  commands.reset_pending_modal_lifecycle_input_binding();
+  EXPECT_TRUE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.dispatch_viewport_input_binding(
+      single_input_chord("M"), {}, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  ASSERT_EQ(commands.dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+J"), {}, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  commands.reset_pending_non_modal_keybinding_chord();
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
 }
 
 TEST(EditorApiTests, UvPeelCommandActivatesBeforeSelectionAndPreservesOverrides) {
@@ -7612,18 +7745,23 @@ TEST(EditorApiTests, EscapeClearsSelectionInOrdinarySelectionToolsAndModes) {
   }
 }
 
-TEST(EditorApiTests, ExtrudeEscapeExitsToolWithoutClearingCapsOrUndoingGeometry) {
+TEST(EditorApiTests, ExtrudeEscapeRestoresSourceSelectionGeometryAndHistory) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
   const auto box = create_selected_box(editor, "Extrude Escape");
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
-  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
-  const auto after = editor.query().compiled_object_mesh(box);
-  ASSERT_TRUE(after.has_value());
+  const auto before = editor.query().compiled_object_mesh(box);
+  ASSERT_TRUE(before.has_value());
   const auto selection = editor.selection().summary();
   const auto history = editor.history().snapshot();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 2.15).ok());
+  const auto after = editor.query().compiled_object_mesh(box);
+  ASSERT_TRUE(after.has_value());
+  ASSERT_GT(after->indices.size(), before->indices.size());
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
   const quader::ViewportToolState state{
       .active_tool = quader::ViewportToolId::Extrude,
       .selection_mode = quader::ViewportSelectionMode::Face};
@@ -7643,14 +7781,155 @@ TEST(EditorApiTests, ExtrudeEscapeExitsToolWithoutClearingCapsOrUndoingGeometry)
   }
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_FALSE(editor.tools().active_settings().preview_active);
+  EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
   EXPECT_EQ(editor.selection().summary().selected_face_count,
             selection.selected_face_count);
   const auto after_escape = editor.query().compiled_object_mesh(box);
   ASSERT_TRUE(after_escape.has_value());
-  EXPECT_EQ(after_escape->indices, after->indices);
-  EXPECT_EQ(after_escape->vertices.size(), after->vertices.size());
+  EXPECT_EQ(after_escape->indices, before->indices);
+  ASSERT_EQ(after_escape->vertices.size(), before->vertices.size());
+  for (std::size_t index = 0; index < before->vertices.size(); ++index) {
+    EXPECT_FLOAT_EQ(after_escape->vertices[index].position.x,
+                    before->vertices[index].position.x);
+    EXPECT_FLOAT_EQ(after_escape->vertices[index].position.y,
+                    before->vertices[index].position.y);
+    EXPECT_FLOAT_EQ(after_escape->vertices[index].position.z,
+                    before->vertices[index].position.z);
+  }
   EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
-  EXPECT_TRUE(editor.history().can_undo());
+  EXPECT_EQ(editor.history().snapshot().redo_label, history.redo_label);
+  EXPECT_EQ(editor.history().can_undo(), history.can_undo);
+  EXPECT_EQ(editor.history().can_redo(), history.can_redo);
+}
+
+TEST(EditorApiTests, PendingExtrusionLocksSelectionModesAndToolChangesUntilCompletion) {
+  for (const double amount : {0.0, 2.15}) {
+    for (const bool apply : {false, true}) {
+      SCOPED_TRACE(amount);
+      SCOPED_TRACE(apply);
+      CommandTestHarness harness;
+      auto &editor = harness.editor;
+      const auto source = create_selected_box(editor, "Locked extrusion source");
+      const auto other = create_selected_box(editor, "Other selection target");
+      ASSERT_TRUE(editor.selection().select_face(source, 1).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+      ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", amount).ok());
+      ASSERT_TRUE(editor.tools().active_settings().preview_active);
+      const auto selection = editor.selection().summary();
+      const auto scene_selection = selected_entities(editor);
+      const auto history = editor.history().snapshot();
+      const auto preview = editor.query().compiled_object_mesh(source);
+      ASSERT_TRUE(preview.has_value());
+      const auto unchanged_selection = [&] {
+        const auto current = editor.selection().summary();
+        EXPECT_EQ(current.mode, selection.mode);
+        EXPECT_EQ(current.active_object_id, selection.active_object_id);
+        EXPECT_EQ(current.active_face_id, selection.active_face_id);
+        EXPECT_EQ(current.selected_face_count, selection.selected_face_count);
+        EXPECT_EQ(current.selection_revision, selection.selection_revision);
+        EXPECT_EQ(selected_entities(editor), scene_selection);
+        EXPECT_TRUE(editor.tools().active_settings().preview_active);
+        EXPECT_EQ(editor.tools().active_tool(), "extrude");
+      };
+      const std::vector<std::function<quader::QuaderApiVoidResult()>> edits{
+          [&] { return editor.selection().select_face(source, 3); },
+          [&] { return editor.selection().select_face(other, 1, quader::QuaderSelectionEdit::Add); },
+          [&] { return editor.selection().select_vertex(source, 1); },
+          [&] { return editor.selection().select_object(other); },
+          [&] { return editor.selection().select_objects_for_inspection({other.entity}); },
+          [&] { return editor.selection().clear(); },
+          [&] { return editor.selection().select_all(); },
+          [&] { return editor.selection().select_inverse(); },
+          [&] { return editor.selection().grow(); },
+          [&] { return editor.selection().shrink(); },
+          [&] { return editor.selection().select_faces_with_same_material(); },
+          [&] { return editor.selection().set_mode(quader::QuaderSelectionMode::Object); },
+          [&] { return editor.tools().activate(quader::ViewportToolId::Select); },
+          [&] { return editor.tools().activate(quader::ViewportToolId::Move); },
+          [&] { return editor.tools().activate(quader::ViewportToolId::CreatePrimitive); },
+          [&] { return editor.tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Box); },
+          [&] { return editor.tools().begin_new_curve_creation(); },
+          [&] { return editor.tools().begin_light_creation(quader::QuaderLightType::Point); },
+          [&] { return editor.commands().execute(quader::quader_command::kEditClearSelection); },
+          [&] { return editor.commands().execute(quader::quader_command::kToolsActivateSelect); },
+      };
+      for (std::size_t index = 0; index < edits.size(); ++index) {
+        SCOPED_TRACE(index);
+        const auto result = edits[index]();
+        EXPECT_FALSE(result.ok());
+        EXPECT_FALSE(result.changed());
+        unchanged_selection();
+      }
+      const auto picked = editor.selection().pick_select(
+          {.ray = {.origin = {0, 0, 10}, .direction = {0, 0, -1}}});
+      EXPECT_FALSE(picked.ok());
+      EXPECT_FALSE(picked.changed());
+      unchanged_selection();
+      const auto boxed = editor.selection().box_select({});
+      EXPECT_FALSE(boxed.ok());
+      EXPECT_FALSE(boxed.changed());
+      unchanged_selection();
+      for (const auto tool : {quader::ViewportToolId::Select,
+                              quader::ViewportToolId::Move,
+                              quader::ViewportToolId::CreatePrimitive}) {
+        EXPECT_FALSE(editor.tools().can_activate(tool));
+      }
+      const auto retained = editor.query().compiled_object_mesh(source);
+      ASSERT_TRUE(retained.has_value());
+      EXPECT_EQ(retained->indices, preview->indices);
+      ASSERT_EQ(retained->vertices.size(), preview->vertices.size());
+      for (std::size_t index = 0; index < retained->vertices.size(); ++index) {
+        EXPECT_FLOAT_EQ(retained->vertices[index].position.x, preview->vertices[index].position.x);
+        EXPECT_FLOAT_EQ(retained->vertices[index].position.y, preview->vertices[index].position.y);
+        EXPECT_FLOAT_EQ(retained->vertices[index].position.z, preview->vertices[index].position.z);
+      }
+      EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+      EXPECT_EQ(editor.history().snapshot().redo_label, history.redo_label);
+      ASSERT_TRUE((apply ? editor.tools().commit_active_tool_preview()
+                        : editor.tools().cancel_active_tool_preview()).ok());
+      EXPECT_FALSE(editor.tools().active_settings().preview_active);
+      ASSERT_TRUE(editor.selection().clear().ok());
+      EXPECT_TRUE(editor.tools().can_activate(quader::ViewportToolId::Select));
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+      ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+      ASSERT_TRUE(editor.selection().select_object(other).ok());
+    }
+  }
+}
+
+TEST(EditorApiTests, ExtrudeLocksFirstSelectedFaceAndReleasesItAfterApply) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto object = create_selected_box(editor, "Picked extrusion source");
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+  EXPECT_FALSE(editor.tools().active_settings().preview_active);
+  ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  EXPECT_FALSE(editor.selection().select_face(object, 3).ok());
+  ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 2.15).ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(editor.tools().active_tool(), "extrude");
+  EXPECT_FALSE(editor.tools().active_settings().preview_active);
+  const auto applied = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(applied.has_value());
+  const auto history = editor.history().snapshot();
+  const auto cap = editor.selection().summary().active_face_id;
+  ASSERT_TRUE(editor.selection().select_face(object, cap).ok());
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  const auto settings = editor.tools().active_settings();
+  const auto *amount = find_tool_setting_control(settings, "extrude.amount");
+  ASSERT_NE(amount, nullptr);
+  EXPECT_DOUBLE_EQ(amount->number_value, 0.0);
+  const auto selected = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(selected.has_value());
+  EXPECT_EQ(selected->indices, applied->indices);
+  EXPECT_EQ(selected->vertices.size(), applied->vertices.size());
+  EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+  EXPECT_FALSE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
 }
 
 TEST(EditorApiTests, ExtrudeDefaultBindingAndAxisActionsRespectInputOwnership) {
@@ -7833,7 +8112,7 @@ TEST(EditorApiTests, ExtrudeModeShortcutsArmOneToolAndEUsesItsRememberedMode) {
   }
 }
 
-TEST(EditorApiTests, ExtrudeModeCommandsStartNewStepsWithoutReshapingPriorResult) {
+TEST(EditorApiTests, ExtrudeModeCommandsStartZeroPreviewsAfterExplicitApply) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
   const auto box = create_selected_box(editor, "Extrude Mode Shortcut Source");
@@ -7843,6 +8122,7 @@ TEST(EditorApiTests, ExtrudeModeCommandsStartNewStepsWithoutReshapingPriorResult
   ASSERT_TRUE(editor.commands().execute(
       quader::quader_command::kToolsActivateExtrude).ok());
   ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 2.15).ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
   for (const auto &[command, type] : {
            std::pair{quader::quader_command::kToolsActivateExtrudeIndividual,
                      "individual"},
@@ -7861,11 +8141,19 @@ TEST(EditorApiTests, ExtrudeModeCommandsStartNewStepsWithoutReshapingPriorResult
     ASSERT_NE(mode, nullptr);
     ASSERT_NE(amount, nullptr);
     EXPECT_EQ(mode->choice_value, type);
-    EXPECT_DOUBLE_EQ(amount->number_value, 2.15);
+    EXPECT_DOUBLE_EQ(amount->number_value, 0.0);
+    const auto zero_preview = editor.query().compiled_object_mesh(box);
+    ASSERT_TRUE(zero_preview.has_value());
+    EXPECT_EQ(zero_preview->indices, previous->indices);
+    EXPECT_EQ(zero_preview->vertices.size(), previous->vertices.size());
+    ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 2.15).ok());
     const auto extruded = editor.query().compiled_object_mesh(box);
     ASSERT_TRUE(extruded.has_value());
     EXPECT_GT(extruded->indices.size(), previous->indices.size());
     EXPECT_EQ(editor.selection().summary().selected_face_count, 2U);
+    EXPECT_TRUE(settings.preview_active);
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
     ASSERT_TRUE(editor.history().undo().ok());
     const auto undone = editor.query().compiled_object_mesh(box);
     ASSERT_TRUE(undone.has_value());
@@ -10178,6 +10466,81 @@ TEST(EditorApiTests, RadialWheelDefaultsPreservePlainWheelOverridesAndUnassignme
         single_input_chord(shortcut), state, true, false, action));
   }
   std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests, OperationPreviewLifecycleBindingsKeepOverridesWhileOwningViewport) {
+  CommandTestHarness harness;
+  auto &commands = harness.editor.commands();
+  auto &preferences = harness.editor.preferences();
+  ASSERT_TRUE(commands.set_keybinding_storage_path({}).ok());
+  using Kind = quader::QuaderViewportKeybindingDispatch::Kind;
+  const quader::QuaderViewportKeybindingContext context{
+      .modal_tool_active = true,
+      .active_tool_owns_viewport = true,
+      .operation_preview_active = true};
+  for (const auto &[target, old_chord, new_chord] : {
+           std::tuple{quader::quader_command::kModelingApplyActivePreview,
+                      "Space", "F18"},
+           std::tuple{quader::quader_command::kModelingCancelActivePreview,
+                      "Escape", "F19"}}) {
+    SCOPED_TRACE(target.string());
+    const auto initial = commands.dispatch_viewport_input_binding(
+        single_input_chord(old_chord), {}, true, false, context);
+    ASSERT_EQ(initial.kind, Kind::Command);
+    EXPECT_EQ(initial.command_id, target.string());
+    ASSERT_TRUE(preferences.set_shortcut(target, new_chord).ok());
+    EXPECT_EQ(commands.dispatch_viewport_input_binding(
+        single_input_chord(old_chord), {}, true, false, context).kind,
+        Kind::NoMatch);
+    const auto remapped = commands.dispatch_viewport_input_binding(
+        single_input_chord(new_chord), {}, true, false, context);
+    ASSERT_EQ(remapped.kind, Kind::Command);
+    EXPECT_EQ(remapped.command_id, target.string());
+    ASSERT_TRUE(preferences.remove_shortcut(target).ok());
+    for (const auto chord : {old_chord, new_chord}) {
+      EXPECT_EQ(commands.dispatch_viewport_input_binding(
+          single_input_chord(chord), {}, true, false, context).kind,
+          Kind::NoMatch);
+    }
+  }
+}
+
+TEST(EditorApiTests, NativeToolsShareViewportApplyAndCancelBindings) {
+  CommandTestHarness harness;
+  auto &commands = harness.editor.commands();
+  ASSERT_TRUE(commands.set_keybinding_storage_path({}).ok());
+  using Kind = quader::QuaderViewportKeybindingDispatch::Kind;
+  for (const auto tool : {quader::ViewportToolId::Extrude,
+                          quader::ViewportToolId::UvPeel,
+                          quader::ViewportToolId::Pivot,
+                          quader::ViewportToolId::LinearArray,
+                          quader::ViewportToolId::RadialArray,
+                          quader::ViewportToolId::PathArray,
+                          quader::ViewportToolId::Curve}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    const quader::ViewportToolState state{.active_tool = tool};
+    const auto apply = commands.dispatch_viewport_input_binding(
+        single_input_chord("Space"), state, true, false);
+    ASSERT_EQ(apply.kind, Kind::ViewportInputAction);
+    EXPECT_EQ(apply.action, quader::ViewportInputActionKind::ModalToolFinalize);
+    const auto cancel = commands.dispatch_viewport_input_binding(
+        single_input_chord("Escape"), state, true, false);
+    ASSERT_EQ(cancel.kind, Kind::ViewportShortcut);
+    EXPECT_EQ(cancel.shortcut.kind, quader::ViewportShortcutKind::CancelActiveTool);
+    for (const auto chord : {"Space", "Escape"}) {
+      EXPECT_EQ(commands.dispatch_viewport_input_binding(
+          single_input_chord(chord), state, false, false).kind, Kind::NoMatch);
+      EXPECT_EQ(commands.dispatch_viewport_input_binding(
+          single_input_chord(chord), state, true, true).kind, Kind::NoMatch);
+      const auto navigation = commands.dispatch_viewport_input_binding(
+          single_input_chord(chord), state, true, false,
+          {.navigation_active = true});
+      EXPECT_NE(navigation.action,
+                quader::ViewportInputActionKind::ModalToolFinalize);
+      EXPECT_NE(navigation.shortcut.kind,
+                quader::ViewportShortcutKind::CancelActiveTool);
+    }
+  }
 }
 
 TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {

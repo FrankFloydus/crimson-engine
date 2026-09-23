@@ -35,9 +35,6 @@ double axis_drag_amount(
                          : normalize(camera.transform.origin - anchor);
   const double alignment = dot(axis, view);
   constexpr double kNearAxisCosineSquared = 0.9924038765; // Five degrees.
-  if (alignment * alignment >= kNearAxisCosineSquared) {
-    return static_cast<double>(press.y - pointer.y) * 2.0 * world_per_pixel;
-  }
   const QVec3 right = camera.transform.x_axis;
   const QVec3 up = camera.transform.y_axis;
   const QVec3 forward = camera.transform.z_axis * -1.0F;
@@ -57,12 +54,23 @@ double axis_drag_amount(
   }
   const double projected_length_squared =
       screen_axis_x * screen_axis_x + screen_axis_y * screen_axis_y;
-  if (!std::isfinite(projected_length_squared) ||
-      projected_length_squared <= 1.0e-12) {
+  if (!std::isfinite(projected_length_squared)) {
     return std::numeric_limits<double>::quiet_NaN();
   }
   const double delta_x = static_cast<double>(pointer.x) - press.x;
   const double delta_y = static_cast<double>(pointer.y) - press.y;
+  if (alignment * alignment >= kNearAxisCosineSquared) {
+    // Preserve a visible stem's direction without amplifying near-axis motion.
+    // An exactly end-on handle has no screen direction, so upward remains positive.
+    const double projected_delta = projected_length_squared > 1.0e-12
+        ? (delta_x * screen_axis_x + delta_y * screen_axis_y) /
+              std::sqrt(projected_length_squared)
+        : -delta_y;
+    return projected_delta * 2.0 * world_per_pixel;
+  }
+  if (projected_length_squared <= 1.0e-12) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
   return (delta_x * screen_axis_x + delta_y * screen_axis_y) *
          world_per_pixel / projected_length_squared;
 }
@@ -118,15 +126,29 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
   if (frame.input_result.cancel_requested || (press_ && interrupted)) {
     hover(ExtrudeHandlePart::None);
     const bool had_press = press_.has_value() || tool.dragging();
-    publish(had_press ? tool.cancel_drag() : tool.cancel());
+    const bool cancel_tool = !had_press ||
+        (tool.preview_active() && !tool.dragging());
+    publish(cancel_tool ? tool.cancel() : tool.cancel_drag());
     clear_drag_state();
     release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
     output.consumed = output.blocks_transform_gizmo = true;
-    output.sync_active_tool = !had_press && output.command_result.ok;
+    output.sync_active_tool = cancel_tool && output.command_result.ok;
     return output;
   }
   if (interrupted || frame.transform_gizmo_consumed) {
     hover(ExtrudeHandlePart::None);
+    return output;
+  }
+  if (input.modal_tool_finalize_pressed && tool.preview_active() &&
+      !tool.dragging()) {
+    const CommandResult applied = tool.commit_preview();
+    publish(applied);
+    if (applied.ok) {
+      clear_drag_state();
+      release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+    }
+    output.consumed = output.blocks_transform_gizmo = true;
+    output.sync_active_tool = applied.ok;
     return output;
   }
   const ExtrudeHandleState handle = tool.handle_state();
@@ -146,8 +168,8 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
         input.pointer_pressed_edges, QuaderMouseButton::Left,
         frame.left_click_local, input.mouse_screen, input.modifiers,
         frame.pointer_drag_threshold_pixels);
-    // Modified face clicks retain selection; an explicit disk hit owns its
-    // precision and snapping modifiers from the beginning of the gesture.
+    // An explicit disk hit owns precision and snapping modifiers from the
+    // beginning of the gesture. Pending sources never release clicks to selection.
     if (!gesture.modifiers.alt &&
         (hit != ExtrudeHandlePart::None ||
          (!gesture.modifiers.primary && !gesture.modifiers.shift))) {
@@ -182,6 +204,9 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
     }
   }
   if (!press_) {
+    if (tool.preview_active()) {
+      output.consumed = output.blocks_transform_gizmo = true;
+    }
     return output;
   }
   output.consumed = output.blocks_transform_gizmo = true;
@@ -245,13 +270,9 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
     press_->started = true;
   }
   if (press_->started) {
-    const bool axis_projection = tool.mode() == modeling::FaceExtrudeMode::Region;
-    const double raw_delta = axis_projection
-        ? axis_drag_amount(press_->camera, press_->anchor, direction,
-                           press_->gesture.press.local, pointer,
-                           press_->world_per_pixel)
-        : 2.0 * press_->world_per_pixel *
-              (press_->gesture.press.local.y - pointer.y);
+    const double raw_delta = axis_drag_amount(
+        press_->camera, press_->anchor, direction,
+        press_->gesture.press.local, pointer, press_->world_per_pixel);
     if (finite_pointer && std::isfinite(raw_delta)) {
       // Anchor precision only when its modifier changes. This scales new motion
       // without jumps and still recovers exactly after an invalid large sample.
@@ -308,7 +329,7 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
       press_->snap_query_pointer.reset();
     }
     // The release edge owns Ctrl just as it owns the final pointer position.
-    // Snap the total amount, including an existing committed extrusion.
+    // Snap the total amount, including the pending amount before this drag.
     if (sample_modifiers.primary && !press_->snapped_amount) {
       const double grid = viewport_grid_world_size_for_preset(input.grid_preset);
       if (grid > 0.0) {
@@ -342,15 +363,15 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
   }
   if (released) {
     if (press_->started) {
-      const CommandResult committed = press_->rejected_sample
-          ? *press_->rejected_sample : tool.end_drag();
-      publish(committed);
-      if (!committed.ok) {
+      const CommandResult released = press_->rejected_sample
+          ? *press_->rejected_sample : tool.release_drag();
+      publish(released);
+      if (!released.ok) {
         const CommandResult canceled = tool.cancel_drag();
         output.invalidate_hover = output.invalidate_hover || canceled.changed;
         output.mark_overlay_dirty = output.mark_overlay_dirty || canceled.changed;
       }
-    } else if (press_->face_click) {
+    } else if (press_->face_click && !tool.preview_active()) {
       output.selection_click_requested = true;
       output.selection_click_local = press_->gesture.press.local;
       output.selection_click_modifiers = press_->gesture.modifiers;

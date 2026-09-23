@@ -10,7 +10,9 @@
 
 #include <QObject>
 
+#include <cstdint>
 #include <functional>
+#include <unordered_set>
 
 class QEvent;
 class QWidget;
@@ -82,6 +84,9 @@ private:
   QtApplicationCommandInputOwnerProvider outliner_input_owner_provider_;
   QtCommandInputContextProvider input_context_provider_;
   bool text_input_sequence_pending_ = false;
+  std::uint64_t binding_generation_ = 0;
+  // A consumed settings press retains its release across focus/runtime changes.
+  std::unordered_set<int> consumed_settings_keys_;
 };
 
 } // namespace quader

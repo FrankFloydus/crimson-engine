@@ -29,37 +29,6 @@ execute_viewport_shortcut_command(QuaderEditorApi &editor,
 } // namespace
 
 ViewportShortcutControllerResult
-ViewportShortcutController::handle_operation_preview_shortcut(
-    const ViewportInputResult &input_result,
-    bool operation_preview_active,
-    QuaderEditorApi &editor) const {
-  if (!input_result.shortcut_handled ||
-      !operation_preview_active) {
-    return {};
-  }
-
-  const std::optional<std::string> command_target =
-      viewport_operation_preview_command_target_id_for_router_shortcut(
-          input_result.shortcut);
-  if (!command_target) {
-    return {};
-  }
-
-  const QuaderApiVoidResult command =
-      editor.commands().execute(*command_target);
-  if (!command.ok) {
-    LOG_ERROR("Tool preview shortcut failed: {}",
-              command.message.empty() ? "Command failed." : command.message);
-  }
-  return {
-      .consumed = true,
-      .command_executed = true,
-      .invalidate_hover = true,
-      .mark_overlay_dirty = true,
-  };
-}
-
-ViewportShortcutControllerResult
 ViewportShortcutController::handle_modeling_shortcut(
     const ViewportInputResult &input_result, QuaderEditorApi &editor) const {
   if (!input_result.shortcut_handled) {

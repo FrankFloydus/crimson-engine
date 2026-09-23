@@ -10,12 +10,16 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_apply_cancel_input_filter.hpp"
 #include "ui/qt_face_texture_panel.hpp"
+#include "ui/qt_face_texture_canvas.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
@@ -26,6 +30,7 @@
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <QApplication>
+#include <QAbstractButton>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDockWidget>
@@ -37,9 +42,11 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLineEdit>
+#include <QLocale>
 #include <QListView>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
 #include <QTabBar>
@@ -48,6 +55,7 @@
 #include <QTreeView>
 #include <QWidget>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -171,6 +179,7 @@ TEST(QtCommandEventFilterTests,
     ASSERT_TRUE(override_event.isAccepted());
     const auto before = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(before.has_value());
+    const auto history_before = session.history().undo_count();
     QKeyEvent press(QEvent::KeyPress, key, Qt::AltModifier);
     QCoreApplication::sendEvent(receiver, &press);
     const auto frame = surface->take_input_frame(0.0F, false);
@@ -184,8 +193,20 @@ TEST(QtCommandEventFilterTests,
     ASSERT_TRUE(editor.commands().execute(dispatch.command_id).ok());
     const auto after = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(after.has_value());
-    EXPECT_GT(after->indices.size(), before->indices.size());
+    EXPECT_EQ(after->indices, before->indices);
+    EXPECT_EQ(after->vertices.size(), before->vertices.size());
     EXPECT_EQ(editor.tools().active_tool(), "extrude");
+    EXPECT_TRUE(editor.tools().active_settings().preview_active);
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    EXPECT_EQ(session.history().undo_count(), history_before);
+    ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 1.0).ok());
+    const auto preview = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(preview.has_value());
+    EXPECT_GT(preview->indices.size(), before->indices.size());
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    EXPECT_EQ(session.history().undo_count(), history_before + 1u);
     EXPECT_EQ(menu_openings, 0);
     QKeyEvent release(QEvent::KeyRelease, key, Qt::AltModifier);
     QCoreApplication::sendEvent(receiver, &release);
@@ -854,7 +875,587 @@ TEST(QtCommandEventFilterTests,
 }
 
 TEST(QtCommandEventFilterTests,
-     RejectedDirectToolSettingsCommitNotifiesOncePerAttempt) {
+     ScopedLifecycleSequencesSurviveEitherApplicationFilterOrder) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-scoped-lifecycle-filter-order-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const auto flags : {Qt::Dialog, Qt::Popup, Qt::Tool}) {
+    for (const bool global_first : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(flags));
+      SCOPED_TRACE(global_first);
+      auto standalone = quader::create_standalone_editor();
+      auto &editor = standalone.editor();
+      ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+      ASSERT_TRUE(editor.preferences().set_shortcut(
+          "viewport.modal_tool.finalize", "Ctrl+Alt+F24 G").ok());
+      QWidget surface(nullptr, flags);
+      surface.setAttribute(Qt::WA_DontShowOnScreen, true);
+      if (flags == Qt::Dialog) {
+        surface.setWindowModality(Qt::ApplicationModal);
+      }
+      QPushButton apply(QStringLiteral("Apply"), &surface);
+      QPushButton cancel(QStringLiteral("Cancel"), &surface);
+      cancel.move(0, 40);
+      int applies = 0;
+      int cancels = 0;
+      QObject::connect(&apply, &QPushButton::clicked, &surface,
+                       [&] { ++applies; });
+      QObject::connect(&cancel, &QPushButton::clicked, &surface,
+                       [&] { ++cancels; });
+      quader::QtCommandEventFilter global_filter(editor, {});
+      global_filter.set_command_input_owner_provider(
+          [&] { return flags == Qt::Tool && surface.isVisible(); });
+      application.installEventFilter(&global_filter);
+      quader::QtApplyCancelInputFilter scoped_filter(
+          surface, apply, cancel, [&] { return &editor.commands(); });
+      if (global_first) {
+        application.removeEventFilter(&global_filter);
+        application.installEventFilter(&global_filter);
+      }
+      surface.show();
+      surface.activateWindow();
+      QCoreApplication::processEvents();
+      QApplication::setActiveWindow(&surface);
+      cancel.setFocus(Qt::OtherFocusReason);
+      ASSERT_EQ(QApplication::focusWidget(), &cancel);
+      for (const int key : {Qt::Key_F24, Qt::Key_G}) {
+        const auto modifiers = key == Qt::Key_F24
+            ? Qt::ControlModifier | Qt::AltModifier : Qt::NoModifier;
+        QKeyEvent override_event(QEvent::ShortcutOverride, key, modifiers);
+        override_event.ignore();
+        QCoreApplication::sendEvent(&cancel, &override_event);
+        EXPECT_TRUE(override_event.isAccepted());
+        send_key_press(cancel, key, modifiers);
+        QKeyEvent release(QEvent::KeyRelease, key, modifiers);
+        QCoreApplication::sendEvent(&cancel, &release);
+        EXPECT_EQ(editor.commands().has_pending_keybinding_chord(),
+                  key == Qt::Key_F24);
+      }
+      EXPECT_EQ(applies, 1);
+      EXPECT_EQ(cancels, 0);
+      surface.hide();
+      application.removeEventFilter(&global_filter);
+    }
+  }
+}
+
+TEST(QtCommandEventFilterTests,
+     SettingsLifecycleKeysOverrideEveryFocusedControlForNativeAndOperationPreviews) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-settings-lifecycle-focus-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const bool bevel : {false, true}) {
+    for (const int key : {Qt::Key_Space, Qt::Key_Escape}) {
+      for (const QString &focus_name : {
+               QStringLiteral("number"), QStringLiteral("tool_settings.apply"),
+               QStringLiteral("tool_settings.cancel"),
+               QStringLiteral("tool_settings.target_title")}) {
+        SCOPED_TRACE(bevel);
+        SCOPED_TRACE(key);
+        SCOPED_TRACE(focus_name.toStdString());
+        quader::SceneSession session;
+        quader::QuaderEditorApi editor(
+            quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+        ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+        const auto box = editor.modeling().create_box(
+            {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+        ASSERT_TRUE(box.ok());
+        ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+        ASSERT_TRUE(editor.selection().set_mode(
+            bevel ? quader::QuaderSelectionMode::Edge
+                  : quader::QuaderSelectionMode::Face).ok());
+        ASSERT_TRUE((bevel ? editor.selection().select_edge(box.value(), 1, 2)
+                           : editor.selection().select_face(box.value(), 1)).ok());
+        const auto source = editor.query().compiled_object_mesh(box.value());
+        ASSERT_TRUE(source.has_value());
+        session.history().clear();
+        if (bevel) {
+          const auto started = editor.commands().execute(
+              editor.commands().command_id_for_modeling_action("bevel_edges"));
+          ASSERT_TRUE(started.ok()) << started.error_message();
+          ASSERT_TRUE(editor.tools().set_setting(
+              "edge_bevel", "operation.edge_bevel.width", 0.1).ok());
+        } else {
+          ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+          ASSERT_TRUE(editor.tools().set_setting(
+              "extrude", "extrude.amount", 1.0).ok());
+        }
+        ASSERT_TRUE(editor.tools().active_settings().preview_active);
+        quader::QtCommandEventFilter filter(editor, [bevel] {
+          return quader::ViewportToolState{
+              .active_tool = bevel ? quader::ViewportToolId::Select
+                                   : quader::ViewportToolId::Extrude,
+              .selection_mode = bevel ? quader::ViewportSelectionMode::Edge
+                                      : quader::ViewportSelectionMode::Face};
+        });
+        application.installEventFilter(&filter);
+        quader::QtToolSettingsPanel panel;
+        panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+        panel.bind(editor);
+        panel.set_expanded(true);
+        auto *number = panel.findChild<QDoubleSpinBox *>(bevel
+            ? QStringLiteral("tool_settings.control.operation.edge_bevel.width")
+            : QStringLiteral("tool_settings.control.extrude.amount"));
+        auto *apply = panel.findChild<QPushButton *>(
+            QStringLiteral("tool_settings.apply"));
+        auto *cancel = panel.findChild<QPushButton *>(
+            QStringLiteral("tool_settings.cancel"));
+        ASSERT_NE(number, nullptr);
+        ASSERT_NE(apply, nullptr);
+        ASSERT_NE(cancel, nullptr);
+        int button_clicks = 0;
+        QObject::connect(apply, &QPushButton::clicked, &panel,
+                         [&] { ++button_clicks; });
+        QObject::connect(cancel, &QPushButton::clicked, &panel,
+                         [&] { ++button_clicks; });
+        QWidget *target = focus_name == QStringLiteral("number")
+            ? number : panel.findChild<QWidget *>(focus_name);
+        ASSERT_NE(target, nullptr);
+        ASSERT_TRUE(target->isEnabled());
+        panel.show();
+        panel.activateWindow();
+        QCoreApplication::processEvents();
+        QApplication::setActiveWindow(&panel);
+        ASSERT_TRUE(target->isVisible());
+        ASSERT_TRUE(target->isEnabled());
+        target->setFocus(Qt::OtherFocusReason);
+        ASSERT_EQ(QApplication::focusWidget(), target);
+        if (target == number) {
+          number->setLocale(QLocale::c());
+          auto *line = number->findChild<QLineEdit *>();
+          ASSERT_NE(line, nullptr);
+          send_key_press(*line, Qt::Key_A, Qt::ControlModifier);
+          send_key_press(*line, Qt::Key_2, Qt::NoModifier,
+                         bevel ? QStringLiteral("0.2") : QStringLiteral("2.5"));
+        }
+        QKeyEvent override_event(QEvent::ShortcutOverride, key, Qt::NoModifier);
+        override_event.ignore();
+        QCoreApplication::sendEvent(target, &override_event);
+        EXPECT_TRUE(override_event.isAccepted());
+        EXPECT_TRUE(editor.tools().active_settings().preview_active);
+        send_key_press(*target, key, Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &release);
+        EXPECT_FALSE(editor.tools().active_settings().preview_active);
+        EXPECT_EQ(button_clicks, 0);
+        EXPECT_EQ(session.history().undo_count(), key == Qt::Key_Space ? 1U : 0U);
+        EXPECT_TRUE(panel.expanded());
+        if (key == Qt::Key_Space) {
+          if (target == number) {
+            EXPECT_DOUBLE_EQ(bevel
+                ? session.modeling().interaction_settings().edge_bevel_width
+                : session.extrude().amount(), bevel ? 0.2 : 0.0);
+          }
+          ASSERT_TRUE(editor.history().undo().ok());
+        }
+        const auto restored = editor.query().compiled_object_mesh(box.value());
+        ASSERT_TRUE(restored.has_value());
+        EXPECT_EQ(restored->indices, source->indices);
+        EXPECT_EQ(restored->vertices.size(), source->vertices.size());
+        application.removeEventFilter(&filter);
+        panel.unbind();
+      }
+    }
+  }
+}
+
+TEST(QtCommandEventFilterTests,
+     SettingsLifecycleRespectsPopupOwnershipUnassignmentAndRemappedSequences) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-settings-lifecycle-sequence-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+  session.history().clear();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 1.0).ok());
+  quader::QtCommandEventFilter filter(editor, [] {
+    return quader::ViewportToolState{
+        .active_tool = quader::ViewportToolId::Extrude,
+        .selection_mode = quader::ViewportSelectionMode::Face};
+  });
+  application.installEventFilter(&filter);
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.set_expanded(true);
+  auto *amount = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.extrude.amount"));
+  ASSERT_NE(amount, nullptr);
+  panel.show();
+  panel.activateWindow();
+  amount->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), amount);
+
+  QMenu popup(&panel);
+  popup.addAction(QStringLiteral("Settings popup"));
+  popup.popup(amount->mapToGlobal(QPoint(0, 0)));
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::activePopupWidget(), &popup);
+  send_key_press(popup, Qt::Key_Escape, Qt::NoModifier);
+  QKeyEvent escape_release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(&popup, &escape_release);
+  EXPECT_FALSE(popup.isVisible());
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  EXPECT_EQ(session.history().undo_count(), 0U);
+  amount->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), amount);
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto finalize = std::ranges::find_if(catalog, [](const auto &entry) {
+    return std::ranges::find(entry.target_ids, "viewport.modal_tool.finalize") !=
+           entry.target_ids.end();
+  });
+  ASSERT_NE(finalize, catalog.end());
+  ASSERT_TRUE(editor.commands().remove_action_shortcut(finalize->key).ok());
+  send_key_press(*amount, Qt::Key_Space, Qt::NoModifier);
+  QKeyEvent space_release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+  QCoreApplication::sendEvent(amount, &space_release);
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  EXPECT_EQ(session.history().undo_count(), 0U);
+  const auto expect_space_does_not_activate_a_button = [&] {
+    for (const QString &name : {QStringLiteral("tool_settings.apply"),
+                               QStringLiteral("tool_settings.cancel"),
+                               QStringLiteral("tool_settings.reset_defaults"),
+                               QStringLiteral("tool_settings.target_title")}) {
+      SCOPED_TRACE(name.toStdString());
+      auto *button = panel.findChild<QAbstractButton *>(name);
+      ASSERT_NE(button, nullptr);
+      int clicks = 0;
+      const auto connection = QObject::connect(
+          button, &QAbstractButton::clicked, &panel, [&] { ++clicks; });
+      button->setFocus(Qt::OtherFocusReason);
+      QCoreApplication::processEvents();
+      ASSERT_EQ(QApplication::focusWidget(), button);
+      QKeyEvent override_event(QEvent::ShortcutOverride, Qt::Key_Space,
+                               Qt::NoModifier);
+      override_event.ignore();
+      QCoreApplication::sendEvent(button, &override_event);
+      EXPECT_TRUE(override_event.isAccepted());
+      send_key_press(*button, Qt::Key_Space, Qt::NoModifier);
+      QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+      QCoreApplication::sendEvent(button, &release);
+      EXPECT_EQ(clicks, 0);
+      EXPECT_TRUE(editor.tools().active_settings().preview_active);
+      EXPECT_TRUE(panel.expanded());
+      EXPECT_EQ(session.history().undo_count(), 0U);
+      QObject::disconnect(connection);
+    }
+  };
+  expect_space_does_not_activate_a_button();
+  const auto remapped = editor.commands().set_action_shortcut(
+      finalize->key, "Ctrl+Alt+F24 G");
+  ASSERT_TRUE(remapped.ok()) << remapped.error_message();
+  expect_space_does_not_activate_a_button();
+  amount->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), amount);
+  const QString numeric_text = amount->text();
+  send_key_press(*amount, Qt::Key_F24, Qt::ControlModifier | Qt::AltModifier);
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  QKeyEvent mismatch_override(QEvent::ShortcutOverride, Qt::Key_9, Qt::NoModifier);
+  mismatch_override.ignore();
+  QCoreApplication::sendEvent(amount, &mismatch_override);
+  EXPECT_TRUE(mismatch_override.isAccepted());
+  send_key_press(*amount, Qt::Key_9, Qt::NoModifier, QStringLiteral("9"));
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(amount->text(), numeric_text);
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  for (const int key : {Qt::Key_F24, Qt::Key_9}) {
+    QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+    QCoreApplication::sendEvent(amount, &release);
+  }
+  for (const int key : {Qt::Key_F24, Qt::Key_G}) {
+    const auto modifiers = key == Qt::Key_F24
+        ? Qt::ControlModifier | Qt::AltModifier : Qt::NoModifier;
+    QKeyEvent override_event(QEvent::ShortcutOverride, key, modifiers);
+    override_event.ignore();
+    QCoreApplication::sendEvent(amount, &override_event);
+    EXPECT_TRUE(override_event.isAccepted());
+    // Probing must leave a prefix unchanged until its physical press arrives.
+    EXPECT_EQ(editor.commands().has_pending_keybinding_chord(), key == Qt::Key_G);
+    send_key_press(*amount, key, modifiers);
+    QKeyEvent release(QEvent::KeyRelease, key, modifiers);
+    QCoreApplication::sendEvent(amount, &release);
+    editor.commands().reset_pending_viewport_keybinding_chord();
+    EXPECT_EQ(editor.commands().has_pending_keybinding_chord(), key == Qt::Key_F24);
+  }
+  EXPECT_FALSE(editor.tools().active_settings().preview_active);
+  EXPECT_EQ(session.history().undo_count(), 1U);
+  application.removeEventFilter(&filter);
+  panel.unbind();
+}
+
+TEST(QtCommandEventFilterTests,
+     NativeToolSettingsFinalizeFlushesTypedAmountAndEscapeDiscardsIt) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-tool-settings-pending-number-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const int completion_key : {Qt::Key_Space, Qt::Key_Return,
+                                   Qt::Key_Escape}) {
+    SCOPED_TRACE(completion_key);
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    if (completion_key == Qt::Key_Return) {
+      const auto catalog = editor.commands().keybinding_catalog();
+      const auto finalize = std::ranges::find_if(catalog, [](const auto &entry) {
+        return std::ranges::find(entry.target_ids, "viewport.modal_tool.finalize") !=
+               entry.target_ids.end();
+      });
+      ASSERT_NE(finalize, catalog.end());
+      // Enter already belongs to the Radial Array completion scope.
+      const auto remapped = editor.commands().set_action_shortcut(
+          finalize->key, "Enter", quader::QuaderKeybindingConflictPolicy::Replace);
+      ASSERT_TRUE(remapped.ok()) << remapped.error_message();
+    }
+    const auto box = editor.modeling().create_box(
+        {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
+    ASSERT_TRUE(box.ok());
+    ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+    const auto source = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(source.has_value());
+    session.history().clear();
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+    ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    ASSERT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 7.25).ok());
+    const auto expected = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(expected.has_value());
+    ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 0.0).ok());
+
+    quader::QtCommandEventFilter filter(editor, [] {
+      return quader::ViewportToolState{
+          .active_tool = quader::ViewportToolId::Extrude,
+          .selection_mode = quader::ViewportSelectionMode::Face};
+    });
+    application.installEventFilter(&filter);
+    quader::QtToolSettingsPanel panel;
+    panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+    panel.bind(editor);
+    panel.set_expanded(true);
+    auto *amount = panel.findChild<QDoubleSpinBox *>(
+        QStringLiteral("tool_settings.control.extrude.amount"));
+    ASSERT_NE(amount, nullptr);
+    // Production main installs C locale before constructing QApplication.
+    amount->setLocale(QLocale::c());
+    auto *line = amount->findChild<QLineEdit *>();
+    ASSERT_NE(line, nullptr);
+    panel.show();
+    panel.activateWindow();
+    line->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), amount);
+    send_key_press(*line, Qt::Key_A, Qt::ControlModifier);
+    send_key_press(*line, Qt::Key_7, Qt::NoModifier, QStringLiteral("7.25"));
+    ASSERT_TRUE(panel.numeric_interaction_active());
+    ASSERT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+
+    // Dispatch before the trailing number timer can deliver the typed sample.
+    send_key_press(*line, completion_key, Qt::NoModifier);
+    QKeyEvent completion_release(QEvent::KeyRelease, completion_key, Qt::NoModifier);
+    QCoreApplication::sendEvent(line, &completion_release);
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    EXPECT_FALSE(panel.numeric_interaction_active());
+    EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+    if (completion_key == Qt::Key_Escape) {
+      EXPECT_EQ(editor.tools().active_tool(), "select");
+      EXPECT_EQ(session.history().undo_count(), 0U);
+      EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      const auto restored = editor.query().compiled_object_mesh(box.value());
+      ASSERT_TRUE(restored.has_value());
+      EXPECT_EQ(restored->indices, source->indices);
+      EXPECT_EQ(restored->vertices.size(), source->vertices.size());
+    } else {
+      EXPECT_EQ(session.history().undo_count(), 1U);
+      EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      panel.refresh();
+      EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+      const auto committed = editor.query().compiled_object_mesh(box.value());
+      ASSERT_TRUE(committed.has_value());
+      EXPECT_EQ(committed->indices, expected->indices);
+      ASSERT_EQ(committed->vertices.size(), expected->vertices.size());
+      for (std::size_t index = 0; index < committed->vertices.size(); ++index) {
+        const auto &position = committed->vertices[index].position;
+        const auto &expected_position = expected->vertices[index].position;
+        EXPECT_FLOAT_EQ(position.x, expected_position.x);
+        EXPECT_FLOAT_EQ(position.y, expected_position.y);
+        EXPECT_FLOAT_EQ(position.z, expected_position.z);
+      }
+      // The next step may start and finish before a frame observes its preview.
+      // Retained focus must accept the new amount and show the owner's reset.
+      ASSERT_TRUE(amount->hasFocus());
+      send_key_press(*line, Qt::Key_A, Qt::ControlModifier);
+      send_key_press(*line, Qt::Key_2, Qt::NoModifier, QStringLiteral("2.5"));
+      ASSERT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      ASSERT_FALSE(editor.tools().active_settings().preview_active);
+      send_key_press(*line, completion_key, Qt::NoModifier);
+      QCoreApplication::sendEvent(line, &completion_release);
+      EXPECT_EQ(session.history().undo_count(), 2U);
+      EXPECT_FALSE(editor.tools().active_settings().preview_active);
+      EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      panel.refresh();
+      EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+      const auto second_step = editor.query().compiled_object_mesh(box.value());
+      ASSERT_TRUE(second_step.has_value());
+      EXPECT_GT(second_step->indices.size(), committed->indices.size());
+      ASSERT_TRUE(editor.history().undo().ok());
+      const auto first_step = editor.query().compiled_object_mesh(box.value());
+      ASSERT_TRUE(first_step.has_value());
+      EXPECT_EQ(first_step->indices, committed->indices);
+      ASSERT_EQ(first_step->vertices.size(), committed->vertices.size());
+      for (std::size_t index = 0; index < first_step->vertices.size(); ++index) {
+        const auto &position = first_step->vertices[index].position;
+        const auto &committed_position = committed->vertices[index].position;
+        EXPECT_FLOAT_EQ(position.x, committed_position.x);
+        EXPECT_FLOAT_EQ(position.y, committed_position.y);
+        EXPECT_FLOAT_EQ(position.z, committed_position.z);
+      }
+      ASSERT_TRUE(editor.history().undo().ok());
+      const auto restored = editor.query().compiled_object_mesh(box.value());
+      ASSERT_TRUE(restored.has_value());
+      EXPECT_EQ(restored->indices, source->indices);
+      ASSERT_TRUE(editor.history().redo().ok());
+    }
+    application.removeEventFilter(&filter);
+    panel.unbind();
+  }
+}
+
+TEST(QtCommandEventFilterTests,
+     NativeToolSettingsFinalizeStopsWhenNumericInterpretationRebindsRuntime) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-tool-settings-number-rebind-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const int rebind_case : {0, 1, 2}) {
+    SCOPED_TRACE(rebind_case);
+    quader::SceneSession outgoing_session;
+    quader::SceneSession replacement_session;
+    quader::QuaderEditorApi outgoing(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(outgoing_session));
+    quader::QuaderEditorApi replacement(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(replacement_session));
+    for (quader::QuaderEditorApi *editor : {&outgoing, &replacement}) {
+      ASSERT_TRUE(editor->commands().set_keybinding_storage_path({}).ok());
+      const auto box = editor->modeling().create_box(
+          {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
+      ASSERT_TRUE(box.ok());
+      ASSERT_TRUE(editor->selection().select_face(box.value(), 1).ok());
+      ASSERT_TRUE(editor->tools().activate(quader::ViewportToolId::Extrude).ok());
+      ASSERT_TRUE(editor->tools().active_settings().preview_active);
+      if (editor == &replacement) {
+        ASSERT_TRUE(editor->tools().set_setting(
+            "extrude", "extrude.amount", 1.0).ok());
+      }
+    }
+    const auto outgoing_history = outgoing_session.history().undo_count();
+    const auto replacement_history = replacement_session.history().undo_count();
+    quader::QtCommandEventFilter filter(outgoing, [] {
+      return quader::ViewportToolState{
+          .active_tool = quader::ViewportToolId::Extrude,
+          .selection_mode = quader::ViewportSelectionMode::Face};
+    });
+    application.installEventFilter(&filter);
+    quader::QtToolSettingsPanel panel;
+    panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+    panel.bind(outgoing);
+    panel.set_expanded(true);
+    auto *amount = panel.findChild<QDoubleSpinBox *>(
+        QStringLiteral("tool_settings.control.extrude.amount"));
+    ASSERT_NE(amount, nullptr);
+    amount->setLocale(QLocale::c());
+    auto *line = amount->findChild<QLineEdit *>();
+    ASSERT_NE(line, nullptr);
+    panel.show();
+    panel.activateWindow();
+    line->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), amount);
+    send_key_press(*line, Qt::Key_A, Qt::ControlModifier);
+    send_key_press(*line, Qt::Key_7, Qt::NoModifier, QStringLiteral("7.25"));
+    int rebinds = 0;
+    QObject::connect(amount, &QDoubleSpinBox::valueChanged, &panel, [&](double) {
+      ++rebinds;
+      filter.rebind_editor(rebind_case == 2 ? outgoing : replacement);
+      if (rebind_case == 1) {
+        panel.bind(replacement);
+      }
+    });
+    send_key_press(*line, Qt::Key_Space, Qt::NoModifier);
+    EXPECT_EQ(rebinds, 1);
+    EXPECT_TRUE(outgoing.tools().active_settings().preview_active);
+    EXPECT_TRUE(replacement.tools().active_settings().preview_active);
+    EXPECT_EQ(outgoing_session.history().undo_count(), outgoing_history);
+    EXPECT_EQ(replacement_session.history().undo_count(), replacement_history);
+
+    // A held key remains reserved even while a popup takes ownership and Qt
+    // preprocesses its shortcut before delivering the repeated press.
+    QMenu popup(&panel);
+    popup.addAction(QStringLiteral("Popup during runtime replacement"));
+    popup.popup(panel.mapToGlobal(QPoint(0, 0)));
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::activePopupWidget(), &popup);
+    QKeyEvent repeat_override(QEvent::ShortcutOverride, Qt::Key_Space,
+                              Qt::NoModifier, QStringLiteral(" "), true);
+    repeat_override.ignore();
+    QCoreApplication::sendEvent(&popup, &repeat_override);
+    EXPECT_TRUE(repeat_override.isAccepted());
+    popup.close();
+
+    filter.rebind_editor(replacement);
+    panel.bind(replacement);
+    auto *cancel = panel.findChild<QPushButton *>(
+        QStringLiteral("tool_settings.cancel"));
+    ASSERT_NE(cancel, nullptr);
+    cancel->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), cancel);
+    QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier,
+                     QStringLiteral(" "), true);
+    QCoreApplication::sendEvent(cancel, &repeat);
+    QKeyEvent repeat_release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier,
+                             QStringLiteral(" "), true);
+    QCoreApplication::sendEvent(cancel, &repeat_release);
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+    QCoreApplication::sendEvent(cancel, &release);
+    EXPECT_TRUE(replacement.tools().active_settings().preview_active);
+    EXPECT_EQ(replacement_session.history().undo_count(), replacement_history);
+    // Only a new physical press may act on the replacement runtime.
+    send_key_press(*cancel, Qt::Key_Space, Qt::NoModifier);
+    QCoreApplication::sendEvent(cancel, &release);
+    EXPECT_FALSE(replacement.tools().active_settings().preview_active);
+    EXPECT_EQ(replacement_session.history().undo_count(), replacement_history + 1U);
+    application.removeEventFilter(&filter);
+    panel.unbind();
+  }
+}
+
+TEST(QtCommandEventFilterTests,
+     DisabledToolSettingsApplyRemainsInactiveWithoutErrorNotifications) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-tool-settings-failure-tests";
@@ -867,6 +1468,7 @@ TEST(QtCommandEventFilterTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Curve).ok());
   ASSERT_TRUE(editor.tools().active_native_tool_lifecycle(
       quader::ViewportToolId::Curve));
+  ASSERT_FALSE(editor.tools().active_settings().can_apply);
 
   std::vector<quader::QuaderNotification> notifications;
   editor.ui().set_runtime_hooks(
@@ -881,6 +1483,7 @@ TEST(QtCommandEventFilterTests,
   application.installEventFilter(&command_filter);
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
   QLineEdit edit(&panel);
   panel.show();
   panel.activateWindow();
@@ -890,15 +1493,12 @@ TEST(QtCommandEventFilterTests,
   const auto command_revision = editor.commands().last_status_revision();
 
   send_key_press(edit, Qt::Key_Space, Qt::NoModifier);
-  ASSERT_EQ(notifications.size(), 1u);
-  EXPECT_EQ(notifications.front().level, quader::QuaderNotificationLevel::Error);
-  EXPECT_FALSE(notifications.front().message.empty());
+  EXPECT_TRUE(notifications.empty());
   EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
   QCoreApplication::processEvents();
-  EXPECT_EQ(notifications.size(), 1u);
   send_key_press(edit, Qt::Key_Space, Qt::NoModifier);
-  ASSERT_EQ(notifications.size(), 2u);
-  EXPECT_EQ(notifications.back().message, notifications.front().message);
+  EXPECT_TRUE(notifications.empty());
+  EXPECT_EQ(editor.tools().active_tool(), "curve");
   EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
   application.removeEventFilter(&command_filter);
 }
@@ -1098,6 +1698,61 @@ TEST(QtCommandEventFilterTests,
   send_key_press(panel, Qt::Key_G, Qt::NoModifier, QStringLiteral("g"));
   EXPECT_EQ(editor.viewports().grid_preset(), 2);
   EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  application.removeEventFilter(&filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     FaceTexturePanEscapeKeepsTheActiveNativeToolPreview) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-face-texture-pan-command-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+  session.history().clear();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 1.0).ok());
+  quader::QtCommandEventFilter filter(editor, [] {
+    return quader::ViewportToolState{
+        .active_tool = quader::ViewportToolId::Extrude,
+        .selection_mode = quader::ViewportSelectionMode::Face};
+  });
+  application.installEventFilter(&filter);
+  quader::QtFaceTexturePanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.resize(700, 900);
+  panel.bind(editor);
+  auto *canvas = dynamic_cast<quader::QtFaceTextureCanvas *>(
+      panel.findChild<QWidget *>(QStringLiteral("face_texture.canvas")));
+  ASSERT_NE(canvas, nullptr);
+  panel.show();
+  panel.activateWindow();
+  QCoreApplication::processEvents();
+  const QPointF position(canvas->rect().center());
+  QMouseEvent press(QEvent::MouseButtonPress, position,
+                    QPointF(canvas->mapToGlobal(position.toPoint())),
+                    Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(canvas, &press);
+  ASSERT_TRUE(canvas->interaction_active());
+  ASSERT_EQ(QApplication::focusWidget(), canvas);
+  send_key_press(*canvas, Qt::Key_Escape, Qt::NoModifier);
+  EXPECT_FALSE(canvas->interaction_active());
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  EXPECT_EQ(session.history().undo_count(), 0U);
+  QMouseEvent release(QEvent::MouseButtonRelease, position,
+                      QPointF(canvas->mapToGlobal(position.toPoint())),
+                      Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(canvas, &release);
+  panel.unbind();
   application.removeEventFilter(&filter);
 }
 

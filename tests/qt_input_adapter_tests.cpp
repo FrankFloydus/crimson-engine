@@ -15,6 +15,7 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
+#include "editor/array/path_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
@@ -24,6 +25,9 @@
 #include "editor/session/scene_session.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "editor/tools/primitive_creation_interaction.hpp"
+#include "editor/tools/extrude_handle_layout.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
+#include "editor/tools/uv_peel_tool_service.hpp"
 #include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
@@ -120,6 +124,22 @@ void expect_history_unchanged(const quader::QuaderHistorySnapshot &actual,
   EXPECT_EQ(actual.redo_label, before.redo_label);
 }
 
+void expect_compiled_mesh_equal(const quader::QuaderMeshAsset &actual,
+                                const quader::QuaderMeshAsset &expected) {
+  EXPECT_EQ(actual.indices, expected.indices);
+  ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+  for (std::size_t index = 0; index < actual.vertices.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto &a = actual.vertices[index];
+    const auto &b = expected.vertices[index];
+    EXPECT_FLOAT_EQ(a.position.x, b.position.x);
+    EXPECT_FLOAT_EQ(a.position.y, b.position.y);
+    EXPECT_FLOAT_EQ(a.position.z, b.position.z);
+    EXPECT_FLOAT_EQ(a.uv.x, b.uv.x);
+    EXPECT_FLOAT_EQ(a.uv.y, b.uv.y);
+  }
+}
+
 /// Drives navigation through the production Qt panel without a visible window.
 struct NavigationPanelTestContext {
   quader::SceneSession session;
@@ -148,6 +168,14 @@ struct NavigationPanelTestContext {
     panel.process_input(editor, session.scene(), session.assets(),
                         session.modeling(), {}, session.native_tools(),
                         &session.point_placement(), delta_seconds);
+  }
+
+  void key(int key) {
+    QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+    QApplication::sendEvent(surface, &press);
+    QApplication::sendEvent(surface, &release);
+    process();
   }
 
   void wheel(QPointF local, int angle_delta,
@@ -1089,7 +1117,7 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
-     RepeatedExtrudeShortcutCommitsSelectedFacesThroughTheProductionPanel) {
+     FirstFaceSelectionLocksExtrusionUntilExplicitApplyOrCancelThroughTheProductionPanel) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-repeated-extrude-input-tests";
@@ -1106,6 +1134,9 @@ TEST(QtViewportSurfaceInputTests,
     const auto box = editor.modeling().create_box(
         {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
     ASSERT_TRUE(box.ok()) << box.error_message();
+    const auto other = editor.modeling().create_box(
+        {.min = {3.0F, -1.0F, -1.0F}, .max = {5.0F, 1.0F, 1.0F}});
+    ASSERT_TRUE(other.ok()) << other.error_message();
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Front).ok());
 
@@ -1115,7 +1146,7 @@ TEST(QtViewportSurfaceInputTests,
     ASSERT_NE(surface, nullptr);
     surface->resize(800, 600);
     session.viewport_workspace().camera(quader::ViewportPaneId::Perspective)
-        .focus_origin(8.0f);
+        .focus_origin(12.0f);
     const QPointF local{400.0, 300.0};
     const QPointF global{500.0, 400.0};
     QEnterEvent enter(local, local, global);
@@ -1134,6 +1165,25 @@ TEST(QtViewportSurfaceInputTests,
       if (!coalesced) {
         process_input();
       }
+      QApplication::sendEvent(surface, &release);
+      process_input();
+    };
+    const auto press_key = [&](int key) {
+      QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+      QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+      QApplication::sendEvent(surface, &press);
+      QApplication::sendEvent(surface, &release);
+      process_input();
+    };
+    const auto click = [&](QPointF position,
+                           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+      const auto screen = QPointF(surface->mapToGlobal(position.toPoint()));
+      QMouseEvent press(QEvent::MouseButtonPress, position, screen,
+                        Qt::LeftButton, Qt::LeftButton, modifiers);
+      QMouseEvent release(QEvent::MouseButtonRelease, position, screen,
+                          Qt::LeftButton, Qt::NoButton, modifiers);
+      QApplication::sendEvent(surface, &press);
+      if (!coalesced) process_input();
       QApplication::sendEvent(surface, &release);
       process_input();
     };
@@ -1159,37 +1209,334 @@ TEST(QtViewportSurfaceInputTests,
     QApplication::sendEvent(surface, &select_release);
     process_input();
     ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
+    ASSERT_EQ(editor.selection().summary().active_object_id,
+              box.value().modeling_object_id);
+    ASSERT_TRUE(session.extrude().preview_active());
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
     const auto selected = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(selected.has_value());
     EXPECT_EQ(selected->indices, original->indices);
     EXPECT_EQ(selected->vertices.size(), original->vertices.size());
     const auto steps_before_extrude = session.history().undo_count();
-
+    const auto locked_selection = editor.selection().summary();
+    const auto projected_other = session.viewport_workspace()
+        .camera(quader::ViewportPaneId::Perspective).project_world_point({4, 0, 0});
+    ASSERT_TRUE(projected_other.visible);
+    const QPointF other_position{
+        projected_other.position.x / surface->devicePixelRatio(),
+        projected_other.position.y / surface->devicePixelRatio()};
+    for (const auto modifiers : {Qt::KeyboardModifiers{},
+                                  Qt::KeyboardModifiers{Qt::ShiftModifier},
+                                  Qt::KeyboardModifiers{Qt::ControlModifier}}) {
+      click(other_position, modifiers);
+      EXPECT_EQ(editor.selection().summary().active_object_id,
+                locked_selection.active_object_id);
+      EXPECT_EQ(editor.selection().summary().active_face_id,
+                locked_selection.active_face_id);
+      EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
+    }
+    click({790, 590});
+    EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
+    ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 2.15).ok());
     press_extrude();
     const auto first = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(first.has_value());
     EXPECT_GT(first->indices.size(), original->indices.size());
-    EXPECT_EQ(session.history().undo_count(), steps_before_extrude + 1u);
+    EXPECT_EQ(session.history().undo_count(), steps_before_extrude);
+    EXPECT_TRUE(editor.tools().active_settings().preview_active);
     EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
     ASSERT_EQ(editor.tools().active_tool(), "extrude");
 
     press_extrude();
     const auto second = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(second.has_value());
-    EXPECT_GT(second->indices.size(), first->indices.size());
-    EXPECT_EQ(session.history().undo_count(), steps_before_extrude + 2u);
+    expect_compiled_mesh_equal(*second, *first);
+    EXPECT_EQ(session.history().undo_count(), steps_before_extrude);
+    EXPECT_TRUE(editor.tools().active_settings().preview_active);
     EXPECT_EQ(editor.tools().active_tool(), "extrude");
-
-    ASSERT_TRUE(editor.history().undo().ok());
-    const auto undo_second = editor.query().compiled_object_mesh(box.value());
-    ASSERT_TRUE(undo_second.has_value());
-    EXPECT_EQ(undo_second->indices, first->indices);
-    EXPECT_EQ(undo_second->vertices.size(), first->vertices.size());
+    press_key(Qt::Key_Space);
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    EXPECT_EQ(session.history().undo_count(), steps_before_extrude + 1u);
+    click(other_position);
+    ASSERT_EQ(editor.selection().summary().active_object_id,
+              other.value().modeling_object_id);
+    ASSERT_TRUE(session.extrude().preview_active());
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    press_key(Qt::Key_Escape);
+    EXPECT_FALSE(session.extrude().preview_active());
+    EXPECT_EQ(session.history().undo_count(), steps_before_extrude + 1u);
     ASSERT_TRUE(editor.history().undo().ok());
     const auto undo_first = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(undo_first.has_value());
     EXPECT_EQ(undo_first->indices, original->indices);
     EXPECT_EQ(undo_first->vertices.size(), original->vertices.size());
+    EXPECT_EQ(session.history().undo_count(), steps_before_extrude);
+    ASSERT_TRUE(editor.history().redo().ok());
+    const auto redo_first = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(redo_first.has_value());
+    EXPECT_EQ(redo_first->indices, first->indices);
+    EXPECT_EQ(redo_first->vertices.size(), first->vertices.size());
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PreviewCompletionKeysApplyOrCancelGeometryThroughTheProductionPanel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-preview-completion-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  enum class Preview { Extrude, ReleasedExtrudeGizmo, Bevel, UvPeel };
+  for (const auto kind : {Preview::Extrude, Preview::ReleasedExtrudeGizmo,
+                          Preview::Bevel, Preview::UvPeel}) {
+    for (const int completion : {Qt::Key_Space, Qt::Key_Escape, Qt::Key_F18}) {
+      SCOPED_TRACE(static_cast<int>(kind));
+      SCOPED_TRACE(completion);
+      NavigationPanelTestContext context;
+      ASSERT_NE(context.surface, nullptr);
+      auto &editor = context.editor;
+      auto &session = context.session;
+      const auto created = [&] {
+        if (kind != Preview::UvPeel) {
+          return editor.modeling().create_box(
+              {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Completion source");
+        }
+        quader_poly::Document document;
+        const std::array vertices{
+            quader_poly::add_vertex(document, {-2, -1, 0}),
+            quader_poly::add_vertex(document, {0, -1, 0}),
+            quader_poly::add_vertex(document, {2, -1, 0}),
+            quader_poly::add_vertex(document, {-2, 1, 0}),
+            quader_poly::add_vertex(document, {0, 1, 0}),
+            quader_poly::add_vertex(document, {2, 1, 0})};
+        (void)quader_poly::add_face(document,
+            std::array{vertices[0], vertices[1], vertices[4], vertices[3]});
+        (void)quader_poly::add_face(document,
+            std::array{vertices[1], vertices[2], vertices[5], vertices[4]});
+        return editor.modeling().create_mesh(
+            quader::QuaderPolygonDocumentInternalAccess::from_backend(
+                std::move(document)), {.name = "Peel completion source"});
+      }();
+      ASSERT_TRUE(created.ok()) << created.error_message();
+      if (kind == Preview::Bevel) {
+        ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
+      } else if (kind == Preview::UvPeel) {
+        ASSERT_TRUE(editor.selection().select_edge(created.value(), 2, 5).ok());
+      } else {
+        ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
+      }
+      const auto source = editor.query().compiled_object_mesh(created.value());
+      ASSERT_TRUE(source.has_value());
+      session.history().clear();
+      context.process();
+      if (kind == Preview::Bevel) {
+        ASSERT_TRUE(editor.commands().execute(
+            editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+        ASSERT_TRUE(editor.tools().set_setting(
+            "edge_bevel", "operation.edge_bevel.width", 0.2).ok());
+      } else if (kind == Preview::UvPeel) {
+        ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+        ASSERT_TRUE(editor.tools().set_setting(
+            "uv_peel", "uv_peel.u_repeat", 2.0).ok());
+        ASSERT_TRUE(editor.tools().set_setting(
+            "uv_peel", "uv_peel.u_offset", 0.25).ok());
+        ASSERT_TRUE(session.uv_peel().refresh().ok);
+      } else {
+        context.key(Qt::Key_E);
+        ASSERT_TRUE(session.extrude().preview_active());
+        if (kind == Preview::Extrude) {
+          ASSERT_TRUE(editor.tools().set_setting(
+              "extrude", "extrude.amount", 2.15).ok());
+        }
+        if (kind == Preview::ReleasedExtrudeGizmo) {
+          context.camera.focus_origin(8.0F);
+          context.camera.set_view_direction(
+              session.extrude().handle_state().world_direction * -1.0F);
+          context.process();
+          const auto layout = quader::build_extrude_handle_layout(
+              context.camera, session.extrude().handle_state(),
+              static_cast<float>(context.surface->devicePixelRatio()));
+          ASSERT_TRUE(layout.valid);
+          const QPointF press{
+              layout.button_center_screen.x / context.surface->devicePixelRatio(),
+              layout.button_center_screen.y / context.surface->devicePixelRatio()};
+          context.mouse(QEvent::MouseButtonPress, press,
+                        Qt::LeftButton, Qt::LeftButton);
+          context.process();
+          context.mouse(QEvent::MouseMove, press + QPointF{0, -30},
+                        Qt::NoButton, Qt::LeftButton);
+          context.process();
+          ASSERT_TRUE(session.extrude().dragging());
+          context.mouse(QEvent::MouseButtonRelease, press + QPointF{0, -45},
+                        Qt::LeftButton, Qt::NoButton);
+          context.process();
+          ASSERT_FALSE(session.extrude().dragging());
+          ASSERT_TRUE(session.extrude().preview_active());
+        }
+      }
+      context.process();
+      ASSERT_TRUE(editor.tools().active_settings().preview_active);
+      ASSERT_TRUE(editor.tools().active_settings().can_apply);
+      EXPECT_EQ(session.history().undo_count(), 0u);
+      const auto preview = editor.query().compiled_object_mesh(created.value());
+      ASSERT_TRUE(preview.has_value());
+      if (completion == Qt::Key_F18) {
+        const std::string_view target = kind == Preview::Bevel
+            ? quader::quader_command::kModelingApplyActivePreview.string()
+            : "viewport.modal_tool.finalize";
+        ASSERT_TRUE(editor.preferences().set_shortcut(target, "F18").ok());
+        context.key(Qt::Key_Space);
+        ASSERT_TRUE(editor.tools().active_settings().preview_active);
+        EXPECT_EQ(session.history().undo_count(), 0u);
+      }
+      context.key(completion);
+      EXPECT_FALSE(editor.tools().active_settings().preview_active);
+      const auto completed = editor.query().compiled_object_mesh(created.value());
+      ASSERT_TRUE(completed.has_value());
+      if (completion == Qt::Key_Escape) {
+        EXPECT_EQ(session.history().undo_count(), 0u);
+        expect_compiled_mesh_equal(*completed, *source);
+      } else {
+        EXPECT_EQ(session.history().undo_count(), 1u);
+        expect_compiled_mesh_equal(*completed, *preview);
+        ASSERT_TRUE(editor.history().undo().ok());
+        const auto undone = editor.query().compiled_object_mesh(created.value());
+        ASSERT_TRUE(undone.has_value());
+        expect_compiled_mesh_equal(*undone, *source);
+        ASSERT_TRUE(editor.history().redo().ok());
+        const auto redone = editor.query().compiled_object_mesh(created.value());
+        ASSERT_TRUE(redone.has_value());
+        expect_compiled_mesh_equal(*redone, *preview);
+      }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NativeCompletionKeysApplyOrCancelSceneToolsThroughTheProductionPanel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-native-completion-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const auto tool : {quader::ViewportToolId::LinearArray,
+                          quader::ViewportToolId::RadialArray,
+                          quader::ViewportToolId::PathArray,
+                          quader::ViewportToolId::Pivot,
+                          quader::ViewportToolId::Curve,
+                          quader::ViewportToolId::CreatePrimitive}) {
+    for (const int completion : {Qt::Key_Space, Qt::Key_Escape}) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      SCOPED_TRACE(completion);
+      NavigationPanelTestContext context;
+      ASSERT_NE(context.surface, nullptr);
+      auto &editor = context.editor;
+      auto &session = context.session;
+      const auto source = editor.modeling().create_box(
+          {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Native completion source");
+      ASSERT_TRUE(source.ok()) << source.error_message();
+      ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+      if (tool == quader::ViewportToolId::PathArray) {
+        const auto path = editor.modeling().create_curve({
+            .points = {{.position = {}}, {.position = {12, 0, 0}}},
+            .name = "Completion path"});
+        ASSERT_TRUE(path.ok()) << path.error_message();
+        ASSERT_TRUE(editor.selection().select_object(path.value()).ok());
+        ASSERT_TRUE(session.curve().refresh().ok);
+      }
+      const auto baseline_entities = session.scene().entities();
+      const auto baseline_count = editor.query().modeling_objects().size();
+      const auto baseline_transform = session.scene().world_transform_matrix(
+          source.value().entity);
+      session.history().clear();
+      context.process();
+      ASSERT_TRUE(editor.tools().activate(tool).ok());
+      std::size_t added_objects = 0;
+      switch (tool) {
+      case quader::ViewportToolId::LinearArray:
+        ASSERT_TRUE(editor.tools().set_setting(
+            "linear_array", "linear_array.count", 3.0).ok());
+        added_objects = 2;
+        break;
+      case quader::ViewportToolId::RadialArray:
+        ASSERT_TRUE(session.radial_array().set_copies(3).ok);
+        ASSERT_TRUE(session.radial_array().update_center_candidate(
+            {3, 0, 0}, {0, 1, 0}, 1.0).ok);
+        ASSERT_TRUE(session.radial_array().lock_center().ok);
+        added_objects = 2;
+        break;
+      case quader::ViewportToolId::PathArray:
+        ASSERT_TRUE(session.path_array().set_count(3).ok);
+        ASSERT_TRUE(session.path_array().select_source(source.value().entity).ok);
+        ASSERT_TRUE(session.path_array().preview_valid());
+        added_objects = 2;
+        break;
+      case quader::ViewportToolId::Pivot:
+        ASSERT_TRUE(editor.tools().execute_action(
+            "pivot", "pivot.align.top_center").ok());
+        break;
+      case quader::ViewportToolId::Curve:
+        for (const quader::QVec3 point : {quader::QVec3{-2, 0, 0},
+                                          quader::QVec3{2, 0, 0}}) {
+          ASSERT_TRUE(session.curve().begin_point(point).ok);
+          ASSERT_TRUE(session.curve().commit_drag().ok);
+        }
+        ASSERT_TRUE(session.curve().can_apply());
+        added_objects = 1;
+        break;
+      case quader::ViewportToolId::CreatePrimitive: {
+        quader::ModelingBoxPreview preview;
+        preview.ok = preview.valid = true;
+        preview.drag_state = quader::ModelingBoxDragState::Height;
+        preview.corners = {quader::QVec3{-2, -2, -2}, quader::QVec3{-2, -2, 2},
+                           quader::QVec3{2, -2, 2}, quader::QVec3{2, -2, -2},
+                           quader::QVec3{-2, 2, -2}, quader::QVec3{-2, 2, 2},
+                           quader::QVec3{2, 2, 2}, quader::QVec3{2, 2, -2}};
+        preview.corner_count = 8;
+        ASSERT_TRUE(session.primitive_creation().accept_preview(
+            preview, "Completion primitive").ok);
+        added_objects = 1;
+        break;
+      }
+      default:
+        FAIL() << "Missing completion fixture";
+      }
+      context.process();
+      ASSERT_TRUE(editor.tools().active_settings().preview_active);
+      ASSERT_TRUE(editor.tools().active_settings().can_apply);
+      EXPECT_EQ(session.history().undo_count(), 0u);
+      context.key(completion);
+      EXPECT_FALSE(editor.tools().active_settings().preview_active);
+      if (completion == Qt::Key_Escape) {
+        EXPECT_EQ(session.history().undo_count(), 0u);
+        EXPECT_EQ(session.scene().entities(), baseline_entities);
+        EXPECT_EQ(editor.query().modeling_objects().size(), baseline_count);
+        EXPECT_EQ(session.scene().world_transform_matrix(source.value().entity).values,
+                  baseline_transform.values);
+      } else {
+        EXPECT_EQ(session.history().undo_count(), 1u);
+        EXPECT_EQ(editor.query().modeling_objects().size(),
+                  baseline_count + added_objects);
+        if (tool == quader::ViewportToolId::Pivot) {
+          const auto moved = editor.query().entity(source.value().entity);
+          ASSERT_TRUE(moved.has_value());
+          EXPECT_FLOAT_EQ(moved->transform.position.y, 1.0F);
+        }
+        ASSERT_TRUE(editor.history().undo().ok());
+        EXPECT_EQ(session.scene().entities(), baseline_entities);
+        EXPECT_EQ(editor.query().modeling_objects().size(), baseline_count);
+        EXPECT_EQ(session.scene().world_transform_matrix(source.value().entity).values,
+                  baseline_transform.values);
+        ASSERT_TRUE(editor.history().redo().ok());
+        EXPECT_EQ(editor.query().modeling_objects().size(),
+                  baseline_count + added_objects);
+      }
+    }
   }
 }
 

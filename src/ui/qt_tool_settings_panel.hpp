@@ -20,6 +20,7 @@ namespace quader {
 class LocalizationService;
 class QuaderEditorApi;
 class QtUiScaleMetrics;
+enum class QuaderNativeToolSettingsIntent;
 
 /**
  * Presents active settings in a collapsible viewport overlay.
@@ -53,6 +54,11 @@ public:
    * dispatch. This is a presentation-only check and performs no owner query.
    */
   [[nodiscard]] bool numeric_interaction_active() const;
+
+  /// Settles Apply or abandons Cancel drafts before dispatching the intent.
+  /// Returns false if validation or synchronous runtime replacement stops it.
+  [[nodiscard]] bool prepare_lifecycle_intent(
+      QuaderEditorApi &editor, QuaderNativeToolSettingsIntent intent);
 
 private:
   struct Impl;

@@ -273,9 +273,9 @@ TEST(ViewportToolGuardrailTests,
   EXPECT_LT(interpret, execute);
   EXPECT_NE(commands.find("active_native_tool_lifecycle(state.active_tool)"),
             std::string::npos);
-  EXPECT_NE(commands.find("ViewportInputActionKind::ModalToolFinalize"),
+  EXPECT_NE(commands.find("metadata->action_id == \"tools.finalize\""),
             std::string::npos);
-  EXPECT_NE(commands.find("ViewportShortcutKind::CancelActiveTool"),
+  EXPECT_NE(commands.find("metadata->action_id == \"tools.cancel\""),
             std::string::npos);
 }
 

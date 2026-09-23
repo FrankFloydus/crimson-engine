@@ -33,7 +33,7 @@ ExtrudeHandleLayout build_extrude_handle_layout(
   layout.mode = handle.mode;
   layout.raster_scale = viewport_sanitized_pixel_scale(raster_scale);
   const float normal_length = length(handle.world_direction);
-  if (!handle.active || handle.dragging || !finite(handle.world_position) ||
+  if (!handle.active || !finite(handle.world_position) ||
       !finite(handle.world_direction) || !std::isfinite(normal_length) ||
       normal_length < 1.0e-6F) {
     return layout;

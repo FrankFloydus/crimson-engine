@@ -73,6 +73,16 @@ QAbstractSpinBox *focused_spin_box(QWidget *widget) {
   return nullptr;
 }
 
+QtToolSettingsPanel *focused_tool_settings_panel(QWidget *widget) {
+  for (QWidget *current = widget; current != nullptr;
+       current = current->parentWidget()) {
+    if (auto *panel = dynamic_cast<QtToolSettingsPanel *>(current)) {
+      return panel;
+    }
+  }
+  return nullptr;
+}
+
 QComboBox *focused_combo_box(QWidget *widget) {
   for (QWidget *current = widget; current != nullptr;
        current = current->parentWidget()) {
@@ -81,6 +91,20 @@ QComboBox *focused_combo_box(QWidget *widget) {
     }
   }
   return nullptr;
+}
+
+bool suppress_settings_button_space(QuaderEditorApi &editor,
+                                    const QWidget *focus,
+                                    const QKeyEvent &event) {
+  if (event.key() != Qt::Key_Space ||
+      event.modifiers() != Qt::NoModifier ||
+      dynamic_cast<const QAbstractButton *>(focus) == nullptr) {
+    return false;
+  }
+  const auto settings = editor.tools().active_settings();
+  // An unassigned/remapped lifecycle key must not activate whichever button
+  // happens to have focus. This reserves the Qt edge without inventing intent.
+  return settings.active && (settings.apply_visible || settings.can_cancel);
 }
 
 QLineEdit *focused_line_edit(QWidget *widget) {
@@ -386,8 +410,10 @@ QtCommandEventFilter::QtCommandEventFilter(
       tool_state_provider_(std::move(tool_state_provider)) {}
 
 void QtCommandEventFilter::rebind_editor(QuaderEditorApi &editor) noexcept {
+  ++binding_generation_;
   editor_ = &editor;
-  reset_pending_chord();
+  text_input_sequence_pending_ = false;
+  editor_->commands().reset_pending_keybinding_chord();
 }
 
 bool qt_outliner_owns_command_input(const QWidget *outliner) {
@@ -420,7 +446,51 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     return QObject::eventFilter(watched, event);
   }
 
+  if (event->type() == QEvent::ShortcutOverride ||
+      event->type() == QEvent::KeyRelease ||
+      event->type() == QEvent::KeyPress) {
+    const auto &key = *static_cast<QKeyEvent *>(event);
+    if (consumed_settings_keys_.contains(key.key()) &&
+        (event->type() == QEvent::KeyRelease || key.isAutoRepeat())) {
+      if (event->type() == QEvent::KeyRelease && !key.isAutoRepeat()) {
+        consumed_settings_keys_.erase(key.key());
+      }
+      event->accept();
+      return true;
+    }
+  }
+
   switch (event->type()) {
+  case QEvent::ShortcutOverride: {
+    if (modal_or_popup_owns_input() ||
+        qt_application_command_input_owner_active(
+            command_input_owner_provider_)) {
+      break;
+    }
+    QWidget *focus = QApplication::focusWidget();
+    const bool tool_settings_focused =
+        qt_object_belongs_to_tool_settings_panel(focus) ||
+        (qt_object_belongs_to_face_texture_panel(focus) &&
+         (text_input_has_focus() || focused_combo_box(focus) != nullptr));
+    if (!tool_settings_focused) {
+      break;
+    }
+    const auto &key = *static_cast<QKeyEvent *>(event);
+    const QuaderInputChord chord =
+        quader_input_chord_from_qt_key(key.key(), key.modifiers());
+    if ((!chord.empty() &&
+         editor_->commands().resolve_native_tool_settings_input_binding(
+            chord, qt_command_dispatch_tool_state(
+                       tool_state_provider_, editor_->viewports().grid_preset()))
+                 .kind != QuaderNativeToolSettingsDispatch::Kind::NoMatch) ||
+        suppress_settings_button_space(*editor_, focus, key)) {
+      // Reserve the canonical mapping before Qt activates a shortcut/mnemonic;
+      // only KeyPress advances the owner's sequence and executes the intent.
+      event->accept();
+      return true;
+    }
+    break;
+  }
   case QEvent::ApplicationDeactivate:
   case QEvent::WindowDeactivate:
   case QEvent::FocusOut:
@@ -443,10 +513,15 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return QObject::eventFilter(watched, event);
     }
     const bool text_input_active = text_input_has_focus();
+    const bool tool_settings_focused =
+        qt_object_belongs_to_tool_settings_panel(focus_widget) ||
+        (qt_object_belongs_to_face_texture_panel(focus_widget) &&
+         (text_input_active || focused_combo_box(focus_widget) != nullptr));
     const bool outliner_focused =
         !text_input_active && qt_application_command_input_owner_active(
                                   outliner_input_owner_provider_);
-    const bool viewport_focused = !outliner_focused && !text_input_active &&
+    const bool viewport_focused = !tool_settings_focused && !outliner_focused &&
+                                 !text_input_active &&
                                  viewport_surface_has_focus(watched);
 
     const std::optional<QuaderInputChord> chord =
@@ -494,6 +569,78 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return true;
     }
 
+    if (tool_settings_focused) {
+      const QuaderNativeToolSettingsDispatch tool_settings_dispatch = [&]() {
+        QDR_PROFILE_SCOPE("Qt command resolve tool-settings keybinding");
+        return editor_->commands()
+            .dispatch_native_tool_settings_input_binding(*chord, state);
+      }();
+      if (tool_settings_dispatch.kind ==
+          QuaderNativeToolSettingsDispatch::Kind::Intent) {
+        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        QuaderEditorApi *const command_editor = editor_;
+        const auto command_binding_generation = binding_generation_;
+        if (QtToolSettingsPanel *panel =
+                focused_tool_settings_panel(focus_widget)) {
+          if (!panel->prepare_lifecycle_intent(
+                  *command_editor, tool_settings_dispatch.intent) ||
+              editor_ != command_editor ||
+              binding_generation_ != command_binding_generation) {
+            event->accept();
+            return true;
+          }
+        } else if (tool_settings_dispatch.intent ==
+            QuaderNativeToolSettingsIntent::Apply) {
+          if (QAbstractSpinBox *spin = focused_spin_box(focus_widget)) {
+            // Commit the visible text before Apply consumes Enter so the live
+            // native-tool preview and its persistent setting match the field.
+            spin->interpretText();
+          }
+        }
+        if (editor_ != command_editor ||
+            binding_generation_ != command_binding_generation) {
+          event->accept();
+          return true;
+        }
+        const std::uint64_t status_revision =
+            command_editor->commands().last_status_revision();
+        const QuaderApiVoidResult result = [&]() {
+          QDR_PROFILE_SCOPE("Qt command execute tool-settings lifecycle");
+          return command_editor->commands().execute_native_tool_settings_intent(
+              tool_settings_dispatch.intent);
+        }();
+        if (!result.ok) {
+          LOG_ERROR("Qt Tool Settings lifecycle failed: {}",
+                    result.message.empty() ? "Command failed."
+                                           : result.message);
+          if (editor_ == command_editor &&
+              binding_generation_ == command_binding_generation &&
+              command_editor->commands().last_status_revision() ==
+                  status_revision) {
+            (void)command_editor->ui().notify(
+                {.level = QuaderNotificationLevel::Error,
+                 .message = result.message.empty() ? "Command failed."
+                                                   : result.message});
+          }
+        }
+        event->accept();
+        return true;
+      } else if (tool_settings_dispatch.kind ==
+                     QuaderNativeToolSettingsDispatch::Kind::PendingChord ||
+                 tool_settings_dispatch.kind ==
+                     QuaderNativeToolSettingsDispatch::Kind::Consumed) {
+        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        event->accept();
+        return true;
+      }
+      if (suppress_settings_button_space(
+              *editor_, focus_widget, *static_cast<QKeyEvent *>(event))) {
+        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        event->accept();
+        return true;
+      }
+    }
+
     const bool text_input_sequence_was_pending =
         text_input_active && text_input_sequence_pending_ &&
         editor_->commands().has_pending_keybinding_chord();
@@ -505,10 +652,6 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     } else if (!text_input_active && text_input_sequence_pending_) {
       reset_pending_chord();
     }
-    const bool native_tool_settings_editor_focused =
-        (qt_object_belongs_to_tool_settings_panel(focus_widget) ||
-         qt_object_belongs_to_face_texture_panel(focus_widget)) &&
-        (text_input_active || focused_combo_box(focus_widget) != nullptr);
     if (!text_input_active) {
       // Hover can transfer command ownership without a Qt focus event. Clear
       // an outgoing viewport prefix before checking a panel continuation.
@@ -540,53 +683,6 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       // the still-focused viewport's deferred input queue.
       event->accept();
       return true;
-    }
-    if (dispatch.kind ==
-            QuaderViewportKeybindingDispatch::Kind::NoMatch &&
-        native_tool_settings_editor_focused) {
-      const QuaderNativeToolSettingsDispatch tool_settings_dispatch = [&]() {
-        QDR_PROFILE_SCOPE("Qt command resolve tool-settings keybinding");
-        return editor_->commands()
-            .dispatch_native_tool_settings_input_binding(*chord, state);
-      }();
-      if (tool_settings_dispatch.kind ==
-          QuaderNativeToolSettingsDispatch::Kind::Intent) {
-        if (tool_settings_dispatch.intent ==
-            QuaderNativeToolSettingsIntent::Apply) {
-          if (QAbstractSpinBox *spin = focused_spin_box(focus_widget)) {
-            // Commit the visible text before Apply consumes Enter so the live
-            // native-tool preview and its persistent setting match the field.
-            spin->interpretText();
-          }
-        }
-        QuaderEditorApi *const command_editor = editor_;
-        const std::uint64_t status_revision =
-            command_editor->commands().last_status_revision();
-        const QuaderApiVoidResult result = [&]() {
-          QDR_PROFILE_SCOPE("Qt command execute tool-settings lifecycle");
-          return command_editor->commands().execute_native_tool_settings_intent(
-              tool_settings_dispatch.intent);
-        }();
-        if (!result.ok) {
-          LOG_ERROR("Qt Tool Settings lifecycle failed: {}",
-                    result.message.empty() ? "Command failed."
-                                           : result.message);
-          if (editor_ == command_editor &&
-              command_editor->commands().last_status_revision() ==
-                  status_revision) {
-            (void)command_editor->ui().notify(
-                {.level = QuaderNotificationLevel::Error,
-                 .message = result.message.empty() ? "Command failed."
-                                                   : result.message});
-          }
-        }
-        event->accept();
-        return true;
-      } else if (tool_settings_dispatch.kind ==
-                 QuaderNativeToolSettingsDispatch::Kind::PendingChord) {
-        event->accept();
-        return true;
-      }
     }
 
     if (focused_widget_owns_key_press(
@@ -665,8 +761,16 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
 }
 
 bool QtCommandEventFilter::modal_or_popup_owns_input() {
-  return QApplication::activeModalWidget() != nullptr ||
-         QApplication::activePopupWidget() != nullptr;
+  if (QApplication::activeModalWidget() != nullptr ||
+      QApplication::activePopupWidget() != nullptr) {
+    return true;
+  }
+  // A popup may already own QWidget focus before the platform publishes its
+  // active-popup registration. Preserve its scoped input in either ordering.
+  const QWidget *focus = QApplication::focusWidget();
+  const QWidget *window = focus != nullptr ? focus->window() : nullptr;
+  return window != nullptr && window->isVisible() &&
+         (window->windowType() == Qt::Popup || window->isModal());
 }
 
 bool QtCommandEventFilter::viewport_surface_has_focus(QObject *watched) {
@@ -725,7 +829,9 @@ bool QtCommandEventFilter::is_text_input_widget(const QWidget *widget) {
 void QtCommandEventFilter::reset_pending_chord() {
   text_input_sequence_pending_ = false;
   if (editor_ != nullptr && editor_->commands().has_pending_keybinding_chord()) {
-    editor_->commands().reset_pending_keybinding_chord();
+    // Dialog/popup adapters own their own scope loss. Yielding the application
+    // filter must not erase a prefix before that adapter receives its suffix.
+    editor_->commands().reset_pending_non_modal_keybinding_chord();
   }
 }
 

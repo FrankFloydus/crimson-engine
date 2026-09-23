@@ -91,45 +91,220 @@ protected:
   QuaderEditorApi editor_;
 };
 
-TEST_F(ExtrudeToolServiceTests, ActivationExtrudesAndAdjustmentsKeepOneUndoStep) {
+TEST_F(ExtrudeToolServiceTests, ActivationStartsAtZeroWithoutChangingGeometryOrHistory) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  const auto original = mesh(strip);
+  const auto steps = session_.history().undo_count();
+  auto &tool = session_.extrude();
+  EXPECT_DOUBLE_EQ(ExtrudeSessionDefaults{}.amount, 0.0);
+  ASSERT_TRUE(tool.activate().ok);
+  EXPECT_TRUE(tool.active());
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_TRUE(tool.adjustable());
+  EXPECT_FALSE(tool.dragging());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_EQ(session_.modeling().selection_summary().selected_face_count, 2U);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  expect_mesh(strip, original);
+}
+
+TEST_F(ExtrudeToolServiceTests, PendingSettingsApplyOnceAndResetForANewOperation) {
   const auto strip = create_strip();
   select_strip(strip);
   const auto original = mesh(strip);
   const auto steps = session_.history().undo_count();
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
-  EXPECT_TRUE(tool.active());
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_EQ(session_.modeling().selection_summary().selected_face_count, 2U);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
-  EXPECT_NEAR(maximum_height(strip), 1.0 / 32.0, 0.00001);
   ASSERT_TRUE(tool.set_mode(modeling::FaceExtrudeMode::Individual).ok);
   ASSERT_TRUE(tool.set_amount(2.15).ok);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  EXPECT_EQ(session_.history().undo_count(), steps);
   EXPECT_NEAR(maximum_height(strip), 2.15 / 32.0, 0.00001);
-  const auto final = mesh(strip);
+  const auto pending = mesh(strip);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_FALSE(tool.handle_state().adjustment_available);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_EQ(tool.mode(), modeling::FaceExtrudeMode::Individual);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  EXPECT_FALSE(tool.begin_adjust_drag().ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  expect_mesh(strip, pending);
   ASSERT_TRUE(session_.history().undo().ok);
   expect_mesh(strip, original);
   ASSERT_TRUE(session_.history().redo().ok);
-  expect_mesh(strip, final);
-  EXPECT_FALSE(tool.adjustable());
+  expect_mesh(strip, pending);
 }
 
-TEST_F(ExtrudeToolServiceTests, RepeatedExtrusionsAreSeparateUndoSteps) {
+TEST_F(ExtrudeToolServiceTests, RepeatedActivationNeverAcceptsOrStacksThePendingStep) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  auto &tool = session_.extrude();
+  const auto original = mesh(strip);
+  const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kToolsActivateExtrude).ok());
+  ASSERT_TRUE(tool.set_amount(2.15).ok);
+  const auto pending = mesh(strip);
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kToolsActivateExtrude).ok());
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.activate_preview().ok);
+  ASSERT_TRUE(tool.extrude().ok);
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_DOUBLE_EQ(tool.amount(), 2.15);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  expect_mesh(strip, pending);
+  ASSERT_TRUE(tool.activate(modeling::FaceExtrudeMode::Individual).ok);
+  EXPECT_EQ(tool.mode(), modeling::FaceExtrudeMode::Individual);
+  EXPECT_DOUBLE_EQ(tool.amount(), 2.15);
+  EXPECT_NEAR(maximum_height(strip), 2.15 / 32.0, 0.00001);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  ASSERT_TRUE(editor_.tools().cancel_modal_tool().ok());
+  expect_mesh(strip, original);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+}
+
+TEST_F(ExtrudeToolServiceTests, PendingCancelRestoresSelectionAndPreservesRedo) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   const auto original = mesh(strip);
   ASSERT_TRUE(tool.activate().ok);
-  const auto first = mesh(strip);
+  ASSERT_TRUE(tool.set_amount(1.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  const auto accepted = mesh(strip);
+  ASSERT_TRUE(tool.cancel().ok);
+  ASSERT_TRUE(session_.history().undo().ok);
+  const auto undo_steps = session_.history().undo_count();
+  const auto redo_steps = session_.history().redo_count();
+  const auto history_revision = session_.history().revision();
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kToolsActivateExtrude).ok());
+  ASSERT_TRUE(tool.set_options({modeling::FaceExtrudeMode::Individual, 2.15}).ok);
+  ASSERT_TRUE(editor_.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(tool.active());
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_TRUE(session_.modeling().tool_preview_meshes().empty());
+  expect_mesh(strip, original);
+  EXPECT_EQ(session_.modeling().selection_summary().selected_face_count, 2U);
+  EXPECT_EQ(session_.history().undo_count(), undo_steps);
+  EXPECT_EQ(session_.history().redo_count(), redo_steps);
+  EXPECT_EQ(session_.history().revision(), history_revision);
+  ASSERT_TRUE(session_.history().redo().ok);
+  expect_mesh(strip, accepted);
+}
+
+TEST_F(ExtrudeToolServiceTests, SequentialAppliedAmountsStartFromCurrentCapsAndUndoSeparately) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  auto &tool = session_.extrude();
+  const auto original = mesh(strip);
   const auto steps = session_.history().undo_count();
   ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  const auto first = mesh(strip);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  ASSERT_TRUE(tool.set_amount(3.0).ok);
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_NEAR(maximum_height(strip), 5.0 / 32.0, 0.00001);
+  EXPECT_GT(mesh(strip).indices.size(), first.indices.size());
   EXPECT_EQ(session_.history().undo_count(), steps + 1);
-  EXPECT_NEAR(maximum_height(strip), 2.0 / 32.0, 0.00001);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  const auto second = mesh(strip);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_EQ(session_.history().undo_count(), steps + 2);
   ASSERT_TRUE(session_.history().undo().ok);
   expect_mesh(strip, first);
   ASSERT_TRUE(session_.history().undo().ok);
   expect_mesh(strip, original);
+  ASSERT_TRUE(session_.history().redo().ok);
+  expect_mesh(strip, first);
+  ASSERT_TRUE(session_.history().redo().ok);
+  expect_mesh(strip, second);
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_EQ(session_.modeling().selection_summary().selected_face_count, 2U);
+}
+
+TEST_F(ExtrudeToolServiceTests, CancelingTheNextOperationCannotRewriteTheAppliedStep) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  auto &tool = session_.extrude();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  const auto accepted = mesh(strip);
+  const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(tool.set_options({modeling::FaceExtrudeMode::Individual, 4.0}).ok);
+  ASSERT_TRUE(tool.begin_adjust_drag().ok);
+  ASSERT_TRUE(tool.update_drag(6.0).ok);
+  ASSERT_TRUE(tool.cancel_drag().ok);
+  EXPECT_TRUE(tool.active());
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, accepted);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  ASSERT_TRUE(tool.set_amount(3.0).ok);
+  EXPECT_NEAR(maximum_height(strip), 5.0 / 32.0, 0.00001);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+}
+
+TEST_F(ExtrudeToolServiceTests, DragAcceptanceCreatesOneStepAndResetsItsAmount) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  auto &tool = session_.extrude();
+  const auto original = mesh(strip);
+  const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(tool.activate_preview().ok);
+  ASSERT_TRUE(tool.begin_adjust_drag().ok);
+  EXPECT_TRUE(tool.adjusting());
+  ASSERT_TRUE(tool.update_drag(3.25).ok);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  ASSERT_TRUE(tool.end_drag().ok);
+  const auto accepted = mesh(strip);
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  EXPECT_NEAR(maximum_height(strip), 3.25 / 32.0, 0.00001);
+  ASSERT_TRUE(tool.end_drag().ok);
+  ASSERT_TRUE(tool.cancel().ok);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  expect_mesh(strip, accepted);
+  ASSERT_TRUE(session_.history().undo().ok);
+  expect_mesh(strip, original);
+}
+
+TEST_F(ExtrudeToolServiceTests, ReleasedDragKeepsItsCandidateEditableUntilApply) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  auto &tool = session_.extrude();
+  const auto original = mesh(strip);
+  const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.begin_adjust_drag().ok);
+  ASSERT_TRUE(tool.update_drag(2.0).ok);
+  ASSERT_TRUE(tool.release_drag().ok);
+  EXPECT_FALSE(tool.dragging());
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_DOUBLE_EQ(tool.amount(), 2.0);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  ASSERT_TRUE(tool.set_mode(modeling::FaceExtrudeMode::Individual).ok);
+  ASSERT_TRUE(tool.set_amount(2.15).ok);
+  const auto pending = mesh(strip);
+  ASSERT_TRUE(editor_.tools().commit_active_tool_preview().ok());
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_EQ(tool.mode(), modeling::FaceExtrudeMode::Individual);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  expect_mesh(strip, pending);
+  ASSERT_TRUE(session_.history().undo().ok);
+  expect_mesh(strip, original);
+  ASSERT_TRUE(session_.history().redo().ok);
+  expect_mesh(strip, pending);
 }
 
 TEST_F(ExtrudeToolServiceTests, EmptyActivationAndSelectionDoNotCreateGeometry) {
@@ -138,229 +313,290 @@ TEST_F(ExtrudeToolServiceTests, EmptyActivationAndSelectionDoNotCreateGeometry) 
   const auto original = mesh(strip);
   const auto steps = session_.history().undo_count();
   auto &tool = session_.extrude();
-  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.activate(modeling::FaceExtrudeMode::AlongNormals).ok);
   EXPECT_EQ(session_.modeling().selection_mode(), ModelingSelectionMode::Face);
   EXPECT_FALSE(tool.has_selected_faces());
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
   select_strip(strip);
   ASSERT_TRUE(tool.refresh().ok);
   EXPECT_TRUE(tool.active());
-  EXPECT_TRUE(tool.has_selected_faces());
+  expect_mesh(strip, original);
+  ASSERT_TRUE(tool.extrude().ok);
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
   expect_mesh(strip, original);
   EXPECT_EQ(session_.history().undo_count(), steps);
-  ASSERT_TRUE(tool.extrude().ok);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
-}
-
-TEST_F(ExtrudeToolServiceTests, ZeroSettingsRestoreTheOriginalAndRemainEditable) {
-  const auto strip = create_strip();
-  select_strip(strip);
-  auto &tool = session_.extrude();
-  ASSERT_TRUE(tool.set_amount(0.0).ok);
-  const auto original = mesh(strip);
-  const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(tool.activate().ok);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  expect_mesh(strip, original);
-  ASSERT_TRUE(tool.set_amount(1.0).ok);
-  ASSERT_TRUE(tool.extrude().ok);
-  ASSERT_TRUE(tool.set_amount(0.0).ok);
-  expect_mesh(strip, original);
-  EXPECT_TRUE(tool.adjustable());
   ASSERT_TRUE(tool.set_amount(2.0).ok);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
   EXPECT_NEAR(maximum_height(strip), 2.0 / 32.0, 0.00001);
+  EXPECT_EQ(session_.history().undo_count(), steps);
 }
 
-TEST_F(ExtrudeToolServiceTests, SelectionAndHistoryChangesRetireAdjustments) {
+TEST_F(ExtrudeToolServiceTests, ReturningPendingAmountToZeroRestoresOnlyItsOwnSource) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
   const auto first = mesh(strip);
   const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(editor_.selection().clear().ok());
-  ASSERT_TRUE(tool.set_amount(4.0).ok);
-  EXPECT_FALSE(tool.adjustable());
-  expect_mesh(strip, first);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  ASSERT_TRUE(session_.history().undo().ok);
-  ASSERT_TRUE(session_.history().redo().ok);
   ASSERT_TRUE(tool.set_amount(3.0).ok);
+  ASSERT_TRUE(tool.set_amount(0.0).ok);
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_TRUE(tool.adjustable());
   expect_mesh(strip, first);
   EXPECT_EQ(session_.history().undo_count(), steps);
+  ASSERT_TRUE(tool.set_amount(1.25).ok);
+  EXPECT_NEAR(maximum_height(strip), 3.25 / 32.0, 0.00001);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  ASSERT_TRUE(session_.history().undo().ok);
+  expect_mesh(strip, first);
 }
 
-TEST_F(ExtrudeToolServiceTests, SharedDefaultsSurviveToolAndSceneChanges) {
+TEST_F(ExtrudeToolServiceTests, ZeroApplyClosesThePreviewWithoutCreatingHistory) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  auto &tool = session_.extrude();
+  const auto original = mesh(strip);
+  const auto steps = session_.history().undo_count();
+  const auto revision = session_.history().revision();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  ASSERT_TRUE(tool.set_amount(0.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, original);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  EXPECT_EQ(session_.history().revision(), revision);
+}
+
+TEST_F(ExtrudeToolServiceTests, SelectionChangesCannotReuseAnAppliedSource) {
+  const auto strip = create_strip();
+  const auto other = create_strip();
+  select_strip(strip);
+  auto &tool = session_.extrude();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  const auto first = mesh(strip);
+  const auto second_source = mesh(other);
+  const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(editor_.selection().clear().ok());
+  select_strip(other);
+  ASSERT_TRUE(tool.refresh().ok);
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_TRUE(tool.adjustable());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, first);
+  expect_mesh(other, second_source);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  ASSERT_TRUE(tool.set_amount(3.0).ok);
+  expect_mesh(strip, first);
+  EXPECT_NEAR(maximum_height(other), 3.0 / 32.0, 0.00001);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  ASSERT_TRUE(session_.history().undo().ok);
+  expect_mesh(strip, first);
+  expect_mesh(other, second_source);
+}
+
+TEST_F(ExtrudeToolServiceTests, SharedModeSurvivesSceneChangesWithoutRememberingDisplacement) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
   ASSERT_TRUE(tool.set_options({modeling::FaceExtrudeMode::Individual, 2.15}).ok);
-  const auto committed = mesh(strip);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  const auto accepted = mesh(strip);
   ASSERT_TRUE(tool.cancel().ok);
-  expect_mesh(strip, committed);
+  expect_mesh(strip, accepted);
   SceneSession second(nullptr, defaults_);
   EXPECT_EQ(second.extrude().mode(), modeling::FaceExtrudeMode::Individual);
-  EXPECT_DOUBLE_EQ(second.extrude().amount(), 2.15);
-  EXPECT_DOUBLE_EQ(ExtrudeSessionDefaults{}.amount, 1.0);
+  EXPECT_DOUBLE_EQ(second.extrude().amount(), 0.0);
   ASSERT_TRUE(tool.activate().ok);
-  EXPECT_NEAR(maximum_height(strip), 4.30 / 32.0, 0.00001);
+  EXPECT_EQ(tool.mode(), modeling::FaceExtrudeMode::Individual);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, accepted);
 }
 
-TEST_F(ExtrudeToolServiceTests, DragCancelRestoresGeometryHistoryAndSettings) {
+TEST_F(ExtrudeToolServiceTests, SharedDefaultsDoNotSharePendingOrIdleAmounts) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  auto &tool = session_.extrude();
+  SceneSession second(nullptr, defaults_);
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_options({modeling::FaceExtrudeMode::Individual, 2.15}).ok);
+  EXPECT_EQ(second.extrude().mode(), modeling::FaceExtrudeMode::Individual);
+  EXPECT_DOUBLE_EQ(second.extrude().amount(), 0.0);
+  ASSERT_TRUE(second.extrude().set_amount(4.0).ok);
+  EXPECT_DOUBLE_EQ(tool.amount(), 2.15);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_DOUBLE_EQ(second.extrude().amount(), 4.0);
+  ASSERT_TRUE(second.extrude().activate().ok);
+  EXPECT_DOUBLE_EQ(second.extrude().amount(), 0.0);
+  EXPECT_EQ(second.extrude().mode(), modeling::FaceExtrudeMode::Individual);
+}
+
+TEST_F(ExtrudeToolServiceTests, FreshActivationDiscardsAnInactiveAmount) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  const auto original = mesh(strip);
+  const auto steps = session_.history().undo_count();
+  auto &tool = session_.extrude();
+  ASSERT_TRUE(tool.set_options({modeling::FaceExtrudeMode::Individual, 2.15}).ok);
+  ASSERT_TRUE(tool.activate().ok);
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_EQ(tool.mode(), modeling::FaceExtrudeMode::Individual);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, original);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+}
+
+TEST_F(ExtrudeToolServiceTests, DragCancelRestoresGeometryHistoryAndZeroAmount) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
-  const auto committed = mesh(strip);
+  const auto original = mesh(strip);
   const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(tool.begin_drag().ok);
-  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
-  expect_mesh(strip, committed);
+  ASSERT_TRUE(tool.begin_adjust_drag().ok);
   ASSERT_TRUE(tool.update_drag_world_amount(0.5).ok);
   EXPECT_DOUBLE_EQ(tool.amount(), 16.0);
   EXPECT_EQ(session_.history().undo_count(), steps);
   ASSERT_TRUE(tool.cancel_drag().ok);
   EXPECT_TRUE(tool.active());
   EXPECT_FALSE(tool.dragging());
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_DOUBLE_EQ(tool.amount(), 1.0);
-  expect_mesh(strip, committed);
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, original);
   EXPECT_EQ(session_.history().undo_count(), steps);
   ASSERT_TRUE(tool.set_amount(2.0).ok);
-  EXPECT_EQ(session_.history().undo_count(), steps);
   EXPECT_NEAR(maximum_height(strip), 2.0 / 32.0, 0.00001);
+  EXPECT_EQ(session_.history().undo_count(), steps);
 }
 
-TEST_F(ExtrudeToolServiceTests, CompletedNewDragKeepsASeparateUndoStep) {
+TEST_F(ExtrudeToolServiceTests, NewDragAfterApplyStartsAtTheCurrentCapAndZeroDisplacement) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
   const auto first = mesh(strip);
   const auto steps = session_.history().undo_count();
   ASSERT_TRUE(tool.begin_drag().ok);
   EXPECT_FALSE(tool.adjusting());
   EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, first);
   ASSERT_TRUE(tool.update_drag(3.0).ok);
   ASSERT_TRUE(tool.end_drag().ok);
   EXPECT_EQ(session_.history().undo_count(), steps + 1);
-  EXPECT_NEAR(maximum_height(strip), 4.0 / 32.0, 0.00001);
-  ASSERT_TRUE(tool.set_amount(2.0).ok);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
-  EXPECT_NEAR(maximum_height(strip), 3.0 / 32.0, 0.00001);
+  EXPECT_NEAR(maximum_height(strip), 5.0 / 32.0, 0.00001);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
   ASSERT_TRUE(session_.history().undo().ok);
   expect_mesh(strip, first);
 }
 
-TEST_F(ExtrudeToolServiceTests, FailedDragBeginRetainsPreviousEditableExtrusion) {
+TEST_F(ExtrudeToolServiceTests, FailedDragBeginPreservesTheAppliedStepAndAllowsRetry) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_amount(1.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
   const auto accepted = mesh(strip);
   const auto steps = session_.history().undo_count();
-  for (const bool adjusting : {false, true}) {
-    SCOPED_TRACE(adjusting);
-    session_.modeling().set_modeling_sdk_projection_failure_for_tests(
-        ModelingSdkProjectionFailurePoint::AfterSdkMutation);
-    const auto failed = adjusting ? tool.begin_adjust_drag() : tool.begin_drag();
-    session_.modeling().set_modeling_sdk_projection_failure_for_tests(
-        ModelingSdkProjectionFailurePoint::None);
-    EXPECT_FALSE(failed.ok);
-    EXPECT_FALSE(tool.dragging());
-    EXPECT_FALSE(tool.can_update_drag());
-    EXPECT_TRUE(tool.adjustable());
-    EXPECT_DOUBLE_EQ(tool.amount(), 1.0);
-    EXPECT_EQ(session_.history().undo_count(), steps);
-    expect_mesh(strip, accepted);
-  }
-  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  session_.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  const auto failed = tool.begin_drag();
+  session_.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(tool.dragging());
+  EXPECT_FALSE(tool.can_update_drag());
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
   EXPECT_EQ(session_.history().undo_count(), steps);
-  EXPECT_NEAR(maximum_height(strip), 2.0 / 32.0, 0.00001);
+  expect_mesh(strip, accepted);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  EXPECT_NEAR(maximum_height(strip), 3.0 / 32.0, 0.00001);
+  EXPECT_EQ(session_.history().undo_count(), steps);
 }
 
-TEST_F(ExtrudeToolServiceTests, DragCommitCreatesOneAdjustableUndoStep) {
-  const auto strip = create_strip();
-  ASSERT_TRUE(editor_.selection().clear().ok());
-  auto &tool = session_.extrude();
-  ASSERT_TRUE(tool.activate().ok);
-  select_strip(strip);
-  ASSERT_TRUE(tool.active());
-  const auto original = mesh(strip);
-  const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(tool.begin_drag().ok);
-  ASSERT_TRUE(tool.update_drag(1.25).ok);
-  ASSERT_TRUE(tool.update_drag(2.15).ok);
-  ASSERT_TRUE(tool.end_drag().ok);
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_DOUBLE_EQ(tool.amount(), 2.15);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
-  ASSERT_TRUE(tool.set_mode(modeling::FaceExtrudeMode::Individual).ok);
-  ASSERT_TRUE(tool.set_amount(3.0).ok);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
-  const auto final = mesh(strip);
-  ASSERT_TRUE(session_.history().undo().ok);
-  expect_mesh(strip, original);
-  ASSERT_TRUE(session_.history().redo().ok);
-  expect_mesh(strip, final);
-}
-
-TEST_F(ExtrudeToolServiceTests, InvalidSettingsPreserveAcceptedGeometryAndHistory) {
+TEST_F(ExtrudeToolServiceTests, InvalidSettingsPreserveTheLastValidPendingCandidate) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
-  const auto committed = mesh(strip);
+  ASSERT_TRUE(tool.set_amount(1.25).ok);
+  const auto pending = mesh(strip);
   const auto steps = session_.history().undo_count();
   EXPECT_FALSE(tool.set_amount(std::numeric_limits<double>::quiet_NaN()).ok);
   EXPECT_FALSE(tool.set_amount(std::numeric_limits<double>::infinity()).ok);
   EXPECT_FALSE(tool.set_amount(std::numeric_limits<double>::max()).ok);
   EXPECT_FALSE(tool.set_mode(static_cast<modeling::FaceExtrudeMode>(255)).ok);
-  EXPECT_DOUBLE_EQ(tool.amount(), 1.0);
+  EXPECT_DOUBLE_EQ(tool.amount(), 1.25);
   EXPECT_TRUE(tool.adjustable());
-  expect_mesh(strip, committed);
+  expect_mesh(strip, pending);
   EXPECT_EQ(session_.history().undo_count(), steps);
 }
 
-TEST_F(ExtrudeToolServiceTests, UnchangedFramesDoNotCaptureOrRegenerateGeometry) {
+TEST_F(ExtrudeToolServiceTests, UnchangedPendingAndAppliedFramesDoNotRegenerateGeometry) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
-  ASSERT_TRUE(tool.handle_state().active);
-  const auto work = tool.work_stats_for_tests();
-  const auto revision = tool.tool_settings_revision();
-  for (int frame = 0; frame != 20; ++frame) {
-    EXPECT_TRUE(tool.refresh().ok);
-    EXPECT_TRUE(tool.handle_state().active);
-    EXPECT_EQ(tool.tool_settings_revision(), revision);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  for (const bool applied : {false, true}) {
+    SCOPED_TRACE(applied);
+    if (applied) {
+      ASSERT_TRUE(tool.commit_preview().ok);
+    }
+    ASSERT_TRUE(tool.handle_state().active);
+    const auto work = tool.work_stats_for_tests();
+    const auto revision = tool.tool_settings_revision();
+    for (int frame = 0; frame != 20; ++frame) {
+      EXPECT_TRUE(tool.refresh().ok);
+      EXPECT_TRUE(tool.handle_state().active);
+      EXPECT_EQ(tool.tool_settings_revision(), revision);
+    }
+    EXPECT_EQ(tool.work_stats_for_tests().source_capture_count,
+              work.source_capture_count);
+    EXPECT_EQ(tool.work_stats_for_tests().geometry_update_count,
+              work.geometry_update_count);
   }
-  EXPECT_EQ(tool.work_stats_for_tests().source_capture_count,
-            work.source_capture_count);
-  EXPECT_EQ(tool.work_stats_for_tests().geometry_update_count,
-            work.geometry_update_count);
 }
 
-TEST_F(ExtrudeToolServiceTests, FailedAdjustmentPreservesItsAcceptedSettings) {
+TEST_F(ExtrudeToolServiceTests, FailedPendingUpdateRestoresOnlyTheCurrentOperationSource) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
-  const auto committed = mesh(strip);
+  ASSERT_TRUE(tool.set_amount(1.0).ok);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  const auto accepted = mesh(strip);
   const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(tool.set_amount(4.0).ok);
   session_.modeling().set_modeling_sdk_projection_failure_for_tests(
       ModelingSdkProjectionFailurePoint::AfterSdkMutation);
-  const auto failed = tool.set_amount(3.0);
-  EXPECT_FALSE(failed.ok);
-  EXPECT_DOUBLE_EQ(tool.amount(), 1.0);
-  expect_mesh(strip, committed);
-  EXPECT_EQ(session_.history().undo_count(), steps);
+  const auto failed = tool.set_amount(6.0);
   session_.modeling().set_modeling_sdk_projection_failure_for_tests(
       ModelingSdkProjectionFailurePoint::None);
-  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  ASSERT_FALSE(failed.ok);
+  ASSERT_TRUE(tool.refresh().ok);
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, accepted);
   EXPECT_EQ(session_.history().undo_count(), steps);
-  EXPECT_NEAR(maximum_height(strip), 2.0 / 32.0, 0.00001);
+  ASSERT_TRUE(tool.set_amount(2.0).ok);
+  EXPECT_NEAR(maximum_height(strip), 3.0 / 32.0, 0.00001);
+  EXPECT_EQ(session_.history().undo_count(), steps);
 }
 
 TEST_F(ExtrudeToolServiceTests, FailedActivationPreservesGeometryAndPriorTool) {
@@ -382,249 +618,57 @@ TEST_F(ExtrudeToolServiceTests, FailedActivationPreservesGeometryAndPriorTool) {
       ModelingSdkProjectionFailurePoint::None);
 }
 
-TEST_F(ExtrudeToolServiceTests, PresetActivationStartsANewExtrusionAndRemembersMode) {
+TEST_F(ExtrudeToolServiceTests, PendingDragReturningToItsStartStillNeedsOneApply) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
-  const auto first = mesh(strip);
+  ASSERT_TRUE(tool.set_amount(1.0).ok);
+  const auto pending = mesh(strip);
   const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(tool.activate(modeling::FaceExtrudeMode::Individual).ok);
-  EXPECT_EQ(tool.mode(), modeling::FaceExtrudeMode::Individual);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
-  EXPECT_NEAR(maximum_height(strip), 2.0 / 32.0, 0.00001);
-  ASSERT_TRUE(session_.history().undo().ok);
-  expect_mesh(strip, first);
-}
-
-TEST_F(ExtrudeToolServiceTests, EmptyPresetActivationOnlyArmsTheChosenMode) {
-  const auto strip = create_strip();
-  ASSERT_TRUE(editor_.selection().clear().ok());
-  auto &tool = session_.extrude();
-  const auto before = mesh(strip);
-  const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(tool.activate(modeling::FaceExtrudeMode::AlongNormals).ok);
-  EXPECT_TRUE(tool.active());
-  EXPECT_EQ(tool.mode(), modeling::FaceExtrudeMode::AlongNormals);
-  expect_mesh(strip, before);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  select_strip(strip);
-  ASSERT_TRUE(tool.extrude().ok);
-  EXPECT_EQ(session_.history().undo_count(), steps + 1);
-}
-
-TEST_F(ExtrudeToolServiceTests, FailedPresetActivationPreservesPreviousAdjustment) {
-  const auto strip = create_strip();
-  select_strip(strip);
-  auto &tool = session_.extrude();
-  ASSERT_TRUE(tool.activate().ok);
-  const auto before = mesh(strip);
-  const auto steps = session_.history().undo_count();
-  session_.modeling().set_modeling_sdk_projection_failure_for_tests(
-      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
-  EXPECT_FALSE(tool.activate(modeling::FaceExtrudeMode::Individual).ok);
-  EXPECT_TRUE(tool.active());
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_EQ(tool.mode(), modeling::FaceExtrudeMode::Region);
-  EXPECT_DOUBLE_EQ(tool.amount(), 1.0);
-  expect_mesh(strip, before);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  session_.modeling().set_modeling_sdk_projection_failure_for_tests(
-      ModelingSdkProjectionFailurePoint::None);
-  ASSERT_TRUE(tool.set_amount(2.0).ok);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  EXPECT_NEAR(maximum_height(strip), 2.0 / 32.0, 0.00001);
-}
-
-TEST_F(ExtrudeToolServiceTests, AdjustmentDragStartsAtAcceptedAmountAndMergesHistory) {
-  const auto strip = create_strip();
-  select_strip(strip);
-  auto &tool = session_.extrude();
-  const auto original = mesh(strip);
-  ASSERT_TRUE(tool.activate().ok);
-  const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(tool.begin_adjust_drag().ok);
-  EXPECT_TRUE(tool.adjusting());
-  EXPECT_DOUBLE_EQ(tool.amount(), 1.0);
-  ASSERT_TRUE(tool.update_drag(2.15).ok);
-  ASSERT_TRUE(tool.end_drag().ok);
-  EXPECT_FALSE(tool.adjusting());
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_DOUBLE_EQ(tool.amount(), 2.15);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  EXPECT_NEAR(maximum_height(strip), 2.15 / 32.0, 0.00001);
-  const auto after = mesh(strip);
-  ASSERT_TRUE(session_.history().undo().ok);
-  expect_mesh(strip, original);
-  ASSERT_TRUE(session_.history().redo().ok);
-  expect_mesh(strip, after);
-}
-
-TEST_F(ExtrudeToolServiceTests,
-       RepeatedAdjustmentDragsMergeUntilTheNextExtrudeCommand) {
-  const auto strip = create_strip();
-  select_strip(strip);
-  auto &tool = session_.extrude();
-  const auto original = mesh(strip);
-  const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(editor_.commands()
-                  .execute(quader_command::kToolsActivateExtrude)
-                  .ok());
-
-  for (const double amount : {2.15, 0.0, -1.25, 3.25}) {
-    SCOPED_TRACE(amount);
-    const double accepted_amount = tool.amount();
-    ASSERT_TRUE(tool.begin_adjust_drag().ok);
-    EXPECT_TRUE(tool.adjusting());
-    EXPECT_DOUBLE_EQ(tool.amount(), accepted_amount);
-    ASSERT_TRUE(tool.update_drag(amount).ok);
-    ASSERT_TRUE(tool.end_drag().ok);
-    EXPECT_TRUE(tool.adjustable());
-    EXPECT_DOUBLE_EQ(tool.amount(), amount);
-    EXPECT_EQ(session_.history().undo_count(), steps + 1);
-    EXPECT_EQ(session_.modeling().selection_summary().selected_face_count, 2U);
-    if (amount == 0.0) {
-      expect_mesh(strip, original);
-    }
-  }
-  const auto first = mesh(strip);
-  EXPECT_NEAR(maximum_height(strip), 3.25 / 32.0, 0.00001);
-
-  ASSERT_TRUE(editor_.commands()
-                  .execute(quader_command::kToolsActivateExtrude)
-                  .ok());
-  EXPECT_DOUBLE_EQ(tool.amount(), 3.25);
-  EXPECT_NEAR(maximum_height(strip), 6.5 / 32.0, 0.00001);
-  for (const double amount : {0.0, -2.0, 1.75}) {
-    SCOPED_TRACE(amount);
-    ASSERT_TRUE(tool.begin_adjust_drag().ok);
-    ASSERT_TRUE(tool.update_drag(amount).ok);
-    ASSERT_TRUE(tool.end_drag().ok);
-    EXPECT_TRUE(tool.adjustable());
-    EXPECT_DOUBLE_EQ(tool.amount(), amount);
-    EXPECT_EQ(session_.history().undo_count(), steps + 2);
-    if (amount == 0.0) {
-      expect_mesh(strip, first);
-    }
-  }
-  const auto second = mesh(strip);
-  EXPECT_NEAR(maximum_height(strip), 5.0 / 32.0, 0.00001);
-
-  ASSERT_TRUE(tool.begin_adjust_drag().ok);
-  ASSERT_TRUE(tool.update_drag(0.0).ok);
-  ASSERT_TRUE(tool.update_drag(-3.0).ok);
-  ASSERT_TRUE(tool.cancel_drag().ok);
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_DOUBLE_EQ(tool.amount(), 1.75);
-  EXPECT_EQ(session_.history().undo_count(), steps + 2);
-  expect_mesh(strip, second);
-
-  ASSERT_TRUE(session_.history().undo().ok);
-  expect_mesh(strip, first);
-  ASSERT_TRUE(session_.history().undo().ok);
-  expect_mesh(strip, original);
-  ASSERT_TRUE(session_.history().redo().ok);
-  expect_mesh(strip, first);
-  ASSERT_TRUE(session_.history().redo().ok);
-  expect_mesh(strip, second);
-  EXPECT_EQ(session_.history().undo_count(), steps + 2);
-  EXPECT_EQ(session_.modeling().selection_summary().selected_face_count, 2U);
-}
-
-TEST_F(ExtrudeToolServiceTests, AdjustmentCancelRestoresGeometryAmountAndEligibility) {
-  const auto strip = create_strip();
-  select_strip(strip);
-  auto &tool = session_.extrude();
-  ASSERT_TRUE(tool.activate().ok);
-  ASSERT_TRUE(tool.set_amount(2.15).ok);
-  const auto accepted = mesh(strip);
-  const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(tool.begin_adjust_drag().ok);
-  ASSERT_TRUE(tool.update_drag(4.0).ok);
-  ASSERT_TRUE(tool.cancel_drag().ok);
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_DOUBLE_EQ(tool.amount(), 2.15);
-  expect_mesh(strip, accepted);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  ASSERT_TRUE(tool.set_amount(3.0).ok);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  EXPECT_NEAR(maximum_height(strip), 3.0 / 32.0, 0.00001);
-}
-
-TEST_F(ExtrudeToolServiceTests, UnchangedAdjustmentReleaseKeepsHistoryAndSettings) {
-  const auto strip = create_strip();
-  select_strip(strip);
-  auto &tool = session_.extrude();
-  ASSERT_TRUE(tool.activate().ok);
-  const auto accepted = mesh(strip);
-  const auto steps = session_.history().undo_count();
-  const auto history_revision = session_.history().revision();
   ASSERT_TRUE(tool.begin_adjust_drag().ok);
   ASSERT_TRUE(tool.update_drag(2.0).ok);
   ASSERT_TRUE(tool.update_drag(1.0).ok);
-  ASSERT_TRUE(tool.end_drag().ok);
-  EXPECT_TRUE(tool.adjustable());
+  ASSERT_TRUE(tool.release_drag().ok);
+  EXPECT_TRUE(tool.preview_active());
   EXPECT_DOUBLE_EQ(tool.amount(), 1.0);
   EXPECT_EQ(session_.history().undo_count(), steps);
-  EXPECT_EQ(session_.history().revision(), history_revision);
-  expect_mesh(strip, accepted);
+  expect_mesh(strip, pending);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, pending);
 }
 
-TEST_F(ExtrudeToolServiceTests,
-       ReturningToTheOriginalDirectionKeepsHistoryAndGeometry) {
+TEST_F(ExtrudeToolServiceTests, ReturningToTheSourceDirectionRestoresThePendingCandidate) {
   const auto strip = create_strip(true);
   select_strip(strip);
   auto &tool = session_.extrude();
   const auto original = mesh(strip);
-  ASSERT_TRUE(editor_.commands()
-                  .execute(quader_command::kToolsActivateExtrude)
-                  .ok());
-  const auto accepted = mesh(strip);
-  const double accepted_amount = tool.amount();
-  const auto original_direction = tool.handle_state().adjustment_direction;
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_amount(1.0).ok);
+  const auto pending = mesh(strip);
+  const auto direction = tool.handle_state().adjustment_direction;
   const auto steps = session_.history().undo_count();
-  const auto history_revision = session_.history().revision();
-
   ASSERT_TRUE(tool.begin_adjust_drag().ok);
   ASSERT_TRUE(tool.update_drag(2.0, QVec3{1.0F, 0.0F, 0.0F}).ok);
-  ASSERT_TRUE(tool.update_drag(accepted_amount, original_direction).ok);
-  ASSERT_TRUE(tool.end_drag().ok);
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_DOUBLE_EQ(tool.amount(), accepted_amount);
+  ASSERT_TRUE(tool.update_drag(1.0, direction).ok);
+  ASSERT_TRUE(tool.release_drag().ok);
   EXPECT_EQ(session_.history().undo_count(), steps);
-  EXPECT_EQ(session_.history().revision(), history_revision);
-  expect_mesh(strip, accepted);
+  expect_mesh(strip, pending);
+  ASSERT_TRUE(tool.commit_preview().ok);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1);
   ASSERT_TRUE(session_.history().undo().ok);
   expect_mesh(strip, original);
   ASSERT_TRUE(session_.history().redo().ok);
-  expect_mesh(strip, accepted);
+  expect_mesh(strip, pending);
 }
 
-TEST_F(ExtrudeToolServiceTests, AdjustmentDragToZeroRestoresSourceAndCanBeAdjustedAgain) {
+TEST_F(ExtrudeToolServiceTests, NegativePendingAmountKeepsTheSourceDirectionAndCancelPivot) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   const auto original = mesh(strip);
-  ASSERT_TRUE(tool.activate().ok);
-  const auto steps = session_.history().undo_count();
-  ASSERT_TRUE(tool.begin_adjust_drag().ok);
-  ASSERT_TRUE(tool.update_drag(0.0).ok);
-  ASSERT_TRUE(tool.end_drag().ok);
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
-  expect_mesh(strip, original);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  ASSERT_TRUE(tool.begin_adjust_drag().ok);
-  ASSERT_TRUE(tool.update_drag(2.0).ok);
-  ASSERT_TRUE(tool.end_drag().ok);
-  EXPECT_EQ(session_.history().undo_count(), steps);
-  EXPECT_NEAR(maximum_height(strip), 2.0 / 32.0, 0.00001);
-}
-
-TEST_F(ExtrudeToolServiceTests, NegativeAdjustmentKeepsOriginalDirectionAndCurrentPivot) {
-  const auto strip = create_strip();
-  select_strip(strip);
-  auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
   ASSERT_TRUE(tool.set_amount(-2.0).ok);
   const auto handle = tool.handle_state();
@@ -639,17 +683,20 @@ TEST_F(ExtrudeToolServiceTests, NegativeAdjustmentKeepsOriginalDirectionAndCurre
   EXPECT_NEAR(tool.handle_state().adjustment_origin.z, -3.0 / 32.0, 0.00001);
   EXPECT_NEAR(tool.handle_state().adjustment_direction.z, 1.0, 0.00001);
   ASSERT_TRUE(tool.cancel_drag().ok);
-  EXPECT_NEAR(tool.handle_state().adjustment_origin.z, -2.0 / 32.0, 0.00001);
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  EXPECT_NEAR(tool.handle_state().world_position.z, 0.0, 0.00001);
+  expect_mesh(strip, original);
 }
 
-TEST_F(ExtrudeToolServiceTests, FailedAdjustmentPreviewRestoresTheEditableResult) {
+TEST_F(ExtrudeToolServiceTests, FailedDragUpdateRetiresItsPreviewWithoutCommitting) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
   ASSERT_TRUE(tool.activate().ok);
-  const auto accepted = mesh(strip);
+  const auto original = mesh(strip);
   const auto steps = session_.history().undo_count();
   ASSERT_TRUE(tool.begin_adjust_drag().ok);
+  ASSERT_TRUE(tool.update_drag(1.0).ok);
   EXPECT_TRUE(tool.can_update_drag());
   session_.modeling().set_modeling_sdk_projection_failure_for_tests(
       ModelingSdkProjectionFailurePoint::AfterSdkMutation);
@@ -658,21 +705,20 @@ TEST_F(ExtrudeToolServiceTests, FailedAdjustmentPreviewRestoresTheEditableResult
   session_.modeling().set_modeling_sdk_projection_failure_for_tests(
       ModelingSdkProjectionFailurePoint::None);
   ASSERT_TRUE(tool.cancel_drag().ok);
-  EXPECT_TRUE(tool.adjustable());
-  EXPECT_DOUBLE_EQ(tool.amount(), 1.0);
-  expect_mesh(strip, accepted);
+  EXPECT_FALSE(tool.adjustable());
+  EXPECT_DOUBLE_EQ(tool.amount(), 0.0);
+  expect_mesh(strip, original);
   EXPECT_EQ(session_.history().undo_count(), steps);
 }
 
-TEST_F(ExtrudeToolServiceTests, RegionAdjustmentAxisChangeUsesOriginalSourcePivot) {
+TEST_F(ExtrudeToolServiceTests, RegionAxisChangesUseTheCurrentOperationSourcePivot) {
   const auto strip = create_strip(true);
   select_strip(strip);
   auto &tool = session_.extrude();
-  ASSERT_TRUE(tool.set_amount(0.0).ok);
   ASSERT_TRUE(tool.activate().ok);
-  ASSERT_TRUE(tool.begin_drag(QVec3{0.0F, 0.0F, 1.0F}).ok);
+  ASSERT_TRUE(tool.begin_adjust_drag(QVec3{0.0F, 0.0F, 1.0F}).ok);
   ASSERT_TRUE(tool.update_drag(1.0).ok);
-  ASSERT_TRUE(tool.end_drag().ok);
+  ASSERT_TRUE(tool.release_drag().ok);
   EXPECT_NEAR(tool.handle_state().adjustment_origin.z,
               -1.0 + 1.0 / 32.0, 0.00001);
   ASSERT_TRUE(tool.begin_adjust_drag().ok);
@@ -683,43 +729,33 @@ TEST_F(ExtrudeToolServiceTests, RegionAdjustmentAxisChangeUsesOriginalSourcePivo
   EXPECT_NEAR(preview.adjustment_origin.z, -1.0, 0.00001);
   ASSERT_TRUE(tool.end_drag().ok);
   const auto committed = tool.handle_state();
-  EXPECT_NEAR(committed.adjustment_origin.x, preview.adjustment_origin.x,
-              0.00001);
-  EXPECT_NEAR(committed.adjustment_origin.z, preview.adjustment_origin.z,
-              0.00001);
-  EXPECT_FLOAT_EQ(committed.world_direction.x, 1.0F);
-  EXPECT_FLOAT_EQ(committed.world_direction.y, 0.0F);
-  EXPECT_FLOAT_EQ(committed.world_direction.z, 0.0F);
+  EXPECT_FALSE(committed.adjustment_available);
+  EXPECT_DOUBLE_EQ(committed.amount_world, 0.0);
+  EXPECT_NEAR(committed.world_position.x, preview.world_position.x, 0.00001);
+  EXPECT_NEAR(committed.world_position.z, preview.world_position.z, 0.00001);
 }
 
-TEST_F(ExtrudeToolServiceTests, AdjustableRegionHandleFollowsCommittedAxisDirection) {
+TEST_F(ExtrudeToolServiceTests, AppliedAxisConstraintDoesNotCarryIntoTheNextOperation) {
   const auto strip = create_strip();
   select_strip(strip);
   auto &tool = session_.extrude();
-  ASSERT_TRUE(editor_.commands().execute(quader_command::kToolsActivateExtrude).ok());
-  EXPECT_FLOAT_EQ(tool.handle_state().world_direction.z, 1.0F);
+  ASSERT_TRUE(tool.activate().ok);
   ASSERT_TRUE(tool.begin_adjust_drag().ok);
   ASSERT_TRUE(tool.update_drag(2.0, QVec3{1.0F, 0.0F, 0.0F}).ok);
+  EXPECT_FLOAT_EQ(tool.handle_state().world_direction.x, 1.0F);
   ASSERT_TRUE(tool.end_drag().ok);
-  const auto committed = tool.handle_state();
-  ASSERT_TRUE(committed.adjustment_available);
-  EXPECT_FLOAT_EQ(committed.world_direction.x, 1.0F);
-  EXPECT_FLOAT_EQ(committed.world_direction.y, 0.0F);
-  EXPECT_FLOAT_EQ(committed.world_direction.z, 0.0F);
-  EXPECT_FLOAT_EQ(length_squared(committed.world_direction -
-                                 committed.adjustment_direction), 0.0F);
-  EXPECT_NEAR(committed.world_position.x, 1.0 + 2.0 / 32.0, 0.00001);
-  EXPECT_NEAR(committed.world_position.z, 0.0, 0.00001);
-
-  tool.retire_adjustment();
-  const auto next_operation = tool.handle_state();
-  EXPECT_FALSE(next_operation.adjustment_available);
-  EXPECT_FLOAT_EQ(next_operation.world_direction.x, 0.0F);
-  EXPECT_FLOAT_EQ(next_operation.world_direction.y, 0.0F);
-  EXPECT_FLOAT_EQ(next_operation.world_direction.z, 1.0F);
+  const auto idle = tool.handle_state();
+  EXPECT_FALSE(idle.adjustment_available);
+  EXPECT_NEAR(idle.world_position.x, 1.0 + 2.0 / 32.0, 0.00001);
+  EXPECT_FLOAT_EQ(idle.world_direction.x, 0.0F);
+  EXPECT_FLOAT_EQ(idle.world_direction.z, 1.0F);
+  ASSERT_TRUE(tool.set_amount(3.0).ok);
+  EXPECT_FLOAT_EQ(tool.handle_state().world_direction.x, 0.0F);
+  EXPECT_FLOAT_EQ(tool.handle_state().world_direction.z, 1.0F);
+  EXPECT_NEAR(maximum_height(strip), 3.0 / 32.0, 0.00001);
 }
 
-TEST_F(ExtrudeToolServiceTests, OpposingFaceNormalsUseModeAppropriateDiskDirection) {
+TEST_F(ExtrudeToolServiceTests, OpposingFaceNormalsUseModeAppropriatePendingDiskDirection) {
   quader_poly::Document document;
   const std::array vertices{
       quader_poly::add_vertex(document, {0.0F, 0.0F, 0.0F}),
@@ -739,27 +775,22 @@ TEST_F(ExtrudeToolServiceTests, OpposingFaceNormalsUseModeAppropriateDiskDirecti
       {.name = "Opposing extrusion disks"});
   ASSERT_TRUE(created.ok());
   select_strip(created.value());
-  auto &tool = session_.extrude();
-  ASSERT_TRUE(tool.set_options({modeling::FaceExtrudeMode::Individual, 0.0}).ok);
-  ASSERT_TRUE(tool.activate().ok);
-  const auto idle = tool.handle_state();
-  EXPECT_FLOAT_EQ(idle.world_direction.x, 0.0F);
-  EXPECT_FLOAT_EQ(idle.world_direction.y, 1.0F);
-  EXPECT_FLOAT_EQ(idle.world_direction.z, 0.0F);
   const auto source = session_.modeling().capture_face_extrusion_source();
   ASSERT_TRUE(source.ok);
   EXPECT_NEAR(std::abs(source.direction_world.x), 1.0, 0.00001);
-  ASSERT_TRUE(tool.begin_drag().ok);
-  ASSERT_TRUE(tool.update_drag(1.0).ok);
-  const auto preview = tool.handle_state();
-  EXPECT_FLOAT_EQ(preview.world_direction.y, 1.0F);
-  EXPECT_FLOAT_EQ(preview.world_direction.x, 0.0F);
-  EXPECT_FLOAT_EQ(preview.world_position.x, idle.world_position.x);
-  EXPECT_FLOAT_EQ(preview.world_position.y, idle.world_position.y);
-  EXPECT_FLOAT_EQ(preview.world_position.z, idle.world_position.z);
-  ASSERT_TRUE(tool.cancel_drag().ok);
-  ASSERT_TRUE(tool.set_options({modeling::FaceExtrudeMode::Region, 1.0}).ok);
-  ASSERT_TRUE(editor_.commands().execute(quader_command::kToolsActivateExtrude).ok());
+  auto &tool = session_.extrude();
+  ASSERT_TRUE(tool.activate(modeling::FaceExtrudeMode::Individual).ok);
+  const auto initial = tool.handle_state();
+  EXPECT_FLOAT_EQ(initial.world_direction.x, 0.0F);
+  EXPECT_FLOAT_EQ(initial.world_direction.y, 1.0F);
+  EXPECT_FLOAT_EQ(initial.world_direction.z, 0.0F);
+  ASSERT_TRUE(tool.set_amount(1.0).ok);
+  const auto pending = tool.handle_state();
+  EXPECT_FLOAT_EQ(pending.world_direction.y, 1.0F);
+  EXPECT_FLOAT_EQ(pending.world_position.x, initial.world_position.x);
+  EXPECT_FLOAT_EQ(pending.world_position.y, initial.world_position.y);
+  EXPECT_FLOAT_EQ(pending.world_position.z, initial.world_position.z);
+  ASSERT_TRUE(tool.set_mode(modeling::FaceExtrudeMode::Region).ok);
   const auto region = tool.handle_state();
   ASSERT_TRUE(region.adjustment_available);
   EXPECT_FLOAT_EQ(length_squared(region.world_direction -
@@ -769,10 +800,9 @@ TEST_F(ExtrudeToolServiceTests, OpposingFaceNormalsUseModeAppropriateDiskDirecti
   for (const auto mode : {modeling::FaceExtrudeMode::AlongNormals,
                           modeling::FaceExtrudeMode::Individual}) {
     ASSERT_TRUE(tool.set_mode(mode).ok);
-    const auto per_normal = tool.handle_state();
-    EXPECT_FLOAT_EQ(per_normal.world_direction.x, 0.0F);
-    EXPECT_FLOAT_EQ(per_normal.world_direction.y, 1.0F);
-    EXPECT_FLOAT_EQ(per_normal.world_direction.z, 0.0F);
+    EXPECT_FLOAT_EQ(tool.handle_state().world_direction.x, 0.0F);
+    EXPECT_FLOAT_EQ(tool.handle_state().world_direction.y, 1.0F);
+    EXPECT_FLOAT_EQ(tool.handle_state().world_direction.z, 0.0F);
   }
 }
 

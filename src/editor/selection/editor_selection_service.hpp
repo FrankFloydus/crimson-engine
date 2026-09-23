@@ -165,6 +165,7 @@ public:
   using SceneSelectionTargetResolver = std::function<EntityId(EntityId)>;
   using SceneSelectionScopeFilter = std::function<bool(EntityId)>;
   using SceneSelectionHistorySuppressionProvider = std::function<bool()>;
+  using SelectionEditCallback = std::function<ModelingCommandResult()>;
 
   EditorSelectionService(SceneDocument &scene,
                          DocumentCommandService &document_commands,
@@ -180,6 +181,10 @@ public:
       SceneSelectionScopeFilter filter);
   void set_scene_selection_history_suppression_provider(
       SceneSelectionHistorySuppressionProvider provider);
+  /// User selection edits respect native preview ownership; publication bypasses it.
+  void set_selection_edit_policy(SelectionEditCallback preflight,
+                                 SelectionEditCallback edited);
+  [[nodiscard]] ModelingCommandResult selection_edit_preflight() const;
   void set_sub_selection_provider(EditorSubSelectionProvider *provider);
   [[nodiscard]] bool has_sub_selection() const;
   [[nodiscard]] std::optional<EditorSubSelectionBaseline>
@@ -351,6 +356,7 @@ private:
   ModelingCommandResult apply_component_selection_command(
       ModelingComponentSelectionCommand command,
       std::span<const ModelingSelectionMode> allowed_modes);
+  ModelingCommandResult finish_selection_edit(ModelingCommandResult result);
   [[nodiscard]] EditorSubSelectionSnapshot
   current_sub_selection_snapshot() const;
 
@@ -361,6 +367,8 @@ private:
   SceneSelectionScopeFilter scene_scope_filter_;
   SceneSelectionHistorySuppressionProvider
       scene_selection_history_suppression_provider_;
+  SelectionEditCallback selection_edit_preflight_;
+  SelectionEditCallback selection_edited_;
   EditorSubSelectionProvider *sub_selection_provider_ = nullptr;
   mutable bool summary_cache_valid_ = false;
   mutable bool summary_cache_preview_active_ = false;

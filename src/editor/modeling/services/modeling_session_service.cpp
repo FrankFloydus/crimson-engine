@@ -8920,6 +8920,12 @@ public:
     return sdk_projection_adapter_.capture_face_extrusion_source();
   }
 
+  [[nodiscard]] ModelingCommandResult validate_next_face_extrusion(
+      modeling::FaceExtrudeMode mode, double amount_internal) const {
+    return sdk_projection_adapter_.validate_next_face_extrusion(mode,
+                                                               amount_internal);
+  }
+
   [[nodiscard]] bool face_extrusion_source_current(
       const ModelingFaceExtrusionSource &source) const {
     return sdk_projection_adapter_.face_extrusion_source_current(source);
@@ -11814,6 +11820,11 @@ bool ModelingSessionService::curve_document_preview_active() const {
 ModelingFaceExtrusionSourceResult
 ModelingSessionService::capture_face_extrusion_source() const {
   return impl_->capture_face_extrusion_source();
+}
+
+ModelingCommandResult ModelingSessionService::validate_next_face_extrusion(
+    modeling::FaceExtrudeMode mode, double amount_internal) const {
+  return impl_->validate_next_face_extrusion(mode, amount_internal);
 }
 
 bool ModelingSessionService::face_extrusion_source_current(

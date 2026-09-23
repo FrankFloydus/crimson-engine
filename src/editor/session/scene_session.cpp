@@ -227,6 +227,22 @@ void SceneSession::rebuild_services() {
   uv_peel_ = std::make_unique<UvPeelToolService>(*history_, *selection_, *modeling_);
   extrude_ = std::make_unique<ExtrudeToolService>(
       document_.scene(), *modeling_, *history_, *extrude_defaults_);
+  selection_->set_selection_edit_policy(
+      [this]() -> ModelingCommandResult {
+        if (extrude_->preview_active()) {
+          return {.ok = false,
+                  .message = "Apply or cancel the extrusion before changing selection."};
+        }
+        return {.ok = true};
+      },
+      [this]() -> ModelingCommandResult {
+        if (!extrude_->active() || extrude_->preview_active()) {
+          return {.ok = true};
+        }
+        const CommandResult begun = extrude_->begin_selection_preview();
+        return {.ok = begun.ok, .changed = begun.changed,
+                .message = begun.message};
+      });
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *path_array_,
       *primitive_creation_, *light_creation_,

@@ -213,7 +213,9 @@ public:
     return selection_overlay_builds_;
   }
 
-  void expect_selection_overlay_height(double displayed_amount) const {
+  void expect_selection_overlay_height(
+      double displayed_amount,
+      std::optional<double> previous_cap_amount = std::nullopt) const {
     const float expected_z = static_cast<float>(displayed_amount /
         viewport_host_defaults().map_units_per_world_unit);
     std::size_t selected_cap_lines = 0u;
@@ -227,7 +229,13 @@ public:
         for (const auto &endpoint : {line.start, line.end}) {
           if (endpoint.z > 0.0000001F) {
             ++elevated_source_endpoints;
-            EXPECT_NEAR(endpoint.z, expected_z, 0.0000002F);
+            if (previous_cap_amount &&
+                std::abs(endpoint.z - expected_z) > 0.0000002F) {
+              EXPECT_NEAR(endpoint.z, static_cast<float>(*previous_cap_amount /
+                  viewport_host_defaults().map_units_per_world_unit), 0.0000002F);
+            } else {
+              EXPECT_NEAR(endpoint.z, expected_z, 0.0000002F);
+            }
           }
         }
       }
@@ -402,11 +410,15 @@ void print_samples(std::string_view path, std::string_view phase,
 void measure_path(bool preview, PerformanceResult &result) {
   ExtrudePerformanceHarness harness;
   ASSERT_TRUE(harness.initialize());
+  ASSERT_TRUE(harness.tool().preview_active());
+  ASSERT_DOUBLE_EQ(harness.tool().amount(), 0.0);
+  const auto initial_undo = harness.undo_count();
+  ASSERT_TRUE(harness.tool().set_amount(1.0).ok);
+  EXPECT_EQ(harness.undo_count(), initial_undo);
   ASSERT_TRUE(harness.sync());
   ASSERT_TRUE(harness.render());
   ASSERT_TRUE(harness.finish_gpu());
   const auto initial_caps = harness.cap_ids();
-  const auto initial_undo = harness.undo_count();
   const auto initial_meshes = harness.mesh_count();
   ASSERT_EQ(initial_caps.size(), kSelectedSide * kSelectedSide);
   if (preview) ASSERT_TRUE(harness.tool().begin_adjust_drag().ok);
@@ -442,15 +454,13 @@ void measure_path(bool preview, PerformanceResult &result) {
       EXPECT_EQ(harness.selection_overlay_builds(),
                 before_overlay_builds + (repeated ? 0u : 1u));
       harness.expect_selection_overlay_height(amount);
-      if (preview) {
-        if (repeated) {
-          EXPECT_EQ(harness.preview_submission_revision(), before_submission);
-        } else {
-          EXPECT_GT(harness.preview_submission_revision(), before_submission)
-              << "Each accepted position must cross the real render API source gates";
-        }
-        EXPECT_TRUE(harness.source_suppressed());
+      if (repeated) {
+        EXPECT_EQ(harness.preview_submission_revision(), before_submission);
+      } else {
+        EXPECT_GT(harness.preview_submission_revision(), before_submission)
+            << "Each accepted position must cross the real render API source gates";
       }
+      EXPECT_TRUE(harness.source_suppressed());
       samples.peak_renderables = std::max(samples.peak_renderables,
                                          harness.renderables());
       // Verify the exact payload consumed by the renderer, outside both timed
@@ -485,10 +495,15 @@ void measure_path(bool preview, PerformanceResult &result) {
     samples.asset_revision_delta = harness.asset_revision() - before_asset;
     samples.geometry_update_delta =
         harness.tool().work_stats_for_tests().geometry_update_count - before_updates;
-    print_samples(preview ? "drag_preview" : "committed_settings",
+    print_samples(preview ? "drag_preview" : "pending_settings",
                   repeated ? "identical" : "tiny_changes", samples);
   }
-  if (preview) ASSERT_TRUE(harness.tool().end_drag().ok);
+  if (preview) ASSERT_TRUE(harness.tool().release_drag().ok);
+  EXPECT_TRUE(harness.tool().preview_active());
+  EXPECT_EQ(harness.undo_count(), initial_undo);
+  ASSERT_TRUE(harness.tool().commit_preview().ok);
+  EXPECT_FALSE(harness.tool().preview_active());
+  EXPECT_DOUBLE_EQ(harness.tool().amount(), 0.0);
   ASSERT_TRUE(harness.sync());
   harness.expect_selection_overlay_height(amount);
   ASSERT_TRUE(harness.render());
@@ -498,7 +513,7 @@ void measure_path(bool preview, PerformanceResult &result) {
   result.mesh = *mesh;
   result.cap_ids = harness.cap_ids();
   EXPECT_EQ(result.cap_ids, initial_caps);
-  EXPECT_EQ(harness.undo_count(), initial_undo);
+  EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
   EXPECT_EQ(harness.mesh_count(), initial_meshes);
   EXPECT_EQ(result.repeated.asset_revision_delta, 0u);
   EXPECT_EQ(result.repeated.geometry_update_delta, 0u);
@@ -511,15 +526,15 @@ void measure_path(bool preview, PerformanceResult &result) {
     // Exercise source-stamp retirement through the real render API after an
     // accepted dynamic sample. Owner getters alone cannot catch a stale gate.
     for (const bool publication_failure : {false, true}) {
-      ASSERT_TRUE(harness.tool().begin_adjust_drag().ok);
-      ASSERT_TRUE(harness.tool().update_drag(amount + 0.002).ok);
+      ASSERT_TRUE(harness.tool().begin_drag().ok);
+      ASSERT_TRUE(harness.tool().update_drag(0.002).ok);
       ASSERT_TRUE(harness.sync());
-      harness.expect_selection_overlay_height(amount + 0.002);
+      harness.expect_selection_overlay_height(amount + 0.002, amount);
       EXPECT_TRUE(harness.source_suppressed());
       const auto active_submission = harness.preview_submission_revision();
       if (publication_failure) {
         harness.inject_failure(ModelingSdkProjectionFailurePoint::AfterSdkMutation);
-        const auto rejected = harness.tool().update_drag(amount + 0.003);
+        const auto rejected = harness.tool().update_drag(0.003);
         harness.inject_failure(ModelingSdkProjectionFailurePoint::None);
         ASSERT_FALSE(rejected.ok);
         ASSERT_TRUE(harness.sync());
@@ -528,6 +543,7 @@ void measure_path(bool preview, PerformanceResult &result) {
         EXPECT_GT(harness.preview_submission_revision(), active_submission);
       }
       ASSERT_TRUE(harness.tool().cancel_drag().ok);
+      EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
       ASSERT_TRUE(harness.sync());
       harness.expect_selection_overlay_height(amount);
       EXPECT_TRUE(harness.preview_suppression_empty());
@@ -542,10 +558,22 @@ void measure_path(bool preview, PerformanceResult &result) {
       test::curve::expect_same_mesh_geometry(*restored, result.mesh);
     }
   }
+  // Applying closes the operation: the next numeric amount builds a new step
+  // from the accepted cap and receives its own history entry.
+  ASSERT_TRUE(harness.tool().set_amount(0.002).ok);
+  EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
+  ASSERT_TRUE(harness.sync());
+  harness.expect_selection_overlay_height(amount + 0.002, amount);
+  ASSERT_TRUE(harness.tool().commit_preview().ok);
+  EXPECT_EQ(harness.undo_count(), initial_undo + 2u);
+  EXPECT_DOUBLE_EQ(harness.tool().amount(), 0.0);
+  ASSERT_TRUE(harness.sync());
+  harness.expect_selection_overlay_height(amount + 0.002, amount);
+  EXPECT_TRUE(harness.preview_suppression_empty());
 }
 
 TEST(ExtrudePreviewPerformanceTests,
-     CommittedSettingsAndDragHaveMatchingResultsAndReportCosts) {
+     PendingSettingsAndDragHaveMatchingResultsAndReportCosts) {
   if (qEnvironmentVariableIntValue("QUADER_RUN_EXTRUDE_PERFORMANCE") != 1) {
     GTEST_SKIP() << "Set QUADER_RUN_EXTRUDE_PERFORMANCE=1 for the controlled "
                    "modeling and windowless Vulkan extrusion benchmark";
@@ -557,14 +585,16 @@ TEST(ExtrudePreviewPerformanceTests,
   if (QCoreApplication::instance() == nullptr) {
     application = std::make_unique<QCoreApplication>(argc, argv);
   }
-  PerformanceResult committed;
+  PerformanceResult settings;
   PerformanceResult preview;
-  measure_path(false, committed);
+  measure_path(false, settings);
   ASSERT_FALSE(HasFatalFailure());
   measure_path(true, preview);
   ASSERT_FALSE(HasFatalFailure());
   EXPECT_EQ(preview.changed.asset_revision_delta, 0u)
       << "Dragging must keep the published asset unchanged until acceptance";
+  EXPECT_EQ(settings.changed.asset_revision_delta, 0u)
+      << "Numeric settings must keep the published asset unchanged until acceptance";
   EXPECT_LE(preview.changed.after.gpu_geometry_resource_count,
             preview.changed.before.gpu_geometry_resource_count + 1u)
       << "Tiny samples must reuse mutable preview geometry";
@@ -573,8 +603,8 @@ TEST(ExtrudePreviewPerformanceTests,
       << "At most the active and preceding three-pass preview may be retained";
   EXPECT_EQ(preview.changed.layout_changes, 0u)
       << "Stable positive extrusion samples must preserve source IDs and triangle layout";
-  EXPECT_EQ(preview.cap_ids, committed.cap_ids);
-  test::curve::expect_same_mesh_geometry(preview.mesh, committed.mesh);
+  EXPECT_EQ(preview.cap_ids, settings.cap_ids);
+  test::curve::expect_same_mesh_geometry(preview.mesh, settings.mesh);
   ASSERT_FALSE(HasFailure());
   std::cout << "EXTRUDE_PERF semantic_match=1 final_vertices="
             << preview.mesh.vertices.size() << " final_indices="

@@ -9,6 +9,7 @@
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <gtest/gtest.h>
 
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -72,6 +74,28 @@ void expect_overlay_color(const ViewportOverlayFrame &frame,
   }
   EXPECT_EQ(frame.lines.front().color, expected);
 }
+
+class ExtrusionOverlayTarget final : public ViewportOverlaySubmissionTarget {
+public:
+  ViewportOverlayCameraUpdate update_overlay_cameras(
+      std::size_t, std::uint8_t, ViewportOverlayCamera) override {
+    return {true, true};
+  }
+
+  void submit_persistent_overlay(std::size_t, std::uint8_t,
+                                 ViewportOverlayFrame,
+                                 ViewportOverlayCamera) override {}
+
+  void submit_dynamic_overlay(std::size_t, std::uint8_t,
+                              ViewportOverlayFrame frame,
+                              ViewportOverlayCamera) override {
+    ++submit_count;
+    submitted = std::move(frame);
+  }
+
+  int submit_count = 0;
+  ViewportOverlayFrame submitted;
+};
 
 TEST(ExtrudeHandleLayoutTests, AllModesUseOneCommonWorldRadiusAndNormalOffset) {
   const auto camera = extrusion_camera();
@@ -306,7 +330,7 @@ TEST(ExtrudeHandleLayoutTests, OverlayIsOneOpaquePaleYellowDiskAndOneThinStem) {
   }
 }
 
-TEST(ExtrudeHandleLayoutTests, HoverTurnsWhiteAndDraggingHidesTheWholeAffordance) {
+TEST(ExtrudeHandleLayoutTests, HoverTurnsWhiteAndDraggingKeepsTheDiskAndStemVisible) {
   const auto camera = extrusion_camera();
   for (const auto mode : kExtrusionModes) {
     SCOPED_TRACE(static_cast<int>(mode));
@@ -318,17 +342,21 @@ TEST(ExtrudeHandleLayoutTests, HoverTurnsWhiteAndDraggingHidesTheWholeAffordance
     expect_overlay_color(hovered, kActiveDiskColor);
     handle.new_hovered = false;
     handle.dragging = true;
+    handle.world_position = {0.25F, 0.5F, 0.0F};
     const auto dragging = extrusion_overlay(camera, handle);
     const auto dragging_layout = build_extrude_handle_layout(camera, handle);
-    EXPECT_FALSE(dragging_layout.valid);
-    EXPECT_EQ(hit_extrude_handle(dragging_layout, {}), ExtrudeHandlePart::None);
-    EXPECT_TRUE(dragging.triangles.empty());
-    EXPECT_TRUE(dragging.lines.empty());
+    ASSERT_TRUE(dragging_layout.valid);
+    expect_vector_near(dragging_layout.pivot, handle.world_position);
+    EXPECT_EQ(hit_extrude_handle(dragging_layout,
+                                 dragging_layout.button_center_screen),
+              ExtrudeHandlePart::NewExtrusion);
+    expect_overlay_color(dragging, kDiskColor);
+    EXPECT_EQ(dragging.triangles.size(), idle.triangles.size());
+    expect_vector_near(dragging.lines.front().start, handle.world_position);
     EXPECT_TRUE(dragging.points.empty());
     EXPECT_TRUE(dragging.icons.empty());
     EXPECT_EQ(idle.triangles.size(), hovered.triangles.size());
     handle.dragging = false;
-    handle.world_position = {0.25F, 0.5F, 0.0F};
     const auto completed_layout = build_extrude_handle_layout(camera, handle);
     ASSERT_TRUE(completed_layout.valid);
     expect_vector_near(completed_layout.pivot, handle.world_position);
@@ -370,8 +398,9 @@ TEST(ExtrudeHandleLayoutTests, HoverAndDragInvalidateTheOtherwiseStablePresentat
 
 TEST(ExtrudeHandleLayoutTests, FilledDiskReachesTheRendererAsToolGeometry) {
   const auto camera = extrusion_camera();
-  const auto frame =
-      extrusion_overlay(camera, extrusion_handle(modeling::FaceExtrudeMode::Region));
+  auto handle = extrusion_handle(modeling::FaceExtrudeMode::Region);
+  handle.dragging = true;
+  const auto frame = extrusion_overlay(camera, handle);
   ASSERT_FALSE(frame.triangles.empty());
   const auto plan = OverlayRenderableBuilder::build_layer(
       frame, ViewportCameraAdapter::overlay_camera(camera, camera.viewport_size()),
@@ -385,6 +414,62 @@ TEST(ExtrudeHandleLayoutTests, FilledDiskReachesTheRendererAsToolGeometry) {
   EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
   EXPECT_TRUE(plan.point_batches.empty());
   EXPECT_TRUE(plan.icon_batches.empty());
+}
+
+TEST(ExtrudeHandleLayoutTests, RetainedSubmissionKeepsTheMovingDragGizmoAndReusesUnchangedFrames) {
+  const auto camera = extrusion_camera();
+  const auto overlay_camera =
+      ViewportCameraAdapter::overlay_camera(camera, camera.viewport_size());
+  auto handle = extrusion_handle(modeling::FaceExtrudeMode::Region);
+  const auto settings = ViewportSettings::defaults();
+  ViewportOverlaySubmissionCoordinator coordinator;
+  ExtrusionOverlayTarget target;
+  const auto submit = [&]() {
+    const ViewportToolOverlaySource source({
+        .source_identity = reinterpret_cast<std::uintptr_t>(&handle),
+        .overlay_camera = &overlay_camera,
+        .viewport_camera = &camera,
+        .extrusion_handle = &handle});
+    return coordinator.submit(
+        {.viewport_index = 0u,
+         .layer_mask = 1u,
+         .camera = overlay_camera,
+         .dynamic_tool_source = source.source_stamp(),
+         .dynamic_tool_frame_provider = &source},
+        settings, target);
+  };
+
+  ASSERT_TRUE(submit().dynamic_submitted);
+  ASSERT_FALSE(target.submitted.triangles.empty());
+  ASSERT_EQ(target.submitted.lines.size(), 1u);
+  const auto disk_triangles = target.submitted.triangles.size();
+  handle.dragging = true;
+  for (const QVec3 position : {QVec3{0.25F, 0.5F, 0.0F},
+                               QVec3{0.5F, 0.75F, 0.0F}}) {
+    handle.world_position = position;
+    ASSERT_TRUE(submit().dynamic_submitted);
+    EXPECT_EQ(target.submitted.triangles.size(), disk_triangles);
+    ASSERT_EQ(target.submitted.lines.size(), 1u);
+    expect_vector_near(target.submitted.lines.front().start, position);
+    const auto compose_count =
+        coordinator.work_counters().dynamic_source_compose_count;
+    const auto submit_count = target.submit_count;
+    EXPECT_TRUE(submit().camera_only);
+    EXPECT_EQ(target.submit_count, submit_count);
+    EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+              compose_count);
+  }
+
+  handle.dragging = false;
+  ASSERT_TRUE(submit().dynamic_submitted);
+  EXPECT_EQ(target.submitted.triangles.size(), disk_triangles);
+  ASSERT_EQ(target.submitted.lines.size(), 1u);
+  expect_vector_near(target.submitted.lines.front().start,
+                     handle.world_position);
+  handle.active = false;
+  ASSERT_TRUE(submit().dynamic_submitted);
+  EXPECT_TRUE(target.submitted.triangles.empty());
+  EXPECT_TRUE(target.submitted.lines.empty());
 }
 
 } // namespace

@@ -1147,11 +1147,16 @@ TEST(UiLayoutGuardrailTests,
   const std::string apply = source_slice(
       tool, "QObject::connect(apply_button_, &QPushButton::clicked",
       "QObject::connect(cancel_button_, &QPushButton::clicked");
-  const std::size_t preview_flush = apply.find("flush_pending_number_dispatches()");
+  const std::size_t preview_prepare = apply.find("!prepare_lifecycle_intent(");
   const std::size_t preview_commit = apply.find("commit_active_tool_preview()");
-  ASSERT_NE(preview_flush, std::string::npos);
+  ASSERT_NE(preview_prepare, std::string::npos);
   ASSERT_NE(preview_commit, std::string::npos);
-  EXPECT_LT(preview_flush, preview_commit);
+  EXPECT_LT(preview_prepare, preview_commit);
+  expect_contains(apply, "QuaderNativeToolSettingsIntent::Apply");
+  const std::string prepare = source_slice(
+      tool, "  [[nodiscard]] bool prepare_lifecycle_intent(",
+      "  void apply_ui_scale(");
+  expect_contains(prepare, "flush_pending_number_dispatches()");
   const std::string clear_controls = source_slice(
       tool, "void clear_controls()", "void present_inactive_target()");
   const auto discard = clear_controls.find("discard_pending_number_dispatches()");
@@ -1315,17 +1320,33 @@ TEST(UiLayoutGuardrailTests,
   const std::string apply = source_slice(
       panel, "QObject::connect(apply_button_, &QPushButton::clicked",
       "QObject::connect(cancel_button_, &QPushButton::clicked");
-  const auto validation = apply.find("has_invalid_number_draft()");
-  const auto flush = apply.find("flush_pending_number_dispatches()");
-  const auto rebind_check = apply.find("generation != binding_generation_");
+  const auto preparation = apply.find("!prepare_lifecycle_intent(");
   const auto commit = apply.find("commit_active_tool_preview()");
+  ASSERT_NE(preparation, std::string::npos);
+  ASSERT_NE(commit, std::string::npos);
+  EXPECT_LT(preparation, commit);
+  expect_contains(apply, "QuaderNativeToolSettingsIntent::Apply");
+
+  const std::string prepare = source_slice(
+      panel, "  [[nodiscard]] bool prepare_lifecycle_intent(",
+      "  void apply_ui_scale(");
+  const auto validation = prepare.find("has_invalid_number_draft()");
+  const auto interpret = prepare.find("spin->interpretText()");
+  const auto flush = prepare.find("flush_pending_number_dispatches()");
+  const auto rebind_check =
+      prepare.find("return !number_dispatch_failed_ && still_current()");
   ASSERT_NE(validation, std::string::npos);
+  ASSERT_NE(interpret, std::string::npos);
   ASSERT_NE(flush, std::string::npos);
   ASSERT_NE(rebind_check, std::string::npos);
-  ASSERT_NE(commit, std::string::npos);
-  EXPECT_LT(validation, flush);
+  EXPECT_LT(validation, interpret);
+  EXPECT_LT(interpret, flush);
   EXPECT_LT(flush, rebind_check);
-  EXPECT_LT(rebind_check, commit);
+  expect_contains(prepare, "editor_ == &editor");
+  expect_contains(prepare, "generation == binding_generation_");
+  expect_contains(prepare, "controls_generation == control_generation_");
+  expect_contains(prepare, "presentation_is_current()");
+  expect_contains(prepare, "active_tool_revision() == tool_revision");
 
   const std::string lifecycle = source_slice(
       panel, "  [[nodiscard]] bool number_dispatch_lifecycle_is_current(",

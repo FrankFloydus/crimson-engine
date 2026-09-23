@@ -8,6 +8,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
@@ -298,6 +299,7 @@ public:
   }
 
   ExtrudeToolService &extrusion() { return session_.extrude(); }
+  std::size_t undo_count() const { return session_.history().undo_count(); }
 
   bool present_extrusion_sample() {
     QuaderEditorApi editor(
@@ -633,6 +635,9 @@ TEST(SelectionOverlayRuntimeTests,
     SelectionOverlayRuntimeHarness harness;
     ASSERT_TRUE(harness.initialize(0.0f, false));
     ASSERT_TRUE(harness.create_extrusion_sample(mode));
+    ASSERT_TRUE(harness.extrusion().preview_active());
+    ASSERT_DOUBLE_EQ(harness.extrusion().amount(), 0.0);
+    const auto initial_undo = harness.undo_count();
     ASSERT_TRUE(harness.present_extrusion_sample());
     const auto source_pixel = harness.front_cap_edge_pixel();
     ASSERT_TRUE(source_pixel.has_value());
@@ -675,14 +680,26 @@ TEST(SelectionOverlayRuntimeTests,
       previous_pixel = *cap_pixel;
     }
 
-    ASSERT_TRUE(harness.extrusion().end_drag().ok);
+    ASSERT_TRUE(harness.extrusion().release_drag().ok);
+    EXPECT_TRUE(harness.extrusion().preview_active());
+    EXPECT_EQ(harness.undo_count(), initial_undo);
+    ASSERT_TRUE(harness.present_extrusion_sample());
+    const QImage released = harness.capture();
+    ASSERT_FALSE(released.isNull());
+    EXPECT_GE(yellow_pixels(released, previous_pixel), 3);
+    save(released, "released");
+
+    ASSERT_TRUE(harness.extrusion().commit_preview().ok);
+    EXPECT_FALSE(harness.extrusion().preview_active());
+    EXPECT_DOUBLE_EQ(harness.extrusion().amount(), 0.0);
+    EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
     ASSERT_TRUE(harness.present_extrusion_sample());
     const QImage committed = harness.capture();
     ASSERT_FALSE(committed.isNull());
     EXPECT_GE(yellow_pixels(committed, previous_pixel), 3);
     save(committed, "committed");
 
-    ASSERT_TRUE(harness.extrusion().begin_adjust_drag().ok);
+    ASSERT_TRUE(harness.extrusion().begin_drag().ok);
     ASSERT_TRUE(harness.extrusion().update_drag_world_amount(0.35).ok);
     ASSERT_TRUE(harness.present_extrusion_sample());
     const auto adjusted_pixel = harness.front_cap_edge_pixel();
@@ -692,9 +709,11 @@ TEST(SelectionOverlayRuntimeTests,
     ASSERT_FALSE(adjusted.isNull());
     EXPECT_GE(yellow_pixels(adjusted, *adjusted_pixel), 3);
     EXPECT_EQ(yellow_pixels(adjusted, previous_pixel), 0);
-    save(adjusted, "adjusted");
+    save(adjusted, "next_step");
+    EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
 
     ASSERT_TRUE(harness.extrusion().cancel_drag().ok);
+    EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
     ASSERT_TRUE(harness.present_extrusion_sample());
     const QImage restored = harness.capture();
     ASSERT_FALSE(restored.isNull());

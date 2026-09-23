@@ -1115,6 +1115,21 @@ public:
       return dispatch_at(chord, context, Clock::now(), std::move(eligible));
     }
 
+    /// Probes the next chord without advancing or consuming a pending sequence.
+    [[nodiscard]] QuaderKeybindingDispatch resolve_next_chord(
+        const QuaderInputChord &chord, const QuaderKeybindingContext &context,
+        EligibilityPredicate eligible = {}, bool continue_pending = true) const {
+      if (chord.empty()) {
+        return {};
+      }
+      std::vector<QuaderInputChord> sequence;
+      if (continue_pending && has_pending_chord()) {
+        sequence = pending_sequence_;
+      }
+      sequence.push_back(chord);
+      return resolve_sequence(sequence, context, std::move(eligible));
+    }
+
     /**
      * Resolves one chord at an explicit semantic timestamp. This overload
      * keeps sequence expiry deterministic for owner-level tests and callers

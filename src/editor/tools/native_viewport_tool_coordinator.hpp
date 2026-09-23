@@ -140,6 +140,8 @@ public:
   CommandResult
   complete_active_light_creation(LightCreationOperation operation);
   CommandResult cancel_competing_state_for_tool_activation();
+  /// Scene transitions explicitly cancel previews without tool-switch guards.
+  CommandResult cancel_transient_state();
   CommandResult commit_active() override;
   CommandResult undo_active();
   CommandResult redo_active();

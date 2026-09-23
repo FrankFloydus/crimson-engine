@@ -17,7 +17,6 @@ class QuaderEditorApi;
  * Stores the Viewport Shortcut Controller Result data contract used by the Qt editor presentation layer.
  */
 struct ViewportShortcutControllerResult {
-    bool consumed = false;
     bool command_executed = false;
     bool invalidate_hover = false;
     bool mark_overlay_dirty = false;
@@ -28,12 +27,6 @@ struct ViewportShortcutControllerResult {
  */
 class ViewportShortcutController {
 public:
-  [[nodiscard]] ViewportShortcutControllerResult
-  handle_operation_preview_shortcut(
-      const ViewportInputResult &input_result,
-      bool operation_preview_active,
-      QuaderEditorApi &editor) const;
-
   [[nodiscard]] ViewportShortcutControllerResult
   handle_modeling_shortcut(const ViewportInputResult &input_result,
                            QuaderEditorApi &editor) const;

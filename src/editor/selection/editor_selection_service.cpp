@@ -342,6 +342,30 @@ void EditorSelectionService::set_scene_selection_history_suppression_provider(
   scene_selection_history_suppression_provider_ = std::move(provider);
 }
 
+void EditorSelectionService::set_selection_edit_policy(
+    SelectionEditCallback preflight, SelectionEditCallback edited) {
+  selection_edit_preflight_ = std::move(preflight);
+  selection_edited_ = std::move(edited);
+}
+
+ModelingCommandResult EditorSelectionService::selection_edit_preflight() const {
+  return selection_edit_preflight_ ? selection_edit_preflight_()
+                                   : ModelingCommandResult{.ok = true};
+}
+
+ModelingCommandResult EditorSelectionService::finish_selection_edit(
+    ModelingCommandResult result) {
+  if (result.ok && selection_edited_) {
+    ModelingCommandResult notified = selection_edited_();
+    result.changed = result.changed || notified.changed;
+    if (!notified.ok) {
+      result.ok = false;
+      result.message = std::move(notified.message);
+    }
+  }
+  return result;
+}
+
 void EditorSelectionService::set_sub_selection_provider(
     EditorSubSelectionProvider *provider) {
   if (sub_selection_provider_ == provider) {
@@ -428,6 +452,10 @@ EditorSelectionService::try_delete_sub_selection() {
 
 DocumentCommandResult EditorSelectionService::apply_scene_selection_state(
     SceneSelectionState selection, bool preserve_selection_mode) {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return {.ok = false, .message = preflight.message};
+  }
   if (same_scene_selection(capture_scene_selection(scene_), selection)) {
     if (is_component_selection_mode(modeling_.selection_mode())) {
       return publish_scene_selection(preserve_selection_mode);
@@ -589,6 +617,10 @@ EditorSelectionService::set_object_selection(std::span<const EntityId> entities,
 
 ModelingCommandResult EditorSelectionService::set_component_selection(
     const ModelingComponentSelectionRequest &request) {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return preflight;
+  }
   const std::optional<EntityId> entity =
       modeling_.entity_for_modeling_object(request.modeling_object_id);
   if (!entity.has_value() || !component_owner_selectable(*entity)) {
@@ -601,11 +633,15 @@ ModelingCommandResult EditorSelectionService::set_component_selection(
   if (result.ok && sub_selection_provider_ != nullptr) {
     sub_selection_provider_->synchronize_sub_selection_scope();
   }
-  return result;
+  return finish_selection_edit(std::move(result));
 }
 
 ModelingCommandResult
 EditorSelectionService::set_mode(ModelingSelectionMode mode) {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return preflight;
+  }
   const ModelingSelectionMode previous_mode = modeling_.selection_mode();
   ModelingCommandResult result = modeling_.set_selection_mode(mode);
   if (result.ok && previous_mode != mode) {
@@ -657,6 +693,10 @@ EditorSelectionService::scene_bulk_candidates(ModelingSelectionMode mode) const 
 
 ModelingCommandResult EditorSelectionService::select_all() {
   QDR_PROFILE_FUNCTION();
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return preflight;
+  }
   if (sub_selection_provider_ != nullptr) {
     sub_selection_provider_->synchronize_sub_selection_scope();
   }
@@ -669,7 +709,7 @@ ModelingCommandResult EditorSelectionService::select_all() {
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   if (!selection_mode_uses_scene_document(selection_mode)) {
     QDR_PROFILE_SCOPE("Selection select all runtime components");
-    return modeling_.select_all();
+    return finish_selection_edit(modeling_.select_all());
   }
 
   std::vector<EntityId> selected;
@@ -683,6 +723,10 @@ ModelingCommandResult EditorSelectionService::select_all() {
 }
 
 ModelingCommandResult EditorSelectionService::invert() {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return preflight;
+  }
   if (sub_selection_provider_ != nullptr) {
     sub_selection_provider_->synchronize_sub_selection_scope();
   }
@@ -694,7 +738,7 @@ ModelingCommandResult EditorSelectionService::invert() {
   }
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   if (!selection_mode_uses_scene_document(selection_mode)) {
-    return modeling_.invert_selection();
+    return finish_selection_edit(modeling_.invert_selection());
   }
 
   const std::vector<EntityId> current = scene_.selected_entities();
@@ -733,6 +777,10 @@ ModelingCommandResult EditorSelectionService::invert() {
 }
 
 ModelingCommandResult EditorSelectionService::clear() {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return preflight;
+  }
   if (sub_selection_provider_ != nullptr) {
     sub_selection_provider_->synchronize_sub_selection_scope();
   }
@@ -765,6 +813,10 @@ ModelingCommandResult EditorSelectionService::clear() {
 ModelingCommandResult EditorSelectionService::apply_component_selection_command(
     ModelingComponentSelectionCommand command,
     std::span<const ModelingSelectionMode> allowed_modes) {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return preflight;
+  }
   const ModelingSelectionMode current_mode = modeling_.selection_mode();
   if (std::find(allowed_modes.begin(), allowed_modes.end(), current_mode) ==
       allowed_modes.end()) {
@@ -774,7 +826,8 @@ ModelingCommandResult EditorSelectionService::apply_component_selection_command(
         .message = "The selection command is unavailable in the current mode.",
     };
   }
-  return modeling_.apply_component_selection_command(command);
+  return finish_selection_edit(
+      modeling_.apply_component_selection_command(command));
 }
 
 ModelingCommandResult EditorSelectionService::select_edge_direction() {
@@ -815,6 +868,10 @@ ModelingCommandResult EditorSelectionService::select_face_normal() {
 }
 
 ModelingCommandResult EditorSelectionService::select_mesh_ngons() {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return preflight;
+  }
   if (modeling_.selection_mode() != ModelingSelectionMode::Object) {
     return {
         .ok = false,
@@ -850,7 +907,7 @@ ModelingCommandResult EditorSelectionService::select_mesh_ngons() {
         .message = "No directly editable mesh is selected.",
     };
   }
-  return modeling_.select_mesh_ngons(targets);
+  return finish_selection_edit(modeling_.select_mesh_ngons(targets));
 }
 
 ModelingCommandResult EditorSelectionService::select_similar_meshes() {
@@ -1166,6 +1223,10 @@ ModelingCommandResult EditorSelectionService::restore_sub_selection_after_failur
 
 ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     const ResolvedSelectionClickRequest &request) {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return {.command = preflight, .selection = summary()};
+  }
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   const ModelingEdgeSelectionTraversal edge_traversal =
       request.policy.edge_traversal_requested(selection_mode);
@@ -1391,11 +1452,16 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
   };
   ModelingCommandResult command =
       modeling_.apply_resolved_component_selection(component);
+  command = finish_selection_edit(std::move(command));
   return {.command = std::move(command), .selection = summary()};
 }
 
 ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_marquee(
     const ResolvedSelectionMarqueeRequest &request) {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) {
+    return {.command = preflight, .selection = summary()};
+  }
   const ModelingSelectionMode current_mode = modeling_.selection_mode();
   if (request.mode != current_mode || request.baseline.mode != current_mode) {
     return {
@@ -1621,6 +1687,7 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_marquee(
   }
   base_result.command.changed =
       base_result.command.changed || provider_result.changed;
+  base_result.command = finish_selection_edit(std::move(base_result.command));
   summary_cache_valid_ = false;
   base_result.selection = summary();
   return base_result;
@@ -1894,6 +1961,9 @@ ModelingSelectionSummary
 EditorSelectionService::box_select(const ModelingBoxSelectRequest &request,
                                    const EditorSelectionBoxBaseline *baseline) {
   QDR_PROFILE_SCOPE("Editor box selection route");
+  if (!selection_edit_preflight().ok) {
+    return summary();
+  }
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   if (selection_mode_uses_scene_document(selection_mode)) {
     const std::vector<EntityId> mesh_entities = [&]() {

@@ -935,6 +935,7 @@ add_library(quader_ui STATIC
     src/ui/qt_color_swatch_button.cpp
     src/ui/qt_dock_title_presentation.cpp
     src/ui/qt_input_adapter.cpp
+    src/ui/qt_apply_cancel_input_filter.cpp
     src/ui/qt_main_menu.cpp
     src/ui/qt_material_browser_window.cpp
     src/ui/qt_material_find_replace_dialog.cpp

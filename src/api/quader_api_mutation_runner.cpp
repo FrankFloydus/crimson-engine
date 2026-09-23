@@ -349,6 +349,11 @@ QuaderApiMutationRunner::set_selection_mode(ModelingSelectionMode mode) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
+  const auto preflight = session.selection().selection_edit_preflight();
+  if (!preflight.ok) {
+    return status_from(preflight, QuaderMutationKind::Modeling,
+                       "Set Selection Mode");
+  }
   bool changed = false;
   if (session.native_tools().has_pending_tool()) {
     const CommandResult canceled = session.native_tools().cancel_active();

@@ -43,6 +43,8 @@ class QTreeWidgetItem;
 
 namespace quader {
 
+class QuaderCommandsApi;
+
 using QtMaterialBrowserItem = QtMaterialPresentationItem;
 
 /// Localized text used by the material-browser presentation.
@@ -269,6 +271,7 @@ public:
   using MaterialActionCallback =
       std::function<void(QtMaterialBrowserActionRequest)>;
   using PresentationStateChangedCallback = std::function<void()>;
+  using LifecycleCommandsProvider = std::function<QuaderCommandsApi *()>;
 
   explicit QtMaterialBrowserWindow(
       QWidget *parent = nullptr,
@@ -319,6 +322,8 @@ public:
   void set_material_action_callback(MaterialActionCallback callback);
   void set_presentation_state_changed_callback(
       PresentationStateChangedCallback callback);
+  /// Resolves the current runtime commands for this browser's staged popup.
+  void set_lifecycle_commands_provider(LifecycleCommandsProvider provider);
 
   /// Reapplies explicit retained metrics from their authored values.
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
@@ -428,6 +433,7 @@ private:
   bool thumbnail_wheel_uses_pixels_ = false;
   bool material_paste_available_ = false;
   PresentationStateChangedCallback presentation_state_changed_;
+  LifecycleCommandsProvider lifecycle_commands_provider_;
   QtUiScaleMetrics ui_scale_metrics_;
 };
 

@@ -7,6 +7,7 @@
 #include "ui/qt_settings_dialog.hpp"
 
 #include "api/quader_commands_api.hpp"
+#include "ui/qt_apply_cancel_input_filter.hpp"
 #include "core/localization_service.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
@@ -947,6 +948,11 @@ struct QtSettingsDialog::Impl {
   };
 
   explicit Impl(QtSettingsDialog &dialog) : owner(dialog) { build(); }
+  ~Impl() {
+    if (lifecycle_input) {
+      lifecycle_input->abandon();
+    }
+  }
 
   QtSettingsDialog &owner;
   UISettings *target_ui_settings = nullptr;
@@ -957,6 +963,7 @@ struct QtSettingsDialog::Impl {
   ViewportSettings *viewport_settings = nullptr;
   LocalizationService *localization = nullptr;
   QuaderCommandsApi *commands = nullptr;
+  QPointer<QtApplyCancelInputFilter> lifecycle_input;
   QtSettingsController controller;
   QtSettingsController::ChangeCallback settings_changed;
   std::function<bool()> persist_interface_settings;
@@ -1501,6 +1508,11 @@ struct QtSettingsDialog::Impl {
                      [this]() { owner.accept(); });
     QObject::connect(button_box, &QDialogButtonBox::rejected, &owner,
                      [this]() { owner.reject(); });
+    lifecycle_input = new QtApplyCancelInputFilter(
+        owner, *apply_button, *cancel_button, [this]() { return commands; },
+        [](const QWidget *widget) {
+          return dynamic_cast<const QtKeybindingCaptureEdit *>(widget) != nullptr;
+        }, ok_button);
 
     create_interface_page();
     const OptionsPageWidgets navigation_page = create_category(

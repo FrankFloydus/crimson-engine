@@ -407,7 +407,8 @@ struct QtToolSettingsPanel::Impl {
     target_title_->setObjectName(QStringLiteral("tool_settings.target_title"));
     target_title_->setAutoRaise(true);
     target_title_->setCheckable(true);
-    target_title_->setArrowType(Qt::RightArrow);
+    target_title_->setChecked(expanded_);
+    target_title_->setArrowType(Qt::DownArrow);
     target_title_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     target_title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     // Mouse collapse settles drafts before focus-out can interpret them.
@@ -486,21 +487,9 @@ struct QtToolSettingsPanel::Impl {
       schedule_refresh();
     });
     QObject::connect(apply_button_, &QPushButton::clicked, &panel_, [this]() {
-      if (!presentation_is_current()) {
-        discard_pending_number_dispatches();
-        return;
-      }
-      if (has_invalid_number_draft()) {
-        return;
-      }
-      number_dispatch_failed_ = false;
-      const std::uint64_t generation = binding_generation_;
-      const std::uint64_t tool_revision = editor_->tools().active_tool_revision();
-      flush_pending_number_dispatches();
-      if (number_dispatch_failed_ || editor_ == nullptr ||
-          generation != binding_generation_ ||
-          !presentation_is_current() ||
-          editor_->tools().active_tool_revision() != tool_revision) {
+      if (editor_ == nullptr ||
+          !prepare_lifecycle_intent(*editor_,
+                                   QuaderNativeToolSettingsIntent::Apply)) {
         return;
       }
       const QuaderApiVoidResult result =
@@ -513,7 +502,9 @@ struct QtToolSettingsPanel::Impl {
                        // Cancel owns the previous authoritative preview state.
                        discard_pending_number_dispatches();
                        cancel_button_->setFocus(Qt::MouseFocusReason);
-                       if (!presentation_is_current()) {
+                       if (editor_ == nullptr ||
+                           !prepare_lifecycle_intent(
+                               *editor_, QuaderNativeToolSettingsIntent::Cancel)) {
                          return;
                        }
                        const QuaderApiVoidResult result =
@@ -582,6 +573,10 @@ struct QtToolSettingsPanel::Impl {
 
     const std::uint64_t presentation_serial =
         editor_->tools().active_settings_presentation_origin().serial;
+    const bool new_activation =
+        inactive_presented_ ||
+        target_presentation_serial_ != presentation_serial ||
+        (last_target_.has_value() && last_target_->tool_id != target.tool_id);
     if (!last_target_.has_value() ||
         target_presentation_serial_ != presentation_serial ||
         !same_target_structure(*last_target_, target)) {
@@ -592,6 +587,9 @@ struct QtToolSettingsPanel::Impl {
     last_target_ = target;
     target_presentation_serial_ = presentation_serial;
     target_tool_revision_ = editor_->tools().active_tool_revision();
+    if (new_activation) {
+      set_expanded(true);
+    }
     notify_presentation_changed();
   }
 
@@ -650,6 +648,57 @@ struct QtToolSettingsPanel::Impl {
                  (binding.number_slider != nullptr &&
                   binding.number_slider->isSliderDown());
         });
+  }
+
+  [[nodiscard]] bool prepare_lifecycle_intent(
+      QuaderEditorApi &editor, QuaderNativeToolSettingsIntent intent) {
+    if (editor_ != &editor || !presentation_is_current()) {
+      discard_pending_number_dispatches();
+      return false;
+    }
+    if (intent == QuaderNativeToolSettingsIntent::Cancel) {
+      discard_pending_number_dispatches();
+      return true;
+    }
+    if (intent != QuaderNativeToolSettingsIntent::Apply ||
+        has_invalid_number_draft()) {
+      return false;
+    }
+    number_dispatch_failed_ = false;
+    const std::uint64_t generation = binding_generation_;
+    const std::uint64_t controls_generation = control_generation_;
+    const std::uint64_t tool_revision = editor_->tools().active_tool_revision();
+    const auto still_current = [&] {
+      return editor_ == &editor && generation == binding_generation_ &&
+             controls_generation == control_generation_ &&
+             presentation_is_current() &&
+             editor_->tools().active_tool_revision() == tool_revision;
+    };
+    for (QWidget *widget = QApplication::focusWidget();
+         widget != nullptr && panel_.isAncestorOf(widget);
+         widget = widget->parentWidget()) {
+      if (auto *spin = dynamic_cast<QAbstractSpinBox *>(widget)) {
+        if (!spin->hasAcceptableInput()) {
+          return false;
+        }
+        spin->interpretText();
+        break;
+      }
+    }
+    if (!still_current() || has_invalid_number_draft()) {
+      return false;
+    }
+    // interpretText queues the final sample; it does not emit editingFinished
+    // when a command filter consumes the completion key before the control.
+    flush_pending_number_dispatches();
+    if (number_dispatch_failed_ || !still_current()) {
+      return false;
+    }
+    // A fresh amount can start a preview during this flush. Observe it before
+    // Apply completes it so even a whole step between frame refreshes publishes
+    // its authoritative reset to a still-focused field.
+    refresh();
+    return !number_dispatch_failed_ && still_current();
   }
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
@@ -2048,6 +2097,14 @@ private:
 
   void synchronize_values(const QuaderToolSettingsTarget &target) {
     synchronizing_ = true;
+    const bool preview_completed = last_target_.has_value() &&
+                                   last_target_->preview_active &&
+                                   !target.preview_active;
+    if (preview_completed) {
+      // Completing a preview ends its drafts even if Apply retained field focus.
+      // Present owner resets now; later typing starts a new numeric interaction.
+      discard_pending_number_dispatches();
+    }
     for (std::size_t index = 0; index < controls_.size(); ++index) {
       ControlWidget &binding = controls_[index];
       if (binding.spinbox_only != nullptr &&
@@ -2097,9 +2154,9 @@ private:
         binding.container->setEnabled(control.enabled);
       }
       const bool integer_editing =
-          widget_or_descendant_has_focus(binding.integer);
+          !preview_completed && widget_or_descendant_has_focus(binding.integer);
       const bool floating_editing =
-          widget_or_descendant_has_focus(binding.floating);
+          !preview_completed && widget_or_descendant_has_focus(binding.floating);
       const bool slider_editing =
           binding.number_slider != nullptr &&
           binding.number_slider->isSliderDown();
@@ -2127,7 +2184,8 @@ private:
           component_binding.enabled = component.enabled;
         }
         const bool component_editing =
-            widget_or_descendant_has_focus(component_binding.spin) ||
+            (!preview_completed &&
+             widget_or_descendant_has_focus(component_binding.spin)) ||
             component_binding.pending_value.has_value();
         if (component_editing) {
           continue;
@@ -2315,7 +2373,7 @@ private:
   std::vector<ControlGroupWidget> control_groups_;
   std::unordered_map<std::string, bool> control_group_expansion_;
   std::optional<QuaderToolSettingsTarget> last_target_;
-  bool expanded_ = false;
+  bool expanded_ = true;
   QSize last_presentation_size_;
   bool last_presentation_available_ = false;
   bool synchronizing_ = false;
@@ -2370,6 +2428,11 @@ QSize QtToolSettingsPanel::sizeHint() const { return impl_->preferred_size(); }
 
 bool QtToolSettingsPanel::numeric_interaction_active() const {
   return impl_->numeric_interaction_active();
+}
+
+bool QtToolSettingsPanel::prepare_lifecycle_intent(
+    QuaderEditorApi &editor, QuaderNativeToolSettingsIntent intent) {
+  return impl_->prepare_lifecycle_intent(editor, intent);
 }
 
 bool qt_object_belongs_to_tool_settings_panel(const QObject *target) {

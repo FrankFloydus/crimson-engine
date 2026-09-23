@@ -1911,7 +1911,7 @@ bool ProjectSession::cancel_transient_state(OpenSceneSession &scene) {
     return false;
   }
   const CommandResult native =
-      scene.session->native_tools().cancel_competing_state_for_tool_activation();
+      scene.session->native_tools().cancel_transient_state();
   return native.ok;
 }
 

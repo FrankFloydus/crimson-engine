@@ -8,6 +8,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "assets/asset_registry.hpp"
+#include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
@@ -19,6 +20,8 @@
 #include "render/overlay/selected_mesh_outline_cache.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "scene/scene_document.hpp"
+#include "support/command_behavior_contract.hpp"
+#include "support/command_behavior_fixture.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -152,8 +155,10 @@ struct ExtrudeOutlineHarness {
         {static_cast<QuaderElementId>(first),
          static_cast<QuaderElementId>(second)}).ok());
     ASSERT_TRUE(session.extrude().set_mode(mode).ok);
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
+    ASSERT_TRUE(session.extrude().preview_active());
+    ASSERT_DOUBLE_EQ(session.extrude().amount(), 0.0);
     ASSERT_TRUE(session.extrude().set_amount(amount).ok);
-    ASSERT_TRUE(session.extrude().activate().ok);
     (void)settings.set_color(ViewportColorSettingId::SourceWire, {0, 1, 1, 1});
     (void)settings.set_color(ViewportColorSettingId::SelectionWire, {1, 1, 0, 1});
   }
@@ -256,6 +261,71 @@ struct ExtrudeOutlineHarness {
 };
 
 TEST(SelectedMeshOutlinePresentationTests,
+     SameDocumentBridgeStepsRefreshRetainedWiresAndCancelRestoresThem) {
+  for (const auto command : {quader_command::kModelingInterpolatedBridgeEdges,
+                             quader_command::kModelingInterpolatedBridgeFaces}) {
+    SCOPED_TRACE(command.string());
+    const auto *contract = test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    auto &session = fixture->native_scene();
+    auto &modeling = session.modeling();
+    ExtrudeOutlineProvider provider{session};
+    ExtrudeOutlineTarget target;
+    ViewportOverlaySubmissionCoordinator coordinator;
+    const auto settings = ViewportSettings::defaults();
+    const auto context = command.string() ==
+                                 quader_command::kModelingInterpolatedBridgeEdges.string()
+        ? ViewportOverlaySelectionContext::Edge
+        : ViewportOverlaySelectionContext::Face;
+    const auto submit = [&] {
+      return coordinator.submit({
+          .viewport_index = 0u,
+          .layer_mask = 1u,
+          .selection_source = {
+              .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+              .content_revision = modeling.content_revision(),
+              .selection_revision = modeling.selection_revision(),
+              .scene_revision = session.scene().revision(),
+              .asset_revision = session.assets().revision(),
+              .overlay_signature = modeling.selection_overlay_signature(),
+              .selection_context = context,
+          },
+          .selection_frame_provider = &provider,
+          .scene_selection_mode = RenderOverlaySelectionMode::Component,
+          .style_selection_context = context,
+          .overlays_visible = true,
+      }, settings, target);
+    };
+    ASSERT_TRUE(submit().persistent_submitted);
+    const auto original_lines = target.persistent.lines.size();
+    ASSERT_GT(original_lines, 0u);
+    ASSERT_TRUE(editor.commands().execute(command).ok());
+    ASSERT_TRUE(submit().persistent_submitted);
+    const auto initial_lines = target.persistent.lines.size();
+    const auto updated = editor.tools().set_setting(
+        "bridge", "operation.bridge.steps", 3.0);
+    ASSERT_TRUE(updated.ok()) << updated.error_message();
+    ASSERT_TRUE(submit().persistent_submitted);
+    EXPECT_GT(target.persistent.lines.size(), initial_lines);
+    const auto builds = provider.builds;
+    const auto submissions = target.submissions;
+    for (int frame = 0; frame < 4; ++frame) {
+      const auto stable = submit();
+      EXPECT_FALSE(stable.selection_source_refreshed);
+      EXPECT_FALSE(stable.persistent_submitted);
+    }
+    EXPECT_EQ(provider.builds, builds);
+    EXPECT_EQ(target.submissions, submissions);
+    ASSERT_TRUE(editor.commands().execute_native_tool_settings_intent(
+        QuaderNativeToolSettingsIntent::Cancel).ok());
+    ASSERT_TRUE(submit().persistent_submitted);
+    EXPECT_EQ(target.persistent.lines.size(), original_lines);
+  }
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
      ExtrusionPreviewSubmitsCurrentSourceAndSelectedWiresWithStableIds) {
   for (const double initial_amount : {0.0, 1.0}) {
     SCOPED_TRACE(initial_amount);
@@ -265,6 +335,7 @@ TEST(SelectedMeshOutlinePresentationTests,
       SCOPED_TRACE(static_cast<int>(mode));
       ExtrudeOutlineHarness harness;
       ASSERT_NO_FATAL_FAILURE(harness.seed(mode, initial_amount));
+      const auto undo_count = harness.session.history().undo_count();
       ASSERT_TRUE(harness.submit().persistent_submitted);
       ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(initial_amount));
       const auto begun = initial_amount == 0.0
@@ -308,8 +379,26 @@ TEST(SelectedMeshOutlinePresentationTests,
         ASSERT_TRUE(harness.session.extrude().update_drag(amount).ok);
         ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
       }
-      ASSERT_TRUE(harness.session.extrude().end_drag().ok);
+      ASSERT_TRUE(harness.session.extrude().release_drag().ok);
+      EXPECT_TRUE(harness.session.extrude().preview_active());
+      EXPECT_EQ(harness.session.history().undo_count(), undo_count);
       (void)harness.submit();
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(1.25));
+      ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+      ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok());
+      EXPECT_FALSE(harness.session.extrude().preview_active());
+      EXPECT_FALSE(harness.session.extrude().adjustable());
+      EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), 0.0);
+      EXPECT_EQ(harness.session.history().undo_count(), undo_count + 1u);
+      EXPECT_TRUE(harness.session.modeling().tool_preview_meshes().empty());
+      ASSERT_TRUE(harness.submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(1.25));
+      ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      ASSERT_TRUE(harness.submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(0.0));
+      ASSERT_TRUE(harness.editor.history().redo().ok());
+      ASSERT_TRUE(harness.submit().persistent_submitted);
       ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(1.25));
       ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
     }
@@ -319,11 +408,12 @@ TEST(SelectedMeshOutlinePresentationTests,
 TEST(SelectedMeshOutlinePresentationTests,
      ExtrusionWiresRetirePreviewCoordinatesOnZeroCancelAndFailure) {
   ExtrudeOutlineHarness harness;
-  ASSERT_NO_FATAL_FAILURE(harness.seed(modeling::FaceExtrudeMode::Region));
+  ASSERT_NO_FATAL_FAILURE(harness.seed(modeling::FaceExtrudeMode::Region, 0.0));
   (void)harness.submit();
   auto &tool = harness.session.extrude();
   for (const bool fail : {false, true}) {
     SCOPED_TRACE(fail);
+    ASSERT_TRUE(tool.set_amount(1.0).ok);
     ASSERT_TRUE(tool.begin_adjust_drag().ok);
     ASSERT_TRUE(tool.update_drag(2.15).ok);
     (void)harness.submit();
@@ -335,8 +425,10 @@ TEST(SelectedMeshOutlinePresentationTests,
       harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
           ModelingSdkProjectionFailurePoint::None);
       ASSERT_FALSE(rejected.ok);
+      ASSERT_TRUE(tool.refresh().ok);
+      EXPECT_FALSE(tool.preview_active());
       EXPECT_TRUE(harness.submit().persistent_submitted);
-      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(1.0));
+      ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(0.0));
       ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
     } else {
       ASSERT_TRUE(tool.update_drag(0.0).ok);
@@ -350,9 +442,63 @@ TEST(SelectedMeshOutlinePresentationTests,
     ASSERT_TRUE(tool.cancel_drag().ok);
     const auto retired = harness.submit();
     if (!fail) EXPECT_TRUE(retired.persistent_submitted);
-    ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(1.0));
+    ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(0.0));
     ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
   }
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
+     PendingExtrusionSettingsAndCancelReachRetainedSubmission) {
+  ExtrudeOutlineHarness harness;
+  ASSERT_NO_FATAL_FAILURE(harness.seed(modeling::FaceExtrudeMode::Region, 0.0));
+  auto &tool = harness.session.extrude();
+  ASSERT_TRUE(harness.submit().persistent_submitted);
+  ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(0.0));
+  ASSERT_TRUE(tool.set_amount(1.0).ok);
+  const auto durable = harness.source_stamp();
+  const auto undo_count = harness.session.history().undo_count();
+  const auto redo_count = harness.session.history().redo_count();
+  for (const double amount : {2.15, 2.1501, 3.25, 0.0, -1.25}) {
+    SCOPED_TRACE(amount);
+    ASSERT_TRUE(tool.set_amount(amount).ok);
+    const auto current = harness.source_stamp();
+    EXPECT_EQ(current.content_revision, durable.content_revision);
+    EXPECT_EQ(current.asset_revision, durable.asset_revision);
+    EXPECT_TRUE(harness.submit().persistent_submitted);
+    ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(amount));
+    ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+  }
+  for (const double amount : {2.75, 4.25}) {
+    SCOPED_TRACE(amount);
+    ASSERT_TRUE(tool.begin_adjust_drag().ok);
+    ASSERT_TRUE(tool.update_drag(amount).ok);
+    ASSERT_TRUE(harness.submit().persistent_submitted);
+    ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(amount));
+    const auto dragging_stamp = harness.source_stamp();
+
+    ASSERT_TRUE(tool.release_drag().ok);
+    EXPECT_FALSE(tool.dragging());
+    EXPECT_TRUE(tool.preview_active());
+    EXPECT_TRUE(tool.adjustable());
+    const auto released_stamp = harness.source_stamp();
+    EXPECT_EQ(released_stamp.content_revision, durable.content_revision);
+    EXPECT_EQ(released_stamp.asset_revision, durable.asset_revision);
+    EXPECT_EQ(released_stamp.selection_revision, dragging_stamp.selection_revision);
+    EXPECT_EQ(released_stamp.scene_revision, dragging_stamp.scene_revision);
+    EXPECT_EQ(released_stamp.overlay_signature, dragging_stamp.overlay_signature);
+    EXPECT_EQ(harness.session.history().undo_count(), undo_count);
+    EXPECT_EQ(harness.session.history().redo_count(), redo_count);
+    ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(amount));
+    ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+  }
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(tool.preview_active());
+  EXPECT_TRUE(harness.session.modeling().tool_preview_meshes().empty());
+  EXPECT_EQ(harness.session.history().undo_count(), undo_count);
+  EXPECT_EQ(harness.session.history().redo_count(), redo_count);
+  EXPECT_TRUE(harness.submit().persistent_submitted);
+  ASSERT_NO_FATAL_FAILURE(harness.expect_visible_coordinates(0.0));
+  ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
 }
 
 TEST(SelectedMeshOutlinePresentationTests,

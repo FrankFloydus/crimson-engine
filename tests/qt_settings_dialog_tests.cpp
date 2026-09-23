@@ -1360,6 +1360,186 @@ TEST(QtSettingsDialogTests,
 }
 
 TEST(QtSettingsDialogTests,
+     CanonicalApplyCancelSettleNumericDraftsAndPreserveInputOwnership) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const ScopedDefaultLocale force_c_locale(QLocale::c());
+  int argc = 1;
+  char name[] = "quader-settings-lifecycle-key-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  auto localization = loaded_localization();
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(ui_settings, viewport_settings, localization,
+                     editor.commands(), [&](const QtSettingsChange &change) {
+                       changes.push_back(change);
+                     });
+  dialog.show();
+  application.processEvents();
+  auto *thickness = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_GridMajorLineSize"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *cancel = dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
+  auto *search = dialog.findChild<QLineEdit *>(
+      QStringLiteral("settingsKeybindingsSearch"));
+  auto *capture = dialog.findChild<QLineEdit *>(
+      QStringLiteral("settingsKeybindingsShortcutFilter"));
+  ASSERT_NE(thickness, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(capture, nullptr);
+  auto *line = thickness->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  thickness->setKeyboardTracking(false);
+  line->setText(QStringLiteral("2.5"));
+  ASSERT_TRUE(thickness->hasAcceptableInput());
+  EXPECT_FALSE(apply->isEnabled());
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier,
+                   QStringLiteral(" "));
+  QCoreApplication::sendEvent(line, &press);
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1U);
+
+  thickness->setValue(3.0);
+  QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier,
+                    QStringLiteral(" "), true);
+  QCoreApplication::sendEvent(cancel, &repeat);
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+  QCoreApplication::sendEvent(cancel, &release);
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+
+  search->setText(QStringLiteral("Undo"));
+  search->setCursorPosition(4);
+  QKeyEvent text_space(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier,
+                        QStringLiteral(" "));
+  QCoreApplication::sendEvent(search, &text_space);
+  EXPECT_EQ(search->text(), QStringLiteral("Undo "));
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+  send_key(*capture, Qt::Key_Space);
+  EXPECT_EQ(capture->text(), QStringLiteral("Space"));
+  send_key(*capture, Qt::Key_Escape);
+  EXPECT_EQ(capture->text(), QStringLiteral("Escape"));
+  EXPECT_TRUE(dialog.isVisible());
+
+  QDialog child(&dialog);
+  child.setAttribute(Qt::WA_DontShowOnScreen, true);
+  child.setModal(true);
+  child.show();
+  application.processEvents();
+  send_key(child, Qt::Key_Space);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+  send_key(child, Qt::Key_Escape);
+  EXPECT_FALSE(child.isVisible());
+  EXPECT_TRUE(dialog.isVisible());
+  send_key(*thickness, Qt::Key_Escape);
+  EXPECT_FALSE(dialog.isVisible());
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+}
+
+TEST(QtSettingsDialogTests,
+     LifecycleBindingsHonorRemappingUnassignmentAndScopedSequences) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-settings-remapped-lifecycle-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(
+      std::filesystem::path(temporary.path().toStdWString()) /
+      "keybindings.json").ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto finalize = std::find_if(catalog.begin(), catalog.end(),
+      [](const auto &entry) { return entry.key.action_id == "tools.finalize"; });
+  const auto cancel = std::find_if(catalog.begin(), catalog.end(),
+      [](const auto &entry) { return entry.key.action_id == "tools.cancel"; });
+  ASSERT_NE(finalize, catalog.end());
+  ASSERT_NE(cancel, catalog.end());
+  ASSERT_TRUE(editor.commands().set_action_shortcut(
+      finalize->key, "Ctrl+Alt+F24 G").ok());
+  ASSERT_TRUE(editor.commands().set_action_shortcut(
+      cancel->key, "Ctrl+Alt+F23").ok());
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  auto localization = loaded_localization();
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(ui_settings, viewport_settings, localization,
+                     editor.commands(), {});
+  dialog.show();
+  application.processEvents();
+  auto *thickness = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_GridMajorLineSize"));
+  ASSERT_NE(thickness, nullptr);
+  auto *cancel_button = dialog.findChild<QPushButton *>(
+      QStringLiteral("settingsCancel"));
+  ASSERT_NE(cancel_button, nullptr);
+  auto *ok_button = dialog.findChild<QPushButton *>(
+      QStringLiteral("settingsOk"));
+  ASSERT_NE(ok_button, nullptr);
+  const auto original = viewport_settings.float_value(
+      ViewportFloatSettingId::GridMajorLineSize);
+  thickness->setValue(2.5);
+  send_key(*thickness, Qt::Key_Space);
+  send_key(*thickness, Qt::Key_Escape);
+  send_key(*cancel_button, Qt::Key_Space);
+  send_key(*ok_button, Qt::Key_Space);
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), original);
+  send_key(*thickness, Qt::Key_F24, Qt::ControlModifier | Qt::AltModifier);
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  send_key(*thickness, Qt::Key_G);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+  EXPECT_TRUE(dialog.isVisible());
+
+  thickness->setValue(3.0);
+  send_key(*thickness, Qt::Key_F24, Qt::ControlModifier | Qt::AltModifier);
+  dialog.hide();
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  dialog.show();
+  application.processEvents();
+  thickness->setValue(3.0);
+  send_key(*thickness, Qt::Key_G);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+  ASSERT_TRUE(editor.commands().remove_action_shortcut(finalize->key).ok());
+  ASSERT_TRUE(editor.commands().remove_action_shortcut(cancel->key).ok());
+  send_key(*cancel_button, Qt::Key_Space);
+  send_key(*ok_button, Qt::Key_Space);
+  send_key(*thickness, Qt::Key_Space);
+  send_key(*thickness, Qt::Key_Escape);
+  send_key(*thickness, Qt::Key_F23, Qt::ControlModifier | Qt::AltModifier);
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+  ASSERT_TRUE(editor.commands().set_action_shortcut(
+      cancel->key, "Ctrl+Alt+F23").ok());
+  send_key(*thickness, Qt::Key_F23, Qt::ControlModifier | Qt::AltModifier);
+  EXPECT_FALSE(dialog.isVisible());
+}
+
+TEST(QtSettingsDialogTests,
      ApplyOkAndCancelOwnOneStagedSettingsTransaction) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

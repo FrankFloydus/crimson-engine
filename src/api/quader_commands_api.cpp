@@ -227,6 +227,11 @@ constexpr std::string_view viewport_command_keybinding_context() {
   return "viewportFocus && !textInputActive && !navigation.active";
 }
 
+constexpr std::string_view viewport_maximize_keybinding_context() {
+  return "viewportFocus && !textInputActive && !navigation.active && "
+         "!operationPreview.active";
+}
+
 constexpr std::string_view editor_command_keybinding_context() {
   return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
          "!navigation.active";
@@ -379,7 +384,7 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
            "!navigation.active && !modalTool.active && !activeTool.ownsViewport && "
            "!transformDrag.active && !operationPreview.active && "
-           "!activeTool.uv_peel && !activeTool.extrude && selection.allowedByTool";
+           "!activeTool.nativeLifecycle && selection.allowedByTool";
   }
   if (command_id == quader_command::kViewportFrameSelection.string()) {
     return unobstructed_editor_command_keybinding_context();
@@ -502,6 +507,13 @@ default_keybinding_context_for_contract_target(std::string_view target_id) {
   return viewport_command_keybinding_context();
 }
 
+QuaderKeybindingContext modal_lifecycle_keybinding_context() {
+  QuaderKeybindingContext context;
+  context.set("viewportFocus", true);
+  context.set("modalTool.active", true);
+  return context;
+}
+
 QuaderKeybindingContext
 viewport_keybinding_context(const ViewportToolState &state,
                             bool viewport_focused, bool text_input_active,
@@ -527,6 +539,8 @@ viewport_keybinding_context(const ViewportToolState &state,
               input_context.active_tool_owns_viewport);
   const ToolDescriptor *descriptor =
       find_viewport_tool_descriptor(state.active_tool);
+  context.set("activeTool.nativeLifecycle",
+              descriptor != nullptr && descriptor->editor_owned_native_lifecycle);
   context.set("selection.allowedByTool",
               descriptor != nullptr && descriptor->allows_selection_fallback);
   context.set("transformDrag.active", input_context.active_transform_drag);
@@ -1095,9 +1109,22 @@ public:
     [[nodiscard]] QuaderNativeToolSettingsDispatch
     dispatch_native_tool_settings_input_binding(
         const QuaderInputChord &chord, const ViewportToolState &state);
+    [[nodiscard]] QuaderNativeToolSettingsDispatch
+    resolve_native_tool_settings_input_binding(
+        const QuaderInputChord &chord, const ViewportToolState &state) const;
+    [[nodiscard]] std::optional<QuaderKeybindingContext>
+    tool_settings_keybinding_context(const ViewportToolState &state) const;
+    [[nodiscard]] QuaderNativeToolSettingsIntent
+    tool_settings_intent(std::string_view target_id) const;
+    [[nodiscard]] QuaderNativeToolSettingsDispatch
+    resolve_modal_lifecycle_input_binding(const QuaderInputChord &chord) const;
+    [[nodiscard]] QuaderNativeToolSettingsDispatch
+    dispatch_modal_lifecycle_input_binding(const QuaderInputChord &chord);
+    void reset_pending_modal_lifecycle_input_binding();
     QuaderApiVoidResult execute_native_tool_settings_intent(
         QuaderNativeToolSettingsIntent intent);
     void reset_pending_keybinding_chord();
+    void reset_pending_non_modal_keybinding_chord();
     void reset_pending_viewport_keybinding_chord();
     [[nodiscard]] bool has_pending_keybinding_chord() const;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,
@@ -1180,7 +1207,9 @@ public:
     EditorCommandRegistry registry_;
     QuaderKeybindingService keybindings_;
     /// Identifies which adapter owns the shared in-progress sequence.
-    enum class KeybindingInputOwner { Viewport, Outliner, Editor };
+    enum class KeybindingInputOwner {
+      Viewport, Outliner, Editor, ToolSettings, ModalDialog
+    };
     KeybindingInputOwner pending_keybinding_owner_ =
         KeybindingInputOwner::Viewport;
     QuaderKeybindingTargetCatalog keybinding_target_catalog_;
@@ -2009,60 +2038,187 @@ QuaderCommandsApi::Impl::resolve_immediate_global_command(
              : std::nullopt;
 }
 
+std::optional<QuaderKeybindingContext>
+QuaderCommandsApi::Impl::tool_settings_keybinding_context(
+    const ViewportToolState &state) const {
+  const auto settings = tools_.active_settings();
+  if (!settings.active || (!settings.apply_visible && !settings.can_cancel)) {
+    return std::nullopt;
+  }
+  const bool native = tools_.active_native_tool_lifecycle(state.active_tool);
+  return viewport_keybinding_context(
+      state, true, false,
+      {.modal_tool_active = native,
+       .active_tool_owns_viewport = native,
+       .operation_preview_active = !native && settings.preview_active},
+      api_.history().can_undo(), api_.history().can_redo(), tools_);
+}
+
+QuaderNativeToolSettingsIntent
+QuaderCommandsApi::Impl::tool_settings_intent(std::string_view target_id) const {
+  if (target_id == quader_command::kModelingApplyActivePreview.string()) {
+    return QuaderNativeToolSettingsIntent::Apply;
+  }
+  if (target_id == quader_command::kModelingCancelActivePreview.string()) {
+    return QuaderNativeToolSettingsIntent::Cancel;
+  }
+  const auto *metadata = keybinding_target_metadata(target_id);
+  if (metadata != nullptr && metadata->action_id == "tools.finalize") {
+    return QuaderNativeToolSettingsIntent::Apply;
+  }
+  if (metadata != nullptr && metadata->action_id == "tools.cancel") {
+    return QuaderNativeToolSettingsIntent::Cancel;
+  }
+  return QuaderNativeToolSettingsIntent::None;
+}
+
+QuaderNativeToolSettingsDispatch
+QuaderCommandsApi::Impl::resolve_native_tool_settings_input_binding(
+    const QuaderInputChord &chord, const ViewportToolState &state) const {
+  const auto context = tool_settings_keybinding_context(state);
+  if (!context) {
+    return {};
+  }
+  const auto dispatch = keybindings_.resolve_next_chord(
+      chord, *context,
+      [this](std::string_view target_id) {
+        return tool_settings_intent(target_id) !=
+               QuaderNativeToolSettingsIntent::None;
+      },
+      pending_keybinding_owner_ == KeybindingInputOwner::ToolSettings);
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::PendingChord};
+  }
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::ExactMatch) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::Intent,
+            .intent = tool_settings_intent(dispatch.target_id)};
+  }
+  if (pending_keybinding_owner_ == KeybindingInputOwner::ToolSettings &&
+      keybindings_.has_pending_chord()) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::Consumed};
+  }
+  return {};
+}
+
 QuaderNativeToolSettingsDispatch
 QuaderCommandsApi::Impl::dispatch_native_tool_settings_input_binding(
     const QuaderInputChord &chord, const ViewportToolState &state) {
-  if (!tools_.active_native_tool_lifecycle(state.active_tool)) {
+  const auto resolved = resolve_native_tool_settings_input_binding(chord, state);
+  if (resolved.kind == QuaderNativeToolSettingsDispatch::Kind::Consumed) {
+    reset_pending_keybinding_chord();
+    return resolved;
+  }
+  if (resolved.kind == QuaderNativeToolSettingsDispatch::Kind::NoMatch) {
     return {};
   }
-
-  const QuaderViewportKeybindingDispatch dispatch =
-      dispatch_viewport_input_binding(
-          chord, state, true, false,
-          {.modal_tool_active = true, .active_tool_owns_viewport = true});
-  if (dispatch.kind == QuaderViewportKeybindingDispatch::Kind::PendingChord) {
-    return {.kind =
-                QuaderNativeToolSettingsDispatch::Kind::PendingChord};
+  const auto context = tool_settings_keybinding_context(state);
+  if (!context) {
+    return {};
   }
-
-  QuaderNativeToolSettingsIntent intent =
-      QuaderNativeToolSettingsIntent::None;
-  if (dispatch.kind ==
-          QuaderViewportKeybindingDispatch::Kind::ViewportInputAction &&
-      dispatch.action == ViewportInputActionKind::ModalToolFinalize) {
-    intent = QuaderNativeToolSettingsIntent::Apply;
-  } else if (dispatch.kind ==
-                 QuaderViewportKeybindingDispatch::Kind::ViewportShortcut &&
-             dispatch.shortcut.kind ==
-                 ViewportShortcutKind::CancelActiveTool) {
-    intent = QuaderNativeToolSettingsIntent::Cancel;
-  } else if (dispatch.kind ==
-             QuaderViewportKeybindingDispatch::Kind::Command) {
-    const QuaderKeybindingTargetMetadata *metadata =
-        keybinding_target_metadata(dispatch.command_id);
-    if (metadata != nullptr && metadata->action_id == "tools.finalize") {
-      intent = QuaderNativeToolSettingsIntent::Apply;
-    } else if (metadata != nullptr && metadata->action_id == "tools.cancel") {
-      intent = QuaderNativeToolSettingsIntent::Cancel;
-    }
+  if (pending_keybinding_owner_ != KeybindingInputOwner::ToolSettings) {
+    reset_pending_keybinding_chord();
   }
+  const auto dispatch = keybindings_.dispatch(
+      chord, *context, [this](std::string_view target_id) {
+        return tool_settings_intent(target_id) !=
+               QuaderNativeToolSettingsIntent::None;
+      });
+  pending_keybinding_owner_ = KeybindingInputOwner::ToolSettings;
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::PendingChord};
+  }
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::ExactMatch) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::Intent,
+            .intent = tool_settings_intent(dispatch.target_id)};
+  }
+  return {};
+}
 
-  return intent != QuaderNativeToolSettingsIntent::None
-             ? QuaderNativeToolSettingsDispatch{
-                   .kind = QuaderNativeToolSettingsDispatch::Kind::Intent,
-                   .intent = intent,
-               }
-             : QuaderNativeToolSettingsDispatch{};
+QuaderNativeToolSettingsDispatch
+QuaderCommandsApi::Impl::resolve_modal_lifecycle_input_binding(
+    const QuaderInputChord &chord) const {
+  const auto dispatch = keybindings_.resolve_next_chord(
+      chord, modal_lifecycle_keybinding_context(),
+      [this](std::string_view target_id) {
+        const auto *metadata = keybinding_target_metadata(target_id);
+        return metadata != nullptr &&
+            (metadata->action_id == "tools.finalize" ||
+             metadata->action_id == "tools.cancel");
+      },
+      pending_keybinding_owner_ == KeybindingInputOwner::ModalDialog);
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::PendingChord};
+  }
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::ExactMatch) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::Intent,
+            .intent = tool_settings_intent(dispatch.target_id)};
+  }
+  if (pending_keybinding_owner_ == KeybindingInputOwner::ModalDialog &&
+      keybindings_.has_pending_chord()) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::Consumed};
+  }
+  return {};
+}
+
+QuaderNativeToolSettingsDispatch
+QuaderCommandsApi::Impl::dispatch_modal_lifecycle_input_binding(
+    const QuaderInputChord &chord) {
+  const auto resolved = resolve_modal_lifecycle_input_binding(chord);
+  if (resolved.kind == QuaderNativeToolSettingsDispatch::Kind::Consumed) {
+    reset_pending_keybinding_chord();
+    return resolved;
+  }
+  if (resolved.kind == QuaderNativeToolSettingsDispatch::Kind::NoMatch) {
+    return {};
+  }
+  if (pending_keybinding_owner_ != KeybindingInputOwner::ModalDialog) {
+    reset_pending_keybinding_chord();
+  }
+  const auto dispatch = keybindings_.dispatch(
+      chord, modal_lifecycle_keybinding_context(),
+      [this](std::string_view target_id) {
+        const auto *metadata = keybinding_target_metadata(target_id);
+        return metadata != nullptr &&
+            (metadata->action_id == "tools.finalize" ||
+             metadata->action_id == "tools.cancel");
+      });
+  pending_keybinding_owner_ = KeybindingInputOwner::ModalDialog;
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::PendingChord};
+  }
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::ExactMatch) {
+    return {.kind = QuaderNativeToolSettingsDispatch::Kind::Intent,
+            .intent = tool_settings_intent(dispatch.target_id)};
+  }
+  return {};
+}
+
+void QuaderCommandsApi::Impl::reset_pending_modal_lifecycle_input_binding() {
+  if (pending_keybinding_owner_ == KeybindingInputOwner::ModalDialog) {
+    reset_pending_keybinding_chord();
+  }
 }
 
 QuaderApiVoidResult
 QuaderCommandsApi::Impl::execute_native_tool_settings_intent(
     QuaderNativeToolSettingsIntent intent) {
+  const auto settings = tools_.active_settings();
+  if (intent != QuaderNativeToolSettingsIntent::None &&
+      (!settings.active ||
+       (intent == QuaderNativeToolSettingsIntent::Apply && !settings.can_apply) ||
+       (intent == QuaderNativeToolSettingsIntent::Cancel && !settings.can_cancel))) {
+    return {.ok = true, .changed = false, .revisions = api_.revisions()};
+  }
+  const auto *descriptor = find_viewport_tool_descriptor(tools_.active_tool());
+  const bool native = descriptor != nullptr &&
+      tools_.active_native_tool_lifecycle(descriptor->tool);
   switch (intent) {
   case QuaderNativeToolSettingsIntent::Apply:
-    return tools_.commit_active_tool_preview();
+    return native ? tools_.commit_active_tool_preview()
+                  : api_.modeling().commit_preview("Apply Tool Preview");
   case QuaderNativeToolSettingsIntent::Cancel:
-    return tools_.cancel_active_tool_preview();
+    return native ? tools_.cancel_active_tool_preview()
+                  : api_.modeling().cancel_preview();
   case QuaderNativeToolSettingsIntent::None:
     break;
   }
@@ -2072,6 +2228,12 @@ QuaderCommandsApi::Impl::execute_native_tool_settings_intent(
 void QuaderCommandsApi::Impl::reset_pending_keybinding_chord() {
   keybindings_.reset_pending_chord();
   pending_keybinding_owner_ = KeybindingInputOwner::Viewport;
+}
+
+void QuaderCommandsApi::Impl::reset_pending_non_modal_keybinding_chord() {
+  if (pending_keybinding_owner_ != KeybindingInputOwner::ModalDialog) {
+    reset_pending_keybinding_chord();
+  }
 }
 
 void QuaderCommandsApi::Impl::reset_pending_viewport_keybinding_chord() {
@@ -3101,15 +3263,16 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       "Cancel Tool", "keybindings.action.tools.cancel.label",
       QuaderKeybindingContextKind::ModalTool,
       "viewportFocus && !textInputActive && !navigation.active && "
+      "!operationPreview.active && !activeTool.create_primitive && "
       "(modalTool.active || activeTool.ownsViewport || "
-      "transformDrag.active || activeTool.uv_peel || activeTool.extrude)",
+      "transformDrag.active || activeTool.nativeLifecycle)",
       {}, "tools.cancel");
   register_keybinding_target_metadata(
       viewport_input_action_target_id("toggle_maximized"),
       "Toggle Maximized Viewport",
       stable_keybinding_localization_key("viewport.toggle_maximized"),
       QuaderKeybindingContextKind::Viewport,
-      std::string(viewport_command_keybinding_context()));
+      std::string(viewport_maximize_keybinding_context()));
   register_keybinding_target_metadata(
       viewport_input_action_target_id("delete_popup"), "Open Delete Menu",
       stable_keybinding_localization_key("viewport.delete_popup"),
@@ -3194,12 +3357,13 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("cancel_active_tool"), "Escape",
       "viewportFocus && !textInputActive && !navigation.active && "
+      "!operationPreview.active && !activeTool.create_primitive && "
       "(modalTool.active || activeTool.ownsViewport || "
-      "transformDrag.active || activeTool.uv_peel || activeTool.extrude)",
+      "transformDrag.active || activeTool.nativeLifecycle)",
       10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("toggle_maximized"), "Space",
-      std::string(viewport_command_keybinding_context()), 10);
+      std::string(viewport_maximize_keybinding_context()), 10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("delete_popup"), "X",
       std::string(viewport_command_keybinding_context()), 10);
@@ -3628,6 +3792,28 @@ QuaderCommandsApi::dispatch_native_tool_settings_input_binding(
   return impl_->dispatch_native_tool_settings_input_binding(chord, state);
 }
 
+QuaderNativeToolSettingsDispatch
+QuaderCommandsApi::resolve_native_tool_settings_input_binding(
+    const QuaderInputChord &chord, const ViewportToolState &state) const {
+  return impl_->resolve_native_tool_settings_input_binding(chord, state);
+}
+
+QuaderNativeToolSettingsDispatch
+QuaderCommandsApi::resolve_modal_lifecycle_input_binding(
+    const QuaderInputChord &chord) const {
+  return impl_->resolve_modal_lifecycle_input_binding(chord);
+}
+
+QuaderNativeToolSettingsDispatch
+QuaderCommandsApi::dispatch_modal_lifecycle_input_binding(
+    const QuaderInputChord &chord) {
+  return impl_->dispatch_modal_lifecycle_input_binding(chord);
+}
+
+void QuaderCommandsApi::reset_pending_modal_lifecycle_input_binding() {
+  impl_->reset_pending_modal_lifecycle_input_binding();
+}
+
 QuaderApiVoidResult QuaderCommandsApi::execute_native_tool_settings_intent(
     QuaderNativeToolSettingsIntent intent) {
   return impl_->execute_native_tool_settings_intent(intent);
@@ -3635,6 +3821,10 @@ QuaderApiVoidResult QuaderCommandsApi::execute_native_tool_settings_intent(
 
 void QuaderCommandsApi::reset_pending_keybinding_chord() {
   impl_->reset_pending_keybinding_chord();
+}
+
+void QuaderCommandsApi::reset_pending_non_modal_keybinding_chord() {
+  impl_->reset_pending_non_modal_keybinding_chord();
 }
 
 void QuaderCommandsApi::reset_pending_viewport_keybinding_chord() {

@@ -8,25 +8,36 @@
 
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDoubleSpinBox>
 #include <QEvent>
+#include <QEventLoop>
 #include <QFocusEvent>
 #include <QFrame>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QLocale>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QToolButton>
+#include <QTimer>
 
 #include <memory>
+#include <array>
+#include <string_view>
+#include <utility>
 
 namespace {
 
@@ -150,10 +161,10 @@ protected:
 };
 
 TEST_F(QtViewportSettingsOverlayTests,
-       OperationOriginStaysPinnedAndExpansionSurvivesAnEmptyContext) {
+       OperationOriginStaysPinnedAndEachActivationStartsExpanded) {
   EXPECT_TRUE(settings_->isHidden());
   EXPECT_FALSE(settings_->has_settings());
-  EXPECT_FALSE(settings_->expanded());
+  EXPECT_TRUE(settings_->expanded());
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
@@ -166,15 +177,17 @@ TEST_F(QtViewportSettingsOverlayTests,
       QStringLiteral("tool_settings.target_title"));
   ASSERT_NE(header, nullptr);
   EXPECT_EQ(header->text(), QStringLiteral("Create Primitive"));
-  EXPECT_FALSE(header->isChecked());
+  EXPECT_TRUE(header->isChecked());
+  EXPECT_EQ(header->arrowType(), Qt::DownArrow);
   header->click();
   refresh();
-  EXPECT_TRUE(settings_->expanded());
+  EXPECT_FALSE(settings_->expanded());
   ASSERT_TRUE(editor_->tools().set_setting(quader::kCreatePrimitiveToolId,
       quader::kBoxSubdivisionsXSetting, 4.0).ok());
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Front));
   refresh();
   EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Top));
+  EXPECT_FALSE(settings_->expanded());
 
   // A complete cancel/start between refreshes still represents a new operation.
   ASSERT_TRUE(editor_->tools().cancel_active_tool_preview().ok());
@@ -185,6 +198,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Side));
   EXPECT_TRUE(settings_->expanded());
 
+  settings_->set_expanded(false);
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Select).ok());
   refresh();
   EXPECT_FALSE(settings_->has_settings());
@@ -203,6 +217,9 @@ TEST_F(QtViewportSettingsOverlayTests,
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   refresh();
   ASSERT_NO_FATAL_FAILURE(expect_anchored(6));
+  EXPECT_EQ(settings_->width(), 280);
+  settings_->set_expanded(false);
+  refresh();
   EXPECT_EQ(settings_->width(), 160);
   settings_->set_expanded(true);
   refresh();
@@ -359,6 +376,174 @@ TEST_F(QtViewportSettingsOverlayTests,
   refresh();
   ASSERT_EQ(settings_->target_id(), "edge_bevel");
   ASSERT_NO_FATAL_FAILURE(expect_settings_fit_without_scrolling());
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
+       BevelSettingsChangeGeometryWhileViewportFramesContinue) {
+  ASSERT_TRUE(session_->viewport_workspace().set_layout(
+      quader::ViewportLayoutId::Single));
+  const auto source = editor_->modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Live bevel settings");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor_->selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor_->selection().select_edge(source.value(), 1, 2).ok());
+  ASSERT_TRUE(editor_->selection().select_all().ok());
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Move).ok());
+  ASSERT_TRUE(editor_->commands().execute(
+      editor_->commands().command_id_for_modeling_action("bevel_edges")).ok());
+  ASSERT_TRUE(editor_->tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.1).ok());
+  settings_->set_expanded(true);
+  refresh();
+  process_input();
+  refresh();
+  const auto initial = editor_->query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(initial.has_value());
+  auto *width = settings_->findChild<QDoubleSpinBox *>(QStringLiteral(
+      "tool_settings.control.operation.edge_bevel.width"));
+  auto *segments = settings_->findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.operation.edge_bevel.segments"));
+  ASSERT_NE(width, nullptr);
+  ASSERT_NE(segments, nullptr);
+
+  const auto settle_with_viewport_frames = [&] {
+    QEventLoop loop;
+    QTimer frames;
+    QObject::connect(&frames, &QTimer::timeout, &loop, [&] {
+      process_input();
+      refresh();
+    });
+    frames.start(5);
+    QTimer::singleShot(120, &loop, &QEventLoop::quit);
+    loop.exec();
+  };
+  width->setValue(0.2);
+  settle_with_viewport_frames();
+  EXPECT_DOUBLE_EQ(session_->modeling().interaction_settings().edge_bevel_width,
+                   0.2);
+  const auto widened = editor_->query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(widened.has_value());
+  ASSERT_EQ(widened->vertices.size(), initial->vertices.size());
+  bool position_changed = false;
+  for (std::size_t index = 0; index < widened->vertices.size(); ++index) {
+    const auto &before = initial->vertices[index].position;
+    const auto &after = widened->vertices[index].position;
+    position_changed = position_changed || before.x != after.x ||
+                       before.y != after.y || before.z != after.z;
+  }
+  EXPECT_TRUE(position_changed);
+
+  segments->setValue(3);
+  settle_with_viewport_frames();
+  EXPECT_EQ(session_->modeling().interaction_settings().edge_bevel_segments, 3);
+  const auto subdivided = editor_->query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(subdivided.has_value());
+  EXPECT_GT(subdivided->indices.size(), widened->indices.size());
+  EXPECT_TRUE(editor_->tools().active_settings().preview_active);
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
+       ApplyIncludesTypedNumericDraftsForBevelAndThicken) {
+  struct Operation {
+    std::string_view action;
+    std::string_view tool;
+    std::string_view setting;
+    quader::QuaderSelectionMode mode;
+  };
+  constexpr std::array kOperations{
+      Operation{"bevel_edges", "edge_bevel", "operation.edge_bevel.width",
+                quader::QuaderSelectionMode::Edge},
+      Operation{"thicken_faces", "thicken", "operation.thicken.thickness",
+                quader::QuaderSelectionMode::Face}};
+  ASSERT_TRUE(session_->viewport_workspace().set_layout(
+      quader::ViewportLayoutId::Single));
+  host_->activateWindow();
+  for (const auto &operation : kOperations) {
+    SCOPED_TRACE(operation.action);
+    const auto source = [&] {
+      if (operation.mode == quader::QuaderSelectionMode::Edge) {
+        return editor_->modeling().create_box(
+            {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Typed bevel settings");
+      }
+      // Thicken requires an open boundary; a face of a closed box is ineligible.
+      quader_poly::Document document;
+      const std::array vertices{
+          quader_poly::add_vertex(document, {-1.0F, -1.0F, 0.0F}),
+          quader_poly::add_vertex(document, {1.0F, -1.0F, 0.0F}),
+          quader_poly::add_vertex(document, {1.0F, 1.0F, 0.0F}),
+          quader_poly::add_vertex(document, {-1.0F, 1.0F, 0.0F})};
+      EXPECT_NE(quader_poly::add_face(document, vertices),
+                quader_poly::kInvalidElementId);
+      return editor_->modeling().create_mesh(
+          quader::QuaderPolygonDocumentInternalAccess::from_backend(
+              std::move(document)), {.name = "Typed thicken settings"});
+    }();
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor_->selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor_->selection().set_mode(operation.mode).ok());
+    ASSERT_TRUE((operation.mode == quader::QuaderSelectionMode::Edge
+        ? editor_->selection().select_edge(source.value(), 1, 2)
+        : editor_->selection().select_face(source.value(), 1)).ok());
+    const auto started = editor_->commands().execute(
+        editor_->commands().command_id_for_modeling_action(operation.action));
+    ASSERT_TRUE(started.ok()) << started.error_message();
+    ASSERT_TRUE(editor_->tools().set_setting(
+        operation.tool, operation.setting, 0.1).ok());
+    settings_->set_expanded(true);
+    refresh();
+    auto *spin = settings_->findChild<QDoubleSpinBox *>(QStringLiteral(
+        "tool_settings.control.%1").arg(QString::fromUtf8(
+            operation.setting.data(), static_cast<qsizetype>(operation.setting.size()))));
+    auto *apply = settings_->findChild<QPushButton *>(
+        QStringLiteral("tool_settings.apply"));
+    ASSERT_NE(spin, nullptr);
+    ASSERT_NE(apply, nullptr);
+    ASSERT_TRUE(spin->isEnabled());
+    ASSERT_TRUE(apply->isEnabled());
+    spin->setLocale(QLocale::c());
+    spin->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(spin->hasFocus());
+    auto *line = spin->findChild<QLineEdit *>();
+    ASSERT_NE(line, nullptr);
+    line->selectAll();
+    for (const QChar character : QStringLiteral("0.2")) {
+      QKeyEvent text(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                     QString(character));
+      QCoreApplication::sendEvent(line, &text);
+    }
+    ASSERT_EQ(line->text(), QStringLiteral("0.2"));
+    ASSERT_DOUBLE_EQ(spin->value(), 0.1);
+    const auto before = editor_->query().compiled_object_mesh(source.value());
+    ASSERT_TRUE(before.has_value());
+
+    // Apply deliberately does not take mouse focus. It must interpret the
+    // visible draft before flushing the delayed owner write and committing.
+    const QPoint position = apply->rect().center();
+    const QPoint global = apply->mapToGlobal(position);
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(position), QPointF(global),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(apply, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(position), QPointF(global),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(apply, &release);
+    const auto owner = session_->modeling().interaction_settings();
+    EXPECT_DOUBLE_EQ(operation.mode == quader::QuaderSelectionMode::Edge
+                         ? owner.edge_bevel_width : owner.thicken_thickness,
+                     0.2);
+    EXPECT_FALSE(session_->modeling().operation_preview_active());
+    const auto after = editor_->query().compiled_object_mesh(source.value());
+    ASSERT_TRUE(after.has_value());
+    ASSERT_EQ(after->vertices.size(), before->vertices.size());
+    bool position_changed = false;
+    for (std::size_t index = 0; index < after->vertices.size(); ++index) {
+      const auto &a = before->vertices[index].position;
+      const auto &b = after->vertices[index].position;
+      position_changed = position_changed || a.x != b.x || a.y != b.y || a.z != b.z;
+    }
+    EXPECT_TRUE(position_changed);
+  }
 }
 
 TEST_F(QtViewportSettingsOverlayTests,

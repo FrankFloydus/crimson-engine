@@ -538,6 +538,9 @@ public:
       bool preserve_selection = false);
   [[nodiscard]] ModelingFaceExtrusionSourceResult
   capture_face_extrusion_source() const;
+  /// Read-only validation of the next step, including a current preview's caps.
+  [[nodiscard]] ModelingCommandResult validate_next_face_extrusion(
+      modeling::FaceExtrudeMode mode, double amount_internal) const;
   [[nodiscard]] bool face_extrusion_source_current(
       const ModelingFaceExtrusionSource &source) const;
   [[nodiscard]] ModelingCommandResult validate_face_extrusion(

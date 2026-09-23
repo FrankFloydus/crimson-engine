@@ -6,11 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "editor/input/quader_input_binding.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "support/command_behavior_contract.hpp"
+#include "support/command_behavior_fixture.hpp"
+#include "support/command_observable_state.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
 namespace quader {
@@ -173,6 +178,103 @@ TEST(SelectionToolSettingsTests, NewSceneSessionUsesDefaultCheckboxValues) {
   ASSERT_TRUE(next_tools.activate(ViewportToolId::LassoSelect).ok());
   EXPECT_FALSE(next_tools.active_settings().controls[0].bool_value);
   EXPECT_TRUE(first_tools.active_settings().controls[0].bool_value);
+}
+
+TEST(SelectionToolSettingsTests,
+     EveryModelingPreviewSettingsTargetAppliesOrCancelsThroughCanonicalKeys) {
+  struct PreviewCase {
+    QuaderCommandId command;
+    std::string_view tool;
+    std::string_view setting;
+    double value;
+  };
+  constexpr std::array kCases{
+      PreviewCase{quader_command::kModelingInterpolatedBridgeEdges, "bridge",
+                  "operation.bridge.steps", 3.0},
+      PreviewCase{quader_command::kModelingInterpolatedBridgeFaces, "bridge",
+                  "operation.bridge.steps", 3.0},
+      PreviewCase{quader_command::kModelingBevelEdges, "edge_bevel",
+                  "operation.edge_bevel.width", 0.2},
+      PreviewCase{quader_command::kModelingThickenFaces, "thicken",
+                  "operation.thicken.thickness", 0.25},
+      PreviewCase{quader_command::kModelingSliceQuad, "slice_quad",
+                  "operation.slice_quad.x_slices", 3.0},
+      PreviewCase{quader_command::kModelingMergeByDistance, "merge_by_distance",
+                  "operation.merge_by_distance.tolerance", 0.2},
+      PreviewCase{quader_command::kModelingHalfCut, "half_cut",
+                  "operation.half_cut.axis", 2.0},
+  };
+  using Domain = test::CommandObservableDomain;
+  for (const auto &preview_case : kCases) {
+    SCOPED_TRACE(preview_case.command.string());
+    const auto *contract =
+        test::find_command_behavior_contract(preview_case.command.string());
+    ASSERT_NE(contract, nullptr);
+    for (const bool apply : {false, true}) {
+      SCOPED_TRACE(apply ? "Space applies" : "Escape cancels");
+      auto fixture = test::CommandBehaviorFixture::create(*contract);
+      auto &editor = fixture->editor();
+      const auto undo_before = fixture->native_scene().history().undo_count();
+      const auto redo_before = fixture->native_scene().history().redo_count();
+      const auto before = test::capture_command_observable_state(editor);
+      const auto started = editor.commands().execute(preview_case.command);
+      ASSERT_TRUE(started.ok()) << started.error_message();
+      ASSERT_TRUE(editor.tools().active_settings().preview_active);
+      const auto initial_preview = test::capture_command_observable_state(editor);
+      const auto updated = editor.tools().set_setting(
+          preview_case.tool, preview_case.setting, preview_case.value);
+      ASSERT_TRUE(updated.ok()) << updated.error_message();
+      const auto settings = editor.tools().active_settings();
+      ASSERT_EQ(settings.tool_id, preview_case.tool);
+      ASSERT_TRUE(settings.can_apply);
+      ASSERT_TRUE(settings.can_cancel);
+      const auto preview = test::capture_command_observable_state(editor);
+      ASSERT_NE(preview.domain(Domain::Geometry), before.domain(Domain::Geometry));
+      if (preview_case.tool == "bridge") {
+        EXPECT_NE(preview.domain(Domain::Geometry),
+                  initial_preview.domain(Domain::Geometry));
+      }
+      EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_before);
+
+      ASSERT_EQ(editor.tools().active_tool(), "select");
+      const ViewportToolState state{.active_tool = ViewportToolId::Select};
+      ASSERT_FALSE(editor.tools().active_native_tool_lifecycle(state.active_tool));
+      const auto dispatch =
+          editor.commands().dispatch_native_tool_settings_input_binding(
+              input_chord(apply ? "Space" : "Escape"), state);
+      ASSERT_EQ(dispatch.kind, QuaderNativeToolSettingsDispatch::Kind::Intent);
+      EXPECT_EQ(dispatch.intent, apply ? QuaderNativeToolSettingsIntent::Apply
+                                       : QuaderNativeToolSettingsIntent::Cancel);
+      const auto completed =
+          editor.commands().execute_native_tool_settings_intent(dispatch.intent);
+      ASSERT_TRUE(completed.ok()) << completed.error_message();
+      EXPECT_TRUE(completed.changed());
+      EXPECT_FALSE(editor.tools().active_settings().preview_active);
+      const auto after = test::capture_command_observable_state(editor);
+      if (!apply) {
+        const auto restored = test::diff_command_observable_state(
+            before, after, Domain::Geometry | Domain::Selection);
+        EXPECT_TRUE(restored.empty()) << restored.summary;
+        EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_before);
+        EXPECT_EQ(fixture->native_scene().history().redo_count(), redo_before);
+        continue;
+      }
+
+      EXPECT_EQ(after.domain(Domain::Geometry), preview.domain(Domain::Geometry));
+      EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_before + 1U);
+      ASSERT_TRUE(editor.history().undo().ok());
+      const auto undone = test::capture_command_observable_state(editor);
+      const auto restored = test::diff_command_observable_state(
+          before, undone, Domain::Geometry | Domain::Selection);
+      EXPECT_TRUE(restored.empty()) << restored.summary;
+      EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_before);
+      ASSERT_TRUE(editor.history().redo().ok());
+      const auto redone = test::capture_command_observable_state(editor);
+      const auto reapplied = test::diff_command_observable_state(
+          after, redone, Domain::Geometry | Domain::Selection);
+      EXPECT_TRUE(reapplied.empty()) << reapplied.summary;
+    }
+  }
 }
 
 } // namespace

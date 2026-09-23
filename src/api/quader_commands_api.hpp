@@ -54,7 +54,7 @@ struct QuaderViewportKeybindingDispatch {
     std::string command_id;
 };
 
-/** Identifies editor intent resolved from a focused native Tool Settings edit. */
+/** Identifies Apply/Cancel intent resolved for a settings or dialog draft. */
 enum class QuaderNativeToolSettingsIntent {
   None,
   Apply,
@@ -66,10 +66,11 @@ enum class QuaderNativeToolSettingsIntent {
  * native tool or owner-specific command to Qt.
  */
 struct QuaderNativeToolSettingsDispatch final {
-  /** Classifies a native Tool Settings dispatch as unmatched, pending, or resolved. */
+  /** Preserves unmatched, pending, consumed-prefix and resolved lifecycle input. */
   enum class Kind {
     NoMatch,
     PendingChord,
+    Consumed,
     Intent,
   };
 
@@ -204,13 +205,25 @@ public:
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool text_input_active,
         QuaderViewportKeybindingContext input_context = {}) const;
-    /** Resolves Apply/Cancel for a focused active native-tool settings editor. */
+    /** Resolves Apply/Cancel for an active tool or operation settings editor. */
     [[nodiscard]] QuaderNativeToolSettingsDispatch
     dispatch_native_tool_settings_input_binding(
         const QuaderInputChord &chord, const ViewportToolState &state);
+    /// Probes settings lifecycle shortcuts without consuming their sequence.
+    [[nodiscard]] QuaderNativeToolSettingsDispatch
+    resolve_native_tool_settings_input_binding(
+        const QuaderInputChord &chord, const ViewportToolState &state) const;
+    /// Dialog-owned intents applied by the caller to its own draft.
+    [[nodiscard]] QuaderNativeToolSettingsDispatch
+    resolve_modal_lifecycle_input_binding(const QuaderInputChord &chord) const;
+    [[nodiscard]] QuaderNativeToolSettingsDispatch
+    dispatch_modal_lifecycle_input_binding(const QuaderInputChord &chord);
+    void reset_pending_modal_lifecycle_input_binding();
     QuaderApiVoidResult execute_native_tool_settings_intent(
         QuaderNativeToolSettingsIntent intent);
     void reset_pending_keybinding_chord();
+    /// Clears editor prefixes while preserving a dialog's input ownership.
+    void reset_pending_non_modal_keybinding_chord();
     /** Clears viewport prefixes without canceling another editor panel's sequence. */
     void reset_pending_viewport_keybinding_chord();
     [[nodiscard]] bool has_pending_keybinding_chord() const;

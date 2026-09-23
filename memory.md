@@ -155,24 +155,29 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
 
 ## Modeling publication and preview transactions
 
-- Dedicated Extrusion commits immediately; its settings regenerate from immutable source
-  documents and merge into that extrusion's one editor-history entry. Selection, history,
-  scene or tool changes retire adjustment before another edit can publish. Escape only
-  cancels an unfinished pointer drag; leaving the idle tool retains committed geometry.
-  Session defaults are shared across scenes, separate from each scene's adjustable result.
+- Dedicated Extrusion activation starts a pending preview; releasing a viewport drag ends
+  pointer input but retains that preview with Apply enabled. Apply accepts it, while
+  Escape/Cancel restores its source and preserves existing undo/redo.
+  Activation starts at zero and locks preselected faces, or the first face picked after
+  activation. User selection edits and tool switches cannot replace that source while
+  pending; internal preview/history publication still restores its own selections.
+  Repeated E retains the pending step. Settings regenerate from its immutable source.
+  Apply records one history entry, releases the source, and resets Amount to zero;
+  the next amount edit or drag creates a new step from the selected caps. Accepted
+  geometry has no adjustment window. Leaving the idle tool retains accepted geometry.
   Physical E needs the descriptor's repeated-activation capability at the viewport dispatch
   gate. Native QWindow focus must reserve ShortcutOverride like its widget container so
   Alt+E reaches the canonical resolver before the Edit-menu mnemonic.
-  E starts a new step; the yellow disk and settings adjust that step from its original
-  source while cancellation restores the committed result and its adjustment eligibility.
+  The yellow disk remains visible during dragging; it and the settings edit only the
+  pending step. Cancellation restores the document from before that step.
   Extrusion dragging is free by default; event-time Ctrl snaps the total amount to the
   grid and Shift scales new movement for precision. Automatic scene snapping must not
   override free movement; the explicit vertex-snap hold remains available. Mouse-up
   retains its own canonical held-key snapshot, so a later V release in the same frame
-  cannot change the committed snap state (including remapped bindings).
+  cannot change the final preview snap state (including remapped bindings).
   Preview baselines must therefore be the live document, not the immutable source.
   Nonzero drag samples reuse SDK-prepared topology and IDs; publishing zero retires
-  that generation. Dynamic render previews keep assets unchanged until release.
+  that generation. Dynamic render previews keep assets unchanged until Apply.
   Their projection revision must reach every retained gate, including Qt's persistent
   selection source stamp and compensated failures that clear the preview. A fresh
   `selection_overlay_frame()` getter does not prove the cached viewport submitted it;
@@ -181,9 +186,12 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   Region adjustment handles follow the saved axis.
   Extrusion validation permits structurally valid thin/tangent side walls and unchanged
   authored defects, but rejects properly crossing new wall boundaries and validates
-  affected caps in anchored, scale-normalized coordinates. Region pointer projection
-  stays linear in the press-time camera frame; per-pointer ray/axis intersections can
-  diverge and reverse near the vanishing point.
+  affected caps in anchored, scale-normalized coordinates. Every extrusion mode maps
+  pointer motion along the visible handle axis in the press-time camera frame; fixed
+  upward-positive motion reverses Individual/Along Normals when the handle projects down.
+  Near the view axis, retain the projected direction with bounded sensitivity; only a
+  degenerate projection uses upward-positive motion. Projection stays linear during the
+  drag: per-pointer ray/axis intersections can diverge and reverse near the vanishing point.
   Owners: `ExtrudeToolService` and the SDK projection adapter. Tests:
   `tests/extrude_tool_service_tests.cpp`, `tests/qt_extrude_tool_settings_tests.cpp`,
   `tests/qt_input_adapter_tests.cpp`, `tests/qt_command_event_filter_tests.cpp`.
@@ -708,7 +716,11 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
 ## Retained Qt state, scaling, and first paint
 
 - Pending numeric edits carry tool/settings/preview identity; discard them on rebind, reset, cancel,
-  or structural rebuild. Flush the exact final value on release/Apply. Discard on button press before
+  or structural rebuild. Interpret focused numeric text before flushing on Apply or the canonical
+  settings completion key: deferred spinboxes may not have queued their visible draft yet.
+  Lifecycle bindings belong to the whole settings panel, including buttons; Space on a focused
+  Cancel button must resolve Apply rather than trigger the button's native click on release.
+  Flush the exact final value on release/Apply. Discard on button press before
   focus loss can emit editingFinished. An idle held slider performs no owner work.
 - Native transient windows yield viewport submission until first Paint completes, then resume while
   still open; pausing for the entire modal lifetime breaks live previews. Retain generation/QPointer

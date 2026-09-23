@@ -271,13 +271,11 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .can_activate = [] { return true; },
       .active = [&] { return extrude_.active(); },
       .pending = [&] { return extrude_.active(); },
-      .pending_history_preview = [&] { return extrude_.dragging(); },
-      .blocks_modeling_content_mutation = [&] { return extrude_.dragging(); },
-      .blocks_document_mutation = [&](EntityId) { return extrude_.dragging(); },
-      .activate = [&](double) { return extrude_.activate(); },
-      .commit = [&] {
-        return extrude_.dragging() ? extrude_.end_drag() : extrude_.extrude();
-      },
+      .pending_history_preview = [&] { return extrude_.preview_active(); },
+      .blocks_modeling_content_mutation = [&] { return extrude_.preview_active(); },
+      .blocks_document_mutation = [&](EntityId) { return extrude_.preview_active(); },
+      .activate = [&](double) { return extrude_.activate_preview(); },
+      .commit = [&] { return extrude_.commit_preview(); },
       .cancel = [&] { return extrude_.cancel(); },
       .reset = [&] { (void)extrude_.cancel(); },
   });
@@ -292,6 +290,9 @@ bool NativeViewportToolCoordinator::handles(std::string_view tool_id) const {
 
 bool NativeViewportToolCoordinator::can_activate(
     std::string_view tool_id) const {
+  if (extrude_.preview_active() && tool_id != kExtrudeToolId) {
+    return false;
+  }
   return runtime_.can_activate_native_lifecycle(tool_id);
 }
 
@@ -447,8 +448,12 @@ bool NativeViewportToolCoordinator::curve_control_gizmo_start_allowed(
 
 CommandResult NativeViewportToolCoordinator::activate(
     std::string_view tool_id, double grid_world_size) {
+  if (extrude_.preview_active() && tool_id != kExtrudeToolId) {
+    return command_invalid_result(
+        "Apply or cancel the extrusion before changing tools.");
+  }
   if (tool_id == kExtrudeToolId && extrude_.active()) {
-    return extrude_.extrude();
+    return extrude_.activate_preview();
   }
   return runtime_.activate_native_lifecycle(
       tool_id, grid_world_size,
@@ -458,13 +463,13 @@ CommandResult NativeViewportToolCoordinator::activate(
 CommandResult NativeViewportToolCoordinator::activate_extrude(
     modeling::FaceExtrudeMode mode) {
   if (extrude_.active()) {
-    return extrude_.activate(mode);
+    return extrude_.activate_preview(mode);
   }
   const CommandResult canceled = cancel_competing_state_for_tool_activation();
   if (!canceled.ok) {
     return canceled;
   }
-  CommandResult activated = extrude_.activate(mode);
+  CommandResult activated = extrude_.activate_preview(mode);
   activated.changed = activated.changed || canceled.changed;
   return activated;
 }
@@ -491,6 +496,14 @@ CommandResult NativeViewportToolCoordinator::complete_active_light_creation(
 
 CommandResult
 NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
+  if (extrude_.preview_active()) {
+    return command_invalid_result(
+        "Apply or cancel the extrusion before changing tools.");
+  }
+  return cancel_transient_state();
+}
+
+CommandResult NativeViewportToolCoordinator::cancel_transient_state() {
   const ModelingCommandResult modeling_cancel =
       modeling_.cancel_competing_state_for_native_tool_activation();
   if (!modeling_cancel.ok) {
@@ -531,6 +544,7 @@ CommandResult NativeViewportToolCoordinator::commit_active() {
   const CommandResult result = runtime_.commit_active_native_lifecycle();
   if (result.ok) {
     interaction_.clear_drag_state();
+    extrude_interaction_.clear_drag_state();
   }
   return result;
 }

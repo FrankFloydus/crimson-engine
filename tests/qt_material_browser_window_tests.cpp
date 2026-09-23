@@ -6,6 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "editor/session/scene_session.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_application_theme.hpp"
 
@@ -46,6 +49,7 @@
 #include <QStackedWidget>
 #include <QStyleOption>
 #include <QTableView>
+#include <QTemporaryDir>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -54,6 +58,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -941,6 +946,181 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(proxy.index(0, 0).data().toString(), QStringLiteral("Brick"));
   proxy.set_usage_mode(QtMaterialBrowserUsageMode::All);
   EXPECT_EQ(proxy.rowCount(), 2);
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     FloatingUsageLifecycleKeysApplyCancelAndRetainConsumedRelease) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-usage-lifecycle-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.set_lifecycle_commands_provider([&]() { return &editor.commands(); });
+  window.set_project_generation(41);
+  window.set_material_usage({.project_generation = 41, .revision = 1,
+                            .complete = true});
+  window.show();
+  application.processEvents();
+  auto *filter = window.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  ASSERT_NE(filter, nullptr);
+  filter->click();
+  QPointer<QFrame> popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  auto *used = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  auto *cancel = popup->findChild<QPushButton *>(
+      QStringLiteral("materialBrowser.filterCancel"));
+  ASSERT_NE(used, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  used->click();
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::All);
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+  QCoreApplication::sendEvent(cancel, &press);
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  EXPECT_TRUE(popup.isNull() || !popup->isVisible());
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  EXPECT_TRUE(popup.isNull());
+
+  QObject next_input_owner;
+  QKeyEvent shortcut_override(QEvent::ShortcutOverride, Qt::Key_Space,
+                               Qt::NoModifier, {}, true);
+  shortcut_override.setAccepted(false);
+  QCoreApplication::sendEvent(&next_input_owner, &shortcut_override);
+  EXPECT_TRUE(shortcut_override.isAccepted())
+      << "held lifecycle input must not activate a shortcut after popup closure";
+
+  QPushButton next_focus;
+  int unintended_clicks = 0;
+  QObject::connect(&next_focus, &QPushButton::clicked, [&]() {
+    ++unintended_clicks;
+  });
+  next_focus.setDown(true);
+  QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, {}, true);
+  QCoreApplication::sendEvent(&next_focus, &repeat);
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+  QCoreApplication::sendEvent(&next_focus, &release);
+  EXPECT_EQ(unintended_clicks, 0);
+  next_focus.setDown(false);
+
+  filter->click();
+  popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  auto *not_used = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterNotUsed"));
+  ASSERT_NE(not_used, nullptr);
+  not_used->click();
+  send_key(*not_used, Qt::Key_Escape);
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  EXPECT_TRUE(popup.isNull() || !popup->isVisible());
+
+  filter->click();
+  popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  not_used = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterNotUsed"));
+  ASSERT_NE(not_used, nullptr);
+  not_used->click();
+  window.set_material_usage({.project_generation = 41, .revision = 2,
+                            .complete = false});
+  if (popup && popup->isVisible()) {
+    send_key(*popup, Qt::Key_Space);
+  }
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used)
+      << "a stale popup cannot apply a choice from an older usage snapshot";
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     FloatingUsageLifecycleKeysHonorRemappingAndUnassignment) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-usage-remapped-lifecycle-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(
+      std::filesystem::path(temporary.path().toStdWString()) /
+      "keybindings.json").ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto finalize = std::find_if(catalog.begin(), catalog.end(),
+      [](const auto &entry) { return entry.key.action_id == "tools.finalize"; });
+  const auto cancel_binding = std::find_if(catalog.begin(), catalog.end(),
+      [](const auto &entry) { return entry.key.action_id == "tools.cancel"; });
+  ASSERT_NE(finalize, catalog.end());
+  ASSERT_NE(cancel_binding, catalog.end());
+  ASSERT_TRUE(editor.commands().set_action_shortcut(
+      finalize->key, "F24 G").ok());
+  ASSERT_TRUE(editor.commands().set_action_shortcut(
+      cancel_binding->key, "F23").ok());
+  QtMaterialBrowserWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.set_lifecycle_commands_provider([&]() { return &editor.commands(); });
+  window.set_project_generation(41);
+  window.set_material_usage({.project_generation = 41, .revision = 1,
+                            .complete = true});
+  window.show();
+  application.processEvents();
+  auto *filter = window.findChild<QToolButton *>(
+      QStringLiteral("materialBrowser.filter"));
+  ASSERT_NE(filter, nullptr);
+  filter->click();
+  QPointer<QFrame> popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  auto *used = popup->findChild<QCheckBox *>(
+      QStringLiteral("materialBrowser.filterUsed"));
+  auto *cancel = popup->findChild<QPushButton *>(
+      QStringLiteral("materialBrowser.filterCancel"));
+  ASSERT_NE(used, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  used->click();
+  send_key(*cancel, Qt::Key_Space);
+  send_key(*cancel, Qt::Key_Escape);
+  ASSERT_TRUE(popup && popup->isVisible());
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::All);
+  send_key(*cancel, Qt::Key_F24);
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  send_key(*cancel, Qt::Key_Space);
+  ASSERT_TRUE(popup && popup->isVisible());
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::All);
+  send_key(*cancel, Qt::Key_F24);
+  send_key(*cancel, Qt::Key_G);
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used);
+  EXPECT_TRUE(popup.isNull() || !popup->isVisible());
+
+  filter->click();
+  popup = window.findChild<QFrame *>(
+      QStringLiteral("materialBrowser.filterPopup"));
+  ASSERT_NE(popup, nullptr);
+  cancel = popup->findChild<QPushButton *>(
+      QStringLiteral("materialBrowser.filterCancel"));
+  ASSERT_NE(cancel, nullptr);
+  ASSERT_TRUE(editor.commands().remove_action_shortcut(finalize->key).ok());
+  ASSERT_TRUE(editor.commands().remove_action_shortcut(cancel_binding->key).ok());
+  send_key(*cancel, Qt::Key_Space);
+  send_key(*cancel, Qt::Key_Escape);
+  send_key(*cancel, Qt::Key_F23);
+  EXPECT_TRUE(popup && popup->isVisible());
+  ASSERT_TRUE(editor.commands().set_action_shortcut(
+      cancel_binding->key, "F23").ok());
+  send_key(*cancel, Qt::Key_F23);
+  EXPECT_TRUE(popup.isNull() || !popup->isVisible());
+  EXPECT_EQ(window.usage_mode(), QtMaterialBrowserUsageMode::Used);
 }
 
 TEST(QtMaterialBrowserWindowTests,

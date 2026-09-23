@@ -196,6 +196,8 @@ TEST(OperationInputHintTests, ExtrusionDescribesAdjustmentAndExplicitSnapModifie
   EXPECT_TRUE(contains_command(hints, quader_command::kToolsActivateExtrude));
   EXPECT_TRUE(contains_command(hints, quader_command::kToolsActivateExtrudeIndividual));
   EXPECT_TRUE(contains_command(hints, quader_command::kToolsActivateExtrudeAlongNormals));
+  EXPECT_TRUE(contains_command(hints, QuaderCommandId{"viewport.modal_tool.finalize"}));
+  EXPECT_TRUE(contains_command(hints, QuaderCommandId{"viewport.cancel_active_tool"}));
   EXPECT_TRUE(contains_command(hints, QuaderCommandId{"viewport.transform.vertex_snap"}));
   EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::PrimaryDrag));
   EXPECT_TRUE(contains_gesture(hints, QuaderOperationInputGesture::ControlPrimaryDrag));

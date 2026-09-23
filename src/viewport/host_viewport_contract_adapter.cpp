@@ -511,8 +511,9 @@ viewport_input_action_binding_catalog() {
           .context = ViewportInputBindingContext::ModalTool,
           .shortcut = "Space",
           .when = "viewportFocus && !textInputActive && "
+                  "!operationPreview.active && !activeTool.create_primitive && "
                   "(modalTool.active || activeTool.ownsViewport || "
-                  "activeTool.uv_peel) && "
+                  "activeTool.nativeLifecycle) && "
                   "!navigation.active",
           .weight = 30,
           .action = ViewportInputActionKind::ModalToolFinalize,
@@ -1095,19 +1096,6 @@ std::optional<std::string> viewport_command_target_id_for_router_shortcut(
     return *command_target;
   }
   return std::nullopt;
-}
-
-std::optional<std::string>
-viewport_operation_preview_command_target_id_for_router_shortcut(
-    const ViewportShortcut &shortcut) {
-  switch (shortcut.kind) {
-  case ViewportShortcutKind::ToggleMaximized:
-    return std::string(quader_command::kModelingApplyActivePreview.string());
-  case ViewportShortcutKind::CancelActiveTool:
-    return std::string(quader_command::kModelingCancelActivePreview.string());
-  default:
-    return std::nullopt;
-  }
 }
 
 bool viewport_router_shortcut_for_target_id(std::string_view target_id,

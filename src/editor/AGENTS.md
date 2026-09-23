@@ -19,7 +19,7 @@ file except through prior written authorization from Francesco Di Blasi.
 | Native modeling projection and picking | [runtime guide](modeling/runtime/README.md) |
 | Descriptor catalogs | [metadata guide](metadata/README.md) |
 | Native tool lifecycle and semantic input | `tools/`, then [input guide](../../INPUT_KEYBINDINGS.md) |
-| Face extrusion, remembered options and editable committed results | `tools/extrude_tool_service.*`; geometry and source snapshots stay in the modeling owner |
+| Face extrusion, pending operation boundaries and remembered mode | `tools/extrude_tool_service.*`; geometry and source snapshots stay in the modeling owner |
 | Light range and live scene-color previews | `viewport/point_light_range_interaction.*`, `commands/document_command_service.*` |
 | Live material albedo drafts | `material/standard_material_edit_session_service.*`, `render/standard_material_render_snapshot_adapter.*` |
 | Material folders and permanent deletion | `material/project_material_organization_service.*`, `material/project_material_deletion_service.*` |

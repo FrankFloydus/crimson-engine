@@ -587,12 +587,13 @@ QuaderToolSettingsTarget extrude_tool_settings_target(
       : mode == modeling::FaceExtrudeMode::Individual ? "individual" : "region";
   QuaderToolSettingsTarget result{
       .active = true,
-      .preview_active = extrude.dragging(),
+      .preview_active = extrude.preview_active(),
       .tool_id = "extrude",
       .title = "Extrude",
       .can_reset = !extrude.dragging(),
-      .apply_visible = false,
-      .can_cancel = false,
+      .apply_visible = true,
+      .can_apply = extrude.preview_active() && !extrude.dragging(),
+      .can_cancel = true,
   };
   auto type = choice_control(
       "extrude.type", "Type", mode_id,
@@ -610,9 +611,6 @@ QuaderToolSettingsTarget extrude_tool_settings_target(
   amount.enabled = !extrude.dragging();
   amount.tooltip = "Extrusion distance in displayed scene units. Negative values extrude inward.";
   result.controls.push_back(std::move(amount));
-  auto action = action_control("extrude.apply", "Extrude");
-  action.enabled = !extrude.dragging() && extrude.has_selected_faces();
-  result.controls.push_back(std::move(action));
   for (auto &control : result.controls) {
     control.label_key = "tool_settings." + control.id;
   }
@@ -1412,6 +1410,11 @@ void QuaderToolsApi::rebind_session(QuaderApiSession session) {
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
   const QuaderSettingsOperationOriginCapture origin(session_);
   const auto activate_tool = [&]() -> QuaderApiVoidResult {
+    if (scene_session(session_).extrude().preview_active() &&
+        tool_id != viewport_tool_catalog_id(ViewportToolId::Extrude)) {
+      return quader_api_failure_status(
+          scene_session(session_), "Apply or cancel the extrusion before changing tools.");
+    }
     if (scene_session(session_).document_commands().property_edit_active()) {
       return quader_api_failure_status(
           scene_session(session_), "Finish the active property edit before changing tools.");
@@ -1504,6 +1507,10 @@ QuaderApiVoidResult QuaderToolsApi::activate_extrude(QuaderExtrudeMode mode) {
 
 bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
   SceneSession &session = scene_session(session_);
+  if (session.extrude().preview_active() &&
+      tool_id != viewport_tool_catalog_id(ViewportToolId::Extrude)) {
+    return false;
+  }
   if (session.document_commands().property_edit_active()) {
     return false;
   }
@@ -2235,7 +2242,7 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
   if (tool_id == "extrude" && action_id == "extrude.apply") {
     const QuaderSettingsOperationOriginCapture origin(session_);
     auto result = api_status_from_command(
-        session, session.extrude().extrude(),
+        session, session.extrude().activate_preview(),
         QuaderMutationKind::Modeling, "Extrude");
     if (result.ok() && result.changed()) {
       origin.publish();

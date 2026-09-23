@@ -22,6 +22,7 @@ bindings. Do not copy that catalog into documentation. Follow root `AGENTS.md` f
 | Public command/keybinding API and compiled registration | `src/api/quader_commands_api.*`; IDs in `src/api/quader_command_ids.hpp` |
 | Canonical input to semantic viewport actions | `src/editor/input/viewport_keybinding_resolver.*` |
 | Qt event conversion | `src/ui/qt_input_adapter.*` |
+| Scoped dialog Apply/Cancel routing | `src/ui/qt_apply_cancel_input_filter.*`, using `QuaderCommandsApi` lifecycle resolution |
 | Event accumulation and host frame assembly | `src/ui/qt_viewport_surface.*`, `src/ui/qt_viewport_panel.*` |
 | Relative pointer accumulation and Win32 backend | `src/ui/qt_relative_pointer_input.*`, `src/platform/raw_mouse_input.*` |
 | Shared press record and release suppression | `src/viewport/viewport_pointer_gesture.hpp` |
@@ -101,20 +102,43 @@ that capability rather than a tool-name list. Active transform drags, previews, 
 cancellation priority; a subsequent Escape clears selection. The existing selection owner handles
 object/group history and component selection. Clear Selection remains remappable through Settings.
 Tool IDs used by input contexts come from the same descriptor catalog as tool activation and presentation.
+Tool Settings Apply/Cancel uses the same canonical lifecycle bindings from the viewport
+and from every settings control: Space applies, Escape cancels by default. Focus on a
+button must not turn Space into a different action, including activating Cancel.
+Apply settles the focused numeric draft before committing; Cancel discards it before
+focus loss can publish it. Keep user remaps, deliberate unassignments, sequence ownership,
+and popup input ownership intact. Test physical key press/release through the production
+viewport and settings adapters, not only the button's API call.
+Resolve operation-preview completion through its canonical Apply/Cancel commands;
+reinterpreting an unrelated viewport action as completion bypasses remapping and
+deliberate unassignment.
+Preferences and the floating material usage filter resolve their Apply/Cancel controls
+through the same canonical bindings. Free-text fields, shortcut capture, and nested
+dialogs keep their input; the scoped dialog adapter owns its multi-key prefixes while
+the global editor adapter yields. Preferences Apply keeps the dialog open, matching
+its button, and the embedded material filter retains its immediate checkbox behavior.
 The persistent Extrude tool reserves Escape even while idle: it exits the tool and
-keeps committed geometry and selected caps. During an extrusion drag, Escape cancels
-only that drag and keeps Extrude active; a subsequent Escape exits the tool.
-E starts a new extrusion using remembered settings. Ctrl+E starts one in Individual
-mode and Alt+E starts one Along Normals; all three bindings are canonical and remappable.
-The yellow disk and selected-face dragging adjust the latest eligible extrusion;
-with no eligible result, they start the first extrusion at zero distance. E starts
-the next extrusion, while Amount also adjusts the latest result.
+keeps accepted geometry and selected caps. E captures preselected faces in a pending
+extrusion at zero amount; when activated without faces, the first face selection starts
+that pending operation. Its source selection stays locked until Apply or Cancel.
+Escape or the settings Cancel button restores its source without recording
+history. Releasing a viewport drag leaves the extrusion pending and enables Apply;
+Apply accepts it once and resets Amount to zero. During an extrusion drag, Escape cancels that operation and keeps
+Extrude active; a subsequent Escape exits the tool. Ctrl+E starts an extrusion in
+Individual mode and Alt+E starts one
+Along Normals; all three bindings are canonical and remappable.
+The yellow disk stays visible during dragging. The disk, selected-face dragging and
+Amount edit only the pending operation. After Apply, the next amount edit or drag
+starts a new operation from the selected caps; accepted geometry is never adjusted.
+Repeated E retains the current pending operation instead of accepting it implicitly.
+Dragging follows the visible gizmo axis in every extrusion mode. When the axis points
+directly into the view and has no visible direction, dragging upward increases Amount.
 Extrusion dragging is unsnapped by default. Holding Ctrl snaps the total extrusion
 amount to the current grid size, including an existing result's starting amount;
 pressing Ctrl can therefore move an off-grid amount to its nearest grid multiple.
 Shift reduces subsequent motion to one tenth. Vertex snapping requires its explicit
-hold binding. The release event's modifiers and held snap binding determine the committed value. Modified
-face clicks keep selection behavior; the disk accepts Ctrl and Shift when pressed.
+hold binding. The release event's modifiers and held snap binding determine the final preview value. Modified
+face clicks cannot alter a pending extrusion's source; the disk accepts Ctrl and Shift when pressed.
 
 ## Settings and persistence
 
@@ -184,7 +208,7 @@ held; release, focus loss, or context loss clears it. This action accepts exactl
 chord; invalid persisted sequences or mouse mappings fall back to its compiled default.
 Mouse-release edges also retain their event-time held keyboard chords. The canonical
 resolver derives the edge's vertex-snap state before retiring suppressed key releases;
-Extrude commits from that edge even when snap-key release coalesces into the same frame.
+Extrude retains that edge's final preview even when snap-key release coalesces into the same frame.
 
 Some actions must reserve constituent presses before their Click/DoubleClick resolves. Preserve the
 material-transfer, Curve-conversion, and orthographic Mesh-depth-selection tests when modifying that

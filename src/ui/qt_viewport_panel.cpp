@@ -3198,17 +3198,7 @@ void QtViewportPanel::process_viewport_input(
   const bool modal_tool_owns_viewport_for_menu =
       input.active_tool_owns_viewport || input.modal_tool_active;
 
-  const ViewportShortcutControllerResult preview_shortcut =
-      shortcut_controller_.handle_operation_preview_shortcut(
-          result, input.operation_preview_active, editor);
-  if (runtime_binding_generation_ != input_binding_generation) {
-    return;
-  }
-  const bool preview_shortcut_consumed = preview_shortcut.consumed;
-  if (preview_shortcut.invalidate_hover) {
-    hover_controller_.invalidate();
-  }
-  if (!preview_shortcut_consumed && result.shortcut_handled &&
+  if (result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::SetSelectionMode) {
     const QuaderApiVoidResult mode_change = editor.selection().set_mode(
         to_api_selection_mode(
@@ -3269,7 +3259,7 @@ void QtViewportPanel::process_viewport_input(
     }
   }
 
-  if (!preview_shortcut_consumed) {
+  {
     const ViewportShortcutControllerResult modeling_shortcut =
         shortcut_controller_.handle_modeling_shortcut(result, editor);
     if (runtime_binding_generation_ != input_binding_generation) {
@@ -3281,15 +3271,15 @@ void QtViewportPanel::process_viewport_input(
   }
 
   const bool show_delete_popup =
-      !preview_shortcut_consumed && result.shortcut_handled &&
+      result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::DeletePopup &&
       localization_ != nullptr;
   const bool show_add_popup =
-      !preview_shortcut_consumed && result.shortcut_handled &&
+      result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::AddPopup &&
       localization_ != nullptr;
   const bool show_shading_popup =
-      !preview_shortcut_consumed && result.shortcut_handled &&
+      result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::ShadingPopup &&
       localization_ != nullptr;
   const bool show_quick_menu = show_add_popup || show_shading_popup;
@@ -3517,7 +3507,7 @@ void QtViewportPanel::process_viewport_input(
   };
 
   bool cancel_consumed = false;
-  if (!preview_shortcut_consumed && result.cancel_requested) {
+  if (result.cancel_requested) {
     const bool active_drag_canceled =
         interaction_controller_.cancel_active_drag(editor, native_tools);
     if (runtime_binding_generation_ != input_binding_generation) {

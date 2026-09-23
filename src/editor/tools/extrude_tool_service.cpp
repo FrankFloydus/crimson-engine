@@ -65,18 +65,6 @@ struct ExtrudeToolService::Impl final {
     friend bool operator==(const Stamp &, const Stamp &) = default;
   };
 
-  /// Immutable source and the exact committed head that may still be adjusted.
-  struct Adjustment final {
-    ModelingFaceExtrusionSource source;
-    std::optional<QVec3> world_direction;
-    std::string merge_key;
-    Stamp stamp;
-    std::uint64_t history_revision = 0;
-    QVec3 origin;
-    QVec3 direction;
-    ExtrudeSessionDefaults options;
-  };
-
   /// Provisional geometry whose cancellation restores the committed document.
   struct Drag final {
     ModelingFaceExtrusionSource source;
@@ -86,12 +74,12 @@ struct ExtrudeToolService::Impl final {
     double amount = 0.0;
     ExtrudeHandleState handle;
     ExtrudeSessionDefaults options;
-    std::optional<Adjustment> previous_adjustment;
-    std::optional<Adjustment> cancellation_adjustment;
     QVec3 source_origin;
     QVec3 source_direction;
     QVec3 visual_direction;
     QVec3 initial_pivot;
+    bool pointer_drag = true;
+    bool adjusting_pending = false;
   };
 
   [[nodiscard]] static std::optional<QVec3> canonical_drag_direction(
@@ -117,46 +105,6 @@ struct ExtrudeToolService::Impl final {
             modeling.modeling_object_map_revision()};
   }
 
-  [[nodiscard]] bool adjustment_current() const {
-    return active && !drag && adjustment.has_value() &&
-           adjustment->stamp == stamp() &&
-           modeling.face_extrusion_source_current(adjustment->source) &&
-           history.can_merge_with_latest(adjustment->merge_key,
-                                          adjustment->history_revision);
-  }
-
-  void retire_stale_adjustment() {
-    if (adjustment && !adjustment_current()) {
-      adjustment.reset();
-      ++settings_revision;
-      ++handle_revision;
-    }
-  }
-
-  void accept_adjustment(ModelingFaceExtrusionSource source,
-                         std::optional<QVec3> direction, std::string key,
-                         QVec3 origin, QVec3 normal,
-                         const ExtrudeSessionDefaults &options) {
-    adjustment = Adjustment{std::move(source), direction, std::move(key),
-                            stamp(), history.revision(), origin, normal, options};
-    if (!adjustment_current()) {
-      adjustment.reset();
-    }
-    ++settings_revision;
-    ++handle_revision;
-  }
-
-  void restore_adjustment_after_compensation(const Adjustment &previous) {
-    if (!adjustment_current() &&
-        history.can_merge_with_latest(previous.merge_key,
-                                       previous.history_revision) &&
-        modeling.face_extrusion_source_current(previous.source)) {
-      accept_adjustment(previous.source, previous.world_direction,
-                         previous.merge_key, previous.origin,
-                         previous.direction, previous.options);
-    }
-  }
-
   [[nodiscard]] const ModelingFaceExtrusionSourceResult &target() const {
     const Stamp current = stamp();
     if (!cached_stamp || *cached_stamp != current ||
@@ -171,8 +119,19 @@ struct ExtrudeToolService::Impl final {
   }
 
   void observe_defaults() const {
-    if (!same_options(observed_defaults, defaults)) {
+    if (observed_defaults.mode != defaults.mode) {
       observed_defaults = defaults;
+      ++settings_revision;
+      ++handle_revision;
+    }
+  }
+
+  void remember_options(const ExtrudeSessionDefaults &options) {
+    const bool amount_changed = idle_amount != options.amount;
+    idle_amount = options.amount;
+    defaults.mode = options.mode;
+    observe_defaults();
+    if (amount_changed) {
       ++settings_revision;
       ++handle_revision;
     }
@@ -182,8 +141,8 @@ struct ExtrudeToolService::Impl final {
   ModelingSessionService &modeling;
   EditorHistoryService &history;
   ExtrudeSessionDefaults &defaults;
+  double idle_amount = 0.0;
   bool active = false;
-  std::optional<Adjustment> adjustment;
   std::optional<Drag> drag;
   mutable std::optional<Stamp> cached_stamp;
   mutable ModelingFaceExtrusionSourceResult cached_target;
@@ -203,22 +162,25 @@ ExtrudeToolService::ExtrudeToolService(SceneDocument &scene,
 ExtrudeToolService::~ExtrudeToolService() = default;
 
 bool ExtrudeToolService::active() const { return impl_->active; }
-bool ExtrudeToolService::dragging() const { return impl_->drag.has_value(); }
+bool ExtrudeToolService::dragging() const {
+  return impl_->drag && impl_->drag->pointer_drag;
+}
+bool ExtrudeToolService::preview_active() const { return impl_->drag.has_value(); }
 bool ExtrudeToolService::adjusting() const {
-  return dragging() && impl_->drag->previous_adjustment.has_value();
+  return dragging() && impl_->drag->adjusting_pending;
 }
 bool ExtrudeToolService::can_update_drag() const {
   return dragging() && impl_->modeling.face_extrusion_preview_active() &&
          impl_->modeling.face_extrusion_source_current(impl_->drag->source);
 }
 bool ExtrudeToolService::adjustable() const {
-  return impl_->adjustment_current();
+  return preview_active() && !dragging();
 }
 modeling::FaceExtrudeMode ExtrudeToolService::mode() const {
-  return dragging() ? impl_->drag->options.mode : impl_->defaults.mode;
+  return preview_active() ? impl_->drag->options.mode : impl_->defaults.mode;
 }
 double ExtrudeToolService::amount() const {
-  return dragging() ? impl_->drag->amount : impl_->defaults.amount;
+  return preview_active() ? impl_->drag->amount : impl_->idle_amount;
 }
 
 bool ExtrudeToolService::has_selected_faces() const {
@@ -237,13 +199,14 @@ const ExtrudeHandleState &ExtrudeToolService::handle_state() const {
                      .mode = mode()};
     return impl_->handle;
   }
-  if (dragging()) {
+  if (preview_active()) {
     auto &drag = *impl_->drag;
     auto &handle = drag.handle;
     handle.revision = impl_->handle_revision;
+    handle.mode = drag.options.mode;
     handle.amount_world = to_world_amount(drag.amount);
     const auto direction = drag.options.mode == modeling::FaceExtrudeMode::Region
-                               ? drag.world_direction.value_or(drag.visual_direction)
+                               ? drag.world_direction.value_or(drag.source_direction)
                                : drag.visual_direction;
     handle.adjustment_direction = direction;
     handle.world_direction = direction;
@@ -255,7 +218,8 @@ const ExtrudeHandleState &ExtrudeToolService::handle_state() const {
           static_cast<float>(to_world_amount(drag.amount));
     }
     handle.adjustment_origin = handle.world_position;
-    handle.dragging = true;
+    handle.adjustment_available = !dragging();
+    handle.dragging = dragging();
     handle.adjusting = adjusting();
     return handle;
   }
@@ -267,14 +231,6 @@ const ExtrudeHandleState &ExtrudeToolService::handle_state() const {
                    .mode = mode(),
                    .adjustment_available = adjustable(),
                    .amount_world = to_world_amount(amount())};
-  if (impl_->handle.adjustment_available) {
-    impl_->handle.adjustment_origin = target.center_world;
-    impl_->handle.adjustment_direction = impl_->adjustment->direction;
-    if (mode() == modeling::FaceExtrudeMode::Region) {
-      impl_->handle.world_direction = impl_->adjustment->direction;
-    }
-    impl_->handle.amount_world = to_world_amount(impl_->adjustment->options.amount);
-  }
   return impl_->handle;
 }
 
@@ -288,17 +244,31 @@ ExtrudeToolWorkStats ExtrudeToolService::work_stats_for_tests() const {
 }
 
 CommandResult ExtrudeToolService::activate() {
-  return activate(impl_->defaults.mode);
+  return activate(mode());
 }
 
 CommandResult ExtrudeToolService::activate(
     modeling::FaceExtrudeMode requested_mode) {
-  const ExtrudeSessionDefaults options{requested_mode, impl_->defaults.amount};
+  return activate_impl(requested_mode);
+}
+
+CommandResult ExtrudeToolService::activate_preview() {
+  return activate_preview(mode());
+}
+
+CommandResult ExtrudeToolService::activate_preview(
+    modeling::FaceExtrudeMode requested_mode) {
+  return activate_impl(requested_mode);
+}
+
+CommandResult ExtrudeToolService::activate_impl(
+    modeling::FaceExtrudeMode requested_mode) {
+  const ExtrudeSessionDefaults options{requested_mode, active() ? amount() : 0.0};
   if (!valid_options(options)) {
     return command_invalid_result("Invalid extrusion settings.");
   }
   if (active()) {
-    return start_extrusion(options);
+    return start_preview(options);
   }
   // Reject invalid candidates before changing selection or viewport-tool state.
   if (has_selected_faces() && options.amount != 0.0) {
@@ -326,12 +296,11 @@ CommandResult ExtrudeToolService::activate(
   impl_->active = true;
   ++impl_->settings_revision;
   ++impl_->handle_revision;
-  result = start_extrusion(options);
+  result = start_preview(options);
   if (result.ok) {
     result.changed = true;
   } else {
     impl_->active = false;
-    impl_->adjustment.reset();
     (void)impl_->modeling.activate_viewport_tool(previous_tool);
     ++impl_->settings_revision;
     ++impl_->handle_revision;
@@ -347,65 +316,57 @@ CommandResult ExtrudeToolService::refresh() {
       impl_->modeling.tool_status().active_tool != ModelingViewportTool::Select) {
     return cancel();
   }
-  if (!dragging()) {
-    impl_->retire_stale_adjustment();
+  if (preview_active() && !impl_->modeling.face_extrusion_preview_active()) {
+    return cancel_preview();
   }
   impl_->observe_defaults();
   return command_unchanged_result();
 }
 
 CommandResult ExtrudeToolService::extrude() {
-  return start_extrusion(impl_->defaults);
+  return start_preview({mode(), amount()});
 }
 
-CommandResult ExtrudeToolService::start_extrusion(
+CommandResult ExtrudeToolService::start_preview(
     const ExtrudeSessionDefaults &requested_options) {
-  // Callers may pass the defaults object itself; retain the requested value
-  // across the geometry publication and preference update.
   const ExtrudeSessionDefaults options = requested_options;
-  if (!active()) {
-    return command_invalid_result("The Extrude tool is not active.");
+  if (!active() || dragging() || !valid_options(options)) {
+    return command_invalid_result("The Extrude tool cannot start a preview.");
   }
-  if (dragging()) {
-    return command_invalid_result("Finish the extrusion drag first.");
+  if (preview_active()) {
+    return set_options(options);
   }
-  const CommandResult refreshed = refresh();
-  if (!refreshed.ok || !active()) {
-    return refreshed;
-  }
-  if (!valid_options(options)) {
-    return command_invalid_result("Invalid extrusion settings.");
-  }
-  if (!has_selected_faces() || options.amount == 0.0) {
-    const bool changed = !same_options(options, impl_->defaults) ||
-                         impl_->adjustment.has_value();
-    retire_adjustment();
-    impl_->defaults = options;
-    impl_->observe_defaults();
+  if (!has_selected_faces()) {
+    const bool changed = !same_options(options, {mode(), amount()});
+    impl_->remember_options(options);
     return changed ? command_changed_result() : command_unchanged_result();
   }
-  const ModelingFaceExtrusionSourceResult target = impl_->target();
-  if (!target.ok) {
-    return command_invalid_result(target.message);
+  const auto begun = begin_drag();
+  if (!begun.ok) {
+    return begun;
   }
-  if (!target.source.valid()) {
+  impl_->drag->options = options;
+  const auto updated = update_drag(options.amount);
+  if (!updated.ok) {
+    (void)cancel_drag();
+    return updated;
+  }
+  impl_->drag->pointer_drag = false;
+  impl_->remember_options(options);
+  ++impl_->settings_revision;
+  ++impl_->handle_revision;
+  return command_changed_result();
+}
+
+CommandResult ExtrudeToolService::commit_preview() {
+  return end_drag();
+}
+
+CommandResult ExtrudeToolService::begin_selection_preview() {
+  if (preview_active()) {
     return command_unchanged_result();
   }
-  std::string key = next_extrusion_key();
-  ++impl_->work.geometry_update_count;
-  CommandResult result = impl_->history.execute(
-      std::make_unique<ExtrudeHistoryCommand>(
-          impl_->modeling, target.source, options.mode,
-          to_world_amount(options.amount), std::nullopt, key),
-      {.merge_key = key});
-  if (result.ok && result.changed) {
-    impl_->defaults = options;
-    impl_->observe_defaults();
-    impl_->accept_adjustment(target.source, std::nullopt, std::move(key),
-                              target.center_world, target.direction_world,
-                              options);
-  }
-  return result;
+  return start_preview({mode(), 0.0});
 }
 
 CommandResult ExtrudeToolService::set_options(
@@ -416,39 +377,41 @@ CommandResult ExtrudeToolService::set_options(
   if (dragging()) {
     return command_invalid_result("Finish the extrusion drag first.");
   }
-  if (same_options(options, impl_->defaults)) {
+  if (same_options(options, {mode(), amount()})) {
     return command_unchanged_result();
   }
-  impl_->retire_stale_adjustment();
-  if (impl_->adjustment) {
-    const Impl::Adjustment current = *impl_->adjustment;
+  if (preview_active()) {
+    auto &preview = *impl_->drag;
     ++impl_->work.geometry_update_count;
-    CommandResult applied = impl_->history.execute(
-        std::make_unique<ExtrudeHistoryCommand>(
-            impl_->modeling, current.source, options.mode,
-            to_world_amount(options.amount), current.world_direction,
-            current.merge_key),
-        {.merge_key = current.merge_key});
-    if (!applied.ok) {
-      return applied;
+    const auto updated = modeling_memento_command_result(
+        impl_->modeling.update_face_extrusion_preview(
+            preview.source, options.mode, to_world_amount(options.amount),
+            preview.world_direction));
+    if (!updated.ok) {
+      return updated;
     }
-    impl_->accept_adjustment(current.source, current.world_direction,
-                              current.merge_key, current.origin,
-                              current.direction, options);
+    preview.options = options;
+    preview.amount = options.amount;
+    impl_->remember_options(options);
+    ++impl_->settings_revision;
+    ++impl_->handle_revision;
+    return command_changed_result();
   }
-  impl_->defaults = options;
-  impl_->observe_defaults();
+  if (active() && has_selected_faces() && options.amount != 0.0) {
+    return start_preview(options);
+  }
+  impl_->remember_options(options);
   return command_changed_result();
 }
 
 CommandResult ExtrudeToolService::set_mode(modeling::FaceExtrudeMode value) {
-  ExtrudeSessionDefaults next = impl_->defaults;
+  ExtrudeSessionDefaults next{mode(), amount()};
   next.mode = value;
   return set_options(next);
 }
 
 CommandResult ExtrudeToolService::set_amount(double displayed_amount) {
-  ExtrudeSessionDefaults next = impl_->defaults;
+  ExtrudeSessionDefaults next{mode(), amount()};
   next.amount = displayed_amount;
   return set_options(next);
 }
@@ -460,7 +423,9 @@ CommandResult ExtrudeToolService::begin_drag(
   if (!active() || dragging()) {
     return command_invalid_result("The Extrude tool cannot start a drag.");
   }
-  impl_->retire_stale_adjustment();
+  if (preview_active()) {
+    return begin_adjust_drag(world_direction);
+  }
   const ModelingFaceExtrusionSourceResult target = impl_->target();
   if (!target.ok || !target.source.valid()) {
     return command_invalid_result(target.ok ? "Select faces to extrude."
@@ -471,8 +436,7 @@ CommandResult ExtrudeToolService::begin_drag(
                   .world_direction = world_direction,
                   .original_world_direction = world_direction,
                   .handle = handle_state(),
-                  .options = impl_->defaults,
-                  .cancellation_adjustment = impl_->adjustment,
+                  .options = {mode(), 0.0},
                   .source_origin = target.center_world,
                   .source_direction = target.direction_world,
                   .visual_direction = target.handle_direction_world,
@@ -482,19 +446,11 @@ CommandResult ExtrudeToolService::begin_drag(
   drag.handle.adjustment_direction =
       drag.world_direction.value_or(target.handle_direction_world);
   CommandResult result = modeling_memento_command_result(
-      impl_->modeling.begin_face_extrusion_preview(
-          target.source, drag.cancellation_adjustment
-                             ? drag.cancellation_adjustment->source
-                             : ModelingFaceExtrusionSource{}));
+      impl_->modeling.begin_face_extrusion_preview(target.source));
   if (!result.ok) {
-    if (drag.cancellation_adjustment) {
-      impl_->restore_adjustment_after_compensation(
-          *drag.cancellation_adjustment);
-    }
     return result;
   }
   impl_->drag = std::move(drag);
-  impl_->adjustment.reset();
   ++impl_->settings_revision;
   ++impl_->handle_revision;
   return command_changed_result();
@@ -502,38 +458,22 @@ CommandResult ExtrudeToolService::begin_drag(
 
 CommandResult ExtrudeToolService::begin_adjust_drag(
     std::optional<QVec3> world_direction) {
-  if (!adjustable()) {
-    return command_invalid_result("No extrusion result is available to adjust.");
+  if (preview_active() && !dragging()) {
+    impl_->drag->pointer_drag = true;
+    impl_->drag->adjusting_pending = true;
+    if (world_direction) {
+      const auto updated = update_drag(impl_->drag->amount, world_direction);
+      if (!updated.ok) {
+        impl_->drag->pointer_drag = false;
+        impl_->drag->adjusting_pending = false;
+        return updated;
+      }
+    }
+    ++impl_->settings_revision;
+    ++impl_->handle_revision;
+    return command_changed_result();
   }
-  const Impl::Adjustment previous = *impl_->adjustment;
-  Impl::Drag drag{
-      .source = previous.source,
-      .before = impl_->modeling.capture_history_memento(),
-      .world_direction = world_direction.has_value()
-                             ? world_direction : previous.world_direction,
-      .original_world_direction = previous.world_direction,
-      .amount = previous.options.amount,
-      .handle = handle_state(),
-      .options = previous.options,
-      .previous_adjustment = previous,
-      .cancellation_adjustment = previous,
-      .source_origin = previous.origin,
-      .source_direction = previous.direction,
-      .visual_direction = handle_state().world_direction,
-      .initial_pivot = handle_state().adjustment_origin};
-  drag.world_direction =
-      Impl::canonical_drag_direction(drag, drag.world_direction);
-  CommandResult result = modeling_memento_command_result(
-      impl_->modeling.begin_face_extrusion_adjustment_preview(previous.source));
-  if (!result.ok) {
-    impl_->restore_adjustment_after_compensation(previous);
-    return result;
-  }
-  impl_->drag = std::move(drag);
-  impl_->adjustment.reset();
-  ++impl_->settings_revision;
-  ++impl_->handle_revision;
-  return command_changed_result();
+  return command_invalid_result("No pending extrusion is available to adjust.");
 }
 
 CommandResult ExtrudeToolService::update_drag(
@@ -568,26 +508,26 @@ CommandResult ExtrudeToolService::update_drag_world_amount(
       world_direction);
 }
 
-CommandResult ExtrudeToolService::end_drag() {
+CommandResult ExtrudeToolService::release_drag() {
   if (!dragging()) {
     return command_unchanged_result();
   }
+  impl_->drag->pointer_drag = false;
+  impl_->remember_options({impl_->drag->options.mode, impl_->drag->amount});
+  ++impl_->settings_revision;
+  ++impl_->handle_revision;
+  return command_changed_result();
+}
+
+CommandResult ExtrudeToolService::end_drag() {
+  if (!preview_active()) {
+    return command_unchanged_result();
+  }
   const Impl::Drag drag = *impl_->drag;
-  const bool adjusting_result = drag.previous_adjustment.has_value();
-  if ((!adjusting_result && drag.amount == 0.0) ||
-      (adjusting_result && drag.amount == drag.previous_adjustment->options.amount &&
-       same_direction(drag.world_direction,
-                      drag.previous_adjustment->world_direction))) {
-    return cancel_drag();
+  if (drag.amount == 0.0) {
+    return cancel_preview();
   }
-  if (adjusting_result &&
-      !impl_->history.can_merge_with_latest(
-          drag.previous_adjustment->merge_key,
-          drag.previous_adjustment->history_revision)) {
-    return command_invalid_result("The extrusion history changed during the drag.");
-  }
-  std::string key = adjusting_result ? drag.previous_adjustment->merge_key
-                                    : next_extrusion_key();
+  std::string key = next_extrusion_key();
   CommandResult result = impl_->history.execute(
       std::make_unique<ExtrudeHistoryCommand>(
           impl_->modeling, drag.source, drag.options.mode, to_world_amount(drag.amount),
@@ -597,68 +537,41 @@ CommandResult ExtrudeToolService::end_drag() {
     return result;
   }
   impl_->drag.reset();
-  if (result.changed) {
-    impl_->defaults = {drag.options.mode, drag.amount};
-    impl_->observe_defaults();
-    impl_->accept_adjustment(
-        drag.source, drag.world_direction, std::move(key),
-        drag.source_origin,
-        drag.options.mode == modeling::FaceExtrudeMode::Region
-            ? drag.world_direction.value_or(drag.source_direction)
-            : drag.source_direction,
-        impl_->defaults);
-  } else if (drag.cancellation_adjustment &&
-             impl_->history.can_merge_with_latest(
-                 drag.cancellation_adjustment->merge_key,
-                 drag.cancellation_adjustment->history_revision)) {
-    const auto &previous = *drag.cancellation_adjustment;
-    impl_->accept_adjustment(previous.source, previous.world_direction,
-                              previous.merge_key, previous.origin,
-                              previous.direction, previous.options);
-  }
+  impl_->remember_options({drag.options.mode, 0.0});
+  ++impl_->handle_revision;
   ++impl_->settings_revision;
   return command_changed_result();
 }
 
 CommandResult ExtrudeToolService::cancel_drag() {
-  if (!dragging()) {
+  return dragging() ? cancel_preview() : command_unchanged_result();
+}
+
+CommandResult ExtrudeToolService::cancel_preview() {
+  if (!preview_active()) {
     return command_unchanged_result();
   }
-  const auto previous = impl_->drag->cancellation_adjustment;
+  const auto previous_mode = impl_->drag->options.mode;
   CommandResult result = modeling_memento_command_result(
       impl_->modeling.cancel_face_extrusion_preview());
   if (!result.ok) {
     return result;
   }
   impl_->drag.reset();
-  if (previous && impl_->history.can_merge_with_latest(
-                      previous->merge_key, previous->history_revision)) {
-    impl_->accept_adjustment(previous->source, previous->world_direction,
-                              previous->merge_key, previous->origin,
-                              previous->direction, previous->options);
-  }
+  impl_->remember_options({previous_mode, 0.0});
   ++impl_->settings_revision;
   ++impl_->handle_revision;
   return command_changed_result();
-}
-
-void ExtrudeToolService::retire_adjustment() {
-  if (impl_->adjustment) {
-    impl_->adjustment.reset();
-    ++impl_->settings_revision;
-    ++impl_->handle_revision;
-  }
 }
 
 CommandResult ExtrudeToolService::cancel() {
   if (!active()) {
     return command_unchanged_result();
   }
-  CommandResult result = cancel_drag();
+  CommandResult result = cancel_preview();
   if (!result.ok) {
     return result;
   }
-  retire_adjustment();
   impl_->active = false;
   ++impl_->settings_revision;
   ++impl_->handle_revision;

@@ -32,6 +32,7 @@
 #include "ui/qt_texture_toolbar.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_tool_toolbar.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -54,6 +55,7 @@
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEventLoop>
 #include <QFrame>
 #include <QFocusEvent>
 #include <QGuiApplication>
@@ -86,6 +88,7 @@
 #include <QTableView>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
@@ -2404,6 +2407,104 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(editor.history().redo().ok());
   ui.refresh({}, {});
   EXPECT_EQ(counter->text(), QStringLiteral("2 Groups Selected"));
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     OperationSettingsDispatchSurvivesTheRealUiFrameRefresh) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-ui-live-operation-settings-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-live-operation-settings-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto project_root = scoped_profile.profile() / "Live settings project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  ASSERT_TRUE(editor.project().create(project_root).ok());
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+  ui.show_workspace();
+  ui.main_window()->show();
+  ui.main_window()->activateWindow();
+  auto *settings = dynamic_cast<quader::QtToolSettingsPanel *>(
+      ui.main_window()->findChild<QWidget *>(
+          QStringLiteral("viewport.settings_overlay")));
+  ASSERT_NE(settings, nullptr);
+  settings->set_expanded(true);
+
+  const auto source = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Live operation settings");
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(source.value(), 1, 2).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.1).ok());
+  ui.refresh({}, {});
+  QCoreApplication::processEvents();
+  const auto before = editor.query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(before.has_value());
+  auto *width = settings->findChild<QDoubleSpinBox *>(QStringLiteral(
+      "tool_settings.control.operation.edge_bevel.width"));
+  ASSERT_NE(width, nullptr);
+  ASSERT_TRUE(width->isEnabled());
+  click_widget(*width, width->rect().center());
+  send_key(*width, Qt::Key_Up);
+  const double edited_width = width->value();
+  ASSERT_GT(edited_width, 0.1);
+  ASSERT_TRUE(settings->numeric_interaction_active());
+  const auto settings_revision = editor.tools().active_settings_revision();
+  const auto tool_revision = editor.tools().active_tool_revision();
+  const auto origin = editor.tools().active_settings_presentation_origin();
+  for (int frame = 0; frame < 3; ++frame) {
+    ui.refresh({}, {});
+    ui.process_viewport_input();
+    EXPECT_EQ(editor.tools().active_settings_revision(), settings_revision);
+    EXPECT_EQ(editor.tools().active_tool_revision(), tool_revision);
+    EXPECT_EQ(editor.tools().active_settings_presentation_origin(), origin);
+  }
+  QEventLoop loop;
+  QTimer frames;
+  QObject::connect(&frames, &QTimer::timeout, &loop, [&] {
+    ui.refresh({}, {});
+    ui.process_viewport_input();
+  });
+  frames.start(5);
+  QTimer::singleShot(120, &loop, &QEventLoop::quit);
+  loop.exec();
+  frames.stop();
+  EXPECT_DOUBLE_EQ(scene.modeling().interaction_settings().edge_bevel_width,
+                   edited_width);
+  EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  const auto after = editor.query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(after.has_value());
+  ASSERT_EQ(after->vertices.size(), before->vertices.size());
+  bool position_changed = false;
+  for (std::size_t index = 0; index < after->vertices.size(); ++index) {
+    const auto &a = before->vertices[index].position;
+    const auto &b = after->vertices[index].position;
+    position_changed = position_changed || a.x != b.x || a.y != b.y || a.z != b.z;
+  }
+  EXPECT_TRUE(position_changed);
   ui.shutdown();
 }
 

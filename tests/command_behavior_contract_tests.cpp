@@ -893,6 +893,76 @@ TEST(CommandBehaviorContractTests,
 }
 
 TEST(CommandBehaviorContractTests,
+     ExtrudeActivationAndRepeatedCommandsStayPendingUntilExplicitApply) {
+  for (const auto command : {quader_command::kToolsActivateExtrude,
+                             quader_command::kToolsActivateExtrudeIndividual,
+                             quader_command::kToolsActivateExtrudeAlongNormals}) {
+    SCOPED_TRACE(command.string());
+    const auto *contract = find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    EXPECT_EQ(contract->undo_repeat, CommandUndoRepeatPolicy::BeginPreview);
+    auto fixture = CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    const auto before = capture_command_observable_state(editor);
+    const auto undo_count = fixture->native_scene().history().undo_count();
+    const auto redo_count = fixture->native_scene().history().redo_count();
+    const auto expect_mesh_state = [&](const CommandObservableState &expected) {
+      const auto actual = capture_command_observable_state(editor);
+      for (const auto domain : {CommandObservableDomain::Geometry,
+                               CommandObservableDomain::Selection}) {
+        EXPECT_EQ(actual.domain(domain), expected.domain(domain))
+            << command_observable_domain_name(domain);
+      }
+    };
+
+    const auto activated = editor.commands().execute(command);
+    ASSERT_TRUE(activated.ok()) << activated.error_message();
+    ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    expect_mesh_state(before);
+    ASSERT_TRUE(editor.commands().execute(command).ok());
+    expect_mesh_state(before);
+    EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_count);
+    EXPECT_EQ(fixture->native_scene().history().redo_count(), redo_count);
+
+    ASSERT_TRUE(editor.tools().set_setting(
+        "extrude", "extrude.amount", 2.25).ok());
+    const auto candidate = capture_command_observable_state(editor);
+    EXPECT_NE(candidate.domain(CommandObservableDomain::Geometry),
+              before.domain(CommandObservableDomain::Geometry));
+    ASSERT_TRUE(editor.commands().execute(command).ok());
+    ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    expect_mesh_state(candidate);
+    EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_count);
+    EXPECT_EQ(fixture->native_scene().history().redo_count(), redo_count);
+
+    const auto applied = editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok()) << applied.error_message();
+    EXPECT_TRUE(applied.changed());
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_count + 1u);
+    expect_mesh_state(candidate);
+    const auto accepted = capture_command_observable_state(editor);
+
+    // A new Amount edit starts another reversible operation on the accepted cap.
+    ASSERT_TRUE(editor.tools().set_setting(
+        "extrude", "extrude.amount", 1.0).ok());
+    ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    EXPECT_NE(capture_command_observable_state(editor).domain(
+                  CommandObservableDomain::Geometry),
+              accepted.domain(CommandObservableDomain::Geometry));
+    EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_count + 1u);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    expect_mesh_state(accepted);
+    EXPECT_EQ(fixture->native_scene().history().undo_count(), undo_count + 1u);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_mesh_state(before);
+    ASSERT_TRUE(editor.history().redo().ok());
+    expect_mesh_state(accepted);
+  }
+}
+
+TEST(CommandBehaviorContractTests,
      UvPeelActivationPreviewsBeforeOneCommitWithExactHistoryAndStickyRepeat) {
   const CommandBehaviorContract *contract =
       find_command_behavior_contract(quader_command::kModelingUvPeel.string());

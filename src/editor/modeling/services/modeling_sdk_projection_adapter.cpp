@@ -2548,8 +2548,9 @@ public:
   }
 
   [[nodiscard]] ModelingFaceExtrusionSourceResult
-  capture_face_extrusion_source() const {
-    if (preview_active()) {
+  capture_face_extrusion_source(bool include_extrusion_preview = false) const {
+    if (preview_active() &&
+        !(include_extrusion_preview && face_extrusion_preview_active())) {
       return {.message = "Commit or cancel the active preview first."};
     }
     if (selection_mode_ != ModelingSelectionMode::Face) {
@@ -2573,6 +2574,14 @@ public:
     QVec3 fallback_normal{};
     for (std::size_t index = 0; index < selected.size(); ++index) {
       PolygonDocument &document = documents.value()[index];
+      if (include_extrusion_preview && face_extrusion_preview_active()) {
+        auto current = session_.preview_document_copy(
+            session_.preview_summary().id, selected[index]);
+        if (!current.ok()) {
+          return {.message = current.error_message()};
+        }
+        document = std::move(current).value();
+      }
       if (document.selection().faces.empty()) {
         continue;
       }
@@ -2700,8 +2709,10 @@ public:
 
   [[nodiscard]] ModelingCommandResult validate_face_extrusion(
       const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
-      double amount_internal, std::optional<QVec3> world_direction) const {
-    if (preview_active() || !face_extrusion_source_live(source)) {
+      double amount_internal, std::optional<QVec3> world_direction,
+      bool include_extrusion_preview = false) const {
+    if ((preview_active() && !include_extrusion_preview) ||
+        !face_extrusion_source_live(source)) {
       return failure("The extrusion source is no longer available.");
     }
     if (!std::isfinite(amount_internal) ||
@@ -2721,6 +2732,19 @@ public:
       }
     }
     return {.ok = true};
+  }
+
+  [[nodiscard]] ModelingCommandResult validate_next_face_extrusion(
+      modeling::FaceExtrudeMode mode, double amount_internal) const {
+    const auto captured = capture_face_extrusion_source(true);
+    if (!captured.ok) {
+      return failure(captured.message);
+    }
+    if (!captured.source.valid()) {
+      return {.ok = true};
+    }
+    return validate_face_extrusion(captured.source, mode, amount_internal,
+                                  std::nullopt, true);
   }
 
   [[nodiscard]] ModelingCommandResult apply_face_extrusion(
@@ -4011,7 +4035,10 @@ public:
       }
       return result;
     }
-    if (operation == quader_editor_core::EditorOperationId::Bridge) {
+    // Only cross-document Bridge owns structural participants; a Bridge within
+    // one document must keep updating its original mesh preview transaction.
+    if (operation == quader_editor_core::EditorOperationId::Bridge &&
+        structural_preview_host_state_.has_value()) {
       const auto *bridge =
           std::get_if<quader_editor_core::BridgeOperationSettings>(&settings);
       if (bridge == nullptr) {
@@ -13769,6 +13796,11 @@ ModelingCommandResult ModelingSdkProjectionAdapter::replace_mesh_document(
 ModelingFaceExtrusionSourceResult
 ModelingSdkProjectionAdapter::capture_face_extrusion_source() const {
   return impl_->capture_face_extrusion_source();
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::validate_next_face_extrusion(
+    modeling::FaceExtrudeMode mode, double amount_internal) const {
+  return impl_->validate_next_face_extrusion(mode, amount_internal);
 }
 
 bool ModelingSdkProjectionAdapter::face_extrusion_source_current(

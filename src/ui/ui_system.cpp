@@ -1832,6 +1832,9 @@ void UISystem::refresh_face_texture_material(
 
 void UISystem::configure_material_browser(QtMaterialBrowserWindow &source) {
   const QPointer<QtMaterialBrowserWindow> browser(&source);
+  browser->set_lifecycle_commands_provider([this]() {
+    return editor_ != nullptr ? &editor_->commands() : nullptr;
+  });
   browser->set_presentation_state_changed_callback(
       [this, browser]() { schedule_auxiliary_window_state_save(); });
   browser->set_assign_material_callback(

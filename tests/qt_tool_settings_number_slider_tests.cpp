@@ -1514,7 +1514,7 @@ TEST(QtToolSettingsPanelTests,
 }
 
 TEST(QtToolSettingsPanelTests,
-     SettingsOnlyOverlayStartsCollapsedAndRemembersExpansionAcrossTargets) {
+     SettingsOnlyOverlayStartsExpandedAndReopensForEachActivation) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-settings-overlay-tests";
@@ -1528,7 +1528,7 @@ TEST(QtToolSettingsPanelTests,
   panel.bind(editor);
   EXPECT_FALSE(panel.has_settings());
   EXPECT_TRUE(panel.isHidden());
-  EXPECT_FALSE(panel.expanded());
+  EXPECT_TRUE(panel.expanded());
   EXPECT_EQ(panel.findChild<QWidget *>(
                 QStringLiteral("tool_settings.description")), nullptr);
   EXPECT_EQ(panel.findChild<QWidget *>(
@@ -1553,9 +1553,13 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_TRUE(panel.has_settings());
   EXPECT_EQ(panel.target_id(), "uv_peel");
   EXPECT_EQ(header->text(), QStringLiteral("Guided UV Peel"));
-  EXPECT_EQ(header->arrowType(), Qt::RightArrow);
+  EXPECT_EQ(header->arrowType(), Qt::DownArrow);
   EXPECT_EQ(header->accessibleName(), header->text());
   EXPECT_EQ(panel.windowTitle(), header->text());
+  EXPECT_FALSE(body->isHidden());
+  EXPECT_TRUE(header->isChecked());
+  header->click();
+  EXPECT_FALSE(panel.expanded());
   EXPECT_TRUE(body->isHidden());
   const QSize collapsed_size = panel.sizeHint();
   EXPECT_EQ(collapsed_size.width(), 160);
@@ -1594,8 +1598,9 @@ TEST(QtToolSettingsPanelTests,
   panel.set_expanded(false);
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   panel.refresh();
-  EXPECT_FALSE(panel.expanded());
-  EXPECT_TRUE(body->isHidden());
+  EXPECT_TRUE(panel.expanded());
+  EXPECT_FALSE(body->isHidden());
+  panel.set_expanded(false);
   quader::LocalizationService italian;
   ASSERT_TRUE(italian.load(
       std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "it-IT"));
@@ -1631,7 +1636,7 @@ TEST(QtToolSettingsPanelTests, ActiveToolWithoutSettingsHidesTheEntireOverlay) {
   panel.bind(editor);
   panel.show();
   ASSERT_TRUE(panel.has_settings());
-  ASSERT_FALSE(panel.expanded());
+  ASSERT_TRUE(panel.expanded());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Mirror).ok());
   const auto mirror_target = editor.tools().active_settings();
   ASSERT_EQ(editor.tools().active_tool(), "mirror");
@@ -1796,6 +1801,8 @@ TEST(QtToolSettingsPanelTests,
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
+  EXPECT_EQ(panel.sizeHint().width(), 280);
+  panel.set_expanded(false);
   EXPECT_EQ(panel.sizeHint().width(), 160);
   panel.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
   EXPECT_EQ(panel.sizeHint().width(), 320);
@@ -2957,7 +2964,7 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   panel->refresh();
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, expected);
-  EXPECT_FALSE(panel->expanded());
+  EXPECT_TRUE(panel->expanded());
   panel->unbind();
 }
 
@@ -4222,7 +4229,8 @@ TEST(QtToolSettingsPanelTests,
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   panel.show();
-  EXPECT_FALSE(panel.expanded());
+  EXPECT_TRUE(panel.expanded());
+  panel.set_expanded(false);
   const QSize collapsed_size = panel.sizeHint();
   panel.set_expanded(true);
   panel.resize(panel.sizeHint());
