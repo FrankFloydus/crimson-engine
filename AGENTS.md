@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Agent Guide
 
-Quader is a native Windows polygon modeling editor: C++20, Qt Widgets, Filament,
+Quader is a native Windows level design tool: C++20, Qt Widgets, Filament,
 CMake and vcpkg. This file owns repository-wide agent policy. Read it first, then
 only the guidance relevant to the change.
 
@@ -32,8 +32,10 @@ sandbox account.
 
 | Work | Read next |
 | --- | --- |
+| Any Quader change or documentation request | Use **Quader Doc Mantainer**: `quader-doc-mantainer:maintain-docs` ([skill source](C:/Users/Drako/plugins/quader-doc-mantainer/skills/maintain-docs/SKILL.md)) |
 | Quader Godot bridge/plugin work | Use [$quader-godot-bridge](C:/Users/Drako/.codex/skills/quader-godot-bridge/SKILL.md), then the [bridge agent guide](../quader-godot/AGENTS.md) |
 | Source changes | [src/AGENTS.md](src/AGENTS.md), then the nearest package `AGENTS.md` |
+| New or changed native UI | [UI style direction](#ui-style-direction) below, then [src/ui/AGENTS.md](src/ui/AGENTS.md) |
 | Ownership or cross-package changes | [architecture-review.md](architecture-review.md) |
 | Input, shortcuts, navigation or command lifecycle | [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md) |
 | Non-trivial or regression-prone behavior | Relevant sections of [memory.md](memory.md) |
@@ -95,6 +97,126 @@ architecture migration program. Completed plans are in Git history; do not resta
 - Keep network dependency fetches opt-in and backed by license evidence. Dependency changes
   include manifest, license/provenance, CMake and guardrails together; avoid new dependencies
   for small utilities already covered by C++ or existing libraries.
+
+## UI style direction
+
+All new or changed panels, dialogs, tool options, browsers, editors, menus and popups follow
+Quader's **Linear-inspired dark native Qt** direction. Extend the shared presentation already
+used by the Inspector, Settings, Material Browser and RMB menus. This applies within the
+requested feature's scope; it does not authorize unrelated redesigns or additional controls.
+
+### Visual language and composition
+
+- Keep the scene and editable content prominent. Use neutral charcoal surfaces, subtle elevation,
+  quiet borders and readable text. Avoid blue-tinted chrome, bright bevels, decorative gradients,
+  large purple fills, excessive rounding and spacious website layouts in narrow docks.
+- Make section boundaries explicit. A header and its retained body share one containing surface
+  and outline; the disclosure arrow sits beside the title inside the full-width clickable header.
+  Keep inter-section gaps outside that hit target. Do not return to disconnected tree arrows or
+  tightly packed headings whose bodies visually run together.
+- Preserve productive density: spacing between groups exceeds spacing between related rows.
+  Match the neighboring component's rhythm rather than enclosing every field in a separate card.
+  Inspector sections currently use 8 design units of separation; Settings groups use 10.
+- Align labels in a consistent column and align editors with each other. Labels are secondary;
+  values and section titles are brighter. Editable fields must have a visible raised fill and quiet
+  boundary at rest, so they can be distinguished from read-only text before hovering.
+- Separate axis labels from values. Keep the Inspector's stacked X/Y/Z groups and distinct
+  Position/Rotation/Scale groups in narrow docks. Face Texture deliberately keeps Scale U/V on
+  one row, Shift U/V on the next, then Rotation; do not expand it into six stacked component rows.
+- Use Quader purple sparingly for focus, selection tint, checked state and primary/default actions.
+  Preserve semantic axis, alert and content colors. Current-material and active-viewport outlines
+  remain orange; they are not ordinary purple UI selection.
+- Preserve native Qt controls and behavior: editing, focus, accessibility, selection models,
+  keyboard navigation, mnemonics, icons, menus, submenus, scrolling and RTL layout. Use monochrome
+  outline glyphs for neutral chrome where the existing component supports them; retain authored
+  material thumbnails and semantic icons. Do not substitute emoji or unrelated multicolor icons.
+
+### Palette, typography and metrics
+
+[qt_application_theme.cpp](src/ui/qt_application_theme.cpp) is the color authority. Consume
+`QPalette` roles and their Active/Inactive/Disabled groups, not copied RGB constants or local
+stylesheets. These are Quader's current **Active** design values, not published Linear tokens:
+
+| Role | Hex | Use |
+| --- | --- | --- |
+| `Window` | `#111213` | Receding application/dock background |
+| `Base` | `#171819` | Content and item-view base |
+| `AlternateBase` | `#1C1D1F` | Contained sections and raised menus |
+| `Button` | `#242528` | Editable fields and ordinary button surfaces |
+| `ToolTipBase` / `ToolTipText` | `#292B2F` / `#EEF0F6` | Tooltip surface/text |
+| `WindowText` | `#ADB0B6` | Secondary labels and chrome |
+| `Text` / `ButtonText` | `#E1E2E5` / `#DADCE1` | Values/content and button labels |
+| `PlaceholderText` | `#858991` | Hints and secondary menu shortcuts |
+| `Mid` / `Midlight` | `#2C2D30` / `#36373B` | Quiet section edges; field/checkbox/popup boundaries |
+| `Light` | `#414246` | Stronger interaction edge where the shared style uses it |
+| `Dark` / `Shadow` | `#252629` / `#08090A` | Recessed edges and pressed blends |
+| `Highlight` / `HighlightedText` | `#302738` / `#ECE5F5` | Restrained purple selection and its text |
+| `Accent` | `#9A64D8` | Quader logo purple, focus and active indicators |
+| `Link` / `LinkVisited` | `#D6BDF3` / `#BEA5D8` | Links |
+
+Use `qt_current_item_outline_color()` for the semantic orange `#FF8F18`. Do not use white
+`BrightText` as the default for all labels. Inactive and Disabled colors are authored separately
+in the theme owner; do not approximate them with arbitrary opacity. Hover gently lifts a surface,
+press darkens it, and focus adds a visible outline. Default buttons must retain readable text and
+a keyboard-focus cue distinct from their resting accent. Preserve mixed and disabled check states.
+Windows High Contrast uses the live native palette and painter fallback; custom painting must
+respect `qt_application_style_active()`, including explicitly light widget palettes.
+
+Keep the platform font family. Startup sets a minimum **10 pt at 100% UI scale**, retaining a
+larger platform point-size font; section titles use the shared DemiBold treatment. Do not introduce
+another font or equate point sizes with pixels. Scale immutable design baselines once through
+[QtUiScaleMetrics](src/ui/qt_ui_scale_metrics.hpp) and the existing scalable-layout helpers:
+
+- Fields/buttons use a 4-unit radius; sections/popups use 6. Borders remain one physical device
+  pixel rather than growing thicker with UI scale.
+- Disclosure headers are at least 30 units and font height + 12; menu rows are at least 28 units,
+  font height + 8 and the native required height. Menu insets are 4 units; plain separator rows 8.
+- Honor font metrics, localized labels, native minima, height-for-width, saved column widths and
+  splitters. Reserve readable numeric text and arrow gutters before allocating label width; wrap
+  labels as supported instead of clipping values. Recalculate on relevant layout/font/style/scale
+  changes, never every unchanged refresh. Scale-down must work as well as scale-up.
+
+### Shared implementation and references
+
+Reuse these owners; improve the existing shared component when a requested capability is missing:
+
+| Need | Owner/reference |
+| --- | --- |
+| Palette, font and live High Contrast | [qt_application_theme.cpp](src/ui/qt_application_theme.cpp) |
+| Native control/menu painting | [qt_application_style.cpp](src/ui/qt_application_style.cpp), through the existing Fusion proxies |
+| Scale, popup sizing and masks | [qt_ui_scale_metrics.cpp](src/ui/qt_ui_scale_metrics.cpp) |
+| Integrated disclosure header | [QtPanelSectionHeader](src/ui/qt_panel_section_header.hpp) |
+| Retained section body and scalable layouts | [QtSettingsSection and helpers](src/ui/qt_settings_control_widgets.hpp) |
+| Property and settings composition | [Inspector](src/ui/inspector_panel.cpp), [Settings](src/ui/qt_settings_dialog.cpp) |
+| Numeric editing/scrubbing | [Numeric inputs contract](src/ui/NUMERIC_INPUTS.md); `QtSpinBox` / `QtDoubleSpinBox` |
+| Compact paired UV controls | [Face texture controls](src/ui/qt_face_texture_controls.cpp) |
+| Collection chrome and glyphs | [Material browser](src/ui/qt_material_browser_window.cpp) |
+| Dock, toolbar and tree chrome | [Dock titles](src/ui/qt_dock_title_presentation.cpp), [toolbar buttons](src/ui/qt_toolbar_button_presentation.cpp), [tree relationships](src/ui/qt_tree_relationship_presentation.cpp) |
+
+Retain section controls and settle focused drafts before collapse using the existing lifetime
+guards. Popups inherit the shared `QMenu` style: raised surface, rounded selected row, muted
+shortcut column and compact dividers. Do not restore local menu QSS or unscaled separator margins.
+Keep command availability and dispatch with their existing owners. Avoid per-panel theme forks.
+
+Visual references: Linear's [2026 design refresh](https://linear.app/now/behind-the-latest-design-refresh)
+provides official before/after images and explains quieter navigation, neutral surfaces and softer
+borders while retaining density. Its [UI redesign article](https://linear.app/now/how-we-redesigned-the-linear-ui)
+explains hierarchy, alignment and elevation. Use these principles, not copied branding/assets or
+claims of pixel fidelity. Native references: [Qt palette roles](https://doc.qt.io/qt-6/qpalette.html)
+and [QProxyStyle delegation](https://doc.qt.io/qt-6/qproxystyle.html). Current Quader code and tests
+take precedence over this snapshot of metrics and external inspiration.
+
+For visible changes, review actual Qt widgets beside the existing panels at 100% and 200% and a
+narrow supported dock width. Check readable fields, clear grouping, long labels, focus, interaction
+states and High Contrast; include RTL/submenus for menus and a scale-down cycle for wrapping/minima.
+Use the existing [style](tests/qt_application_style_tests.cpp),
+[theme/scale](tests/qt_application_theme_tests.cpp),
+[Inspector](tests/qt_inspector_numeric_drag_tests.cpp),
+[texture](tests/qt_face_texture_panel_tests.cpp),
+[browser](tests/qt_material_browser_window_tests.cpp) and
+[menu](tests/qt_viewport_context_menu_tests.cpp) tests as examples. Their optional
+`QUADER_UI_REVIEW_DIR` captures can supply real widget images where supported. Follow the scoped
+verification policy below; web mockups and source-only assertions do not prove native appearance.
 
 ## Worktree and version
 
@@ -187,6 +309,26 @@ executable from another configuration as containing this task's changes.
 - Run `python tools/check_cpp_style.py` only before commit/push or an explicit C++ style audit.
 
 ## Keep documentation useful
+
+For every Quader change, load **Quader Doc Mantainer** (`quader-doc-mantainer:maintain-docs`)
+and assess documentation impact. Also load it whenever documentation work is requested. If the
+plugin skill is not in the available list, read its [source SKILL.md](C:/Users/Drako/plugins/quader-doc-mantainer/skills/maintain-docs/SKILL.md)
+directly. Synchronization is part of the current task unless the user explicitly defers it.
+
+The manual lives at `C:/Users/Drako/Desktop/quader-windows/quader-docs`, including when the app
+is being edited in a worktree. If that path is unavailable, use only a verified sibling
+`quader-docs` for the same Quader workspace; do not create or assume a worktree copy.
+Update affected pages when public features, behavior, UI labels, bindings, workflows, or file
+formats change. The public 0.1 feature set is the baseline, not a permanent ceiling: include
+subsequent public additions after verifying their availability. Keep internal-only functionality
+out of the published manual unless the user explicitly requests that scope. Changes with no
+reader-visible impact do not require manufactured prose or new pages.
+
+Follow the plugin's authoring and verification workflow. When manual content or site files
+change, run `scripts/build.ps1` from the docs root; documentation alone does not require a native
+app build. Report the affected pages and validation, or the concrete reason no manual update was
+needed. This policy maintains local documentation; it does not authorize publication or a
+background watcher.
 
 Keep global policy here, package contracts in local `AGENTS.md`, technical explanations beside
 their owner, and hard-to-rediscover regression invariants in topical `memory.md` entries.
