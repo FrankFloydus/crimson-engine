@@ -9,7 +9,6 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
-#include "core/scene_environment_catalog.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
@@ -20,7 +19,6 @@
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
-#include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_continuous_edit_tracker.hpp"
@@ -31,7 +29,6 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDialog>
-#include <QDoubleValidator>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QFrame>
@@ -82,7 +79,7 @@ constexpr float kRadToDeg = 57.29577951308232f;
 constexpr float kDegToRad = 0.017453292519943295f;
 constexpr int kInspectorNumericDispatchIntervalMs = 16;
 constexpr float kInspectorLightRangeMin = 0.001f;
-constexpr float kInspectorLightRangeSliderMax = 100.0f;
+constexpr float kInspectorLightRangeMax = 100.0f;
 constexpr int kInspectorMinimumValueColumnWidth = 96;
 constexpr int kInspectorMaterialPreviewSize = 56;
 constexpr int kInspectorMaterialActionSize = 24;
@@ -372,51 +369,6 @@ protected:
   }
 };
 
-/// Keeps small atmospheric coefficients readable without rounding owner values.
-class InspectorFogSpinBox final : public QtDoubleSpinBox {
-public:
-  explicit InspectorFogSpinBox(QWidget *parent) : QtDoubleSpinBox(parent) {
-    QObject::connect(lineEdit(), &QLineEdit::textEdited, this,
-                     [this]() { draft_edited_ = true; });
-    const auto settled = [this]() { draft_edited_ = false; };
-    QObject::connect(this, &QDoubleSpinBox::valueChanged, this, settled);
-    QObject::connect(this, &QDoubleSpinBox::editingFinished, this, settled);
-  }
-
-protected:
-  QString textFromValue(double value) const override {
-    if (value != 0.0 && std::abs(value) < 0.0001) {
-      return locale().toString(value, 'g', 4);
-    }
-    return QtDoubleSpinBox::textFromValue(value);
-  }
-
-  double valueFromText(const QString &text) const override {
-    if (!specialValueText().isEmpty() && text == specialValueText()) {
-      return minimum();
-    }
-    if (!draft_edited_ && text == textFromValue(value())) {
-      return value();
-    }
-    bool valid = false;
-    const double parsed = locale().toDouble(text, &valid);
-    return valid ? parsed : QtDoubleSpinBox::valueFromText(text);
-  }
-
-  QValidator::State validate(QString &text, int &position) const override {
-    if (!specialValueText().isEmpty() && text == specialValueText()) {
-      return QValidator::Acceptable;
-    }
-    QDoubleValidator validator(minimum(), maximum(), decimals());
-    validator.setLocale(locale());
-    validator.setNotation(QDoubleValidator::ScientificNotation);
-    return validator.validate(text, position);
-  }
-
-private:
-  bool draft_edited_ = false;
-};
-
 /// Draws inspector property-cell separators from the active Fusion palette.
 class InspectorPropertyDelegate final : public QStyledItemDelegate {
 public:
@@ -448,9 +400,6 @@ enum class TransformEditKind {
   Scale,
 };
 
-/// Selects the scene-owned color preview lifecycle and color space.
-enum class InspectorColorProperty { Light, Environment, Fog };
-
 /// Captures the selection and baseline values for one transform edit preview.
 struct TransformEditState {
   TransformEditKind kind = TransformEditKind::Position;
@@ -480,11 +429,9 @@ struct InspectorPanel::Impl {
     qreal preview_device_pixel_ratio = 0.0;
   };
 
-  /// Retains the numeric value independently from the slider's bounded span.
-  struct NumberSlider {
+  /// Retains authored bounds independently from legacy out-of-range values.
+  struct NumberField {
     QPointer<QDoubleSpinBox> number;
-    QPointer<QtToolSettingsNumberSlider> slider;
-    QtToolSettingsNumberSliderMapping mapping;
     double numeric_minimum = 0.0;
     double numeric_maximum = 0.0;
   };
@@ -979,9 +926,7 @@ private:
       build_transform_section();
       build_material_section();
 
-      if (selection_.size() == 1u && document_->is_scene_root(primary_)) {
-        build_scene_settings_sections();
-      } else if (selection_.size() == 1u) {
+      if (selection_.size() == 1u) {
         build_mesh_sections();
         build_light_section();
       }
@@ -1319,12 +1264,8 @@ private:
   add_continuous_number(Section &section, std::string stable_id,
                         const QString &label, double value, double minimum,
                         double maximum, double step, int decimals,
-                        std::function<void(double, std::string)> changed,
-                        bool fog_number = false) {
-    QtDoubleSpinBox *spin = fog_number
-                              ? static_cast<QtDoubleSpinBox *>(
-                                    new InspectorFogSpinBox(section.editor_parent))
-                              : new InspectorDoubleSpinBox(section.editor_parent);
+                        std::function<void(double, std::string)> changed) {
+    auto *spin = new InspectorDoubleSpinBox(section.editor_parent);
     spin->setObjectName(stable_name(stable_id));
     spin->setRange(minimum, maximum);
     spin->setSingleStep(step);
@@ -1362,7 +1303,7 @@ private:
     return spin;
   }
 
-  void synchronize_number_slider(const NumberSlider &field, double value) {
+  void synchronize_number_field(const NumberField &field, double value) {
     if (field.number == nullptr) {
       return;
     }
@@ -1375,29 +1316,16 @@ private:
     if (field.number->value() != value) {
       field.number->setValue(value);
     }
-    if (field.slider != nullptr) {
-      const int position = qt_tool_settings_number_slider_position(field.mapping, value);
-      if (field.slider->value() != position) {
-        const QSignalBlocker slider_blocker(field.slider.data());
-        field.slider->setValue(position);
-      }
-    }
   }
 
-  NumberSlider add_number_slider(
+  NumberField add_number_field(
       Section &section, const std::string &stable_id, const QString &label,
-      double value, double minimum, double slider_maximum,
-      double numeric_maximum, double step,
-      std::function<void(double, std::string)> changed, bool with_slider = true,
-      bool integer_slider = false) {
-    auto *container = new QWidget(section.editor_parent);
-    auto *layout = new QHBoxLayout(container);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(scaled_px(4));
-    NumberSlider field;
+      double value, double minimum, double numeric_maximum, double step,
+      std::function<void(double, std::string)> changed) {
+    NumberField field;
     field.numeric_minimum = minimum;
     field.numeric_maximum = numeric_maximum;
-    auto *spin = new InspectorDoubleSpinBox(container);
+    auto *spin = new InspectorDoubleSpinBox(section.editor_parent);
     field.number = spin;
     spin->setObjectName(stable_name(stable_id));
     // Retain conversion precision; QtDoubleSpinBox formats at most four decimals.
@@ -1406,22 +1334,8 @@ private:
     spin->setKeyboardTracking(true);
     spin->setMinimumWidth(0);
     spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    if (with_slider) {
-      field.mapping = qt_tool_settings_number_slider_mapping(
-          minimum, slider_maximum, integer_slider, step);
-      auto *slider = new QtToolSettingsNumberSlider(Qt::Horizontal, container);
-      field.slider = slider;
-      slider->setObjectName(stable_name(stable_id + ".slider"));
-      slider->setRange(field.mapping.slider_minimum,
-                        field.mapping.slider_maximum);
-      slider->setSingleStep(qt_tool_settings_number_slider_step(
-          field.mapping, value, step));
-      slider->setMinimumWidth(scaled_px(24));
-      layout->addWidget(slider, 1);
-    }
-    layout->addWidget(spin, 1);
-    synchronize_number_slider(field, value);
-    add_row(section, stable_id, label, container);
+    synchronize_number_field(field, value);
+    add_row(section, stable_id, label, spin);
 
     const auto update = [this, stable_id, field,
                          changed = std::move(changed)](double requested) {
@@ -1457,45 +1371,19 @@ private:
     };
     QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_, finish);
     qt_install_numeric_spin_box(*spin).interaction_canceled = finish;
-    if (field.slider != nullptr) {
-      QObject::connect(field.slider.data(), &QSlider::valueChanged, &panel_,
-                       [this, field, update, finish](int position) {
-                         const double value =
-                             qt_tool_settings_number_slider_value(
-                                 field.mapping, position);
-                         // QSlider and its paired number editor are one
-                         // control. Keep the visible value in lockstep before
-                         // dispatching the continuous scene edit.
-                         synchronize_number_slider(field, value);
-                         const std::uint64_t generation = runtime_binding_generation_;
-                         QPointer<InspectorPanel> panel_guard(&panel_);
-                         update(value);
-                         if (panel_guard == nullptr ||
-                             generation != runtime_binding_generation_) {
-                           return;
-                         }
-                         if (field.slider != nullptr &&
-                             !field.slider->isSliderDown()) {
-                           finish();
-                         }
-                       });
-      QObject::connect(field.slider.data(), &QSlider::sliderReleased, &panel_,
-                       finish);
-    }
     return field;
   }
 
   void synchronize_light_controls(const LightComponent &light) {
-    synchronize_number_slider(light_intensity_field_, light.intensity);
-    synchronize_number_slider(light_falloff_field_, light.distance_attenuation);
-    synchronize_number_slider(light_temperature_field_,
+    synchronize_number_field(light_intensity_field_, light.intensity);
+    synchronize_number_field(light_falloff_field_, light.distance_attenuation);
+    synchronize_number_field(light_temperature_field_,
                                light.color_temperature_kelvin);
     const bool temperature_mode =
         light.color_mode == LightColorMode::ColorTemperature;
     if (light_temperature_field_.number != nullptr &&
         light_temperature_field_.number->isEnabled() != temperature_mode) {
       light_temperature_field_.number->setEnabled(temperature_mode);
-      light_temperature_field_.slider->setEnabled(temperature_mode);
     }
     if (light_color_button_ != nullptr) {
       if (!presented_light_.has_value() ||
@@ -1529,7 +1417,7 @@ private:
   QtColorSwatchButton *
   add_color_button(Section &section, std::string stable_id,
                     const QString &label, QVec3 value,
-                    EntityId entity, InspectorColorProperty property) {
+                    EntityId entity) {
     const QColor initial = QColor::fromRgbF(std::clamp(value.x, 0.0f, 1.0f),
                                             std::clamp(value.y, 0.0f, 1.0f),
                                             std::clamp(value.z, 0.0f, 1.0f));
@@ -1541,18 +1429,13 @@ private:
 
     QObject::connect(
         button, &QtColorSwatchButton::clicked, &panel_,
-        [this, stable_id, button, entity, property]() {
+        [this, stable_id, button, entity]() {
           if (editor_ == nullptr) {
             return;
           }
           const std::uint64_t dialog_generation = runtime_binding_generation_;
           QPointer<InspectorPanel> panel_guard(&panel_);
-          const auto edit = property == InspectorColorProperty::Light
-                                ? editor_->scene().begin_light_color_edit(entity)
-                            : property == InspectorColorProperty::Fog
-                                ? editor_->scene().begin_fog_color_edit(entity)
-                                : editor_->scene().begin_environment_color_edit(
-                                      entity);
+          const auto edit = editor_->scene().begin_light_color_edit(entity);
           if (panel_guard == nullptr ||
               runtime_binding_generation_ != dialog_generation) {
             return;
@@ -1571,7 +1454,7 @@ private:
           QObject::connect(
               &dialog, &QColorDialog::currentColorChanged, &dialog,
               [this, &dialog, guarded_button, panel_guard, dialog_generation,
-               session = edit.value(), property](const QColor &color) {
+               session = edit.value()](const QColor &color) {
                 if (panel_guard == nullptr || !color.isValid() ||
                     runtime_binding_generation_ != dialog_generation ||
                     editor_ == nullptr) {
@@ -1580,17 +1463,9 @@ private:
                 QVec3 next{static_cast<float>(color.redF()),
                            static_cast<float>(color.greenF()),
                            static_cast<float>(color.blueF())};
-                if (property != InspectorColorProperty::Environment) {
-                  next = light_srgb_to_linear(next);
-                }
-                const auto result = property == InspectorColorProperty::Light
-                                        ? editor_->scene().update_light_color_edit(
-                                              session, next)
-                                    : property == InspectorColorProperty::Fog
-                                        ? editor_->scene().update_fog_color_edit(
-                                              session, next)
-                                        : editor_->scene().update_environment_color_edit(
-                                              session, next);
+                next = light_srgb_to_linear(next);
+                const auto result = editor_->scene().update_light_color_edit(
+                    session, next);
                 if (panel_guard == nullptr ||
                     runtime_binding_generation_ != dialog_generation) {
                   return;
@@ -1602,8 +1477,7 @@ private:
                 if (guarded_button != nullptr) {
                   guarded_button->set_swatch_color(color);
                 }
-                if (property == InspectorColorProperty::Light &&
-                    document_ != nullptr) {
+                if (document_ != nullptr) {
                   if (const LightComponent *light = document_->light(primary_)) {
                     synchronize_light_controls(*light);
                   }
@@ -1621,14 +1495,8 @@ private:
             return;
           }
           const bool cancel = result != QDialog::Accepted;
-          const auto finished = property == InspectorColorProperty::Light
-                                    ? editor_->scene().finish_light_color_edit(
-                                          edit.value(), cancel)
-                                : property == InspectorColorProperty::Fog
-                                    ? editor_->scene().finish_fog_color_edit(
-                                          edit.value(), cancel)
-                                    : editor_->scene().finish_environment_color_edit(
-                                          edit.value(), cancel);
+          const auto finished = editor_->scene().finish_light_color_edit(
+              edit.value(), cancel);
           if (panel_guard == nullptr ||
               runtime_binding_generation_ != dialog_generation) {
             return;
@@ -1655,36 +1523,6 @@ private:
     text->setObjectName(stable_name(stable_id));
     text->setTextInteractionFlags(Qt::TextSelectableByMouse);
     add_row(section, stable_id, label, text);
-  }
-
-  void apply_scene_settings(
-      EntityId entity,
-      const std::function<void(SceneSettingsComponent &)> &mutation,
-      std::string merge_key = {}) {
-    if (editor_ == nullptr || document_ == nullptr) {
-      return;
-    }
-    const SceneSettingsComponent *current = document_->scene_settings(entity);
-    if (current == nullptr) {
-      return;
-    }
-    SceneSettingsComponent next = *current;
-    mutation(next);
-    next.environment.intensity = std::max(next.environment.intensity, 0.0f);
-    next.environment.background_intensity =
-        std::max(next.environment.background_intensity, 0.0f);
-    next.camera.near_plane = std::max(next.camera.near_plane, 0.001f);
-    next.camera.far_plane =
-        std::max(next.camera.far_plane, next.camera.near_plane + 0.001f);
-    next.post_process.ambient_occlusion_intensity =
-        std::max(next.post_process.ambient_occlusion_intensity, 0.0f);
-    next.post_process.ambient_occlusion_radius =
-        std::max(next.post_process.ambient_occlusion_radius, 0.0f);
-    next.post_process.bloom_strength =
-        std::max(next.post_process.bloom_strength, 0.0f);
-    (void)editor_->scene().set_scene_settings(
-        entity, to_api_scene_settings(next),
-        QuaderSceneEditOptions{.merge_key = std::move(merge_key)});
   }
 
   void
@@ -1745,13 +1583,7 @@ private:
   }
 
   void build_general_section() {
-    std::vector<EntityId> editable_selected;
-    editable_selected.reserve(selection_.size());
-    for (const EntityId entity : selection_) {
-      if (!document_->is_scene_root(entity)) {
-        editable_selected.push_back(entity);
-      }
-    }
+    const std::vector<EntityId> &editable_selected = selection_;
     const BoolAggregate visibility =
         aggregate_visibility(*document_, editable_selected);
     const BoolAggregate lock = aggregate_lock(*document_, editable_selected);
@@ -1768,20 +1600,16 @@ private:
       if (const NameComponent *component = document_->name(primary_)) {
         name->setText(qt_text(component->name));
       }
-      const bool scene_root = document_->is_scene_root(primary_);
-      name->setReadOnly(scene_root);
       add_row(section, "general.name", localized("ui.inspector.name", "Name"),
               name);
-      if (!scene_root) {
-        const EntityId entity = primary_;
-        QObject::connect(name, &QLineEdit::editingFinished, &panel_,
-                         [this, name, entity]() {
-                           if (!rebuilding_) {
-                             (void)editor_->scene().rename(
-                                 entity, name->text().toUtf8().toStdString());
-                           }
-                         });
-      }
+      const EntityId entity = primary_;
+      QObject::connect(name, &QLineEdit::editingFinished, &panel_,
+                       [this, name, entity]() {
+                         if (!rebuilding_) {
+                           (void)editor_->scene().rename(
+                               entity, name->text().toUtf8().toStdString());
+                         }
+                       });
     }
 
     if (visibility.has_value) {
@@ -2163,357 +1991,6 @@ private:
     active_transform_edit_.reset();
   }
 
-  void build_fog_section(EntityId entity, const SceneFogSettings &settings) {
-    Section fog = add_section("fog", localized("ui.inspector.fog", "Fog"));
-    auto *enabled = add_checkbox(
-        fog, "fog.enabled", localized("ui.inspector.enabled", "Enabled"),
-        settings.enabled, [this, entity](bool value) {
-          apply_scene_settings(entity, [value](SceneSettingsComponent &next) {
-            next.fog.enabled = value;
-          });
-        });
-    enabled->setToolTip(localized(
-        "ui.inspector.fog.enabled.tooltip",
-        "Show atmospheric fog in Rendered viewports. Other shading modes stay clear."));
-
-    const auto add_fog_number =
-        [this, &fog, &settings, entity](
-            std::string stable_id, const QString &label,
-            float SceneFogSettings::*member, double minimum, double maximum,
-            double step, const QString &tooltip) {
-          auto *field = add_continuous_number(
-              fog, std::move(stable_id), label, settings.*member, minimum,
-              maximum, step, 50,
-              [this, entity, member](double value, std::string merge_key) {
-                apply_scene_settings(
-                    entity,
-                    [value, member](SceneSettingsComponent &next) {
-                      // Return can emit the displayed zero for an unchanged
-                      // Disabled sentinel. Preserve the owner's negative value.
-                      if (member == &SceneFogSettings::in_scattering_size &&
-                          value <= 0.0 && next.fog.in_scattering_size <= 0.0f) {
-                        return;
-                      }
-                      next.fog.*member = static_cast<float>(value);
-                    },
-                    std::move(merge_key));
-              }, true);
-          field->setEnabled(settings.enabled);
-          field->setToolTip(tooltip);
-          return field;
-        };
-    const double maximum = std::numeric_limits<float>::max();
-    add_fog_number(
-        "fog.density", localized("ui.inspector.fog.density", "Density (1/m)"),
-        &SceneFogSettings::density, 0.0, maximum, 0.001,
-        localized("ui.inspector.fog.density.tooltip",
-                  "Extinction per meter at the fog height. Higher values make the fog denser."));
-    add_fog_number(
-        "fog.distance", localized("ui.inspector.fog.distance", "Start (m)"),
-        &SceneFogSettings::distance, 0.0, maximum, 0.1,
-        localized("ui.inspector.fog.distance.tooltip",
-                  "Distance from the camera before fog starts."));
-    auto *cutoff = add_fog_number(
-        "fog.cut_off_distance",
-        localized("ui.inspector.fog.cut_off_distance", "Cutoff (m)"),
-        &SceneFogSettings::cut_off_distance, 0.0, maximum, 1.0,
-        localized("ui.inspector.fog.cut_off_distance.tooltip",
-                  "Objects beyond this distance receive no fog. Zero means unlimited, including the sky background."));
-    cutoff->setSpecialValueText(localized("ui.inspector.fog.unlimited", "Unlimited"));
-    add_fog_number(
-        "fog.maximum_opacity",
-        localized("ui.inspector.fog.maximum_opacity", "Max Opacity"),
-        &SceneFogSettings::maximum_opacity, 0.0, 1.0, 0.01,
-        localized("ui.inspector.fog.maximum_opacity.tooltip",
-                  "Upper limit of fog opacity, from transparent (0) to opaque (1)."));
-    add_fog_number(
-        "fog.height", localized("ui.inspector.fog.height", "Height (m)"),
-        &SceneFogSettings::height, -maximum, maximum, 0.1,
-        localized("ui.inspector.fog.height.tooltip",
-                  "World height of the fog layer, measured along the vertical axis."));
-    add_fog_number(
-        "fog.height_falloff",
-        localized("ui.inspector.fog.height_falloff", "Falloff (1/m)"),
-        &SceneFogSettings::height_falloff, 0.0, maximum, 0.01,
-        localized("ui.inspector.fog.height_falloff.tooltip",
-                  "How quickly density decreases above the fog height. Zero gives uniform density at every height."));
-    auto *color = add_color_button(
-        fog, "fog.color", localized("ui.inspector.fog.color", "Color / Tint"),
-        light_linear_to_srgb(settings.color), entity, InspectorColorProperty::Fog);
-    color->setEnabled(settings.enabled);
-    color->setToolTip(localized(
-        "ui.inspector.fog.color.tooltip",
-        "Fog color, or a tint applied to the sampled environment when Environment Color is enabled."));
-    auto *environment = add_checkbox(
-        fog, "fog.color_from_environment",
-        localized("ui.inspector.fog.color_from_environment", "Environment Color"),
-        settings.color_from_environment, [this, entity](bool value) {
-          apply_scene_settings(entity, [value](SceneSettingsComponent &next) {
-            next.fog.color_from_environment = value;
-          });
-        });
-    environment->setEnabled(settings.enabled);
-    environment->setToolTip(localized(
-        "ui.inspector.fog.color_from_environment.tooltip",
-        "Sample the scene environment in the view direction and multiply it by the fog tint. Requires an enabled environment."));
-    auto *scattering_size = add_fog_number(
-        "fog.in_scattering_size",
-        localized("ui.inspector.fog.in_scattering_size", "Sun Scattering"),
-        &SceneFogSettings::in_scattering_size, 0.0, maximum, 1.0,
-        localized("ui.inspector.fog.in_scattering_size.tooltip",
-                  "Directional-light scattering; zero disables it. Try 10 to 100. Smaller positive values spread the glow wider. Requires a directional light."));
-    scattering_size->setSpecialValueText(
-        localized("ui.inspector.fog.disabled", "Disabled"));
-    auto *scattering_start = add_fog_number(
-        "fog.in_scattering_start",
-        localized("ui.inspector.fog.in_scattering_start", "Sun Start (m)"),
-        &SceneFogSettings::in_scattering_start, 0.0, maximum, 0.1,
-        localized("ui.inspector.fog.in_scattering_start.tooltip",
-                  "Distance from the camera before directional-light scattering starts."));
-    scattering_start->setEnabled(settings.enabled && settings.in_scattering_size > 0.0f);
-    QObject::connect(
-        scattering_size, &QDoubleSpinBox::valueChanged, scattering_start,
-        [scattering_start, enabled = settings.enabled](double value) {
-          scattering_start->setEnabled(enabled && value > 0.0);
-        });
-  }
-
-  void build_scene_settings_sections() {
-    const SceneSettingsComponent *settings =
-        document_->scene_settings(primary_);
-    if (settings == nullptr) {
-      return;
-    }
-    const EntityId entity = primary_;
-
-    Section environment = add_section(
-        "environment", localized("ui.inspector.environment", "Environment"));
-    auto *environment_combo = new QComboBox(environment.editor_parent);
-    environment_combo->setObjectName(
-        stable_name("environment.environment_preset"));
-    int environment_index = -1;
-    int descriptor_index = 0;
-    for (const SceneEnvironmentDescriptor &descriptor :
-         scene_environment_catalog()) {
-      environment_combo->addItem(
-          localized(descriptor.label_key, descriptor.fallback_label),
-          qt_text(descriptor.id));
-      if (descriptor.id == settings->environment.environment_id) {
-        environment_index = descriptor_index;
-      }
-      ++descriptor_index;
-    }
-    environment_combo->setCurrentIndex(environment_index);
-    add_row(environment, "environment.environment_preset",
-            localized("ui.inspector.environment_preset", "Preset"),
-            environment_combo);
-    QObject::connect(environment_combo, &QComboBox::activated, &panel_,
-                     [this, environment_combo, entity](int index) {
-                       if (rebuilding_ || index < 0) {
-                         return;
-                       }
-                       const std::string id = environment_combo->itemData(index)
-                                                  .toString()
-                                                  .toUtf8()
-                                                  .toStdString();
-                       apply_scene_settings(
-                           entity, [id](SceneSettingsComponent &next) {
-                             next.environment.environment_id = id;
-                           });
-                     });
-    add_checkbox(environment, "environment.enabled",
-                 localized("ui.inspector.enabled", "Enabled"),
-                 settings->environment.enabled, [this, entity](bool enabled) {
-                   apply_scene_settings(
-                       entity, [enabled](SceneSettingsComponent &next) {
-                         next.environment.enabled = enabled;
-                       });
-                 });
-    add_checkbox(
-        environment, "environment.background",
-        localized("ui.inspector.background", "Background"),
-        settings->environment.show_background, [this, entity](bool visible) {
-          apply_scene_settings(entity, [visible](SceneSettingsComponent &next) {
-            next.environment.show_background = visible;
-          });
-        });
-    add_color_button(environment, "environment.clear_color",
-                     localized("ui.inspector.clear_color", "Clear Color"),
-                     settings->environment.clear_color, entity,
-                     InspectorColorProperty::Environment);
-    add_continuous_number(environment, "environment.intensity",
-                          localized("ui.inspector.intensity", "Intensity"),
-                          settings->environment.intensity, 0.0, 16.0, 0.01, 3,
-                          [this, entity](double value, std::string merge_key) {
-                            apply_scene_settings(
-                                entity,
-                                [value](SceneSettingsComponent &next) {
-                                  next.environment.intensity =
-                                      static_cast<float>(value);
-                                },
-                                std::move(merge_key));
-                          });
-    add_continuous_number(
-        environment, "environment.background_intensity",
-        localized("ui.inspector.background_intensity", "Background Intensity"),
-        settings->environment.background_intensity, 0.0, 16.0, 0.01, 3,
-        [this, entity](double value, std::string merge_key) {
-          apply_scene_settings(
-              entity,
-              [value](SceneSettingsComponent &next) {
-                next.environment.background_intensity =
-                    static_cast<float>(value);
-              },
-              std::move(merge_key));
-        });
-    add_number_slider(environment, "environment.rotation",
-                      localized("ui.inspector.rotation", "Rotation"),
-                      settings->environment.rotation_y * kRadToDeg, -180.0,
-                      180.0, 180.0, 1.0,
-                      [this, entity](double value, std::string merge_key) {
-                        apply_scene_settings(
-                            entity, [value](SceneSettingsComponent &next) {
-                              next.environment.rotation_y =
-                                  static_cast<float>(value) * kDegToRad;
-                            },
-                            std::move(merge_key));
-                      }, true, true);
-
-    build_fog_section(entity, settings->fog);
-
-    Section camera =
-        add_section("camera", localized("ui.inspector.camera", "Camera"));
-    add_continuous_number(
-        camera, "camera.near", localized("ui.inspector.near_plane", "Near"),
-        settings->camera.near_plane, 0.001, 10000.0, 0.001, 4,
-        [this, entity](double value, std::string merge_key) {
-          apply_scene_settings(
-              entity,
-              [value](SceneSettingsComponent &next) {
-                next.camera.near_plane = static_cast<float>(value);
-              },
-              std::move(merge_key));
-        });
-    add_continuous_number(
-        camera, "camera.far", localized("ui.inspector.far_plane", "Far"),
-        settings->camera.far_plane, 0.001, 1000000.0, 1.0, 2,
-        [this, entity](double value, std::string merge_key) {
-          apply_scene_settings(
-              entity,
-              [value](SceneSettingsComponent &next) {
-                next.camera.far_plane = static_cast<float>(value);
-              },
-              std::move(merge_key));
-        });
-
-    Section post = add_section(
-        "post_process", localized("ui.inspector.post_process", "Post Process"));
-    add_checkbox(post, "post_process.enabled",
-                 localized("ui.inspector.enabled", "Enabled"),
-                 settings->post_process.enabled, [this, entity](bool enabled) {
-                   apply_scene_settings(
-                       entity, [enabled](SceneSettingsComponent &next) {
-                         next.post_process.enabled = enabled;
-                       });
-                 });
-    add_checkbox(
-        post, "post_process.anti_aliasing",
-        localized("ui.inspector.anti_aliasing", "Anti-Aliasing"),
-        settings->post_process.anti_aliasing, [this, entity](bool enabled) {
-          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
-            next.post_process.anti_aliasing = enabled;
-          });
-        });
-    add_checkbox(
-        post, "post_process.dithering",
-        localized("ui.inspector.dithering", "Dithering"),
-        settings->post_process.dithering, [this, entity](bool enabled) {
-          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
-            next.post_process.dithering = enabled;
-          });
-        });
-    const SceneToneMapping tone_mapping = settings->post_process.tone_mapping;
-    const SceneToneMapping displayed_tone_mapping =
-        tone_mapping == SceneToneMapping::AcesLegacy ||
-                tone_mapping == SceneToneMapping::DisplayRange
-            ? SceneToneMapping::Aces
-            : tone_mapping;
-    add_enum_combo<SceneToneMapping>(
-        post, "post_process.tone_mapping",
-        localized("ui.inspector.tone_mapping", "Tone Mapping"),
-        displayed_tone_mapping,
-        {
-            {SceneToneMapping::Linear,
-             localized("ui.inspector.tone_mapping.linear", "Linear")},
-            {SceneToneMapping::Aces,
-             localized("ui.inspector.tone_mapping.aces", "ACES")},
-            {SceneToneMapping::Agx,
-             localized("ui.inspector.tone_mapping.agx", "AgX")},
-            {SceneToneMapping::Filmic,
-             localized("ui.inspector.tone_mapping.filmic", "Filmic")},
-        },
-        [this, entity](SceneToneMapping value) {
-          apply_scene_settings(entity, [value](SceneSettingsComponent &next) {
-            next.post_process.tone_mapping = value;
-          });
-        });
-    add_checkbox(
-        post, "post_process.ambient_occlusion",
-        localized("ui.inspector.ambient_occlusion", "Ambient Occlusion"),
-        settings->post_process.ambient_occlusion, [this, entity](bool enabled) {
-          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
-            next.post_process.ambient_occlusion = enabled;
-          });
-        });
-    if (settings->post_process.ambient_occlusion) {
-      add_continuous_number(
-          post, "post_process.ambient_occlusion_intensity",
-          localized("ui.inspector.ambient_occlusion_intensity", "AO Intensity"),
-          settings->post_process.ambient_occlusion_intensity, 0.0, 8.0, 0.01, 3,
-          [this, entity](double value, std::string merge_key) {
-            apply_scene_settings(
-                entity,
-                [value](SceneSettingsComponent &next) {
-                  next.post_process.ambient_occlusion_intensity =
-                      static_cast<float>(value);
-                },
-                std::move(merge_key));
-          });
-      add_continuous_number(
-          post, "post_process.ambient_occlusion_radius",
-          localized("ui.inspector.ambient_occlusion_radius", "AO Radius"),
-          settings->post_process.ambient_occlusion_radius, 0.0, 10.0, 0.01, 3,
-          [this, entity](double value, std::string merge_key) {
-            apply_scene_settings(
-                entity,
-                [value](SceneSettingsComponent &next) {
-                  next.post_process.ambient_occlusion_radius =
-                      static_cast<float>(value);
-                },
-                std::move(merge_key));
-          });
-    }
-    add_checkbox(
-        post, "post_process.bloom", localized("ui.inspector.bloom", "Bloom"),
-        settings->post_process.bloom, [this, entity](bool enabled) {
-          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
-            next.post_process.bloom = enabled;
-          });
-        });
-    add_continuous_number(
-        post, "post_process.bloom_strength",
-        localized("ui.inspector.bloom_strength", "Bloom Strength"),
-        settings->post_process.bloom_strength, 0.0, 1.0, 0.01, 3,
-        [this, entity](double value, std::string merge_key) {
-          apply_scene_settings(
-              entity,
-              [value](SceneSettingsComponent &next) {
-                next.post_process.bloom_strength = static_cast<float>(value);
-              },
-              std::move(merge_key));
-        });
-  }
-
   void build_mesh_sections() {
     const MeshComponent *mesh = document_->mesh(primary_);
     if (mesh == nullptr) {
@@ -2561,7 +2038,7 @@ private:
     bool unsupported = false;
     for (const EntityId entity : selection_) {
       const MeshComponent *mesh = document_->mesh(entity);
-      if (mesh == nullptr || document_->is_scene_root(entity)) {
+      if (mesh == nullptr) {
         continue;
       }
       meshes.push_back(entity);
@@ -2703,11 +2180,11 @@ private:
             }
           });
         });
-    light_temperature_field_ = add_number_slider(
+    light_temperature_field_ = add_number_field(
         section, "light.color_temperature_kelvin",
         localized("ui.inspector.temperature", "Temperature (K)"),
         light->color_temperature_kelvin, kLightMinimumTemperatureKelvin,
-        kLightMaximumTemperatureKelvin, kLightMaximumTemperatureKelvin, 1.0,
+        kLightMaximumTemperatureKelvin, 1.0,
         [this, entity](double value, std::string merge_key) {
           apply_light_component(
               entity, [value](LightComponent &next) {
@@ -2718,23 +2195,23 @@ private:
         });
     light_color_button_ = add_color_button(
         section, "light.color", localized("ui.inspector.color", "Color"),
-        light_linear_to_srgb(light->color), entity, InspectorColorProperty::Light);
+        light_linear_to_srgb(light->color), entity);
 
-    light_intensity_field_ = add_number_slider(
+    light_intensity_field_ = add_number_field(
         section, "light.intensity", localized("ui.inspector.intensity", "Intensity"),
-        light->intensity, 0.0, 0.0, std::numeric_limits<float>::max(), 0.01,
+        light->intensity, 0.0, std::numeric_limits<float>::max(), 0.01,
         [this, entity](double value, std::string merge_key) {
           apply_light_component(
               entity, [value](LightComponent &next) {
                 next.intensity = static_cast<float>(value);
                 next.source_preset = LightSourcePreset::Custom;
               }, std::move(merge_key));
-        }, false);
+        });
     if (light->type == LightType::Point || light->type == LightType::Spot) {
       light_range_field_ = add_continuous_number(
           section, "light.range", localized("ui.inspector.range", "Range"),
           light->range, kInspectorLightRangeMin,
-          std::max(kInspectorLightRangeSliderMax, light->range),
+          std::max(kInspectorLightRangeMax, light->range),
           0.1, 4, [this, entity](double value, std::string merge_key) {
             apply_light_component(
                 entity,
@@ -2743,11 +2220,11 @@ private:
                 },
                 std::move(merge_key));
           });
-      light_falloff_field_ = add_number_slider(
+      light_falloff_field_ = add_number_field(
           section, "light.distance_attenuation",
           localized("ui.inspector.distance_attenuation", "Falloff"),
           light->distance_attenuation, kLightMinimumFalloff,
-          kLightMaximumFalloff, kLightMaximumFalloff, 0.01,
+          kLightMaximumFalloff, 0.01,
           [this, entity](double value, std::string merge_key) {
             apply_light_component(
                 entity,
@@ -2798,9 +2275,9 @@ private:
   std::vector<MaterialRow> material_rows_;
   std::vector<TransformRow> transform_rows_;
   QPointer<QDoubleSpinBox> light_range_field_;
-  NumberSlider light_intensity_field_;
-  NumberSlider light_falloff_field_;
-  NumberSlider light_temperature_field_;
+  NumberField light_intensity_field_;
+  NumberField light_falloff_field_;
+  NumberField light_temperature_field_;
   QPointer<QtColorSwatchButton> light_color_button_;
   QPointer<QComboBox> light_preset_combo_;
   QPointer<QComboBox> light_color_mode_combo_;

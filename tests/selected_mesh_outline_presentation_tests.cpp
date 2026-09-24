@@ -19,7 +19,13 @@
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_mesh_outline_cache.hpp"
 #include "render/scene_render_bridge.hpp"
+#include "render/scene_render_extraction.hpp"
 #include "scene/scene_document.hpp"
+#include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_double_spin_box.hpp"
+#include "ui/qt_spin_box.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_viewport_panel.hpp"
 #include "support/command_behavior_contract.hpp"
 #include "support/command_behavior_fixture.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -27,6 +33,17 @@
 #include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <gtest/gtest.h>
+
+#include <QAbstractSpinBox>
+#include <QApplication>
+#include <QEnterEvent>
+#include <QEventLoop>
+#include <QFocusEvent>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QMouseEvent>
+#include <QPointer>
+#include <QTimer>
 
 #include <algorithm>
 #include <array>
@@ -326,6 +343,266 @@ TEST(SelectedMeshOutlinePresentationTests,
 }
 
 TEST(SelectedMeshOutlinePresentationTests,
+     BevelNumericEditsRefreshRetainedWiresAndRenderGeometry) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-bevel-submission-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  const auto created = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Bevel settings submission source");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  ASSERT_TRUE(editor.selection().select_object(object).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+
+  QtViewportPanel viewport;
+  viewport.setAttribute(Qt::WA_DontShowOnScreen, true);
+  viewport.resize(1000, 750);
+  viewport.attach_workspace(session.viewport_workspace());
+  viewport.set_startup_presentation_blocked(false);
+  QtToolSettingsPanel panel;
+  viewport.set_settings_panel(&panel);
+  panel.set_expanded(true);
+  panel.bind(editor);
+  QtCommandEventFilter command_filter(editor, [&] { return viewport.tool_state(); });
+  command_filter.set_input_context_provider([&] {
+    return viewport.command_input_context();
+  });
+  application.installEventFilter(&command_filter);
+  viewport.show();
+  viewport.activateWindow();
+  QCoreApplication::processEvents();
+  auto *surface = viewport.surface(ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  const QPointF pointer{400, 300};
+  QEnterEvent enter(pointer, pointer, surface->mapToGlobal(pointer.toPoint()));
+  QFocusEvent focus(QEvent::FocusIn);
+  QCoreApplication::sendEvent(surface, &enter);
+  QCoreApplication::sendEvent(surface, &focus);
+  const auto process_frame = [&] {
+    viewport.process_input(editor, session.scene(), session.assets(),
+                           session.modeling(), {}, session.native_tools(),
+                           &session.point_placement(), 1.0 / 60.0);
+    // UISystem leaves the current numeric draft in place during interaction;
+    // viewport ownership and overlay placement still advance on every frame.
+    if (!panel.numeric_interaction_active()) panel.refresh();
+    viewport.refresh_workspace_layout();
+    viewport.refresh_settings_overlay(editor);
+  };
+  process_frame();
+
+  auto &modeling = session.modeling();
+  ExtrudeOutlineProvider provider{session};
+  ExtrudeOutlineTarget target;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  const auto settings = ViewportSettings::defaults();
+  const auto submit_overlay = [&] {
+    return coordinator.submit({
+        .viewport_index = 0u,
+        .layer_mask = 1u,
+        .selection_source = {
+            .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+            .content_revision = modeling.content_revision(),
+            .selection_revision = modeling.selection_revision(),
+            .scene_revision = session.scene().revision(),
+            .asset_revision = session.assets().revision(),
+            .overlay_signature = modeling.selection_overlay_signature(),
+            .selection_context = ViewportOverlaySelectionContext::Edge,
+        },
+        .selection_frame_provider = &provider,
+        .scene_selection_mode = RenderOverlaySelectionMode::Component,
+        .style_selection_context = ViewportOverlaySelectionContext::Edge,
+        .overlays_visible = true,
+    }, settings, target);
+  };
+  const auto submitted_wires = [&] {
+    std::vector<std::array<float, 6u>> wires;
+    for (const auto &line : target.persistent.lines) {
+      if (line.element.object_id == object.modeling_object_id &&
+          (line.layer == ViewportOverlayLayer::SourceWire ||
+           line.layer == ViewportOverlayLayer::SelectedEdge)) {
+        wires.push_back({line.start.x, line.start.y, line.start.z,
+                         line.end.x, line.end.y, line.end.z});
+      }
+    }
+    return wires;
+  };
+  auto render_snapshot = build_render_scene_snapshot(session.scene(), session.assets());
+  const auto rendered_positions = [&] {
+    std::vector<std::array<float, 3u>> positions;
+    for (const auto &record : render_snapshot.meshes) {
+      for (const auto &vertex : record.mesh.vertices) {
+        const auto world = transform_point(record.world_transform, vertex.position);
+        positions.push_back({world.x, world.y, world.z});
+      }
+    }
+    return positions;
+  };
+  const auto expect_unchanged = [&] {
+    const auto builds = provider.builds;
+    const auto submissions = target.submissions;
+    const auto work = modeling.tool_preview_work_stats();
+    for (int frame = 0; frame < 4; ++frame) {
+      process_frame();
+      EXPECT_TRUE(render_scene_snapshot_matches_sources(
+          render_snapshot, session.scene(), session.assets()));
+      const auto unchanged = build_render_scene_snapshot(
+          session.scene(), session.assets(), {.previous = &render_snapshot});
+      EXPECT_TRUE(unchanged.reused_previous_records);
+      EXPECT_FALSE(unchanged.dirty.any_dirty());
+      const auto submission = submit_overlay();
+      EXPECT_FALSE(submission.selection_source_refreshed);
+      EXPECT_FALSE(submission.persistent_submitted);
+    }
+    EXPECT_EQ(provider.builds, builds);
+    EXPECT_EQ(target.submissions, submissions);
+    EXPECT_EQ(modeling.tool_preview_work_stats().signature_enumeration_count,
+              work.signature_enumeration_count);
+    EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+              work.mesh_extraction_count);
+  };
+
+  ASSERT_TRUE(submit_overlay().persistent_submitted);
+  const auto original_positions = rendered_positions();
+  const auto original_wires = submitted_wires();
+  ASSERT_FALSE(original_wires.empty());
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.segments", 1.0).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.08).ok());
+  process_frame();
+  render_snapshot = build_render_scene_snapshot(
+      session.scene(), session.assets(), {.previous = &render_snapshot});
+  ASSERT_EQ(render_snapshot.meshes.size(), 1u);
+  ASSERT_TRUE(submit_overlay().persistent_submitted);
+  auto previous_positions = rendered_positions();
+  auto previous_wires = submitted_wires();
+  const auto history_count = session.history().undo_count();
+  const auto initial_indices = render_snapshot.meshes.front().mesh.indices.size();
+
+  QCoreApplication::processEvents();
+  process_frame();
+  ASSERT_TRUE(panel.isVisible());
+  ASSERT_TRUE(panel.testAttribute(Qt::WA_NativeWindow));
+  const auto send_mouse = [](QLineEdit &line, QEvent::Type type, QPoint position,
+                             Qt::MouseButton button, Qt::MouseButtons buttons,
+                             Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QMouseEvent event(type, QPointF(position), QPointF(line.mapToGlobal(position)),
+                     button, buttons, modifiers);
+    QCoreApplication::sendEvent(&line, &event);
+  };
+  const std::array changes{
+      std::pair{"operation.edge_bevel.width", 0.12},
+      std::pair{"operation.edge_bevel.width", 0.18},
+      std::pair{"operation.edge_bevel.segments", 4.0},
+      std::pair{"operation.edge_bevel.profile", 0.25}};
+  for (const auto &[setting, value] : changes) {
+    SCOPED_TRACE(setting);
+    SCOPED_TRACE(value);
+    auto *spin = panel.findChild<QAbstractSpinBox *>(
+        QStringLiteral("tool_settings.control.") + QString::fromUtf8(setting));
+    ASSERT_NE(spin, nullptr);
+    const QPointer<QAbstractSpinBox> retained_spin(spin);
+    ASSERT_TRUE(dynamic_cast<QtSpinBox *>(spin) != nullptr ||
+                dynamic_cast<QtDoubleSpinBox *>(spin) != nullptr);
+    auto *line = spin->findChild<QLineEdit *>();
+    ASSERT_NE(line, nullptr);
+    const QPoint press = line->rect().center();
+    if (value == 0.18) {
+      // The second width update follows the live custom-scrub path while the
+      // same frame refresh that hosts the viewport runs between dispatches.
+      send_mouse(*line, QEvent::MouseButtonPress, press, Qt::LeftButton,
+                 Qt::LeftButton, Qt::ShiftModifier);
+      const QPoint crossed = press + QPoint(QApplication::startDragDistance() + 1, 0);
+      send_mouse(*line, QEvent::MouseMove, crossed, Qt::NoButton,
+                 Qt::LeftButton, Qt::ShiftModifier);
+      const QPoint moved = crossed + QPoint(6, 0);
+      send_mouse(*line, QEvent::MouseMove, moved, Qt::NoButton,
+                 Qt::LeftButton, Qt::ShiftModifier);
+      process_frame();
+      QEventLoop loop;
+      QTimer frames;
+      QObject::connect(&frames, &QTimer::timeout, &panel, process_frame);
+      frames.start(4);
+      QTimer::singleShot(40, &loop, &QEventLoop::quit);
+      loop.exec();
+      EXPECT_FALSE(render_scene_snapshot_matches_sources(
+          render_snapshot, session.scene(), session.assets()));
+      send_mouse(*line, QEvent::MouseButtonRelease, moved, Qt::LeftButton,
+                 Qt::NoButton, Qt::ShiftModifier);
+    } else {
+      send_mouse(*line, QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton);
+      send_mouse(*line, QEvent::MouseButtonRelease, press, Qt::LeftButton, Qt::NoButton);
+      process_frame();
+      ASSERT_TRUE(line->hasSelectedText());
+      const auto text = dynamic_cast<QtSpinBox *>(spin) != nullptr
+          ? spin->locale().toString(static_cast<int>(value))
+          : spin->locale().toString(value, 'f', 4);
+      for (const QChar character : text) {
+        QKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                      QString(character));
+        QCoreApplication::sendEvent(line, &key);
+      }
+      process_frame();
+      QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+      QCoreApplication::sendEvent(line, &enter);
+    }
+    QCoreApplication::processEvents();
+    process_frame();
+    ASSERT_FALSE(retained_spin.isNull());
+    EXPECT_EQ(panel.findChild<QAbstractSpinBox *>(spin->objectName()), spin);
+    EXPECT_FALSE(render_scene_snapshot_matches_sources(
+        render_snapshot, session.scene(), session.assets()));
+    render_snapshot = build_render_scene_snapshot(
+        session.scene(), session.assets(), {.previous = &render_snapshot});
+    ASSERT_EQ(render_snapshot.meshes.size(), 1u);
+    EXPECT_TRUE(render_snapshot.meshes.front().mesh_dirty);
+    EXPECT_EQ(render_snapshot.meshes.front().entity_id, object.entity);
+    const auto submission = submit_overlay();
+    EXPECT_TRUE(submission.selection_source_refreshed);
+    EXPECT_TRUE(submission.persistent_submitted);
+    const auto positions = rendered_positions();
+    const auto wires = submitted_wires();
+    EXPECT_NE(positions, previous_positions);
+    EXPECT_NE(wires, previous_wires);
+    ASSERT_FALSE(wires.empty());
+    for (const auto &wire : wires) {
+      for (const auto offset : {0u, 3u}) {
+        const QVec3 endpoint{wire[offset], wire[offset + 1u], wire[offset + 2u]};
+        EXPECT_TRUE(std::ranges::any_of(positions, [&](const auto &position) {
+          return length_squared(endpoint - QVec3{position[0], position[1], position[2]})
+              < 1.0e-12F;
+        })) << "Submitted Bevel wire is stale relative to render geometry";
+      }
+    }
+    EXPECT_EQ(session.history().undo_count(), history_count);
+    previous_positions = positions;
+    previous_wires = wires;
+    ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+  }
+  EXPECT_NE(render_snapshot.meshes.front().mesh.indices.size(), initial_indices);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  process_frame();
+  render_snapshot = build_render_scene_snapshot(
+      session.scene(), session.assets(), {.previous = &render_snapshot});
+  EXPECT_EQ(rendered_positions(), original_positions);
+  ASSERT_TRUE(submit_overlay().persistent_submitted);
+  EXPECT_EQ(submitted_wires(), original_wires);
+  EXPECT_EQ(session.history().undo_count(), history_count);
+  ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
      ExtrusionPreviewSubmitsCurrentSourceAndSelectedWiresWithStableIds) {
   for (const double initial_amount : {0.0, 1.0}) {
     SCOPED_TRACE(initial_amount);
@@ -388,7 +665,7 @@ TEST(SelectedMeshOutlinePresentationTests,
       ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok());
       EXPECT_FALSE(harness.session.extrude().preview_active());
       EXPECT_FALSE(harness.session.extrude().adjustable());
-      EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), 0.0);
+      EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), 1.25);
       EXPECT_EQ(harness.session.history().undo_count(), undo_count + 1u);
       EXPECT_TRUE(harness.session.modeling().tool_preview_meshes().empty());
       ASSERT_TRUE(harness.submit().persistent_submitted);
@@ -414,6 +691,8 @@ TEST(SelectedMeshOutlinePresentationTests,
   for (const bool fail : {false, true}) {
     SCOPED_TRACE(fail);
     ASSERT_TRUE(tool.set_amount(1.0).ok);
+    // Reusing the remembered value after Cancel needs an explicit activation.
+    ASSERT_TRUE(tool.activate().ok);
     ASSERT_TRUE(tool.begin_adjust_drag().ok);
     ASSERT_TRUE(tool.update_drag(2.15).ok);
     (void)harness.submit();

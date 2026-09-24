@@ -231,6 +231,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     }
 
     const EdgeBevelSettings settings = sanitized_edge_bevel_settings(requested_settings);
+    EdgeBevelWidthFeedback width_feedback{.requested_width = settings.width};
     const std::map<std::pair<ElementId, ElementId>, int> incidence_counts = edge_incidence_counts(document);
     std::set<std::pair<ElementId, ElementId>> selected_edge_keys;
     std::map<ElementId, int> selected_edge_counts;
@@ -478,7 +479,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         bool side_failed = false;
         for (std::size_t side_index = 0; side_index < adjacent_faces.size(); ++side_index) {
             std::optional<EdgeBevelSide> side =
-                edge_bevel_side_for_face(candidate, document, build.edge, adjacent_faces[side_index], settings.width);
+                edge_bevel_side_for_face(candidate, document, build.edge, adjacent_faces[side_index], settings.width, &width_feedback);
             if (!side.has_value()) {
                 side_failed = true;
                 break;
@@ -494,7 +495,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                             endpoint_id,
                             settings.width,
                             selected_edge_keys,
-                            miter_vertices)) {
+                            miter_vertices, &width_feedback)) {
                     bevel_side.endpoint_vertices[endpoint_id] = miter->first;
                     bevel_side.endpoint_positions[endpoint_id] = miter->second;
                 }
@@ -906,7 +907,9 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
       }
 
       const float boundary_distance =
-          std::min(settings.width, edge_length * 0.999F);
+          record_edge_bevel_applied_width(
+              &width_feedback, settings.width,
+              std::min(settings.width, edge_length * 0.999F));
       const quader::QVec3 boundary_position =
           source_vertex->position +
           (edge_delta * (boundary_distance / edge_length));
@@ -1384,7 +1387,9 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                     const float support_length = length(support_delta);
                     if (support_length > kEpsilon) {
                       const float cap_distance =
-                          std::min(settings.width, support_length * 0.999F);
+                          record_edge_bevel_applied_width(
+                              &width_feedback, settings.width,
+                              std::min(settings.width, support_length * 0.999F));
                       const ElementId cap_vertex_id = add_vertex(
                           candidate, endpoint->position +
                                          (support_delta *
@@ -2006,7 +2011,9 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     selection.mode = SelectionMode::Face;
     selection.faces = std::move(selected_generated_faces);
     activate_last_selection(selection);
-    return { true, {} };
+    OperationResult result{true, {}};
+    result.edge_bevel_width = width_feedback;
+    return result;
 }
 
 BevelEdgesOperation::BevelEdgesOperation(EdgeBevelSettings settings) : settings_(settings) {}

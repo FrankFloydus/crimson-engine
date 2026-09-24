@@ -1595,7 +1595,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   expect_color_near(
       settings.color(ViewportColorSettingId::InstanceEditContext),
       {0.38f, 0.40f, 0.42f, 0.45f});
-  const SceneSettingsComponent scene_settings_defaults;
+  const SceneSettings scene_settings_defaults;
   expect_vec3_near(scene_settings_defaults.environment.clear_color,
                    {2.0f / 255.0f, 2.0f / 255.0f, 2.0f / 255.0f});
   EXPECT_FLOAT_EQ(
@@ -5359,6 +5359,212 @@ TEST(ViewportPointPlacementServiceTests,
   EXPECT_GT(visibility_filter_calls, previous_calls);
 }
 
+TEST(SceneDocumentTests, ParentlessObjectsRetainAuthoredRootOrder) {
+  SceneContentDocument document;
+  SceneDocument &scene = document.scene();
+  EXPECT_TRUE(scene.entities().empty());
+  EXPECT_TRUE(scene.root_entities().empty());
+  EXPECT_EQ(scene.scene_settings(), SceneSettings{});
+
+  const EntityId first = scene.create_entity_with_id(90u, "First");
+  const EntityId second = scene.create_entity_with_id(12u, "Second");
+  const EntityId group = scene.create_empty("Group");
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({first, second, group}));
+  EXPECT_EQ(scene.children(kInvalidEntityId), scene.root_entities());
+  EXPECT_EQ(scene.sibling_ordinal(second), 1u);
+  ASSERT_TRUE(scene.set_sibling_ordinal(group, 0u));
+  EXPECT_EQ(scene.entity_tree_order(), std::vector<EntityId>({group, first, second}));
+  ASSERT_TRUE(scene.set_parent(first, group, false));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({group, second}));
+  EXPECT_EQ(scene.children(group), std::vector<EntityId>({first}));
+  ASSERT_TRUE(scene.set_parent(first, kInvalidEntityId, false));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({group, second, first}));
+  ASSERT_TRUE(scene.destroy_entity(group));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({second, first}));
+  EXPECT_FALSE(scene.set_sibling_ordinal(kInvalidEntityId, 0u));
+  EXPECT_FALSE(scene.set_sibling_ordinal(first, 2u));
+}
+
+TEST(SceneDocumentTests, AtomicForestReplacementPreservesRootOrderAndRejectsCycles) {
+  SceneDocument scene;
+  const EntityId first = scene.create_empty("First");
+  const EntityId second = scene.create_empty("Second");
+  const EntityId third = scene.create_empty("Third");
+  const std::array<SceneParentAssignment, 3u> assignments{{
+      {.child = third, .parent = kInvalidEntityId},
+      {.child = second, .parent = kInvalidEntityId},
+      {.child = first, .parent = second},
+  }};
+  ASSERT_TRUE(scene.replace_hierarchy(assignments));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({third, second}));
+  EXPECT_EQ(scene.entity_tree_order(), std::vector<EntityId>({third, second, first}));
+  const auto revision = scene.revision();
+  ASSERT_TRUE(scene.replace_hierarchy(assignments));
+  EXPECT_EQ(scene.revision(), revision);
+  const std::array<SceneParentAssignment, 2u> cycle{{
+      {.child = first, .parent = second},
+      {.child = second, .parent = first},
+  }};
+  EXPECT_FALSE(scene.set_parents(cycle));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({third, second}));
+  EXPECT_EQ(scene.revision(), revision);
+  const std::array<SceneParentAssignment, 1u> unparent{{
+      {.child = first, .parent = kInvalidEntityId},
+  }};
+  ASSERT_TRUE(scene.set_parents(unparent));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({third, second, first}));
+  const std::array<SceneParentAssignment, 3u> reordered{{
+      {.child = first, .parent = kInvalidEntityId},
+      {.child = third, .parent = kInvalidEntityId},
+      {.child = second, .parent = kInvalidEntityId},
+  }};
+  ASSERT_TRUE(scene.replace_hierarchy(reordered));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({first, third, second}));
+}
+
+TEST(SceneDocumentTests, DocumentSettingsExistWithoutObjectsAndPreserveSpatialCaches) {
+  SceneDocument scene;
+  const auto hierarchy = scene.hierarchy_projection();
+  const auto occurrences = scene.mesh_occurrence_projection();
+  SceneSettings settings = scene.scene_settings();
+  settings.environment.intensity = 3.25f;
+  settings.fog.enabled = true;
+  settings.post_process.tone_mapping = SceneToneMapping::Agx;
+  ASSERT_TRUE(scene.set_scene_settings(settings));
+  EXPECT_TRUE(scene.entities().empty());
+  EXPECT_EQ(scene.scene_settings(), settings);
+  EXPECT_EQ(scene.revision(), 1u);
+  EXPECT_EQ(scene.content_revision(), 1u);
+  EXPECT_EQ(scene.scene_settings_revision(), 1u);
+  EXPECT_EQ(scene.hierarchy_presentation_revision(), 0u);
+  EXPECT_EQ(scene.render_component_revision(), 0u);
+  EXPECT_EQ(scene.transform_revision(), 0u);
+  EXPECT_EQ(scene.mesh_binding_revision(), 0u);
+  EXPECT_EQ(scene.hierarchy_projection(), hierarchy);
+  EXPECT_EQ(scene.mesh_occurrence_projection(), occurrences);
+  ASSERT_TRUE(scene.set_scene_settings(settings));
+  EXPECT_EQ(scene.revision(), 1u);
+  settings.fog.density = -1.0f;
+  EXPECT_FALSE(scene.set_scene_settings(settings));
+  EXPECT_EQ(scene.revision(), 1u);
+  EXPECT_EQ(scene.scene_settings_revision(), 1u);
+  EXPECT_GE(scene.scene_settings().fog.density, 0.0f);
+}
+
+TEST(SceneDocumentTests, StructuralCompensationRestoresExactForestAndIdentity) {
+  SceneDocument scene;
+  const EntityId first = scene.create_empty("First");
+  const EntityId group = scene.create_empty("Group");
+  const EntityId child = scene.create_empty("Child");
+  const EntityId last = scene.create_empty("Last");
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+  ASSERT_TRUE(scene.set_sibling_ordinal(group, 0u));
+  const auto before = scene.entity_tree_order();
+  const auto roots = scene.root_entities();
+  const auto group_uuid = scene.uuid(group);
+  const auto group_identity = scene.editor_object_id(group);
+  const auto revision = scene.revision();
+  const std::array participants{group, child};
+  const auto checkpoint = scene.capture_modeling_projection_checkpoint(
+      participants, SceneModelingProjectionDomain::Structure);
+  ASSERT_TRUE(checkpoint.valid());
+  ASSERT_TRUE(scene.destroy_entity(group));
+  const EntityId provisional = scene.create_empty("Provisional");
+  ASSERT_TRUE(scene.set_sibling_ordinal(provisional, 0u));
+  const std::array created{provisional};
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint, created));
+  EXPECT_EQ(scene.entity_tree_order(), before);
+  EXPECT_EQ(scene.root_entities(), roots);
+  EXPECT_EQ(scene.uuid(group), group_uuid);
+  EXPECT_EQ(scene.editor_object_id(group), group_identity);
+  EXPECT_EQ(scene.parent(child), group);
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_FALSE(scene.exists(provisional));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({group, first, last}));
+}
+
+TEST(SceneDocumentTests, BoundedStructuralHistoryPreservesConcurrentDocumentSettings) {
+  SceneDocument scene;
+  const EntityId first = scene.create_empty("First");
+  const EntityId second = scene.create_empty("Second");
+  const std::array participants{second};
+  constexpr auto kDomains = SceneModelingProjectionDomain::Structure;
+  const auto checkpoint = scene.capture_modeling_projection_checkpoint(participants, kDomains);
+  auto fence = scene.capture_modeling_projection_mutation_fence(participants, kDomains);
+  ASSERT_TRUE(scene.set_parent(second, first, false));
+  ASSERT_TRUE(fence.acknowledge_current(scene));
+  SceneSettings settings = scene.scene_settings();
+  settings.fog.enabled = true;
+  ASSERT_TRUE(scene.set_scene_settings(settings));
+  const auto settings_revision = scene.scene_settings_revision();
+  EXPECT_FALSE(scene.can_restore_modeling_projection_checkpoint(checkpoint));
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+      checkpoint, fence));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({first, second}));
+  EXPECT_EQ(scene.scene_settings(), settings);
+  EXPECT_EQ(scene.scene_settings_revision(), settings_revision);
+}
+
+TEST(SceneDocumentTests, StructuralCompensationRemovesProvisionalGroupAroundRoots) {
+  SceneDocument scene;
+  const EntityId first = scene.create_empty("First");
+  const EntityId second = scene.create_empty("Second");
+  const EntityId last = scene.create_empty("Last");
+  const std::array participants{first, second};
+  const auto checkpoint = scene.capture_modeling_projection_checkpoint(
+      participants, SceneModelingProjectionDomain::Structure);
+  ASSERT_TRUE(checkpoint.valid());
+  const auto revision = scene.revision();
+  const EntityId group = scene.create_empty("Provisional Group");
+  ASSERT_TRUE(scene.set_parent(first, group, false));
+  ASSERT_TRUE(scene.set_parent(second, group, false));
+  ASSERT_TRUE(scene.set_sibling_ordinal(group, 0u));
+  const std::array created{group};
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint, created));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({first, second, last}));
+  EXPECT_EQ(scene.parent(first), kInvalidEntityId);
+  EXPECT_EQ(scene.parent(second), kInvalidEntityId);
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_FALSE(scene.exists(group));
+}
+
+TEST(SceneDocumentTests, StructuralCompensationRestoresScatteredRootSiblingSlots) {
+  SceneDocument scene;
+  const EntityId first = scene.create_empty("First");
+  const EntityId second = scene.create_empty("Second");
+  const EntityId third = scene.create_empty("Third");
+  const EntityId last = scene.create_empty("Last");
+  const std::array participants{first, third};
+  const auto checkpoint = scene.capture_modeling_projection_checkpoint(
+      participants, SceneModelingProjectionDomain::Structure);
+  const auto revision = scene.revision();
+  ASSERT_TRUE(checkpoint.valid());
+  ASSERT_TRUE(scene.set_sibling_ordinal(first, 3u));
+  ASSERT_TRUE(scene.set_sibling_ordinal(third, 3u));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({second, last, first, third}));
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint));
+  EXPECT_EQ(scene.root_entities(), std::vector<EntityId>({first, second, third, last}));
+  EXPECT_EQ(scene.revision(), revision);
+}
+
+TEST(SceneDocumentTests, ScalarCompensationRestoresDocumentSettingsRevisionsAfterInverse) {
+  SceneDocument scene;
+  const SceneSettings original = scene.scene_settings();
+  auto checkpoint = scene.capture_scalar_compensation_checkpoint();
+  ASSERT_TRUE(checkpoint.valid());
+  SceneSettings changed = original;
+  changed.environment.intensity = 8.0f;
+  ASSERT_TRUE(scene.set_scene_settings(changed));
+  ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(checkpoint));
+  ASSERT_TRUE(scene.begin_scalar_compensation_restore(checkpoint));
+  ASSERT_TRUE(scene.set_scene_settings(original));
+  ASSERT_TRUE(scene.restore_scalar_compensation_checkpoint(checkpoint));
+  EXPECT_EQ(scene.scene_settings(), original);
+  EXPECT_EQ(scene.scene_settings_revision(), 0u);
+  EXPECT_EQ(scene.revision(), 0u);
+  EXPECT_EQ(scene.content_revision(), 0u);
+}
+
 TEST(SceneDocumentTests, CurveBindingsPreserveKindAndTrackOwnerRevisions) {
   SceneDocument scene;
   const EntityId curve = scene.create_entity("Curve", EntityKind::Curve);
@@ -5374,7 +5580,6 @@ TEST(SceneDocumentTests, CurveBindingsPreserveKindAndTrackOwnerRevisions) {
   EXPECT_FALSE(scene.set_mesh(curve, {.mesh = 7u}));
   EXPECT_FALSE(scene.set_light(curve, {}));
   EXPECT_FALSE(scene.set_entity_kind(curve, EntityKind::Mesh));
-  EXPECT_FALSE(scene.set_scene_settings(curve, {}));
   EXPECT_EQ(scene.revision(), revision);
   EXPECT_EQ(scene.curve_binding_revision(), binding_revision);
   EXPECT_EQ(scene.render_component_revision(), render_revision);
@@ -13661,7 +13866,7 @@ TEST(SceneContentDocumentTests,
   SceneContentDocument document;
   const EntityId first = document.scene().create_entity("First");
   ASSERT_NE(first, kInvalidEntityId);
-  EXPECT_EQ(document.scene().editor_object_id(first), 2u);
+  EXPECT_EQ(document.scene().editor_object_id(first), 1u);
 
   const EntityId imported = document.scene().create_entity_with_id(
       50u, "Imported", EntityKind::Mesh, 99u);
@@ -13672,7 +13877,16 @@ TEST(SceneContentDocumentTests,
       document.scene().create_entity("After Import", EntityKind::Mesh);
   EXPECT_EQ(document.scene().editor_object_id(after_import), 100u);
 
+  ASSERT_TRUE(document.scene().set_sibling_ordinal(after_import, 0u));
+  const auto authored_roots = document.scene().root_entities();
+  SceneSettings settings = document.scene().scene_settings();
+  settings.environment.rotation_y = 0.75f;
+  ASSERT_TRUE(document.scene().set_scene_settings(settings));
+  const auto settings_revision = document.scene().scene_settings_revision();
   SceneContentDocument moved(std::move(document));
+  EXPECT_EQ(moved.scene().root_entities(), authored_roots);
+  EXPECT_EQ(moved.scene().scene_settings(), settings);
+  EXPECT_EQ(moved.scene().scene_settings_revision(), settings_revision);
   const EntityId after_move =
       moved.scene().create_entity("After Move", EntityKind::Mesh);
   ASSERT_NE(after_move, kInvalidEntityId);
@@ -17663,6 +17877,67 @@ TEST(ModelingSessionServiceTests,
     const ModelingCommandResult canceled =
         service.cancel_active_operation_preview();
     EXPECT_TRUE(canceled.ok) << canceled.message;
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     HalfCutPreviewResetFailuresPreserveSettingsAndAllowRetry) {
+  for (const bool rebuild_participants : {false, true}) {
+    SCOPED_TRACE(rebuild_participants ? "structural rebuild"
+                                      : "in-place update");
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult box = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Half-Cut Failed Reset Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    const ModelingCommandResult begun =
+        service.execute_context_action("half_cut");
+    ASSERT_TRUE(begun.ok) << begun.message;
+    const ModelingInteractionSettings defaults = service.interaction_settings();
+    ModelingInteractionSettings edited = defaults;
+    edited.half_cut_axis = ModelingHalfCutAxis::Z;
+    edited.half_cut_separate_parts = rebuild_participants;
+    const ModelingCommandResult updated = service.set_interaction_settings(edited);
+    ASSERT_TRUE(updated.ok) << updated.message;
+    ASSERT_TRUE(updated.changed);
+    const ModelingInteractionSettings accepted = service.interaction_settings();
+    const std::uint64_t accepted_revision = service.tool_settings_revision();
+    const std::optional<MeshAsset> accepted_mesh =
+        service.compile_object_mesh(box.object.modeling_object_id);
+    ASSERT_TRUE(accepted_mesh.has_value());
+
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+    const ModelingCommandResult failed = service.reset_active_tool_settings();
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_EQ(service.interaction_settings(), accepted);
+    EXPECT_EQ(service.tool_settings_revision(), accepted_revision);
+    EXPECT_TRUE(service.operation_preview_active());
+    const std::optional<MeshAsset> after_failure =
+        service.compile_object_mesh(box.object.modeling_object_id);
+    ASSERT_TRUE(after_failure.has_value());
+    EXPECT_EQ(mesh_position_fingerprint(*after_failure),
+              mesh_position_fingerprint(*accepted_mesh));
+
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    const ModelingCommandResult retried = service.reset_active_tool_settings();
+    ASSERT_TRUE(retried.ok) << retried.message;
+    EXPECT_TRUE(retried.changed);
+    EXPECT_EQ(service.interaction_settings(), defaults);
+    EXPECT_GT(service.tool_settings_revision(), accepted_revision);
+    const std::optional<MeshAsset> reset_mesh =
+        service.compile_object_mesh(box.object.modeling_object_id);
+    ASSERT_TRUE(reset_mesh.has_value());
+    EXPECT_NE(mesh_position_fingerprint(*reset_mesh),
+              mesh_position_fingerprint(*accepted_mesh));
+    EXPECT_FALSE(service.reset_active_tool_settings().changed);
+    EXPECT_TRUE(service.cancel_active_operation_preview().ok);
   }
 }
 
@@ -24973,11 +25248,8 @@ TEST(BakeServiceTests, ValidatesDescriptors) {
 TEST(SceneLayerTests,
      OwnsUniqueNamesExactMembershipAndLayerAwareVisibility) {
   SceneDocument scene;
-  const EntityId root = scene.create_empty("Scene");
-  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
   const EntityId group = scene.create_empty("Group");
   const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
-  ASSERT_TRUE(scene.set_parent(group, root, false));
   ASSERT_TRUE(scene.set_parent(child, group, false));
 
   const SceneLayerId first = scene.create_layer();
@@ -25024,11 +25296,8 @@ TEST(SceneLayerTests,
 TEST(SceneLayerTests,
      LayerLockIsAnUndoableEffectiveMaskThatPreservesLocalLocks) {
   SceneDocument scene;
-  const EntityId root = scene.create_empty("Scene");
-  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
   const EntityId group = scene.create_empty("Group");
   const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
-  ASSERT_TRUE(scene.set_parent(group, root, false));
   ASSERT_TRUE(scene.set_parent(child, group, false));
 
   const SceneLayerId layer = scene.create_layer("Locked Layer");
@@ -25089,14 +25358,11 @@ TEST(SceneLayerTests,
 TEST(SceneLayerTests,
      CommandsExpandGroupsExcludeInternalDefinitionsAndPreserveUndoState) {
   SceneDocument scene;
-  const EntityId root = scene.create_empty("Scene");
-  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
   const EntityId group = scene.create_empty("Group");
   const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(child, MeshComponent{.mesh = 1u}));
   const EntityId definition = scene.create_empty("Definition");
   const EntityId definition_member = scene.create_empty("Definition Member");
-  ASSERT_TRUE(scene.set_parent(group, root, false));
   ASSERT_TRUE(scene.set_parent(child, group, false));
   ASSERT_TRUE(scene.set_parent(definition, group, false));
   ASSERT_TRUE(scene.set_instance_definition(definition));
@@ -25126,7 +25392,7 @@ TEST(SceneLayerTests,
 
   const std::uint64_t before_public_reparent = scene.layer_revision();
   const DocumentCommandResult public_reparent =
-      commands.reparent_entity(child, root, false);
+      commands.reparent_entity(child, kInvalidEntityId, false);
   ASSERT_TRUE(public_reparent.ok);
   ASSERT_TRUE(public_reparent.changed);
   EXPECT_EQ(scene.entity_layer(child), created.layer_id);

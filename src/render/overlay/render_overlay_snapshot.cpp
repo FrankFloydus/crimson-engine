@@ -143,16 +143,9 @@ RenderOverlayBoundsSnapshot bounds_snapshot(const SceneBounds &bounds) {
 
 ViewportCameraClipPlanes scene_camera_clip_planes(
     const SceneDocument &document) {
-  if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
-    if (const SceneSettingsComponent *settings =
-            document.scene_settings(root)) {
-      return sanitize_viewport_camera_clip_planes(
-          settings->camera.near_plane, settings->camera.far_plane);
-    }
-  }
-  const SceneCameraSettings defaults;
-  return sanitize_viewport_camera_clip_planes(defaults.near_plane,
-                                              defaults.far_plane);
+  const SceneCameraSettings &camera = document.scene_settings().camera;
+  return sanitize_viewport_camera_clip_planes(camera.near_plane,
+                                              camera.far_plane);
 }
 
 bool affine_matrices_differ_only_by_translation(const QMat4 &left,

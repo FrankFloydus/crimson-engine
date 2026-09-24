@@ -219,6 +219,7 @@ private:
   bool instance_edit_active_ = false;
   bool valid_ = false;
   std::uint64_t rectangle_source_revision_ = 0;
+  std::uint64_t rectangle_settings_revision_ = 0;
   std::uint64_t rectangle_build_count_ = 0;
   ModelingViewportCamera rectangle_camera_;
   quader_editor_core::RectangleProjectedHitsRequest rectangle_request_;

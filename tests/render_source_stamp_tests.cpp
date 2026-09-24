@@ -130,12 +130,10 @@ TEST(RenderSourceStampTests,
      CameraOnlySceneChangeReusesSceneAndOverlayExtractionStorage) {
   SceneDocument document;
   AssetRegistry assets;
-  const EntityId root =
-      document.create_entity("Scene Settings", EntityKind::Empty);
-  SceneSettingsComponent settings;
+  SceneSettings settings;
   settings.camera.near_plane = 0.1f;
   settings.camera.far_plane = 100.0f;
-  ASSERT_TRUE(document.set_scene_settings(root, settings));
+  ASSERT_TRUE(document.set_scene_settings(settings));
 
   const RenderSceneBindingKey scene_binding{41u, 42u, 43u};
   const RenderSceneSnapshot scene_snapshot = build_render_scene_snapshot(
@@ -151,7 +149,7 @@ TEST(RenderSourceStampTests,
 
   settings.camera.near_plane = 0.25f;
   settings.camera.far_plane = 250.0f;
-  ASSERT_TRUE(document.set_scene_settings(root, settings));
+  ASSERT_TRUE(document.set_scene_settings(settings));
   ASSERT_GT(document.revision(), scene_snapshot.scene_revision);
 
   EXPECT_TRUE(render_scene_snapshot_matches_sources(

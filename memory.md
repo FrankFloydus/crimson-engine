@@ -158,12 +158,13 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
 - Dedicated Extrusion activation starts a pending preview; releasing a viewport drag ends
   pointer input but retains that preview with Apply enabled. Apply accepts it, while
   Escape/Cancel restores its source and preserves existing undo/redo.
-  Activation starts at zero and locks preselected faces, or the first face picked after
+  Activation uses the remembered Amount (initially zero) and locks preselected faces, or the first face picked after
   activation. User selection edits and tool switches cannot replace that source while
   pending; internal preview/history publication still restores its own selections.
   Repeated E retains the pending step. Settings regenerate from its immutable source.
-  Apply records one history entry, releases the source, and resets Amount to zero;
-  the next amount edit or drag creates a new step from the selected caps. Accepted
+  Apply records one history entry and releases the source while retaining Amount;
+  it does not start another preview. The next amount edit or drag creates a new step from the selected caps.
+  A new pointer drag starts at zero displacement; canceled samples do not replace accepted options. Accepted
   geometry has no adjustment window. Leaving the idle tool retains accepted geometry.
   Physical E needs the descriptor's repeated-activation capability at the viewport dispatch
   gate. Native QWindow focus must reserve ShortcutOverride like its widget container so
@@ -262,8 +263,9 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
   share the revision-gated primitive-control projection. Ctrl changes the subdivision buttons to
   decrement controls (minimum one segment); the accepted press freezes the direction and active
   glyph even if modifiers change before release. Modifier-only frames do not reproject or rebuild
-  geometry. Primitive settings persist between shapes in one session and reset to defaults when
-  that session ends, without changing the accepted geometry or its history snapshots.
+  geometry. Primitive settings and preferred shape persist for the application lifetime across
+  tool and scene sessions, without changing accepted geometry or its history snapshots.
+  Rejected edits restore the last accepted options before preview retirement.
 - Cylinder uses the same creation interaction, with top/bottom dots, one camera-facing radial
   dot and one upper-rim segment button (3–128 sides). Radial drags scale both footprint radii about
   their center from an immutable baseline, retaining ellipse proportions. Cylinder F/C change
@@ -278,7 +280,7 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
   boundary dots, a bottom-anchored height dot, and major/minor segment buttons. Torus outer drags
   retain the hole, inner drags retain the outside, and both retain XZ ellipse proportions. Its
   resize baseline includes tube ratio as well as bounds: cancellation/Undo must restore both.
-  All five shapes share bounds publication, pending-setting isolation, and session reset. Hover
+  All five shapes share bounds publication, pending-setting isolation, and application option memory. Hover
   labels and highlighted loops use the shared projected controls and interaction revisions; the
   native label must remain transparent to viewport pointer hit testing. Dimension feedback stays
   in world units until the Qt presenter converts with `viewport_host_defaults().map_units_per_world_unit`,
@@ -617,16 +619,17 @@ Tests: [occurrences](tests/scene_mesh_occurrence_projection_tests.cpp),
 
 ## Render binding and resource lifetime
 
-- Scene fog belongs to the root's scene settings and its existing document-command history.
+- Scene fog belongs to the document's scene settings and its existing document-command history.
   It applies only to Rendered viewport scene views, independently of the Post Process toggle;
   overlay views stay clear. Keep every effective fog field in the viewport presentation gate so
   edits invalidate rendering while unchanged frames skip Filament setters. Fog color is linear
-  and uses the Inspector's color-preview transaction, including cancel and scene-rebind fences.
-  QDR schema 15 stores fog; older scenes default to disabled. Zero cutoff means unlimited.
+  and uses the Environment popout's color-preview transaction, including cancel and scene-rebind fences.
+  QDR schema 16 stores document settings; schema 15 introduced fog, and earlier scenes default
+  to disabled fog. Zero cutoff means unlimited.
   Owners: [scene settings](src/scene/components.hpp), [viewport fog](src/render/viewport_renderer.cpp),
   [QDR compatibility](src/io/qdr/README.md).
   Tests: [color preview](tests/scene_color_preview_tests.cpp),
-  [Inspector](tests/inspector_material_tests.cpp), [fog pixels](tests/render_fog_runtime_tests.cpp).
+  [Environment popup](tests/qt_environment_settings_popup_tests.cpp), [fog pixels](tests/render_fog_runtime_tests.cpp).
 - Keep postprocessed viewport and preview grading in Rec709-sRGB-D65: Filament's dithering,
   integer LUT and LDR intermediates need display-encoded values. Linear grading amplifies dark
   noise and loses shadow precision. The maintained presentation patch decodes only the final
@@ -721,7 +724,7 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
   Lifecycle bindings belong to the whole settings panel, including buttons; Space on a focused
   Cancel button must resolve Apply rather than trigger the button's native click on release.
   Flush the exact final value on release/Apply. Discard on button press before
-  focus loss can emit editingFinished. An idle held slider performs no owner work.
+  focus loss can emit editingFinished. An idle numeric scrub performs no owner work.
 - Native transient windows yield viewport submission until first Paint completes, then resume while
   still open; pausing for the entire modal lifetime breaks live previews. Retain generation/QPointer
   guards across nested, hidden, destroyed, and re-shown windows.
@@ -786,7 +789,9 @@ Tests: [normal behavior](tests/modeling_domain/operation/qdr_document_operation_
   then Apply or Cancel through the shared lifecycle. Selection edits rebuild the UV preview
   from committed coordinates; invalid or empty guides restore them without ending the tool.
   Apply records one UV history entry and captured repeat options; Cancel keeps selected guides
-  and scene-local settings. Returning the candidate to original UVs must preserve redo history.
+  and application-lifetime options. Guide tokens and preview geometry remain scene-local;
+  rejected candidates cannot replace accepted options. Returning the candidate to original UVs
+  must preserve redo history.
   Contracts: [tool workflows](tests/uv_peel_tool_service_tests.cpp).
 - Guided UV Peel orders selected connected edge guides and walks opposite edges through quads on
   both sides, including front/back bands and quad end caps. Stop at a boundary, non-quad or the

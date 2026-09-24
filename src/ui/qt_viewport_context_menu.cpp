@@ -113,7 +113,7 @@ ViewportContextMenuScope context_menu_scope(
     }
     any_target = true;
     const bool editable = entity.selectable && !entity.locked &&
-                          !entity.is_scene_root && !entity.is_instance_definition;
+                          !entity.is_instance_definition;
     const bool instance = editable && entity.has_instance_occurrence;
     const bool polygon = editable && entity.has_modeling_object &&
                          entity.has_mesh && !entity.has_curve && !instance;

@@ -33,7 +33,7 @@ class QMenu;
 class QMimeData;
 class QPushButton;
 class QShowEvent;
-class QSlider;
+class QSpinBox;
 class QStackedWidget;
 class QSplitter;
 class QTableView;
@@ -395,7 +395,7 @@ private:
   QLabel *usage_status_ = nullptr;
   QToolButton *grid_button_ = nullptr;
   QToolButton *list_button_ = nullptr;
-  QSlider *tile_slider_ = nullptr;
+  QSpinBox *tile_size_spin_ = nullptr;
   QToolButton *folders_button_ = nullptr;
   QSplitter *splitter_ = nullptr;
   QTreeWidget *folder_tree_ = nullptr;

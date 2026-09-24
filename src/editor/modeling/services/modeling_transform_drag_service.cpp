@@ -49,7 +49,7 @@ bool selected_scene_targets_support_structural_duplicate(
   const std::vector<EntityId> selected = scene.selected_entities();
   return !selected.empty() &&
          std::all_of(selected.begin(), selected.end(), [&](EntityId entity) {
-           return scene.exists(entity) && !scene.is_scene_root(entity) &&
+           return scene.exists(entity) &&
                   scene.transform(entity) != nullptr &&
                   !scene.is_effectively_locked(entity);
          });

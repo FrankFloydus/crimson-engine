@@ -454,7 +454,7 @@ private:
   SceneRenderBridge bridge_;
   ViewportRenderer view_;
   ViewportCameraController camera_;
-  SceneSettingsComponent settings_;
+  SceneSettings settings_;
 };
 
 /// Exercises production scene resources and viewport shading without a native
@@ -658,7 +658,7 @@ private:
   SceneRenderBridge bridge_;
   ViewportRenderer view_;
   ViewportCameraController camera_;
-  SceneSettingsComponent settings_;
+  SceneSettings settings_;
 };
 
 struct ColorRuntimePatchStats {

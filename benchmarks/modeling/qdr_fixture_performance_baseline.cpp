@@ -532,7 +532,7 @@ FixtureCounts analyze_fixture(const quader::SceneContentDocument &document) {
       referenced_meshes.insert(mesh->mesh);
     }
     const bool included_in_select_all =
-        !scene.is_scene_root(entity) && !scene.is_effectively_locked(entity) &&
+        !scene.is_effectively_locked(entity) &&
         selectable;
     if (included_in_select_all) {
       counts.selectable_entities.push_back(entity);

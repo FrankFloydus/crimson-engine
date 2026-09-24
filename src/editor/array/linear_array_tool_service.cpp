@@ -109,9 +109,10 @@ QVec3 snapped_endpoint(QVec3 source, QVec3 endpoint,
 LinearArrayToolService::LinearArrayToolService(
     SceneDocument &scene, AssetRegistry &assets, EditorHistoryService &history,
     ModelingSessionService &modeling, EditorSelectionService &selection,
-    SceneInstanceService &instances)
+    SceneInstanceService &instances, LinearArraySessionDefaults *defaults)
     : scene_(scene), assets_(assets), history_(history), modeling_(modeling),
-      selection_(selection), instances_(instances) {}
+      selection_(selection), instances_(instances),
+      defaults_(defaults != nullptr ? *defaults : local_defaults_) {}
 
 void LinearArrayToolService::clear_preview_cache() {
   cached_preview_revision_ = 0;
@@ -411,7 +412,7 @@ bool LinearArrayToolService::active() const {
 }
 
 std::uint32_t LinearArrayToolService::count() const {
-  return session_.has_value() ? session_->count : kLinearArrayDefaultCount;
+  return session_.has_value() ? session_->count : defaults_.count;
 }
 
 std::uint32_t LinearArrayToolService::maximum_count() const {
@@ -436,7 +437,7 @@ CommandResult LinearArrayToolService::activate(double fallback_grid_size) {
   next.primary_source = primary_source;
   next.instance_occurrences = instance_occurrences;
   next.selection_revision = scene_.selection_revision();
-  next.count = std::min(kLinearArrayDefaultCount,
+  next.count = std::min(defaults_.count,
                         maximum_count_for(ordered_sources.size()));
   next.sources.reserve(ordered_sources.size());
   for (const EntityId entity : ordered_sources) {
@@ -614,6 +615,7 @@ CommandResult LinearArrayToolService::set_count(std::uint32_t count) {
     return command_unchanged_result();
   }
   session_->count = count;
+  defaults_.count = count;
   session_->revision = issue_revision();
   clear_preview_cache();
   issue_tool_settings_revision();
@@ -626,10 +628,12 @@ CommandResult LinearArrayToolService::reset_settings() {
   }
   const std::uint32_t default_count =
       std::min(kLinearArrayDefaultCount, maximum_count());
-  if (session_->count == default_count) {
+  if (session_->count == default_count &&
+      defaults_ == LinearArraySessionDefaults{}) {
     return command_unchanged_result();
   }
   session_->count = default_count;
+  defaults_ = {};
   session_->revision = issue_revision();
   clear_preview_cache();
   issue_tool_settings_revision();

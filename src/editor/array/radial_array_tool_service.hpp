@@ -57,6 +57,19 @@ inline constexpr double kRadialArrayMinimumRepeatSpacing = 0.0;
 inline constexpr double kRadialArrayMaximumRepeatSpacing = 16384.0;
 inline constexpr std::size_t kRadialArrayMaximumTotalElements = 1024u;
 
+/** Keeps authored options while leaving placement and automatic spacing local. */
+struct RadialArraySessionDefaults final {
+  RadialArrayMode mode = RadialArrayMode::Total;
+  bool create_instances = false;
+  double degrees = kRadialArrayDefaultDegrees;
+  std::uint32_t copies = kRadialArrayDefaultCopies;
+  std::uint32_t repeats = kRadialArrayDefaultRepeats;
+  std::optional<double> repeat_spacing;
+
+  friend bool operator==(const RadialArraySessionDefaults &,
+                         const RadialArraySessionDefaults &) = default;
+};
+
 /**
  * Exposes the renderer-neutral center marker used during placement/preview.
  */
@@ -102,7 +115,8 @@ public:
                          ModelingSessionService &modeling,
                          EditorSelectionService &selection,
                          SceneInstanceService &instances,
-                         SceneStructuralLifecycleService &structural_lifecycle);
+                         SceneStructuralLifecycleService &structural_lifecycle,
+                         RadialArraySessionDefaults *defaults = nullptr);
 
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
@@ -211,6 +225,8 @@ private:
   EditorSelectionService &selection_;
   SceneInstanceService &instances_;
   SceneStructuralLifecycleService &structural_lifecycle_;
+  RadialArraySessionDefaults local_defaults_;
+  RadialArraySessionDefaults &defaults_;
   std::optional<Session> session_;
   std::uint64_t revision_counter_ = 0;
   std::uint64_t tool_settings_revision_counter_ = 0;

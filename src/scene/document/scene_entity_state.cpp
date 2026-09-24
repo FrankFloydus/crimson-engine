@@ -61,9 +61,6 @@ capture_scene_entity_state(const SceneDocument &scene, EntityId entity) {
                              state.instance_definition);
   capture_optional_component(scene.instance_occurrence(entity),
                              state.instance_occurrence);
-  state.scene_root = scene.is_scene_root(entity);
-  capture_optional_component(scene.scene_settings(entity),
-                             state.scene_settings);
   state.layer_id = scene.entity_layer(entity);
   return state;
 }
@@ -159,11 +156,6 @@ bool apply_scene_entity_state(SceneDocument &scene, EntityId entity,
       !scene.clear_modeling_object(entity)) {
     return false;
   }
-  if (options.include_scene_settings && !state.scene_settings.has_value() &&
-      scene.scene_settings(entity) != nullptr &&
-      !scene.clear_scene_settings(entity)) {
-    return false;
-  }
   if (options.include_texture_mapping &&
       !state.texture_mapping.has_value() &&
       scene.texture_mapping(entity) != nullptr &&
@@ -186,10 +178,6 @@ bool apply_scene_entity_state(SceneDocument &scene, EntityId entity,
   }
   if (options.include_modeling_object && state.modeling_object.has_value() &&
       !scene.set_modeling_object(entity, *state.modeling_object)) {
-    return false;
-  }
-  if (options.include_scene_settings && state.scene_settings.has_value() &&
-      !scene.set_scene_settings(entity, *state.scene_settings)) {
     return false;
   }
   if (options.include_instance_roles) {
@@ -240,7 +228,7 @@ bool apply_scene_entity_state_placement(SceneDocument &scene, EntityId entity,
       !scene.set_parent(entity, parent, false)) {
     return false;
   }
-  if (state.sibling_ordinal.has_value() && parent != kInvalidEntityId &&
+  if (state.sibling_ordinal.has_value() &&
       !scene.set_sibling_ordinal(entity, *state.sibling_ordinal)) {
     return false;
   }

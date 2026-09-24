@@ -1996,6 +1996,8 @@ TEST(BuildGuardrailTests, DependencyCommitLiteralsStayInDependencyOwnerFiles) {
   const std::vector<std::filesystem::path> allowed_commit_owner_files = {
       "cmake/QuaderBuildOptions.cmake",
       "thirdparty/THIRD_PARTY_MANIFEST.md",
+      // Pinned source citations document input behavior; they are not dependency pins.
+      "src/ui/NUMERIC_INPUTS.md",
   };
 
   std::vector<std::filesystem::path> files =

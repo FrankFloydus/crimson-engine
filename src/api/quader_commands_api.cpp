@@ -2826,7 +2826,7 @@ void QuaderCommandsApi::Impl::register_commands() {
       [this] {
         std::vector<QuaderSceneVisibilityEdit> edits;
         for (const QuaderEntitySnapshot &snapshot : api_.query().entities()) {
-          if (!snapshot.is_scene_root && snapshot.selected &&
+          if (snapshot.selected &&
               snapshot.visible) {
             edits.push_back({
                 .entity = snapshot.id,
@@ -2851,7 +2851,7 @@ void QuaderCommandsApi::Impl::register_commands() {
         const std::vector<QuaderEntitySnapshot> entities =
             api_.query().entities();
         return std::ranges::any_of(entities, [](const auto &snapshot) {
-          return !snapshot.is_scene_root && snapshot.selected &&
+          return snapshot.selected &&
                  snapshot.visible;
         });
       });
@@ -2863,7 +2863,7 @@ void QuaderCommandsApi::Impl::register_commands() {
       [this] {
         std::vector<QuaderSceneVisibilityEdit> edits;
         for (const QuaderEntitySnapshot &snapshot : api_.query().entities()) {
-          if (!snapshot.is_scene_root && !snapshot.visible) {
+          if (!snapshot.visible) {
             edits.push_back({
                 .entity = snapshot.id,
                 .before = false,
@@ -2882,7 +2882,7 @@ void QuaderCommandsApi::Impl::register_commands() {
         const std::vector<QuaderEntitySnapshot> entities =
             api_.query().entities();
         return std::ranges::any_of(entities, [](const auto &snapshot) {
-          return !snapshot.is_scene_root && !snapshot.visible;
+          return !snapshot.visible;
         });
       });
   set_keybinding_selection_modes(

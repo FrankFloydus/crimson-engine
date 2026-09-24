@@ -479,7 +479,8 @@ DocumentCommandResult
 EditorSelectionService::apply_runtime_scene_selection_state(
     SceneSelectionState selection, bool preserve_selection_mode) {
   const SceneSelectionState before = capture_scene_selection(scene_);
-  if (!same_scene_selection(before, selection)) {
+  if (!same_scene_selection(before, selection) &&
+      document_commands_.entity_property_edit_active()) {
     const auto canceled = document_commands_.cancel_active_property_edit();
     if (!canceled.ok) return canceled;
   }
@@ -1937,7 +1938,7 @@ EditorSelectionService::group_promoted_scene_target(EntityId entity) const {
     entity = scene_target_resolver_(entity);
   }
   if (entity == kInvalidEntityId || !scene_.exists(entity) ||
-      scene_.is_scene_root(entity) || !scene_target_selectable(entity) ||
+      !scene_target_selectable(entity) ||
       !scene_.is_effectively_visible(entity) ||
       scene_.is_effectively_locked(entity)) {
     return kInvalidEntityId;
@@ -2245,14 +2246,12 @@ ModelingSelectionSummary EditorSelectionService::scene_box_selection(
 
 EntityId EditorSelectionService::nearest_group_ancestor(EntityId entity) const {
   if (entity != kInvalidEntityId && scene_.exists(entity) &&
-      !scene_.is_scene_root(entity) &&
       scene_.kind(entity) == EntityKind::Empty) {
     return entity;
   }
   EntityId parent = scene_.parent(entity);
   while (parent != kInvalidEntityId) {
-    if (!scene_.is_scene_root(parent) &&
-        scene_.kind(parent) == EntityKind::Empty) {
+    if (scene_.kind(parent) == EntityKind::Empty) {
       return parent;
     }
     parent = scene_.parent(parent);

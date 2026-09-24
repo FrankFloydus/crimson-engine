@@ -41,12 +41,21 @@ file except through prior written authorization from Francesco Di Blasi.
   press acquires focus and performs its action in the same gesture. One masked native orange border
   marks the focused pane, including single/maximized layouts; panel focus clears it. It shares the
   current-material outline color and gates geometry/mask/stacking updates before widget work.
+- Each pane's Environment launcher opens one retained `QtEnvironmentSettingsPopup` immediately
+  left of the display menu. Its collapsible Environment, Fog, Camera and Post Process controls
+  edit document settings through the public query/scene APIs, including empty documents.
+  Object selection does not own or interrupt these edits. Gate retained refresh on the document
+  settings revision before copying values; runtime replacement abandons dialogs and numeric
+  gestures without accessing the old owners. See `tests/qt_environment_settings_popup_tests.cpp`.
 - Its retained settings overlay shows only actual settings controls and their actions, with the
   operation title in the disclosure header. No descriptions or empty shell are shown. Expansion
   starts expanded for each activation; an explicit collapse lasts for that activation. Scene-owned origin
   metadata pins the overlay to the initiating pane; hover and parameter edits never move it.
   Collapse settles field drafts without terminating the operation. See
   `tests/qt_viewport_settings_overlay_tests.cpp` and the settings-control tests.
+  Each value uses one label-left, field-right row, with a shared scaled label width and wrapping
+  for localized labels. Composite fields keep their controls in the field column. Actions align
+  with fields. The overlay has no Reset Settings action or numeric limit labels.
 - `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system
   High Contrast fallback. Preserve native control behavior and accessible default, hover, selected,
   pressed, focused, inactive, and disabled states when styling.

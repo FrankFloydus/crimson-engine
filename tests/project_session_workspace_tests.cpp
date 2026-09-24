@@ -785,7 +785,7 @@ TEST(ProjectSessionWorkspace, KeepsSceneHistoryAndSelectionIndependent) {
 }
 
 TEST(ProjectSessionWorkspace,
-     UvPeelOptionsAndSelectionTokensStayWithinSceneSessions) {
+     UvPeelOptionsAreSharedWhileSelectionTokensStayWithinSceneSessions) {
   ScopedProjectSessionDirectory temporary("uv-peel-sessions");
   ProjectSession project;
   const auto created = project.create(temporary.make_empty_child("UvPeel"));
@@ -817,7 +817,7 @@ TEST(ProjectSessionWorkspace,
   OpenSceneSession *second = project.find(added.value());
   ASSERT_NE(second, nullptr);
   ASSERT_NE(first->session.get(), second->session.get());
-  EXPECT_EQ(editor.modeling().uv_peel_settings().options, QuaderUvPeelOptions{});
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, first_options);
   const QuaderUvPeelOptions second_options{.u_repeat = 4.0, .v_offset = -2.0};
   ASSERT_TRUE(editor.modeling().set_uv_peel_options(second_options).changed());
   EXPECT_FALSE(second->dirty());
@@ -843,7 +843,7 @@ TEST(ProjectSessionWorkspace,
   EXPECT_EQ(editor.history().snapshot().redo_label, before_history.redo_label);
 
   ASSERT_TRUE(editor.scene_documents().activate(first->session_id).ok());
-  EXPECT_EQ(editor.modeling().uv_peel_settings().options, first_options);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, second_options);
   EXPECT_EQ(editor.modeling().uv_peel_settings().selected_edge_count, 1u);
   ASSERT_TRUE(editor.scene_documents().activate(second->session_id).ok());
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, second_options);

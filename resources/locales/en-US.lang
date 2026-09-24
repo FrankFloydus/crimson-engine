@@ -1161,7 +1161,6 @@ tool_settings.target.path_array=Path Array
 tool_settings.target.create_primitive=Create Primitive
 tool_settings.section.description=Description
 tool_settings.section.settings=Settings
-tool_settings.reset_defaults=Reset Settings
 tool_settings.texture_section=Texture Settings
 tool_settings.texture_scale_x=Scale U
 tool_settings.texture_scale_y=Scale V

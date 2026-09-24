@@ -12,6 +12,7 @@
 #include "editor/projection/mesh_projection_service.hpp"
 #include "scene/light_properties.hpp"
 #include "scene/scene_texture_mapping.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <quader/modeling/io/qdr_document.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
@@ -54,7 +55,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 15u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 16u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 /**
@@ -867,7 +868,7 @@ encode_material_component(flatbuffers::FlatBufferBuilder &builder,
 
 [[nodiscard]] flatbuffers::Offset<fb::SceneSettingsComponent>
 encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
-                      const SceneSettingsComponent &settings) {
+                      const SceneSettings &settings) {
   if (!scene_fog_settings_is_valid(settings.fog)) {
     throw std::runtime_error("QDR scene contains invalid fog settings.");
   }
@@ -900,6 +901,25 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       settings.fog.in_scattering_size, settings.fog.color_from_environment);
   return fb::CreateSceneSettingsComponent(builder, environment, camera,
                                           post_process, fog);
+}
+
+void validate_write_snapshot_roots(const QdrProjectWriteSnapshot &snapshot) {
+  std::set<EntityId> expected;
+  for (const auto &entity : snapshot.entities) {
+    if (entity.parent == kInvalidEntityId) {
+      if (entity.id == kInvalidEntityId || !expected.insert(entity.id).second) {
+        throw std::runtime_error("QDR snapshot contains invalid parentless entities.");
+      }
+    }
+  }
+  for (const EntityId root : snapshot.root_entities) {
+    if (expected.erase(root) != 1u) {
+      throw std::runtime_error("QDR snapshot contains invalid ordered roots.");
+    }
+  }
+  if (!expected.empty()) {
+    throw std::runtime_error("QDR snapshot ordered roots are incomplete.");
+  }
 }
 
 [[nodiscard]] std::vector<std::byte> encode_scene_metadata(
@@ -994,8 +1014,7 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
           !curve_ids.contains(entity.curve->curve) ||
           entity.mesh.has_value() || entity.light.has_value() ||
           entity.instance_definition.has_value() ||
-          entity.instance_occurrence.has_value() || entity.scene_root ||
-          entity.scene_settings.has_value() ||
+          entity.instance_occurrence.has_value() ||
           entity.texture_mapping.has_value()) {
         throw std::runtime_error("QDR entity curve binding is invalid.");
       }
@@ -1052,10 +1071,6 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
           entity.light->color_temperature_kelvin,
           static_cast<fb::LightSourcePreset>(entity.light->source_preset));
     }
-    flatbuffers::Offset<fb::SceneSettingsComponent> settings;
-    if (entity.scene_settings.has_value()) {
-      settings = encode_scene_settings(builder, *entity.scene_settings);
-    }
     flatbuffers::Offset<fb::InstanceDefinitionComponent>
         instance_definition;
     if (entity.instance_definition.has_value()) {
@@ -1082,7 +1097,7 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         builder, entity.id, builder.CreateString(entity.uuid),
         entity.editor_object_id, builder.CreateString(entity.name),
         to_fb(entity.kind), entity.parent, transform, visibility, lock,
-        modeling_object, mesh, material, light, entity.scene_root, settings,
+        modeling_object, mesh, material, light, false, {},
         instance_definition, instance_occurrence, entity.layer_id,
         texture_mapping, curve));
   }
@@ -1148,7 +1163,9 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       builder.CreateVector(textures), builder.CreateVector(entities),
       {}, builder.CreateVector(dependencies),
       builder.CreateVector(layers), viewport_camera_pose,
-      builder.CreateVector(curves));
+      builder.CreateVector(curves),
+      encode_scene_settings(builder, snapshot.scene_settings),
+      builder.CreateVector(snapshot.root_entities));
   fb::FinishScenePayloadBuffer(builder, root);
   return flatbuffer_bytes(builder);
 }
@@ -1778,7 +1795,7 @@ decode_legacy_object_records(const SceneContentDocument &document,
   return records;
 }
 
-[[nodiscard]] SceneSettingsComponent
+[[nodiscard]] SceneSettings
 decode_scene_settings(const fb::SceneSettingsComponent &value,
                       std::uint16_t schema_version) {
   const fb::SceneEnvironmentSettings *environment = value.environment();
@@ -1788,7 +1805,7 @@ decode_scene_settings(const fb::SceneSettingsComponent &value,
     throw std::runtime_error(
         "QDR scene settings payload is missing required fields.");
   }
-  SceneSettingsComponent settings;
+  SceneSettings settings;
   settings.environment.environment_id = string_from_fb(
       environment->environment_id(), settings.environment.environment_id);
   settings.environment.enabled = environment->enabled();
@@ -1842,6 +1859,116 @@ decode_scene_settings(const fb::SceneSettingsComponent &value,
     }
   }
   return settings;
+}
+
+// Legacy wrappers exist only while decoding an unpublished candidate. They never
+// escape into the live scene or a write snapshot.
+struct DecodedSceneDocumentMetadata final {
+  SceneSettings settings;
+  EntityId legacy_root = kInvalidEntityId;
+  std::vector<EntityId> roots;
+};
+
+[[nodiscard]] DecodedSceneDocumentMetadata decode_scene_document_metadata(
+    const fb::ScenePayload &payload, std::uint16_t schema_version) {
+  DecodedSceneDocumentMetadata result;
+  std::map<EntityId, const fb::Entity *> entities;
+  std::vector<EntityId> encoded_roots;
+  if (const auto *stored_entities = payload.entities()) {
+    for (const fb::Entity *entity : *stored_entities) {
+      if (entity->id() == kInvalidEntityId ||
+          !entities.emplace(entity->id(), entity).second) {
+        throw std::runtime_error("QDR scene contains a duplicate or invalid entity id.");
+      }
+      if (entity->parent() == kInvalidEntityId) encoded_roots.push_back(entity->id());
+      if (!entity->scene_root() && entity->scene_settings() == nullptr) continue;
+      if (schema_version >= 16u ||
+          entity->scene_settings() == nullptr ||
+          result.legacy_root != kInvalidEntityId ||
+          entity->parent() != kInvalidEntityId ||
+          entity->modeling_object() != nullptr || entity->mesh() != nullptr ||
+          entity->material() != nullptr || entity->light() != nullptr ||
+          entity->instance_definition() != nullptr ||
+          entity->instance_occurrence() != nullptr ||
+          entity->texture_mapping() != nullptr || entity->curve() != nullptr ||
+          entity->layer_id() != kInvalidSceneLayerId) {
+        throw std::runtime_error("QDR scene contains invalid legacy scene-root settings or payload.");
+      }
+      result.legacy_root = entity->id();
+      result.settings = decode_scene_settings(*entity->scene_settings(), schema_version);
+    }
+  }
+  if (schema_version >= 16u) {
+    if (payload.scene_settings() == nullptr || payload.root_entities() == nullptr) {
+      throw std::runtime_error("QDR scene is missing document settings or ordered roots.");
+    }
+    result.settings = decode_scene_settings(*payload.scene_settings(), schema_version);
+    result.roots.assign(payload.root_entities()->begin(), payload.root_entities()->end());
+    std::set<EntityId> unique_roots;
+    for (const EntityId root : result.roots) {
+      const auto entity = entities.find(root);
+      if (!unique_roots.insert(root).second || entity == entities.end() ||
+          entity->second->parent() != kInvalidEntityId) {
+        throw std::runtime_error("QDR scene contains invalid ordered roots.");
+      }
+    }
+    if (result.roots.size() != encoded_roots.size()) {
+      throw std::runtime_error("QDR scene ordered roots are incomplete.");
+    }
+  } else {
+    for (const EntityId root : encoded_roots) {
+      if (root != result.legacy_root) {
+        result.roots.push_back(root);
+      } else if (const auto *stored_entities = payload.entities()) {
+        for (const fb::Entity *entity : *stored_entities) {
+          if (entity->parent() == root) result.roots.push_back(entity->id());
+        }
+      }
+    }
+  }
+  SceneDocument settings_validator;
+  if (!settings_validator.set_scene_settings(result.settings)) {
+    throw std::runtime_error("QDR scene contains invalid document settings.");
+  }
+  return result;
+}
+
+void apply_scene_document_metadata(
+    SceneDocument &scene, const DecodedSceneDocumentMetadata &metadata) {
+  if (metadata.legacy_root != kInvalidEntityId) {
+    const EntityId root = metadata.legacy_root;
+    const auto children = scene.children(root);
+    const bool root_selectable = scene.visibility(root)->selectable;
+    for (const EntityId child : children) {
+      const QMat4 world_transform = scene.world_transform_matrix(child);
+      const bool visible = scene.is_effectively_visible(child);
+      const bool locked = scene.is_effectively_locked(child);
+      const bool selectable = root_selectable && scene.visibility(child)->selectable;
+      // Preserve exact authored TRS when the removed wrapper has no placement.
+      const bool transform_changes =
+          scene.local_transform_matrix(root).values != QMat4{}.values;
+      if (!scene.set_parent(child, kInvalidEntityId, transform_changes) ||
+          !scene_matrix_near_equal(scene.world_transform_matrix(child), world_transform) ||
+          !scene.set_visible(child, visible) || !scene.set_locked(child, locked) ||
+          !scene.set_selectable(child, selectable)) {
+        throw std::runtime_error("QDR legacy scene-root promotion cannot preserve object state.");
+      }
+    }
+    if (!scene.destroy_entity(root)) {
+      throw std::runtime_error("QDR legacy scene root could not be removed.");
+    }
+  }
+  if (scene.root_entities().size() != metadata.roots.size()) {
+    throw std::runtime_error("QDR scene ordered roots are incomplete.");
+  }
+  for (std::size_t index = 0u; index < metadata.roots.size(); ++index) {
+    if (!scene.set_sibling_ordinal(metadata.roots[index], index)) {
+      throw std::runtime_error("QDR scene contains invalid ordered roots.");
+    }
+  }
+  if (!scene.set_scene_settings(metadata.settings)) {
+    throw std::runtime_error("QDR scene contains invalid document settings.");
+  }
 }
 
 template <typename Payload>
@@ -2299,15 +2426,6 @@ decode_entity_state(const SceneContentDocument &document,
       }
     }
   }
-  if (stored.scene_root() || stored.scene_settings() != nullptr) {
-    if (stored.scene_settings() == nullptr) {
-      throw std::runtime_error(
-          "QDR scene contains invalid scene-root settings.");
-    }
-    state.scene_root = stored.scene_root();
-    state.scene_settings =
-        decode_scene_settings(*stored.scene_settings(), schema_version);
-  }
   if (stored.instance_definition() != nullptr) {
     state.instance_definition = InstanceDefinitionComponent{};
   }
@@ -2338,6 +2456,7 @@ decode_entity_state(const SceneContentDocument &document,
 void decode_entities(SceneContentDocument &document,
                      const fb::ScenePayload &payload,
                      std::uint16_t schema_version) {
+  const auto scene_metadata = decode_scene_document_metadata(payload, schema_version);
   const std::vector<LegacyQdrObjectRecord> legacy_object_records =
       decode_legacy_object_records(document, payload);
   std::unordered_map<EntityId, const LegacyQdrObjectRecord *>
@@ -2433,9 +2552,18 @@ void decode_entities(SceneContentDocument &document,
     throw std::runtime_error(
         "QDR scene contains an invalid entity hierarchy.");
   }
-  if (document.ensure_scene_root() == kInvalidEntityId) {
-    throw std::runtime_error("QDR scene could not establish its scene root.");
+  // Historical object projections also included the Scene wrapper. Validate
+  // every identity before migration removes that compatibility-only entity.
+  for (const LegacyQdrObjectRecord &record : legacy_object_records) {
+    if (!document.scene().exists(record.scene_entity) ||
+        document.scene().editor_object_id(record.scene_entity) !=
+            record.editor_object_id) {
+      throw std::runtime_error(
+          "QDR legacy object record points at a missing or conflicting scene "
+          "entity.");
+    }
   }
+  apply_scene_document_metadata(document.scene(), scene_metadata);
 
   const std::set<EntityId> definition_ids(instance_definitions.begin(),
                                           instance_definitions.end());
@@ -2483,15 +2611,6 @@ void decode_entities(SceneContentDocument &document,
     }
   }
 
-  for (const LegacyQdrObjectRecord &record : legacy_object_records) {
-    if (!document.scene().exists(record.scene_entity) ||
-        document.scene().editor_object_id(record.scene_entity) !=
-            record.editor_object_id) {
-      throw std::runtime_error(
-          "QDR legacy object record points at a missing or conflicting scene "
-          "entity.");
-    }
-  }
 }
 
 [[nodiscard]] std::optional<QdrSceneBinaryDependencyDecodeResult>
@@ -2912,6 +3031,7 @@ QdrSceneBinaryEncodeResult encode_qdr_scene_binary(
     const QdrProjectWriteSnapshot &snapshot,
     std::array<std::byte, 16> scene_uuid) {
   QDR_PROFILE_FUNCTION();
+  validate_write_snapshot_roots(snapshot);
   EncodedGeometrySet geometry = encode_unique_geometry(snapshot);
   const auto metadata_started = std::chrono::steady_clock::now();
   std::vector<std::byte> metadata =
@@ -2994,8 +3114,7 @@ QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
       SceneContentDocumentRecord{
           .id = payload->scene_id(),
           .name = string_from_fb(payload->scene_name(), "Untitled Scene"),
-      },
-      SceneContentDocumentRootPolicy::DeferSceneRoot);
+      });
   std::vector<ProjectAssetReference> project_asset_dependencies =
       decode_project_asset_dependencies(*payload);
   std::optional<QdrSceneViewportCameraPose> viewport_camera_pose =
@@ -3104,8 +3223,7 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
 
   SceneContentDocument metadata_document(
       SceneContentDocumentRecord{.id = payload->scene_id(),
-                                 .name = result.scene_name},
-      SceneContentDocumentRootPolicy::DeferSceneRoot);
+                                 .name = result.scene_name});
   decode_material_and_texture_assets(metadata_document, *payload,
                                      metadata.schema_version);
   const auto collect_material = [&](const MaterialReference &reference,
@@ -3176,6 +3294,8 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
     }
   }
 
+  const auto scene_metadata =
+      decode_scene_document_metadata(*payload, metadata.schema_version);
   std::vector<SceneParentAssignment> parent_links;
   if (const auto *stored_entities = payload->entities()) {
     parent_links.reserve(stored_entities->size());
@@ -3197,14 +3317,40 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
         throw std::runtime_error(
             "QDR scene contains a duplicate or invalid entity identity.");
       }
-      if (stored->scene_root() || stored->scene_settings() != nullptr) {
-        if (stored->scene_settings() == nullptr ||
-            !metadata_document.scene().set_scene_settings(
-                entity, decode_scene_settings(*stored->scene_settings(),
-                                               metadata.schema_version))) {
-          throw std::runtime_error(
-              "QDR scene contains invalid scene-root settings.");
-        }
+      // The dependency projection needs placement and inherited presentation,
+      // but must not decode geometry or hydrate asset-backed components.
+      SceneEntityState metadata_state{
+          .id = entity,
+          .kind = from_fb(stored->kind()),
+      };
+      if (const auto *transform = stored->transform()) {
+        metadata_state.transform = {
+            .position = from_fb(transform->position()),
+            .rotation_euler = from_fb(transform->rotation_euler()),
+            .scale = from_fb(transform->scale(), {1.0f, 1.0f, 1.0f}),
+            .custom_pivot = transform->custom_pivot(),
+        };
+      }
+      if (const auto *visibility = stored->visibility()) {
+        metadata_state.visibility = {
+            .visible = visibility->visible(),
+            .selectable = visibility->selectable(),
+        };
+      }
+      if (const auto *lock = stored->lock()) {
+        metadata_state.lock.locked = lock->locked();
+      }
+      if (!apply_scene_entity_state(
+              metadata_document.scene(), entity, metadata_state,
+              SceneEntityStateApplyOptions{
+                  .include_modeling_object = false,
+                  .include_selection = false,
+                  .include_instance_roles = false,
+                  .include_texture_mapping = false,
+                  .include_layer_membership = false,
+              })) {
+        throw std::runtime_error(
+            "QDR scene contains invalid metadata entity state.");
       }
       parent_links.push_back({.child = entity, .parent = stored->parent()});
     }
@@ -3212,9 +3358,7 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
   if (!metadata_document.scene().replace_hierarchy(parent_links)) {
     throw std::runtime_error("QDR scene contains an invalid entity hierarchy.");
   }
-  if (metadata_document.ensure_scene_root() == kInvalidEntityId) {
-    throw std::runtime_error("QDR scene could not establish its scene root.");
-  }
+  apply_scene_document_metadata(metadata_document.scene(), scene_metadata);
   const SceneContentDocumentIdentityReport identity =
       metadata_document.validate_object_identity_invariants();
   if (!identity.ok()) {

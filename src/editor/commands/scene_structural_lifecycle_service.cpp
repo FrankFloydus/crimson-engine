@@ -444,10 +444,6 @@ SceneStructuralLifecycleService::normalize_explicit_roots(
     if (root == kInvalidEntityId || !scene_.exists(root)) {
       return {.status = command_invalid_result("Entity does not exist")};
     }
-    if (scene_.is_scene_root(root)) {
-      return {.status = command_invalid_result(
-                  "Scene root cannot be structurally modified")};
-    }
     requested.insert(root);
   }
 

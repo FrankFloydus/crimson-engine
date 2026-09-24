@@ -1161,7 +1161,6 @@ tool_settings.target.path_array=Serie lungo percorso
 tool_settings.target.create_primitive=Crea primitiva
 tool_settings.section.description=Descrizione
 tool_settings.section.settings=Impostazioni
-tool_settings.reset_defaults=Ripristina impostazioni
 tool_settings.texture_section=Impostazioni texture
 tool_settings.texture_scale_x=Scala U
 tool_settings.texture_scale_y=Scala V

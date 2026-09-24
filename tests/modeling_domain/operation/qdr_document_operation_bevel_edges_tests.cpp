@@ -1180,6 +1180,65 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleEdgeBevelWidthReachesAvailableFa
     EXPECT_TRUE(every_face_compiles_to_triangles(document));
 }
 
+TEST(QdrDocumentOperationBevelEdgesTests, SaturatedWidthFeedbackReplaysTheExactCandidate) {
+    for (const float depth : {0.5F, 2.0F}) {
+        SCOPED_TRACE(depth);
+        CubePrimitiveSpec spec;
+        spec.width = 0.5F;
+        spec.height = 2.25F;
+        spec.depth = depth;
+        const Document source = make_cube(spec);
+        const Edge edge = make_edge(
+            vertex_near_position(source, {-0.25F, -1.125F, depth * 0.5F}),
+            vertex_near_position(source, {-0.25F, 1.125F, depth * 0.5F}));
+        for (const float requested_width : {0.2F, 1.0F, 3.0F}) {
+            SCOPED_TRACE(requested_width);
+            Document candidate = source;
+            Selection selection = edge_selection_for_edge(edge);
+            EdgeBevelSettings settings;
+            settings.width = requested_width;
+            settings.segments = 4;
+            settings.profile = 0.25F;
+            const OperationResult result =
+                bevel_selected_edges(candidate, selection, settings);
+            ASSERT_TRUE(result.success) << result.message;
+            ASSERT_TRUE(result.changed);
+            ASSERT_TRUE(result.edge_bevel_width.has_value());
+            const auto feedback = *result.edge_bevel_width;
+            EXPECT_FLOAT_EQ(feedback.requested_width, requested_width);
+            EXPECT_FLOAT_EQ(feedback.applied_width,
+                            std::min(requested_width, depth * 0.999F));
+            EXPECT_EQ(feedback.support_limited, requested_width > 0.4995F);
+
+            Document replay = source;
+            Selection replay_selection = edge_selection_for_edge(edge);
+            settings.width = feedback.applied_width;
+            const OperationResult replayed =
+                bevel_selected_edges(replay, replay_selection, settings);
+            ASSERT_TRUE(replayed.success) << replayed.message;
+            ASSERT_EQ(replay.vertices.size(), candidate.vertices.size());
+            ASSERT_EQ(replay.faces.size(), candidate.faces.size());
+            for (std::size_t index = 0; index < candidate.vertices.size(); ++index) {
+                EXPECT_EQ(replay.vertices[index].id, candidate.vertices[index].id);
+                EXPECT_TRUE(vec_nearly_equal(replay.vertices[index].position,
+                                            candidate.vertices[index].position, 0.0F));
+            }
+            for (std::size_t index = 0; index < candidate.faces.size(); ++index) {
+                EXPECT_EQ(replay.faces[index].id, candidate.faces[index].id);
+                EXPECT_EQ(replay.faces[index].vertices, candidate.faces[index].vertices);
+            }
+        }
+    }
+}
+
+TEST(QdrDocumentOperationBevelEdgesTests, InvalidBevelHasNoAppliedWidthFeedback) {
+    Document document = make_cube({});
+    Selection selection;
+    const OperationResult result = bevel_selected_edges(document, selection, {});
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.edge_bevel_width.has_value());
+}
+
 TEST(QdrDocumentOperationBevelEdgesTests, SingleHalfEdgeBevelClosesSplitCubeEdgeTerminals) {
     Document document;
     const ElementId left_front_bottom = add_vertex(document, { -1.0F, -1.0F, -1.0F });

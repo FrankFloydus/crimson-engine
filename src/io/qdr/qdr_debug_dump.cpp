@@ -322,7 +322,7 @@ texture_color_space_name(TextureColorSpace color_space) {
 }
 
 [[nodiscard]] Json
-scene_settings_json(const SceneSettingsComponent &settings) {
+scene_settings_json(const SceneSettings &settings) {
   return {
       {"environment",
        {
@@ -557,10 +557,6 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
   if (entity.light) {
     value["light"] = light_json(*entity.light);
   }
-  if (entity.scene_settings) {
-    value["sceneRoot"] = entity.scene_root;
-    value["sceneSettings"] = scene_settings_json(*entity.scene_settings);
-  }
   if (entity.layer_id != 0u) {
     value["layerId"] = entity.layer_id;
   }
@@ -678,7 +674,9 @@ std::string qdr_scene_debug_json(
            {"sceneUuid", uuid_hex(container.scene_uuid)},
            {"chunks", std::move(chunks)},
        }},
-      {"scene", {{"id", snapshot.project_id}, {"name", snapshot.project_name}}},
+      {"scene", {{"id", snapshot.project_id}, {"name", snapshot.project_name},
+                 {"settings", scene_settings_json(snapshot.scene_settings)},
+                 {"rootEntities", snapshot.root_entities}}},
       {"assets",
        {
            {"meshes", std::move(meshes)},

@@ -28,33 +28,20 @@ struct ProgrammaticApiHarness {
 
 std::size_t
 user_entity_count(const std::vector<quader::QuaderEntitySnapshot> &entities) {
-  std::size_t count = 0;
-  for (const quader::QuaderEntitySnapshot &entity : entities) {
-    if (!entity.is_scene_root) {
-      ++count;
-    }
-  }
-  return count;
+  return entities.size();
 }
 
 std::size_t user_entity_count(const quader::QuaderApi &api) {
   return user_entity_count(api.query().entities());
 }
 
-bool has_scene_root(const quader::QuaderApi &api) {
-  const std::vector<quader::QuaderEntitySnapshot> entities =
-      api.query().entities();
-  return std::any_of(entities.begin(), entities.end(),
-                     [](const quader::QuaderEntitySnapshot &entity) {
-                       return entity.is_scene_root;
-                     });
-}
 
 } // namespace
 
 TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
     ProgrammaticApiHarness harness;
     quader::QuaderApi& api = harness.api;
+    EXPECT_TRUE(api.query().entities().empty());
 
     quader::QuaderCreateBoxArgs args;
     args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
@@ -71,7 +58,9 @@ TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
     EXPECT_NE(created.value.mesh, quader::kInvalidAssetId);
 
     const quader::QuaderSelectionSummary selection = api.selection().summary();
-    EXPECT_TRUE(has_scene_root(api));
+    const auto created_entity = api.query().entity(created.value.entity);
+    ASSERT_TRUE(created_entity.has_value());
+    EXPECT_EQ(created_entity->parent, quader::kInvalidEntityId);
     EXPECT_EQ(user_entity_count(api), 1u);
     EXPECT_EQ(api.modeling().objects().size(), 1u);
     EXPECT_EQ(api.query().assets().mesh_count, 1u);
@@ -153,14 +142,7 @@ TEST(ProgrammaticApiTests,
     EXPECT_FLOAT_EQ(first_snapshot->transform.scale.x, 1.0f);
     EXPECT_FLOAT_EQ(first_snapshot->transform.scale.y, 1.0f);
     EXPECT_FLOAT_EQ(first_snapshot->transform.scale.z, 1.0f);
-    const std::vector<quader::QuaderEntitySnapshot> entities =
-        api.query().entities();
-    const auto scene_root = std::ranges::find_if(
-        entities, [](const quader::QuaderEntitySnapshot &entity) {
-            return entity.is_scene_root;
-        });
-    ASSERT_NE(scene_root, entities.end());
-    EXPECT_EQ(first_snapshot->parent, scene_root->id);
+    EXPECT_EQ(first_snapshot->parent, quader::kInvalidEntityId);
     const std::string first_uuid = first_snapshot->uuid;
     const auto first_editor_object_id = first_snapshot->editor_object_id;
 

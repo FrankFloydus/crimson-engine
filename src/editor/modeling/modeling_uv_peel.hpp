@@ -23,6 +23,12 @@ namespace quader {
 using ModelingUvPeelAxis = modeling::UvPeelAxis;
 using ModelingUvPeelOptions = modeling::UvPeelOptions;
 
+/// Accepted Peel options shared for one application lifetime, without guide state.
+struct UvPeelSessionDefaults final {
+  ModelingUvPeelOptions options;
+  std::uint64_t revision = 0;
+};
+
 /// Captures settings once; repeat resolves the current guides and frames.
 struct ModelingUvPeelRequest final {
   ModelingUvPeelOptions options;
@@ -64,7 +70,7 @@ struct ModelingUvPeelTarget final {
   QMat4 sampling_from_local;
 };
 
-/// Shares scene-local options and selected-guide availability with presentation.
+/// Shares application options and scene-local guide availability with presentation.
 struct ModelingUvPeelSettings final {
   std::size_t selected_edge_count = 0;
   bool editable = false;

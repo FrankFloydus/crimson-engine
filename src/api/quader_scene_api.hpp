@@ -27,6 +27,13 @@ struct QuaderScenePropertyEditRef {
   std::uint64_t generation = 0u;
 };
 
+/// Pins a document setting preview to the session, document binding, and edit lifetime.
+struct QuaderSceneSettingsEditRef {
+  SceneSessionId scene_session_id;
+  std::uint64_t document_binding_generation = 0u;
+  std::uint64_t generation = 0u;
+};
+
 /**
  * Represents a scene transform edit used by the public Quader API surface.
  */
@@ -154,7 +161,7 @@ public:
     /**
      * Moves the supplied hierarchy roots in authored tree order as one undo step.
      * Descendants of supplied roots are deduplicated. An invalid parent means
-     * the scene root; an invalid insertion sibling appends to the destination.
+     * parentless objects; an invalid insertion sibling appends to the destination.
      * World transforms and selection are preserved; invalid moves are atomic.
      */
     QuaderApiVoidResult move_entities(
@@ -183,16 +190,15 @@ public:
     QuaderApiResult<QuaderScenePropertyEditRef> begin_light_color_edit(EntityId entity);
     QuaderApiVoidResult update_light_color_edit(QuaderScenePropertyEditRef light, QVec3 color);
     QuaderApiVoidResult finish_light_color_edit(QuaderScenePropertyEditRef light, bool cancel = false);
-    /// Previews the scene-root clear color; acceptance records one undo step.
-    QuaderApiResult<QuaderScenePropertyEditRef> begin_environment_color_edit(EntityId entity);
-    QuaderApiVoidResult update_environment_color_edit(QuaderScenePropertyEditRef environment, QVec3 color);
-    QuaderApiVoidResult finish_environment_color_edit(QuaderScenePropertyEditRef environment, bool cancel = false);
+    /// Previews the document clear color; acceptance records one undo step.
+    QuaderApiResult<QuaderSceneSettingsEditRef> begin_environment_color_edit();
+    QuaderApiVoidResult update_environment_color_edit(QuaderSceneSettingsEditRef environment, QVec3 color);
+    QuaderApiVoidResult finish_environment_color_edit(QuaderSceneSettingsEditRef environment, bool cancel = false);
     /// Preview fog color live, accepting one undo step or restoring on cancellation.
-    QuaderApiResult<QuaderScenePropertyEditRef> begin_fog_color_edit(EntityId entity);
-    QuaderApiVoidResult update_fog_color_edit(QuaderScenePropertyEditRef fog, QVec3 color);
-    QuaderApiVoidResult finish_fog_color_edit(QuaderScenePropertyEditRef fog, bool cancel = false);
-    QuaderApiVoidResult set_scene_settings(EntityId entity,
-                                           QuaderSceneSettings settings,
+    QuaderApiResult<QuaderSceneSettingsEditRef> begin_fog_color_edit();
+    QuaderApiVoidResult update_fog_color_edit(QuaderSceneSettingsEditRef fog, QVec3 color);
+    QuaderApiVoidResult finish_fog_color_edit(QuaderSceneSettingsEditRef fog, bool cancel = false);
+    QuaderApiVoidResult set_scene_settings(QuaderSceneSettings settings,
                                            QuaderSceneEditOptions options = {});
     QuaderApiVoidResult select(std::span<const EntityId> entities,
                                EntityId active = kInvalidEntityId);

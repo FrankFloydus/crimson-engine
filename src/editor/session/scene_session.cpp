@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/session/scene_session.hpp"
+#include "editor/session/tool_session_defaults.hpp"
 
 #include "diagnostics/profile.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
@@ -52,14 +53,16 @@ SceneSession::SceneSession(SceneContentDocument document)
 
 SceneSession::SceneSession(
     std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
-    std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults)
-    : path_array_defaults_(std::move(path_array_defaults)),
+    std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults,
+    std::shared_ptr<ToolSessionDefaults> tool_defaults)
+    : tool_defaults_(tool_defaults ? std::move(tool_defaults)
+                                  : std::make_shared<ToolSessionDefaults>()),
+      path_array_defaults_(std::move(path_array_defaults)),
       extrude_defaults_(extrude_defaults ? std::move(extrude_defaults)
                                         : std::make_shared<ExtrudeSessionDefaults>()) {
   if (!path_array_defaults_) {
     path_array_defaults_ = std::make_shared<PathArraySessionDefaults>();
   }
-  (void)document_.ensure_scene_root();
   rebuild_services();
   mark_clean();
 }
@@ -67,15 +70,17 @@ SceneSession::SceneSession(
 SceneSession::SceneSession(
     std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
     SceneContentDocument document,
-    std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults)
+    std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults,
+    std::shared_ptr<ToolSessionDefaults> tool_defaults)
     : document_(std::move(document)),
+      tool_defaults_(tool_defaults ? std::move(tool_defaults)
+                                  : std::make_shared<ToolSessionDefaults>()),
       path_array_defaults_(std::move(path_array_defaults)),
       extrude_defaults_(extrude_defaults ? std::move(extrude_defaults)
                                         : std::make_shared<ExtrudeSessionDefaults>()) {
   if (!path_array_defaults_) {
     path_array_defaults_ = std::make_shared<PathArraySessionDefaults>();
   }
-  (void)document_.ensure_scene_root();
   rebuild_services();
   mark_clean();
 }
@@ -147,7 +152,7 @@ void SceneSession::rebuild_services() {
               content_settled_observer_(false);
             }
           },
-      });
+      }, &tool_defaults_->modeling, &tool_defaults_->uv_peel);
   selection_ = std::make_unique<EditorSelectionService>(
       document_.scene(), *document_commands_, *modeling_);
   structural_lifecycle_ =
@@ -187,18 +192,20 @@ void SceneSession::rebuild_services() {
                 viewport_local_visibility_->allows_selection_entity(entity));
       });
   pivot_ = std::make_unique<PivotToolService>(
-      document_.scene(), document_.assets(), *history_, *modeling_);
+      document_.scene(), document_.assets(), *history_, *modeling_,
+      &tool_defaults_->pivot);
   mesh_transform_bake_ = std::make_unique<MeshTransformBakeService>(
       document_.scene(), document_.assets(), *history_, *modeling_);
   linear_array_ = std::make_unique<LinearArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
-      *selection_, *instances_);
+      *selection_, *instances_, &tool_defaults_->linear_array);
   radial_array_ = std::make_unique<RadialArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
-      *selection_, *instances_, *structural_lifecycle_);
+      *selection_, *instances_, *structural_lifecycle_,
+      &tool_defaults_->radial_array);
   curve_ = std::make_unique<CurveToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
-      *selection_, *document_commands_);
+      *selection_, *document_commands_, &tool_defaults_->curve);
   selection_->set_sub_selection_provider(curve_.get());
   path_array_ = std::make_unique<PathArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
@@ -219,7 +226,7 @@ void SceneSession::rebuild_services() {
                                     finish_modeling_preview_checkpoint(
                                         restored_by_cancel);
                                   },
-                              });
+                              }, &tool_defaults_->primitive);
   selection_->set_scene_selection_history_suppression_provider([this]() {
     return primitive_creation_ && primitive_creation_->active();
   });
@@ -403,7 +410,6 @@ void SceneSession::replace_document_impl(
   viewport_local_visibility_->reset_for_document_replacement();
   modeling_->clear_transient_state_for_document_replacement();
   native_tools_->reset_transient_state();
-  (void)modeling_->set_uv_peel_options({});
   instance_edit_context_.clear();
   preview_content_checkpoint_.reset();
   document_commands_->abandon_property_edit();
@@ -411,10 +417,6 @@ void SceneSession::replace_document_impl(
   invalidate_document_binding();
   scene_surface_query_->invalidate();
   point_placement_->invalidate();
-  {
-    QDR_PROFILE_SCOPE("SceneSession replace ensure scene root");
-    (void)document_.ensure_scene_root();
-  }
   {
     QDR_PROFILE_SCOPE("SceneSession replace advance scene revision");
     document_.scene().advance_revision_for_replacement(previous_scene_revision);
@@ -491,23 +493,26 @@ void SceneSession::mark_clean_at(SceneContentRevisionStamp stamp) noexcept {
 
 SceneSessionService::SceneSessionService()
     : path_array_defaults_(std::make_shared<PathArraySessionDefaults>()),
-      extrude_defaults_(std::make_shared<ExtrudeSessionDefaults>()) {}
+      extrude_defaults_(std::make_shared<ExtrudeSessionDefaults>()),
+      tool_defaults_(std::make_shared<ToolSessionDefaults>()) {}
 
 std::unique_ptr<SceneSession> SceneSessionService::create_session() const {
-  return std::make_unique<SceneSession>(path_array_defaults_, extrude_defaults_);
+  return std::make_unique<SceneSession>(path_array_defaults_, extrude_defaults_,
+                                       tool_defaults_);
 }
 
 std::unique_ptr<SceneSession>
 SceneSessionService::create_session(SceneContentDocumentRecord record) const {
   return std::make_unique<SceneSession>(
       path_array_defaults_, SceneContentDocument(std::move(record)),
-      extrude_defaults_);
+      extrude_defaults_, tool_defaults_);
 }
 
 std::unique_ptr<SceneSession>
 SceneSessionService::open_session(SceneContentDocument document) const {
   return std::make_unique<SceneSession>(path_array_defaults_,
-                                        std::move(document), extrude_defaults_);
+                                        std::move(document), extrude_defaults_,
+                                        tool_defaults_);
 }
 
 } // namespace quader

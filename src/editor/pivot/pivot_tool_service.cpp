@@ -1217,8 +1217,24 @@ std::optional<QVec3> cycled_bounds_position_for_action(
 
 PivotToolService::PivotToolService(SceneDocument &scene, AssetRegistry &assets,
                                    EditorHistoryService &history,
-                                   ModelingSessionService &modeling)
-    : scene_(scene), assets_(assets), history_(history), modeling_(modeling) {}
+                                   ModelingSessionService &modeling,
+                                   PivotSessionDefaults *session_defaults)
+    : scene_(scene), assets_(assets), history_(history), modeling_(modeling),
+      session_defaults_(session_defaults != nullptr ? session_defaults
+                                                   : &local_session_defaults_),
+      snap_settings_(session_defaults_->snap_settings) {}
+
+void PivotToolService::restore_session_defaults() {
+  const PivotSnapSettings &remembered = session_defaults_->snap_settings;
+  if (snap_settings_.vertex == remembered.vertex &&
+      snap_settings_.edge_midpoint == remembered.edge_midpoint &&
+      snap_settings_.face_center == remembered.face_center &&
+      snap_settings_.grid == remembered.grid) {
+    return;
+  }
+  snap_settings_ = remembered;
+  ++tool_settings_revision_;
+}
 
 bool PivotToolService::persistent_active() const {
   return persistent_.has_value() && persistent_session_is_valid();
@@ -1322,6 +1338,7 @@ PivotToolService::activate_persistent(EditorSelectionService &selection) {
       return synchronized;
     }
   }
+  restore_session_defaults();
   persistent_ = PersistentSession{
       .target = *target,
       .kind = kind,
@@ -1398,14 +1415,19 @@ CommandResult PivotToolService::copy_pivot_from_active(
 CommandResult
 PivotToolService::set_snap_enabled(std::string_view setting_id, bool enabled) {
   bool *target = nullptr;
+  bool *remembered = nullptr;
   if (setting_id == kPivotSnapVertexSetting) {
     target = &snap_settings_.vertex;
+    remembered = &session_defaults_->snap_settings.vertex;
   } else if (setting_id == kPivotSnapEdgeMidpointSetting) {
     target = &snap_settings_.edge_midpoint;
+    remembered = &session_defaults_->snap_settings.edge_midpoint;
   } else if (setting_id == kPivotSnapFaceCenterSetting) {
     target = &snap_settings_.face_center;
+    remembered = &session_defaults_->snap_settings.face_center;
   } else if (setting_id == kPivotSnapGridSetting) {
     target = &snap_settings_.grid;
+    remembered = &session_defaults_->snap_settings.grid;
   }
   if (target == nullptr) {
     return command_invalid_result("Unknown pivot snap setting.");
@@ -1414,6 +1436,7 @@ PivotToolService::set_snap_enabled(std::string_view setting_id, bool enabled) {
     return command_unchanged_result();
   }
   *target = enabled;
+  *remembered = enabled;
   ++tool_settings_revision_;
   return command_changed_result();
 }
@@ -1430,6 +1453,7 @@ CommandResult PivotToolService::reset_settings() {
     return command_unchanged_result();
   }
   snap_settings_ = defaults;
+  session_defaults_->snap_settings = defaults;
   ++tool_settings_revision_;
   return command_changed_result();
 }
@@ -1475,6 +1499,7 @@ void PivotToolService::begin_quick(QVec3 initial_world_position) {
     clear_quick_override();
     return;
   }
+  restore_session_defaults();
   quick_ = QuickState{
       .override_valid = true,
       .editing = true,

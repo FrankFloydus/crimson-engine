@@ -95,6 +95,89 @@ public:
   QuaderEditorApi editor;
 };
 
+TEST(RadialArrayInstanceTests,
+     RemembersAllOptionsAcrossApplyCancelAndServiceReplacement) {
+  RadialArraySessionDefaults defaults;
+  for (int run = 0; run < 2; ++run) {
+    RadialArrayInstanceHarness h;
+    const auto source = h.box("Remembered Radial Source");
+    ASSERT_TRUE(h.editor.selection().select_object(source).ok());
+    RadialArrayToolService tool(
+        h.session.scene(), h.session.assets(), h.session.history(),
+        h.session.modeling(), h.session.selection(), h.session.instances(),
+        h.session.structural_lifecycle(), &defaults);
+    ASSERT_TRUE(tool.activate(2.0).ok);
+    if (run == 0) {
+      ASSERT_TRUE(tool.set_mode(RadialArrayMode::Spacing).ok);
+      ASSERT_TRUE(tool.set_degrees(45.0).ok);
+      ASSERT_TRUE(tool.set_copies(3u).ok);
+      ASSERT_TRUE(tool.set_repeats(2u).ok);
+      ASSERT_TRUE(tool.set_create_instances(true).ok);
+      // Choosing the current automatic value still expresses explicit spacing.
+      ASSERT_TRUE(tool.set_repeat_spacing(2.0).ok);
+      ASSERT_TRUE(defaults.repeat_spacing.has_value());
+      ASSERT_TRUE(tool.update_center_candidate({}, {0, 1, 0}, 1.0).ok);
+      ASSERT_TRUE(tool.lock_center().ok);
+      ASSERT_TRUE(tool.cancel().ok);
+      ASSERT_TRUE(tool.activate(9.0).ok);
+    }
+    EXPECT_EQ(tool.mode(), RadialArrayMode::Spacing);
+    EXPECT_DOUBLE_EQ(tool.degrees(), 45.0);
+    EXPECT_EQ(tool.copies(), 3u);
+    EXPECT_EQ(tool.repeats(), 2u);
+    EXPECT_TRUE(tool.create_instances());
+    EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 2.0);
+    EXPECT_FALSE(tool.center_locked());
+    EXPECT_FALSE(tool.has_valid_center());
+    EXPECT_FALSE(tool.set_copies(kRadialArrayMaximumCopies + 1u).ok);
+    EXPECT_FALSE(tool.set_repeat_spacing(-1.0).ok);
+    EXPECT_EQ(defaults.copies, 3u);
+    EXPECT_DOUBLE_EQ(defaults.repeat_spacing.value(), 2.0);
+    ASSERT_TRUE(tool.update_center_candidate({}, {0, 1, 0}, 5.0).ok);
+    EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 2.0);
+    ASSERT_TRUE(tool.apply().ok);
+    EXPECT_EQ(defaults.copies, 3u);
+    EXPECT_EQ(defaults.repeats, 2u);
+  }
+  EXPECT_FALSE(RadialArraySessionDefaults{}.repeat_spacing.has_value());
+}
+
+TEST(RadialArrayInstanceTests,
+     AutomaticSpacingAndCapacityRemainLocalToEachOperation) {
+  RadialArrayInstanceHarness h;
+  const auto source = h.box("Radial Capacity Source");
+  const auto second = h.box("Radial Capacity Second");
+  ASSERT_TRUE(h.editor.selection().select_object(source).ok());
+  RadialArraySessionDefaults defaults;
+  RadialArrayToolService tool(
+      h.session.scene(), h.session.assets(), h.session.history(),
+      h.session.modeling(), h.session.selection(), h.session.instances(),
+      h.session.structural_lifecycle(), &defaults);
+  ASSERT_TRUE(tool.activate(2.0).ok);
+  ASSERT_TRUE(tool.set_copies(128u).ok);
+  ASSERT_TRUE(tool.set_repeats(8u).ok);
+  ASSERT_TRUE(tool.update_center_candidate({}, {0, 1, 0}, 2.0).ok);
+  const double first_spacing = tool.repeat_spacing();
+  ASSERT_TRUE(tool.cancel().ok);
+  EXPECT_FALSE(defaults.repeat_spacing.has_value());
+  ASSERT_TRUE(h.editor.selection()
+                  .select_objects({source.entity, second.entity}, second.entity)
+                  .ok());
+  ASSERT_TRUE(tool.activate(3.0).ok);
+  EXPECT_EQ(tool.copies(), 128u);
+  EXPECT_EQ(tool.repeats(), 4u);
+  EXPECT_EQ(defaults.copies, 128u);
+  EXPECT_EQ(defaults.repeats, 8u);
+  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 3.0);
+  ASSERT_TRUE(tool.update_center_candidate({-10, 0, 0}, {0, 1, 0}, 3.0).ok);
+  EXPECT_GT(tool.repeat_spacing(), first_spacing);
+  EXPECT_FALSE(defaults.repeat_spacing.has_value());
+  ASSERT_TRUE(tool.cancel().ok);
+  ASSERT_TRUE(h.editor.selection().select_object(source).ok());
+  ASSERT_TRUE(tool.activate(1.0).ok);
+  EXPECT_EQ(tool.repeats(), 8u);
+}
+
 TEST(RadialArrayInstanceTests, LinkedMeshArrayConvertsOriginalAndPreservesRedoIdentities) {
   RadialArrayInstanceHarness h;
   const auto source = h.box("Linked Radial Source");

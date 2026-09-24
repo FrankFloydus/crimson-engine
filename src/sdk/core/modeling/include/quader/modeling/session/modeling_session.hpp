@@ -628,6 +628,10 @@ public:
   preview_base_curve_document_copy(PreviewId preview_id,
                                    ObjectId object_id) const;
   [[nodiscard]] PreviewTransactionSummary preview_summary() const;
+  /// Returns cached accepted bevel feedback without materializing geometry.
+  /// Absent outside bevel previews or when participants use different widths.
+  [[nodiscard]] std::optional<EdgeBevelWidthFeedback>
+  preview_edge_bevel_width() const noexcept;
   [[nodiscard]] SessionPreviewWorkStats preview_work_stats() const;
   [[nodiscard]] SessionMutationCheckpointWorkStats
   mutation_checkpoint_work_stats() const;

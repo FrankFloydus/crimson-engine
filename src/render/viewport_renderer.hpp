@@ -72,7 +72,7 @@ public:
 
     void resize(std::uint32_t width, std::uint32_t height);
     void update_camera(const ViewportCameraController &controller);
-    void apply_scene_settings(const SceneSettingsComponent &settings,
+    void apply_scene_settings(const SceneSettings &settings,
                               bool rendered_mode,
                               const ViewportSettings &viewport_settings);
     void update_ground_grid(const ViewportCameraController &controller,

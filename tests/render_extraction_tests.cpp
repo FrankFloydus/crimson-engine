@@ -3179,12 +3179,10 @@ TEST(RenderOverlaySnapshotTests,
      CapturesSelectedObjectAndSceneWireframeRecordsWithDirtyRevisions) {
   SceneDocument document;
   AssetRegistry assets;
-  const EntityId root =
-      document.create_entity("Scene Settings", EntityKind::Empty);
-  SceneSettingsComponent scene_settings;
+  SceneSettings scene_settings;
   scene_settings.camera.near_plane = 0.01f;
   scene_settings.camera.far_plane = 250.0f;
-  ASSERT_TRUE(document.set_scene_settings(root, scene_settings));
+  ASSERT_TRUE(document.set_scene_settings(scene_settings));
   const AssetId triangle_mesh = assets.add_mesh(make_overlay_triangle_mesh());
   const AssetId quad_mesh = assets.add_mesh(make_authored_quad_mesh());
   const EntityId selected_mesh =

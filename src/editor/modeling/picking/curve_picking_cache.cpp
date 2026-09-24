@@ -918,16 +918,14 @@ std::vector<EntityId> ViewportCurvePickCache::box_pick_entities(
   const auto source = candidates(document, assets, visibility_revision,
                                  entity_visible, instance_edit_active);
   if (!rectangle_valid_ || rectangle_source_revision_ != build_count_ ||
+      rectangle_settings_revision_ != document.scene_settings_revision() ||
       !modeling_viewport_camera_matches(rectangle_camera_, request.camera)) {
     QDR_PROFILE_SCOPE("Viewport rebuild curve rectangle projection");
     rectangle_request_.objects.clear();
     rectangle_entities_.clear();
     rectangle_request_.objects.reserve(source.size());
     rectangle_entities_.reserve(source.size());
-    SceneCameraSettings settings;
-    if (const auto *scene_settings = document.scene_settings(document.scene_root())) {
-      settings = scene_settings->camera;
-    }
+    const SceneCameraSettings &settings = document.scene_settings().camera;
     const auto clips = sanitize_viewport_camera_clip_planes(
         settings.near_plane, settings.far_plane);
     const auto camera = modeling_runtime_camera(request.camera);
@@ -989,6 +987,7 @@ std::vector<EntityId> ViewportCurvePickCache::box_pick_entities(
       rectangle_request_.objects.push_back(std::move(projected));
     }
     rectangle_source_revision_ = build_count_;
+    rectangle_settings_revision_ = document.scene_settings_revision();
     rectangle_camera_ = request.camera;
     rectangle_valid_ = true;
     ++rectangle_build_count_;

@@ -134,7 +134,7 @@ public:
                          RenderAdditionalSwapChain &surface);
     void render_material_preview(MaterialPreviewRenderer &preview_renderer,
                                  RenderAdditionalSwapChain &surface);
-    void apply_scene_settings(const SceneSettingsComponent &settings);
+    void apply_scene_settings(const SceneSettings &settings);
 
   private:
     friend class RenderAdditionalSwapChain;

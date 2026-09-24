@@ -110,6 +110,10 @@ public:
       }
       return document_command_missing_entity_result();
     }
+    if (!document_command_restore_placement_order(scene(), root_placements_)) {
+      return document_command_invalid_request_result(
+          "Grouped entity order cannot be restored");
+    }
     document_command_apply_selection(scene(), before_selection_);
     return document_command_changed_result();
   }
@@ -192,6 +196,16 @@ public:
             ++grouped_count;
           }
         }
+        const auto first_sibling = std::ranges::find_if(
+            root_placements_, [common_parent](const auto &placement) {
+              return placement.parent == common_parent;
+            });
+        if (first_sibling != root_placements_.end() &&
+            first_sibling->sibling_ordinal.has_value() &&
+            !scene().set_sibling_ordinal(group_, *first_sibling->sibling_ordinal)) {
+          return document_command_invalid_request_result(
+              "Group sibling placement could not be stored");
+        }
         document_command_select_only(scene(), {group_});
         return document_command_changed_result();
     }
@@ -249,13 +263,16 @@ private:
   bool rollback_placements(
       const std::vector<DocumentEntityPlacement> &placements,
       std::size_t count) {
+    const std::size_t restored_count = count;
     while (count > 0u) {
       --count;
       if (!document_command_apply_placement(scene(), placements[count]).ok) {
         return false;
       }
     }
-    return true;
+    return document_command_restore_placement_order(
+        scene(), std::span<const DocumentEntityPlacement>(placements).first(
+                     restored_count));
   }
 
   bool rollback_created_group(std::size_t grouped_count) {

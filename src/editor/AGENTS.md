@@ -19,7 +19,8 @@ file except through prior written authorization from Francesco Di Blasi.
 | Native modeling projection and picking | [runtime guide](modeling/runtime/README.md) |
 | Descriptor catalogs | [metadata guide](metadata/README.md) |
 | Native tool lifecycle and semantic input | `tools/`, then [input guide](../../INPUT_KEYBINDINGS.md) |
-| Face extrusion, pending operation boundaries and remembered mode | `tools/extrude_tool_service.*`; geometry and source snapshots stay in the modeling owner |
+| Face extrusion, pending operation boundaries and remembered options | `tools/extrude_tool_service.*`; geometry and source snapshots stay in the modeling owner |
+| Application-lifetime tool options | `session/tool_session_defaults.hpp`, plus Path Array and Extrude defaults supplied by `ProjectSession`/`SceneSessionService` |
 | Light range and live scene-color previews | `viewport/point_light_range_interaction.*`, `commands/document_command_service.*` |
 | Live material albedo drafts | `material/standard_material_edit_session_service.*`, `render/standard_material_render_snapshot_adapter.*` |
 | Material folders and permanent deletion | `material/project_material_organization_service.*`, `material/project_material_deletion_service.*` |
@@ -27,11 +28,15 @@ file except through prior written authorization from Francesco Di Blasi.
 | Retained actual project-wide surface material usage | `material/project_material_usage_service.*` |
 
 - `ModelingSessionService` adapts the portable core; it must not become another modeling owner.
+- Tool owners retain accepted options across completion, cancellation and scene/project changes.
+  Their application-owned defaults are not saved in scene files or user preferences. Keep source
+  selection, placement, preview history and geometry-dependent limits local to each operation;
+  rejected edits must not replace remembered values.
 - Structural actions must preserve scene state, SDK bindings, component selection, and chronological
   history together. Failed publication rolls back all participating owners. Normal undo/redo keeps
   monotonic revisions; exact revision restoration is for failure compensation.
 - `delete_selection` uses `DeleteSelectionTool`/`deleteComponentSelection()` for components and the
-  scene-aware document route for objects, groups, and selected roots other than the scene root.
+  scene-aware document route for objects, groups, and selected hierarchy roots.
 - Tools own state machines; UI dispatches intent. Cover preview cancel/commit, selection, overlays,
   and undo/redo with focused synthetic behavior tests under the root verification contract.
   Geometry previews must also satisfy the [preview projection contract](modeling/runtime/README.md#live-preview-projection-contract)

@@ -188,11 +188,11 @@ SceneContentDocument make_lighting_document(std::span<const float> intensities,
                                             float falloff, bool calibration) {
   SceneContentDocument document({.id = 8u, .name = "Lighting calibration"});
   auto &scene = document.scene();
-  SceneSettingsComponent settings;
+  SceneSettings settings;
   settings.environment.enabled = false;
   settings.environment.show_background = false;
   settings.environment.clear_color = {0.0f, 0.0f, 0.0f};
-  EXPECT_TRUE(scene.set_scene_settings(scene.scene_root(), settings));
+  EXPECT_TRUE(scene.set_scene_settings(settings));
   EntityId id = 300u;
   for (std::size_t shape = 0u; shape < kLightShapes.size(); ++shape) {
     for (const float intensity : intensities) {
@@ -651,18 +651,18 @@ TEST_F(BridgeReaderTests, CatalogUsesSavedActiveSceneAndFallsBackToFirst) {
 
 TEST_F(BridgeReaderTests, SceneViewUsesFixedExposureDespiteAuthoredCameraChanges) {
   auto document = make_lighting_document(std::array{16.0f}, 1.0f, false);
-  SceneSettingsComponent settings = *document.scene().scene_settings(document.scene().scene_root());
+  SceneSettings settings = document.scene().scene_settings();
   settings.camera.aperture = 8.0f;
   settings.camera.shutter_speed = 0.02f;
   settings.camera.sensitivity = 400.0f;
   settings.camera.use_exposure = true;
-  ASSERT_TRUE(document.scene().set_scene_settings(document.scene().scene_root(), settings));
+  ASSERT_TRUE(document.scene().set_scene_settings(settings));
   add_scene(kFirstScene, "Scenes/exposed.qdr", document);
   settings.camera.aperture = 2.0f;
   settings.camera.shutter_speed = 0.5f;
   settings.camera.sensitivity = 1600.0f;
   settings.camera.use_exposure = false;
-  ASSERT_TRUE(document.scene().set_scene_settings(document.scene().scene_root(), settings));
+  ASSERT_TRUE(document.scene().set_scene_settings(settings));
   add_scene(kSecondScene, "Scenes/unexposed.qdr", document);
   open_project();
   std::array<QuaderBridgeLightView, 3> before{};
@@ -771,10 +771,10 @@ TEST_F(BridgeReaderTests, LightSnapshotsRemainDetachedFromLaterSourceEdits) {
   auto light = *document.scene().light(initial.entity);
   light.intensity = 32.0f;
   ASSERT_TRUE(document.scene().set_light(initial.entity, light));
-  auto settings = *document.scene().scene_settings(document.scene().scene_root());
+  auto settings = document.scene().scene_settings();
   settings.camera.use_exposure = false;
   settings.camera.aperture = 2.0f;
-  ASSERT_TRUE(document.scene().set_scene_settings(document.scene().scene_root(), settings));
+  ASSERT_TRUE(document.scene().set_scene_settings(settings));
   const auto snapshot = qdr_project_write_snapshot_from_document(document);
   ASSERT_TRUE(snapshot.ok()) << snapshot.error().message;
   const auto written = QdrDocumentWriter::write_project_document_atomic(
@@ -1655,13 +1655,12 @@ TEST_F(BridgeReaderTests, SaveGodotAcceptanceFixture) {
         ASSERT_TRUE(changed.ok) << changed.message;
       }
     } else {
-      const EntityId root = scene->session->scene().scene_root();
-      auto settings = *scene->session->scene().scene_settings(root);
+      auto settings = scene->session->scene().scene_settings();
       settings.camera.aperture = 2.0f;
       settings.camera.shutter_speed = 0.5f;
       settings.camera.sensitivity = 1600.0f;
       settings.camera.use_exposure = false;
-      const auto changed = scene->session->document_commands().set_scene_settings(root, settings);
+      const auto changed = scene->session->document_commands().set_scene_settings(settings);
       ASSERT_TRUE(changed.ok) << changed.message;
     }
     const auto committed = native_project.save(scene->session_id);

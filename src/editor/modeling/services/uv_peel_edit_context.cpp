@@ -19,6 +19,9 @@ std::uint64_t next_uv_peel_selection_token() {
 
 } // namespace
 
+UvPeelEditContext::UvPeelEditContext(UvPeelSessionDefaults *defaults)
+    : defaults_(defaults != nullptr ? *defaults : owned_defaults_) {}
+
 ModelingUvPeelSettings UvPeelEditContext::synchronize(
     const ModelingSelectedUvPeelSnapshot &snapshot,
     std::uint64_t content_revision, std::uint64_t selection_revision,
@@ -46,7 +49,7 @@ ModelingUvPeelSettings UvPeelEditContext::synchronize(
   return {
       .selected_edge_count = count,
       .editable = editable,
-      .options = options_,
+      .options = defaults_.options,
       .block_reason = editable ? ModelingUvPeelBlockReason::None
                               : ModelingUvPeelBlockReason::NoSelection,
       .disabled_reason = snapshot.command.message,
@@ -60,12 +63,21 @@ UvPeelEditContext::set_options(const ModelingUvPeelOptions &options) {
   if (!validated.ok()) {
     return {.ok = false, .message = validated.error_message()};
   }
-  if (options_ == validated.value()) {
+  if (defaults_.options == validated.value()) {
     return {.ok = true, .changed = false};
   }
-  options_ = validated.value();
-  ++revision_;
+  defaults_.options = validated.value();
+  ++defaults_.revision;
   return {.ok = true, .changed = true};
+}
+
+void UvPeelEditContext::restore_options(
+    const UvPeelSessionDefaults &snapshot) {
+  if (defaults_.options == snapshot.options) {
+    return;
+  }
+  defaults_.options = snapshot.options;
+  ++defaults_.revision;
 }
 
 void UvPeelEditContext::invalidate_selection() {

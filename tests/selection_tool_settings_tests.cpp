@@ -230,7 +230,7 @@ TEST(SelectionToolSettingsTests,
       ASSERT_TRUE(settings.can_cancel);
       const auto preview = test::capture_command_observable_state(editor);
       ASSERT_NE(preview.domain(Domain::Geometry), before.domain(Domain::Geometry));
-      if (preview_case.tool == "bridge") {
+      if (preview_case.tool == "bridge" || preview_case.tool == "edge_bevel") {
         EXPECT_NE(preview.domain(Domain::Geometry),
                   initial_preview.domain(Domain::Geometry));
       }
@@ -275,6 +275,54 @@ TEST(SelectionToolSettingsTests,
       EXPECT_TRUE(reapplied.empty()) << reapplied.summary;
     }
   }
+}
+
+TEST(SelectionToolSettingsTests,
+     BevelNumericSettingsEachUpdateTheAcceptedPreviewGeometry) {
+  const auto *contract = test::find_command_behavior_contract(
+      quader_command::kModelingBevelEdges.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = test::CommandBehaviorFixture::create(*contract);
+  auto &editor = fixture->editor();
+  const auto started =
+      editor.commands().execute(quader_command::kModelingBevelEdges);
+  ASSERT_TRUE(started.ok()) << started.error_message();
+  ASSERT_TRUE(editor.tools().active_settings().preview_active);
+  using Domain = test::CommandObservableDomain;
+  auto previous = test::capture_command_observable_state(editor);
+  struct SettingChange {
+    std::string_view id;
+    double value;
+  };
+  constexpr std::array kChanges{
+      SettingChange{"operation.edge_bevel.width", 0.15},
+      SettingChange{"operation.edge_bevel.width", 0.3},
+      SettingChange{"operation.edge_bevel.segments", 3.0},
+      SettingChange{"operation.edge_bevel.profile", 0.2},
+      SettingChange{"operation.edge_bevel.profile", 0.8},
+      SettingChange{"operation.edge_bevel.width", 0.2},
+  };
+  for (const auto &change : kChanges) {
+    SCOPED_TRACE(change.id);
+    SCOPED_TRACE(change.value);
+    const auto updated =
+        editor.tools().set_setting("edge_bevel", change.id, change.value);
+    ASSERT_TRUE(updated.ok()) << updated.error_message();
+    EXPECT_TRUE(updated.changed());
+    const auto current = test::capture_command_observable_state(editor);
+    EXPECT_NE(current.domain(Domain::Geometry), previous.domain(Domain::Geometry));
+    const auto unchanged =
+        editor.tools().set_setting("edge_bevel", change.id, change.value);
+    ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+    EXPECT_FALSE(unchanged.changed());
+    EXPECT_EQ(test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              current.domain(Domain::Geometry));
+    previous = current;
+  }
+  ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+  EXPECT_NE(test::capture_command_observable_state(editor).domain(Domain::Geometry),
+            previous.domain(Domain::Geometry));
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
 } // namespace

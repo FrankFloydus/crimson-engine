@@ -8,6 +8,11 @@
 
 #include "ui/qt_navigation_gizmo.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
+#include "ui/qt_viewport_panel.hpp"
+
+#include <QApplication>
+#include <QLayout>
+#include <QPushButton>
 
 #include <cmath>
 
@@ -94,6 +99,123 @@ TEST(QtViewportChromeLayoutTests,
   EXPECT_EQ(layout.menu_width, 296);
   EXPECT_EQ(layout.toolbar_width, 296);
   EXPECT_EQ(layout.toolbar_x, 800 - inset - 296);
+}
+
+TEST(QtViewportChromeLayoutTests,
+     PlacesEnvironmentImmediatelyLeftOfTheDisplayMenuWithRightInset) {
+  const quader::QtViewportChromeLayout layout =
+      quader::qt_viewport_chrome_layout(800, 180, 6, 148, 120, 4);
+
+  EXPECT_EQ(layout.menu_width, 180);
+  EXPECT_EQ(layout.environment_width, 120);
+  EXPECT_EQ(layout.menu_spacing, 4);
+  EXPECT_EQ(layout.toolbar_width, 304);
+  EXPECT_EQ(layout.toolbar_x, 800 - 6 - 304);
+}
+
+TEST(QtViewportChromeLayoutTests,
+     ShrinksBothMenusAndTheirSpacingWithoutOverflowInNarrowPanes) {
+  for (int pane_width = 1; pane_width <= 400; ++pane_width) {
+    const quader::QtViewportChromeLayout layout =
+        quader::qt_viewport_chrome_layout(pane_width, 180, 6, 148, 120, 4);
+    EXPECT_GE(layout.toolbar_x, 0) << pane_width;
+    EXPECT_GT(layout.menu_width, 0) << pane_width;
+    EXPECT_GE(layout.environment_width, 0) << pane_width;
+    EXPECT_GE(layout.menu_spacing, 0) << pane_width;
+    EXPECT_LE(layout.menu_spacing, 4) << pane_width;
+    EXPECT_EQ(layout.toolbar_width,
+              layout.menu_width + layout.environment_width + layout.menu_spacing)
+        << pane_width;
+    EXPECT_LE(layout.toolbar_x + layout.toolbar_width, pane_width) << pane_width;
+    if (pane_width >= 14) {
+      EXPECT_GT(layout.environment_width, 0) << pane_width;
+      EXPECT_EQ(layout.toolbar_x + layout.toolbar_width, pane_width - 6)
+          << pane_width;
+    }
+  }
+
+  const auto narrow =
+      quader::qt_viewport_chrome_layout(40, 180, 6, 148, 120, 4);
+  EXPECT_EQ(narrow.toolbar_width, 28);
+  EXPECT_EQ(narrow.toolbar_x, 6);
+  EXPECT_EQ(narrow.menu_spacing, 4);
+  EXPECT_EQ(narrow.environment_width, 9);
+  EXPECT_EQ(narrow.menu_width, 15);
+}
+
+TEST(QtViewportChromeLayoutTests,
+     ZeroWidthPanesHideBothMenusAndZeroEnvironmentWidthKeepsSingleMenuLayout) {
+  const auto empty =
+      quader::qt_viewport_chrome_layout(0, 180, 6, 148, 120, 4);
+  EXPECT_EQ(empty.toolbar_x, 0);
+  EXPECT_EQ(empty.toolbar_width, 0);
+  EXPECT_EQ(empty.menu_width, 0);
+  EXPECT_EQ(empty.environment_width, 0);
+  EXPECT_EQ(empty.menu_spacing, 0);
+
+  for (int pane_width : {0, 1, 14, 40, 400}) {
+    const auto original =
+        quader::qt_viewport_chrome_layout(pane_width, 180, 6);
+    const auto explicit_single =
+        quader::qt_viewport_chrome_layout(pane_width, 180, 6, 148, 0, 4);
+    EXPECT_EQ(explicit_single.toolbar_x, original.toolbar_x);
+    EXPECT_EQ(explicit_single.toolbar_width, original.toolbar_width);
+    EXPECT_EQ(explicit_single.menu_width, original.menu_width);
+    EXPECT_EQ(explicit_single.environment_width, 0);
+    EXPECT_EQ(explicit_single.menu_spacing, 0);
+  }
+}
+
+TEST(QtViewportChromeLayoutTests,
+     EveryPanePlacesEnvironmentLeftOfDisplayAndSharesOneRetainedPopup) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-environment-launcher-layout";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::ViewportWorkspaceService workspace;
+  ASSERT_TRUE(workspace.set_layout(quader::ViewportLayoutId::FourQuad));
+  quader::QtViewportPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.resize(1000, 700);
+  panel.attach_workspace(workspace);
+  panel.refresh_workspace_layout();
+
+  const auto popups = panel.findChildren<QWidget *>(
+      QStringLiteral("environmentSettings"));
+  ASSERT_EQ(popups.size(), 1);
+  EXPECT_EQ(popups.front()->parentWidget(), &panel);
+
+  for (const char *pane : {"perspective", "top", "front", "side"}) {
+    SCOPED_TRACE(pane);
+    const QString suffix = QString::fromLatin1(pane);
+    auto *toolbar = panel.findChild<QWidget *>(
+        QStringLiteral("viewportToolbar_") + suffix);
+    auto *environment = panel.findChild<QPushButton *>(
+        QStringLiteral("viewportEnvironment_") + suffix);
+    auto *display = panel.findChild<QPushButton *>(
+        QStringLiteral("viewportShading_") + suffix);
+    ASSERT_NE(toolbar, nullptr);
+    ASSERT_NE(environment, nullptr);
+    ASSERT_NE(display, nullptr);
+    ASSERT_NE(toolbar->layout(), nullptr);
+    toolbar->layout()->activate();
+    EXPECT_EQ(environment->parentWidget(), toolbar);
+    EXPECT_EQ(display->parentWidget(), toolbar);
+    EXPECT_EQ(environment->text(), QStringLiteral("Environment"));
+    EXPECT_GT(environment->width(), 0);
+    EXPECT_GT(display->width(), 0);
+    EXPECT_EQ(display->x(), environment->geometry().right() + 1 +
+                                toolbar->layout()->spacing());
+    EXPECT_EQ(toolbar->geometry().right() + 1,
+              toolbar->parentWidget()->width() - 6);
+    EXPECT_EQ(toolbar->y(), 6);
+    EXPECT_TRUE(toolbar->rect().contains(environment->geometry()));
+    EXPECT_TRUE(toolbar->rect().contains(display->geometry()));
+  }
 }
 
 TEST(QtNavigationGizmoUpdatePolicyTests,

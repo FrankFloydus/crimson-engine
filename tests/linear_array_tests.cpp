@@ -876,6 +876,74 @@ TEST(LinearArrayPerformanceTests,
 }
 
 TEST(LinearArrayToolServiceTests,
+     RemembersCountAcrossCancellationApplyAndReplacementWithoutPlacement) {
+  LinearArraySessionDefaults defaults;
+  for (int run = 0; run < 2; ++run) {
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto source = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Remembered Linear Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    LinearArrayToolService tool(
+        session.scene(), session.assets(), session.history(), session.modeling(),
+        session.selection(), session.instances(), &defaults);
+    ASSERT_TRUE(tool.activate(1.0).ok);
+    if (run == 0) {
+      ASSERT_TRUE(tool.set_count(7u).ok);
+      ASSERT_TRUE(tool.set_endpoint({99.0f, 0.0f, 0.0f}, false, 1.0).ok);
+      ASSERT_TRUE(tool.set_axis_constraint(LinearArrayAxisConstraint::X).ok);
+      ASSERT_TRUE(tool.cancel().ok);
+      ASSERT_TRUE(tool.activate(1.0).ok);
+    }
+    EXPECT_EQ(tool.count(), 7u);
+    EXPECT_EQ(defaults.count, 7u);
+    EXPECT_EQ(tool.handle_state().constraint, LinearArrayAxisConstraint::Free);
+    EXPECT_NEAR(tool.handle_state().endpoint_world.x, 12.0f, 0.0001f);
+    EXPECT_FALSE(tool.set_count(kLinearArrayMaximumCount + 1u).ok);
+    EXPECT_EQ(defaults.count, 7u);
+    ASSERT_TRUE(tool.apply().ok);
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(tool.activate(1.0).ok);
+    EXPECT_EQ(tool.count(), 7u);
+  }
+  EXPECT_EQ(LinearArraySessionDefaults{}.count, kLinearArrayDefaultCount);
+}
+
+TEST(LinearArrayToolServiceTests,
+     SourceCapacityDoesNotReplaceTheRememberedCount) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<EntityId> sources;
+  for (int index = 0; index < 9; ++index) {
+    const auto source = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Capacity Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    sources.push_back(source.value().entity);
+  }
+  LinearArraySessionDefaults defaults;
+  LinearArrayToolService tool(
+      session.scene(), session.assets(), session.history(), session.modeling(),
+      session.selection(), session.instances(), &defaults);
+  ASSERT_TRUE(editor.selection().select_objects({sources.front()}, sources.front()).ok());
+  ASSERT_TRUE(tool.activate(1.0).ok);
+  ASSERT_TRUE(tool.set_count(kLinearArrayMaximumCount).ok);
+  ASSERT_TRUE(tool.cancel().ok);
+  ASSERT_TRUE(editor.selection().select_objects(sources, sources.back()).ok());
+  ASSERT_TRUE(tool.activate(1.0).ok);
+  EXPECT_LT(tool.count(), kLinearArrayMaximumCount);
+  EXPECT_EQ(defaults.count, kLinearArrayMaximumCount);
+  ASSERT_TRUE(tool.cancel().ok);
+  ASSERT_TRUE(editor.selection().select_objects({sources.front()}, sources.front()).ok());
+  ASSERT_TRUE(tool.activate(1.0).ok);
+  EXPECT_EQ(tool.count(), kLinearArrayMaximumCount);
+}
+
+TEST(LinearArrayToolServiceTests,
      ResetRestoresTheDynamicDefaultWithOnePreviewRevision) {
   SceneSession session;
   QuaderEditorApi editor(

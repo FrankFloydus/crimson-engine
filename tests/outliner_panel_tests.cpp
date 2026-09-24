@@ -266,6 +266,23 @@ protected:
   QTreeView *tree_ = nullptr;
 };
 
+TEST_F(OutlinerPanelDropTests, EmptySceneHasNoRowAndObjectsAppearAsEditableRoots) {
+  EXPECT_EQ(tree_->model()->rowCount(), 0);
+  const quader::EntityId first = create("First");
+  const quader::EntityId second = create("Second");
+  refresh();
+
+  ASSERT_EQ(tree_->model()->rowCount(), 2);
+  EXPECT_FALSE(index(first).parent().isValid());
+  EXPECT_FALSE(index(second).parent().isValid());
+  EXPECT_EQ(index(first).row(), 0);
+  EXPECT_EQ(index(second).row(), 1);
+  EXPECT_TRUE(index(first).flags().testFlag(Qt::ItemIsEditable));
+  EXPECT_TRUE(index(first).flags().testFlag(Qt::ItemIsDragEnabled));
+  EXPECT_EQ(session_.scene().parent(first), quader::kInvalidEntityId);
+  EXPECT_EQ(session_.scene().parent(second), quader::kInvalidEntityId);
+}
+
 TEST_F(OutlinerPanelDropTests,
        MultiSelectionMovesIntoAndOutOfGroupsWithWorldPlacementAndSingleUndo) {
   const quader::EntityId first = create("First");
@@ -310,7 +327,7 @@ TEST_F(OutlinerPanelDropTests,
 
   ASSERT_TRUE(editor_.history().undo().ok());
   refresh();
-  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+  EXPECT_EQ(session_.scene().root_entities(),
             (std::vector<quader::EntityId>{first, second, group}));
   EXPECT_EQ(session_.scene().children(group),
             std::vector<quader::EntityId>{existing});
@@ -324,8 +341,12 @@ TEST_F(OutlinerPanelDropTests,
   ASSERT_NE(outward, nullptr);
   ASSERT_TRUE(drop(*outward, {}));
   refresh();
-  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+  EXPECT_EQ(session_.scene().root_entities(),
             (std::vector<quader::EntityId>{group, first, second}));
+  EXPECT_EQ(session_.scene().parent(first), quader::kInvalidEntityId);
+  EXPECT_EQ(session_.scene().parent(second), quader::kInvalidEntityId);
+  EXPECT_FALSE(index(first).parent().isValid());
+  EXPECT_FALSE(index(second).parent().isValid());
   EXPECT_EQ(session_.scene().world_transform_matrix(first).values, first_world.values);
   EXPECT_EQ(session_.scene().world_transform_matrix(second).values, second_world.values);
   expect_selection(*tree_, session_.scene(), {first, second}, second);
@@ -342,7 +363,7 @@ TEST_F(OutlinerPanelDropTests,
   ASSERT_NE(single, nullptr);
   ASSERT_TRUE(drop(*single, index(first).parent(), index(first).row()));
   refresh();
-  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+  EXPECT_EQ(session_.scene().root_entities(),
             (std::vector<quader::EntityId>{fourth, first, second, third}));
   ASSERT_TRUE(editor_.history().undo().ok());
   refresh();
@@ -354,13 +375,13 @@ TEST_F(OutlinerPanelDropTests,
   // must not remove a second set of rows from our scene-owned projection.
   EXPECT_FALSE(tree_->model()->removeRows(0, 1, index(first).parent()));
   refresh();
-  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+  EXPECT_EQ(session_.scene().root_entities(),
             (std::vector<quader::EntityId>{second, fourth, first, third}));
   EXPECT_EQ(index(first).row(), 2);
   EXPECT_EQ(index(third).row(), 3);
   ASSERT_TRUE(editor_.history().undo().ok());
   refresh();
-  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+  EXPECT_EQ(session_.scene().root_entities(),
             (std::vector<quader::EntityId>{first, second, third, fourth}));
 }
 
@@ -382,13 +403,13 @@ TEST_F(OutlinerPanelDropTests, NestedSelectionMovesAsOneSubtreeAndRejectsCycles)
             std::vector<quader::EntityId>{child});
 }
 
-TEST_F(OutlinerPanelDropTests, StaleForeignLockedAndRootDragsCannotMutateScene) {
+TEST_F(OutlinerPanelDropTests, StaleForeignLockedAndInvalidDragsCannotMutateScene) {
   const quader::EntityId source = create("Source");
   const quader::EntityId target = create("Target");
   refresh();
   const auto data = mime({source});
   ASSERT_NE(data, nullptr);
-  EXPECT_EQ(mime({session_.scene().scene_root()}), nullptr);
+  EXPECT_EQ(mime({quader::kInvalidEntityId}), nullptr);
   EXPECT_FALSE(tree_->model()->dropMimeData(data.get(), Qt::CopyAction,
                                            -1, 0, index(target)));
   QMimeData foreign;
@@ -415,7 +436,7 @@ TEST_F(OutlinerPanelDropTests, StaleForeignLockedAndRootDragsCannotMutateScene) 
   panel_.abandon_runtime();
   refresh();
   EXPECT_FALSE(drop(*before_rebind, index(target)));
-  EXPECT_EQ(session_.scene().children(session_.scene().scene_root()),
+  EXPECT_EQ(session_.scene().root_entities(),
             (std::vector<quader::EntityId>{source, target}));
 }
 
@@ -814,8 +835,7 @@ TEST(OutlinerPanelTests,
   {
     SCOPED_TRACE("external empty selection resets the stale Shift anchor");
     expect_selection(*tree, session.scene(),
-                     {session.scene().scene_root(), first.value().id,
-                      second.value().id},
+                     {first.value().id, second.value().id},
                      second.value().id);
   }
 
@@ -931,12 +951,16 @@ TEST(OutlinerPanelTests,
   panel.refresh(context);
   styled_first = find_entity_index(*tree->model(), first.value().id);
   EXPECT_FALSE(styled_first.data(Qt::UserRole + 2).toBool());
-  const QModelIndex old_root = tree->model()->index(0, 0);
-  ASSERT_TRUE(old_root.isValid());
-  ASSERT_TRUE(tree->model()->hasChildren(old_root));
-  tree->collapse(old_root);
+  const auto first_child = create("First Group Child", first.value().id);
+  ASSERT_TRUE(first_child.ok()) << first_child.error_message();
+  panel.refresh(context);
+  const QModelIndex old_group =
+      find_entity_index(*tree->model(), first.value().id);
+  ASSERT_TRUE(old_group.isValid());
+  ASSERT_TRUE(tree->model()->hasChildren(old_group));
+  tree->collapse(old_group);
   QCoreApplication::processEvents();
-  ASSERT_FALSE(tree->isExpanded(old_root));
+  ASSERT_FALSE(tree->isExpanded(old_group));
 
   quader::SceneSession other_session;
   quader::QuaderEditorApi other_editor(
@@ -947,6 +971,13 @@ TEST(OutlinerPanelTests,
       .kind = quader::QuaderEntityKind::Empty,
   });
   ASSERT_TRUE(other.ok()) << other.error_message();
+  ASSERT_EQ(other.value().id, first.value().id);
+  const auto other_child = other_editor.scene().create_entity({
+      .name = "Other Group Child",
+      .kind = quader::QuaderEntityKind::Empty,
+      .parent = other.value().id,
+  });
+  ASSERT_TRUE(other_child.ok()) << other_child.error_message();
   bool alternate_name = false;
   std::string other_name = "Other Document";
   while (other_session.scene().content_revision() <
@@ -971,9 +1002,11 @@ TEST(OutlinerPanelTests,
   };
   panel.refresh(other_context);
   QCoreApplication::processEvents();
-  const QModelIndex other_root = tree->model()->index(0, 0);
-  ASSERT_TRUE(other_root.isValid());
-  EXPECT_TRUE(tree->isExpanded(other_root))
+  const QModelIndex other_group =
+      find_entity_index(*tree->model(), other.value().id);
+  ASSERT_TRUE(other_group.isValid());
+  ASSERT_TRUE(tree->model()->hasChildren(other_group));
+  EXPECT_TRUE(tree->isExpanded(other_group))
       << "document-local collapsed IDs must not leak between scenes";
   EXPECT_FALSE(
       find_entity_index(*tree->model(), fourth.value().id).isValid());

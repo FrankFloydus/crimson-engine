@@ -144,9 +144,6 @@ bool scene_entity_selectable_for_user_selection(const SceneDocument &scene,
   if (entity == kInvalidEntityId || !scene.exists(entity)) {
     return false;
   }
-  if (scene.is_scene_root(entity)) {
-    return true;
-  }
   if (scene.is_effectively_locked(entity)) {
     return false;
   }
@@ -220,7 +217,7 @@ user_selectable_scene_entities_for_mode(const SceneDocument &scene,
     }
     effectively_locked.emplace(entity, locked);
     const VisibilityComponent *visibility = scene.visibility(entity);
-    if (scene.is_scene_root(entity) || locked ||
+    if (locked ||
         (visibility != nullptr && !visibility->selectable)) {
       continue;
     }

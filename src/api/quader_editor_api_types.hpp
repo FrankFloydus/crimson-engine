@@ -229,6 +229,10 @@ struct QuaderToolSettingControl {
   bool number_positive_only = false;
   // Converts the world-space grid interval into this field's displayed units.
   double number_grid_scale = 1.0;
+  // Units per logical pixel; zero uses the shared numeric control default.
+  double number_drag_sensitivity = 0.0;
+  // Internal precision override; compact display formatting remains unchanged.
+  int number_decimals = 0;
 };
 
 /**

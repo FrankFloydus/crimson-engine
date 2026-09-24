@@ -72,10 +72,12 @@ RadialArrayToolService::RadialArrayToolService(
     SceneDocument &scene, AssetRegistry &assets, EditorHistoryService &history,
     ModelingSessionService &modeling, EditorSelectionService &selection,
     SceneInstanceService &instances,
-    SceneStructuralLifecycleService &structural_lifecycle)
+    SceneStructuralLifecycleService &structural_lifecycle,
+    RadialArraySessionDefaults *defaults)
     : scene_(scene), assets_(assets), history_(history), modeling_(modeling),
       selection_(selection), instances_(instances),
-      structural_lifecycle_(structural_lifecycle) {}
+      structural_lifecycle_(structural_lifecycle),
+      defaults_(defaults != nullptr ? *defaults : local_defaults_) {}
 
 void RadialArrayToolService::clear_preview_cache() {
   cached_preview_revision_ = 0;
@@ -325,20 +327,21 @@ bool RadialArrayToolService::center_locked() const {
 
 double RadialArrayToolService::degrees() const {
   return session_.has_value() ? session_->degrees
-                              : kRadialArrayDefaultDegrees;
+                              : defaults_.degrees;
 }
 
 std::uint32_t RadialArrayToolService::copies() const {
-  return session_.has_value() ? session_->copies : kRadialArrayDefaultCopies;
+  return session_.has_value() ? session_->copies : defaults_.copies;
 }
 
 std::uint32_t RadialArrayToolService::repeats() const {
   return session_.has_value() ? session_->repeats
-                              : kRadialArrayDefaultRepeats;
+                              : defaults_.repeats;
 }
 
 double RadialArrayToolService::repeat_spacing() const {
-  return session_.has_value() ? session_->repeat_spacing : 1.0;
+  return session_.has_value() ? session_->repeat_spacing
+                              : defaults_.repeat_spacing.value_or(1.0);
 }
 
 std::uint32_t RadialArrayToolService::maximum_copies_for(
@@ -370,11 +373,12 @@ bool RadialArrayToolService::has_valid_center() const {
 }
 
 RadialArrayMode RadialArrayToolService::mode() const {
-  return session_.has_value() ? session_->mode : RadialArrayMode::Total;
+  return session_.has_value() ? session_->mode : defaults_.mode;
 }
 
 bool RadialArrayToolService::create_instances() const {
-  return session_.has_value() && session_->create_instances;
+  return session_.has_value() ? session_->create_instances
+                              : defaults_.create_instances;
 }
 
 double RadialArrayToolService::automatic_repeat_spacing(
@@ -444,10 +448,20 @@ CommandResult RadialArrayToolService::activate(double fallback_grid_size) {
   next.instance_occurrences = instance_occurrences;
   next.selection_revision = scene_.selection_revision();
   next.fallback_grid_size = sanitized_grid_size(fallback_grid_size);
-  next.repeat_spacing = next.fallback_grid_size;
-  next.copies = std::min(kRadialArrayDefaultCopies,
+  next.repeat_spacing =
+      defaults_.repeat_spacing.value_or(next.fallback_grid_size);
+  next.repeat_spacing_edited = defaults_.repeat_spacing.has_value();
+  next.mode = defaults_.mode;
+  next.degrees = defaults_.degrees;
+  next.create_instances = defaults_.create_instances;
+  // A source-capacity reduction affects only this operation, not authored
+  // options used by subsequent operations with a smaller selection.
+  next.copies = std::min(defaults_.copies,
                          maximum_copies_for(ordered_sources.size(),
                                             kRadialArrayDefaultRepeats));
+  next.repeats = std::min(defaults_.repeats,
+                         maximum_repeats_for(ordered_sources.size(),
+                                             next.copies));
   next.sources.reserve(ordered_sources.size());
   for (const EntityId entity : ordered_sources) {
     const std::optional<QVec3> visible_pivot =
@@ -888,6 +902,7 @@ CommandResult RadialArrayToolService::set_degrees(double degrees) {
     return command_unchanged_result();
   }
   session_->degrees = degrees;
+  defaults_.degrees = degrees;
   session_->revision = issue_revision();
   issue_tool_settings_revision();
   return command_changed_result();
@@ -902,6 +917,7 @@ CommandResult RadialArrayToolService::set_mode(RadialArrayMode mode) {
   }
   if (session_->mode == mode) return command_unchanged_result();
   session_->mode = mode;
+  defaults_.mode = mode;
   session_->revision = issue_revision();
   issue_tool_settings_revision();
   return command_changed_result();
@@ -913,6 +929,7 @@ CommandResult RadialArrayToolService::set_create_instances(bool enabled) {
   }
   if (session_->create_instances == enabled) return command_unchanged_result();
   session_->create_instances = enabled;
+  defaults_.create_instances = enabled;
   issue_tool_settings_revision();
   return command_changed_result();
 }
@@ -930,6 +947,7 @@ CommandResult RadialArrayToolService::set_copies(std::uint32_t copies) {
     return command_unchanged_result();
   }
   session_->copies = copies;
+  defaults_.copies = copies;
   session_->revision = issue_revision();
   issue_tool_settings_revision();
   return command_changed_result();
@@ -961,6 +979,7 @@ CommandResult RadialArrayToolService::set_repeats(std::uint32_t repeats) {
     return command_unchanged_result();
   }
   session_->repeats = repeats;
+  defaults_.repeats = repeats;
   session_->revision = issue_revision();
   issue_tool_settings_revision();
   return command_changed_result();
@@ -989,11 +1008,13 @@ CommandResult RadialArrayToolService::set_repeat_spacing(double spacing) {
     return command_invalid_result(
         "Radial Array repeat spacing must be between 0 and 16384.");
   }
-  session_->repeat_spacing_edited = true;
-  if (session_->repeat_spacing == spacing) {
+  if (session_->repeat_spacing == spacing &&
+      session_->repeat_spacing_edited) {
     return command_unchanged_result();
   }
   session_->repeat_spacing = spacing;
+  session_->repeat_spacing_edited = true;
+  defaults_.repeat_spacing = spacing;
   session_->revision = issue_revision();
   issue_tool_settings_revision();
   return command_changed_result();
@@ -1014,7 +1035,8 @@ CommandResult RadialArrayToolService::reset_settings() {
       session_->repeats != default_repeats ||
       session_->repeat_spacing != default_spacing ||
       session_->repeat_spacing_edited ||
-      session_->mode != RadialArrayMode::Total || session_->create_instances;
+      session_->mode != RadialArrayMode::Total || session_->create_instances ||
+      defaults_ != RadialArraySessionDefaults{};
   if (!changed) {
     return command_unchanged_result();
   }
@@ -1025,6 +1047,7 @@ CommandResult RadialArrayToolService::reset_settings() {
   session_->repeat_spacing_edited = false;
   session_->mode = RadialArrayMode::Total;
   session_->create_instances = false;
+  defaults_ = {};
   session_->revision = issue_revision();
   issue_tool_settings_revision();
   return command_changed_result();

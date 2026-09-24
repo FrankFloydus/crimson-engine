@@ -158,11 +158,6 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
     snapshot.has_light = true;
     snapshot.light = to_api_light_component(*light);
   }
-  if (const SceneSettingsComponent *settings = scene.scene_settings(entity)) {
-    snapshot.is_scene_root = scene.is_scene_root(entity);
-    snapshot.has_scene_settings = true;
-    snapshot.scene_settings = to_api_scene_settings(*settings);
-  }
   if (const ModelingObjectComponent *object = scene.modeling_object(entity)) {
     snapshot.has_modeling_object = true;
     snapshot.modeling_object_id = object->object_id;
@@ -467,6 +462,18 @@ QuaderOverlayFrame QuaderQueryApi::selection_overlay() const {
       read_scene_session(session_).modeling().selection_overlay_frame());
 }
 
+QuaderSceneSettings QuaderQueryApi::scene_settings() const {
+  return to_api_scene_settings(read_scene_session(session_).scene().scene_settings());
+}
+
+QuaderSceneDocumentBinding QuaderQueryApi::document_binding() const {
+  return {
+      .scene_session_id = mutations_.scene_session_id(),
+      .document_binding_generation =
+          read_scene_session(session_).document_binding_generation(),
+  };
+}
+
 QuaderRevisionStamp QuaderQueryApi::revisions() const {
   return quader_api_current_revisions(read_scene_session(session_));
 }
@@ -474,6 +481,7 @@ QuaderRevisionStamp QuaderQueryApi::revisions() const {
 QuaderApiSnapshot QuaderQueryApi::snapshot() const {
   return {
       .revisions = revisions(),
+      .scene_settings = scene_settings(),
       .entities = entity_tree(),
       .layers = QuaderLayersApi(session_, mutations_).all(),
       .modeling_objects = modeling_objects(),

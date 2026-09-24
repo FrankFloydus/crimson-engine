@@ -25,6 +25,11 @@ class ModelingSessionService;
 class SceneDocument;
 struct SceneBounds;
 
+/// Remembers snap preferences across scene owners for one app lifetime.
+struct PivotSessionDefaults {
+  PivotSnapSettings snap_settings;
+};
+
 /// Reports deterministic Copy Pivot planning work without timing assertions.
 struct PivotPlanningStats {
   std::uint64_t copy_batch_count = 0;
@@ -44,7 +49,8 @@ class PivotToolService final {
 public:
   PivotToolService(SceneDocument &scene, AssetRegistry &assets,
                    EditorHistoryService &history,
-                   ModelingSessionService &modeling);
+                   ModelingSessionService &modeling,
+                   PivotSessionDefaults *session_defaults = nullptr);
 
   [[nodiscard]] bool persistent_active() const;
   [[nodiscard]] PivotSnapSettings snap_settings() const { return snap_settings_; }
@@ -127,11 +133,14 @@ private:
   [[nodiscard]] bool persistent_session_is_valid() const;
   [[nodiscard]] std::optional<SceneBounds> target_bounds() const;
   [[nodiscard]] CommandResult align_to_world_position(QVec3 world_position);
+  void restore_session_defaults();
 
   SceneDocument &scene_;
   AssetRegistry &assets_;
   EditorHistoryService &history_;
   ModelingSessionService &modeling_;
+  PivotSessionDefaults local_session_defaults_;
+  PivotSessionDefaults *session_defaults_ = nullptr;
   PivotSnapSettings snap_settings_;
   mutable std::optional<PersistentSession> persistent_;
   QuickState quick_;

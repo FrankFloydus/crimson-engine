@@ -104,15 +104,24 @@ inline constexpr double kPathArrayScaleUiMaximumFactor = 10.0;
 inline constexpr double kPathArrayScaleUiStepFactor = 0.01;
 
 /**
- * Persists the preferred path spacing across SceneSession replacement.
+ * Persists authored Path Array options across SceneSession replacement.
  *
- * An empty value deliberately means "fit the default count to the path". The
- * first activation initializes that intent; only an explicit Distance edit or
- * Reset replaces it afterward. The application lifetime owner supplies one
- * shared instance to each SceneSession.
+ * An empty distance means "fit the count to the first path". The fitted value
+ * is retained until an explicit Distance edit or Reset. Random seeds and
+ * source/path state remain local to each operation. The app lifetime owner
+ * shares these options across scenes.
  */
 struct PathArraySessionDefaults final {
   std::optional<double> remembered_distance;
+  std::uint32_t count = kPathArrayDefaultCount;
+  bool follow_path = kPathArrayDefaultFollowPath;
+  PathArraySignedAxis forward_axis = kPathArrayDefaultForwardAxis;
+  QVec3 rotation_offset_degrees = kPathArrayDefaultRotationOffsetDegrees;
+  QVec3 rotation_random_min_degrees = kPathArrayDefaultRotationRandomMinDegrees;
+  QVec3 rotation_random_max_degrees = kPathArrayDefaultRotationRandomMaxDegrees;
+  QVec3 scale_offset_factors = kPathArrayDefaultScaleOffsetFactors;
+  QVec3 scale_random_min_factors = kPathArrayDefaultScaleRandomMinFactors;
+  QVec3 scale_random_max_factors = kPathArrayDefaultScaleRandomMaxFactors;
 };
 
 /** Identifies the modal Path Array lifecycle phase. */
@@ -364,6 +373,8 @@ private:
   [[nodiscard]] std::optional<PathArrayLayoutResult>
   build_layout(const Session &session) const;
   CommandResult set_variation(PathArrayVariationSettings variation);
+  PathArraySessionDefaults &editable_defaults();
+  void publish_pending_defaults() const;
   [[nodiscard]] std::optional<std::vector<std::vector<QMat4>>>
   build_preview_mesh_mappings(
       const Session &session,
@@ -392,6 +403,8 @@ private:
   DocumentCommandService &document_commands_;
   SceneStructuralLifecycleService &structural_lifecycle_;
   PathArraySessionDefaults &defaults_;
+  // Source-bound edits become remembered options only after a valid preview.
+  mutable std::optional<PathArraySessionDefaults> pending_defaults_;
   std::optional<Session> session_;
   bool committing_ = false;
   std::uint64_t revision_counter_ = 0U;

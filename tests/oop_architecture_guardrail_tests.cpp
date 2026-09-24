@@ -961,8 +961,8 @@ TEST(OopArchitectureGuardrailTests, SceneEnvironmentCatalogOwnsIblResourceContra
       read_file(source_root() / "src/scene/components.hpp");
   const std::string api_types =
       read_file(source_root() / "src/api/quader_api_types.hpp");
-  const std::string inspector =
-      read_file(source_root() / "src/ui/inspector_panel.cpp");
+  const std::string environment_popup =
+      read_file(source_root() / "src/ui/qt_environment_settings_popup.cpp");
   const std::string environment_library =
       read_file(source_root() / "src/render/filament_environment_library.cpp");
 
@@ -975,7 +975,7 @@ TEST(OopArchitectureGuardrailTests, SceneEnvironmentCatalogOwnsIblResourceContra
             std::string::npos);
   EXPECT_NE(api_types.find("core/scene_environment_catalog.hpp"),
             std::string::npos);
-  EXPECT_NE(inspector.find("scene_environment_catalog()"), std::string::npos);
+  EXPECT_NE(environment_popup.find("scene_environment_catalog()"), std::string::npos);
   EXPECT_NE(
       environment_library.find("scene_environment_descriptor(environment_id)"),
       std::string::npos);

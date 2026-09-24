@@ -23,18 +23,25 @@
 
 #include <QApplication>
 #include <QColorDialog>
+#include <QDialog>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEnterEvent>
 #include <QEventLoop>
 #include <QFocusEvent>
+#include <QImage>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
 #include <QMouseEvent>
 #include <QPixmap>
+#include <QPointer>
+#include <QScopeGuard>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QTimer>
+#include <QWindow>
 
 #include <algorithm>
 #include <array>
@@ -108,6 +115,50 @@ void click_center(QLineEdit &editor) {
              Qt::NoButton);
 }
 
+QAbstractSpinBox *make_numeric_field(QWidget &parent, bool native,
+                                    bool floating) {
+  if (floating) {
+    QDoubleSpinBox *spin = native ? new QDoubleSpinBox(&parent)
+                                 : new quader::QtDoubleSpinBox(&parent);
+    spin->setRange(-1000.0, 1000.0);
+    spin->setValue(12.25);
+    return spin;
+  }
+  QSpinBox *spin = native ? new QSpinBox(&parent)
+                         : new quader::QtSpinBox(&parent);
+  spin->setRange(-1000, 1000);
+  spin->setValue(12);
+  return spin;
+}
+
+double numeric_value(QAbstractSpinBox &spin) {
+  if (auto *floating = qobject_cast<QDoubleSpinBox *>(&spin)) {
+    return floating->value();
+  }
+  return qobject_cast<QSpinBox *>(&spin)->value();
+}
+
+class EscapeTrackingDialog final : public QDialog {
+public:
+  int escape_presses = 0;
+  int escape_releases = 0;
+
+protected:
+  void keyPressEvent(QKeyEvent *event) override {
+    if (event->key() == Qt::Key_Escape) {
+      ++escape_presses;
+    }
+    QDialog::keyPressEvent(event);
+  }
+
+  void keyReleaseEvent(QKeyEvent *event) override {
+    if (event->key() == Qt::Key_Escape) {
+      ++escape_releases;
+    }
+    QDialog::keyReleaseEvent(event);
+  }
+};
+
 QPoint begin_drag(QLineEdit &editor,
                   Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
   const QPoint center = editor.rect().center();
@@ -140,6 +191,21 @@ void export_review_image(QWidget &widget, const QString &name) {
   }
   ASSERT_TRUE(QDir().mkpath(directory));
   ASSERT_TRUE(widget.grab().save(QDir(directory).filePath(name)));
+}
+
+bool rendering_changes_during_cursor_blink(QWidget &widget) {
+  const QImage initial = widget.grab().toImage();
+  QElapsedTimer elapsed;
+  elapsed.start();
+  while (elapsed.elapsed() < QApplication::cursorFlashTime() * 2) {
+    QEventLoop loop;
+    QTimer::singleShot(10, &loop, &QEventLoop::quit);
+    loop.exec();
+    if (widget.grab().toImage() != initial) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Domain-specific steps (for example texture scale powers of two) must remain
@@ -468,6 +534,43 @@ TEST_F(QtNumericSpinBoxTests,
       << "returning from a bound must not traverse accumulated excess travel";
   send_mouse(*editor, QEvent::MouseButtonRelease, bound - QPoint(1, 0),
              Qt::LeftButton, Qt::NoButton);
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       OwnerClampedDragReversesImmediatelyAndEscapeRestoresGestureStart) {
+  quader::QtDoubleSpinBox spin;
+  spin.setDecimals(6);
+  spin.setRange(0.0, 10.0);
+  spin.setValue(0.1);
+  show(spin);
+  auto &control = quader::qt_install_numeric_spin_box(spin);
+  control.set_drag_sensitivity(0.01);
+  auto *editor = spin.findChild<QLineEdit *>();
+  ASSERT_NE(editor, nullptr);
+
+  const QPoint origin = begin_drag(*editor);
+  const QPoint requested = origin + QPoint(80, 0);
+  send_mouse(*editor, QEvent::MouseMove, requested, Qt::NoButton,
+             Qt::LeftButton);
+  ASSERT_TRUE(control.is_dragging());
+  ASSERT_DOUBLE_EQ(spin.value(), 0.9);
+
+  // A completed preview discovers the geometric limit after pointer dispatch.
+  {
+    const QSignalBlocker blocker(&spin);
+    spin.setMaximum(0.4995);
+    spin.setValue(0.4995);
+    control.synchronize_drag_value();
+  }
+  send_mouse(*editor, QEvent::MouseMove, requested - QPoint(1, 0),
+             Qt::NoButton, Qt::LeftButton);
+  EXPECT_DOUBLE_EQ(spin.value(), 0.4895)
+      << "the first reverse pixel must move away from the owner-clamped value";
+
+  send_key(*editor, Qt::Key_Escape);
+  EXPECT_DOUBLE_EQ(spin.value(), 0.1);
+  EXPECT_FALSE(control.is_dragging());
+  EXPECT_FALSE(quader::qt_numeric_drag_active(application()));
 }
 
 TEST_F(QtNumericSpinBoxTests,
@@ -922,6 +1025,317 @@ TEST_F(QtNumericSpinBoxTests, NativeTextEntryCommitsAndEscapeRestoresTheValue) {
   EXPECT_EQ(spin.value(), 27);
   EXPECT_EQ(editor->text(), QStringLiteral("27"));
   EXPECT_FALSE(control.is_editing());
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       OutsideClickOnANonFocusableLabelCommitsAndExitsEveryNumericFieldType) {
+  quader::qt_install_default_numeric_spin_boxes(application());
+  for (bool native : {false, true}) {
+    for (bool floating : {false, true}) {
+      SCOPED_TRACE(native ? "adopted native" : "custom");
+      SCOPED_TRACE(floating ? "double" : "integer");
+      QWidget host;
+      auto *spin = make_numeric_field(host, native, floating);
+      spin->setGeometry(10, 10, 200, 32);
+      spin->setKeyboardTracking(false);
+      QLabel outside(QStringLiteral("Outside"), &host);
+      outside.setGeometry(10, 55, 200, 32);
+      ASSERT_EQ(outside.focusPolicy(), Qt::NoFocus);
+      show(host);
+      host.resize(240, 100);
+      QCoreApplication::processEvents();
+      auto &control = quader::qt_install_numeric_spin_box(*spin);
+      auto *editor = spin->findChild<QLineEdit *>();
+      ASSERT_NE(editor, nullptr);
+      int finishes = 0;
+      QObject::connect(spin, &QAbstractSpinBox::editingFinished, &host,
+                       [&]() { ++finishes; });
+
+      click_center(*editor);
+      ASSERT_TRUE(control.is_editing());
+      type_text(*editor, floating ? QStringLiteral("27.5")
+                                 : QStringLiteral("27"));
+      EXPECT_DOUBLE_EQ(numeric_value(*spin), floating ? 12.25 : 12.0);
+      send_mouse(outside, QEvent::MouseButtonPress, outside.rect().center(),
+                 Qt::LeftButton, Qt::LeftButton);
+      send_mouse(outside, QEvent::MouseButtonRelease, outside.rect().center(),
+                 Qt::LeftButton, Qt::NoButton);
+      EXPECT_FALSE(control.is_editing());
+      EXPECT_DOUBLE_EQ(numeric_value(*spin), floating ? 27.5 : 27.0);
+      EXPECT_EQ(finishes, 1);
+      EXPECT_NE(editor->cursor().shape(), Qt::IBeamCursor);
+      EXPECT_TRUE(editor->isReadOnly());
+      EXPECT_FALSE(editor->inputMethodQuery(Qt::ImEnabled).toBool());
+      EXPECT_FALSE(spin->isReadOnly());
+
+      send_mouse(outside, QEvent::MouseButtonPress, outside.rect().center(),
+                 Qt::LeftButton, Qt::LeftButton);
+      send_mouse(outside, QEvent::MouseButtonRelease, outside.rect().center(),
+                 Qt::LeftButton, Qt::NoButton);
+      EXPECT_EQ(finishes, 1);
+    }
+  }
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       NativeWindowOutsideClickCommitsTextOnANonFocusableLabel) {
+  QWidget host;
+  quader::QtDoubleSpinBox spin(&host);
+  spin.setGeometry(10, 10, 200, 32);
+  spin.setKeyboardTracking(false);
+  spin.setValue(1.25);
+  QLabel outside(QStringLiteral("Outside"), &host);
+  outside.setGeometry(10, 55, 200, 32);
+  ASSERT_EQ(outside.focusPolicy(), Qt::NoFocus);
+  show(host);
+  host.resize(240, 100);
+  QCoreApplication::processEvents();
+  ASSERT_NE(host.windowHandle(), nullptr);
+  auto &control = quader::qt_install_numeric_spin_box(spin);
+  auto *editor = spin.findChild<QLineEdit *>();
+  ASSERT_NE(editor, nullptr);
+  int finishes = 0;
+  QObject::connect(&spin, &QAbstractSpinBox::editingFinished, &host,
+                   [&]() { ++finishes; });
+
+  click_center(*editor);
+  type_text(*editor, QStringLiteral("2.5"));
+  ASSERT_TRUE(control.is_editing());
+  const QPoint global = outside.mapToGlobal(outside.rect().center());
+  const QPoint local = host.mapFromGlobal(global);
+  QMouseEvent press(QEvent::MouseButtonPress, QPointF(local), QPointF(global),
+                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(host.windowHandle(), &press);
+  QMouseEvent release(QEvent::MouseButtonRelease, QPointF(local), QPointF(global),
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(host.windowHandle(), &release);
+  EXPECT_FALSE(control.is_editing());
+  EXPECT_DOUBLE_EQ(spin.value(), 2.5);
+  EXPECT_EQ(finishes, 1);
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       ClickingAnotherNumericFieldCommitsTheFirstAndEntersTheNext) {
+  QWidget host;
+  quader::QtDoubleSpinBox first(&host);
+  first.setGeometry(10, 10, 200, 32);
+  first.setKeyboardTracking(false);
+  first.setValue(1.25);
+  quader::QtSpinBox second(&host);
+  second.setGeometry(10, 55, 200, 32);
+  second.setKeyboardTracking(false);
+  second.setValue(12);
+  show(host);
+  host.resize(240, 100);
+  QCoreApplication::processEvents();
+  auto &first_control = quader::qt_install_numeric_spin_box(first);
+  auto &second_control = quader::qt_install_numeric_spin_box(second);
+  auto *first_editor = first.findChild<QLineEdit *>();
+  auto *second_editor = second.findChild<QLineEdit *>();
+  ASSERT_NE(first_editor, nullptr);
+  ASSERT_NE(second_editor, nullptr);
+  int first_finishes = 0;
+  QObject::connect(&first, &QAbstractSpinBox::editingFinished, &host,
+                   [&]() { ++first_finishes; });
+
+  click_center(*first_editor);
+  type_text(*first_editor, QStringLiteral("2.5"));
+  click_center(*second_editor);
+  EXPECT_DOUBLE_EQ(first.value(), 2.5);
+  EXPECT_FALSE(first_control.is_editing());
+  EXPECT_EQ(first_finishes, 1);
+  ASSERT_TRUE(second_control.is_editing());
+  EXPECT_EQ(second_editor->selectedText(), second_editor->text());
+  type_text(*second_editor, QStringLiteral("34"));
+  send_key(*second_editor, Qt::Key_Return);
+  EXPECT_EQ(second.value(), 34);
+  EXPECT_FALSE(second_control.is_editing());
+  EXPECT_EQ(first_finishes, 1);
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       TextEntryConsumesFirstEscapeBeforeTheEnclosingDialogCanCancel) {
+  quader::qt_install_default_numeric_spin_boxes(application());
+  const int previous_flash_time = QApplication::cursorFlashTime();
+  const auto restore_flash_time = qScopeGuard([previous_flash_time] {
+    QApplication::setCursorFlashTime(previous_flash_time);
+  });
+  QApplication::setCursorFlashTime(100);
+  for (bool native : {false, true}) {
+    for (bool floating : {false, true}) {
+      SCOPED_TRACE(native ? "adopted native" : "custom");
+      SCOPED_TRACE(floating ? "double" : "integer");
+      EscapeTrackingDialog dialog;
+      auto *spin = make_numeric_field(dialog, native, floating);
+      spin->setGeometry(10, 10, 200, 32);
+      spin->setKeyboardTracking(true);
+      show(dialog);
+      dialog.resize(240, 70);
+      QApplication::setActiveWindow(&dialog);
+      QCoreApplication::processEvents();
+      auto &control = quader::qt_install_numeric_spin_box(*spin);
+      auto *editor = spin->findChild<QLineEdit *>();
+      ASSERT_NE(editor, nullptr);
+      int cancels = 0;
+      int commits = 0;
+      control.editing_canceled = [&]() { ++cancels; };
+      QObject::connect(spin, &QAbstractSpinBox::editingFinished, &dialog,
+                       [&]() { ++commits; });
+      EXPECT_TRUE(editor->isReadOnly());
+      EXPECT_FALSE(spin->isReadOnly());
+
+      click_center(*editor);
+      ASSERT_FALSE(editor->isReadOnly());
+      EXPECT_TRUE(editor->inputMethodQuery(Qt::ImEnabled).toBool());
+      QWidget *focused = QApplication::focusWidget();
+      ASSERT_TRUE(focused == spin || focused == editor);
+      editor->deselect();
+      EXPECT_TRUE(rendering_changes_during_cursor_blink(*editor))
+          << "the focused editable field must render a blinking caret";
+      const QString image_kind =
+          QStringLiteral("%1-%2")
+              .arg(native ? QStringLiteral("native") : QStringLiteral("custom"))
+              .arg(floating ? QStringLiteral("double") : QStringLiteral("int"));
+      export_review_image(*spin,
+                          QStringLiteral("numeric-caret-edit-%1.png")
+                              .arg(image_kind));
+      editor->selectAll();
+      type_text(*editor, floating ? QStringLiteral("27.5")
+                                 : QStringLiteral("27"));
+      ASSERT_TRUE(control.is_editing());
+      ASSERT_DOUBLE_EQ(numeric_value(*spin), floating ? 27.5 : 27.0);
+      QKeyEvent shortcut(QEvent::ShortcutOverride, Qt::Key_Escape,
+                         Qt::NoModifier);
+      shortcut.setAccepted(false);
+      QCoreApplication::sendEvent(editor, &shortcut);
+      EXPECT_TRUE(shortcut.isAccepted());
+      EXPECT_TRUE(control.is_editing());
+      send_key(*editor, Qt::Key_Escape);
+      QKeyEvent release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+      release.setAccepted(false);
+      QCoreApplication::sendEvent(editor, &release);
+      EXPECT_TRUE(release.isAccepted());
+      EXPECT_FALSE(control.is_editing());
+      // Native read-only presentation suppresses the caret while retaining
+      // the keyboard context needed for a second Escape to reach the dialog.
+      EXPECT_TRUE(editor->isReadOnly());
+      EXPECT_FALSE(editor->inputMethodQuery(Qt::ImEnabled).toBool());
+      EXPECT_FALSE(spin->isReadOnly());
+      EXPECT_EQ(QApplication::focusWidget(), focused);
+      EXPECT_TRUE(editor->selectedText().isEmpty());
+      EXPECT_DOUBLE_EQ(numeric_value(*spin), floating ? 12.25 : 12.0);
+      EXPECT_EQ(cancels, 1);
+      EXPECT_EQ(commits, 0);
+      EXPECT_EQ(dialog.escape_presses, 0);
+      EXPECT_EQ(dialog.escape_releases, 0);
+      ASSERT_TRUE(dialog.isVisible());
+      EXPECT_FALSE(rendering_changes_during_cursor_blink(*editor))
+          << "Escape must stop the rendered caret, not only clear is_editing";
+      export_review_image(*spin,
+                          QStringLiteral("numeric-caret-escaped-%1.png")
+                              .arg(image_kind));
+
+      send_key(*editor, Qt::Key_Escape);
+      EXPECT_EQ(cancels, 1);
+      EXPECT_EQ(dialog.escape_presses, 1);
+      EXPECT_FALSE(dialog.isVisible());
+      EXPECT_EQ(dialog.result(), QDialog::Rejected);
+      EXPECT_EQ(commits, 0);
+    }
+  }
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       CanceledDisplayCanReenterTextByClickF2TypingAndTab) {
+  quader::qt_install_default_numeric_spin_boxes(application());
+  for (bool native : {false, true}) {
+    for (bool floating : {false, true}) {
+      SCOPED_TRACE(native ? "adopted native" : "custom");
+      SCOPED_TRACE(floating ? "double" : "integer");
+      QWidget host;
+      auto *spin = make_numeric_field(host, native, floating);
+      spin->setGeometry(10, 10, 200, 32);
+      spin->setKeyboardTracking(true);
+      show(host);
+      QApplication::setActiveWindow(&host);
+      QCoreApplication::processEvents();
+      auto &control = quader::qt_install_numeric_spin_box(*spin);
+      auto *editor = spin->findChild<QLineEdit *>();
+      ASSERT_NE(editor, nullptr);
+      int commits = 0;
+      QObject::connect(spin, &QAbstractSpinBox::editingFinished, &host,
+                       [&]() { ++commits; });
+
+      for (int entry = 0; entry < 4; ++entry) {
+        SCOPED_TRACE(entry);
+        ASSERT_FALSE(control.is_editing());
+        ASSERT_TRUE(editor->isReadOnly());
+        ASSERT_FALSE(spin->isReadOnly());
+        switch (entry) {
+        case 0:
+          click_center(*editor);
+          break;
+        case 1:
+          send_key(*editor, Qt::Key_F2);
+          break;
+        case 2:
+          type_text(*editor, QStringLiteral("2"));
+          break;
+        case 3: {
+          QFocusEvent focus(QEvent::FocusIn, Qt::TabFocusReason);
+          QCoreApplication::sendEvent(spin, &focus);
+          break;
+        }
+        }
+        ASSERT_TRUE(control.is_editing());
+        EXPECT_FALSE(editor->isReadOnly());
+        EXPECT_TRUE(editor->inputMethodQuery(Qt::ImEnabled).toBool());
+        type_text(*editor, QStringLiteral("7"));
+        EXPECT_DOUBLE_EQ(numeric_value(*spin), entry == 2 ? 27.0 : 7.0);
+
+        send_key(*editor, Qt::Key_Escape);
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor, &release);
+        EXPECT_FALSE(control.is_editing());
+        EXPECT_TRUE(editor->isReadOnly());
+        EXPECT_FALSE(editor->inputMethodQuery(Qt::ImEnabled).toBool());
+        EXPECT_FALSE(spin->isReadOnly());
+        EXPECT_DOUBLE_EQ(numeric_value(*spin), floating ? 12.25 : 12.0);
+        EXPECT_EQ(commits, 0);
+      }
+    }
+  }
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       OutsideClickCommitToleratesTheOwnerDeletingTheNumericField) {
+  QWidget host;
+  auto *spin = new quader::QtDoubleSpinBox(&host);
+  spin->setGeometry(10, 10, 200, 32);
+  spin->setKeyboardTracking(false);
+  spin->setValue(1.25);
+  QLabel outside(QStringLiteral("Outside"), &host);
+  outside.setGeometry(10, 55, 200, 32);
+  show(host);
+  host.resize(240, 100);
+  QCoreApplication::processEvents();
+  auto *editor = spin->findChild<QLineEdit *>();
+  ASSERT_NE(editor, nullptr);
+  QPointer<QDoubleSpinBox> live_spin(spin);
+  double committed_value = 0.0;
+  QObject::connect(spin, &QAbstractSpinBox::editingFinished, &host, [&]() {
+    committed_value = spin->value();
+    delete spin;
+  });
+
+  click_center(*editor);
+  type_text(*editor, QStringLiteral("2.5"));
+  send_mouse(outside, QEvent::MouseButtonPress, outside.rect().center(),
+             Qt::LeftButton, Qt::LeftButton);
+  send_mouse(outside, QEvent::MouseButtonRelease, outside.rect().center(),
+             Qt::LeftButton, Qt::NoButton);
+  EXPECT_TRUE(live_spin.isNull());
+  EXPECT_DOUBLE_EQ(committed_value, 2.5);
 }
 
 TEST_F(QtNumericSpinBoxTests, TabFocusEntersTextWithoutRequiringAPointer) {

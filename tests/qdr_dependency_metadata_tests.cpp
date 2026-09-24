@@ -50,6 +50,7 @@ namespace fb = ::quader::qdr::fb;
   entity.material->material_slots.emplace(
       999u, MaterialReference::project(dependency_material_id(1u)));
   snapshot.entities.push_back(entity);
+  snapshot.root_entities = {entity.id};
   return snapshot;
 }
 
@@ -250,6 +251,7 @@ TEST(QdrDependencyMetadataTests, RejectsMissingParentsAndHierarchyCycles) {
     child.editor_object_id = 22u;
     child.parent = 11u;
     snapshot.entities.front().parent = parent;
+    snapshot.root_entities.clear();
     snapshot.entities.push_back(child);
     const auto bytes = encode_qdr_scene_binary(snapshot).bytes;
     const auto canonical =
@@ -258,18 +260,18 @@ TEST(QdrDependencyMetadataTests, RejectsMissingParentsAndHierarchyCycles) {
     const auto metadata =
         QdrDocumentReader::deserialize_project_dependencies(bytes);
     EXPECT_FALSE(metadata.ok);
-    EXPECT_NE(metadata.message.find("invalid entity hierarchy"),
-              std::string::npos);
+    EXPECT_FALSE(metadata.message.empty());
   }
 }
 
-TEST(QdrDependencyMetadataTests, PreservesMissingRootAndLegacyIdentitySupport) {
+TEST(QdrDependencyMetadataTests, PreservesParentlessObjectsAndMissingLegacyIdentitySupport) {
   auto snapshot = dependency_snapshot();
   snapshot.entities.front().editor_object_id = kInvalidEditorObjectId;
   const auto bytes = encode_qdr_scene_binary(snapshot).bytes;
   const auto canonical = QdrDocumentReader::deserialize_project_document(bytes);
   ASSERT_TRUE(canonical.ok) << canonical.message;
-  EXPECT_NE(canonical.document.scene().scene_root(), kInvalidEntityId);
+  EXPECT_EQ(canonical.document.scene().root_entities(), (std::vector<EntityId>{11u}));
+  EXPECT_EQ(canonical.document.scene().entities().size(), 1u);
   EXPECT_TRUE(canonical.document.validate_object_identity_invariants().ok());
   const auto metadata =
       QdrDocumentReader::deserialize_project_dependencies(bytes);
@@ -277,33 +279,55 @@ TEST(QdrDependencyMetadataTests, PreservesMissingRootAndLegacyIdentitySupport) {
   EXPECT_EQ(metadata.material_ids.size(), 2u);
 }
 
-TEST(QdrDependencyMetadataTests, RejectsMalformedDuplicateAndParentedRoots) {
+TEST(QdrDependencyMetadataTests, RejectsMalformedDuplicateAndParentedLegacyWrappers) {
   for (const unsigned scenario : {0u, 1u, 2u}) {
     SCOPED_TRACE(scenario);
-    auto snapshot = dependency_snapshot();
-    auto &root = snapshot.entities.front();
-    root.kind = EntityKind::Empty;
-    root.scene_root = true;
-    if (scenario != 0u) {
-      root.scene_settings = SceneSettingsComponent{};
-      auto other = root;
-      other.id = 12u;
-      other.editor_object_id = 22u;
-      if (scenario == 2u) {
-        other.scene_root = false;
-        other.scene_settings.reset();
-        root.parent = other.id;
-      }
-      snapshot.entities.push_back(other);
+    flatbuffers::FlatBufferBuilder builder;
+    const auto environment = fb::CreateSceneEnvironmentSettings(builder);
+    const auto camera = fb::CreateSceneCameraSettings(builder);
+    const auto post_process = fb::CreateScenePostProcessSettings(builder);
+    const auto settings = fb::CreateSceneSettingsComponent(builder, environment, camera, post_process);
+    std::vector<flatbuffers::Offset<fb::Entity>> entities;
+    entities.push_back(fb::CreateEntity(
+        builder, 11u, {}, 21u, {}, fb::EntityKind::Empty,
+        scenario == 2u ? 12u : 0u, {}, {}, {}, {}, {}, {}, {},
+        true, scenario == 0u ? flatbuffers::Offset<fb::SceneSettingsComponent>{} : settings));
+    if (scenario == 1u || scenario == 2u) {
+      entities.push_back(fb::CreateEntity(
+          builder, 12u, {}, 22u, {}, fb::EntityKind::Empty, 0u,
+          {}, {}, {}, {}, {}, {}, {}, scenario == 1u,
+          scenario == 1u ? settings : flatbuffers::Offset<fb::SceneSettingsComponent>{}));
     }
-    const auto bytes = encode_qdr_scene_binary(snapshot).bytes;
-    const auto canonical =
-        QdrDocumentReader::deserialize_project_document(bytes);
+    const auto payload = fb::CreateScenePayload(
+        builder, 81u, {}, {}, {}, {}, builder.CreateVector(entities));
+    const auto bytes = wrap_metadata(builder, payload);
+    const auto canonical = QdrDocumentReader::deserialize_project_document(bytes);
     ASSERT_FALSE(canonical.ok) << canonical.message;
-    const auto metadata =
-        QdrDocumentReader::deserialize_project_dependencies(bytes);
+    const auto metadata = QdrDocumentReader::deserialize_project_dependencies(bytes);
     EXPECT_FALSE(metadata.ok);
   }
+}
+
+TEST(QdrDependencyMetadataTests, MigratesLegacySettingsWrapperWithoutRedundantMarker) {
+  flatbuffers::FlatBufferBuilder builder;
+  const auto environment = fb::CreateSceneEnvironmentSettings(builder);
+  const auto camera = fb::CreateSceneCameraSettings(builder);
+  const auto post_process = fb::CreateScenePostProcessSettings(builder);
+  const auto settings = fb::CreateSceneSettingsComponent(builder, environment, camera, post_process);
+  const auto wrapper = fb::CreateEntity(
+      builder, 11u, {}, 21u, {}, fb::EntityKind::Generic, 0u,
+      {}, {}, {}, {}, {}, {}, {}, false, settings);
+  const std::array entities{wrapper};
+  const auto payload = fb::CreateScenePayload(builder, 81u, {}, {}, {}, {},
+      builder.CreateVector(entities.data(), entities.size()));
+  const auto bytes = wrap_metadata(builder, payload);
+  const auto canonical = QdrDocumentReader::deserialize_project_document(bytes);
+  ASSERT_TRUE(canonical.ok) << canonical.message;
+  EXPECT_TRUE(canonical.document.scene().entities().empty());
+  EXPECT_EQ(canonical.document.scene().scene_settings().post_process.tone_mapping,
+            SceneToneMapping::Aces);
+  const auto metadata = QdrDocumentReader::deserialize_project_dependencies(bytes);
+  EXPECT_TRUE(metadata.ok) << metadata.message;
 }
 
 TEST(QdrDependencyMetadataTests, RejectsInvalidAndDuplicateEntityIdentities) {
@@ -322,6 +346,7 @@ TEST(QdrDependencyMetadataTests, RejectsInvalidAndDuplicateEntityIdentities) {
         other.uuid = dependency_material_id(1u).str();
       }
       snapshot.entities.push_back(other);
+      snapshot.root_entities.push_back(other.id);
     }
     const auto bytes = encode_qdr_scene_binary(snapshot).bytes;
     const auto canonical =

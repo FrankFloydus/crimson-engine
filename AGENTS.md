@@ -52,6 +52,14 @@ Current code, tests and the user request override historical memory. There is no
 architecture migration program. Completed plans are in Git history; do not restart them.
 [FEATURE_IDEAS.md](FEATURE_IDEAS.md) contains optional product ideas, not authorized work.
 
+## User-requested scope
+
+- Never add features, UI, or behavior that the user did not request. Do not independently add
+  explanatory labels, tooltips, disabled states, options, styling changes, or other product
+  changes merely because they seem useful.
+- Make supporting implementation changes only when necessary to deliver the requested behavior.
+  Optional improvements must remain unimplemented unless the user explicitly requests them.
+
 ## Ownership and implementation
 
 - The app-owned portable modeling core at `src/sdk/core/modeling` is modeling truth.

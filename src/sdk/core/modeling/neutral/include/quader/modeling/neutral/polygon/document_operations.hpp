@@ -35,6 +35,13 @@ struct OperationElementDelta {
   }
 };
 
+/** Reports the width actually consumed by an accepted bevel's support clamps. */
+struct EdgeBevelWidthFeedback {
+  float requested_width = 0.0F;
+  float applied_width = 0.0F;
+  bool support_limited = false;
+};
+
 /**
  * Stores the Operation Result data contract used by the polygon document and
  * mesh editing core.
@@ -48,6 +55,7 @@ struct OperationResult {
   // An unchanged operation can still succeed; rejected operations explicitly
   // carry failure so adapters never infer severity from message text or changes.
   bool success = true;
+  std::optional<EdgeBevelWidthFeedback> edge_bevel_width;
 
   /// Creates a rejected operation without authored changes or element deltas.
   [[nodiscard]] static OperationResult failure(std::string message) {

@@ -55,6 +55,7 @@ class LocalizationService;
 class NativeViewportToolCoordinator;
 class QuaderEditorApi;
 class QtToolSettingsPanel;
+class QtEnvironmentSettingsPopup;
 struct QuaderViewportKeybindingContext;
 class RenderOverlaySnapshotCache;
 class QtViewportEdgeLengthHud;
@@ -165,6 +166,7 @@ private:
     QFrame *frame = nullptr;
     QWidget *toolbar = nullptr;
     QPushButton *display_button = nullptr;
+    QPushButton *environment_button = nullptr;
     QMenu *display_menu = nullptr;
     QMenu *camera_menu = nullptr;
     QMenu *debug_view_menu = nullptr;
@@ -250,6 +252,7 @@ private:
   RenderSystem *render_system_ = nullptr;
   ViewportWorkspaceService *workspace_ = nullptr;
   QPointer<QtToolSettingsPanel> settings_panel_;
+  QtEnvironmentSettingsPopup *environment_popup_ = nullptr;
   std::string settings_target_id_;
   std::uint64_t settings_origin_serial_ = 0;
   std::optional<ViewportPaneId> settings_origin_pane_;

@@ -390,7 +390,7 @@ struct LightComponent {
 };
 
 /**
- * Stores scene-wide environment settings on the real scene root entity.
+ * Stores scene-wide environment settings in the scene document.
  */
 struct SceneEnvironmentSettings {
   std::string environment_id = std::string(kDefaultSceneEnvironmentId);
@@ -416,7 +416,7 @@ struct SceneEnvironmentSettings {
 };
 
 /**
- * Stores scene-wide camera exposure settings on the real scene root entity.
+ * Stores scene-wide camera exposure settings in the scene document.
  */
 struct SceneCameraSettings {
     float aperture = 16.0f;
@@ -448,7 +448,7 @@ enum class SceneToneMapping {
 };
 
 /**
- * Stores scene-wide viewport post-process settings on the real scene root entity.
+ * Stores scene-wide viewport post-process settings in the scene document.
  */
 struct ScenePostProcessSettings {
     bool enabled = true;
@@ -471,7 +471,7 @@ struct ScenePostProcessSettings {
     }
 };
 
-/// Stores linear-color atmospheric fog on the real scene root.
+/// Stores linear-color atmospheric fog in the scene document.
 struct SceneFogSettings {
   bool enabled = false;
   float distance = 0.0f;
@@ -514,15 +514,15 @@ struct SceneFogSettings {
 }
 
 /**
- * Marks the real scene root entity and stores global scene render settings.
+ * Stores document-owned global scene render settings.
  */
-struct SceneSettingsComponent {
+struct SceneSettings {
     SceneEnvironmentSettings environment;
     SceneCameraSettings camera;
     ScenePostProcessSettings post_process;
     SceneFogSettings fog;
 
-    [[nodiscard]] bool operator==(const SceneSettingsComponent& other) const {
+    [[nodiscard]] bool operator==(const SceneSettings& other) const {
       return environment == other.environment && camera == other.camera &&
              post_process == other.post_process && fog == other.fog;
     }

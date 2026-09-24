@@ -198,6 +198,13 @@ adapt_operation_result(const quader_poly::OperationResult &result) {
   sdk_result.dirty.topology =
       result.changed && (!sdk_result.created.empty() || !sdk_result.deleted.empty());
   sdk_result.dirty.selection = result.changed;
+  if (result.edge_bevel_width.has_value()) {
+    sdk_result.edge_bevel_width = EdgeBevelWidthFeedback{
+        .requested_width = result.edge_bevel_width->requested_width,
+        .applied_width = result.edge_bevel_width->applied_width,
+        .support_limited = result.edge_bevel_width->support_limited,
+    };
+  }
   return sdk_result;
 }
 

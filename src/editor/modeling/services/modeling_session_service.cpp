@@ -1473,13 +1473,27 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
 
 public:
   Impl(SceneDocument &scene, AssetRegistry &assets,
-       ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks)
+       ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks,
+       ModelingInteractionSettingsService *interaction_settings,
+       UvPeelSessionDefaults *uv_peel_defaults)
       : scene_(scene), assets_(assets),
         sdk_projection_adapter_(scene, assets, object_registry_,
                                 mesh_sync_service_),
+        uv_peel_context_(uv_peel_defaults),
+        interaction_settings_service_(interaction_settings != nullptr
+                                          ? *interaction_settings
+                                          : owned_interaction_settings_service_),
         preview_checkpoint_hooks_(std::move(preview_checkpoint_hooks)) {
     selection_service_.set_app_selection_mode_provider(
         [this]() { return app_selection_mode_; });
+    sdk_projection_adapter_.set_edge_bevel_preview_settings_handler(
+        [this](const quader_editor_core::EdgeBevelOperationSettings &accepted) {
+          auto settings = interaction_settings_service_.settings();
+          settings.edge_bevel_width = accepted.width;
+          settings.edge_bevel_profile = accepted.profile;
+          settings.edge_bevel_segments = accepted.segments;
+          (void)interaction_settings_service_.set_normalized(settings);
+        });
     sdk_projection_adapter_.set_face_texture_gesture_selection_cancel_handler(
         [this]() { return cancel_face_texture_gesture(); });
     sdk_projection_adapter_.set_uv_peel_preview_selection_refresh_handler(
@@ -2974,7 +2988,22 @@ public:
   }
 
   ModelingCommandResult set_uv_peel_options(const ModelingUvPeelOptions &options) {
-    return uv_peel_context_.set_options(options);
+    const auto accepted = uv_peel_context_.options_snapshot();
+    const auto configured = uv_peel_context_.set_options(options);
+    if (!configured.ok || !configured.changed || !uv_peel_preview_active_) {
+      return configured;
+    }
+    const bool has_editable_guides = uv_peel_settings().editable;
+    auto preview = refresh_uv_peel_preview();
+    if (!preview.ok || (has_editable_guides && !uv_peel_preview_valid_)) {
+      // Candidate publication must not replace the options reused by other scenes.
+      uv_peel_context_.restore_options(accepted);
+      preview.ok = false;
+      if (preview.message.empty()) preview.message = uv_peel_preview_error_;
+      return preview;
+    }
+    preview.changed = preview.changed || configured.changed;
+    return preview;
   }
 
   [[nodiscard]] bool uv_peel_preview_active() const {
@@ -4543,7 +4572,10 @@ public:
       if (const std::optional<quader_editor_core::PreviewTransactionKind> kind =
               quader_editor_core::preview_transaction_kind_for_operation(
                   *operation)) {
-        return tool_settings_service_.active_preview_target(*kind);
+        auto target = tool_settings_service_.active_preview_target(*kind);
+        target.edge_bevel_maximum_width =
+            sdk_projection_adapter_.active_edge_bevel_maximum_width();
+        return target;
       }
     }
     return tool_settings_service_.active_runtime_tool_target(runtime_.status());
@@ -4557,17 +4589,21 @@ public:
     const std::uint64_t interaction_revision =
         interaction_settings_service_.revision();
     const std::uint64_t metadata_revision = tool_settings_service_.revision();
+    const auto bevel_maximum =
+        sdk_projection_adapter_.active_edge_bevel_maximum_width();
     if (!tool_settings_revision_valid_ ||
         tool_settings_preview_operation_ != preview_operation ||
         tool_settings_cut_active_ != cut_active ||
         tool_settings_active_tool_ != active_tool ||
         tool_settings_interaction_revision_ != interaction_revision ||
-        tool_settings_metadata_revision_ != metadata_revision) {
+        tool_settings_metadata_revision_ != metadata_revision ||
+        tool_settings_edge_bevel_maximum_ != bevel_maximum) {
       tool_settings_preview_operation_ = preview_operation;
       tool_settings_cut_active_ = cut_active;
       tool_settings_active_tool_ = active_tool;
       tool_settings_interaction_revision_ = interaction_revision;
       tool_settings_metadata_revision_ = metadata_revision;
+      tool_settings_edge_bevel_maximum_ = bevel_maximum;
       tool_settings_revision_valid_ = true;
       ++tool_settings_revision_;
     }
@@ -4583,8 +4619,19 @@ public:
     const ModelingToolSettingsTarget active_target = tool_settings_target();
     const ModelingInteractionSettings previous =
         interaction_settings_service_.settings();
-    const ModelingInteractionSettings normalized =
+    ModelingInteractionSettings normalized =
         interaction_settings_service_.normalize(settings);
+    const auto bevel_maximum =
+        sdk_projection_adapter_.active_edge_bevel_maximum_width();
+    // A learned limit belongs to this source and geometry configuration. A
+    // profile/segment edit must first let the canonical operation observe its
+    // new support limit instead of reusing the old one.
+    if (bevel_maximum.has_value() &&
+        normalized.edge_bevel_profile == previous.edge_bevel_profile &&
+        normalized.edge_bevel_segments == previous.edge_bevel_segments) {
+      normalized.edge_bevel_width =
+          std::min(normalized.edge_bevel_width, *bevel_maximum);
+    }
     const bool cut_mode_changed = normalized.cut_mode != previous.cut_mode;
     const bool changed = normalized != previous;
     if (!changed) {
@@ -4598,14 +4645,22 @@ public:
       // Preview settings are a candidate until their SDK projection succeeds.
       // This keeps both the values and their revision on the prior committed
       // state when an in-place update or structural preview rebuild fails.
+      const auto settings_before = interaction_settings_service_;
       ModelingCommandResult result =
           update_active_operation_preview_settings(normalized);
       if (!result.ok) {
+        interaction_settings_service_ = settings_before;
         return result;
       }
-      const bool settings_changed =
-          interaction_settings_service_.set_normalized(normalized);
-      result.changed = result.changed || settings_changed;
+      if (const auto accepted =
+              sdk_projection_adapter_.active_edge_bevel_settings()) {
+        normalized.edge_bevel_width = accepted->width;
+      }
+      const bool settings_changed = normalized != previous;
+      (void)interaction_settings_service_.set_normalized(normalized);
+      const bool maximum_changed = bevel_maximum !=
+          sdk_projection_adapter_.active_edge_bevel_maximum_width();
+      result.changed = result.changed || settings_changed || maximum_changed;
       return result;
     }
     return {.ok = true,
@@ -4641,18 +4696,13 @@ public:
       return set_cut_mode(defaults.cut_mode);
     }
 
-    const bool changed =
-        interaction_settings_service_.reset_for_target(active_target.kind);
-    if (!changed) {
+    ModelingInteractionSettingsService candidate = interaction_settings_service_;
+    if (!candidate.reset_for_target(active_target.kind)) {
       return {.ok = true, .changed = false};
     }
-    if (!active_target.operation_preview_active) {
-      return {.ok = true, .changed = true};
-    }
-    ModelingCommandResult result = update_active_operation_preview_settings(
-        interaction_settings_service_.settings());
-    result.changed = result.changed || changed;
-    return result;
+    // Reset follows the same publication boundary as an individual setting:
+    // retain the accepted values and revision if the candidate cannot publish.
+    return set_interaction_settings(candidate.settings());
   }
 
   [[nodiscard]] bool modal_tool_owns_viewport() const {
@@ -4965,7 +5015,7 @@ public:
     // The shared root helper omits locked roots, so validate the entire selected
     // set first rather than silently applying only to its unlocked remainder.
     for (const EntityId group : selected) {
-      if (!scene_.exists(group) || scene_.is_scene_root(group) ||
+      if (!scene_.exists(group) ||
           scene_.kind(group) != EntityKind::Empty ||
           scene_.is_instance_definition_entity(group) ||
           scene_.is_instance_definition_member(group)) {
@@ -5577,11 +5627,6 @@ public:
                                           modal_tool_owns_viewport());
   }
 
-  void
-  reset_settings_for_preview_action(ModelingActionPreviewKind preview_kind) {
-    interaction_settings_service_.reset_for_preview_action(preview_kind);
-  }
-
   void clear_inactive_operation_preview_metadata() {
     if (!sdk_projection_adapter_.preview_active()) {
       tool_settings_service_.clear_preview_metadata();
@@ -5627,7 +5672,7 @@ public:
       preview_checkpoint_hooks_.observe_before_projection();
     }
 
-    const quader_editor_core::EditorOperationCommand command{
+    quader_editor_core::EditorOperationCommand command{
         .operation_id = runtime_operation,
         .phase = phase,
         .settings = settings,
@@ -5683,6 +5728,13 @@ public:
       }
     }
 
+    if (result.ok) {
+      if (const auto accepted =
+              sdk_projection_adapter_.active_edge_bevel_settings();
+          accepted.has_value() && runtime_operation == OperationId::EdgeBevel) {
+        command.settings = *accepted;
+      }
+    }
     history_bridge_.record_operation(
         command,
         {.ok = result.ok,
@@ -6153,12 +6205,15 @@ public:
               .message = "Action does not support a live settings preview."};
     }
 
-    reset_settings_for_preview_action(action.preview_kind);
+    const auto settings_before = interaction_settings_service_;
     ModelingCommandResult result = execute_runtime_operation_command(
         operation.operation_id(),
         quader_editor_core::EditorOperationCommandPhase::BeginPreview,
         settings_for_operation(operation.operation_id(),
                                interaction_settings_service_.settings()));
+    if (!result.ok) {
+      interaction_settings_service_ = settings_before;
+    }
     if (result.ok) {
       const std::optional<quader_editor_core::PreviewTransactionKind>
           preview_kind =
@@ -8769,9 +8824,11 @@ public:
     }
     if (current_transform == nullptr || current_name == nullptr ||
         !scene_transform_is_finite(*current_transform) ||
-        scene_.uuid(*source).empty() || parent == kInvalidEntityId ||
-        !scene_.exists(parent)) {
+        scene_.uuid(*source).empty()) {
       return rejected("The selected Curve placement is invalid.");
+    }
+    if (parent != kInvalidEntityId && !scene_.exists(parent)) {
+      return rejected("The selected Curve parent no longer exists.");
     }
 
     const std::optional<modeling::CurveDocument> curve_document =
@@ -10645,7 +10702,8 @@ private:
   mutable ModelingToolPreviewWorkStats tool_preview_work_stats_;
   ModelingCommandExecutor command_executor_;
   ModelingContextActionService context_action_service_;
-  ModelingInteractionSettingsService interaction_settings_service_;
+  ModelingInteractionSettingsService owned_interaction_settings_service_;
+  ModelingInteractionSettingsService &interaction_settings_service_;
   ModelingToolSettingsService tool_settings_service_;
   ModelingTransformDragService transform_drag_service_;
   SceneTransformDragService structural_preview_scene_transform_;
@@ -10673,6 +10731,7 @@ private:
       tool_settings_preview_operation_;
   mutable std::uint64_t tool_settings_interaction_revision_ = 0;
   mutable std::uint64_t tool_settings_metadata_revision_ = 0;
+  mutable std::optional<double> tool_settings_edge_bevel_maximum_;
   mutable std::uint64_t tool_settings_revision_ = 0;
   mutable bool tool_settings_cut_active_ = false;
   mutable quader_editor_core::ViewportInteractionTool
@@ -10685,9 +10744,12 @@ private:
 
 ModelingSessionService::ModelingSessionService(
     SceneDocument &scene, AssetRegistry &assets,
-    ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks)
+    ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks,
+    ModelingInteractionSettingsService *interaction_settings,
+    UvPeelSessionDefaults *uv_peel_defaults)
     : impl_(std::make_unique<Impl>(scene, assets,
-                                  std::move(preview_checkpoint_hooks))) {}
+                                  std::move(preview_checkpoint_hooks),
+                                  interaction_settings, uv_peel_defaults)) {}
 
 ModelingSessionService::~ModelingSessionService() = default;
 void ModelingSessionService::detach_preview_checkpoint_hooks() {

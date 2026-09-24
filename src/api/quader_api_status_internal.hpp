@@ -28,6 +28,7 @@ quader_api_current_revisions(const SceneSession &session) {
       .project_revision = session.document().revision(),
       .scene_revision = session.scene().revision(),
       .scene_layer_revision = session.scene().layer_revision(),
+      .scene_settings_revision = session.scene().scene_settings_revision(),
       .asset_revision = session.assets().revision(),
       .modeling_content_revision = session.modeling().content_revision(),
       .modeling_selection_revision = session.modeling().selection_revision(),

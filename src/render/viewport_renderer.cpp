@@ -129,7 +129,7 @@ std::uint64_t viewport_camera_presentation_signature(
 }
 
 std::uint64_t scene_settings_presentation_signature(
-    const SceneSettingsComponent &settings, bool rendered_mode,
+    const SceneSettings &settings, bool rendered_mode,
     ViewportSettingColor resolved_background, bool fog_environment_available) {
   const bool post_processing_enabled =
       rendered_mode && settings.post_process.enabled;
@@ -363,7 +363,7 @@ void ViewportRenderer::update_camera(
 }
 
 void ViewportRenderer::apply_scene_settings(
-    const SceneSettingsComponent &settings, bool rendered_mode,
+    const SceneSettings &settings, bool rendered_mode,
     const ViewportSettings &viewport_settings) {
   QDR_PROFILE_FUNCTION();
   if (!view_ || !camera_) {

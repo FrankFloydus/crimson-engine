@@ -295,9 +295,16 @@ std::string combined_failure(std::string message, std::string_view suffix) {
 
 PrimitiveCreationToolService::PrimitiveCreationToolService(
     EditorHistoryService &history, ModelingSessionService &modeling,
-    ModelingOperationPreviewCheckpointHooks checkpoint_hooks)
+    ModelingOperationPreviewCheckpointHooks checkpoint_hooks,
+    PrimitiveCreationSessionDefaults *session_defaults)
     : history_(history), modeling_(modeling),
-      checkpoint_hooks_(std::move(checkpoint_hooks)) {}
+      checkpoint_hooks_(std::move(checkpoint_hooks)),
+      session_defaults_(session_defaults) {
+  if (session_defaults_) {
+    accepted_settings_ = *session_defaults_;
+  }
+  load_settings(accepted_settings_);
+}
 
 bool PrimitiveCreationToolService::can_apply() const {
   return session_.has_value() && session_->accepted_shapes > 0U;
@@ -367,7 +374,8 @@ std::string_view PrimitiveCreationToolService::active_tool_id() const {
 
 CommandResult
 PrimitiveCreationToolService::activate() {
-  return activate(preferred_kind_);
+  return activate(!session_ && session_defaults_
+                      ? session_defaults_->preferred_kind : preferred_kind_);
 }
 
 CommandResult
@@ -399,7 +407,12 @@ PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
       .kind = kind,
       .before = before,
   };
+  if (session_defaults_) {
+    accepted_settings_ = *session_defaults_;
+  }
+  load_settings(accepted_settings_);
   preferred_kind_ = kind;
+  remember_settings();
   ++tool_settings_revision_;
   return {
       .ok = true,
@@ -1528,6 +1541,7 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
     return command_invalid_result("No primitive tool is active.");
   }
   if (!live_primitive_.has_value()) {
+    remember_settings();
     return command_changed_result();
   }
 
@@ -1571,6 +1585,7 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
   live_primitive_->selection_revision =
       modeling_.selection_summary().selection_revision;
   modeling_.release_redundant_sdk_history();
+  remember_settings();
   return command_changed_result();
 }
 
@@ -1631,13 +1646,54 @@ CommandResult PrimitiveCreationToolService::rollback_and_exit(
 void PrimitiveCreationToolService::finish_session() {
   live_primitive_.reset();
   session_.reset();
-  box_settings_ = {};
-  cylinder_settings_ = {};
-  cone_settings_ = {};
-  sphere_settings_ = {};
-  torus_settings_ = {};
-  preferred_kind_ = PrimitiveCreationKind::Box;
+  // A rejected live edit may have modified the working settings before its
+  // publication failed. Retain the last accepted options, never that candidate.
+  load_settings(accepted_settings_);
   ++tool_settings_revision_;
+}
+
+void PrimitiveCreationToolService::load_settings(
+    const PrimitiveCreationSessionDefaults &settings) {
+  preferred_kind_ = settings.preferred_kind;
+  box_settings_ = settings.box;
+  cylinder_settings_ = settings.cylinder;
+  cone_settings_ = settings.cone;
+  sphere_settings_ = settings.sphere;
+  torus_settings_ = settings.torus;
+}
+
+void PrimitiveCreationToolService::remember_settings() {
+  accepted_settings_ = {
+      .preferred_kind = preferred_kind_,
+      .box = box_settings_,
+      .cylinder = cylinder_settings_,
+      .cone = cone_settings_,
+      .sphere = sphere_settings_,
+      .torus = torus_settings_,
+  };
+  if (!session_defaults_) {
+    return;
+  }
+  session_defaults_->preferred_kind = preferred_kind_;
+  // Other scenes may have accepted new options for other shapes since this
+  // session began. Publishing the edited shape must not replace those options.
+  switch (preferred_kind_) {
+  case PrimitiveCreationKind::Box:
+    session_defaults_->box = box_settings_;
+    break;
+  case PrimitiveCreationKind::Cylinder:
+    session_defaults_->cylinder = cylinder_settings_;
+    break;
+  case PrimitiveCreationKind::Cone:
+    session_defaults_->cone = cone_settings_;
+    break;
+  case PrimitiveCreationKind::Sphere:
+    session_defaults_->sphere = sphere_settings_;
+    break;
+  case PrimitiveCreationKind::Torus:
+    session_defaults_->torus = torus_settings_;
+    break;
+  }
 }
 
 void PrimitiveCreationToolService::finish_checkpoint(

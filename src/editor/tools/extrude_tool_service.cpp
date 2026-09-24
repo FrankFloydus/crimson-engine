@@ -119,7 +119,7 @@ struct ExtrudeToolService::Impl final {
   }
 
   void observe_defaults() const {
-    if (observed_defaults.mode != defaults.mode) {
+    if (!same_options(observed_defaults, defaults)) {
       observed_defaults = defaults;
       ++settings_revision;
       ++handle_revision;
@@ -127,21 +127,14 @@ struct ExtrudeToolService::Impl final {
   }
 
   void remember_options(const ExtrudeSessionDefaults &options) {
-    const bool amount_changed = idle_amount != options.amount;
-    idle_amount = options.amount;
-    defaults.mode = options.mode;
+    defaults = options;
     observe_defaults();
-    if (amount_changed) {
-      ++settings_revision;
-      ++handle_revision;
-    }
   }
 
   SceneDocument &scene;
   ModelingSessionService &modeling;
   EditorHistoryService &history;
   ExtrudeSessionDefaults &defaults;
-  double idle_amount = 0.0;
   bool active = false;
   std::optional<Drag> drag;
   mutable std::optional<Stamp> cached_stamp;
@@ -180,7 +173,7 @@ modeling::FaceExtrudeMode ExtrudeToolService::mode() const {
   return preview_active() ? impl_->drag->options.mode : impl_->defaults.mode;
 }
 double ExtrudeToolService::amount() const {
-  return preview_active() ? impl_->drag->amount : impl_->idle_amount;
+  return preview_active() ? impl_->drag->amount : impl_->defaults.amount;
 }
 
 bool ExtrudeToolService::has_selected_faces() const {
@@ -229,8 +222,7 @@ const ExtrudeHandleState &ExtrudeToolService::handle_state() const {
                    .world_direction = target.handle_direction_world,
                    .revision = impl_->handle_revision,
                    .mode = mode(),
-                   .adjustment_available = adjustable(),
-                   .amount_world = to_world_amount(amount())};
+                   .adjustment_available = adjustable()};
   return impl_->handle;
 }
 
@@ -263,7 +255,7 @@ CommandResult ExtrudeToolService::activate_preview(
 
 CommandResult ExtrudeToolService::activate_impl(
     modeling::FaceExtrudeMode requested_mode) {
-  const ExtrudeSessionDefaults options{requested_mode, active() ? amount() : 0.0};
+  const ExtrudeSessionDefaults options{requested_mode, amount()};
   if (!valid_options(options)) {
     return command_invalid_result("Invalid extrusion settings.");
   }
@@ -366,7 +358,7 @@ CommandResult ExtrudeToolService::begin_selection_preview() {
   if (preview_active()) {
     return command_unchanged_result();
   }
-  return start_preview({mode(), 0.0});
+  return start_preview({mode(), amount()});
 }
 
 CommandResult ExtrudeToolService::set_options(
@@ -512,6 +504,9 @@ CommandResult ExtrudeToolService::release_drag() {
   if (!dragging()) {
     return command_unchanged_result();
   }
+  if (!can_update_drag()) {
+    return cancel_preview();
+  }
   impl_->drag->pointer_drag = false;
   impl_->remember_options({impl_->drag->options.mode, impl_->drag->amount});
   ++impl_->settings_revision;
@@ -537,7 +532,7 @@ CommandResult ExtrudeToolService::end_drag() {
     return result;
   }
   impl_->drag.reset();
-  impl_->remember_options({drag.options.mode, 0.0});
+  impl_->remember_options({drag.options.mode, drag.amount});
   ++impl_->handle_revision;
   ++impl_->settings_revision;
   return command_changed_result();
@@ -551,14 +546,12 @@ CommandResult ExtrudeToolService::cancel_preview() {
   if (!preview_active()) {
     return command_unchanged_result();
   }
-  const auto previous_mode = impl_->drag->options.mode;
   CommandResult result = modeling_memento_command_result(
       impl_->modeling.cancel_face_extrusion_preview());
   if (!result.ok) {
     return result;
   }
   impl_->drag.reset();
-  impl_->remember_options({previous_mode, 0.0});
   ++impl_->settings_revision;
   ++impl_->handle_revision;
   return command_changed_result();

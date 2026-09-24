@@ -16,6 +16,14 @@ namespace quader {
 
 class QuaderApiMutationRunner;
 
+/// Identifies the active document incarnation without exposing runtime owners.
+struct QuaderSceneDocumentBinding final {
+    SceneSessionId scene_session_id;
+    std::uint64_t document_binding_generation = 0u;
+    friend bool operator==(const QuaderSceneDocumentBinding &,
+                           const QuaderSceneDocumentBinding &) = default;
+};
+
 /**
  * Exposes Quader Query API operations through the public Quader API surface.
  */
@@ -23,6 +31,7 @@ class QuaderQueryApi final {
 public:
     QuaderQueryApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
+    [[nodiscard]] QuaderSceneSettings scene_settings() const;
     [[nodiscard]] std::vector<QuaderEntitySnapshot> entities() const;
     [[nodiscard]] std::vector<QuaderEntitySnapshot> entity_tree() const;
     [[nodiscard]] std::optional<QuaderEntitySnapshot> entity(EntityId id) const;
@@ -60,6 +69,8 @@ public:
     [[nodiscard]] QuaderAssetSnapshot assets() const;
     [[nodiscard]] QuaderHistorySnapshot history() const;
     [[nodiscard]] QuaderOverlayFrame selection_overlay() const;
+    /// Cheap identity fence for retained document controls and nested events.
+    [[nodiscard]] QuaderSceneDocumentBinding document_binding() const;
     [[nodiscard]] QuaderRevisionStamp revisions() const;
     [[nodiscard]] QuaderApiSnapshot snapshot() const;
 

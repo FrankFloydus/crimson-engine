@@ -131,14 +131,20 @@ std::vector<EntityId> selected_entities(const QuaderApi &api) {
 
 std::vector<std::string> root_entity_names(const QuaderApi &api) {
   const std::vector<QuaderEntitySnapshot> entities = api.query().entity_tree();
-  const auto scene_root = std::ranges::find(
-      entities, true, &QuaderEntitySnapshot::is_scene_root);
-  if (scene_root == entities.end()) {
-    return {};
-  }
   std::vector<std::string> names;
   for (const QuaderEntitySnapshot &snapshot : entities) {
-    if (snapshot.parent == scene_root->id) {
+    if (snapshot.parent == kInvalidEntityId) {
+      names.push_back(snapshot.name);
+    }
+  }
+  return names;
+}
+
+std::vector<std::string> child_entity_names(const QuaderApi &api,
+                                           EntityId parent) {
+  std::vector<std::string> names;
+  for (const QuaderEntitySnapshot &snapshot : api.query().entity_tree()) {
+    if (snapshot.parent == parent) {
       names.push_back(snapshot.name);
     }
   }
@@ -457,6 +463,183 @@ TEST(GroupingPublicApiTests, GroupSelectionUsesSelectedRootsOnlyWhenParentAndChi
       .parent("child", "existingGroup")
       .parent("sibling", "existingGroup")
       .child_count("outer", 1u);
+}
+
+TEST(GroupingPublicApiTests,
+     GroupNoncontiguousRootsUsesAuthoredOrderAndRestoresExactSlotsOnUndo) {
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  for (const std::string name : {"A", "B", "C", "D", "E"}) {
+    scenario.given().entity(name, name, QuaderEntityKind::Empty);
+  }
+  const std::vector<EntityId> moved{scenario.entity("D")};
+  ASSERT_TRUE(scenario.api().scene().move_entities(
+      moved, kInvalidEntityId, scenario.entity("B")).ok());
+  const std::vector<std::string> original{"A", "D", "B", "C", "E"};
+  ASSERT_EQ(root_entity_names(scenario.api()), original);
+  scenario.given().selected_aliases({"C", "D"}, "C");
+
+  scenario.when().group_selection("group", "Pair");
+  scenario.then().command().ok_changed();
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "Pair", "B", "E"}));
+  EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("group")),
+            (std::vector<std::string>{"D", "C"}));
+  scenario.then().scene().no_parent("group")
+      .parent("D", "group").parent("C", "group")
+      .selected_aliases({"group"}).active_alias("group");
+
+  ASSERT_TRUE(scenario.api().history().undo().ok());
+  EXPECT_EQ(root_entity_names(scenario.api()), original);
+  scenario.then().scene().no_parent("C").no_parent("D")
+      .selected_aliases({"C", "D"}).active_alias("C");
+  ASSERT_TRUE(scenario.api().history().redo().ok());
+  scenario.remember_entity_named("group", "Pair");
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "Pair", "B", "E"}));
+  EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("group")),
+            (std::vector<std::string>{"D", "C"}));
+}
+
+TEST(GroupingPublicApiTests,
+     UngroupMultipleRootsExpandsTheirAuthoredSlotsAndRestoresThemOnUndo) {
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  for (const std::string name : {"A", "First Group", "B", "Second Group", "C"}) {
+    scenario.given().entity(name, name, QuaderEntityKind::Empty);
+  }
+  scenario.given().entity("x", "X", QuaderEntityKind::Empty, {}, "First Group");
+  scenario.given().entity("y", "Y", QuaderEntityKind::Empty, {}, "First Group");
+  scenario.given().entity("u", "U", QuaderEntityKind::Empty, {}, "Second Group");
+  scenario.given().entity("v", "V", QuaderEntityKind::Empty, {}, "Second Group");
+  const std::vector<EntityId> moved{scenario.entity("y")};
+  ASSERT_TRUE(scenario.api().scene().move_entities(
+      moved, scenario.entity("First Group"), scenario.entity("x")).ok());
+  scenario.given().selected_aliases({"Second Group", "First Group"}, "Second Group");
+  const std::vector<std::string> grouped{
+      "A", "First Group", "B", "Second Group", "C"};
+  const std::vector<std::string> expanded{"A", "Y", "X", "B", "U", "V", "C"};
+  ASSERT_EQ(root_entity_names(scenario.api()), grouped);
+
+  scenario.when().ungroup_selection();
+  scenario.then().command().ok_changed();
+  EXPECT_EQ(root_entity_names(scenario.api()), expanded);
+  scenario.then().scene().no_parent("x").no_parent("y")
+      .no_parent("u").no_parent("v").selected_aliases({"x", "y", "u", "v"});
+
+  ASSERT_TRUE(scenario.api().history().undo().ok());
+  scenario.remember_entity_named("First Group", "First Group");
+  scenario.remember_entity_named("Second Group", "Second Group");
+  EXPECT_EQ(root_entity_names(scenario.api()), grouped);
+  EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("First Group")),
+            (std::vector<std::string>{"Y", "X"}));
+  EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("Second Group")),
+            (std::vector<std::string>{"U", "V"}));
+  scenario.then().scene().selected_aliases({"First Group", "Second Group"})
+      .active_alias("Second Group");
+  ASSERT_TRUE(scenario.api().history().redo().ok());
+  EXPECT_EQ(root_entity_names(scenario.api()), expanded);
+}
+
+TEST(GroupingPublicApiTests,
+     ReparentAndUnparentUndoRestoreExactRootAndChildSlots) {
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  scenario.given().entity("a", "A", QuaderEntityKind::Empty);
+  given_box_at(scenario, "subject", "Subject", {3.0f, 0.0f, 0.0f});
+  scenario.given().entity("target", "Target", QuaderEntityKind::Empty,
+                          transform_at({10.0f, 0.0f, 0.0f}));
+  scenario.given().entity("z", "Z", QuaderEntityKind::Empty);
+  scenario.given().entity("x", "X", QuaderEntityKind::Empty, {}, "target");
+  scenario.given().entity("y", "Y", QuaderEntityKind::Empty, {}, "target");
+  const QuaderModelingObjectRef subject = scenario.object("subject");
+  scenario.given().selected("subject");
+
+  ASSERT_TRUE(scenario.api().scene().reparent(
+      subject.entity, scenario.entity("target")).ok());
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "Target", "Z"}));
+  EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("target")),
+            (std::vector<std::string>{"X", "Y", "Subject"}));
+  scenario.then().scene().world_position_near("subject", {3.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(scenario.api().history().undo().ok());
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "Subject", "Target", "Z"}));
+  EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("target")),
+            (std::vector<std::string>{"X", "Y"}));
+  ASSERT_TRUE(scenario.api().history().redo().ok());
+
+  const std::vector<EntityId> moved{subject.entity};
+  ASSERT_TRUE(scenario.api().scene().move_entities(
+      moved, scenario.entity("target"), scenario.entity("y")).ok());
+  ASSERT_EQ(child_entity_names(scenario.api(), scenario.entity("target")),
+            (std::vector<std::string>{"X", "Subject", "Y"}));
+  ASSERT_TRUE(scenario.api().scene().reparent(
+      subject.entity, kInvalidEntityId).ok());
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "Target", "Z", "Subject"}));
+  scenario.then().scene().no_parent("subject")
+      .world_position_near("subject", {3.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(scenario.api().history().undo().ok());
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "Target", "Z"}));
+  EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("target")),
+            (std::vector<std::string>{"X", "Subject", "Y"}));
+  ASSERT_TRUE(scenario.api().history().redo().ok());
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "Target", "Z", "Subject"}));
+  scenario.then().scene().no_parent("subject")
+      .world_position_near("subject", {3.0f, 0.0f, 0.0f})
+      .selected_aliases({"subject"}).active_alias("subject");
+  const auto restored = scenario.api().query().entity(subject.entity);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->uuid, subject.entity_uuid);
+  EXPECT_EQ(restored->modeling_object_id, subject.modeling_object_id);
+  EXPECT_EQ(restored->mesh, subject.mesh);
+}
+
+TEST(GroupingPublicApiTests,
+     SequentialReparentBatchRestoresEachLiveRootPlacementOnUndo) {
+  for (const bool return_first_to_root : {false, true}) {
+    SCOPED_TRACE(return_first_to_root);
+    BehaviorScenario scenario = BehaviorScenario::new_project();
+    for (const std::string name : {"A", "B", "C", "D", "Group"}) {
+      scenario.given().entity(name, name, QuaderEntityKind::Empty);
+    }
+    scenario.given().entity("child", "Child", QuaderEntityKind::Empty, {}, "Group");
+    const std::vector<EntityId> moved{scenario.entity("D")};
+    ASSERT_TRUE(scenario.api().scene().move_entities(
+        moved, kInvalidEntityId, scenario.entity("B")).ok());
+    const std::vector<std::string> original{"A", "D", "B", "C", "Group"};
+    ASSERT_EQ(root_entity_names(scenario.api()), original);
+
+    auto batch = scenario.api().scene().batch("Sequential Root Parenting");
+    batch.reparent(scenario.entity("D"), scenario.entity("Group"));
+    if (return_first_to_root) {
+      batch.reparent(scenario.entity("D"), kInvalidEntityId);
+    } else {
+      batch.reparent(scenario.entity("B"), scenario.entity("Group"));
+    }
+    const QuaderApiVoidResult result = batch.commit();
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    const std::vector<std::string> after_roots = return_first_to_root
+        ? std::vector<std::string>{"A", "B", "C", "Group", "D"}
+        : std::vector<std::string>{"A", "C", "Group"};
+    const std::vector<std::string> after_children = return_first_to_root
+        ? std::vector<std::string>{"Child"}
+        : std::vector<std::string>{"Child", "D", "B"};
+    EXPECT_EQ(root_entity_names(scenario.api()), after_roots);
+    EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("Group")),
+              after_children);
+    scenario.then().history().undo_label("Sequential Root Parenting");
+
+    ASSERT_TRUE(scenario.api().history().undo().ok());
+    EXPECT_EQ(root_entity_names(scenario.api()), original);
+    EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("Group")),
+              (std::vector<std::string>{"Child"}));
+    ASSERT_TRUE(scenario.api().history().redo().ok());
+    EXPECT_EQ(root_entity_names(scenario.api()), after_roots);
+    EXPECT_EQ(child_entity_names(scenario.api(), scenario.entity("Group")),
+              after_children);
+  }
 }
 
 TEST(GroupingPublicApiTests, UngroupUndoRedoRestoresGroupSelectionAndChildPlacement) {
@@ -1140,6 +1323,35 @@ TEST(GroupingPublicApiTests, DeleteMixedMeshAndLightHierarchyUndoRedoRestoresSce
   EXPECT_FALSE(entity_by_id(scenario.api(), group).has_value());
   EXPECT_FALSE(entity_by_id(scenario.api(), mesh).has_value());
   EXPECT_FALSE(entity_by_id(scenario.api(), light_entity).has_value());
+}
+
+TEST(GroupingPublicApiTests,
+     DeleteSeparatedRootsRestoresAuthoredSlotsBetweenSurvivorsOnUndo) {
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  for (const std::string name : {"A", "B", "C", "D", "E"}) {
+    scenario.given().entity(name, name, QuaderEntityKind::Empty);
+  }
+  const std::vector<EntityId> moved{scenario.entity("D")};
+  ASSERT_TRUE(scenario.api().scene().move_entities(
+      moved, kInvalidEntityId, scenario.entity("B")).ok());
+  const std::vector<std::string> original{"A", "D", "B", "C", "E"};
+  ASSERT_EQ(root_entity_names(scenario.api()), original);
+  scenario.given().selected_aliases({"C", "D"}, "C");
+  scenario.given().selection_mode(QuaderSelectionMode::Object);
+
+  scenario.when().execute(quader_command::kDeleteSelection);
+  scenario.then().command().ok_changed();
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "B", "E"}));
+  ASSERT_TRUE(scenario.api().history().undo().ok());
+  EXPECT_EQ(root_entity_names(scenario.api()), original);
+  scenario.then().scene().no_parent("C").no_parent("D")
+      .selected_aliases({"C", "D"}).active_alias("C");
+  ASSERT_TRUE(scenario.api().history().redo().ok());
+  EXPECT_EQ(root_entity_names(scenario.api()),
+            (std::vector<std::string>{"A", "B", "E"}));
+  ASSERT_TRUE(scenario.api().history().undo().ok());
+  EXPECT_EQ(root_entity_names(scenario.api()), original);
 }
 
 TEST(GroupingPublicApiTests,

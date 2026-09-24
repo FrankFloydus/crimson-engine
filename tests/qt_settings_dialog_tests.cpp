@@ -19,10 +19,12 @@
 #include "math/glm_bridge.hpp"
 #include "scene/light_properties.hpp"
 #include "ui/inspector_panel.hpp"
+#include "ui/qt_environment_settings_popup.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_main_menu.hpp"
 #include "ui/qt_main_window.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -1449,6 +1451,121 @@ TEST(QtSettingsDialogTests,
   EXPECT_FALSE(dialog.isVisible());
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
                       ViewportFloatSettingId::GridMajorLineSize), 2.5F);
+}
+
+TEST(QtSettingsDialogTests,
+     NumericEscapeCancelsOnlyTheDraftBeforeCanonicalDialogCancellation) {
+  for (const bool numeric_filter_first : {false, true}) {
+    for (const bool remap_cancel : {false, true}) {
+      SCOPED_TRACE(numeric_filter_first);
+      SCOPED_TRACE(remap_cancel);
+      ASSERT_EQ(QCoreApplication::instance(), nullptr);
+      const ScopedDefaultLocale force_c_locale(QLocale::c());
+      int argc = 1;
+      char name[] = "quader-settings-nested-numeric-escape-tests";
+      char *argv[] = {name, nullptr};
+      QApplication application(argc, argv);
+      application.setQuitOnLastWindowClosed(false);
+      if (numeric_filter_first) {
+        qt_install_default_numeric_spin_boxes(application);
+      }
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+      if (remap_cancel) {
+        const auto catalog = editor.commands().keybinding_catalog();
+        const auto cancel = std::find_if(
+            catalog.begin(), catalog.end(), [](const auto &entry) {
+              return entry.key.action_id == "tools.cancel";
+            });
+        ASSERT_NE(cancel, catalog.end());
+        ASSERT_TRUE(editor.commands().set_action_shortcut(
+            cancel->key, "Ctrl+Alt+F23").ok());
+      }
+      UISettings ui_settings = UISettings::defaults();
+      ViewportSettings viewport_settings = ViewportSettings::defaults();
+      const auto original = viewport_settings.float_value(
+          ViewportFloatSettingId::GridMajorLineSize);
+      auto localization = loaded_localization();
+      std::vector<QtSettingsChange> changes;
+      QtSettingsDialog dialog;
+      dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+      dialog.set_context(ui_settings, viewport_settings, localization,
+                         editor.commands(), [&](const QtSettingsChange &change) {
+                           changes.push_back(change);
+                         });
+      if (!numeric_filter_first) {
+        qt_install_default_numeric_spin_boxes(application);
+      }
+      auto *categories = dialog.findChild<QListWidget *>(
+          QStringLiteral("settingsCategories"));
+      ASSERT_NE(categories, nullptr);
+      for (int row = 0; row < categories->count(); ++row) {
+        if (categories->item(row)->data(Qt::UserRole).toString() ==
+            QStringLiteral("appearance")) {
+          categories->setCurrentRow(row);
+          break;
+        }
+      }
+      auto *thickness = dialog.findChild<QDoubleSpinBox *>(
+          QStringLiteral("viewportSetting_GridMajorLineSize"));
+      auto *cancel = dialog.findChild<QPushButton *>(
+          QStringLiteral("settingsCancel"));
+      ASSERT_NE(thickness, nullptr);
+      ASSERT_NE(cancel, nullptr);
+      auto *line = thickness->findChild<QLineEdit *>();
+      ASSERT_NE(line, nullptr);
+      dialog.show();
+      dialog.activateWindow();
+      application.processEvents();
+      QApplication::setActiveWindow(&dialog);
+      thickness->setValue(2.0);
+      thickness->setKeyboardTracking(false);
+      thickness->setFocus(Qt::OtherFocusReason);
+      ASSERT_TRUE(thickness->isVisible());
+      ASSERT_EQ(QApplication::focusWidget(), thickness);
+      send_key(*line, Qt::Key_F2);
+      auto &controller = qt_install_numeric_spin_box(*thickness);
+      ASSERT_TRUE(controller.is_editing());
+      line->setText(QStringLiteral("3.5"));
+      ASSERT_TRUE(thickness->hasAcceptableInput());
+      QKeyEvent reserve(QEvent::ShortcutOverride, Qt::Key_Escape,
+                        Qt::NoModifier);
+      reserve.ignore();
+      QCoreApplication::sendEvent(line, &reserve);
+      EXPECT_TRUE(reserve.isAccepted());
+      EXPECT_TRUE(controller.is_editing());
+      QKeyEvent press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+      QCoreApplication::sendEvent(line, &press);
+      EXPECT_FALSE(controller.is_editing());
+      EXPECT_DOUBLE_EQ(thickness->value(), 2.0);
+      EXPECT_TRUE(dialog.isVisible());
+      EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                          ViewportFloatSettingId::GridMajorLineSize), original);
+      EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 0U);
+      QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Escape,
+                       Qt::NoModifier, {}, true);
+      QCoreApplication::sendEvent(cancel, &repeat);
+      QKeyEvent repeated_release(QEvent::KeyRelease, Qt::Key_Escape,
+                                 Qt::NoModifier, {}, true);
+      QCoreApplication::sendEvent(cancel, &repeated_release);
+      EXPECT_TRUE(dialog.isVisible());
+      QKeyEvent release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+      QCoreApplication::sendEvent(cancel, &release);
+      EXPECT_TRUE(dialog.isVisible());
+      send_key(*line, Qt::Key_Escape);
+      if (remap_cancel) {
+        EXPECT_TRUE(dialog.isVisible());
+        send_key(*line, Qt::Key_F23, Qt::ControlModifier | Qt::AltModifier);
+      }
+      EXPECT_FALSE(dialog.isVisible());
+      EXPECT_EQ(dialog.result(), QDialog::Rejected);
+      EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                          ViewportFloatSettingId::GridMajorLineSize), original);
+      EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 0U);
+    }
+  }
 }
 
 TEST(QtSettingsDialogTests,
@@ -4416,8 +4533,8 @@ TEST(InspectorPanelTests,
   panel.abandon_runtime();
 }
 
-TEST(InspectorPanelTests,
-     SectionsDefaultExpandedRememberChoiceAndEnvironmentRotationUsesSlider) {
+TEST(EnvironmentSettingsPopupTests,
+     SectionsDefaultExpandedRememberChoiceAndEnvironmentRotationUsesCustomSpinBox) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-inspector-section-rotation-tests";
@@ -4428,11 +4545,6 @@ TEST(InspectorPanelTests,
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
-  const EntityId root = session.scene().scene_root();
-  ASSERT_TRUE(editor.selection()
-                  .select_objects_for_inspection(
-                      std::span<const EntityId>(&root, 1u), root)
-                  .ok());
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
@@ -4448,18 +4560,17 @@ TEST(InspectorPanelTests,
       .preferences = {.ui = ui_settings, .viewport = viewport_settings},
       .localization = localization,
   };
-  InspectorPanel panel;
+  QtEnvironmentSettingsPopup panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.refresh(context);
 
-  auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("environmentSettings.tree"));
   auto *rotation = panel.findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.environment.rotation"));
-  auto *rotation_slider = panel.findChild<QSlider *>(
-      QStringLiteral("inspector.environment.rotation.slider"));
+      QStringLiteral("environmentSettings.environment.rotation"));
   ASSERT_NE(tree, nullptr);
   ASSERT_NE(rotation, nullptr);
-  ASSERT_NE(rotation_slider, nullptr);
+  ASSERT_NE(dynamic_cast<QtDoubleSpinBox *>(rotation), nullptr);
+  EXPECT_TRUE(panel.findChildren<QSlider *>().empty());
   ASSERT_GT(tree->topLevelItemCount(), 0);
   for (int row = 0; row < tree->topLevelItemCount(); ++row) {
     EXPECT_TRUE(tree->topLevelItem(row)->isExpanded())
@@ -4469,25 +4580,22 @@ TEST(InspectorPanelTests,
   EXPECT_DOUBLE_EQ(rotation->maximum(), 180.0);
   EXPECT_DOUBLE_EQ(rotation->singleStep(), 1.0);
   EXPECT_DOUBLE_EQ(rotation->value(), 0.0);
-  EXPECT_EQ(rotation_slider->minimum(), -180);
-  EXPECT_EQ(rotation_slider->maximum(), 180);
-  EXPECT_EQ(rotation_slider->value(), 0);
 
-  rotation_slider->setValue(rotation_slider->minimum());
+  rotation->setValue(rotation->minimum());
   EXPECT_DOUBLE_EQ(rotation->value(), -180.0);
-  EXPECT_NEAR(session.scene().scene_settings(root)->environment.rotation_y,
+  EXPECT_NEAR(session.scene().scene_settings().environment.rotation_y,
               -3.14159265358979323846, 1.0e-5);
-  rotation_slider->setValue(rotation_slider->maximum());
+  rotation->setValue(rotation->maximum());
   EXPECT_DOUBLE_EQ(rotation->value(), 180.0);
-  EXPECT_NEAR(session.scene().scene_settings(root)->environment.rotation_y,
+  EXPECT_NEAR(session.scene().scene_settings().environment.rotation_y,
               3.14159265358979323846, 1.0e-5);
-  rotation_slider->setValue(0);
+  rotation->setValue(0);
   EXPECT_DOUBLE_EQ(rotation->value(), 0.0);
   EXPECT_FLOAT_EQ(
-      session.scene().scene_settings(root)->environment.rotation_y, 0.0f);
+      session.scene().scene_settings().environment.rotation_y, 0.0f);
   rotation->setValue(45.0);
   rotation->editingFinished();
-  EXPECT_NEAR(session.scene().scene_settings(root)->environment.rotation_y,
+  EXPECT_NEAR(session.scene().scene_settings().environment.rotation_y,
               0.78539816339744830962, 1.0e-5);
 
   const auto find_section = [tree](const QString &stable_id) {
@@ -4505,7 +4613,7 @@ TEST(InspectorPanelTests,
   ASSERT_TRUE(localization.select_locale("it-IT"));
   panel.refresh(context);
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-  tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  tree = panel.findChild<QTreeWidget *>(QStringLiteral("environmentSettings.tree"));
   ASSERT_NE(tree, nullptr);
   QTreeWidgetItem *rebuilt_environment = nullptr;
   for (int row = 0; row < tree->topLevelItemCount(); ++row) {
@@ -4520,7 +4628,7 @@ TEST(InspectorPanelTests,
   EXPECT_FALSE(rebuilt_environment->isExpanded());
 }
 
-TEST(InspectorPanelTests,
+TEST(EnvironmentSettingsPopupTests,
       CameraClipEditsPreserveInactivePhotographicMetadata) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -4532,18 +4640,13 @@ TEST(InspectorPanelTests,
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
-  const EntityId root = session.scene().scene_root();
   QuaderSceneSettings settings =
-      to_api_scene_settings(*session.scene().scene_settings(root));
+      to_api_scene_settings(session.scene().scene_settings());
   settings.camera.use_exposure = true;
   settings.camera.aperture = 4.0f;
   settings.camera.shutter_speed = 0.01f;
   settings.camera.sensitivity = 800.0f;
-  ASSERT_TRUE(editor.scene().set_scene_settings(root, settings).ok());
-  ASSERT_TRUE(editor.selection()
-                  .select_objects_for_inspection(
-                      std::span<const EntityId>(&root, 1u), root)
-                  .ok());
+  ASSERT_TRUE(editor.scene().set_scene_settings(settings).ok());
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();
@@ -4560,27 +4663,27 @@ TEST(InspectorPanelTests,
       .preferences = {.ui = ui_settings, .viewport = viewport_settings},
       .localization = localization,
   };
-  InspectorPanel panel;
+  QtEnvironmentSettingsPopup panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   const auto expect_controls = [&]() {
     panel.refresh(context);
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     const auto *toggle = panel.findChild<QCheckBox *>(
-        QStringLiteral("inspector.camera.use_exposure"));
+        QStringLiteral("environmentSettings.camera.use_exposure"));
     EXPECT_EQ(toggle, nullptr);
     for (const char *name : {"aperture", "shutter", "sensitivity"}) {
       const auto *input = panel.findChild<QDoubleSpinBox *>(
-          QStringLiteral("inspector.camera.") + QString::fromLatin1(name));
+          QStringLiteral("environmentSettings.camera.") + QString::fromLatin1(name));
       EXPECT_EQ(input, nullptr) << name;
     }
     for (const char *name : {"near", "far"}) {
       const auto *input = panel.findChild<QDoubleSpinBox *>(
-          QStringLiteral("inspector.camera.") + QString::fromLatin1(name));
+          QStringLiteral("environmentSettings.camera.") + QString::fromLatin1(name));
       ASSERT_NE(input, nullptr);
       EXPECT_TRUE(input->isEnabled()) << name;
     }
     const SceneCameraSettings &camera =
-        session.scene().scene_settings(root)->camera;
+        session.scene().scene_settings().camera;
     EXPECT_EQ(camera.use_exposure, settings.camera.use_exposure);
     EXPECT_FLOAT_EQ(camera.aperture, settings.camera.aperture);
     EXPECT_FLOAT_EQ(camera.shutter_speed, settings.camera.shutter_speed);
@@ -4592,19 +4695,19 @@ TEST(InspectorPanelTests,
   EXPECT_FALSE(session.dirty());
   EXPECT_EQ(session.history().undo_count(), undo_count);
   auto *near_plane = panel.findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.camera.near"));
+      QStringLiteral("environmentSettings.camera.near"));
   ASSERT_NE(near_plane, nullptr);
   near_plane->setValue(1.25);
   near_plane->editingFinished();
   expect_controls();
-  EXPECT_FLOAT_EQ(session.scene().scene_settings(root)->camera.near_plane, 1.25f);
+  EXPECT_FLOAT_EQ(session.scene().scene_settings().camera.near_plane, 1.25f);
   ASSERT_TRUE(editor.history().undo().ok());
   expect_controls();
-  EXPECT_FLOAT_EQ(session.scene().scene_settings(root)->camera.near_plane,
+  EXPECT_FLOAT_EQ(session.scene().scene_settings().camera.near_plane,
                   settings.camera.near_plane);
   ASSERT_TRUE(editor.history().redo().ok());
   expect_controls();
-  EXPECT_FLOAT_EQ(session.scene().scene_settings(root)->camera.near_plane, 1.25f);
+  EXPECT_FLOAT_EQ(session.scene().scene_settings().camera.near_plane, 1.25f);
 }
 
 TEST(InspectorPanelTests,
@@ -4697,17 +4800,14 @@ TEST(InspectorPanelTests,
             std::optional<std::string>("Set Light Component"));
   ASSERT_TRUE(editor.history().undo().ok());
 
-  const EntityId root = session.scene().scene_root();
-  ASSERT_TRUE(editor.selection()
-                  .select_objects_for_inspection(
-                      std::span<const EntityId>(&root, 1u), root)
-                  .ok());
-  panel.refresh(context);
-  auto *clear_color_swatch = panel.findChild<QPushButton *>(
-      QStringLiteral("inspector.environment.clear_color"));
+  QtEnvironmentSettingsPopup environment_panel;
+  environment_panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  environment_panel.refresh(context);
+  auto *clear_color_swatch = environment_panel.findChild<QPushButton *>(
+      QStringLiteral("environmentSettings.environment.clear_color"));
   ASSERT_NE(clear_color_swatch, nullptr);
-  const SceneSettingsComponent initial_scene =
-      *session.scene().scene_settings(root);
+  const SceneSettings initial_scene =
+      session.scene().scene_settings();
   const std::optional<std::string> scene_undo_before =
       history_label(session.history().undo_label());
   const std::optional<std::string> scene_redo_before =
@@ -4715,11 +4815,11 @@ TEST(InspectorPanelTests,
   const QColor committed_scene_color = QColor::fromRgb(211, 83, 47);
   session.mark_clean();
   ASSERT_TRUE(reject_color_picker(
-      panel, *clear_color_swatch,
-      QStringLiteral("inspector.environment.clear_color.dialog"),
+      environment_panel, *clear_color_swatch,
+      QStringLiteral("environmentSettings.environment.clear_color.dialog"),
       committed_scene_color, [&]() {
-        const SceneSettingsComponent *during =
-            session.scene().scene_settings(root);
+        const SceneSettings *during =
+            &session.scene().scene_settings();
         EXPECT_NE(during, nullptr);
         if (during != nullptr) {
           EXPECT_FLOAT_EQ(during->environment.clear_color.x,
@@ -4735,8 +4835,8 @@ TEST(InspectorPanelTests,
         EXPECT_EQ(history_label(session.history().redo_label()),
                   scene_redo_before);
       }));
-  const SceneSettingsComponent *after_scene =
-      session.scene().scene_settings(root);
+  const SceneSettings *after_scene =
+      &session.scene().scene_settings();
   ASSERT_NE(after_scene, nullptr);
   EXPECT_FLOAT_EQ(after_scene->environment.clear_color.x,
                   initial_scene.environment.clear_color.x);
@@ -4749,11 +4849,11 @@ TEST(InspectorPanelTests,
   EXPECT_EQ(history_label(session.history().redo_label()), scene_redo_before);
 
   ASSERT_TRUE(accept_color_picker(
-      panel, *clear_color_swatch,
-      QStringLiteral("inspector.environment.clear_color.dialog"),
+      environment_panel, *clear_color_swatch,
+      QStringLiteral("environmentSettings.environment.clear_color.dialog"),
       committed_scene_color));
-  const SceneSettingsComponent *committed_scene =
-      session.scene().scene_settings(root);
+  const SceneSettings *committed_scene =
+      &session.scene().scene_settings();
   ASSERT_NE(committed_scene, nullptr);
   EXPECT_NEAR(committed_scene->environment.clear_color.x,
               static_cast<float>(committed_scene_color.redF()), 0.00001f);

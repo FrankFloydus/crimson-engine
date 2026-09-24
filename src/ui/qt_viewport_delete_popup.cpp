@@ -196,13 +196,13 @@ void QtViewportDeletePopupPresenter::prewarm() {
 }
 
 QtViewportDeletePopupKind qt_viewport_delete_popup_kind(
-    const ModelingSelectionSummary &summary, bool has_selected_scene_root) {
+    const ModelingSelectionSummary &summary, bool has_selected_object_roots) {
   if (summary.selected_sub_element_count > 0u) {
     return QtViewportDeletePopupKind::DirectDeleteCommand;
   }
   if (summary.mode == ModelingSelectionMode::Object ||
       summary.mode == ModelingSelectionMode::Group ||
-      has_selected_scene_root) {
+      has_selected_object_roots) {
     return QtViewportDeletePopupKind::ObjectConfirmation;
   }
   return QtViewportDeletePopupKind::ComponentMenu;

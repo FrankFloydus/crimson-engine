@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_query_api.hpp"
 #include "app/app_frame_clock.hpp"
 #include "app/app_frame_schedule.hpp"
 #include "app/app_window_settings.hpp"
@@ -21,6 +22,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 class QApplication;
 class QScreen;
@@ -76,6 +78,8 @@ private:
   std::filesystem::path window_settings_path_;
   AppWindowSettings window_settings_;
   AssetId default_material_ = kInvalidAssetId;
+  std::optional<QuaderSceneDocumentBinding> scene_settings_binding_;
+  std::uint64_t scene_settings_revision_ = 0u;
   bool running_ = false;
   bool shutdown_complete_ = false;
   bool rendering_frame_ = false;

@@ -105,6 +105,9 @@ Tool IDs used by input contexts come from the same descriptor catalog as tool ac
 Tool Settings Apply/Cancel uses the same canonical lifecycle bindings from the viewport
 and from every settings control: Space applies, Escape cancels by default. Focus on a
 button must not turn Space into a different action, including activating Cancel.
+An active numeric text edit consumes Escape first, restoring its starting value
+and exiting text entry without canceling the enclosing tool or dialog. Its matching
+repeats and release stay consumed; the next Escape follows the canonical lifecycle binding.
 Apply settles the focused numeric draft before committing; Cancel discards it before
 focus loss can publish it. Keep user remaps, deliberate unassignments, sequence ownership,
 and popup input ownership intact. Test physical key press/release through the production
@@ -119,11 +122,12 @@ the global editor adapter yields. Preferences Apply keeps the dialog open, match
 its button, and the embedded material filter retains its immediate checkbox behavior.
 The persistent Extrude tool reserves Escape even while idle: it exits the tool and
 keeps accepted geometry and selected caps. E captures preselected faces in a pending
-extrusion at zero amount; when activated without faces, the first face selection starts
+extrusion at the last accepted Amount (initially zero); when activated without faces, the first face selection starts
 that pending operation. Its source selection stays locked until Apply or Cancel.
 Escape or the settings Cancel button restores its source without recording
 history. Releasing a viewport drag leaves the extrusion pending and enables Apply;
-Apply accepts it once and resets Amount to zero. During an extrusion drag, Escape cancels that operation and keeps
+Apply accepts it once and retains Amount without starting another preview. A new pointer drag
+starts from zero displacement. During an extrusion drag, Escape cancels that operation and keeps
 Extrude active; a subsequent Escape exits the tool. Ctrl+E starts an extrusion in
 Individual mode and Alt+E starts one
 Along Normals; all three bindings are canonical and remappable.

@@ -314,6 +314,23 @@ void PathArrayToolService::issue_tool_settings_revision() {
   ++tool_settings_revision_;
 }
 
+PathArraySessionDefaults &PathArrayToolService::editable_defaults() {
+  if (!session_.has_value() || !session_->source.has_value()) {
+    return defaults_;
+  }
+  if (!pending_defaults_.has_value()) {
+    pending_defaults_ = defaults_;
+  }
+  return *pending_defaults_;
+}
+
+void PathArrayToolService::publish_pending_defaults() const {
+  if (pending_defaults_.has_value()) {
+    defaults_ = *pending_defaults_;
+    pending_defaults_.reset();
+  }
+}
+
 void PathArrayToolService::invalidate_preview() {
   cached_preview_attempted_ = false;
   cached_preview_current_valid_ = false;
@@ -501,7 +518,6 @@ std::optional<EntityId>
 PathArrayToolService::resolve_source_candidate(EntityId candidate) const {
   if (!active() || candidate == kInvalidEntityId ||
       candidate == session_->path.entity || !scene_.exists(candidate) ||
-      scene_.is_scene_root(candidate) ||
       scene_.is_instance_definition_entity(candidate) ||
       scene_.is_instance_definition_member(candidate) ||
       scene_.transform(candidate) == nullptr ||
@@ -520,8 +536,7 @@ PathArrayToolService::resolve_source_candidate(EntityId candidate) const {
   const std::vector<EntityId> hierarchy = scene_.descendants(candidate, true);
   if (std::ranges::find(hierarchy, session_->path.entity) != hierarchy.end() ||
       std::ranges::any_of(hierarchy, [&](EntityId entity) {
-        return scene_.is_scene_root(entity) ||
-               scene_.is_instance_definition_entity(entity) ||
+        return scene_.is_instance_definition_entity(entity) ||
                scene_.is_instance_definition_member(entity);
       })) {
     return std::nullopt;
@@ -530,7 +545,7 @@ PathArrayToolService::resolve_source_candidate(EntityId candidate) const {
 }
 
 std::uint32_t PathArrayToolService::count() const {
-  return session_.has_value() ? session_->count : kPathArrayDefaultCount;
+  return session_.has_value() ? session_->count : defaults_.count;
 }
 
 double PathArrayToolService::distance() const {
@@ -546,46 +561,46 @@ double PathArrayToolService::maximum_distance() const {
 
 bool PathArrayToolService::follow_path() const {
   return session_.has_value() ? session_->follow_path
-                              : kPathArrayDefaultFollowPath;
+                              : defaults_.follow_path;
 }
 
 PathArraySignedAxis PathArrayToolService::forward_axis() const {
   return session_.has_value() ? session_->forward_axis
-                              : kPathArrayDefaultForwardAxis;
+                              : defaults_.forward_axis;
 }
 
 QVec3 PathArrayToolService::rotation_offset_degrees() const {
   return session_.has_value() ? session_->variation.rotation_offset_degrees
-                              : kPathArrayDefaultRotationOffsetDegrees;
+                              : defaults_.rotation_offset_degrees;
 }
 
 QVec3 PathArrayToolService::rotation_random_min_degrees() const {
   return session_.has_value()
              ? session_->variation.rotation_random_min_degrees
-             : kPathArrayDefaultRotationRandomMinDegrees;
+             : defaults_.rotation_random_min_degrees;
 }
 
 QVec3 PathArrayToolService::rotation_random_max_degrees() const {
   return session_.has_value()
              ? session_->variation.rotation_random_max_degrees
-             : kPathArrayDefaultRotationRandomMaxDegrees;
+             : defaults_.rotation_random_max_degrees;
 }
 
 QVec3 PathArrayToolService::scale_offset_factors() const {
   return session_.has_value() ? session_->variation.scale_offset_factors
-                              : kPathArrayDefaultScaleOffsetFactors;
+                              : defaults_.scale_offset_factors;
 }
 
 QVec3 PathArrayToolService::scale_random_min_factors() const {
   return session_.has_value()
              ? session_->variation.scale_random_min_factors
-             : kPathArrayDefaultScaleRandomMinFactors;
+             : defaults_.scale_random_min_factors;
 }
 
 QVec3 PathArrayToolService::scale_random_max_factors() const {
   return session_.has_value()
              ? session_->variation.scale_random_max_factors
-             : kPathArrayDefaultScaleRandomMaxFactors;
+             : defaults_.scale_random_max_factors;
 }
 
 std::uint32_t PathArrayToolService::maximum_count() const {
@@ -603,16 +618,24 @@ CommandResult PathArrayToolService::activate() {
   }
   const double fitted = fit_distance(path->path.total_length(),
                                      path->path.closed(),
-                                     kPathArrayDefaultCount);
+                                     defaults_.count);
   const double initial_distance =
       defaults_.remembered_distance.value_or(fitted);
   Session next{
       .path = std::move(*path),
       .path_selection = selection_.capture_box_selection_baseline(),
-      .count = kPathArrayDefaultCount,
+      .count = defaults_.count,
       .distance = initial_distance,
-      .follow_path = kPathArrayDefaultFollowPath,
-      .forward_axis = kPathArrayDefaultForwardAxis,
+      .follow_path = defaults_.follow_path,
+      .forward_axis = defaults_.forward_axis,
+      .variation = {
+          .rotation_offset_degrees = defaults_.rotation_offset_degrees,
+          .rotation_random_min_degrees = defaults_.rotation_random_min_degrees,
+          .rotation_random_max_degrees = defaults_.rotation_random_max_degrees,
+          .scale_offset_factors = defaults_.scale_offset_factors,
+          .scale_random_min_factors = defaults_.scale_random_min_factors,
+          .scale_random_max_factors = defaults_.scale_random_max_factors,
+      },
   };
   next.path_generation = issue_revision();
   next.layout_revision = next.path_generation;
@@ -620,6 +643,7 @@ CommandResult PathArrayToolService::activate() {
     defaults_.remembered_distance = initial_distance;
   }
   session_ = std::move(next);
+  pending_defaults_.reset();
   cached_path_generation_ = 0U;
   clear_preview();
   issue_tool_settings_revision();
@@ -645,6 +669,7 @@ CommandResult PathArrayToolService::refresh() {
       };
     }
     session_.reset();
+    pending_defaults_.reset();
     cached_path_generation_ = 0U;
     clear_preview();
     issue_tool_settings_revision();
@@ -671,6 +696,7 @@ CommandResult PathArrayToolService::refresh() {
   cached_changed_source_.reset();
   if (!current.has_value()) {
     session_->source.reset();
+    pending_defaults_.reset();
     session_->source_generation = issue_revision();
     session_->layout_revision = issue_revision();
     clear_preview();
@@ -704,12 +730,16 @@ CommandResult PathArrayToolService::cancel() {
   if (!session_.has_value()) {
     return command_unchanged_result();
   }
+  if (pending_defaults_.has_value()) {
+    (void)preview_state();
+  }
   const EditorSelectionBoxBaseline baseline = session_->path_selection;
   const CommandResult restored = apply_selection_baseline(baseline);
   if (!restored.ok) {
     return restored;
   }
   session_.reset();
+  pending_defaults_.reset();
   cached_path_generation_ = 0U;
   clear_preview();
   issue_tool_settings_revision();
@@ -795,6 +825,9 @@ CommandResult PathArrayToolService::clear_source() {
   if (!session_.has_value()) {
     return command_unchanged_result();
   }
+  if (pending_defaults_.has_value()) {
+    (void)preview_state();
+  }
   const DocumentCommandResult cleared = selection_.synchronize_scene_selection(
       std::span<const EntityId>{}, kInvalidEntityId);
   if (!cleared.ok) {
@@ -807,6 +840,7 @@ CommandResult PathArrayToolService::clear_source() {
                            : command_unchanged_result();
   }
   session_->source.reset();
+  pending_defaults_.reset();
   session_->source_generation = issue_revision();
   session_->layout_revision = issue_revision();
   clear_preview();
@@ -826,6 +860,7 @@ CommandResult PathArrayToolService::set_count(std::uint32_t count) {
     return command_unchanged_result();
   }
   session_->count = count;
+  editable_defaults().count = count;
   session_->layout_revision = issue_revision();
   invalidate_preview();
   issue_tool_settings_revision();
@@ -844,7 +879,7 @@ CommandResult PathArrayToolService::set_distance(double distance) {
     return command_unchanged_result();
   }
   session_->distance = distance;
-  defaults_.remembered_distance = distance;
+  editable_defaults().remembered_distance = distance;
   session_->layout_revision = issue_revision();
   invalidate_preview();
   issue_tool_settings_revision();
@@ -859,6 +894,7 @@ CommandResult PathArrayToolService::set_follow_path(bool follow) {
     return command_unchanged_result();
   }
   session_->follow_path = follow;
+  editable_defaults().follow_path = follow;
   session_->layout_revision = issue_revision();
   invalidate_preview();
   issue_tool_settings_revision();
@@ -878,6 +914,7 @@ PathArrayToolService::set_forward_axis(PathArraySignedAxis axis) {
     return command_unchanged_result();
   }
   session_->forward_axis = axis;
+  editable_defaults().forward_axis = axis;
   session_->layout_revision = issue_revision();
   invalidate_preview();
   issue_tool_settings_revision();
@@ -899,6 +936,13 @@ PathArrayToolService::set_variation(PathArrayVariationSettings variation) {
     return command_unchanged_result();
   }
   session_->variation = variation;
+  PathArraySessionDefaults &remembered = editable_defaults();
+  remembered.rotation_offset_degrees = variation.rotation_offset_degrees;
+  remembered.rotation_random_min_degrees = variation.rotation_random_min_degrees;
+  remembered.rotation_random_max_degrees = variation.rotation_random_max_degrees;
+  remembered.scale_offset_factors = variation.scale_offset_factors;
+  remembered.scale_random_min_factors = variation.scale_random_min_factors;
+  remembered.scale_random_max_factors = variation.scale_random_max_factors;
   session_->layout_revision = issue_revision();
   invalidate_preview();
   issue_tool_settings_revision();
@@ -972,11 +1016,12 @@ CommandResult PathArrayToolService::reset_settings() {
   PathArrayVariationSettings reset_variation;
   reset_variation.seed = session_->variation.seed;
   const bool changed = session_->count != reset_count ||
+                       defaults_.count != kPathArrayDefaultCount ||
                        session_->distance != reset_distance ||
                        !session_->follow_path ||
                        session_->forward_axis != kPathArrayDefaultForwardAxis ||
                        session_->variation != reset_variation;
-  defaults_.remembered_distance = reset_distance;
+  editable_defaults() = {.remembered_distance = reset_distance};
   if (!changed) {
     return command_unchanged_result();
   }
@@ -1081,7 +1126,7 @@ PathArrayToolService::capture_source(EntityId source) const {
   result.suppression.entities.reserve(hierarchy.size());
   std::unordered_set<EntityId> captured_definition_fingerprints;
   for (const EntityId entity : hierarchy) {
-    if (entity == session_->path.entity || scene_.is_scene_root(entity) ||
+    if (entity == session_->path.entity ||
         scene_.is_instance_definition_entity(entity) ||
         scene_.is_instance_definition_member(entity) ||
         !append_fingerprint(entity)) {
@@ -1762,6 +1807,7 @@ const PathArrayPreviewState &PathArrayToolService::preview_state() const {
   }
   cached_preview_ = std::move(preview);
   cached_preview_current_valid_ = true;
+  publish_pending_defaults();
   return cached_preview_;
 }
 
@@ -1959,6 +2005,7 @@ CommandResult PathArrayToolService::apply() {
                                                 committed);
   }
 
+  publish_pending_defaults();
   session_.reset();
   cached_path_generation_ = 0U;
   clear_preview();

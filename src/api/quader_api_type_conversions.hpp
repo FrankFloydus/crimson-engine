@@ -245,8 +245,8 @@ inline QuaderToneMapping to_api_tone_mapping(SceneToneMapping tone_mapping) {
   return QuaderToneMapping::Aces;
 }
 
-inline SceneSettingsComponent
-to_scene_settings_component(const QuaderSceneSettings &settings) {
+inline SceneSettings
+to_scene_settings(const QuaderSceneSettings &settings) {
   return {
       .environment =
           SceneEnvironmentSettings{
@@ -299,7 +299,7 @@ to_scene_settings_component(const QuaderSceneSettings &settings) {
 }
 
 inline QuaderSceneSettings
-to_api_scene_settings(const SceneSettingsComponent &settings) {
+to_api_scene_settings(const SceneSettings &settings) {
   return {
       .environment =
           QuaderSceneEnvironmentSettings{

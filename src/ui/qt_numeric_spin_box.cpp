@@ -18,6 +18,7 @@
 #include <QMouseEvent>
 #include <QSpinBox>
 #include <QToolButton>
+#include <QWindow>
 
 #include <algorithm>
 #include <cmath>
@@ -54,7 +55,9 @@ void invoke_callback(const std::function<void()> &callback) {
   }
 }
 
-/// Adopts Qt-created numeric editors once, before their first presentation.
+} // namespace
+
+/// Adopts Qt-created editors and routes input for the active numeric text edit.
 class NumericSpinBoxInstaller final : public QObject {
 public:
   explicit NumericSpinBoxInstaller(QApplication &application)
@@ -96,8 +99,80 @@ public:
   }
   [[nodiscard]] bool drag_active() const { return active_drag_count_ > 0; }
 
+  void begin_text_edit(QtNumericSpinBoxController &controller) {
+    text_editor_ = &controller;
+  }
+  void end_text_edit(QtNumericSpinBoxController &controller) {
+    if (text_editor_ == &controller) {
+      text_editor_.clear();
+    }
+  }
+
+  bool handle_text_edit_key(QObject *target, QEvent *event) {
+    if (!event || (event->type() != QEvent::ShortcutOverride &&
+                   event->type() != QEvent::KeyPress &&
+                   event->type() != QEvent::KeyRelease)) {
+      return false;
+    }
+    auto &key = *static_cast<QKeyEvent *>(event);
+    if (key.key() != Qt::Key_Escape) {
+      return false;
+    }
+    if (escape_consumed_ && (event->type() != QEvent::KeyPress ||
+                             key.isAutoRepeat())) {
+      if (event->type() == QEvent::KeyRelease && !key.isAutoRepeat()) {
+        escape_consumed_ = false;
+      }
+      event->accept();
+      return true;
+    }
+    auto *widget = qobject_cast<QWidget *>(target);
+    if (auto *window = qobject_cast<QWindow *>(target)) {
+      auto *focus = QApplication::focusWidget();
+      if (focus && focus->window()->windowHandle() == window) {
+        widget = focus;
+      }
+    }
+    if (!text_editor_ || !widget ||
+        (widget != &text_editor_->spin_box_ &&
+         !text_editor_->spin_box_.isAncestorOf(widget)) ||
+        event->type() == QEvent::KeyRelease) {
+      return false;
+    }
+    event->accept();
+    if (event->type() == QEvent::KeyPress) {
+      // Retain ownership after cancellation, even if its callbacks delete the field.
+      escape_consumed_ = true;
+      text_editor_->cancel_interaction();
+    }
+    return true;
+  }
+
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override {
+    if (handle_text_edit_key(watched, event)) {
+      return true;
+    }
+    if (event->type() == QEvent::ApplicationDeactivate) {
+      escape_consumed_ = false;
+    }
+    if (text_editor_ && (event->type() == QEvent::MouseButtonPress ||
+                         event->type() == QEvent::MouseButtonDblClick)) {
+      const auto *widget = qobject_cast<QWidget *>(watched);
+      const auto *window = qobject_cast<QWindow *>(watched);
+      const auto &spin = text_editor_->spin_box_;
+      const auto &mouse = *static_cast<QMouseEvent *>(event);
+      const bool outside = widget
+          ? widget != &spin && !spin.isAncestorOf(widget)
+          : window && !spin.rect().contains(spin.mapFromGlobal(
+                          mouse.globalPosition().toPoint()));
+      if (outside) {
+        const QPointer<QObject> target_guard(watched);
+        text_editor_->commit_text_edit();
+        // The original click still reaches its target unless committing removed it.
+        return !target_guard;
+      }
+    }
     if (event->type() == QEvent::Polish && is_numeric_spin_box(watched)) {
       qt_install_numeric_spin_box(*static_cast<QAbstractSpinBox *>(watched));
     }
@@ -105,11 +180,21 @@ protected:
   }
 
 private:
+  QPointer<QtNumericSpinBoxController> text_editor_;
+  bool escape_consumed_ = false;
   QPointer<QObject> snap_context_;
   std::function<double()> snap_provider_;
   std::uint64_t snap_generation_ = 0;
   int active_drag_count_ = 0;
 };
+
+namespace {
+
+NumericSpinBoxInstaller *numeric_installer() {
+  return qApp ? static_cast<NumericSpinBoxInstaller *>(qApp->findChild<QObject *>(
+                    installer_name(), Qt::FindDirectChildrenOnly))
+              : nullptr;
+}
 
 double current_snap_increment() {
   auto *application = qobject_cast<QApplication *>(QCoreApplication::instance());
@@ -258,6 +343,8 @@ void QtNumericSpinBoxController::begin_editing(bool select_text) {
   original_value_ = value();
   editing_ = true;
   press_pending_ = false;
+  qt_install_default_numeric_spin_boxes(*qApp);
+  numeric_installer()->begin_text_edit(*this);
   const QPointer<QtNumericSpinBoxController> guard(this);
   invoke_callback(editing_started);
   if (!guard || !editing_) {
@@ -275,9 +362,38 @@ void QtNumericSpinBoxController::finish_editing() {
     return;
   }
   editing_ = false;
+  if (auto *installer = numeric_installer()) {
+    installer->end_text_edit(*this);
+  }
   line_edit_->deselect();
   refresh_presentation();
   invoke_callback(editing_finished);
+}
+
+void QtNumericSpinBoxController::commit_text_edit() {
+  if (!editing_ || !spin_box_.hasAcceptableInput()) {
+    return;
+  }
+  const QPointer<QtNumericSpinBoxController> guard(this);
+  const auto can_commit = can_commit_text;
+  if (can_commit && !can_commit()) {
+    return;
+  }
+  if (!guard || !editing_) {
+    return;
+  }
+  spin_box_.interpretText();
+  if (!guard || !editing_) {
+    return;
+  }
+  finish_editing();
+  if (!guard) {
+    return;
+  }
+  emit_commit();
+  if (guard) {
+    spin_box_.clearFocus();
+  }
 }
 
 void QtNumericSpinBoxController::set_drag_mode(QtNumericDragMode mode) {
@@ -576,6 +692,9 @@ void QtNumericSpinBoxController::emit_commit() {
 
 void QtNumericSpinBoxController::abandon_interaction() {
   editing_ = false;
+  if (auto *installer = numeric_installer()) {
+    installer->end_text_edit(*this);
+  }
   dragging_ = false;
   press_pending_ = false;
   end_drag_activity();
@@ -639,6 +758,14 @@ void QtNumericSpinBoxController::rebase_drag() {
   }
 }
 
+void QtNumericSpinBoxController::synchronize_drag_value() {
+  if (press_pending_ || dragging_) {
+    drag_remainder_ = 0.0;
+    drag_accumulator_ = value();
+    drag_applied_value_ = drag_accumulator_;
+  }
+}
+
 void QtNumericSpinBoxController::refresh_geometry() {
   if (!decrease_button_ || refreshing_geometry_) {
     return;
@@ -684,6 +811,12 @@ void QtNumericSpinBoxController::schedule_geometry_refresh() {
 
 void QtNumericSpinBoxController::refresh_presentation() {
   const bool interactive = can_interact();
+  // Display mode keeps keyboard focus for enclosing shortcuts, but must not
+  // leave the native text editor writable or paint its blinking caret.
+  const bool text_read_only = !editing_ || !interactive;
+  if (line_edit_->isReadOnly() != text_read_only) {
+    line_edit_->setReadOnly(text_read_only);
+  }
   spin_box_.setCursor(interactive && !editing_ ? Qt::SizeHorCursor
                                               : Qt::ArrowCursor);
   line_edit_->setCursor(interactive && !editing_ ? Qt::SizeHorCursor
@@ -1002,6 +1135,17 @@ void qt_install_default_numeric_spin_boxes(QApplication &application) {
       qt_install_numeric_spin_box(*static_cast<QAbstractSpinBox *>(widget));
     }
   }
+}
+
+bool qt_handle_numeric_text_edit_key(QObject *target, QEvent *event) {
+  if (!event || (event->type() != QEvent::ShortcutOverride &&
+                 event->type() != QEvent::KeyPress &&
+                 event->type() != QEvent::KeyRelease) ||
+      static_cast<QKeyEvent *>(event)->key() != Qt::Key_Escape) {
+    return false;
+  }
+  auto *installer = numeric_installer();
+  return installer && installer->handle_text_edit_key(target, event);
 }
 
 void qt_set_numeric_snap_increment_provider(

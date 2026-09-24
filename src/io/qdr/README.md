@@ -42,7 +42,7 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 
 ## Compatibility that must survive
 
-Current scene metadata schema is 15; schema versions and defaults are enforced in the codec.
+Current scene metadata schema is 16; schema versions and defaults are enforced in the codec.
 
 | Version | Durable data/defaults |
 | --- | --- |
@@ -59,6 +59,7 @@ Current scene metadata schema is 15; schema versions and defaults are enforced i
 | 13 | AgX tone mapping, appended as value 5; historical tone-mapping IDs 0-4 remain readable and round-trip unchanged |
 | 14 | Embedded material diffuse model (Burley or Lambert); missing fields use Burley |
 | 15 | Scene fog settings; older schemas and an absent fog table default to disabled fog |
+| 16 | Document-owned scene settings and an explicit ordered forest of parentless entities |
 
 The FlatBuffers defaults remain intensity 1 and ACES tone mapping, even when new native
 objects use different creation defaults. Saved camera values also remain unchanged. Obsolete
@@ -68,12 +69,29 @@ than interpreting the appended AgX mode incorrectly. Schema 14 appends the mater
 model with Burley as the wire default; readers predating schema 14 reject new files rather
 than silently dropping an authored Lambert selection. Unknown diffuse-model values are rejected.
 
-Schema 15 appends an optional fog table to the scene root settings. It preserves all authored
+Schema 15 appends an optional fog table to the historical scene root settings. It preserves all authored
 distance, height, density, opacity, linear color, environment-color and sunlight-scattering
 settings. A cutoff distance of zero means unlimited; nonpositive scattering size disables
 sunlight scattering. Numeric fog values must be finite, with nonnegative distances, density,
 height falloff and color, and opacity in [0, 1]. Fog height may be negative. Readers predating
 schema 15 reject new files instead of silently losing fog on a later save.
+
+Schema 16 appends scene settings and ordered root entity IDs directly to `ScenePayload`.
+Both fields are required by domain validation, including an explicit empty root vector for
+empty scenes. Every parentless entity appears exactly once; nested or missing IDs are rejected.
+New writers omit the historical entity root/settings fields. Schemas 1-15 extract settings
+from the sole legacy wrapper and remove it, promoting children in order while preserving world
+placement and inherited visibility/selectability/locking. Roots carrying other authored components, malformed
+hierarchies, and transforms that cannot retain their world matrix as TRS are rejected before
+publication. Older scenes without a wrapper retain their existing forest and receive defaults.
+Full and dependency-only readers share this conversion and root-order validation.
+
+The native `qdr_migrate` tool validates a complete batch without writing by default:
+`qdr_migrate <scene.qdr> [...]`. Add `--apply --backup-directory <new-directory>`
+to retain verified originals and publish validated schema-16 files with per-file atomic writes
+and rollback on ordinary failures. Its isolated converter also handles the retired
+metadata-10/geometry-2 dialect; that dialect is not accepted by the normal scene reader.
+Persistent backups provide recovery after interruption; the batch is not crash-atomic.
 
 Light metadata does not replace authored RGB or canonical intensity. Reading historical scenes
 preserves those values and their falloff, including values outside the current Inspector slider

@@ -32,18 +32,17 @@
 #include <QFont>
 #include <QFocusEvent>
 #include <QGridLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
 #include <QLineEdit>
 #include <QMargins>
+#include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
-#include <QSlider>
 #include <QSpinBox>
 #include <QTimer>
 #include <QToolButton>
@@ -76,6 +75,8 @@ using namespace qt_settings_detail;
 // Pointer drags publish the latest value at this bounded cadence; keyboard,
 // wheel, and spin edits use it as a trailing coalescing window.
 constexpr int kNumberDispatchIntervalMs = 16;
+constexpr int kControlLabelWidth = 88;
+constexpr int kControlColumnSpacing = 8;
 
 QString qtext(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -174,6 +175,12 @@ int decimal_places_for_step(double step) {
   return 8;
 }
 
+int number_decimals(const QuaderToolSettingControl &control) {
+  return control.number_decimals > 0
+             ? std::clamp(control.number_decimals, 1, 17)
+             : std::max(4, decimal_places_for_step(control.step));
+}
+
 bool same_choice_structure(const QuaderToolSettingChoiceOption &left,
                            const QuaderToolSettingChoiceOption &right) {
   return left.id == right.id && left.label == right.label &&
@@ -201,6 +208,7 @@ bool same_control_structure(const QuaderToolSettingControl &left,
       left.number_presentation != right.number_presentation ||
       left.number_positive_only != right.number_positive_only ||
       left.number_grid_scale != right.number_grid_scale ||
+      left.number_drag_sensitivity != right.number_drag_sensitivity ||
       left.choice_presentation != right.choice_presentation ||
       left.choices.size() != right.choices.size()) {
     return false;
@@ -249,26 +257,6 @@ bool widget_or_descendant_has_focus(const QWidget *widget) {
   const QWidget *focus = QApplication::focusWidget();
   return widget != nullptr && focus != nullptr &&
          (focus == widget || widget->isAncestorOf(focus));
-}
-
-void update_slider_steps(QtToolSettingsNumberSlider &slider,
-                         const QtToolSettingsNumberSliderMapping &mapping,
-                         double value, double logical_step) {
-  const int single_step = qt_tool_settings_number_slider_step(
-      mapping, value, logical_step);
-  slider.setSingleStep(single_step);
-  if (slider.stepwise_interaction()) {
-    slider.setPageStep(single_step);
-    slider.setTickInterval(single_step);
-    slider.setTickPosition(QSlider::TicksBelow);
-  } else {
-    slider.setPageStep(single_step <= std::numeric_limits<int>::max() / 10
-                           ? single_step * 10
-                           : std::numeric_limits<int>::max());
-    slider.setTickInterval(0);
-    slider.setTickPosition(QSlider::NoTicks);
-  }
-  slider.setTracking(true);
 }
 
 bool choice_matches(std::string_view selected,
@@ -366,7 +354,6 @@ struct QtToolSettingsPanel::Impl {
     QWidget *container = nullptr;
     QLabel *field_label = nullptr;
     QAbstractButton *label_button = nullptr;
-    QGroupBox *label_group = nullptr;
     std::string presented_label;
     std::string presented_label_key;
     QCheckBox *toggle = nullptr;
@@ -376,9 +363,7 @@ struct QtToolSettingsPanel::Impl {
     QtMixedNumberSpinBox *spinbox_only = nullptr;
     bool invalid_number_draft = false;
     QtToolSettingsDragSpinner *number_drag_spinner = nullptr;
-    QtToolSettingsNumberSlider *number_slider = nullptr;
     QComboBox *dropdown = nullptr;
-    QtToolSettingsNumberSliderMapping number_slider_mapping;
     QTimer *number_dispatch_timer = nullptr;
     std::optional<double> pending_number_value;
     std::optional<NumberDispatchLifecycle> pending_number_lifecycle;
@@ -467,30 +452,9 @@ struct QtToolSettingsPanel::Impl {
     preview_actions_layout->addWidget(cancel_button_);
     actions_layout->addWidget(preview_actions_container_);
 
-    reset_button_ = new QPushButton(actions_container_);
-    reset_button_->setObjectName(
-        QStringLiteral("tool_settings.reset_defaults"));
-    reset_button_->setFocusPolicy(Qt::TabFocus);
-    reset_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    actions_layout->addWidget(reset_button_);
     root_layout->addWidget(actions_container_);
     refresh_localized_text();
 
-    QObject::connect(reset_button_, &QPushButton::pressed, &panel_, [this]() {
-      discard_pending_number_dispatches();
-    });
-    QObject::connect(reset_button_, &QPushButton::clicked, &panel_, [this]() {
-      // Reset is authoritative: a stale delayed edit must never overwrite it.
-      discard_pending_number_dispatches();
-      reset_button_->setFocus(Qt::MouseFocusReason);
-      if (!presentation_is_current()) {
-        return;
-      }
-      const QuaderApiVoidResult result =
-          editor_->tools().reset_active_settings();
-      present_failure(editor_, "Reset tool settings", result);
-      schedule_refresh();
-    });
     QObject::connect(apply_button_, &QPushButton::clicked, &panel_, [this]() {
       if (editor_ == nullptr ||
           !prepare_lifecycle_intent(*editor_,
@@ -627,14 +591,25 @@ struct QtToolSettingsPanel::Impl {
 
   [[nodiscard]] QSize preferred_size() const {
     const QMargins margins = panel_.layout()->contentsMargins();
+    const int width = expanded_
+        ? std::max(ui_scale_metrics_.px(320),
+                   controls_layout_->minimumSize().width() +
+                       margins.left() + margins.right())
+        : ui_scale_metrics_.px(160);
     int height = target_title_->sizeHint().height() + margins.top() +
                  margins.bottom();
     if (expanded_ && !inactive_presented_) {
-      height += controls_layout_->sizeHint().height() +
-                actions_container_->sizeHint().height() +
-                panel_.layout()->spacing() * 2;
+      const int controls_height = controls_layout_->hasHeightForWidth()
+          ? controls_layout_->heightForWidth(
+                width - margins.left() - margins.right())
+          : controls_layout_->sizeHint().height();
+      height += controls_height + panel_.layout()->spacing();
+      if (!preview_actions_container_->isHidden()) {
+        height += actions_container_->sizeHint().height() +
+                  panel_.layout()->spacing();
+      }
     }
-    return QSize(ui_scale_metrics_.px(expanded_ ? 280 : 160), height);
+    return QSize(width, height);
   }
 
   [[nodiscard]] bool numeric_interaction_active() const {
@@ -653,9 +628,7 @@ struct QtToolSettingsPanel::Impl {
                   binding.numeric_controller->is_dragging()) ||
                  (binding.number_drag_spinner != nullptr &&
                    (binding.number_drag_spinner->is_dragging() ||
-                    binding.number_drag_spinner->is_editing())) ||
-                 (binding.number_slider != nullptr &&
-                  binding.number_slider->isSliderDown());
+                    binding.number_drag_spinner->is_editing()));
         });
   }
 
@@ -801,6 +774,15 @@ private:
   void apply_current_ui_scale() {
     apply_scalable_layout_metrics(panel_, ui_scale_metrics_);
     apply_scalable_widget_metrics(panel_, ui_scale_metrics_);
+    for (const ControlWidget &control : controls_) {
+      if (auto *row_layout =
+              dynamic_cast<QGridLayout *>(control.container->layout())) {
+        row_layout->itemAtPosition(0, 0)->widget()->setFixedWidth(
+            ui_scale_metrics_.px(kControlLabelWidth));
+        row_layout->setColumnMinimumWidth(
+            0, ui_scale_metrics_.px(kControlLabelWidth));
+      }
+    }
     QFont target_font = QApplication::font(target_title_);
     target_font.setBold(true);
     target_title_->setFont(target_font);
@@ -842,7 +824,6 @@ private:
     control_groups_.clear();
     clear_layout(*controls_layout_);
     target_title_->setText({});
-    reset_button_->setEnabled(false);
     preview_actions_container_->hide();
     apply_button_->hide();
     cancel_button_->hide();
@@ -854,8 +835,9 @@ private:
     if (scroll_area_->isHidden() == visible) {
       scroll_area_->setVisible(visible);
     }
-    if (actions_container_->isHidden() == visible) {
-      actions_container_->setVisible(visible);
+    const bool actions_visible = visible && !preview_actions_container_->isHidden();
+    if (actions_container_->isHidden() == actions_visible) {
+      actions_container_->setVisible(actions_visible);
     }
   }
 
@@ -902,14 +884,31 @@ private:
 
   /// Share one history identity from the first scrub sample through release.
   void bind_number_interaction(QAbstractSpinBox &spin, ControlWidget &binding,
-                               std::size_t control_index, double grid_scale) {
+                               std::size_t control_index,
+                               const QuaderToolSettingControl &control) {
     auto &controller = qt_install_numeric_spin_box(spin);
-    controller.set_drag_snap_scale(grid_scale);
+    controller.set_drag_snap_scale(control.number_grid_scale);
+    controller.set_drag_sensitivity(control.number_drag_sensitivity);
     binding.numeric_controller = &controller;
     controller.drag_started = [this, control_index]() {
       begin_number_continuous_edit(control_index);
     };
     controller.editing_started = controller.drag_started;
+    controller.editing_canceled = [this, control_index]() {
+      if (control_index >= controls_.size()) {
+        return;
+      }
+      ControlWidget &current = controls_[control_index];
+      const double restored_value = current.floating != nullptr
+          ? current.floating->value() : current.integer->value();
+      std::string merge_key = std::move(current.continuous_number_merge_key);
+      discard_pending_number_dispatch(control_index);
+      current.continuous_number_merge_key = std::move(merge_key);
+      // Mixed fields can preview text while their native scalar is unchanged.
+      // Replace the draft with the restored scalar under the same edit identity.
+      queue_number_dispatch(control_index, restored_value);
+      schedule_refresh();
+    };
     controller.interaction_canceled = [this, control_index]() {
       finish_number_continuous_edit(control_index);
     };
@@ -1008,9 +1007,7 @@ private:
           (binding.numeric_controller != nullptr &&
            binding.numeric_controller->is_dragging()) ||
           (binding.number_drag_spinner != nullptr &&
-           binding.number_drag_spinner->is_dragging()) ||
-          (binding.number_slider != nullptr &&
-           binding.number_slider->isSliderDown());
+           binding.number_drag_spinner->is_dragging());
       // Pointer drags publish the latest value at a bounded cadence so live
       // geometry remains visible without compiling once per mouse event.
       // Keyboard, wheel, and spin edits retain one trailing dispatch window.
@@ -1172,6 +1169,8 @@ private:
     const std::uint64_t generation = binding_generation_;
     const std::uint64_t controls_generation = control_generation_;
     const std::uint64_t tool_revision = editor_->tools().active_tool_revision();
+    const std::uint64_t settings_revision =
+        editor_->tools().active_settings_revision();
     const auto dispatch = binding.number_dispatch;
     dispatch(
         value, {.merge_key = std::move(merge_key)});
@@ -1185,6 +1184,67 @@ private:
     // A successful owner write advances the settings revision. Other values
     // queued in the same UI lifecycle remain valid and must still flush.
     rebind_pending_number_dispatches_to_current_revision();
+    // A later queued sample can be clamped to an already accepted bound, or
+    // rejected, without advancing the revision. Settle that draft as well.
+    const bool differs_from_presented_owner =
+        last_target_.has_value() &&
+        control_index < last_target_->controls.size() &&
+        value != last_target_->controls[control_index].number_value;
+    if (editor_->tools().active_settings_revision() != settings_revision ||
+        differs_from_presented_owner) {
+      synchronize_accepted_number(control_index, value);
+    }
+  }
+
+  /// Present owner normalization immediately, including during a live scrub.
+  void synchronize_accepted_number(std::size_t control_index,
+                                    double requested_value) {
+    const QPointer<QtToolSettingsPanel> panel_guard(&panel_);
+    QuaderEditorApi *const editor = editor_;
+    const auto generation = binding_generation_;
+    const auto controls_generation = control_generation_;
+    const auto binding_is_current = [&]() {
+      return panel_guard && editor_ == editor &&
+             binding_generation_ == generation &&
+             control_generation_ == controls_generation &&
+             presentation_is_current();
+    };
+    const auto target = editor->tools().active_settings();
+    if (!binding_is_current()) {
+      return;
+    }
+    if (!last_target_.has_value() ||
+        !same_target_structure(*last_target_, target) ||
+        control_index >= target.controls.size() ||
+        control_index >= controls_.size()) {
+      schedule_refresh();
+      return;
+    }
+    synchronize_values(target);
+    if (!binding_is_current()) {
+      return;
+    }
+    const auto &control = target.controls[control_index];
+    auto &binding = controls_[control_index];
+    if (!binding.pending_number_value.has_value() &&
+        control.kind == QuaderToolSettingControlKind::Number &&
+        control.number_value != requested_value) {
+      if (binding.floating != nullptr) {
+        const QSignalBlocker blocker(binding.floating);
+        binding.floating->setDecimals(number_decimals(control));
+        binding.floating->setRange(control.min_value, control.max_value);
+        binding.floating->setValue(control.number_value);
+      } else if (binding.integer != nullptr) {
+        const QSignalBlocker blocker(binding.integer);
+        binding.integer->setValue(
+            static_cast<int>(std::llround(control.number_value)));
+      }
+      if (binding.numeric_controller != nullptr) {
+        binding.numeric_controller->synchronize_drag_value();
+      }
+    }
+    last_target_ = target;
+    notify_presentation_changed();
   }
 
   void flush_vector3_dispatch(std::size_t control_index,
@@ -1298,8 +1358,6 @@ private:
       return;
     }
     localized_text_dirty_ = false;
-    reset_button_->setText(localized_text(
-        localization_, "tool_settings.reset_defaults", "Reset Settings"));
     apply_button_->setText(
         localized_text(localization_, "ui.action.apply", "Apply"));
     cancel_button_->setText(
@@ -1412,9 +1470,36 @@ private:
             control.label_key.empty() ? control.id : control.label_key,
             control.label);
 
+    auto *row = new QWidget(control_parent);
+    row->setObjectName(object_name + QStringLiteral(".row"));
+    auto *row_layout = new QGridLayout(row);
+    set_scalable_margins(*row_layout, QMargins(0, 0, 0, 0));
+    set_scalable_grid_spacing(*row_layout, kControlColumnSpacing, 3);
+    row_layout->setColumnStretch(1, 1);
+    row_layout->setColumnMinimumWidth(
+        0, ui_scale_metrics_.px(kControlLabelWidth));
+    QLabel *field_label = nullptr;
+    if (control.kind != QuaderToolSettingControlKind::Action) {
+      field_label = new QLabel(label, row);
+      field_label->setObjectName(object_name + QStringLiteral(".label"));
+      field_label->setWordWrap(true);
+      field_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+      field_label->setFixedWidth(ui_scale_metrics_.px(kControlLabelWidth));
+      binding.field_label = field_label;
+      row_layout->addWidget(field_label, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    } else {
+      // A real cell preserves the same gap as the labeled rows without making
+      // their height-for-width measurement include the inter-column spacing.
+      auto *label_spacer = new QWidget(row);
+      label_spacer->setObjectName(object_name + QStringLiteral(".label_spacer"));
+      label_spacer->setFixedWidth(ui_scale_metrics_.px(kControlLabelWidth));
+      row_layout->addWidget(label_spacer, 0, 0);
+    }
+    binding.container = row;
+
     switch (control.kind) {
     case QuaderToolSettingControlKind::Toggle: {
-      auto *toggle = new QCheckBox(label, control_parent);
+      auto *toggle = new QCheckBox(row);
       toggle->setObjectName(object_name);
       toggle->setAccessibleName(label);
       QObject::connect(toggle, &QCheckBox::toggled, &panel_,
@@ -1432,23 +1517,12 @@ private:
                            schedule_refresh();
                          }
                        });
-      control_layout.addWidget(toggle);
-      binding.container = toggle;
-      binding.label_button = toggle;
+      row_layout->addWidget(toggle, 0, 1, Qt::AlignLeft | Qt::AlignVCenter);
+      field_label->setBuddy(toggle);
       binding.toggle = toggle;
       break;
     }
     case QuaderToolSettingControlKind::Number: {
-      auto *row = new QWidget(control_parent);
-      row->setObjectName(object_name + QStringLiteral(".row"));
-      auto *row_layout = new QGridLayout(row);
-      row_layout->setColumnStretch(0, 1);
-      auto *field_label = new QLabel(label, row);
-      field_label->setObjectName(object_name + QStringLiteral(".label"));
-      field_label->setWordWrap(true);
-      binding.field_label = field_label;
-      row_layout->addWidget(field_label, 0, 0, 1, 2);
-
       const bool integer_control = uses_integer_spin_box(control);
       const QtToolSettingsNumberSliderMapping slider_mapping =
           qt_tool_settings_number_slider_mapping(
@@ -1484,10 +1558,10 @@ private:
       if (control.number_presentation ==
           QuaderToolSettingNumberPresentation::SpinBoxOnly) {
         auto *spin = new QtMixedNumberSpinBox(0.0, row);
-        bind_number_interaction(*spin, binding, control_index,
-                                control.number_grid_scale);
+        bind_number_interaction(*spin, binding, control_index, control);
         spin->setObjectName(object_name);
         spin->setAccessibleName(label);
+        spin->setDecimals(number_decimals(control));
         spin->setRange(control.min_value, control.max_value);
         spin->setSingleStep(control.step);
         spin->present(control.number_value);
@@ -1523,12 +1597,10 @@ private:
                              finish_number_continuous_edit(control_index);
                            }
                          });
-        row_layout->addWidget(spin, 1, 0, 1, 2);
+        row_layout->addWidget(spin, 0, 1);
         field_label->setBuddy(spin);
         binding.floating = spin;
         binding.spinbox_only = spin;
-        control_layout.addWidget(row);
-        binding.container = row;
         break;
       }
 
@@ -1538,14 +1610,17 @@ private:
               QuaderToolSettingNumberPresentation::DragSpinner;
       if (use_drag_spinner) {
         auto *spinner = new QtToolSettingsDragSpinner(row);
+        // The standalone spinner is compact; a form field fills its column.
+        spinner->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         spinner->setObjectName(object_name + QStringLiteral(".spinner"));
         spinner->spin_box()->setObjectName(object_name);
         spinner->set_accessible_label(label);
         spinner->set_range(slider_mapping.slider_minimum,
                            slider_mapping.slider_maximum);
         spinner->set_single_step(integer_single_step(control.step));
-        qt_install_numeric_spin_box(*spinner->spin_box())
-            .set_drag_snap_scale(control.number_grid_scale);
+        auto &controller = qt_install_numeric_spin_box(*spinner->spin_box());
+        controller.set_drag_snap_scale(control.number_grid_scale);
+        controller.set_drag_sensitivity(control.number_drag_sensitivity);
         spinner->spin_box()->setKeyboardTracking(false);
         spinner->set_value(qt_tool_settings_number_slider_position(
             slider_mapping, control.number_value));
@@ -1571,85 +1646,27 @@ private:
         spinner->drag_finished = [this, control_index]() {
           finish_number_continuous_edit(control_index);
         };
-        row_layout->addWidget(spinner, 1, 0, 1, 2, Qt::AlignLeft);
+        row_layout->addWidget(spinner, 0, 1);
         field_label->setBuddy(spinner->spin_box());
         binding.integer = spinner->spin_box();
         binding.number_drag_spinner = spinner;
-        binding.number_slider_mapping = slider_mapping;
-        control_layout.addWidget(row);
-        binding.container = row;
         break;
       }
 
-      auto *slider =
-          new QtToolSettingsNumberSlider(Qt::Horizontal, row);
-      slider->setObjectName(object_name + QStringLiteral(".slider"));
-      slider->setAccessibleName(label);
-      slider->setRange(slider_mapping.slider_minimum,
-                       slider_mapping.slider_maximum);
-      slider->set_stepwise_interaction(
-          control.number_interaction ==
-          QuaderToolSettingNumberInteraction::Stepped);
-      slider->setTracking(true);
-      row_layout->addWidget(slider, 1, 0);
-      binding.number_slider = slider;
-      binding.number_slider_mapping = slider_mapping;
-      QObject::connect(slider, &QSlider::sliderPressed, &panel_,
-                       [this, control_index]() {
-                         begin_number_continuous_edit(control_index);
-                       });
-      QObject::connect(slider, &QSlider::sliderReleased, &panel_,
-                       [this, control_index]() {
-                         finish_number_continuous_edit(control_index);
-                       });
-
       if (integer_control) {
         auto *spin = new QtSpinBox(row);
-        bind_number_interaction(*spin, binding, control_index,
-                                control.number_grid_scale);
+        bind_number_interaction(*spin, binding, control_index, control);
         spin->setObjectName(object_name);
         spin->setAccessibleName(label);
         spin->setRange(slider_mapping.slider_minimum,
                        slider_mapping.slider_maximum);
         spin->setSingleStep(integer_single_step(control.step));
         spin->setKeyboardTracking(false);
-        slider->setSingleStep(spin->singleStep());
-        QObject::connect(
-            slider, &QSlider::valueChanged, &panel_,
-            [this, spin, slider, control_index](int position) {
-              if (!presentation_is_current() || synchronizing_) {
-                return;
-              }
-              const QtToolSettingsNumberSliderMapping &mapping =
-                  controls_[control_index].number_slider_mapping;
-              const int value = static_cast<int>(std::llround(
-                  qt_tool_settings_number_slider_value(mapping, position)));
-              {
-                const QSignalBlocker spin_blocker(spin);
-                spin->setValue(value);
-                            }
-                            update_slider_steps(*slider, mapping, value,
-                                                spin->singleStep());
-                            queue_number_dispatch(control_index,
-                                                  static_cast<double>(value));
-            });
         QObject::connect(spin, &QSpinBox::valueChanged, &panel_,
-                         [this, spin, slider, control_index](int value) {
+                         [this, control_index](int value) {
                            if (!presentation_is_current() || synchronizing_) {
                              return;
                            }
-                           const QtToolSettingsNumberSliderMapping &mapping =
-                               controls_[control_index]
-                                   .number_slider_mapping;
-                           {
-                             const QSignalBlocker slider_blocker(slider);
-                             slider->setValue(
-                                 qt_tool_settings_number_slider_position(
-                                     mapping,
-                                     static_cast<double>(value)));
-                           }
-                           update_slider_steps(*slider, mapping, value,
-                                               spin->singleStep());
                            queue_number_dispatch(control_index,
                                                  static_cast<double>(value));
                          });
@@ -1664,62 +1681,29 @@ private:
                              begin_number_continuous_edit(control_index);
                            });
         }
-        row_layout->addWidget(spin, 1, 1);
+        row_layout->addWidget(spin, 0, 1);
         field_label->setBuddy(spin);
         binding.integer = spin;
       } else {
         auto *spin = new QtDoubleSpinBox(row);
-        bind_number_interaction(*spin, binding, control_index,
-                                control.number_grid_scale);
+        bind_number_interaction(*spin, binding, control_index, control);
         spin->setObjectName(object_name);
         spin->setAccessibleName(label);
         const double minimum = std::min(control.min_value, control.max_value);
         const double maximum = std::max(control.min_value, control.max_value);
+        // Preserve owner bounds before Qt rounds the supplied range.
+        spin->setDecimals(number_decimals(control));
         spin->setRange(minimum, maximum);
         spin->setSingleStep(std::isfinite(control.step) && control.step > 0.0
                                 ? control.step
                                 : 0.001);
         spin->setKeyboardTracking(false);
-        // The legacy ImGui slider displayed four decimal places. Preserve at
-        // least that precision so descriptor endpoints such as 0.0625 remain
-        // representable by the paired stock Fusion spin box.
-        spin->setDecimals(
-            std::max(4, decimal_places_for_step(control.step)));
-        QObject::connect(
-            slider, &QSlider::valueChanged, &panel_,
-            [this, spin, slider, control_index](int position) {
-              if (!presentation_is_current() || synchronizing_) {
-                return;
-              }
-              const QtToolSettingsNumberSliderMapping &mapping =
-                  controls_[control_index].number_slider_mapping;
-              const double value = qt_tool_settings_number_slider_value(
-                  mapping, position);
-              {
-                const QSignalBlocker spin_blocker(spin);
-                spin->setValue(value);
-              }
-              update_slider_steps(*slider, mapping, spin->value(),
-                                  spin->singleStep());
-              queue_number_dispatch(control_index, spin->value());
-            });
         QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
-                         [this, spin, slider, control_index](double value) {
+                         [this, control_index](double value) {
                            if (!presentation_is_current() || synchronizing_) {
                              return;
                            }
-                           const QtToolSettingsNumberSliderMapping &mapping =
-                               controls_[control_index]
-                                   .number_slider_mapping;
-                           {
-                             const QSignalBlocker slider_blocker(slider);
-                             slider->setValue(
-                                 qt_tool_settings_number_slider_position(
-                                     mapping, value));
-                            }
-                            update_slider_steps(*slider, mapping, value,
-                                                spin->singleStep());
-                            queue_number_dispatch(control_index, value);
+                           queue_number_dispatch(control_index, value);
                          });
         QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
                          [this, control_index]() {
@@ -1732,27 +1716,13 @@ private:
                              begin_number_continuous_edit(control_index);
                            });
         }
-        row_layout->addWidget(spin, 1, 1);
+        row_layout->addWidget(spin, 0, 1);
         field_label->setBuddy(spin);
         binding.floating = spin;
       }
-      control_layout.addWidget(row);
-      binding.container = row;
       break;
     }
     case QuaderToolSettingControlKind::Vector3Number: {
-      auto *row = new QWidget(control_parent);
-      row->setObjectName(object_name + QStringLiteral(".row"));
-      auto *row_layout = new QVBoxLayout(row);
-      set_scalable_margins(*row_layout, QMargins(0, 0, 0, 0));
-      set_scalable_spacing(*row_layout, 3);
-
-      auto *field_label = new QLabel(label, row);
-      field_label->setObjectName(object_name + QStringLiteral(".label"));
-      field_label->setWordWrap(true);
-      binding.field_label = field_label;
-      row_layout->addWidget(field_label);
-
       auto *fields = new QWidget(row);
       fields->setObjectName(object_name + QStringLiteral(".fields"));
       fields->setMinimumWidth(0);
@@ -1796,7 +1766,7 @@ private:
                                 ? component.step
                                 : 0.001);
         spin->setKeyboardTracking(false);
-        spin->setMinimumWidth(0);
+        set_scalable_minimum_width(*spin, 44);
         spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         spin->setValue(component.value);
         spin->setEnabled(component.enabled);
@@ -1863,27 +1833,19 @@ private:
                            });
         }
       }
-      row_layout->addWidget(fields);
-      control_layout.addWidget(row);
-      binding.container = row;
+      row_layout->addWidget(fields, 0, 1);
+      field_label->setBuddy(binding.vector3_components[0].spin);
       break;
     }
     case QuaderToolSettingControlKind::Choice: {
       if (control.choice_presentation ==
           QuaderToolSettingChoicePresentation::Buttons) {
-        auto *row = new QWidget(control_parent);
-        row->setObjectName(object_name);
-        auto *row_layout = new QVBoxLayout(row);
-        set_scalable_margins(*row_layout, QMargins(0, 0, 0, 0));
-        set_scalable_spacing(*row_layout, 4);
-        auto *field_label = new QLabel(label, row);
-        field_label->setObjectName(object_name + QStringLiteral(".label"));
-        binding.field_label = field_label;
-        row_layout->addWidget(field_label);
-        auto *buttons_layout = new QHBoxLayout();
+        auto *buttons = new QWidget(row);
+        buttons->setObjectName(object_name);
+        auto *buttons_layout = new QHBoxLayout(buttons);
         set_scalable_margins(*buttons_layout, QMargins(0, 0, 0, 0));
         set_scalable_spacing(*buttons_layout, 4);
-        row_layout->addLayout(buttons_layout);
+        row_layout->addWidget(buttons, 0, 1);
         auto *button_group = new QButtonGroup(row);
         button_group->setObjectName(object_name + QStringLiteral(".group"));
         button_group->setExclusive(true);
@@ -1894,7 +1856,7 @@ private:
           const std::string option_key = control.id + "." + option.id;
           const QString option_label = localized_descriptor_label(
               localization_, option_key, option.label);
-          auto *button = new QPushButton(option_label, row);
+          auto *button = new QPushButton(option_label, buttons);
           button->setObjectName(
               option_object_name(object_name, option.id, option_index));
           button->setAccessibleName(option_label);
@@ -1929,20 +1891,13 @@ private:
           binding.choices.push_back(
               ChoiceWidget{button, option.id, option.value});
         }
-        control_layout.addWidget(row);
-        binding.container = row;
+        if (!binding.choices.empty()) {
+          field_label->setBuddy(binding.choices.front().button);
+        }
         break;
       }
       if (control.choice_presentation ==
           QuaderToolSettingChoicePresentation::Dropdown) {
-        auto *row = new QWidget(control_parent);
-        row->setObjectName(object_name + QStringLiteral(".row"));
-        auto *row_layout = new QHBoxLayout(row);
-        auto *field_label = new QLabel(label, row);
-        field_label->setObjectName(object_name + QStringLiteral(".label"));
-        binding.field_label = field_label;
-        row_layout->addWidget(field_label);
-
         auto *dropdown = new QComboBox(row);
         dropdown->setObjectName(object_name);
         dropdown->setAccessibleName(label);
@@ -1963,7 +1918,7 @@ private:
           }
         }
         field_label->setBuddy(dropdown);
-        row_layout->addWidget(dropdown, 1);
+        row_layout->addWidget(dropdown, 0, 1);
         QObject::connect(
             dropdown, &QComboBox::currentIndexChanged, &panel_,
             [this, dropdown, tool_id = target.tool_id,
@@ -1983,15 +1938,15 @@ private:
               // replaced with the fields for the newly selected kind.
               schedule_refresh();
             });
-        control_layout.addWidget(row);
-        binding.container = row;
         binding.dropdown = dropdown;
         break;
       }
 
-      auto *group = new QGroupBox(label, control_parent);
+      auto *group = new QWidget(row);
       group->setObjectName(object_name);
       auto *choice_layout = new QVBoxLayout(group);
+      set_scalable_margins(*choice_layout, QMargins(0, 0, 0, 0));
+      set_scalable_spacing(*choice_layout, 3);
       auto *button_group = new QButtonGroup(group);
       button_group->setObjectName(object_name + QStringLiteral(".group"));
       button_group->setExclusive(true);
@@ -2036,13 +1991,14 @@ private:
         binding.choices.push_back(
             ChoiceWidget{radio, option.id, option.value});
       }
-      control_layout.addWidget(group);
-      binding.container = group;
-      binding.label_group = group;
+      row_layout->addWidget(group, 0, 1);
+      if (!binding.choices.empty()) {
+        field_label->setBuddy(binding.choices.front().button);
+      }
       break;
     }
     case QuaderToolSettingControlKind::Action: {
-      auto *button = new QPushButton(label, control_parent);
+      auto *button = new QPushButton(label, row);
       button->setObjectName(object_name);
       button->setAccessibleName(label);
       QObject::connect(button, &QPushButton::clicked, &panel_,
@@ -2067,17 +2023,28 @@ private:
                          present_failure(editor_, "Tool settings action", result);
                          schedule_refresh();
                        });
-      control_layout.addWidget(button);
-      binding.container = button;
+      row_layout->addWidget(button, 0, 1);
       binding.label_button = button;
       break;
     }
     }
+    if (binding.floating != nullptr) {
+      set_scalable_minimum_width(*binding.floating, 80);
+      binding.floating->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    }
+    if (binding.integer != nullptr) {
+      set_scalable_minimum_width(*binding.integer, 80);
+      binding.integer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    }
+    control_layout.addWidget(row);
 
     if (binding.container != nullptr && !control.tooltip.empty()) {
       const QString tooltip = localized_descriptor_label(
           localization_, control.id + ".tooltip", control.tooltip);
       binding.container->setToolTip(tooltip);
+      if (binding.toggle != nullptr) {
+        binding.toggle->setToolTip(tooltip);
+      }
       if (binding.spinbox_only != nullptr) {
         binding.spinbox_only->setToolTip(tooltip);
       }
@@ -2109,10 +2076,6 @@ private:
         binding.label_button->text() != label) {
       binding.label_button->setText(label);
     }
-    if (binding.label_group != nullptr &&
-        binding.label_group->title() != label) {
-      binding.label_group->setTitle(label);
-    }
     const auto update_accessible_name = [](QWidget *widget,
                                           const QString &name) {
       if (widget != nullptr && widget->accessibleName() != name) {
@@ -2120,9 +2083,9 @@ private:
       }
     };
     update_accessible_name(binding.label_button, label);
+    update_accessible_name(binding.toggle, label);
     update_accessible_name(binding.integer, label);
     update_accessible_name(binding.floating, label);
-    update_accessible_name(binding.number_slider, label);
     update_accessible_name(binding.dropdown, label);
     if (binding.number_drag_spinner != nullptr &&
         binding.number_drag_spinner->accessibleName() != label) {
@@ -2176,9 +2139,6 @@ private:
       target_title_->setAccessibleName(target_title);
       panel_.setWindowTitle(target_title);
     }
-    if (reset_button_->isEnabled() != target.can_reset) {
-      reset_button_->setEnabled(target.can_reset);
-    }
     if (apply_button_->isHidden() == target.apply_visible) {
       apply_button_->setVisible(target.apply_visible);
     }
@@ -2198,6 +2158,7 @@ private:
         preview_actions_visible) {
       preview_actions_container_->setVisible(preview_actions_visible);
     }
+    synchronize_body_visibility();
 
     const std::size_t count = std::min(controls_.size(), target.controls.size());
     for (std::size_t index = 0; index < count; ++index) {
@@ -2218,9 +2179,6 @@ private:
           (widget_or_descendant_has_focus(binding.floating) ||
            (binding.floating != nullptr && binding.numeric_controller != nullptr &&
             binding.numeric_controller->is_dragging()));
-      const bool slider_editing =
-          binding.number_slider != nullptr &&
-          binding.number_slider->isSliderDown();
       const bool drag_spinner_editing =
           binding.number_drag_spinner != nullptr &&
           (binding.number_drag_spinner->is_dragging() ||
@@ -2228,7 +2186,7 @@ private:
       const bool number_dispatch_pending =
           binding.pending_number_value.has_value();
       const bool number_interaction_active =
-          slider_editing || drag_spinner_editing || integer_editing ||
+          drag_spinner_editing || integer_editing ||
           floating_editing ||
           number_dispatch_pending;
 
@@ -2279,43 +2237,36 @@ private:
         }
       }
 
-      if (binding.number_slider != nullptr) {
-        const bool integer_control = binding.integer != nullptr;
-        const QtToolSettingsNumberSliderMapping desired_mapping =
-            qt_tool_settings_number_slider_mapping(
-                control.min_value, control.max_value, integer_control,
-                control.step);
-        if (!number_interaction_active &&
-            desired_mapping != binding.number_slider_mapping) {
-          {
-            const QSignalBlocker blocker(binding.number_slider);
-            binding.number_slider->setRange(desired_mapping.slider_minimum,
-                                             desired_mapping.slider_maximum);
+      if (!number_interaction_active) {
+        if (binding.integer != nullptr && binding.number_drag_spinner == nullptr) {
+          const auto range = qt_tool_settings_number_slider_mapping(
+              control.min_value, control.max_value, true, control.step);
+          const QSignalBlocker blocker(binding.integer);
+          if (binding.integer->minimum() != range.slider_minimum ||
+              binding.integer->maximum() != range.slider_maximum) {
+            binding.integer->setRange(range.slider_minimum, range.slider_maximum);
           }
-          if (binding.integer != nullptr) {
-            const QSignalBlocker blocker(binding.integer);
-            binding.integer->setRange(desired_mapping.slider_minimum,
-                                      desired_mapping.slider_maximum);
+          const int step = integer_single_step(control.step);
+          if (binding.integer->singleStep() != step) {
+            binding.integer->setSingleStep(step);
           }
-          if (binding.floating != nullptr) {
-            const QSignalBlocker blocker(binding.floating);
-            binding.floating->setRange(desired_mapping.value_minimum,
-                                       desired_mapping.value_maximum);
-          }
-          binding.number_slider_mapping = desired_mapping;
         }
-
-        if (!number_interaction_active) {
-          if (binding.integer != nullptr) {
-            binding.integer->setSingleStep(integer_single_step(control.step));
+        if (binding.floating != nullptr && binding.spinbox_only == nullptr) {
+          const QSignalBlocker blocker(binding.floating);
+          const double minimum = std::min(control.min_value, control.max_value);
+          const double maximum = std::max(control.min_value, control.max_value);
+          const int decimals = number_decimals(control);
+          if (binding.floating->decimals() != decimals) {
+            binding.floating->setDecimals(decimals);
           }
-          if (binding.floating != nullptr) {
-            binding.floating->setSingleStep(
-                std::isfinite(control.step) && control.step > 0.0
-                    ? control.step
-                    : 0.001);
-            binding.floating->setDecimals(
-                std::max(4, decimal_places_for_step(control.step)));
+          if (binding.floating->minimum() != minimum ||
+              binding.floating->maximum() != maximum) {
+            binding.floating->setRange(minimum, maximum);
+          }
+          const double step = std::isfinite(control.step) && control.step > 0.0
+                                  ? control.step : 0.001;
+          if (binding.floating->singleStep() != step) {
+            binding.floating->setSingleStep(step);
           }
         }
       }
@@ -2332,7 +2283,6 @@ private:
         binding.number_drag_spinner->set_value(
             qt_tool_settings_number_slider_position(desired_mapping,
                                                     control.number_value));
-        binding.number_slider_mapping = desired_mapping;
       }
 
       if (binding.toggle != nullptr &&
@@ -2345,40 +2295,15 @@ private:
       }
       if (binding.integer != nullptr &&
           binding.number_drag_spinner == nullptr && !integer_editing &&
-          !slider_editing && !number_dispatch_pending) {
+          !number_dispatch_pending) {
         const QSignalBlocker blocker(binding.integer);
         binding.integer->setValue(
             static_cast<int>(std::llround(control.number_value)));
       }
       if (binding.floating != nullptr && !floating_editing &&
-          !slider_editing && !number_dispatch_pending) {
+          !number_dispatch_pending) {
         const QSignalBlocker blocker(binding.floating);
         binding.floating->setValue(control.number_value);
-      }
-      if (binding.number_slider != nullptr &&
-          !slider_editing && !integer_editing && !floating_editing &&
-          !number_dispatch_pending) {
-        const QSignalBlocker blocker(binding.number_slider);
-        binding.number_slider->setValue(
-            qt_tool_settings_number_slider_position(
-                binding.number_slider_mapping, control.number_value));
-      }
-      if (binding.number_slider != nullptr) {
-        const double current_number_value =
-            number_interaction_active && binding.integer != nullptr
-                ? static_cast<double>(binding.integer->value())
-                : number_interaction_active && binding.floating != nullptr
-                      ? binding.floating->value()
-                      : control.number_value;
-        const double logical_step =
-            binding.integer != nullptr
-                ? static_cast<double>(binding.integer->singleStep())
-                : binding.floating != nullptr
-                      ? binding.floating->singleStep()
-                      : control.step;
-        update_slider_steps(*binding.number_slider,
-                            binding.number_slider_mapping,
-                            current_number_value, logical_step);
       }
       if (binding.dropdown != nullptr) {
         const QSignalBlocker blocker(binding.dropdown);
@@ -2429,7 +2354,6 @@ private:
   QVBoxLayout *controls_layout_ = nullptr;
   QWidget *actions_container_ = nullptr;
   QWidget *preview_actions_container_ = nullptr;
-  QPushButton *reset_button_ = nullptr;
   QPushButton *apply_button_ = nullptr;
   QPushButton *cancel_button_ = nullptr;
   std::vector<ControlWidget> controls_;

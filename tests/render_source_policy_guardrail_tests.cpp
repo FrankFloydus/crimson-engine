@@ -2671,10 +2671,10 @@ TEST(ViewportRendererTests,
                 "viewport_settings)"));
   EXPECT_TRUE(source_contains_compact(
       renderer_header,
-      "void apply_scene_settings(const SceneSettingsComponent &settings, "
+      "void apply_scene_settings(const SceneSettings &settings, "
       "bool rendered_mode, const ViewportSettings &viewport_settings);"));
   EXPECT_TRUE(source_contains_compact(
-      viewport_panel, "renderer.apply_scene_settings(*scene_settings, "
+      viewport_panel, "renderer.apply_scene_settings(scene_settings, "
                       "viewport_shading_uses_scene_lighting(shading), settings)"));
   EXPECT_NE(renderer.find("if (rendered_mode)"), std::string::npos);
   EXPECT_NE(renderer.find("environment.clear_color.x"), std::string::npos);
@@ -3716,8 +3716,8 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source, "pane_workspace.camera.set_clip_planes( "
-                             "scene_settings->camera.near_plane, "
-                             "scene_settings->camera.far_plane); "
+                             "scene_settings.camera.near_plane, "
+                             "scene_settings.camera.far_plane); "
                              "renderer.apply_scene_settings("));
   EXPECT_NE(
       viewport_panel_source.find("renderer.set_scene_layer_mask"),

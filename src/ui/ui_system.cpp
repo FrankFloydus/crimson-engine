@@ -3899,8 +3899,7 @@ void UISystem::refresh_status_selection() {
     break;
   case ModelingSelectionMode::Group:
     for (const EntityId entity : document_->selected_entities()) {
-      if (document_->kind(entity) == EntityKind::Empty &&
-          !document_->is_scene_root(entity)) {
+      if (document_->kind(entity) == EntityKind::Empty) {
         ++count;
       }
     }

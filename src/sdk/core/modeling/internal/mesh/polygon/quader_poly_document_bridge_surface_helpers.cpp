@@ -1097,7 +1097,18 @@ float edge_bevel_shape_profile(float profile)
   return std::clamp(profile, kEdgeBevelMinProfile, kEdgeBevelMaxProfile);
 }
 
-float safe_edge_bevel_width_for_face_edge(const Document& document, const Face& face, std::size_t edge_index, float requested_width)
+float record_edge_bevel_applied_width(EdgeBevelWidthFeedback *feedback,
+                                     float requested_width,
+                                     float applied_width)
+{
+    if (feedback != nullptr) {
+        feedback->applied_width = std::max(feedback->applied_width, applied_width);
+        feedback->support_limited |= applied_width < requested_width;
+    }
+    return applied_width;
+}
+
+float safe_edge_bevel_width_for_face_edge(const Document& document, const Face& face, std::size_t edge_index, float requested_width, EdgeBevelWidthFeedback *feedback)
 {
     if (face.vertices.size() < 3 || edge_index >= face.vertices.size()) {
         return 0.0F;
@@ -1132,7 +1143,8 @@ float safe_edge_bevel_width_for_face_edge(const Document& document, const Face& 
     };
     apply_support_limit(previous->position - current->position);
     apply_support_limit(after->position - next->position);
-    return std::max(0.0F, max_width);
+    return record_edge_bevel_applied_width(
+        feedback, requested_width, std::max(0.0F, max_width));
 }
 
 std::optional<EdgeBevelSide> edge_bevel_side_for_face(
@@ -1140,7 +1152,8 @@ std::optional<EdgeBevelSide> edge_bevel_side_for_face(
     const Document& source,
     Edge edge,
     std::size_t face_index,
-    float width)
+    float width,
+    EdgeBevelWidthFeedback *feedback)
 {
     if (face_index >= source.faces.size()) {
         return std::nullopt;
@@ -1167,7 +1180,7 @@ std::optional<EdgeBevelSide> edge_bevel_side_for_face(
     const quader::QVec3 normal = face_normal(source, face);
     const quader::QVec3 edge_direction = normalize_or_zero(to->position - from->position);
     const quader::QVec3 inward = normalize_or_zero(cross(normal, edge_direction));
-    const float safe_width = safe_edge_bevel_width_for_face_edge(source, face, *directed_index, width);
+    const float safe_width = safe_edge_bevel_width_for_face_edge(source, face, *directed_index, width, feedback);
     if (length_squared(normal) <= kEpsilon ||
         length_squared(edge_direction) <= kEpsilon ||
         length_squared(inward) <= kEpsilon || safe_width <= kEpsilon) {
@@ -1236,7 +1249,8 @@ std::optional<EdgeBevelOffsetLine> edge_bevel_offset_line_for_face_edge(
     const Document& document,
     const Face& face,
     std::size_t edge_index,
-    float width)
+    float width,
+    EdgeBevelWidthFeedback *feedback)
 {
     if (face.vertices.size() < 3 || edge_index >= face.vertices.size()) {
         return std::nullopt;
@@ -1253,7 +1267,7 @@ std::optional<EdgeBevelOffsetLine> edge_bevel_offset_line_for_face_edge(
     const quader::QVec3 normal = face_normal(document, face);
     const quader::QVec3 edge_direction = normalize_or_zero(to->position - from->position);
     const quader::QVec3 inward = normalize_or_zero(cross(normal, edge_direction));
-    const float safe_width = safe_edge_bevel_width_for_face_edge(document, face, edge_index, width);
+    const float safe_width = safe_edge_bevel_width_for_face_edge(document, face, edge_index, width, feedback);
     if (length_squared(normal) <= kEpsilon ||
         length_squared(edge_direction) <= kEpsilon ||
         length_squared(inward) <= kEpsilon || safe_width <= kEpsilon) {
@@ -1288,7 +1302,8 @@ std::optional<std::pair<ElementId, quader::QVec3>> edge_bevel_face_vertex_miter(
     ElementId vertex_id,
     float width,
     const std::set<std::pair<ElementId, ElementId>>& selected_edge_keys,
-    std::map<std::pair<ElementId, ElementId>, std::pair<ElementId, quader::QVec3>>& miter_vertices)
+    std::map<std::pair<ElementId, ElementId>, std::pair<ElementId, quader::QVec3>>& miter_vertices,
+    EdgeBevelWidthFeedback *feedback)
 {
     const auto vertex = std::ranges::find(face.vertices, vertex_id);
     if (vertex == face.vertices.end() || face.vertices.size() < 3) {
@@ -1310,9 +1325,9 @@ std::optional<std::pair<ElementId, quader::QVec3>> edge_bevel_face_vertex_miter(
     }
 
     const std::optional<EdgeBevelOffsetLine> previous_line =
-        edge_bevel_offset_line_for_face_edge(source, face, previous_index, width);
+        edge_bevel_offset_line_for_face_edge(source, face, previous_index, width, feedback);
     const std::optional<EdgeBevelOffsetLine> next_line =
-        edge_bevel_offset_line_for_face_edge(source, face, vertex_index, width);
+        edge_bevel_offset_line_for_face_edge(source, face, vertex_index, width, feedback);
     if (!previous_line.has_value() || !next_line.has_value()) {
         return std::nullopt;
     }

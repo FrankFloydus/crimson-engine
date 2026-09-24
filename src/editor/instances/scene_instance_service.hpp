@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <exception>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <span>
@@ -92,6 +93,17 @@ struct FlattenTextureMapping final {
   QMat4 sampling_from_local;
 };
 
+inline bool restore_member_order(
+    SceneDocument &scene, std::span<const MemberPlacement> placements,
+    bool use_after) {
+  std::vector<DocumentEntityPlacement> targets;
+  targets.reserve(placements.size());
+  for (const MemberPlacement &placement : placements) {
+    targets.push_back(use_after ? placement.after : placement.before);
+  }
+  return document_command_restore_placement_order(scene, targets);
+}
+
 inline CommandResult restore_placements(
     SceneDocument &scene, std::span<const MemberPlacement> placements,
     bool use_after) {
@@ -103,7 +115,9 @@ inline CommandResult restore_placements(
       return result;
     }
   }
-  return command_changed_result();
+  return restore_member_order(scene, placements, use_after)
+             ? command_changed_result()
+             : command_invalid_result("Instance member order could not be restored.");
 }
 
 inline std::optional<DocumentEntitySnapshot>
@@ -117,14 +131,34 @@ root_only_snapshot(const SceneDocument &scene, EntityId entity) {
 }
 
 inline EntityId restore_root(SceneDocument &scene,
-                             const DocumentEntitySnapshot &snapshot) {
+                             const DocumentEntitySnapshot &snapshot,
+                             bool restore_order = true) {
   const EntityId parent =
       snapshot.parent != kInvalidEntityId &&
               scene.exists(snapshot.parent)
           ? snapshot.parent
           : kInvalidEntityId;
+  SceneEntityState state = snapshot;
+  if (!restore_order) {
+    state.sibling_ordinal.reset();
+  }
   return document_command_create_entity_from_snapshot(
-      scene, snapshot, parent, snapshot.name, true, true);
+      scene, state, parent, snapshot.name, true, true);
+}
+
+inline bool restore_root_order(
+    SceneDocument &scene,
+    std::initializer_list<const DocumentEntitySnapshot *> snapshots) {
+  std::vector<DocumentEntityPlacement> placements;
+  placements.reserve(snapshots.size());
+  for (const DocumentEntitySnapshot *snapshot : snapshots) {
+    placements.push_back({
+        .entity = snapshot->id,
+        .parent = snapshot->parent,
+        .sibling_ordinal = snapshot->sibling_ordinal,
+    });
+  }
+  return document_command_restore_placement_order(scene, placements);
 }
 
 /// Creates one definition plus its first occurrence as one history item.
@@ -173,8 +207,9 @@ public:
       return roots;
     }
 
-    for (MemberPlacement &member : members_) {
-      member.after.parent = definition_;
+    for (std::size_t index = 0u; index < members_.size(); ++index) {
+      members_[index].after.parent = definition_;
+      members_[index].after.sibling_ordinal = index;
     }
 
     std::size_t moved = 0;
@@ -189,10 +224,7 @@ public:
       if (scene().exists(occurrence_)) {
         (void)scene().destroy_entity(occurrence_);
       }
-      for (std::size_t index = moved; index > 0; --index) {
-        (void)document_command_apply_placement(scene(),
-                                               members_[index - 1u].before);
-      }
+      (void)restore_placements(scene(), members_, false);
       if (scene().exists(definition_)) {
         (void)scene().destroy_entity(definition_);
       }
@@ -201,6 +233,9 @@ public:
           "Instance members could not be moved into the definition.");
     }
 
+    if (!restore_member_order(scene(), members_, true)) {
+      return command_invalid_result("Instance member order could not be stored.");
+    }
     document_command_select_only(scene(), {occurrence_});
     return command_changed_result();
   }
@@ -223,7 +258,6 @@ private:
     definition_ =
         scene().create_entity(definition_name_, EntityKind::Empty);
     if (definition_ == kInvalidEntityId ||
-        !scene().set_parent(definition_, scene().scene_root(), false) ||
         !scene().set_instance_definition(definition_)) {
       destroy_roots();
       return command_invalid_result("Instance definition could not be created.");
@@ -286,21 +320,39 @@ public:
         definition_(definition), members_(std::move(members)),
         before_selection_(document_command_capture_selection(scene)),
         occurrence_snapshot_(root_only_snapshot(scene, occurrence)),
-        definition_snapshot_(root_only_snapshot(scene, definition)) {}
+        definition_snapshot_(root_only_snapshot(scene, definition)) {
+    if (occurrence_snapshot_.has_value() &&
+        occurrence_snapshot_->sibling_ordinal.has_value()) {
+      std::size_t ordinal = *occurrence_snapshot_->sibling_ordinal;
+      if (definition_snapshot_.has_value() &&
+          definition_snapshot_->parent == occurrence_snapshot_->parent &&
+          definition_snapshot_->sibling_ordinal.has_value() &&
+          definition_snapshot_->sibling_ordinal < occurrence_snapshot_->sibling_ordinal) {
+        --ordinal;
+      }
+      for (MemberPlacement &member : members_) {
+        member.after.sibling_ordinal = ordinal++;
+      }
+    }
+  }
 
   CommandResult undo() override {
     if (!definition_snapshot_.has_value() ||
         !occurrence_snapshot_.has_value() ||
-        restore_root(scene(), *definition_snapshot_) == kInvalidEntityId) {
+        restore_root(scene(), *definition_snapshot_, false) == kInvalidEntityId) {
       return command_invalid_result("Instance definition could not be restored.");
     }
-    if (restore_root(scene(), *occurrence_snapshot_) == kInvalidEntityId) {
+    if (restore_root(scene(), *occurrence_snapshot_, false) == kInvalidEntityId) {
       (void)scene().destroy_entity(definition_);
       return command_invalid_result("Instance occurrence could not be restored.");
     }
     const CommandResult restored = restore_placements(scene(), members_, false);
     if (!restored.ok) {
       return restored;
+    }
+    if (!restore_root_order(scene(),
+                            {&*definition_snapshot_, &*occurrence_snapshot_})) {
+      return command_invalid_result("Instance root order could not be restored.");
     }
     document_command_apply_selection(scene(), before_selection_);
     return command_changed_result();
@@ -324,6 +376,9 @@ public:
         occurrence_ = restore_root(scene(), *occurrence_snapshot_);
       }
       return command_invalid_result("Instance definition could not be removed.");
+    }
+    if (!restore_member_order(scene(), members_, true)) {
+      return command_invalid_result("Flattened member order could not be stored.");
     }
     std::vector<EntityId> flattened;
     flattened.reserve(members_.size());
@@ -355,17 +410,29 @@ public:
         before_selection_(document_command_capture_selection(scene)),
         occurrence_snapshot_(remove_occurrence ? root_only_snapshot(scene, occurrence)
                                                : std::nullopt),
-        remove_occurrence_(remove_occurrence) {}
+        remove_occurrence_(remove_occurrence) {
+    if (occurrence_snapshot_.has_value() &&
+        occurrence_snapshot_->sibling_ordinal.has_value()) {
+      std::size_t ordinal = *occurrence_snapshot_->sibling_ordinal;
+      for (MemberPlacement &duplicate : duplicates_) {
+        duplicate.after.sibling_ordinal = ordinal++;
+      }
+    }
+  }
 
   CommandResult undo() override {
     if (remove_occurrence_ && (!occurrence_snapshot_.has_value() ||
-        restore_root(scene(), *occurrence_snapshot_) == kInvalidEntityId)) {
+        restore_root(scene(), *occurrence_snapshot_, false) == kInvalidEntityId)) {
       return command_invalid_result("Instance occurrence could not be restored.");
     }
     const CommandResult restored =
         restore_placements(scene(), duplicates_, false);
     if (!restored.ok) {
       return restored;
+    }
+    if (remove_occurrence_ &&
+        !restore_root_order(scene(), {&*occurrence_snapshot_})) {
+      return command_invalid_result("Instance occurrence order could not be restored.");
     }
     document_command_apply_selection(scene(), before_selection_);
     return command_changed_result();
@@ -380,6 +447,9 @@ public:
     if (remove_occurrence_ && !scene().destroy_entity(occurrence_)) {
       (void)restore_placements(scene(), duplicates_, false);
       return command_invalid_result("Instance occurrence could not be removed.");
+    }
+    if (!restore_member_order(scene(), duplicates_, true)) {
+      return command_invalid_result("Flattened member order could not be stored.");
     }
     std::vector<EntityId> flattened;
     flattened.reserve(duplicates_.size());
@@ -1140,7 +1210,21 @@ private:
 
   [[nodiscard]] std::optional<CreatePlan> prepare_create() const {
     const std::vector<EntityId> selected = scene_.selected_entities();
-    return prepare_create(selected);
+    if (selected.empty()) {
+      return std::nullopt;
+    }
+    const EntityId parent = scene_.parent(selected.front());
+    if (std::ranges::any_of(selected, [&](EntityId entity) {
+          return scene_.parent(entity) != parent;
+        })) {
+      return std::nullopt;
+    }
+    const std::unordered_set<EntityId> selected_set(selected.begin(), selected.end());
+    std::vector<EntityId> ordered = scene_.children(parent);
+    std::erase_if(ordered, [&](EntityId entity) {
+      return !selected_set.contains(entity);
+    });
+    return prepare_create(ordered);
   }
 
   [[nodiscard]] std::optional<CreatePlan> prepare_create(
@@ -1221,6 +1305,7 @@ private:
               .parent = common_parent,
               .transform = *transform,
               .layer_id = scene_.entity_layer(entity),
+              .sibling_ordinal = scene_.sibling_ordinal(entity),
           },
           .after = DocumentEntityPlacement{
               .entity = entity,
@@ -1484,6 +1569,8 @@ private:
             .entity = output_entity,
             .parent = scene_.parent(output_entity),
             .transform = *current,
+            .layer_id = scene_.entity_layer(output_entity),
+            .sibling_ordinal = scene_.sibling_ordinal(output_entity),
         },
         .after = DocumentEntityPlacement{
             .entity = output_entity,

@@ -116,8 +116,9 @@ protected:
     ASSERT_TRUE(scroll->isVisible());
     EXPECT_EQ(scroll->verticalScrollBar()->maximum(), 0);
     EXPECT_GE(scroll->viewport()->height(), scroll->widget()->sizeHint().height());
-    for (const auto *name : {"tool_settings.apply", "tool_settings.cancel",
-                            "tool_settings.reset_defaults"}) {
+    EXPECT_EQ(settings_->findChild<QPushButton *>(
+                  QStringLiteral("tool_settings.reset_defaults")), nullptr);
+    for (const auto *name : {"tool_settings.apply", "tool_settings.cancel"}) {
       auto *action = settings_->findChild<QPushButton *>(QString::fromUtf8(name));
       ASSERT_NE(action, nullptr);
       if (action->isVisible()) {
@@ -217,14 +218,14 @@ TEST_F(QtViewportSettingsOverlayTests,
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   refresh();
   ASSERT_NO_FATAL_FAILURE(expect_anchored(6));
-  EXPECT_EQ(settings_->width(), 280);
+  EXPECT_EQ(settings_->width(), 320);
   settings_->set_expanded(false);
   refresh();
   EXPECT_EQ(settings_->width(), 160);
   settings_->set_expanded(true);
   refresh();
   ASSERT_NO_FATAL_FAILURE(expect_anchored(6));
-  EXPECT_EQ(settings_->width(), 280);
+  EXPECT_EQ(settings_->width(), 320);
 
   host_->resize(700, 480);
   const quader::QtUiScaleMetrics scaled(1.5F, 1);
@@ -243,7 +244,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   const QRect field_bounds(subdivisions->mapTo(scroll->viewport(), QPoint()),
                           subdivisions->size());
   EXPECT_TRUE(scroll->viewport()->rect().intersects(field_bounds));
-  for (const auto *name : {"tool_settings.cancel", "tool_settings.reset_defaults"}) {
+  for (const auto *name : {"tool_settings.cancel"}) {
     auto *action = settings_->findChild<QPushButton *>(QString::fromUtf8(name));
     ASSERT_NE(action, nullptr);
     ASSERT_TRUE(action->isVisible());
@@ -302,8 +303,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   settings_->set_expanded(true);
   refresh();
   EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Perspective));
-  for (const auto *name : {"tool_settings.apply", "tool_settings.cancel",
-                          "tool_settings.reset_defaults"}) {
+  for (const auto *name : {"tool_settings.apply", "tool_settings.cancel"}) {
     auto *action = settings_->findChild<QPushButton *>(QString::fromUtf8(name));
     ASSERT_NE(action, nullptr);
     ASSERT_TRUE(action->isVisible());

@@ -1787,13 +1787,6 @@ TEST(ProjectMaterialBehaviorTests,
   }
   ASSERT_TRUE(editor.query().history().can_redo);
 
-  const auto entities = editor.query().entities();
-  const auto root = std::ranges::find_if(entities,
-      [](const auto &entity) { return entity.is_scene_root; });
-  ASSERT_NE(root, entities.end());
-  ASSERT_TRUE(editor.selection().select_objects_for_inspection(
-      {root->id, second_group.value().id}, second_group.value().id).ok());
-  expect_unchanged_apply(false);
 
   const auto read_only = editor.scene().create_entity({
       .name = "Read-only Mesh", .kind = QuaderEntityKind::Mesh,

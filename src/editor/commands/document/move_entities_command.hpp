@@ -63,7 +63,9 @@ private:
     }
 
     bool changed = false;
-    const QMat4 parent_world = scene().world_transform_matrix(parent_);
+    const QMat4 parent_world = parent_ == kInvalidEntityId
+                                   ? scene_transform_identity_matrix()
+                                   : scene().world_transform_matrix(parent_);
     const EntityId target_definition =
         scene().containing_instance_definition(parent_);
     for (std::size_t index = 0u; index < roots_.size(); ++index) {
@@ -150,10 +152,9 @@ private:
     // ordinal then preserves every untouched sibling, including scattered
     // original positions on undo, without mutating unrelated entities.
     for (const Placement &placement : placements) {
-      const HierarchyComponent *parent = scene().hierarchy(placement.parent);
-      if (parent == nullptr || parent->children.empty() ||
-          !scene().set_sibling_ordinal(placement.entity,
-                                       parent->children.size() - 1u)) {
+      const std::vector<EntityId> siblings = scene().children(placement.parent);
+      if (siblings.empty() ||
+          !scene().set_sibling_ordinal(placement.entity, siblings.size() - 1u)) {
         return fail();
       }
     }

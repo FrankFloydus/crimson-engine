@@ -1258,8 +1258,9 @@ TEST(ExtrudeViewportInteractionTests,
   const auto repeated = harness.editor.query().compiled_object_mesh(harness.object);
   ASSERT_TRUE(repeated.has_value());
   expect_extrude_mesh_geometry(*repeated, *first_final);
+  const double first_amount = harness.session.extrude().amount();
   ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok());
-  EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), 0.0);
+  EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), first_amount);
   EXPECT_FALSE(harness.session.extrude().adjustable());
   ASSERT_TRUE(harness.editor.tools().set_setting(
       "extrude", "extrude.amount", 2.15).ok());
@@ -1314,7 +1315,7 @@ TEST(ExtrudeViewportInteractionTests,
   ASSERT_TRUE(harness.frame(false, true, false).consumed);
   EXPECT_FALSE(harness.session.extrude().dragging());
   EXPECT_FALSE(harness.session.extrude().adjustable());
-  EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), 0.0);
+  EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), 2.15);
   auto current = harness.editor.query().compiled_object_mesh(harness.object);
   ASSERT_TRUE(current.has_value());
   expect_extrude_mesh_geometry(*current, *committed);

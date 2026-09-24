@@ -49,13 +49,15 @@ const QtViewportDeletePopupAction &find_action(
 } // namespace
 
 TEST(QtViewportDeletePopupTests,
-     ObjectGroupAndSelectedSceneRootUseConfirmation) {
+     ObjectGroupAndSelectedHierarchyRootsUseConfirmation) {
   EXPECT_EQ(qt_viewport_delete_popup_kind(
                 {.mode = ModelingSelectionMode::Object}, false),
             QtViewportDeletePopupKind::ObjectConfirmation);
   EXPECT_EQ(qt_viewport_delete_popup_kind(
                 {.mode = ModelingSelectionMode::Group}, false),
             QtViewportDeletePopupKind::ObjectConfirmation);
+  // An Outliner-selected light or group is a whole-object target even when
+  // the modeling editor remains in a component mode.
   EXPECT_EQ(qt_viewport_delete_popup_kind(
                 {.mode = ModelingSelectionMode::Vertex}, true),
             QtViewportDeletePopupKind::ObjectConfirmation);

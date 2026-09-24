@@ -26,32 +26,49 @@ protected:
     const auto created = editor_.scene().create_point_light({.select_created = true});
     ASSERT_TRUE(created.ok()) << created.error_message();
     light_ = created.value().id;
-    entity_ = GetParam() ? session_.scene().scene_root() : light_;
+    entity_ = light_;
     ASSERT_TRUE(editor_.scene().select(entity_).ok());
     session_.mark_clean();
   }
 
-  quader::QuaderApiResult<quader::QuaderScenePropertyEditRef> begin() {
-    if (GetParam() == 2) return editor_.scene().begin_fog_color_edit(entity_);
-    return GetParam() ? editor_.scene().begin_environment_color_edit(entity_)
-                      : editor_.scene().begin_light_color_edit(entity_);
+  struct ColorEditRef {
+    quader::QuaderScenePropertyEditRef light;
+    quader::QuaderSceneSettingsEditRef settings;
+    std::uint64_t generation = 0u;
+  };
+
+  quader::QuaderApiResult<ColorEditRef> begin() {
+    quader::QuaderApiResult<ColorEditRef> result;
+    if (GetParam()) {
+      const auto begun = GetParam() == 2 ? editor_.scene().begin_fog_color_edit()
+                                        : editor_.scene().begin_environment_color_edit();
+      quader::copy_quader_api_status(result, begun);
+      result.value.settings = begun.value();
+      result.value.generation = begun.value().generation;
+    } else {
+      const auto begun = editor_.scene().begin_light_color_edit(entity_);
+      quader::copy_quader_api_status(result, begun);
+      result.value.light = begun.value();
+      result.value.generation = begun.value().generation;
+    }
+    return result;
   }
 
-  quader::QuaderApiVoidResult update(quader::QuaderScenePropertyEditRef ref, quader::QVec3 color) {
-    if (GetParam() == 2) return editor_.scene().update_fog_color_edit(ref, color);
-    return GetParam() ? editor_.scene().update_environment_color_edit(ref, color)
-                      : editor_.scene().update_light_color_edit(ref, color);
+  quader::QuaderApiVoidResult update(ColorEditRef ref, quader::QVec3 color) {
+    if (GetParam() == 2) return editor_.scene().update_fog_color_edit(ref.settings, color);
+    return GetParam() ? editor_.scene().update_environment_color_edit(ref.settings, color)
+                      : editor_.scene().update_light_color_edit(ref.light, color);
   }
 
-  quader::QuaderApiVoidResult finish(quader::QuaderScenePropertyEditRef ref, bool cancel = false) {
-    if (GetParam() == 2) return editor_.scene().finish_fog_color_edit(ref, cancel);
-    return GetParam() ? editor_.scene().finish_environment_color_edit(ref, cancel)
-                      : editor_.scene().finish_light_color_edit(ref, cancel);
+  quader::QuaderApiVoidResult finish(ColorEditRef ref, bool cancel = false) {
+    if (GetParam() == 2) return editor_.scene().finish_fog_color_edit(ref.settings, cancel);
+    return GetParam() ? editor_.scene().finish_environment_color_edit(ref.settings, cancel)
+                      : editor_.scene().finish_light_color_edit(ref.light, cancel);
   }
 
   quader::QVec3 color() const {
-    if (GetParam() == 2) return session_.scene().scene_settings(entity_)->fog.color;
-    return GetParam() ? session_.scene().scene_settings(entity_)->environment.clear_color
+    if (GetParam() == 2) return session_.scene().scene_settings().fog.color;
+    return GetParam() ? session_.scene().scene_settings().environment.clear_color
                       : session_.scene().light(entity_)->color;
   }
 
@@ -64,10 +81,10 @@ protected:
 
   void change_unrelated_field() {
     if (GetParam()) {
-      auto settings = *session_.scene().scene_settings(entity_);
+      auto settings = session_.scene().scene_settings();
       if (GetParam() == 2) settings.fog.density = 3.0f;
       else settings.environment.intensity = 3.0f;
-      ASSERT_TRUE(session_.scene().set_scene_settings(entity_, settings));
+      ASSERT_TRUE(session_.scene().set_scene_settings(settings));
     } else {
       auto properties = *session_.scene().light(entity_);
       properties.intensity = 3.0f;
@@ -77,10 +94,10 @@ protected:
 
   void overwrite_color(quader::QVec3 replacement) {
     if (GetParam()) {
-      auto settings = *session_.scene().scene_settings(entity_);
+      auto settings = session_.scene().scene_settings();
       if (GetParam() == 2) settings.fog.color = replacement;
       else settings.environment.clear_color = replacement;
-      ASSERT_TRUE(session_.scene().set_scene_settings(entity_, settings));
+      ASSERT_TRUE(session_.scene().set_scene_settings(settings));
     } else {
       auto properties = *session_.scene().light(entity_);
       properties.color = replacement;
@@ -89,8 +106,8 @@ protected:
   }
 
   float unrelated_value() const {
-    if (GetParam() == 2) return session_.scene().scene_settings(entity_)->fog.density;
-    return GetParam() ? session_.scene().scene_settings(entity_)->environment.intensity
+    if (GetParam() == 2) return session_.scene().scene_settings().fog.density;
+    return GetParam() ? session_.scene().scene_settings().environment.intensity
                       : session_.scene().light(entity_)->intensity;
   }
 
@@ -196,13 +213,19 @@ TEST_P(SceneColorPreviewTests, UndoCancelsPreviewBeforeConsumingExistingHistory)
   EXPECT_FALSE(session_.dirty());
 }
 
-TEST_P(SceneColorPreviewTests, SelectionChangeCancelsOwnedColor) {
+TEST_P(SceneColorPreviewTests, SelectionChangeCancelsOnlyEntityColor) {
   const auto before = color();
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
   ASSERT_TRUE(update(begun.value(), {0.125f, 0.25f, 0.5f}).ok());
-  ASSERT_TRUE(editor_.scene().select(GetParam() ? light_ : session_.scene().scene_root()).ok());
-  EXPECT_FALSE(session_.document_commands().property_edit_active());
+  ASSERT_TRUE(editor_.scene().select(quader::kInvalidEntityId).ok());
+  if (GetParam()) {
+    EXPECT_TRUE(session_.document_commands().property_edit_active());
+    expect_color({0.125f, 0.25f, 0.5f});
+    ASSERT_TRUE(finish(begun.value(), true).ok());
+  } else {
+    EXPECT_FALSE(session_.document_commands().property_edit_active());
+  }
   expect_color(before);
 }
 
@@ -212,9 +235,7 @@ TEST_P(SceneColorPreviewTests, ReplacementRejectsStaleCallbacksAndKeepsNewPrevie
   ASSERT_TRUE(update(begun.value(), {0.125f, 0.25f, 0.5f}).ok());
   session_.replace_document(quader::SceneContentDocument{});
   EXPECT_FALSE(session_.document_commands().property_edit_active());
-  if (GetParam()) {
-    entity_ = session_.scene().scene_root();
-  } else {
+  if (!GetParam()) {
     const auto created = editor_.scene().create_point_light();
     ASSERT_TRUE(created.ok());
     entity_ = created.value().id;
@@ -250,7 +271,7 @@ TEST_P(SceneColorPreviewTests, EqualComponentAndSelectionWritesKeepPreviewOpen) 
   const auto snapshot = editor_.query().entity(entity_);
   ASSERT_TRUE(snapshot.has_value());
   const auto unchanged = GetParam()
-      ? editor_.scene().set_scene_settings(entity_, snapshot->scene_settings)
+      ? editor_.scene().set_scene_settings(editor_.query().scene_settings())
       : editor_.scene().set_light_component(entity_, snapshot->light);
   ASSERT_TRUE(unchanged.ok());
   EXPECT_FALSE(unchanged.changed());
@@ -428,40 +449,84 @@ TEST_P(SceneColorPreviewTests, FailedUngroupPublicationKeepsCancelOutsideScalarR
 INSTANTIATE_TEST_SUITE_P(LightEnvironmentAndFog, SceneColorPreviewTests,
                         ::testing::Values(0, 1, 2));
 
+TEST(SceneSettingsColorPreviewTests, EmptyDocumentSharesSettingsAcrossApiFacades) {
+  quader::SceneSession session;
+  const auto binding = quader::QuaderApiSessionInternalAccess::from_scene_session(session);
+  quader::QuaderEditorApi first(binding);
+  quader::QuaderEditorApi second(binding);
+  ASSERT_TRUE(first.query().entities().empty());
+  const auto original = session.scene().scene_settings();
+  const auto begun = first.scene().begin_environment_color_edit();
+  ASSERT_TRUE(begun.ok());
+  ASSERT_TRUE(second.scene().update_environment_color_edit(
+      begun.value(), {0.125f, 0.25f, 0.5f}).ok());
+  EXPECT_FLOAT_EQ(first.query().scene_settings().environment.clear_color.x, 0.125f);
+  EXPECT_FLOAT_EQ(second.query().snapshot().scene_settings.environment.clear_color.z, 0.5f);
+  EXPECT_FALSE(second.scene().begin_fog_color_edit().ok());
+  ASSERT_TRUE(second.scene().finish_environment_color_edit(begun.value(), true).ok());
+  EXPECT_EQ(session.scene().scene_settings(), original);
+  EXPECT_TRUE(session.scene().entities().empty());
+  EXPECT_FALSE(session.dirty());
+}
+
+TEST(SceneSettingsColorPreviewTests, ReboundApiRejectsPreviousSessionAtMatchingGeneration) {
+  quader::SceneSession outgoing;
+  quader::SceneSession incoming;
+  auto binding = quader::QuaderApiSessionInternalAccess::from_scene_session(outgoing);
+  quader::QuaderEditorApi editor(binding);
+  const auto previous = editor.scene().begin_fog_color_edit();
+  ASSERT_TRUE(previous.ok());
+  quader::QuaderApiSessionInternalAccess::rebind(
+      binding, quader::QuaderApiSessionInternalAccess::from_scene_session(incoming));
+  const auto current = editor.scene().begin_fog_color_edit();
+  ASSERT_TRUE(current.ok());
+  EXPECT_EQ(previous.value().generation, current.value().generation);
+  EXPECT_EQ(previous.value().document_binding_generation,
+            current.value().document_binding_generation);
+  ASSERT_TRUE(editor.scene().update_fog_color_edit(
+      current.value(), {0.75f, 0.5f, 0.25f}).ok());
+  const auto expected = incoming.scene().scene_settings();
+  EXPECT_FALSE(editor.scene().update_fog_color_edit(
+      previous.value(), {0.125f, 0.25f, 0.5f}).ok());
+  EXPECT_FALSE(editor.scene().finish_fog_color_edit(previous.value(), true).ok());
+  EXPECT_EQ(incoming.scene().scene_settings(), expected);
+  EXPECT_TRUE(incoming.document_commands().property_edit_active());
+  ASSERT_TRUE(editor.scene().finish_fog_color_edit(current.value(), true).ok());
+}
+
 TEST(SceneFogSettingsTests, InvalidWritesKeepPreviewHistoryAndRevisionsUnchanged) {
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
-  const auto root = session.scene().scene_root();
-  auto settings = editor.query().entity(root)->scene_settings;
+  auto settings = editor.query().scene_settings();
   settings.fog.enabled = true;
-  ASSERT_TRUE(editor.scene().set_scene_settings(root, settings).ok());
+  ASSERT_TRUE(editor.scene().set_scene_settings(settings).ok());
   ASSERT_TRUE(editor.history().undo().ok());
   session.mark_clean();
-  const auto preview = editor.scene().begin_fog_color_edit(root);
+  const auto preview = editor.scene().begin_fog_color_edit();
   ASSERT_TRUE(preview.ok());
   ASSERT_TRUE(editor.scene().update_fog_color_edit(
       preview.value(), {0.2f, 0.4f, 0.6f}).ok());
-  const auto before = *session.scene().scene_settings(root);
+  const auto before = session.scene().scene_settings();
   const auto revision = session.scene().revision();
   const auto undo_count = session.history().undo_count();
   const auto redo_count = session.history().redo_count();
   auto reject = [&](const quader::QuaderSceneFogSettings &fog) {
-    auto invalid = editor.query().entity(root)->scene_settings;
+    auto invalid = editor.query().scene_settings();
     invalid.fog = fog;
-    const auto result = editor.scene().set_scene_settings(root, invalid);
+    const auto result = editor.scene().set_scene_settings(invalid);
     EXPECT_FALSE(result.ok());
     EXPECT_FALSE(result.changed());
     EXPECT_FALSE(session.scene().set_scene_settings(
-        root, quader::to_scene_settings_component(invalid)));
-    EXPECT_EQ(*session.scene().scene_settings(root), before);
+        quader::to_scene_settings(invalid)));
+    EXPECT_EQ(session.scene().scene_settings(), before);
     EXPECT_EQ(session.scene().revision(), revision);
     EXPECT_EQ(session.history().undo_count(), undo_count);
     EXPECT_EQ(session.history().redo_count(), redo_count);
     EXPECT_TRUE(session.document_commands().property_edit_active());
     EXPECT_FALSE(session.dirty());
   };
-  const auto initial = editor.query().entity(root)->scene_settings.fog;
+  const auto initial = editor.query().scene_settings().fog;
   const float nan = std::numeric_limits<float>::quiet_NaN();
   const float infinity = std::numeric_limits<float>::infinity();
   using Fog = quader::QuaderSceneFogSettings;
@@ -500,9 +565,8 @@ TEST(SceneFogSettingsTests, FiniteBoundariesAndIndependentCutoffRemainAuthored) 
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
-  const auto root = session.scene().scene_root();
-  const auto original = *session.scene().scene_settings(root);
-  auto settings = editor.query().entity(root)->scene_settings;
+  const auto original = session.scene().scene_settings();
+  auto settings = editor.query().scene_settings();
   settings.fog.enabled = true;
   settings.fog.distance = 100.0f;
   settings.fog.cut_off_distance = 10.0f;
@@ -512,36 +576,35 @@ TEST(SceneFogSettingsTests, FiniteBoundariesAndIndependentCutoffRemainAuthored) 
   settings.fog.density = 0.0f;
   settings.fog.in_scattering_size = -10.0f;
   settings.fog.color = {0.0f, 4.0f, 8.0f};
-  const auto changed = editor.scene().set_scene_settings(root, settings);
+  const auto changed = editor.scene().set_scene_settings(settings);
   ASSERT_TRUE(changed.ok()) << changed.error_message();
   EXPECT_TRUE(changed.changed());
-  EXPECT_EQ(*session.scene().scene_settings(root),
-            quader::to_scene_settings_component(settings));
+  EXPECT_EQ(session.scene().scene_settings(),
+            quader::to_scene_settings(settings));
   const auto revision = session.scene().revision();
-  const auto unchanged = editor.scene().set_scene_settings(root, settings);
+  const auto unchanged = editor.scene().set_scene_settings(settings);
   ASSERT_TRUE(unchanged.ok());
   EXPECT_FALSE(unchanged.changed());
   EXPECT_EQ(session.scene().revision(), revision);
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(*session.scene().scene_settings(root), original);
+  EXPECT_EQ(session.scene().scene_settings(), original);
   ASSERT_TRUE(editor.history().redo().ok());
-  EXPECT_EQ(*session.scene().scene_settings(root),
-            quader::to_scene_settings_component(settings));
+  EXPECT_EQ(session.scene().scene_settings(),
+            quader::to_scene_settings(settings));
 }
 
 TEST(SceneFogSettingsTests, ColorPreviewRejectsOtherPropertyCallbacks) {
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
-  const auto root = session.scene().scene_root();
-  const auto before = *session.scene().scene_settings(root);
-  const auto fog = editor.scene().begin_fog_color_edit(root);
+  const auto before = session.scene().scene_settings();
+  const auto fog = editor.scene().begin_fog_color_edit();
   ASSERT_TRUE(fog.ok());
   EXPECT_FALSE(editor.scene().update_environment_color_edit(
       fog.value(), {0.2f, 0.4f, 0.6f}).ok());
   EXPECT_FALSE(editor.scene().finish_environment_color_edit(fog.value(), true).ok());
   EXPECT_TRUE(session.document_commands().property_edit_active());
-  EXPECT_EQ(*session.scene().scene_settings(root), before);
+  EXPECT_EQ(session.scene().scene_settings(), before);
   ASSERT_TRUE(editor.scene().finish_fog_color_edit(fog.value(), true).ok());
 }
 

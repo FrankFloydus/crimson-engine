@@ -231,10 +231,11 @@ TEST(SceneContentDocumentTests,
   ASSERT_TRUE(apply_scene_entity_state(scene, entity, *empty_state));
   EXPECT_EQ(scene.curve(entity), nullptr);
 
-  ASSERT_TRUE(scene.set_scene_settings(entity, {}));
+  SceneSettings settings = scene.scene_settings();
+  settings.environment.intensity = 2.0f;
+  ASSERT_TRUE(scene.set_scene_settings(settings));
   ASSERT_TRUE(apply_scene_entity_state(scene, entity, *empty_state));
-  EXPECT_EQ(scene.scene_settings(entity), nullptr);
-  EXPECT_FALSE(scene.is_scene_root(entity));
+  EXPECT_EQ(scene.scene_settings(), settings);
 
   ASSERT_TRUE(scene.set_instance_definition(entity));
   ASSERT_TRUE(apply_scene_entity_state(scene, entity, *empty_state));

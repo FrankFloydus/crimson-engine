@@ -1288,6 +1288,126 @@ TEST(CurveToolServiceTests,
   }
 }
 
+TEST(CurveToolServiceTests,
+     CreationPreferencesSurviveCanceledDraftsAndFollowSharedAppLifetime) {
+  CurveSessionDefaults remembered;
+  SceneSession first_session;
+  SceneSession second_session;
+  CurveToolService first(
+      first_session.scene(), first_session.assets(), first_session.history(),
+      first_session.modeling(), first_session.selection(),
+      first_session.document_commands(), &remembered);
+  CurveToolService second(
+      second_session.scene(), second_session.assets(), second_session.history(),
+      second_session.modeling(), second_session.selection(),
+      second_session.document_commands(), &remembered);
+
+  ASSERT_TRUE(first.activate().ok);
+  ASSERT_TRUE(first.set_closed(true).changed);
+  ASSERT_TRUE(first.set_creation_kind(CurveCreationKind::Circle).changed);
+  ASSERT_TRUE(first.set_preset_radius(2.75).changed);
+  ASSERT_TRUE(first.set_creation_kind(CurveCreationKind::Oval).changed);
+  ASSERT_TRUE(first.set_oval_length(12.0).changed);
+  ASSERT_TRUE(first.set_preset_radius(3.5).changed);
+  EXPECT_FALSE(first.set_preset_radius(7.0).ok);
+  ASSERT_TRUE(first.place_preset({.center = {8.0f, 2.0f, 4.0f}}).changed);
+  ASSERT_TRUE(first.cancel().changed);
+
+  ASSERT_TRUE(second.activate().changed);
+  EXPECT_EQ(second.creation_kind(), CurveCreationKind::Oval);
+  EXPECT_DOUBLE_EQ(second.preset_radius(), 3.5);
+  EXPECT_DOUBLE_EQ(second.oval_length(), 12.0);
+  EXPECT_EQ(second.point_count(), 0u);
+  EXPECT_FALSE(second.preview_state().preset_hover_document.has_value());
+  ASSERT_TRUE(second.set_creation_kind(CurveCreationKind::Circle).changed);
+  EXPECT_DOUBLE_EQ(second.preset_radius(), 2.75);
+  ASSERT_TRUE(second.cancel().changed);
+
+  ASSERT_TRUE(first.activate().changed);
+  EXPECT_EQ(first.creation_kind(), CurveCreationKind::Circle);
+  EXPECT_DOUBLE_EQ(first.preset_radius(), 2.75);
+  ASSERT_TRUE(first.set_creation_kind(CurveCreationKind::Draw).changed);
+  EXPECT_TRUE(first.closed());
+  EXPECT_EQ(first.point_count(), 0u);
+  EXPECT_TRUE(first_session.scene().entities().empty());
+  EXPECT_TRUE(second_session.scene().entities().empty());
+
+  SceneSession fresh_session;
+  CurveToolService fresh(
+      fresh_session.scene(), fresh_session.assets(), fresh_session.history(),
+      fresh_session.modeling(), fresh_session.selection(),
+      fresh_session.document_commands());
+  ASSERT_TRUE(fresh.activate().changed);
+  EXPECT_EQ(fresh.creation_kind(), CurveCreationKind::Draw);
+  EXPECT_FALSE(fresh.closed());
+  EXPECT_DOUBLE_EQ(fresh.preset_radius(), kCurvePresetDefaultRadius);
+  EXPECT_DOUBLE_EQ(fresh.oval_length(), kCurveOvalDefaultLength);
+}
+
+TEST(CurveToolServiceTests,
+     ConcurrentCreationOwnersRememberAValidPairOfOvalDimensions) {
+  CurveSessionDefaults remembered;
+  SceneSession first_session;
+  SceneSession second_session;
+  CurveToolService first(
+      first_session.scene(), first_session.assets(), first_session.history(),
+      first_session.modeling(), first_session.selection(),
+      first_session.document_commands(), &remembered);
+  CurveToolService second(
+      second_session.scene(), second_session.assets(), second_session.history(),
+      second_session.modeling(), second_session.selection(),
+      second_session.document_commands(), &remembered);
+  ASSERT_TRUE(first.activate().ok);
+  ASSERT_TRUE(second.activate().ok);
+  ASSERT_TRUE(first.set_creation_kind(CurveCreationKind::Oval).changed);
+  ASSERT_TRUE(second.set_creation_kind(CurveCreationKind::Oval).changed);
+  ASSERT_TRUE(first.set_oval_length(12.0).changed);
+  ASSERT_TRUE(first.set_preset_radius(3.5).changed);
+  ASSERT_TRUE(second.set_oval_length(3.0).changed);
+  EXPECT_DOUBLE_EQ(remembered.oval_radius, 1.0);
+  EXPECT_DOUBLE_EQ(remembered.oval_length, 3.0);
+  ASSERT_TRUE(first.cancel().changed);
+  ASSERT_TRUE(first.activate().changed);
+  EXPECT_DOUBLE_EQ(first.preset_radius(), 1.0);
+  EXPECT_DOUBLE_EQ(first.oval_length(), 3.0);
+  EXPECT_TRUE(first.place_preset({}).ok);
+}
+
+TEST(CurveToolServiceTests,
+     RememberedCreationPreferencesDoNotOverwriteAttachedCurveProperties) {
+  CurveToolHarness harness;
+  const QuaderModelingObjectRef object = harness.make_curve();
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+  CurveToolService &authored = harness.session.curve();
+  ASSERT_TRUE(authored.refresh().ok);
+  ASSERT_TRUE(authored.set_solidify(true).changed);
+  ASSERT_TRUE(authored.set_solidify_radius(0.35).changed);
+  ASSERT_TRUE(authored.set_solidify_resolution(12u).changed);
+  ASSERT_FALSE(authored.closed());
+
+  CurveSessionDefaults remembered{.closed = true, .circle_radius = 3.0};
+  CurveToolService editing(
+      harness.session.scene(), harness.session.assets(),
+      harness.session.history(), harness.session.modeling(),
+      harness.session.selection(), harness.session.document_commands(),
+      &remembered);
+  ASSERT_TRUE(editing.activate().changed);
+  EXPECT_TRUE(editing.has_editable_existing_curve());
+  EXPECT_FALSE(editing.closed());
+  EXPECT_TRUE(editing.solidify_enabled());
+  EXPECT_NEAR(editing.solidify_radius(), 0.35, 1e-7);
+  EXPECT_EQ(editing.solidify_resolution(), 12u);
+  EXPECT_TRUE(remembered.closed);
+  ASSERT_TRUE(editing.begin_new_curve().changed);
+  EXPECT_TRUE(editing.closed());
+  EXPECT_DOUBLE_EQ(editing.preset_radius(), 3.0);
+  const CurveComponent *component = harness.session.scene().curve(object.entity);
+  ASSERT_NE(component, nullptr);
+  EXPECT_TRUE(component->solidify);
+  EXPECT_FLOAT_EQ(component->solidify_radius, 0.35f);
+  EXPECT_EQ(component->solidify_resolution, 12u);
+}
+
 TEST(
     CurveToolServiceTests,
     PresetSettingsRetainPerTypeValuesAndRejectInvalidCoupledDimensionsAtomically) {

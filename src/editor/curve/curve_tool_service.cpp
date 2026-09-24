@@ -246,9 +246,23 @@ CurveToolService::CurveToolService(SceneDocument &scene, AssetRegistry &assets,
                                    EditorHistoryService &history,
                                    ModelingSessionService &modeling,
                                    EditorSelectionService &selection,
-                                   DocumentCommandService &document_commands)
+                                   DocumentCommandService &document_commands,
+                                   CurveSessionDefaults *session_defaults)
     : scene_(scene), assets_(assets), history_(history), modeling_(modeling),
-      selection_(selection), document_commands_(document_commands) {}
+      selection_(selection), document_commands_(document_commands),
+      session_defaults_(session_defaults != nullptr ? session_defaults
+                                                   : &local_session_defaults_) {
+  restore_session_defaults();
+}
+
+void CurveToolService::restore_session_defaults() {
+  creation_kind_ = session_defaults_->creation_kind;
+  preferred_closed_ = session_defaults_->closed;
+  circle_radius_ = session_defaults_->circle_radius;
+  oval_radius_ = session_defaults_->oval_radius;
+  oval_length_ = session_defaults_->oval_length;
+  preset_document_cache_.reset();
+}
 
 bool CurveToolService::can_apply() const {
   return active_ && drawing_ && draft_.point_count() >= 2u && !dragging();
@@ -364,6 +378,8 @@ bool CurveToolService::convert_procedural_draft_to_draw() {
   procedural_frame_.reset();
   preset_hover_frame_.reset();
   creation_kind_ = CurveCreationKind::Draw;
+  session_defaults_->creation_kind = creation_kind_;
+  session_defaults_->closed = preferred_closed_;
   return true;
 }
 
@@ -544,6 +560,7 @@ void CurveToolService::attach_source(EntityId entity) {
 void CurveToolService::detach_source() {
   drawing_ = true;
   clear_preset_placement_state();
+  restore_session_defaults();
   entity_ = kInvalidEntityId;
   modeling_object_id_ = -1;
   source_uuid_.clear();
@@ -575,6 +592,7 @@ CommandResult CurveToolService::activate() {
   drawing_ = true;
   draft_ = {};
   clear_preset_placement_state();
+  restore_session_defaults();
   if (const auto entity = selected_curve()) {
     attach_source(*entity);
   }
@@ -706,14 +724,7 @@ CommandResult CurveToolService::new_curve() {
   if (drawing_) {
     return command_unchanged_result();
   }
-  drawing_ = true;
-  clear_preset_placement_state();
-  entity_ = kInvalidEntityId;
-  modeling_object_id_ = -1;
-  source_uuid_.clear();
-  draft_ = {};
-  (void)set_control_selection({});
-  hover_world_.reset();
+  detach_source();
   observe_owner_revisions();
   invalidate(true);
   return command_changed_result();
@@ -747,6 +758,8 @@ CommandResult CurveToolService::set_closed(bool closed_value) {
           valid_control_selection(control_selection_, draft_));
     }
     preferred_closed_ = closed_value;
+    session_defaults_->creation_kind = creation_kind_;
+    session_defaults_->closed = closed_value;
     invalidate(true);
     return command_changed_result();
   }
@@ -765,6 +778,7 @@ CommandResult CurveToolService::set_closed(bool closed_value) {
           modeling_, modeling_object_id_, std::move(*document)));
   if (result.ok && result.changed) {
     preferred_closed_ = closed_value;
+    session_defaults_->closed = closed_value;
     (void)set_control_selection(std::move(next_selection));
     observe_owner_revisions();
     invalidate(true);
@@ -890,6 +904,8 @@ CommandResult CurveToolService::set_creation_kind(CurveCreationKind kind) {
 
   if (kind == CurveCreationKind::Draw) {
     creation_kind_ = kind;
+    session_defaults_->creation_kind = kind;
+    session_defaults_->closed = preferred_closed_;
     procedural_draft_ = false;
     procedural_frame_.reset();
     preset_hover_frame_.reset();
@@ -919,6 +935,13 @@ CommandResult CurveToolService::set_creation_kind(CurveCreationKind kind) {
 
   const std::size_t old_point_count = draft_.point_count();
   creation_kind_ = kind;
+  session_defaults_->creation_kind = kind;
+  if (kind == CurveCreationKind::Circle) {
+    session_defaults_->circle_radius = circle_radius_;
+  } else {
+    session_defaults_->oval_radius = oval_radius_;
+    session_defaults_->oval_length = oval_length_;
+  }
   preset_document_cache_ = std::move(*canonical);
   hover_world_.reset();
   if (placed.has_value()) {
@@ -981,9 +1004,13 @@ CommandResult CurveToolService::set_preset_radius(double radius) {
   const std::size_t old_point_count = draft_.point_count();
   if (creation_kind_ == CurveCreationKind::Circle) {
     circle_radius_ = radius;
+    session_defaults_->circle_radius = radius;
   } else {
     oval_radius_ = radius;
+    session_defaults_->oval_radius = radius;
+    session_defaults_->oval_length = oval_length_;
   }
+  session_defaults_->creation_kind = creation_kind_;
   preset_document_cache_ = std::move(*canonical);
   if (placed.has_value()) {
     draft_ = std::move(*placed);
@@ -1032,6 +1059,9 @@ CommandResult CurveToolService::set_oval_length(double length_value) {
 
   const std::size_t old_point_count = draft_.point_count();
   oval_length_ = length_value;
+  session_defaults_->creation_kind = creation_kind_;
+  session_defaults_->oval_radius = oval_radius_;
+  session_defaults_->oval_length = length_value;
   preset_document_cache_ = std::move(*canonical);
   if (placed.has_value()) {
     draft_ = std::move(*placed);
@@ -1084,6 +1114,9 @@ CommandResult CurveToolService::reset_settings() {
   const std::size_t old_point_count = draft_.point_count();
   oval_radius_ = kCurvePresetDefaultRadius;
   oval_length_ = kCurveOvalDefaultLength;
+  session_defaults_->creation_kind = creation_kind_;
+  session_defaults_->oval_radius = oval_radius_;
+  session_defaults_->oval_length = oval_length_;
   preset_document_cache_ = std::move(*canonical);
   if (placed.has_value()) {
     draft_ = std::move(*placed);

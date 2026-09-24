@@ -397,6 +397,15 @@ public:
   [[nodiscard]] std::string_view active_preview_operation_id() const noexcept;
   [[nodiscard]] std::optional<quader_editor_core::EditorOperationId>
   active_preview_operation() const noexcept;
+  [[nodiscard]] std::optional<double>
+  active_edge_bevel_maximum_width() const noexcept;
+  [[nodiscard]] std::optional<quader_editor_core::EdgeBevelOperationSettings>
+  active_edge_bevel_settings() const noexcept;
+  /// Publishes accepted scalars after successful preview geometry publication,
+  /// including adapter-owned selection restarts.
+  void set_edge_bevel_preview_settings_handler(
+      std::function<void(const quader_editor_core::EdgeBevelOperationSettings &)>
+          handler);
   [[nodiscard]] std::size_t
   active_preview_deleted_vertex_count() const noexcept;
   [[nodiscard]] ModelingCommandResult

@@ -66,6 +66,7 @@ struct SceneModelingProjectionCheckpoint::State final {
   std::uint64_t render_component_revision = 0u;
   std::uint64_t light_property_revision = 0u;
   std::uint64_t layer_revision = 0u;
+  std::uint64_t scene_settings_revision = 0u;
 };
 
 struct SceneModelingProjectionMutationFence::State final {
@@ -129,6 +130,7 @@ struct SceneScalarCompensationCheckpoint::State final {
     std::uint64_t render_component_revision = 0u;
     std::uint64_t light_property_revision = 0u;
     std::uint64_t layer_revision = 0u;
+    std::uint64_t scene_settings_revision = 0u;
   };
 
   SceneDocument *owner = nullptr;
@@ -154,6 +156,7 @@ struct SceneScalarCompensationCheckpoint::State final {
   std::uint64_t render_component_revision = 0u;
   std::uint64_t light_property_revision = 0u;
   std::uint64_t layer_revision = 0u;
+  std::uint64_t scene_settings_revision = 0u;
   std::vector<EntityAllocationReceipt> entity_allocations;
   std::vector<LayerAllocationReceipt> layer_allocations;
   std::unordered_map<EntityId, MutationBaseline> mutation_baselines;
@@ -492,6 +495,7 @@ SceneDocument::capture_scalar_compensation_checkpoint() {
   state->render_component_revision = render_component_revision_;
   state->light_property_revision = light_property_revision_;
   state->layer_revision = layer_revision_;
+  state->scene_settings_revision = scene_settings_revision_;
 
   scalar_compensation_stack_.push_back(state);
   next_scalar_compensation_token_ = state->token;
@@ -534,6 +538,7 @@ bool SceneDocument::acknowledge_scalar_compensation_checkpoint(
   boundary.render_component_revision = render_component_revision_;
   boundary.light_property_revision = light_property_revision_;
   boundary.layer_revision = layer_revision_;
+  boundary.scene_settings_revision = scene_settings_revision_;
   checkpoint.state_->acknowledged = true;
   return true;
 }
@@ -572,7 +577,8 @@ bool SceneDocument::begin_scalar_compensation_restore(
       material_binding_revision_ != boundary.material_binding_revision ||
       render_component_revision_ != boundary.render_component_revision ||
       light_property_revision_ != boundary.light_property_revision ||
-      layer_revision_ != boundary.layer_revision) {
+      layer_revision_ != boundary.layer_revision ||
+      scene_settings_revision_ != boundary.scene_settings_revision) {
     return false;
   }
 
@@ -729,6 +735,7 @@ bool SceneDocument::restore_scalar_compensation_checkpoint(
   render_component_revision_ = state.render_component_revision;
   light_property_revision_ = state.light_property_revision;
   layer_revision_ = state.layer_revision;
+  scene_settings_revision_ = state.scene_settings_revision;
   for (const auto &[entity, baseline] : state.mutation_baselines) {
     if (!baseline.record_existed) {
       modeling_projection_mutations_by_entity_.erase(entity);
@@ -803,6 +810,7 @@ SceneDocument::capture_modeling_projection_checkpoint(
   state->render_component_revision = render_component_revision_;
   state->light_property_revision = light_property_revision_;
   state->layer_revision = layer_revision_;
+  state->scene_settings_revision = scene_settings_revision_;
   if (has_projection_domain(domains,
                             SceneModelingProjectionDomain::Selection)) {
     state->active_selection = active_selection_;
@@ -990,7 +998,8 @@ bool SceneDocument::preflight_modeling_projection_restore(
         material_binding_revision_ < state.material_binding_revision ||
         render_component_revision_ < state.render_component_revision ||
         light_property_revision_ < state.light_property_revision ||
-        layer_revision_ < state.layer_revision) {
+        layer_revision_ < state.layer_revision ||
+        scene_settings_revision_ < state.scene_settings_revision) {
       return report(false);
     }
     for (const auto &record : state.participants) {
@@ -1238,7 +1247,7 @@ bool SceneDocument::preflight_modeling_projection_restore(
             return false;
           }
           const auto restored = restored_structures.find(child);
-          return !removes_definition || restored == restored_structures.end() ||
+          return restored == restored_structures.end() ||
                  removal_set.contains(restored->second->parent);
         })) {
       return report(false);
@@ -1288,8 +1297,7 @@ bool SceneDocument::preflight_modeling_projection_restore(
         continue;
       }
       const SceneEntityState &structure = *record.structure;
-      if (structure.parent != kInvalidEntityId &&
-          !participant_ids.contains(structure.parent) &&
+      if (!participant_ids.contains(structure.parent) &&
           structure.sibling_ordinal.has_value()) {
         boundary_ordinals[structure.parent].push_back(
             *structure.sibling_ordinal);
@@ -1297,12 +1305,15 @@ bool SceneDocument::preflight_modeling_projection_restore(
     }
     for (auto &[parent_id, ordinals] : boundary_ordinals) {
       const HierarchyComponent *parent_hierarchy = hierarchy(parent_id);
-      if (parent_hierarchy == nullptr) {
+      if (parent_id != kInvalidEntityId && parent_hierarchy == nullptr) {
         return report(false);
       }
+      const std::vector<EntityId> &siblings = parent_id == kInvalidEntityId
+                                                ? root_entities_
+                                                : parent_hierarchy->children;
       const std::size_t retained_child_count =
           static_cast<std::size_t>(std::ranges::count_if(
-              parent_hierarchy->children, [&](EntityId child) {
+              siblings, [&](EntityId child) {
                 return !participant_ids.contains(child);
               }));
       std::ranges::sort(ordinals);
@@ -1418,6 +1429,8 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
     const EntityId parent_id = parent(entity_id);
     if (HierarchyComponent *parent_hierarchy = mutable_hierarchy(parent_id)) {
       remove_child(parent_hierarchy->children, entity_id);
+    } else if (parent_id == kInvalidEntityId) {
+      remove_child(root_entities_, entity_id);
     }
     const entt::entity entity = require_entity(entity_id);
     if (const EditorObjectIdentityComponent *identity =
@@ -1521,8 +1534,6 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
                                  structure.instance_definition);
       restore_optional_component(registry_, entity,
                                  structure.instance_occurrence);
-      restore_optional_component(registry_, entity,
-                                 structure.scene_settings);
       if (structure.layer_id == kInvalidSceneLayerId) {
         registry_.remove<SceneLayerMembershipComponent>(entity);
       } else {
@@ -1544,34 +1555,38 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
         continue;
       }
       const EntityId current_parent = parent(record.entity);
-      if (current_parent != kInvalidEntityId &&
-          !participant_ids.contains(current_parent)) {
+      if (!participant_ids.contains(current_parent)) {
         if (HierarchyComponent *parent_hierarchy =
                 mutable_hierarchy(current_parent)) {
           remove_child(parent_hierarchy->children, record.entity);
+          ++work.boundary_hierarchy_write_count;
+        } else if (current_parent == kInvalidEntityId) {
+          remove_child(root_entities_, record.entity);
           ++work.boundary_hierarchy_write_count;
         }
       }
       registry_.emplace_or_replace<HierarchyComponent>(
           require_entity(record.entity), *record.hierarchy);
       const SceneEntityState &structure = *record.structure;
-      if (structure.parent != kInvalidEntityId &&
-          !participant_ids.contains(structure.parent) &&
+      if (!participant_ids.contains(structure.parent) &&
           structure.sibling_ordinal.has_value()) {
         boundary_children[structure.parent].emplace_back(
             *structure.sibling_ordinal, record.entity);
       }
     }
     for (auto &[parent_id, insertions] : boundary_children) {
-      HierarchyComponent &parent_hierarchy =
-          registry_.get<HierarchyComponent>(require_entity(parent_id));
-      std::erase_if(parent_hierarchy.children, [&](EntityId child) {
+      std::vector<EntityId> &siblings =
+          parent_id == kInvalidEntityId
+              ? root_entities_
+              : registry_.get<HierarchyComponent>(require_entity(parent_id))
+                    .children;
+      std::erase_if(siblings, [&](EntityId child) {
         return participant_ids.contains(child);
       });
       std::ranges::sort(insertions);
       for (const auto &[ordinal, child] : insertions) {
-        parent_hierarchy.children.insert(
-            parent_hierarchy.children.begin() +
+        siblings.insert(
+            siblings.begin() +
                 static_cast<std::ptrdiff_t>(ordinal),
             child);
       }
@@ -1717,6 +1732,7 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
     render_component_revision_ = state.render_component_revision;
     light_property_revision_ = state.light_property_revision;
     layer_revision_ = state.layer_revision;
+    scene_settings_revision_ = state.scene_settings_revision;
   }
   invalidate_spatial_projection_caches_after_revision_restore();
   return report(true);
@@ -1953,6 +1969,7 @@ EntityId SceneDocument::create_entity(std::string name, EntityKind kind,
   registry_.emplace<LockComponent>(entity, LockComponent{});
   registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
   entities_.emplace(id, entity);
+  root_entities_.push_back(id);
   ids_by_entity_.emplace(entity_key(entity), id);
   entity_by_uuid_.emplace(uuid, id);
   entity_by_editor_object_id_.emplace(object_id, id);
@@ -2017,6 +2034,7 @@ EntityId SceneDocument::create_entity_with_id(EntityId id, std::string name,
   registry_.emplace<LockComponent>(entity, LockComponent{});
   registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
   entities_.emplace(id, entity);
+  root_entities_.push_back(id);
   ids_by_entity_.emplace(entity_key(entity), id);
   entity_by_uuid_.emplace(uuid, id);
   entity_by_editor_object_id_.emplace(object_id, id);
@@ -2061,9 +2079,6 @@ bool SceneDocument::destroy_entity(EntityId id) {
 bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   std::unordered_set<EntityId> destroy_set;
   for (const EntityId id : ids) {
-    if (is_scene_root(id)) {
-      continue;
-    }
     const std::vector<EntityId> descendants_to_destroy = descendants(id, true);
     destroy_set.insert(descendants_to_destroy.begin(),
                        descendants_to_destroy.end());
@@ -2086,6 +2101,10 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   if (!destruction_preserves_instance_graph(*this, destroy_set)) {
     return false;
   }
+
+  std::erase_if(root_entities_, [&](EntityId root) {
+    return destroy_set.contains(root);
+  });
 
   const bool active_destroyed = destroy_set.contains(active_selection_);
   const bool layer_membership_destroyed =
@@ -2433,9 +2452,6 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
   if (child == kInvalidEntityId || require_entity(child) == entt::null) {
     return false;
   }
-  if (is_scene_root(child) && new_parent != kInvalidEntityId) {
-    return false;
-  }
   if (new_parent != kInvalidEntityId &&
       require_entity(new_parent) == entt::null) {
     return false;
@@ -2506,6 +2522,8 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
   if (HierarchyComponent *old_parent_hierarchy =
           mutable_hierarchy(old_parent)) {
     remove_child(old_parent_hierarchy->children, child);
+  } else if (old_parent == kInvalidEntityId) {
+    remove_child(root_entities_, child);
   }
 
   child_hierarchy->parent = new_parent;
@@ -2516,6 +2534,8 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
                   child) == new_parent_hierarchy->children.end()) {
       new_parent_hierarchy->children.push_back(child);
     }
+  } else if (new_parent == kInvalidEntityId) {
+    root_entities_.push_back(child);
   }
 
   if (preserve_world_transform) {
@@ -2551,11 +2571,14 @@ bool SceneDocument::set_sibling_ordinal(EntityId entity,
                                         std::size_t ordinal) {
   const EntityId parent_id = parent(entity);
   HierarchyComponent *parent_hierarchy = mutable_hierarchy(parent_id);
-  if (entity == kInvalidEntityId || parent_hierarchy == nullptr) {
+  if (!exists(entity) ||
+      (parent_id != kInvalidEntityId && parent_hierarchy == nullptr)) {
     return false;
   }
 
-  std::vector<EntityId> &siblings = parent_hierarchy->children;
+  std::vector<EntityId> &siblings = parent_id == kInvalidEntityId
+                                       ? root_entities_
+                                       : parent_hierarchy->children;
   const auto current = std::ranges::find(siblings, entity);
   if (current == siblings.end() || ordinal >= siblings.size()) {
     return false;
@@ -2617,6 +2640,8 @@ bool SceneDocument::replace_hierarchy(
   parents.reserve(assignments.size());
   std::unordered_map<EntityId, std::vector<EntityId>> children;
   children.reserve(assignments.size());
+  std::vector<EntityId> roots;
+  roots.reserve(root_entities_.size());
 
   for (const SceneParentAssignment &assignment : assignments) {
     if (assignment.child == kInvalidEntityId ||
@@ -2625,14 +2650,14 @@ bool SceneDocument::replace_hierarchy(
         assignment.child == assignment.parent ||
         (assignment.parent != kInvalidEntityId &&
          require_entity(assignment.parent) == entt::null) ||
-        (is_scene_root(assignment.child) &&
-         assignment.parent != kInvalidEntityId) ||
         instance_definition(assignment.child) != nullptr ||
         instance_occurrence(assignment.child) != nullptr) {
       return false;
     }
     if (assignment.parent != kInvalidEntityId) {
       children[assignment.parent].push_back(assignment.child);
+    } else {
+      roots.push_back(assignment.child);
     }
   }
   if (parents.size() != entities_.size()) {
@@ -2663,7 +2688,7 @@ bool SceneDocument::replace_hierarchy(
     }
   }
 
-  bool changed = false;
+  bool changed = roots != root_entities_;
   for (const SceneParentAssignment &assignment : assignments) {
     const HierarchyComponent *current = hierarchy(assignment.child);
     const auto child_it = children.find(assignment.child);
@@ -2696,6 +2721,7 @@ bool SceneDocument::replace_hierarchy(
     changed_entities.push_back(assignment.child);
   }
 
+  root_entities_ = std::move(roots);
   ++visibility_revision_;
   ++transform_revision_;
   ++hierarchy_presentation_revision_;
@@ -2861,7 +2887,7 @@ bool SceneDocument::set_transforms_and_texture_mappings(
 
 bool SceneDocument::set_instance_definition(EntityId id) {
   const entt::entity entity = require_entity(id);
-  if (entity == entt::null || is_scene_root(id) ||
+  if (entity == entt::null ||
       instance_occurrence(id) != nullptr ||
       containing_instance_definition(parent(id)) != kInvalidEntityId ||
       mesh(id) != nullptr || curve(id) != nullptr ||
@@ -3012,7 +3038,7 @@ bool SceneDocument::clear_mesh(EntityId id) {
 bool SceneDocument::set_curve(EntityId id, CurveComponent value) {
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || !curve_component_is_valid(value) ||
-      is_scene_root(id) || mesh(id) != nullptr || light(id) != nullptr ||
+      mesh(id) != nullptr || light(id) != nullptr ||
       texture_mapping(id) != nullptr ||
       instance_occurrence(id) != nullptr ||
       containing_instance_definition(id) != kInvalidEntityId) {
@@ -3214,49 +3240,16 @@ bool SceneDocument::clear_light(EntityId id) {
   return true;
 }
 
-bool SceneDocument::set_scene_settings(EntityId id,
-                                       SceneSettingsComponent settings) {
+bool SceneDocument::set_scene_settings(SceneSettings settings) {
   if (!scene_fog_settings_is_valid(settings.fog)) {
     return false;
   }
-  const entt::entity entity = require_entity(id);
-  if (entity == entt::null || curve(id) != nullptr) {
-    return false;
-  }
-  const EntityId root = scene_root();
-  if (root != kInvalidEntityId && root != id) {
-    return false;
-  }
-  if (const SceneSettingsComponent *current = scene_settings(id);
-      current != nullptr && *current == settings) {
+  if (scene_settings_ == settings) {
     return true;
   }
-  const bool hierarchy_presentation_changed =
-      scene_settings(id) == nullptr || kind(id) != EntityKind::Empty;
-  registry_.emplace_or_replace<SceneSettingsComponent>(entity,
-                                                       std::move(settings));
-  registry_.emplace_or_replace<EntityKindComponent>(
-      entity, EntityKindComponent{.kind = EntityKind::Empty});
-  if (hierarchy_presentation_changed) {
-    ++hierarchy_presentation_revision_;
-  }
-  mark_dirty(id, SceneModelingProjectionDomain::Structure);
-  return true;
-}
-
-bool SceneDocument::clear_scene_settings(EntityId id) {
-  const entt::entity entity = require_entity(id);
-  if (entity == entt::null ||
-      !registry_.all_of<SceneSettingsComponent>(entity)) {
-    return false;
-  }
-  registry_.remove<SceneSettingsComponent>(entity);
-  if (kind(id) == EntityKind::Empty) {
-    registry_.emplace_or_replace<EntityKindComponent>(
-        entity, EntityKindComponent{.kind = EntityKind::Generic});
-  }
-  ++hierarchy_presentation_revision_;
-  mark_dirty(id, SceneModelingProjectionDomain::Structure);
+  scene_settings_ = std::move(settings);
+  ++scene_settings_revision_;
+  mark_dirty();
   return true;
 }
 
@@ -3437,7 +3430,7 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
          inside_instance_definition[parent_id]);
   }
   for (const SceneLayerAssignment &assignment : state.assignments) {
-    if (!exists(assignment.entity) || is_scene_root(assignment.entity) ||
+    if (!exists(assignment.entity) ||
         is_instance_definition_entity(assignment.entity) ||
         inside_instance_definition[assignment.entity] ||
         !layer_ids.contains(assignment.layer_id) ||
@@ -3628,7 +3621,7 @@ std::string SceneDocument::next_layer_name() const {
 
 bool SceneDocument::is_layer_eligible(EntityId entity) const {
   return entity != kInvalidEntityId && exists(entity) &&
-         !is_scene_root(entity) && !is_instance_definition_entity(entity) &&
+         !is_instance_definition_entity(entity) &&
          !is_instance_definition_member(entity);
 }
 
@@ -3661,7 +3654,7 @@ std::vector<EntityId> SceneDocument::layer_eligible_entities(
         (is_instance_definition_entity(parent_id) ||
          inside_instance_definition[parent_id]);
     inside_instance_definition.emplace(entity, definition_member);
-    if (requested && !is_scene_root(entity) &&
+    if (requested &&
         !is_instance_definition_entity(entity) && !definition_member) {
       eligible.push_back(entity);
     }
@@ -3841,13 +3834,6 @@ const LightComponent* SceneDocument::light(EntityId id) const {
                               : registry_.try_get<LightComponent>(entity);
 }
 
-const SceneSettingsComponent *SceneDocument::scene_settings(EntityId id) const {
-  const entt::entity entity = require_entity(id);
-  return entity == entt::null
-             ? nullptr
-             : registry_.try_get<SceneSettingsComponent>(entity);
-}
-
 const SceneLayerMembershipComponent *
 SceneDocument::layer_membership(EntityId id) const {
   const entt::entity entity = require_entity(id);
@@ -3880,60 +3866,38 @@ std::vector<EntityId> SceneDocument::curve_entities() const {
   return ids;
 }
 
-EntityId SceneDocument::scene_root() const {
-  EntityId root = kInvalidEntityId;
-  for (auto [entity, settings, identity] :
-       registry_.view<SceneSettingsComponent, EntityIdentityComponent>()
-           .each()) {
-    (void)settings;
-    if (root == kInvalidEntityId || identity.id < root) {
-      root = identity.id;
-    }
-  }
-  return exists(root) ? root : kInvalidEntityId;
-}
-
-bool SceneDocument::is_scene_root(EntityId id) const {
-  return id != kInvalidEntityId && scene_settings(id) != nullptr;
-}
-
 std::vector<EntityId> SceneDocument::root_entities() const {
-  std::vector<EntityId> roots;
-  const std::vector<EntityId> ids = entities();
-  roots.reserve(ids.size());
-  const EntityId root = scene_root();
-  if (root != kInvalidEntityId && parent(root) == kInvalidEntityId) {
-    roots.push_back(root);
-  }
-  for (const EntityId id : ids) {
-    if (id != root && parent(id) == kInvalidEntityId) {
-      roots.push_back(id);
-    }
-  }
-  return roots;
+  return root_entities_;
 }
 
 std::vector<EntityId> SceneDocument::children(EntityId id) const {
-    if (const HierarchyComponent* component = hierarchy(id)) {
-        return component->children;
-    }
-    return {};
+  if (id == kInvalidEntityId) {
+    return root_entities_;
+  }
+  if (const HierarchyComponent *component = hierarchy(id)) {
+    return component->children;
+  }
+  return {};
 }
 
 std::optional<std::size_t>
 SceneDocument::sibling_ordinal(EntityId entity) const {
+  if (!exists(entity)) {
+    return std::nullopt;
+  }
   const EntityId parent_id = parent(entity);
   const HierarchyComponent *parent_hierarchy = hierarchy(parent_id);
-  if (entity == kInvalidEntityId || parent_hierarchy == nullptr) {
+  if (parent_id != kInvalidEntityId && parent_hierarchy == nullptr) {
     return std::nullopt;
   }
-  const auto sibling =
-      std::ranges::find(parent_hierarchy->children, entity);
-  if (sibling == parent_hierarchy->children.end()) {
+  const std::vector<EntityId> &siblings = parent_id == kInvalidEntityId
+                                            ? root_entities_
+                                            : parent_hierarchy->children;
+  const auto sibling = std::ranges::find(siblings, entity);
+  if (sibling == siblings.end()) {
     return std::nullopt;
   }
-  return static_cast<std::size_t>(
-      std::distance(parent_hierarchy->children.begin(), sibling));
+  return static_cast<std::size_t>(std::distance(siblings.begin(), sibling));
 }
 
 std::vector<EntityId> SceneDocument::descendants(EntityId id,
@@ -4368,6 +4332,8 @@ void SceneDocument::advance_revision_for_replacement(
   render_component_revision_ =
       std::max(render_component_revision_ + 1u, revision_);
   layer_revision_ = std::max(layer_revision_ + 1u, revision_);
+  scene_settings_revision_ =
+      std::max(scene_settings_revision_ + 1u, revision_);
   hierarchy_presentation_revision_ =
       std::max(hierarchy_presentation_revision_ + 1u, revision_);
 }
@@ -4679,8 +4645,6 @@ EntityRecord SceneDocument::make_entity_record(EntityId id, int depth,
   record.has_mesh = mesh(id) != nullptr;
   record.has_curve = curve(id) != nullptr;
   record.has_light = light(id) != nullptr;
-  record.is_scene_root = is_scene_root(id);
-  record.has_scene_settings = scene_settings(id) != nullptr;
   record.has_modeling_object = modeling_object(id) != nullptr;
   record.is_instance_definition = is_instance_definition_entity(id);
   record.has_instance_occurrence = instance_occurrence(id) != nullptr;

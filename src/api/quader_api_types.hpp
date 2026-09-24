@@ -250,6 +250,7 @@ struct QuaderRevisionStamp {
   std::uint64_t project_revision = 0;
   std::uint64_t scene_revision = 0;
   std::uint64_t scene_layer_revision = 0;
+  std::uint64_t scene_settings_revision = 0;
   std::uint64_t asset_revision = 0;
   std::uint64_t modeling_content_revision = 0;
   std::uint64_t modeling_selection_revision = 0;
@@ -1129,7 +1130,7 @@ struct QuaderSceneFogSettings {
 };
 
 /**
- * Stores public scene root settings.
+ * Stores public document settings.
  */
 struct QuaderSceneSettings {
     QuaderSceneEnvironmentSettings environment;

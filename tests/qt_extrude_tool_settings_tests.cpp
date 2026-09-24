@@ -204,7 +204,7 @@ TEST(QtExtrudeToolSettingsTests,
   panel.refresh();
   EXPECT_FALSE(session.extrude().preview_active());
   EXPECT_FALSE(session.extrude().adjustable());
-  expect_extrude_defaults(editor, "individual", 0.0);
+  expect_extrude_defaults(editor, "individual", -1.25);
   EXPECT_FALSE(apply->isEnabled());
   EXPECT_EQ(session.history().undo_count(), undo_count + 1);
   ASSERT_TRUE(editor.history().undo().ok());
@@ -370,11 +370,11 @@ TEST(QtExtrudeToolSettingsTests,
   QCoreApplication::processEvents();
   panel.refresh();
 
-  expect_extrude_defaults(editor, "region", 0.0);
+  expect_extrude_defaults(editor, "region", 2.15);
   amount = panel.findChild<QDoubleSpinBox *>(
       QStringLiteral("tool_settings.control.extrude.amount"));
   ASSERT_NE(amount, nullptr);
-  EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+  EXPECT_DOUBLE_EQ(amount->value(), 2.15);
   EXPECT_FALSE(apply->isEnabled());
   EXPECT_FALSE(session.extrude().adjustable());
   const auto accepted = editor.query().compiled_object_mesh(created.value());
@@ -393,7 +393,7 @@ TEST(QtExtrudeToolSettingsTests,
 }
 
 TEST(QtExtrudeToolSettingsTests,
-     ApplyResetsTheAmountAndTheNextEditUsesANewOperationSource) {
+     ApplyRemembersTheAmountAndTheNextEditUsesANewOperationSource) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-extrude-sequential-settings-tests";
@@ -436,7 +436,7 @@ TEST(QtExtrudeToolSettingsTests,
   amount = panel.findChild<QDoubleSpinBox *>(
       QStringLiteral("tool_settings.control.extrude.amount"));
   ASSERT_NE(amount, nullptr);
-  EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+  EXPECT_DOUBLE_EQ(amount->value(), 2.0);
 
   amount->setValue(3.0);
   ASSERT_TRUE(QMetaObject::invokeMethod(amount.data(), "editingFinished",
@@ -451,13 +451,13 @@ TEST(QtExtrudeToolSettingsTests,
   apply->click();
   panel.refresh();
   EXPECT_FALSE(apply->isEnabled());
-  EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+  EXPECT_DOUBLE_EQ(session.extrude().amount(), 3.0);
   EXPECT_EQ(session.history().undo_count(), undo_count + 2);
 
   amount = panel.findChild<QDoubleSpinBox *>(
       QStringLiteral("tool_settings.control.extrude.amount"));
   ASSERT_NE(amount, nullptr);
-  EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+  EXPECT_DOUBLE_EQ(amount->value(), 3.0);
   amount->setValue(4.0);
   ASSERT_TRUE(QMetaObject::invokeMethod(amount.data(), "editingFinished",
                                        Qt::DirectConnection));
@@ -465,7 +465,7 @@ TEST(QtExtrudeToolSettingsTests,
   ASSERT_TRUE(session.extrude().preview_active());
   cancel->click();
   panel.refresh();
-  EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+  EXPECT_DOUBLE_EQ(session.extrude().amount(), 4.0);
   EXPECT_EQ(session.history().undo_count(), undo_count + 2);
   const auto canceled = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(canceled.has_value());
@@ -565,11 +565,13 @@ TEST(QtExtrudeToolSettingsTests,
 
       EXPECT_FALSE(session.extrude().preview_active());
       EXPECT_FALSE(session.extrude().adjustable());
-      EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      EXPECT_DOUBLE_EQ(session.extrude().amount(),
+                       type_final_amount ? 2.15 : preview_amount);
       amount = panel.findChild<QDoubleSpinBox *>(
           QStringLiteral("tool_settings.control.extrude.amount"));
       ASSERT_NE(amount, nullptr);
-      EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+      EXPECT_NEAR(amount->value(), type_final_amount ? 2.15 : preview_amount,
+                  0.0001);
       EXPECT_FALSE(apply->isEnabled());
       EXPECT_EQ(session.history().undo_count(), undo_count + 1);
       const auto accepted = editor.query().compiled_object_mesh(created.value());
@@ -627,6 +629,7 @@ TEST(QtExtrudeToolSettingsTests,
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
   ASSERT_NO_FATAL_FAILURE(drag_and_release_extrude_gizmo(session));
+  const double accepted_amount = session.extrude().amount();
   panel.refresh();
   auto *cancel = panel.findChild<QPushButton *>(
       QStringLiteral("tool_settings.cancel"));
@@ -637,7 +640,7 @@ TEST(QtExtrudeToolSettingsTests,
   panel.refresh();
 
   EXPECT_FALSE(session.extrude().preview_active());
-  EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+  EXPECT_DOUBLE_EQ(session.extrude().amount(), accepted_amount);
   const auto canceled = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(canceled.has_value());
   expect_same_extrude_geometry(*canceled, *source);
@@ -689,14 +692,14 @@ TEST(QtExtrudeToolSettingsTests,
   expect_same_extrude_geometry(*canceled, *committed);
   EXPECT_EQ(editor.selection().summary().selected_face_count, 1U);
   EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
-  expect_extrude_defaults(editor, "region", 0.0);
+  expect_extrude_defaults(editor, "region", 1.0);
   ASSERT_TRUE(cancel().ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
 }
 
 TEST(QtExtrudeToolSettingsTests,
-     SharedModeSurvivesSceneAndProjectChangesWithoutRememberingAppliedAmount) {
+     SharedOptionsSurviveSceneAndProjectChangesUntilANewAppLifetime) {
   QTemporaryDir temporary;
   ASSERT_TRUE(temporary.isValid());
   const auto root = std::filesystem::path(temporary.path().toStdWString());
@@ -720,18 +723,18 @@ TEST(QtExtrudeToolSettingsTests,
                   .ok());
   ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 2.15).ok());
   ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
-  expect_extrude_defaults(editor, "individual", 0.0);
+  expect_extrude_defaults(editor, "individual", 2.15);
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Select).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
-  expect_extrude_defaults(editor, "individual", 0.0);
+  expect_extrude_defaults(editor, "individual", 2.15);
 
   const auto second_scene = editor.scene_documents().new_scene();
   ASSERT_TRUE(second_scene.ok()) << second_scene.error_message();
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
-  expect_extrude_defaults(editor, "individual", 0.0);
+  expect_extrude_defaults(editor, "individual", 2.15);
   ASSERT_TRUE(editor.scene_documents().activate(*first_scene).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
-  expect_extrude_defaults(editor, "individual", 0.0);
+  expect_extrude_defaults(editor, "individual", 2.15);
 
   ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 3.25).ok());
   ASSERT_TRUE(editor.tools().active_settings().preview_active);
@@ -747,7 +750,7 @@ TEST(QtExtrudeToolSettingsTests,
   const auto second_project = editor.project().create(root / "second-project");
   ASSERT_TRUE(second_project.ok()) << second_project.error_message();
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
-  expect_extrude_defaults(editor, "individual", 0.0);
+  expect_extrude_defaults(editor, "individual", 3.25);
 
   SceneSession fresh_session;
   QuaderEditorApi fresh_editor(

@@ -28,7 +28,7 @@ inline constexpr std::string_view kExtrudeTypeSetting = "extrude.type";
 inline constexpr std::string_view kExtrudeAmountSetting = "extrude.amount";
 inline constexpr std::string_view kExtrudeApplySetting = "extrude.apply";
 
-/// Extrusion option values in displayed map units; only mode is shared across scenes.
+/// Last accepted extrusion options, shared for the lifetime of the application.
 struct ExtrudeSessionDefaults final {
   modeling::FaceExtrudeMode mode = modeling::FaceExtrudeMode::Region;
   double amount = 0.0;
@@ -90,7 +90,7 @@ public:
   /// Tool activation captures selected faces until explicit Apply or Cancel.
   CommandResult activate_preview();
   CommandResult activate_preview(modeling::FaceExtrudeMode requested_mode);
-  /// Locks the first selected faces in a zero-amount pending operation.
+  /// Locks the first selected faces using the remembered extrusion options.
   CommandResult begin_selection_preview();
   CommandResult commit_preview();
   CommandResult extrude();

@@ -37,7 +37,6 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
-#include <QSlider>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QStyle>
@@ -60,7 +59,6 @@ constexpr int kPreviewStretch = 3;
 constexpr int kPropertiesStretch = 2;
 constexpr int kScalarDecimals = 3;
 constexpr double kScalarStep = 0.01;
-constexpr int kScalarSliderScale = 100;
 constexpr int kLiveNumberDispatchIntervalMs = 16;
 constexpr int kTexturePreviewExtent = 64;
 constexpr int kTexturePreviewIconExtent = 56;
@@ -428,18 +426,8 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   roughness_spin_->setDecimals(kScalarDecimals);
   roughness_spin_->setSingleStep(kScalarStep);
   roughness_spin_->setAccelerated(true);
-  roughness_slider_ = new QSlider(Qt::Horizontal, properties_group_);
-  roughness_slider_->setObjectName(
-      QStringLiteral("standardMaterialEditor.roughness.slider"));
-  roughness_slider_->setRange(0, kScalarSliderScale);
-  roughness_slider_->setSingleStep(1);
-  auto *roughness_row = new QWidget(properties_group_);
-  auto *roughness_layout = new QHBoxLayout(roughness_row);
-  roughness_layout->setContentsMargins(0, 0, 0, 0);
-  roughness_layout->addWidget(roughness_slider_, 1);
-  roughness_layout->addWidget(roughness_spin_);
-  roughness_label_->setBuddy(roughness_slider_);
-  form->addRow(roughness_label_, roughness_row);
+  roughness_label_->setBuddy(roughness_spin_);
+  form->addRow(roughness_label_, roughness_spin_);
   create_texture_controls(QtStandardMaterialTextureSlot::Roughness,
                           QStringLiteral("roughnessTexture"));
 
@@ -451,18 +439,8 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   metallic_spin_->setDecimals(kScalarDecimals);
   metallic_spin_->setSingleStep(kScalarStep);
   metallic_spin_->setAccelerated(true);
-  metallic_slider_ = new QSlider(Qt::Horizontal, properties_group_);
-  metallic_slider_->setObjectName(
-      QStringLiteral("standardMaterialEditor.metallic.slider"));
-  metallic_slider_->setRange(0, kScalarSliderScale);
-  metallic_slider_->setSingleStep(1);
-  auto *metallic_row = new QWidget(properties_group_);
-  auto *metallic_layout = new QHBoxLayout(metallic_row);
-  metallic_layout->setContentsMargins(0, 0, 0, 0);
-  metallic_layout->addWidget(metallic_slider_, 1);
-  metallic_layout->addWidget(metallic_spin_);
-  metallic_label_->setBuddy(metallic_slider_);
-  form->addRow(metallic_label_, metallic_row);
+  metallic_label_->setBuddy(metallic_spin_);
+  form->addRow(metallic_label_, metallic_spin_);
   create_texture_controls(QtStandardMaterialTextureSlot::Metallic,
                           QStringLiteral("metallicTexture"));
 
@@ -474,19 +452,8 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   normal_strength_spin_->setDecimals(kScalarDecimals);
   normal_strength_spin_->setSingleStep(kScalarStep);
   normal_strength_spin_->setAccelerated(true);
-  normal_strength_slider_ = new QSlider(Qt::Horizontal, properties_group_);
-  normal_strength_slider_->setObjectName(
-      QStringLiteral("standardMaterialEditor.normalStrength.slider"));
-  normal_strength_slider_->setRange(-16 * kScalarSliderScale,
-                                    16 * kScalarSliderScale);
-  normal_strength_slider_->setSingleStep(1);
-  auto *normal_strength_row = new QWidget(properties_group_);
-  auto *normal_strength_layout = new QHBoxLayout(normal_strength_row);
-  normal_strength_layout->setContentsMargins(0, 0, 0, 0);
-  normal_strength_layout->addWidget(normal_strength_slider_, 1);
-  normal_strength_layout->addWidget(normal_strength_spin_);
-  normal_strength_label_->setBuddy(normal_strength_slider_);
-  form->addRow(normal_strength_label_, normal_strength_row);
+  normal_strength_label_->setBuddy(normal_strength_spin_);
+  form->addRow(normal_strength_label_, normal_strength_spin_);
   create_texture_controls(QtStandardMaterialTextureSlot::Normal,
                           QStringLiteral("normalTexture"));
   refresh_texture_palette_icons();
@@ -516,34 +483,18 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
         controls.spin->setDecimals(kScalarDecimals);
         controls.spin->setSingleStep(kScalarStep);
         controls.spin->setAccelerated(true);
-        controls.slider = new QSlider(Qt::Horizontal, texture_transform_group_);
-        controls.slider->setObjectName(
-            QStringLiteral("standardMaterialEditor.textureTransform.%1.slider")
-                .arg(stable_name));
-        controls.slider->setRange(
-            static_cast<int>(std::lround(minimum * kScalarSliderScale)),
-            static_cast<int>(std::lround(maximum * kScalarSliderScale)));
-        controls.slider->setSingleStep(1);
-        auto *row = new QWidget(texture_transform_group_);
-        auto *layout = new QHBoxLayout(row);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->addWidget(controls.slider, 1);
-        layout->addWidget(controls.spin);
-        controls.label->setBuddy(controls.slider);
-        transform_form->addRow(controls.label, row);
+        controls.label->setBuddy(controls.spin);
+        transform_form->addRow(controls.label, controls.spin);
 
-        controls.live_dispatch.timer = new QTimer(row);
+        controls.live_dispatch.timer = new QTimer(controls.spin);
         controls.live_dispatch.timer->setObjectName(
-            controls.slider->objectName() +
-            QStringLiteral(".dispatchTimer"));
+            controls.spin->objectName() + QStringLiteral(".dispatchTimer"));
+        controls.live_dispatch.timer->setTimerType(Qt::PreciseTimer);
         controls.live_dispatch.timer->setSingleShot(true);
         controls.live_dispatch.timer->setInterval(
             kLiveNumberDispatchIntervalMs);
         QObject::connect(
             controls.live_dispatch.timer, &QTimer::timeout, this,
-            [this, component]() { flush_texture_transform_edit(component); });
-        QObject::connect(
-            controls.slider, &QSlider::sliderReleased, this,
             [this, component]() { flush_texture_transform_edit(component); });
         QObject::connect(
             controls.spin, &QDoubleSpinBox::editingFinished, this,
@@ -554,28 +505,9 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
         };
         QObject::connect(
             controls.spin, &QDoubleSpinBox::valueChanged, this,
-            [this, component, slider = controls.slider,
-             controller = &numeric_controller](double value) {
-              {
-                const QSignalBlocker blocker(slider);
-                slider->setValue(
-                    static_cast<int>(std::lround(value * kScalarSliderScale)));
-              }
+            [this, component, controller = &numeric_controller](double value) {
               dispatch_texture_transform_edit(component, value,
                                               controller->is_dragging());
-            });
-        QObject::connect(
-            controls.slider, &QSlider::valueChanged, this,
-            [this, component, spin = controls.spin,
-             slider = controls.slider](int slider_value) {
-              const double value =
-                  static_cast<double>(slider_value) / kScalarSliderScale;
-              {
-                const QSignalBlocker blocker(spin);
-                spin->setValue(value);
-              }
-              dispatch_texture_transform_edit(component, value,
-                                              slider->isSliderDown());
             });
       };
   create_transform_controls(
@@ -646,101 +578,34 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   QObject::connect(albedo_button_, &QPushButton::clicked, this,
                    [this]() { choose_albedo_color(); });
   const auto configure_scalar_live_dispatch =
-      [this](QtStandardMaterialScalar scalar, QSlider *slider,
-             QDoubleSpinBox *spin) {
+      [this](QtStandardMaterialScalar scalar, QDoubleSpinBox *spin) {
         LiveNumberDispatch &live_dispatch =
             scalar_live_dispatches_[scalar_index(scalar)];
-        live_dispatch.timer = new QTimer(slider);
+        live_dispatch.timer = new QTimer(spin);
         live_dispatch.timer->setObjectName(
-            slider->objectName() + QStringLiteral(".dispatchTimer"));
+            spin->objectName() + QStringLiteral(".dispatchTimer"));
         live_dispatch.timer->setSingleShot(true);
+        live_dispatch.timer->setTimerType(Qt::PreciseTimer);
         live_dispatch.timer->setInterval(kLiveNumberDispatchIntervalMs);
         QObject::connect(live_dispatch.timer, &QTimer::timeout, this,
                          [this, scalar]() { flush_scalar_edit(scalar); });
-        QObject::connect(slider, &QSlider::sliderReleased, this,
-                         [this, scalar]() { flush_scalar_edit(scalar); });
         QObject::connect(spin, &QDoubleSpinBox::editingFinished, this,
                          [this, scalar]() { flush_scalar_edit(scalar); });
-        qt_install_numeric_spin_box(*spin).interaction_canceled =
+        auto &controller = qt_install_numeric_spin_box(*spin);
+        controller.interaction_canceled =
             [this, scalar]() { flush_scalar_edit(scalar); };
+        QObject::connect(
+            spin, &QDoubleSpinBox::valueChanged, this,
+            [this, scalar, controller = &controller](double value) {
+              dispatch_scalar_edit(scalar, value, controller->is_dragging());
+            });
       };
   configure_scalar_live_dispatch(QtStandardMaterialScalar::Roughness,
-                                 roughness_slider_, roughness_spin_);
+                                 roughness_spin_);
   configure_scalar_live_dispatch(QtStandardMaterialScalar::Metallic,
-                                 metallic_slider_, metallic_spin_);
+                                 metallic_spin_);
   configure_scalar_live_dispatch(QtStandardMaterialScalar::NormalStrength,
-                                 normal_strength_slider_, normal_strength_spin_);
-  QObject::connect(
-      roughness_spin_, &QDoubleSpinBox::valueChanged, this,
-      [this, controller = &qt_install_numeric_spin_box(*roughness_spin_)](
-          double value) {
-        {
-          const QSignalBlocker blocker(roughness_slider_);
-          roughness_slider_->setValue(
-              static_cast<int>(std::lround(value * kScalarSliderScale)));
-        }
-        dispatch_scalar_edit(QtStandardMaterialScalar::Roughness, value,
-                             controller->is_dragging());
-      });
-  QObject::connect(roughness_slider_, &QSlider::valueChanged, this,
-                   [this](int slider_value) {
-                     const double value =
-                         static_cast<double>(slider_value) / kScalarSliderScale;
-                      {
-                        const QSignalBlocker blocker(roughness_spin_);
-                        roughness_spin_->setValue(value);
-                      }
-                      dispatch_scalar_edit(
-                          QtStandardMaterialScalar::Roughness, value,
-                          roughness_slider_->isSliderDown());
-                    });
-  QObject::connect(
-      metallic_spin_, &QDoubleSpinBox::valueChanged, this,
-      [this, controller = &qt_install_numeric_spin_box(*metallic_spin_)](
-          double value) {
-        {
-          const QSignalBlocker blocker(metallic_slider_);
-          metallic_slider_->setValue(
-              static_cast<int>(std::lround(value * kScalarSliderScale)));
-        }
-        dispatch_scalar_edit(QtStandardMaterialScalar::Metallic, value,
-                             controller->is_dragging());
-      });
-  QObject::connect(
-      metallic_slider_, &QSlider::valueChanged, this, [this](int slider_value) {
-        const double value =
-            static_cast<double>(slider_value) / kScalarSliderScale;
-        {
-          const QSignalBlocker blocker(metallic_spin_);
-          metallic_spin_->setValue(value);
-        }
-        dispatch_scalar_edit(QtStandardMaterialScalar::Metallic, value,
-                             metallic_slider_->isSliderDown());
-      });
-  QObject::connect(
-      normal_strength_spin_, &QDoubleSpinBox::valueChanged, this,
-      [this, controller = &qt_install_numeric_spin_box(*normal_strength_spin_)](
-          double value) {
-        {
-          const QSignalBlocker blocker(normal_strength_slider_);
-          normal_strength_slider_->setValue(
-              static_cast<int>(std::lround(value * kScalarSliderScale)));
-        }
-        dispatch_scalar_edit(QtStandardMaterialScalar::NormalStrength, value,
-                             controller->is_dragging());
-      });
-  QObject::connect(normal_strength_slider_, &QSlider::valueChanged, this,
-                   [this](int slider_value) {
-                     const double value =
-                         static_cast<double>(slider_value) / kScalarSliderScale;
-                      {
-                        const QSignalBlocker blocker(normal_strength_spin_);
-                        normal_strength_spin_->setValue(value);
-                      }
-                      dispatch_scalar_edit(
-                          QtStandardMaterialScalar::NormalStrength, value,
-                          normal_strength_slider_->isSliderDown());
-                    });
+                                 normal_strength_spin_);
   QObject::connect(direct_x_normal_, &QCheckBox::toggled, this,
                    [this](bool direct_x) {
                      if (!refreshing_ && normal_convention_edited_) {
@@ -1291,11 +1156,8 @@ void QtStandardMaterialEditorWindow::refresh_document_controls() {
 
   const QSignalBlocker name_blocker(name_edit_);
   const QSignalBlocker roughness_blocker(roughness_spin_);
-  const QSignalBlocker roughness_slider_blocker(roughness_slider_);
   const QSignalBlocker metallic_blocker(metallic_spin_);
-  const QSignalBlocker metallic_slider_blocker(metallic_slider_);
   const QSignalBlocker normal_strength_blocker(normal_strength_spin_);
-  const QSignalBlocker normal_strength_slider_blocker(normal_strength_slider_);
   const QSignalBlocker convention_blocker(direct_x_normal_);
   const QSignalBlocker diffuse_model_blocker(diffuse_model_combo_);
   const QIcon no_texture_icon =
@@ -1304,15 +1166,9 @@ void QtStandardMaterialEditorWindow::refresh_document_controls() {
   albedo_button_->set_swatch_color(has_document_ ? document_.albedo
                                                  : QColor(Qt::white));
   roughness_spin_->setValue(has_document_ ? document_.roughness : 1.0);
-  roughness_slider_->setValue(static_cast<int>(std::lround(
-      (has_document_ ? document_.roughness : 1.0) * kScalarSliderScale)));
   metallic_spin_->setValue(has_document_ ? document_.metallic : 0.0);
-  metallic_slider_->setValue(static_cast<int>(std::lround(
-      (has_document_ ? document_.metallic : 0.0) * kScalarSliderScale)));
   normal_strength_spin_->setValue(has_document_ ? document_.normal_strength
                                                 : 1.0);
-  normal_strength_slider_->setValue(static_cast<int>(std::lround(
-      (has_document_ ? document_.normal_strength : 1.0) * kScalarSliderScale)));
   direct_x_normal_->setChecked(has_document_ && document_.direct_x_normal);
   const int diffuse_model = static_cast<int>(
       has_document_ ? document_.diffuse_model : QtStandardMaterialDiffuseModel::Burley);
@@ -1387,10 +1243,7 @@ void QtStandardMaterialEditorWindow::refresh_document_controls() {
   for (std::size_t index = 0; index < transform_values.size(); ++index) {
     TextureTransformControls &controls = texture_transform_controls_[index];
     const QSignalBlocker spin_blocker(controls.spin);
-    const QSignalBlocker slider_blocker(controls.slider);
     controls.spin->setValue(transform_values[index]);
-    controls.slider->setValue(static_cast<int>(
-        std::lround(transform_values[index] * kScalarSliderScale)));
   }
   refreshing_ = false;
   refresh_title_and_status();
@@ -1507,12 +1360,10 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
     }
     if (controls.spin->accessibleName() != transform_labels[index]) {
       controls.spin->setAccessibleName(transform_labels[index]);
-      controls.slider->setAccessibleName(transform_labels[index]);
     }
     if (controls.spin->toolTip() != transform_tooltips[index]) {
       controls.label->setToolTip(transform_tooltips[index]);
       controls.spin->setToolTip(transform_tooltips[index]);
-      controls.slider->setToolTip(transform_tooltips[index]);
     }
   }
   refresh_document_controls();

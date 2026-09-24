@@ -106,8 +106,8 @@ inline bool document_command_same_light_component(const LightComponent &left,
 }
 
 inline bool
-document_command_same_scene_settings(const SceneSettingsComponent &left,
-                                     const SceneSettingsComponent &right) {
+document_command_same_scene_settings(const SceneSettings &left,
+                                     const SceneSettings &right) {
   return left == right;
 }
 

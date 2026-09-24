@@ -39,6 +39,8 @@ qdr_project_write_snapshot_from_document(const SceneContentDocument &document) {
   QdrProjectWriteSnapshot snapshot{
       .project_id = document.id(),
       .project_name = document.name(),
+      .scene_settings = scene.scene_settings(),
+      .root_entities = scene.root_entities(),
   };
 
   const std::vector<AssetId> mesh_ids = assets.mesh_ids();

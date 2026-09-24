@@ -477,6 +477,66 @@ create_textured_asymmetric_mesh(CopyPivotHarness &harness) {
   return created.value();
 }
 
+TEST(PivotToolSettingsTests,
+     SharedSnapPreferencesSurviveCancellationWithoutSharingPlacement) {
+  quader::PivotSessionDefaults remembered;
+  CopyPivotHarness first_harness;
+  CopyPivotHarness second_harness;
+  const auto first_box = create_box(first_harness, "First Pivot");
+  const auto second_box = create_box(second_harness, "Second Pivot");
+  ASSERT_TRUE(first_harness.editor.selection().select_object(first_box).ok());
+  ASSERT_TRUE(second_harness.editor.selection().select_object(second_box).ok());
+  quader::PivotToolService first(
+      first_harness.session.scene(), first_harness.session.assets(),
+      first_harness.session.history(), first_harness.session.modeling(),
+      &remembered);
+  quader::PivotToolService second(
+      second_harness.session.scene(), second_harness.session.assets(),
+      second_harness.session.history(), second_harness.session.modeling(),
+      &remembered);
+
+  ASSERT_TRUE(first.activate_persistent(first_harness.session.selection()).ok);
+  ASSERT_TRUE(first.set_snap_enabled(quader::kPivotSnapGridSetting, false).changed);
+  ASSERT_TRUE(first.set_snap_enabled(quader::kPivotSnapVertexSetting, false).changed);
+  first.set_persistent_preview_position({7.0f, 8.0f, 9.0f});
+  ASSERT_TRUE(first.cancel_persistent().changed);
+  EXPECT_FALSE(first.persistent_preview_position().has_value());
+
+  ASSERT_TRUE(second.activate_persistent(second_harness.session.selection()).ok);
+  EXPECT_FALSE(second.snap_settings().grid);
+  EXPECT_FALSE(second.snap_settings().vertex);
+  EXPECT_TRUE(second.snap_settings().edge_midpoint);
+  EXPECT_TRUE(second.snap_settings().face_center);
+  ASSERT_TRUE(second.persistent_preview_position().has_value());
+  EXPECT_FLOAT_EQ(second.persistent_preview_position()->x, 0.0f);
+  EXPECT_FLOAT_EQ(second.persistent_preview_position()->y, 0.0f);
+  EXPECT_FLOAT_EQ(second.persistent_preview_position()->z, 0.0f);
+  ASSERT_TRUE(second.set_snap_enabled(quader::kPivotSnapFaceCenterSetting, false)
+                  .changed);
+  ASSERT_TRUE(second.cancel_persistent().changed);
+
+  first.begin_quick({1.0f, 2.0f, 3.0f});
+  EXPECT_TRUE(first.quick_edit_active());
+  EXPECT_FALSE(first.snap_settings().face_center);
+  EXPECT_FALSE(first.snap_settings().grid);
+  ASSERT_TRUE(first.set_snap_enabled(quader::kPivotSnapGridSetting, true).changed);
+  first.end_quick_edit();
+  first.clear_quick_override();
+  ASSERT_TRUE(second.activate_persistent(second_harness.session.selection()).ok);
+  EXPECT_TRUE(second.snap_settings().grid);
+  EXPECT_FALSE(second.snap_settings().face_center);
+
+  quader::PivotToolService fresh(
+      first_harness.session.scene(), first_harness.session.assets(),
+      first_harness.session.history(), first_harness.session.modeling());
+  EXPECT_TRUE(fresh.snap_settings().grid);
+  EXPECT_TRUE(fresh.snap_settings().vertex);
+  EXPECT_TRUE(fresh.snap_settings().edge_midpoint);
+  EXPECT_TRUE(fresh.snap_settings().face_center);
+  EXPECT_FALSE(fresh.persistent_preview_position().has_value());
+  EXPECT_FALSE(fresh.selection_pivot_override().valid);
+}
+
 TEST(CopyPivotFromActiveTests,
      PivotRebasePreservesGeneratedUvsAndFaceSettingsThroughHistory) {
   CopyPivotHarness harness;

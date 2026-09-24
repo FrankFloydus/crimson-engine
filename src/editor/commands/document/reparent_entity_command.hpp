@@ -10,6 +10,7 @@
 #include "editor/commands/document/scene_command.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 
@@ -29,6 +30,7 @@ public:
       before_transform_ = *transform;
       after_transform_ = *transform;
     }
+    before_ordinal_ = scene.sibling_ordinal(entity);
     capture_layer_assignments(scene, before_layer_assignments_);
     after_layer_assignments_ = before_layer_assignments_;
     if (scene.containing_instance_definition(parent) != kInvalidEntityId &&
@@ -38,26 +40,8 @@ public:
     }
   }
 
-  ReparentEntityCommand(SceneDocument &scene, EntityId entity,
-                        EntityId before_parent, EntityId after_parent,
-                        TransformComponent before_transform,
-                        TransformComponent after_transform)
-      : SceneCommand(scene, "Reparent Entity"), entity_(entity),
-        before_parent_(before_parent), after_parent_(after_parent),
-        before_transform_(before_transform), after_transform_(after_transform),
-        captured_after_transform_(true) {
-    capture_layer_assignments(scene, before_layer_assignments_);
-    after_layer_assignments_ = before_layer_assignments_;
-    if (scene.containing_instance_definition(after_parent) !=
-            kInvalidEntityId &&
-        scene.containing_instance_definition(entity) !=
-            scene.containing_instance_definition(after_parent)) {
-      after_layer_assignments_.clear();
-    }
-  }
-
   DocumentCommandResult undo() override {
-    return apply(before_parent_, before_transform_);
+    return apply(before_parent_, before_transform_, before_ordinal_, true);
   }
 
     DocumentCommandResult redo() override {
@@ -69,17 +53,31 @@ public:
           return document_command_invalid_request_result(
               "Parent entity does not exist");
         }
-        if (before_parent_ == after_parent_ && !captured_after_transform_) {
+        if (captured_after_transform_) {
+          return apply(after_parent_, after_transform_, after_ordinal_, false);
+        }
+        before_parent_ = scene().parent(entity_);
+        if (before_parent_ == after_parent_) {
           return document_command_unchanged_result();
         }
-        if (captured_after_transform_) {
-          return apply(after_parent_, after_transform_);
+        before_layer_assignments_.clear();
+        capture_layer_assignments(scene(), before_layer_assignments_);
+        after_layer_assignments_ = before_layer_assignments_;
+        if (scene().containing_instance_definition(after_parent_) != kInvalidEntityId &&
+            scene().containing_instance_definition(entity_) !=
+                scene().containing_instance_definition(after_parent_)) {
+          after_layer_assignments_.clear();
+        }
+        before_ordinal_ = scene().sibling_ordinal(entity_);
+        if (const TransformComponent *transform = scene().transform(entity_)) {
+          before_transform_ = *transform;
         }
         if (!scene().set_parent(entity_, after_parent_,
                                 preserve_world_transform_)) {
           return document_command_invalid_request_result(
               "Entity cannot be reparented");
         }
+        after_ordinal_ = scene().sibling_ordinal(entity_);
         if (const TransformComponent* transform = scene().transform(entity_)) {
           after_transform_ = *transform;
           captured_after_transform_ = true;
@@ -131,7 +129,8 @@ private:
       return scene().replace_layer_state(std::move(state));
     }
 
-    DocumentCommandResult apply(EntityId parent, const TransformComponent& transform) {
+    DocumentCommandResult apply(EntityId parent, const TransformComponent& transform,
+                                std::optional<std::size_t> ordinal, bool use_before) {
         if (!scene().exists(entity_)) {
           return document_command_missing_entity_result();
         }
@@ -144,7 +143,11 @@ private:
               "Entity cannot be reparented");
         }
         scene().set_transform(entity_, transform);
-        const bool use_before = parent == before_parent_;
+        if (ordinal.has_value() &&
+            !scene().set_sibling_ordinal(entity_, *ordinal)) {
+          return document_command_invalid_request_result(
+              "Entity sibling placement could not be restored");
+        }
         if (!apply_layer_assignments(use_before ? before_layer_assignments_
                                                 : after_layer_assignments_)) {
           return document_command_invalid_request_result(
@@ -156,6 +159,8 @@ private:
     EntityId entity_ = kInvalidEntityId;
     EntityId before_parent_ = kInvalidEntityId;
     EntityId after_parent_ = kInvalidEntityId;
+    std::optional<std::size_t> before_ordinal_;
+    std::optional<std::size_t> after_ordinal_;
     TransformComponent before_transform_;
     TransformComponent after_transform_;
     bool preserve_world_transform_ = true;

@@ -380,6 +380,7 @@ table Entity {
   mesh:MeshComponent;
   material:MaterialComponent;
   light:LightComponent;
+  // Legacy reader-only wrapper fields; schema 16 stores settings on ScenePayload.
   scene_root:bool = false;
   scene_settings:SceneSettingsComponent;
   instance_definition:InstanceDefinitionComponent;
@@ -435,6 +436,9 @@ table ScenePayload {
   layers:[SceneLayer];
   viewport_camera_pose:ViewportCameraPose;
   curves:[CurveAsset];
+  // Required by schema-16 domain validation; optional on wire for older files.
+  scene_settings:SceneSettingsComponent;
+  root_entities:[ulong];
 }
 
 root_type ScenePayload;

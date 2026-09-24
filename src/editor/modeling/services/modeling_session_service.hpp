@@ -31,8 +31,10 @@ class DocumentCommandService;
 class EditorHistoryService;
 class EditorTransaction;
 class IUndoableCommand;
+class ModelingInteractionSettingsService;
 class SceneDocument;
 struct TextureLockSettings;
+struct UvPeelSessionDefaults;
 struct ViewportSceneCurvePickCandidate;
 
 /**
@@ -142,9 +144,12 @@ private:
  */
 class ModelingSessionService {
 public:
+  /// Borrows app-lifetime options when supplied; standalone callers own theirs.
   ModelingSessionService(
       SceneDocument &scene, AssetRegistry &assets,
-      ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks = {});
+      ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks = {},
+      ModelingInteractionSettingsService *interaction_settings = nullptr,
+      UvPeelSessionDefaults *uv_peel_defaults = nullptr);
   ~ModelingSessionService();
   /// Disconnects scene-owned callbacks before the scene begins member teardown.
   void detach_preview_checkpoint_hooks();

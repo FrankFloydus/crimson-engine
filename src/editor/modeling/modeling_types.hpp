@@ -841,6 +841,8 @@ struct ModelingToolSettingsTarget {
   std::string label;
   std::string action_id;
   std::string operation_id;
+  // Cached accepted Bevel saturation; absent until this source has reached it.
+  std::optional<double> edge_bevel_maximum_width;
 };
 
 /**

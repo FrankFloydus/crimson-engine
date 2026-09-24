@@ -49,7 +49,11 @@ struct PrimitiveCreationHarness {
   AssetRegistry assets;
   EditorHistoryService history;
   ModelingSessionService modeling{scene, assets};
-  PrimitiveCreationToolService tool{history, modeling};
+  PrimitiveCreationToolService tool;
+
+  explicit PrimitiveCreationHarness(
+      PrimitiveCreationSessionDefaults *session_defaults = nullptr)
+      : tool(history, modeling, {}, session_defaults) {}
 };
 
 /// Provides direct coverage of the SDK-to-native creation projection boundary.
@@ -101,27 +105,44 @@ void set_nondefault_primitive_settings(QuaderToolsApi &tools) {
   }
 }
 
+PrimitiveCreationSessionDefaults primitive_settings(
+    const PrimitiveCreationToolService &tool) {
+  return {.preferred_kind = tool.active_kind().value_or(PrimitiveCreationKind::Box),
+          .box = tool.box_settings(),
+          .cylinder = tool.cylinder_settings(),
+          .cone = tool.cone_settings(),
+          .sphere = tool.sphere_settings(),
+          .torus = tool.torus_settings()};
+}
+
+void expect_primitive_settings(
+    const PrimitiveCreationToolService &tool,
+    const PrimitiveCreationSessionDefaults &expected) {
+  EXPECT_EQ(tool.box_settings().subdivisions_x, expected.box.subdivisions_x);
+  EXPECT_EQ(tool.box_settings().subdivisions_y, expected.box.subdivisions_y);
+  EXPECT_EQ(tool.box_settings().subdivisions_z, expected.box.subdivisions_z);
+  EXPECT_EQ(tool.box_settings().flip_faces, expected.box.flip_faces);
+  EXPECT_EQ(tool.cylinder_settings().side_count, expected.cylinder.side_count);
+  EXPECT_EQ(tool.cylinder_settings().caps, expected.cylinder.caps);
+  EXPECT_EQ(tool.cylinder_settings().flip_faces, expected.cylinder.flip_faces);
+  EXPECT_EQ(tool.cone_settings().side_count, expected.cone.side_count);
+  EXPECT_EQ(tool.cone_settings().caps, expected.cone.caps);
+  EXPECT_EQ(tool.cone_settings().flip_faces, expected.cone.flip_faces);
+  EXPECT_EQ(tool.sphere_settings().radial_segments, expected.sphere.radial_segments);
+  EXPECT_EQ(tool.sphere_settings().rings, expected.sphere.rings);
+  EXPECT_EQ(tool.sphere_settings().hemisphere, expected.sphere.hemisphere);
+  EXPECT_EQ(tool.sphere_settings().flip_faces, expected.sphere.flip_faces);
+  EXPECT_EQ(tool.sphere_settings().type, expected.sphere.type);
+  EXPECT_EQ(tool.sphere_settings().subdivision, expected.sphere.subdivision);
+  EXPECT_EQ(tool.torus_settings().major_segments, expected.torus.major_segments);
+  EXPECT_EQ(tool.torus_settings().minor_segments, expected.torus.minor_segments);
+  EXPECT_DOUBLE_EQ(tool.torus_settings().tube_radius_ratio,
+                   expected.torus.tube_radius_ratio);
+  EXPECT_EQ(tool.torus_settings().flip_faces, expected.torus.flip_faces);
+}
+
 void expect_default_primitive_settings(const PrimitiveCreationToolService &tool) {
-  EXPECT_EQ(tool.box_settings().subdivisions_x, 1);
-  EXPECT_EQ(tool.box_settings().subdivisions_y, 1);
-  EXPECT_EQ(tool.box_settings().subdivisions_z, 1);
-  EXPECT_FALSE(tool.box_settings().flip_faces);
-  EXPECT_EQ(tool.cylinder_settings().side_count, 32);
-  EXPECT_TRUE(tool.cylinder_settings().caps);
-  EXPECT_FALSE(tool.cylinder_settings().flip_faces);
-  EXPECT_EQ(tool.cone_settings().side_count, 32);
-  EXPECT_TRUE(tool.cone_settings().caps);
-  EXPECT_FALSE(tool.cone_settings().flip_faces);
-  EXPECT_EQ(tool.sphere_settings().radial_segments, 32);
-  EXPECT_EQ(tool.sphere_settings().rings, 16);
-  EXPECT_FALSE(tool.sphere_settings().hemisphere);
-  EXPECT_FALSE(tool.sphere_settings().flip_faces);
-  EXPECT_EQ(tool.sphere_settings().type, PrimitiveSphereType::Uv);
-  EXPECT_EQ(tool.sphere_settings().subdivision, 3);
-  EXPECT_EQ(tool.torus_settings().major_segments, 32);
-  EXPECT_EQ(tool.torus_settings().minor_segments, 12);
-  EXPECT_DOUBLE_EQ(tool.torus_settings().tube_radius_ratio, 0.2);
-  EXPECT_FALSE(tool.torus_settings().flip_faces);
+  expect_primitive_settings(tool, {});
 }
 
 std::array<QVec3, 8> oriented_box_corners(QVec3 center, QVec3 x_axis,
@@ -304,6 +325,116 @@ std::optional<QVec2> top_face_texture_uv_at_world_point(
     }
   }
   return std::nullopt;
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     SharedOptionsAdoptLatestOnActivationWithoutSharingLiveState) {
+  PrimitiveCreationSessionDefaults remembered;
+  PrimitiveCreationHarness first(&remembered);
+  PrimitiveCreationHarness second(&remembered);
+  ASSERT_TRUE(first.tool.activate(PrimitiveCreationKind::Torus).ok);
+  ASSERT_TRUE(first.tool.set_setting(kTorusMajorSegmentsSetting, 8.0).ok);
+  ASSERT_TRUE(first.tool.set_setting(kTorusMinorSegmentsSetting, 4.0).ok);
+  ASSERT_TRUE(first.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.3).ok);
+  ASSERT_TRUE(first.tool.accept_preview(valid_primitive_preview(), "First Torus").ok);
+  const auto original_content = compiled_content_id(first.modeling, "First Torus");
+
+  // This owner predates the edits and adopts them only when activated.
+  ASSERT_TRUE(second.tool.activate().ok);
+  EXPECT_EQ(second.tool.active_kind(), PrimitiveCreationKind::Torus);
+  expect_primitive_settings(second.tool, remembered);
+  EXPECT_FALSE(second.tool.live_primitive_creation().has_value());
+  EXPECT_EQ(second.tool.shape_count(), 0U);
+  EXPECT_TRUE(second.modeling.objects().empty());
+  ASSERT_TRUE(second.tool.set_kind(PrimitiveCreationKind::Box).ok);
+  ASSERT_TRUE(second.tool.set_setting(kBoxSubdivisionsXSetting, 3.0).ok);
+  EXPECT_EQ(first.tool.active_kind(), PrimitiveCreationKind::Torus);
+  EXPECT_EQ(first.tool.box_settings().subdivisions_x, 1);
+  EXPECT_EQ(compiled_content_id(first.modeling, "First Torus"), original_content);
+
+  // Independently active owners merge only the options they accepted.
+  ASSERT_TRUE(first.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.25).ok);
+  EXPECT_EQ(remembered.box.subdivisions_x, 3);
+  EXPECT_DOUBLE_EQ(remembered.torus.tube_radius_ratio, 0.25);
+  EXPECT_EQ(remembered.preferred_kind, PrimitiveCreationKind::Torus);
+  ASSERT_TRUE(second.tool.cancel().ok);
+  EXPECT_EQ(remembered.preferred_kind, PrimitiveCreationKind::Torus);
+  EXPECT_DOUBLE_EQ(remembered.torus.tube_radius_ratio, 0.25);
+
+  PrimitiveCreationHarness third(&remembered);
+  ASSERT_TRUE(third.tool.activate().ok);
+  EXPECT_EQ(third.tool.active_kind(), PrimitiveCreationKind::Torus);
+  expect_primitive_settings(third.tool, remembered);
+  EXPECT_EQ(third.tool.box_settings().subdivisions_x, 3);
+  EXPECT_FALSE(third.tool.live_primitive_creation().has_value());
+  ASSERT_TRUE(first.tool.cancel().ok);
+  EXPECT_TRUE(first.modeling.objects().empty());
+  EXPECT_TRUE(third.tool.active());
+  ASSERT_TRUE(third.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     FreshApplicationAndStandaloneOwnersStartWithDefaults) {
+  PrimitiveCreationHarness local;
+  ASSERT_TRUE(local.tool.activate(PrimitiveCreationKind::Sphere).ok);
+  ASSERT_TRUE(local.tool.set_setting(kSphereTypeSetting, 1.0).ok);
+  ASSERT_TRUE(local.tool.set_setting(kSphereSubdivisionSetting, 2.0).ok);
+  const auto local_options = primitive_settings(local.tool);
+  ASSERT_TRUE(local.tool.cancel().ok);
+  ASSERT_TRUE(local.tool.activate().ok);
+  EXPECT_EQ(local.tool.active_kind(), PrimitiveCreationKind::Sphere);
+  expect_primitive_settings(local.tool, local_options);
+
+  PrimitiveCreationHarness independent;
+  ASSERT_TRUE(independent.tool.activate().ok);
+  EXPECT_EQ(independent.tool.active_kind(), PrimitiveCreationKind::Box);
+  expect_default_primitive_settings(independent.tool);
+
+  PrimitiveCreationSessionDefaults application_options;
+  PrimitiveCreationHarness application(&application_options);
+  ASSERT_TRUE(application.tool.activate(PrimitiveCreationKind::Cone).ok);
+  ASSERT_TRUE(application.tool.set_setting(kConeSideCountSetting, 7.0).ok);
+  ASSERT_TRUE(application.tool.cancel().ok);
+  PrimitiveCreationSessionDefaults next_application_options;
+  PrimitiveCreationHarness next_application(&next_application_options);
+  ASSERT_TRUE(next_application.tool.activate().ok);
+  EXPECT_EQ(next_application.tool.active_kind(), PrimitiveCreationKind::Box);
+  expect_default_primitive_settings(next_application.tool);
+  ASSERT_TRUE(local.tool.cancel().ok);
+  ASSERT_TRUE(independent.tool.cancel().ok);
+  ASSERT_TRUE(next_application.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     FailedLiveOptionsDoNotReplaceRememberedValuesOrKind) {
+  for (const bool change_kind : {false, true}) {
+    SCOPED_TRACE(change_kind);
+    PrimitiveCreationSessionDefaults remembered;
+    PrimitiveCreationHarness harness(&remembered);
+    ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Torus).ok);
+    ASSERT_TRUE(harness.tool.set_setting(kTorusMajorSegmentsSetting, 8.0).ok);
+    ASSERT_TRUE(harness.tool.set_setting(kTorusMinorSegmentsSetting, 4.0).ok);
+    ASSERT_TRUE(harness.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.3).ok);
+    ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(), "Rejected Edit").ok);
+    const auto accepted_options = remembered;
+    harness.modeling.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+    const auto rejected = change_kind
+        ? harness.tool.set_kind(PrimitiveCreationKind::Sphere)
+        : harness.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.4);
+    EXPECT_FALSE(rejected.ok);
+    EXPECT_FALSE(rejected.changed);
+    EXPECT_FALSE(harness.tool.active());
+    EXPECT_TRUE(harness.modeling.objects().empty());
+    expect_primitive_settings(harness.tool, accepted_options);
+    EXPECT_EQ(remembered.preferred_kind, accepted_options.preferred_kind);
+
+    PrimitiveCreationHarness observer(&remembered);
+    ASSERT_TRUE(observer.tool.activate().ok);
+    EXPECT_EQ(observer.tool.active_kind(), PrimitiveCreationKind::Torus);
+    expect_primitive_settings(observer.tool, accepted_options);
+    ASSERT_TRUE(observer.tool.cancel().ok);
+  }
 }
 
 TEST(PrimitiveCreationToolServiceTests,
@@ -1726,7 +1857,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     RepeatedCubesRetainSettingsUntilFinalizeThenReactivateWithDefaults) {
+     RepeatedCubesRetainSettingsAfterFinalizeAndReactivation) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -1758,9 +1889,10 @@ TEST(PrimitiveCreationToolServiceTests,
       compiled_content_id(session.modeling(), "Second Custom Cube");
   const std::uint64_t settings_revision =
       session.primitive_creation().tool_settings_revision();
+  const auto remembered = primitive_settings(session.primitive_creation());
   ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
   EXPECT_FALSE(session.primitive_creation().active());
-  expect_default_primitive_settings(session.primitive_creation());
+  expect_primitive_settings(session.primitive_creation(), remembered);
   EXPECT_GT(session.primitive_creation().tool_settings_revision(),
             settings_revision);
   EXPECT_EQ(compiled_content_id(session.modeling(), "First Custom Cube"),
@@ -1783,7 +1915,7 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
   EXPECT_EQ(session.primitive_creation().active_kind(),
             PrimitiveCreationKind::Box);
-  expect_default_primitive_settings(session.primitive_creation());
+  expect_primitive_settings(session.primitive_creation(), remembered);
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   EXPECT_EQ(compiled_content_id(session.modeling(), "First Custom Cube"),
             first_content);
@@ -1792,7 +1924,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     CancelAndToolSwitchResetAllSettingsForEmptyAndRepeatedShapeSessions) {
+     CancelAndToolSwitchRetainAllSettingsForEmptyAndRepeatedShapeSessions) {
   for (const bool accept_shapes : {false, true}) {
     for (const bool switch_tool : {false, true}) {
       SCOPED_TRACE(::testing::Message() << "accept_shapes=" << accept_shapes
@@ -1815,6 +1947,7 @@ TEST(PrimitiveCreationToolServiceTests,
                              .tube_radius_ratio, 0.3);
         EXPECT_TRUE(session.primitive_creation().torus_settings().flip_faces);
       }
+      const auto remembered = primitive_settings(session.primitive_creation());
       const std::uint64_t settings_revision =
           session.primitive_creation().tool_settings_revision();
       const QuaderApiVoidResult exited = switch_tool
@@ -1825,27 +1958,29 @@ TEST(PrimitiveCreationToolServiceTests,
       EXPECT_TRUE(session.modeling().objects().empty());
       EXPECT_FALSE(editor.history().can_undo());
       EXPECT_FALSE(editor.history().can_redo());
-      expect_default_primitive_settings(session.primitive_creation());
+      expect_primitive_settings(session.primitive_creation(), remembered);
       EXPECT_GT(session.primitive_creation().tool_settings_revision(),
                 settings_revision);
       ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
       EXPECT_EQ(session.primitive_creation().active_kind(),
-                PrimitiveCreationKind::Box);
-      expect_default_primitive_settings(session.primitive_creation());
+                PrimitiveCreationKind::Torus);
+      expect_primitive_settings(session.primitive_creation(), remembered);
       ASSERT_TRUE(session.primitive_creation().accept_preview(
-          valid_primitive_preview(), "Default Cube").ok);
-      const auto cube = editor.tools().live_primitive_cube();
-      ASSERT_TRUE(cube.has_value());
-      EXPECT_EQ(cube->subdivisions, (std::array<int, 3>{1, 1, 1}));
-      EXPECT_FALSE(cube->flip_faces);
-      EXPECT_EQ(compiled_index_count(session.modeling(), "Default Cube"), 36U);
+          valid_primitive_preview(), "Remembered Torus").ok);
+      const auto torus = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(torus.has_value());
+      EXPECT_EQ(torus->major_segments, 8);
+      EXPECT_EQ(torus->minor_segments, 4);
+      EXPECT_DOUBLE_EQ(torus->tube_radius_ratio, 0.3);
+      EXPECT_TRUE(torus->flip_faces);
+      EXPECT_EQ(compiled_index_count(session.modeling(), "Remembered Torus"), 192U);
       EXPECT_TRUE(editor.tools().cancel_active_tool_preview().ok());
     }
   }
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     LivePublicationFailureResetsEveryPrimitiveSettingBeforeReactivation) {
+     LivePublicationFailureRetainsLastAcceptedPrimitiveSettingsBeforeReactivation) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -1853,6 +1988,7 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_NO_FATAL_FAILURE(set_nondefault_primitive_settings(editor.tools()));
   ASSERT_TRUE(session.primitive_creation().accept_preview(
       valid_primitive_preview(), "Custom Torus").ok);
+  const auto remembered = primitive_settings(session.primitive_creation());
   session.modeling().set_modeling_sdk_projection_failure_for_tests(
       ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
   const QuaderApiVoidResult failed = editor.tools().set_setting(
@@ -1862,11 +1998,11 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_FALSE(session.primitive_creation().active());
   EXPECT_TRUE(session.modeling().objects().empty());
   EXPECT_FALSE(editor.history().can_undo());
-  expect_default_primitive_settings(session.primitive_creation());
+  expect_primitive_settings(session.primitive_creation(), remembered);
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
   EXPECT_EQ(session.primitive_creation().active_kind(),
-            PrimitiveCreationKind::Box);
-  expect_default_primitive_settings(session.primitive_creation());
+            PrimitiveCreationKind::Torus);
+  expect_primitive_settings(session.primitive_creation(), remembered);
   EXPECT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
@@ -1887,6 +2023,8 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_EQ(harness.modeling.objects().size(), 1U);
   EXPECT_FALSE(harness.history.can_undo());
 
+  const auto remembered = primitive_settings(harness.tool);
+  const auto accepted_indices = compiled_index_count(harness.modeling, "Accepted Hemisphere");
   ModelingBoxPreview invalid = valid_primitive_preview(4.0f);
   invalid.corner_count = invalid.corners.size() - 1U;
   const CommandResult failed =
@@ -1899,14 +2037,14 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_FALSE(harness.history.can_undo());
   EXPECT_FALSE(harness.history.can_redo());
   EXPECT_EQ(harness.modeling.selection_summary().selected_object_count, 0U);
-  expect_default_primitive_settings(harness.tool);
+  expect_primitive_settings(harness.tool, remembered);
   ASSERT_TRUE(harness.tool.activate().ok);
-  EXPECT_EQ(harness.tool.active_kind(), PrimitiveCreationKind::Box);
-  expect_default_primitive_settings(harness.tool);
+  EXPECT_EQ(harness.tool.active_kind(), PrimitiveCreationKind::Sphere);
+  expect_primitive_settings(harness.tool, remembered);
   ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(),
-                                          "Default Box After Failure").ok);
-  EXPECT_EQ(compiled_index_count(harness.modeling, "Default Box After Failure"),
-            36U);
+                                          "Remembered Hemisphere After Failure").ok);
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Remembered Hemisphere After Failure"),
+            accepted_indices);
   EXPECT_TRUE(harness.tool.cancel().ok);
 }
 
@@ -1943,11 +2081,12 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_EQ(compiled_index_count(harness.modeling, "Live Primitive"),
             morphed_index_count);
 
+  const auto remembered = primitive_settings(harness.tool);
   ASSERT_TRUE(harness.tool.cancel().ok);
   ASSERT_TRUE(harness.tool.activate().ok);
   ASSERT_TRUE(harness.tool.active_kind().has_value());
-  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Box);
-  expect_default_primitive_settings(harness.tool);
+  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Cylinder);
+  expect_primitive_settings(harness.tool, remembered);
   EXPECT_TRUE(harness.tool.cancel().ok);
 }
 
@@ -2006,6 +2145,7 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_EQ(compiled_content_id(harness.modeling, "Torus"),
             updated_torus_content);
 
+  const auto remembered = primitive_settings(harness.tool);
   const CommandResult applied = harness.tool.apply();
   ASSERT_TRUE(applied.ok) << applied.message;
   ASSERT_TRUE(harness.history.can_undo());
@@ -2018,8 +2158,8 @@ TEST(PrimitiveCreationToolServiceTests,
 
   ASSERT_TRUE(harness.tool.activate().ok);
   ASSERT_TRUE(harness.tool.active_kind().has_value());
-  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Box);
-  expect_default_primitive_settings(harness.tool);
+  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Torus);
+  expect_primitive_settings(harness.tool, remembered);
   EXPECT_TRUE(harness.tool.cancel().ok);
 }
 
@@ -3684,9 +3824,10 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(editor.history().redo().ok());
   EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
   EXPECT_EQ(compiled_content_id(session.modeling(), "Second Cylinder"), second_content);
+  const auto remembered = primitive_settings(session.primitive_creation());
   ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
   EXPECT_EQ(session.history().undo_count(), 2U);
-  expect_default_primitive_settings(session.primitive_creation());
+  expect_primitive_settings(session.primitive_creation(), remembered);
   ASSERT_TRUE(editor.history().undo().ok());
   ASSERT_TRUE(editor.history().undo().ok());
   EXPECT_TRUE(session.modeling().objects().empty());
@@ -3695,7 +3836,7 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_EQ(compiled_content_id(session.modeling(), "First Cylinder"), first_content);
   EXPECT_EQ(compiled_content_id(session.modeling(), "Second Cylinder"), second_content);
   ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
-  expect_default_primitive_settings(session.primitive_creation());
+  expect_primitive_settings(session.primitive_creation(), remembered);
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
@@ -3809,9 +3950,10 @@ TEST(PrimitiveCreationToolServiceTests,
       EXPECT_EQ(pending->flip_faces, !caps);
       EXPECT_EQ(pending->side_count, 7);
       EXPECT_EQ(compiled_content_id(session.modeling(), "Frozen Cylinder"), original_content);
+      const auto remembered = primitive_settings(session.primitive_creation());
       ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
       EXPECT_TRUE(session.modeling().objects().empty());
-      expect_default_primitive_settings(session.primitive_creation());
+      expect_primitive_settings(session.primitive_creation(), remembered);
     }
   }
 }
@@ -3850,7 +3992,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     CylinderResizePublicationFailuresRollbackSessionAndResetSettings) {
+     CylinderResizePublicationFailuresRollbackSessionAndRetainAcceptedSettings) {
   for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
                              ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
     for (const std::string_view action : {"resize", "cancel", "pending_caps"}) {
@@ -3870,6 +4012,7 @@ TEST(PrimitiveCreationToolServiceTests,
       if (action == "pending_caps") {
         ASSERT_TRUE(editor.selection().clear().ok());
       }
+      const auto remembered = primitive_settings(session.primitive_creation());
       session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
       const auto result = action == "resize" ? editor.tools().update_primitive_resize(1.0)
           : action == "cancel" ? editor.tools().cancel_primitive_resize()
@@ -3880,11 +4023,11 @@ TEST(PrimitiveCreationToolServiceTests,
       EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
       ASSERT_EQ(session.modeling().objects().size(), 1U);
       EXPECT_EQ(compiled_content_id(session.modeling(), "Baseline"), baseline);
-      expect_default_primitive_settings(session.primitive_creation());
+      expect_primitive_settings(session.primitive_creation(), remembered);
       EXPECT_FALSE(editor.tools().cancel_primitive_resize().changed());
       EXPECT_FALSE(editor.tools().toggle_primitive_caps().ok());
       ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
-      EXPECT_TRUE(session.primitive_creation().cylinder_settings().caps);
+      EXPECT_FALSE(session.primitive_creation().cylinder_settings().caps);
       ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
     }
   }
@@ -4146,9 +4289,10 @@ TEST(PrimitiveCreationToolServiceTests,
     const auto flat = editor.tools().live_primitive_creation();
     EXPECT_GE(static_cast<double>(flat->local_max.y) - flat->local_min.y, kPrimitiveMinimumExtent);
     EXPECT_FALSE(editor.tools().update_primitive_resize(-200.0).changed());
+    const auto remembered = primitive_settings(session.primitive_creation());
     ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
     EXPECT_TRUE(session.modeling().objects().empty());
-    expect_default_primitive_settings(session.primitive_creation());
+    expect_primitive_settings(session.primitive_creation(), remembered);
   }
 }
 
@@ -4261,9 +4405,10 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_DOUBLE_EQ(editor.tools().live_primitive_creation()->tube_radius_ratio, 0.3);
     EXPECT_FLOAT_EQ(editor.tools().live_primitive_creation()->local_max.x, 1.0f);
     const auto second_content = compiled_content_id(session.modeling(), "Repeated Torus");
+    const auto remembered = primitive_settings(session.primitive_creation());
     ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
     EXPECT_EQ(session.history().undo_count(), 2U);
-    expect_default_primitive_settings(session.primitive_creation());
+    expect_primitive_settings(session.primitive_creation(), remembered);
     ASSERT_TRUE(editor.history().undo().ok());
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_TRUE(session.modeling().objects().empty());
@@ -4386,8 +4531,9 @@ TEST(PrimitiveCreationToolServiceTests,
     if (kind == "cone") EXPECT_FALSE(pending->caps);
     if (kind == "sphere") EXPECT_TRUE(pending->hemisphere);
     EXPECT_EQ(compiled_content_id(session.modeling(), "Frozen Shape"), content);
+    const auto remembered = primitive_settings(session.primitive_creation());
     ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
-    expect_default_primitive_settings(session.primitive_creation());
+    expect_primitive_settings(session.primitive_creation(), remembered);
     EXPECT_TRUE(session.modeling().objects().empty());
   }
 }
@@ -4412,6 +4558,7 @@ TEST(PrimitiveCreationToolServiceTests,
     const auto selection_revision = session.scene().selection_revision();
     EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, kTorusTubeRadiusRatioSetting, 0.0).ok());
     EXPECT_NE(session.primitive_creation().torus_settings().tube_radius_ratio, 0.2);
+    const auto remembered = primitive_settings(session.primitive_creation());
     session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
     const auto flipped = editor.tools().flip_primitive_faces();
     if (failure == ModelingSdkProjectionFailurePoint::None) {
@@ -4427,7 +4574,7 @@ TEST(PrimitiveCreationToolServiceTests,
       EXPECT_FALSE(flipped.ok());
       EXPECT_FALSE(flipped.changed());
       EXPECT_FALSE(session.primitive_creation().active());
-      expect_default_primitive_settings(session.primitive_creation());
+      expect_primitive_settings(session.primitive_creation(), remembered);
     }
     EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
     EXPECT_FALSE(editor.tools().cancel_primitive_resize().changed());
@@ -4646,13 +4793,14 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_FALSE(tool.live_primitive_creation().has_value());
   EXPECT_EQ(compiled_content_id(harness.modeling, "Pending Sphere"), pending_content);
   EXPECT_EQ(compiled_content_id(harness.modeling, "Frozen Sphere"), content);
+  const auto remembered = primitive_settings(tool);
   ASSERT_TRUE(tool.cancel().ok);
   EXPECT_TRUE(harness.modeling.objects().empty());
-  expect_default_primitive_settings(tool);
+  expect_primitive_settings(tool, remembered);
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     SphereTypeEditsRemainWithinPerShapeHistoryAndResetWhenSessionEnds) {
+     SphereTypeEditsRemainWithinPerShapeHistoryAndPersistAfterSessionEnds) {
   PrimitiveCreationHarness harness;
   auto &tool = harness.tool;
   ASSERT_TRUE(tool.activate(PrimitiveCreationKind::Sphere).ok);
@@ -4672,9 +4820,10 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(tool.redo().ok);
   EXPECT_FALSE(tool.live_primitive_creation().has_value());
   EXPECT_EQ(compiled_content_id(harness.modeling, "Second Sphere"), second_content);
+  const auto remembered = primitive_settings(tool);
   ASSERT_TRUE(tool.apply().ok);
   EXPECT_EQ(harness.history.undo_count(), 2U);
-  expect_default_primitive_settings(tool);
+  expect_primitive_settings(tool, remembered);
   ASSERT_TRUE(harness.history.undo().ok);
   ASSERT_TRUE(harness.history.undo().ok);
   EXPECT_TRUE(harness.modeling.objects().empty());

@@ -123,12 +123,12 @@ public:
     DocumentCommandResult begin_light_color_edit(EntityId entity);
     DocumentCommandResult update_light_color_edit(EntityId entity, std::uint64_t generation, QVec3 color);
     DocumentCommandResult finish_light_color_edit(EntityId entity, std::uint64_t generation, bool cancel);
-    DocumentCommandResult begin_environment_color_edit(EntityId entity);
-    DocumentCommandResult update_environment_color_edit(EntityId entity, std::uint64_t generation, QVec3 color);
-    DocumentCommandResult finish_environment_color_edit(EntityId entity, std::uint64_t generation, bool cancel);
-    DocumentCommandResult begin_fog_color_edit(EntityId entity);
-    DocumentCommandResult update_fog_color_edit(EntityId entity, std::uint64_t generation, QVec3 color);
-    DocumentCommandResult finish_fog_color_edit(EntityId entity, std::uint64_t generation, bool cancel);
+    DocumentCommandResult begin_environment_color_edit();
+    DocumentCommandResult update_environment_color_edit(std::uint64_t generation, QVec3 color);
+    DocumentCommandResult finish_environment_color_edit(std::uint64_t generation, bool cancel);
+    DocumentCommandResult begin_fog_color_edit();
+    DocumentCommandResult update_fog_color_edit(std::uint64_t generation, QVec3 color);
+    DocumentCommandResult finish_fog_color_edit(std::uint64_t generation, bool cancel);
     DocumentCommandResult cancel_active_property_edit();
     DocumentCommandResult cancel_active_point_light_range_edit();
     void abandon_property_edit() { property_edit_.reset(); }
@@ -137,11 +137,14 @@ public:
       return property_edit_ ? property_edit_generation_ : 0u;
     }
     [[nodiscard]] bool point_light_range_edit_active() const;
+    [[nodiscard]] bool entity_property_edit_active() const {
+      return property_edit_ && property_edit_->entity != kInvalidEntityId;
+    }
     void set_property_preview_hooks(DocumentPropertyPreviewCheckpointHooks hooks) {
       property_preview_hooks_ = std::move(hooks);
     }
     DocumentCommandResult
-    set_scene_settings(EntityId entity, SceneSettingsComponent settings,
+    set_scene_settings(SceneSettings settings,
                        UndoRedoExecuteOptions options = {});
     DocumentCommandResult set_transform(EntityId entity,
                                         TransformComponent transform);
@@ -208,7 +211,7 @@ public:
       QVec3 before;
       QVec3 expected;
     };
-    /// Pins the sole active preview to an entity identity and typed values.
+    /// Pins entity previews to their identity; document previews carry only typed values.
     struct PropertyEdit {
       EntityId entity = kInvalidEntityId;
       std::string uuid;

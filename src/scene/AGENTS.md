@@ -8,7 +8,11 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Scene Ownership
 
-- `SceneDocument` owns entity identity, components, hierarchy, selection, layers, and scene revisions.
+- `SceneDocument` owns entity identity, components, ordered forest hierarchy, document render settings,
+  selection, layers, and scene revisions. Parentless entities are authored roots, never children of a
+  synthetic Scene entity. `children(kInvalidEntityId)` and sibling placement use the root order.
+  Settings edits advance `scene_settings_revision()` and content revisions without invalidating
+  geometry or hierarchy projections. Bounded modeling history does not own document settings.
   `SceneContentDocument` aggregates scene and assets and validates their references. Runtime session
   and project workspace lifetime belong to `src/editor/session`.
 - `document/scene_entity_state.*` is the shared component inventory for persistence, history,

@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <iterator>
-#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -151,55 +150,22 @@ EntityId restore_scene_delete_snapshot(
 bool restore_scene_delete_placements(
     SceneDocument &scene,
     std::span<const SceneDeleteRestoredPlacement> placements) {
-  std::map<EntityId, std::vector<const SceneDeleteRestoredPlacement *>>
-      ordered_children;
+  std::vector<DocumentEntityPlacement> ordered;
+  ordered.reserve(placements.size());
   for (const SceneDeleteRestoredPlacement &placement : placements) {
     if (scene.parent(placement.entity) != placement.parent &&
         !scene.set_parent(placement.entity, placement.parent, false)) {
       return false;
     }
-    if (placement.parent != kInvalidEntityId &&
-        placement.state->sibling_ordinal.has_value()) {
-      ordered_children[placement.parent].push_back(&placement);
-    }
+    ordered.push_back({
+        .entity = placement.entity,
+        .parent = placement.parent,
+        .sibling_ordinal = placement.state->sibling_ordinal,
+    });
   }
-
-  // Definitions and modeled descendants can have been recreated in a
-  // different order from ordinary roots. Restore complete sibling sequences
-  // only after every parent and child is present, retaining untouched siblings.
-  for (const auto &[parent, restored] : ordered_children) {
-    const std::vector<EntityId> siblings = scene.children(parent);
-    std::vector<EntityId> desired(siblings.size(), kInvalidEntityId);
-    std::unordered_set<EntityId> positioned;
-    positioned.reserve(restored.size());
-    for (const SceneDeleteRestoredPlacement *placement : restored) {
-      const std::size_t ordinal = *placement->state->sibling_ordinal;
-      if (ordinal >= desired.size() || desired[ordinal] != kInvalidEntityId ||
-          !positioned.insert(placement->entity).second) {
-        return false;
-      }
-      desired[ordinal] = placement->entity;
-    }
-    std::size_t next = 0u;
-    for (const EntityId sibling : siblings) {
-      if (positioned.contains(sibling)) {
-        continue;
-      }
-      while (next < desired.size() && desired[next] != kInvalidEntityId) {
-        ++next;
-      }
-      if (next == desired.size()) {
-        return false;
-      }
-      desired[next++] = sibling;
-    }
-    for (std::size_t ordinal = 0u; ordinal < desired.size(); ++ordinal) {
-      if (!scene.set_sibling_ordinal(desired[ordinal], ordinal)) {
-        return false;
-      }
-    }
-  }
-  return true;
+  // Definitions and modeled descendants can be recreated in a different order.
+  // Restore the complete forest before placing captured roots and children.
+  return document_command_restore_placement_order(scene, ordered);
 }
 
 /**
@@ -260,11 +226,6 @@ private:
         return {.ok = false,
                 .changed = false,
                 .message = "Selected entity is missing."};
-      }
-      if (scene_.is_scene_root(root)) {
-        return {.ok = false,
-                .changed = false,
-                .message = "Scene root cannot be destroyed."};
       }
       std::optional<DocumentEntitySnapshot> snapshot =
           document_command_capture_entity_snapshot(scene_, root);

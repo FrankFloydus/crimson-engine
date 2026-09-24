@@ -41,6 +41,7 @@ class SceneInstanceService;
 class SceneSurfaceQuery;
 class SceneStructuralLifecycleService;
 class SnapToFloorService;
+struct ToolSessionDefaults;
 class UvPeelToolService;
 class ViewportLocalVisibilityService;
 class ViewportPointPlacementService;
@@ -87,10 +88,12 @@ public:
   explicit SceneSession(SceneContentDocument document);
   explicit SceneSession(
       std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
-      std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults = {});
+      std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults = {},
+      std::shared_ptr<ToolSessionDefaults> tool_defaults = {});
   SceneSession(std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
                SceneContentDocument document,
-               std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults = {});
+               std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults = {},
+               std::shared_ptr<ToolSessionDefaults> tool_defaults = {});
   ~SceneSession();
 
   SceneSession(const SceneSession &) = delete;
@@ -242,6 +245,7 @@ private:
   SceneContentRevisionStamp clean_stamp_;
   std::optional<PreviewContentCheckpoint> preview_content_checkpoint_;
   std::size_t history_max_steps_ = EditorHistoryService::kDefaultMaxSteps;
+  std::shared_ptr<ToolSessionDefaults> tool_defaults_;
   std::unique_ptr<EditorHistoryService> history_;
   std::unique_ptr<DocumentCommandService> document_commands_;
   std::unique_ptr<AssetCommandService> asset_commands_;
@@ -288,6 +292,7 @@ public:
 private:
   std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;
   std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults_;
+  std::shared_ptr<ToolSessionDefaults> tool_defaults_;
 };
 
 } // namespace quader

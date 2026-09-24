@@ -44,6 +44,8 @@ public:
   bool cancel_interaction();
   /// Rebase pointer travel after an owner replaces the value or range.
   void rebase_drag();
+  /// Follow a constrained owner value without changing the gesture's cancel value.
+  void synchronize_drag_value();
 
   void set_drag_mode(QtNumericDragMode mode);
   /// Positive values override automatic units per logical pixel; zero resets.
@@ -57,6 +59,9 @@ public:
   std::function<double()> drag_origin;
   std::function<void(double)> apply_drag_value;
 
+  /// Keep rejected domain drafts available to their host's validation handling.
+  std::function<bool()> can_commit_text;
+
   std::function<void()> editing_started;
   std::function<void()> editing_canceled;
   std::function<void()> editing_finished;
@@ -69,6 +74,7 @@ protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+  friend class NumericSpinBoxInstaller;
   friend QtNumericSpinBoxController &
   qt_install_numeric_spin_box(QAbstractSpinBox &spin_box,
                               bool reserves_arrow_space);
@@ -83,6 +89,7 @@ private:
   void step_once(int direction);
   void begin_editing(bool select_text = true);
   void finish_editing();
+  void commit_text_edit();
   void begin_drag(QPointF pointer, Qt::KeyboardModifiers modifiers);
   void update_drag(QPointF pointer, Qt::KeyboardModifiers modifiers);
   void update_drag_modifiers(Qt::KeyboardModifiers modifiers);
@@ -141,6 +148,10 @@ qt_install_numeric_spin_box(QAbstractSpinBox &spin_box,
 
 /// Install once at application startup; new Qt-made fields attach when polished.
 void qt_install_default_numeric_spin_boxes(QApplication &application);
+
+/// Give an active numeric text edit Escape before enclosing lifecycle handlers.
+/// Includes shortcut reservation and the matching repeat/release events.
+bool qt_handle_numeric_text_edit_key(QObject *target, QEvent *event);
 
 /// Bind the current grid provider to a live owner; an empty provider clears
 /// only that owner's binding. Missing or expired providers use a unit grid.

@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/modeling_types.hpp"
 
 #include <cstdint>
@@ -27,7 +26,6 @@ public:
     [[nodiscard]] bool
     reset_for_target(ModelingToolSettingsTargetKind target_kind);
 
-    void reset_for_preview_action(ModelingActionPreviewKind preview_kind);
     void set_cut_mode(ModelingCutMode mode);
     void cycle_cut_mode_without_runtime();
 

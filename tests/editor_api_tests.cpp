@@ -73,37 +73,6 @@ entity_by_id(const quader::QuaderEditorApi &editor, quader::EntityId id) {
   return editor.query().entity(id);
 }
 
-std::optional<quader::QuaderEntitySnapshot>
-scene_root(const quader::QuaderEditorApi &editor) {
-  for (const quader::QuaderEntitySnapshot &snapshot :
-       editor.query().entities()) {
-    if (snapshot.is_scene_root) {
-      return snapshot;
-    }
-  }
-  return std::nullopt;
-}
-
-std::size_t user_entity_count(const quader::QuaderEditorApi &editor) {
-  std::size_t count = 0;
-  for (const quader::QuaderEntitySnapshot &snapshot :
-       editor.query().entities()) {
-    if (!snapshot.is_scene_root) {
-      ++count;
-    }
-  }
-  return count;
-}
-
-quader::QuaderSceneSettings
-scene_root_settings(const quader::QuaderEditorApi &editor) {
-  const std::optional<quader::QuaderEntitySnapshot> root = scene_root(editor);
-  EXPECT_TRUE(root.has_value());
-  EXPECT_TRUE(root.has_value() && root->has_scene_settings);
-  return root.has_value() ? root->scene_settings
-                          : quader::QuaderSceneSettings{};
-}
-
 void expect_scene_settings_eq(const quader::QuaderSceneSettings &actual,
                               const quader::QuaderSceneSettings &expected) {
   EXPECT_EQ(actual.environment.environment_id,
@@ -464,6 +433,98 @@ std::size_t count_tool_setting_controls_of_kind(
                     [kind](const quader::QuaderToolSettingControl &control) {
                       return control.kind == kind;
                     }));
+}
+
+/// Exercises the public options contract without transferring a preview or source.
+void exercise_app_lifetime_tool_options(quader::QuaderEditorApi &editor,
+                                       bool expect_remembered,
+                                       bool author_settings = false) {
+  const auto box = editor.modeling().create_box(
+      {.min = {-10.0f, -10.0f, -10.0f}, .max = {10.0f, 10.0f, 10.0f}},
+      "Tool Options Source");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const auto path = editor.modeling().create_curve({
+      .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                 {.position = {100.0f, 0.0f, 0.0f}}},
+      .name = "Tool Options Path",
+  });
+  ASSERT_TRUE(path.ok()) << path.error_message();
+  const std::size_t object_count = editor.query().modeling_objects().size();
+  const auto original_mesh = editor.query().compiled_object_mesh(box.value());
+  ASSERT_TRUE(original_mesh.has_value());
+
+  /// Supplies one representative retained option per independent tool owner.
+  struct OptionCase {
+    std::string_view tool;
+    std::string_view setting;
+    double initial;
+    double remembered;
+  };
+  constexpr std::array kOptions{
+      OptionCase{"create_primitive", "primitive.box.subdivisions_x", 1.0, 4.0},
+      OptionCase{"curve", "curve.closed", 0.0, 1.0},
+      OptionCase{"linear_array", "linear_array.count", 4.0, 7.0},
+      OptionCase{"radial_array", "radial_array.copies", 8.0, 11.0},
+      OptionCase{"pivot", "pivot.snap.grid", 1.0, 0.0},
+      OptionCase{"edge_bevel", "operation.edge_bevel.width", 1.0, 0.17},
+      OptionCase{"path_array", "path_array.count", 4.0, 6.0},
+      OptionCase{"extrude", "extrude.amount", 0.0, 0.25},
+      OptionCase{"uv_peel", "uv_peel.u_repeat", 1.0, 2.5},
+  };
+  for (const auto &option : kOptions) {
+    SCOPED_TRACE(option.tool);
+    ASSERT_TRUE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    if (option.tool == "curve" || option.tool == "uv_peel") {
+      ASSERT_TRUE(editor.selection().clear().ok());
+    } else if (option.tool == "path_array") {
+      ASSERT_TRUE(editor.selection().select_object(path.value()).ok());
+    } else if (option.tool == "edge_bevel") {
+      ASSERT_TRUE(
+          editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+      ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+    } else if (option.tool == "extrude") {
+      ASSERT_TRUE(
+          editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+      ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+    }
+    const auto activated = option.tool == "edge_bevel"
+        ? editor.commands().execute(
+              editor.commands().command_id_for_modeling_action("bevel_edges"))
+        : editor.tools().activate(option.tool);
+    ASSERT_TRUE(activated.ok()) << activated.error_message();
+    auto settings = editor.tools().active_settings();
+    ASSERT_EQ(settings.tool_id, option.tool);
+    const auto *control = find_tool_setting_control(settings, option.setting);
+    ASSERT_NE(control, nullptr);
+    const auto value = [](const quader::QuaderToolSettingControl &field) {
+      return field.kind == quader::QuaderToolSettingControlKind::Toggle
+          ? static_cast<double>(field.bool_value) : field.number_value;
+    };
+    EXPECT_DOUBLE_EQ(value(*control),
+                     expect_remembered ? option.remembered : option.initial);
+    if (author_settings) {
+      const auto changed = editor.tools().set_setting(
+          option.tool, option.setting, option.remembered);
+      ASSERT_TRUE(changed.ok()) << changed.error_message();
+      settings = editor.tools().active_settings();
+      control = find_tool_setting_control(settings, option.setting);
+      ASSERT_NE(control, nullptr);
+      EXPECT_DOUBLE_EQ(value(*control), option.remembered);
+    }
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    EXPECT_EQ(editor.query().modeling_objects().size(), object_count);
+  }
+  const auto restored_mesh = editor.query().compiled_object_mesh(box.value());
+  ASSERT_TRUE(restored_mesh.has_value());
+  EXPECT_EQ(restored_mesh->indices, original_mesh->indices);
+  ASSERT_EQ(restored_mesh->vertices.size(), original_mesh->vertices.size());
+  for (std::size_t index = 0; index < original_mesh->vertices.size(); ++index) {
+    expect_vec3_near(restored_mesh->vertices[index].position,
+                     original_mesh->vertices[index].position);
+  }
 }
 
 /// Captures material and texture ids used by undo/redo preservation regressions.
@@ -1045,8 +1106,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     ASSERT_TRUE(created.ok()) << created.error_message();
     EXPECT_TRUE(created.changed());
     EXPECT_NE(created.value().entity, quader::kInvalidEntityId);
-    ASSERT_TRUE(scene_root(editor).has_value());
-    EXPECT_EQ(user_entity_count(editor), 1u);
+    EXPECT_EQ(editor.query().entities().size(), 1u);
 
     const quader::QuaderApiVoidResult undo =
         editor.commands().execute(quader::quader_command::kEditUndo);
@@ -1188,6 +1248,93 @@ TEST(EditorApiTests, LightCreationRequiresAnActiveScene) {
 }
 
 TEST(EditorApiTests,
+     ToolOptionsFollowTheAppAcrossSceneTabsAndProjectReplacement) {
+  /// Removes only this test's uniquely named temporary project directories.
+  struct TemporaryProjects {
+    std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("quader-tool-options-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    ~TemporaryProjects() {
+      std::error_code ignored;
+      std::filesystem::remove_all(root, ignored);
+    }
+  } temporary;
+  const auto first_root = temporary.root / "Original";
+  const auto replacement_root = temporary.root / "Replacement";
+  ASSERT_TRUE(std::filesystem::create_directories(first_root));
+  ASSERT_TRUE(std::filesystem::create_directories(replacement_root));
+
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene = [](const quader::QuaderSceneDocumentInfo &,
+                                std::string_view) {
+        return quader::QuaderDirtySceneDecision::Discard;
+      },
+  });
+  ASSERT_TRUE(editor.project().create(first_root).ok());
+  const auto first_id = editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(first_id.has_value());
+  exercise_app_lifetime_tool_options(editor, false, true);
+  ASSERT_FALSE(HasFatalFailure());
+  auto scene_path = quader::ProjectRelativePath::parse_portable("Scenes/Options.qdr");
+  ASSERT_TRUE(scene_path.ok()) << scene_path.error().message;
+  ASSERT_TRUE(editor.scene_documents().save_as(*first_id, scene_path.value()).ok());
+  const auto manifest = editor.project().manifest_path();
+
+  const auto second = editor.scene_documents().new_scene();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  EXPECT_NE(second.value(), *first_id);
+  EXPECT_TRUE(editor.query().entities().empty());
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_FALSE(editor.tools().active_settings().preview_active);
+  EXPECT_FALSE(editor.history().can_undo());
+  exercise_app_lifetime_tool_options(editor, true);
+  ASSERT_FALSE(HasFatalFailure());
+  ASSERT_TRUE(editor.scene_documents().activate(*first_id).ok());
+  exercise_app_lifetime_tool_options(editor, true);
+  ASSERT_FALSE(HasFatalFailure());
+
+  ASSERT_TRUE(editor.project().close().ok());
+  EXPECT_FALSE(editor.scene_documents().has_active_scene());
+  ASSERT_TRUE(editor.project().open(manifest).ok());
+  ASSERT_TRUE(editor.scene_documents().open(scene_path.value()).ok());
+  EXPECT_FALSE(editor.tools().active_settings().preview_active);
+  exercise_app_lifetime_tool_options(editor, true);
+  ASSERT_FALSE(HasFatalFailure());
+  ASSERT_TRUE(editor.project().create(replacement_root).ok());
+  EXPECT_TRUE(editor.query().entities().empty());
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_FALSE(editor.tools().active_settings().preview_active);
+  exercise_app_lifetime_tool_options(editor, true);
+  ASSERT_FALSE(HasFatalFailure());
+
+  // Reopening the same saved scene in another app lifetime starts from defaults.
+  quader::ProjectSession fresh_project;
+  quader::QuaderEditorApi fresh_editor(fresh_project);
+  ASSERT_TRUE(fresh_editor.project().open(manifest).ok());
+  ASSERT_TRUE(fresh_editor.scene_documents().open(scene_path.value()).ok());
+  exercise_app_lifetime_tool_options(fresh_editor, false);
+}
+
+TEST(EditorApiTests,
+     StandaloneToolOptionsSurviveDocumentReplacementAndRemainSessionLocal) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  exercise_app_lifetime_tool_options(editor, false, true);
+  ASSERT_FALSE(HasFatalFailure());
+  ASSERT_TRUE(editor.scene_documents().new_scene().ok());
+  EXPECT_TRUE(editor.query().entities().empty());
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_FALSE(editor.tools().active_settings().preview_active);
+  exercise_app_lifetime_tool_options(editor, true);
+  ASSERT_FALSE(HasFatalFailure());
+
+  CommandTestHarness independent;
+  exercise_app_lifetime_tool_options(independent.editor, false);
+}
+
+TEST(EditorApiTests,
      DirtyProjectReplacementCancelPreservesStateAndDiscardUsesOneBoundary) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -1296,10 +1443,7 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
       create_selected_box(editor, "Persisted Box");
   ASSERT_NE(box.entity, quader::kInvalidEntityId);
 
-  const std::optional<quader::QuaderEntitySnapshot> root = scene_root(editor);
-  ASSERT_TRUE(root.has_value());
-  ASSERT_TRUE(root->has_scene_settings);
-  quader::QuaderSceneSettings settings = root->scene_settings;
+  quader::QuaderSceneSettings settings = editor.query().scene_settings();
   settings.environment.environment_id = "pillars_2k";
   settings.environment.enabled = false;
   settings.environment.show_background = false;
@@ -1322,7 +1466,7 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   settings.post_process.bloom_strength = 0.65f;
   settings.post_process.dithering = false;
   settings.post_process.tone_mapping = quader::QuaderToneMapping::DisplayRange;
-  ASSERT_TRUE(editor.scene().set_scene_settings(root->id, settings).ok());
+  ASSERT_TRUE(editor.scene().set_scene_settings(settings).ok());
 
   quader::QuaderCreatePointLightArgs light_args;
   light_args.name = "Persisted Key Light";
@@ -1362,8 +1506,8 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   EXPECT_GT(opened.revisions().scene_revision,
             before_open_revisions.scene_revision);
   EXPECT_TRUE(entity_named(opened, "Persisted Box").has_value());
-  EXPECT_EQ(user_entity_count(opened), 2u);
-  expect_scene_settings_eq(scene_root_settings(opened), settings);
+  EXPECT_EQ(opened.query().entities().size(), 2u);
+  expect_scene_settings_eq(opened.query().scene_settings(), settings);
   const std::optional<quader::QuaderEntitySnapshot> opened_light =
       entity_named(opened, "Persisted Key Light");
   ASSERT_TRUE(opened_light.has_value());
@@ -1529,7 +1673,7 @@ TEST(EditorApiTests, ProjectNewCommandOpensCleanUnsavedEmptyProject) {
       editor.scene().create_entity(entity_args);
   ASSERT_TRUE(dirty_entity.ok()) << dirty_entity.error_message();
   EXPECT_TRUE(editor.project().dirty());
-  EXPECT_GT(user_entity_count(editor), 1u);
+  EXPECT_GT(editor.query().entities().size(), 1u);
 
   editor.project().set_runtime_hooks(quader::QuaderProjectRuntimeHooks{
       .confirm_dirty_project_replacement =
@@ -1544,9 +1688,8 @@ TEST(EditorApiTests, ProjectNewCommandOpensCleanUnsavedEmptyProject) {
   EXPECT_TRUE(created.changed());
   EXPECT_TRUE(editor.project().path().empty());
   EXPECT_FALSE(editor.project().dirty());
-  EXPECT_EQ(user_entity_count(editor), 0u);
+  EXPECT_EQ(editor.query().entities().size(), 0u);
   EXPECT_TRUE(selected_entities(editor).empty());
-  EXPECT_TRUE(scene_root(editor).has_value());
   EXPECT_FALSE(editor.history().can_undo());
   EXPECT_FALSE(editor.history().can_redo());
   EXPECT_FALSE(editor.query().history().can_undo);
@@ -3173,7 +3316,7 @@ TEST(EditorApiTests,
   const quader::QuaderApiVoidResult disabled =
       editor.tools().execute_action("curve", "curve.solidify.apply");
   EXPECT_FALSE(disabled.ok());
-  EXPECT_EQ(user_entity_count(editor), 1U);
+  EXPECT_EQ(editor.query().entities().size(), 1U);
 
   ASSERT_TRUE(
       editor.tools().set_setting("curve", "curve.solidify", true).ok());
@@ -3187,7 +3330,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   EXPECT_TRUE(applied.changed());
   EXPECT_EQ(applied.mutation_kind, quader::QuaderMutationKind::Document);
-  EXPECT_EQ(user_entity_count(editor), 2U);
+  EXPECT_EQ(editor.query().entities().size(), 2U);
   const auto generator = editor.query().entity(curve.value().entity);
   ASSERT_TRUE(generator.has_value());
   EXPECT_TRUE(generator->has_curve);
@@ -3201,10 +3344,10 @@ TEST(EditorApiTests,
             1U);
 
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(user_entity_count(editor), 1U);
+  EXPECT_EQ(editor.query().entities().size(), 1U);
   EXPECT_TRUE(editor.query().entity(curve.value().entity).has_value());
   ASSERT_TRUE(editor.history().redo().ok());
-  EXPECT_EQ(user_entity_count(editor), 2U);
+  EXPECT_EQ(editor.query().entities().size(), 2U);
   EXPECT_TRUE(editor.query().entity(curve.value().entity).has_value());
 }
 
@@ -5647,7 +5790,7 @@ TEST(EditorApiTests, PrimitiveHemisphereAndFlipEditLiveSphereWithinCreationHisto
   ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
   EXPECT_FALSE(editor.commands().descriptor(kHemisphere)->enabled);
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(user_entity_count(editor), 0u);
+  EXPECT_EQ(editor.query().entities().size(), 0u);
   EXPECT_FALSE(editor.history().can_undo());
   ASSERT_TRUE(editor.history().redo().ok());
   EXPECT_EQ(selected_entities(editor), selected);
@@ -5789,7 +5932,7 @@ TEST(EditorApiTests, PrimitiveKeyboardCommandsUseViewportEligibilityBeforeDrawin
       ASSERT_NE(control, nullptr);
       EXPECT_EQ(control->bool_value, expected);
       EXPECT_EQ(editor.tools().active_primitive_type(), kind);
-      EXPECT_EQ(user_entity_count(editor), 0u);
+      EXPECT_EQ(editor.query().entities().size(), 0u);
       EXPECT_FALSE(editor.history().can_undo());
     }
   }
@@ -5938,7 +6081,7 @@ TEST(EditorApiTests, CylinderCapsAndFlipEditLiveGeometryWithinCreationHistory) {
   EXPECT_FALSE(editor.commands().descriptor(kCaps)->enabled);
   EXPECT_FALSE(editor.commands().descriptor(kFlip)->enabled);
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(user_entity_count(editor), 0u);
+  EXPECT_EQ(editor.query().entities().size(), 0u);
   EXPECT_FALSE(editor.history().can_undo());
   ASSERT_TRUE(editor.history().redo().ok());
   EXPECT_EQ(selected_entities(editor), selected);
@@ -5994,7 +6137,7 @@ TEST(EditorApiTests, PrimitiveKeyboardCommandsDuringRepeatFootprintLeavePrevious
       }
     }
     ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
-    EXPECT_EQ(user_entity_count(editor), 0u);
+    EXPECT_EQ(editor.query().entities().size(), 0u);
     EXPECT_FALSE(editor.commands().execute(kCaps).ok());
     EXPECT_FALSE(editor.commands().execute(kFlip).ok());
     EXPECT_FALSE(editor.commands().execute(kHemisphere).ok());
@@ -6069,7 +6212,7 @@ TEST(EditorApiTests, PrimitiveFlipFacesHasTypedLocalizedContextualBinding) {
     const auto *flip = find_tool_setting_control(settings, "primitive.flip_faces");
     ASSERT_NE(flip, nullptr);
     EXPECT_EQ(flip->bool_value, expected);
-    EXPECT_EQ(user_entity_count(editor), 0u);
+    EXPECT_EQ(editor.query().entities().size(), 0u);
     EXPECT_FALSE(editor.history().can_undo());
   }
 }
@@ -6373,7 +6516,7 @@ TEST(EditorApiTests, PrimitiveFlipFacesUpdatesLiveCubeWithinCreationHistory) {
             before.domain(Domain::Geometry));
   ASSERT_TRUE(editor.commands().execute(kFlip).ok());
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(user_entity_count(editor), 0u);
+  EXPECT_EQ(editor.query().entities().size(), 0u);
   EXPECT_FALSE(editor.history().can_undo());
   ASSERT_TRUE(editor.history().redo().ok());
   EXPECT_EQ(selected_entities(editor), selected);
@@ -7902,6 +8045,8 @@ TEST(EditorApiTests, ExtrudeLocksFirstSelectedFaceAndReleasesItAfterApply) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
   const auto object = create_selected_box(editor, "Picked extrusion source");
+  const auto original = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(original.has_value());
   ASSERT_TRUE(editor.selection().clear().ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
   EXPECT_FALSE(editor.tools().active_settings().preview_active);
@@ -7921,15 +8066,35 @@ TEST(EditorApiTests, ExtrudeLocksFirstSelectedFaceAndReleasesItAfterApply) {
   const auto settings = editor.tools().active_settings();
   const auto *amount = find_tool_setting_control(settings, "extrude.amount");
   ASSERT_NE(amount, nullptr);
-  EXPECT_DOUBLE_EQ(amount->number_value, 0.0);
+  EXPECT_DOUBLE_EQ(amount->number_value, 2.15);
   const auto selected = editor.query().compiled_object_mesh(object);
   ASSERT_TRUE(selected.has_value());
-  EXPECT_EQ(selected->indices, applied->indices);
-  EXPECT_EQ(selected->vertices.size(), applied->vertices.size());
+  EXPECT_GT(selected->indices.size(), applied->indices.size());
+  EXPECT_GT(selected->vertices.size(), applied->vertices.size());
   EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+  EXPECT_EQ(editor.history().snapshot().redo_label, history.redo_label);
   EXPECT_FALSE(editor.selection().clear().ok());
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  const auto canceled = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(canceled.has_value());
+  EXPECT_EQ(canceled->indices, applied->indices);
+  ASSERT_EQ(canceled->vertices.size(), applied->vertices.size());
+  for (std::size_t index = 0; index < applied->vertices.size(); ++index) {
+    expect_vec3_near(canceled->vertices[index].position,
+                     applied->vertices[index].position);
+  }
+  EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
   ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto undone = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(undone.has_value());
+  EXPECT_EQ(undone->indices, original->indices);
+  EXPECT_EQ(undone->vertices.size(), original->vertices.size());
+  ASSERT_TRUE(editor.history().redo().ok());
+  const auto redone = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(redone.has_value());
+  EXPECT_EQ(redone->indices, applied->indices);
+  EXPECT_EQ(redone->vertices.size(), applied->vertices.size());
 }
 
 TEST(EditorApiTests, ExtrudeDefaultBindingAndAxisActionsRespectInputOwnership) {
@@ -8112,7 +8277,7 @@ TEST(EditorApiTests, ExtrudeModeShortcutsArmOneToolAndEUsesItsRememberedMode) {
   }
 }
 
-TEST(EditorApiTests, ExtrudeModeCommandsStartZeroPreviewsAfterExplicitApply) {
+TEST(EditorApiTests, ExtrudeModeCommandsRetainAmountAfterExplicitApply) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
   const auto box = create_selected_box(editor, "Extrude Mode Shortcut Source");
@@ -8141,11 +8306,7 @@ TEST(EditorApiTests, ExtrudeModeCommandsStartZeroPreviewsAfterExplicitApply) {
     ASSERT_NE(mode, nullptr);
     ASSERT_NE(amount, nullptr);
     EXPECT_EQ(mode->choice_value, type);
-    EXPECT_DOUBLE_EQ(amount->number_value, 0.0);
-    const auto zero_preview = editor.query().compiled_object_mesh(box);
-    ASSERT_TRUE(zero_preview.has_value());
-    EXPECT_EQ(zero_preview->indices, previous->indices);
-    EXPECT_EQ(zero_preview->vertices.size(), previous->vertices.size());
+    EXPECT_DOUBLE_EQ(amount->number_value, 2.15);
     ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 2.15).ok());
     const auto extruded = editor.query().compiled_object_mesh(box);
     ASSERT_TRUE(extruded.has_value());
@@ -14630,7 +14791,7 @@ TEST(EditorApiTests,
     const quader::QuaderApiVoidResult duplicated =
         editor.commands().execute(quader::quader_command::kDuplicateSelection);
     EXPECT_FALSE(duplicated.changed());
-    EXPECT_EQ(user_entity_count(editor), 1u);
+    EXPECT_EQ(editor.query().entities().size(), 1u);
 
     const quader::QuaderApiVoidResult unlocked =
         editor.scene().set_locked(box.value().entity, false);
@@ -15109,7 +15270,7 @@ TEST(EditorApiTests, PublicDuplicateSelectionDuplicatesLightEntityThroughSceneHi
     ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
     EXPECT_TRUE(duplicated.changed());
     EXPECT_EQ(editor.query().history().undo_label, "Duplicate Selection");
-    EXPECT_EQ(user_entity_count(editor), 2u);
+    EXPECT_EQ(editor.query().entities().size(), 2u);
 
     const std::vector<quader::EntityId> selected = selected_entities(editor);
     ASSERT_EQ(selected.size(), 1u);
@@ -15137,52 +15298,106 @@ TEST(EditorApiTests, PublicDuplicateSelectionDuplicatesLightEntityThroughSceneHi
     EXPECT_TRUE(duplicate_snapshot->active);
 }
 
-TEST(EditorApiTests, SceneRootSelectionCanEditSettingsButCannotBeDeletedOrDuplicated) {
-    CommandTestHarness harness;
-    quader::QuaderEditorApi& editor = harness.editor;
-    const std::optional<quader::QuaderEntitySnapshot> root = scene_root(editor);
-    ASSERT_TRUE(root.has_value());
+TEST(EditorApiTests, EmptyDocumentSettingsExistWithoutAnyEntitiesOrSelection) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.query().entities().empty());
+  ASSERT_FALSE(editor.query().selection().has_selection);
+  ASSERT_FALSE(editor.history().can_undo());
+  const quader::QuaderSceneSettings before = editor.query().scene_settings();
+  const quader::QuaderRevisionStamp before_revisions = editor.revisions();
+  expect_scene_settings_eq(editor.snapshot().scene_settings, before);
 
-    const quader::QuaderApiVoidResult selected_root =
-        editor.selection().select_objects({root->id}, root->id);
-    ASSERT_TRUE(selected_root.ok()) << selected_root.error_message();
-    EXPECT_TRUE(selected_root.changed());
-    EXPECT_EQ(selected_entities(editor),
-              std::vector<quader::EntityId>{root->id});
+  quader::QuaderSceneSettings edited = before;
+  edited.environment.intensity += 0.5f;
+  const quader::QuaderApiVoidResult settings_changed =
+      editor.scene().set_scene_settings(edited);
+  ASSERT_TRUE(settings_changed.ok()) << settings_changed.error_message();
+  EXPECT_TRUE(settings_changed.changed());
+  const quader::QuaderRevisionStamp edited_revisions = editor.revisions();
+  EXPECT_GT(edited_revisions.scene_revision, before_revisions.scene_revision);
+  EXPECT_GT(edited_revisions.scene_settings_revision,
+            before_revisions.scene_settings_revision);
+  EXPECT_EQ(edited_revisions.scene_layer_revision,
+            before_revisions.scene_layer_revision);
+  expect_scene_settings_eq(editor.query().scene_settings(), edited);
+  expect_scene_settings_eq(editor.snapshot().scene_settings, edited);
+  EXPECT_TRUE(editor.project().dirty());
+  EXPECT_TRUE(editor.query().entities().empty());
+  EXPECT_FALSE(editor.query().selection().has_selection);
 
-    const quader::QuaderSelectionSummary root_selection =
-        editor.query().selection();
-    EXPECT_TRUE(root_selection.has_selection);
-    EXPECT_EQ(root_selection.mode, quader::QuaderSelectionMode::Object);
+  ASSERT_TRUE(editor.history().undo().ok());
+  const quader::QuaderRevisionStamp undo_revisions = editor.revisions();
+  EXPECT_GT(undo_revisions.scene_revision, edited_revisions.scene_revision);
+  EXPECT_GT(undo_revisions.scene_settings_revision,
+            edited_revisions.scene_settings_revision);
+  EXPECT_EQ(undo_revisions.scene_layer_revision,
+            before_revisions.scene_layer_revision);
+  expect_scene_settings_eq(editor.query().scene_settings(), before);
+  EXPECT_TRUE(editor.query().entities().empty());
+  EXPECT_FALSE(editor.history().can_undo());
+  ASSERT_TRUE(editor.history().redo().ok());
+  const quader::QuaderRevisionStamp redo_revisions = editor.revisions();
+  EXPECT_GT(redo_revisions.scene_revision, undo_revisions.scene_revision);
+  EXPECT_GT(redo_revisions.scene_settings_revision,
+            undo_revisions.scene_settings_revision);
+  EXPECT_EQ(redo_revisions.scene_layer_revision,
+            before_revisions.scene_layer_revision);
+  expect_scene_settings_eq(editor.query().scene_settings(), edited);
+  EXPECT_TRUE(editor.query().entities().empty());
 
-    quader::QuaderSceneSettings edited = root->scene_settings;
-    edited.environment.intensity += 0.5f;
-    const quader::QuaderApiVoidResult settings_changed =
-        editor.scene().set_scene_settings(root->id, edited);
-    ASSERT_TRUE(settings_changed.ok()) << settings_changed.error_message();
-    EXPECT_TRUE(settings_changed.changed());
-    expect_scene_settings_eq(scene_root_settings(editor), edited);
-
-    const std::optional<quader::QuaderCommandDescriptor> duplicate_descriptor =
-        command_descriptor(editor, quader::quader_command::kDuplicateSelection);
-    ASSERT_TRUE(duplicate_descriptor.has_value());
-    EXPECT_FALSE(duplicate_descriptor->enabled);
-
-    const std::size_t before_count = user_entity_count(editor);
-    const quader::QuaderApiVoidResult duplicate =
-        editor.commands().execute(quader::quader_command::kDuplicateSelection);
-    EXPECT_FALSE(duplicate.changed());
-    EXPECT_EQ(user_entity_count(editor), before_count);
-    EXPECT_TRUE(scene_root(editor).has_value());
-
-    const quader::QuaderApiVoidResult deleted =
-        editor.commands().execute(quader::quader_command::kDeleteSelection);
-    EXPECT_FALSE(deleted.changed());
-    EXPECT_EQ(user_entity_count(editor), before_count);
-    EXPECT_TRUE(scene_root(editor).has_value());
+  const quader::QuaderApiVoidResult duplicate =
+      editor.commands().execute(quader::quader_command::kDuplicateSelection);
+  EXPECT_FALSE(duplicate.changed());
+  const quader::QuaderApiVoidResult deleted =
+      editor.commands().execute(quader::quader_command::kDeleteSelection);
+  EXPECT_FALSE(deleted.changed());
+  EXPECT_TRUE(editor.query().entities().empty());
+  expect_scene_settings_eq(editor.query().scene_settings(), edited);
 }
 
-TEST(EditorApiTests, ObjectSelectAllAndInvertUseSceneEntitiesAndExcludeLockedAndRoot) {
+TEST(EditorApiTests, DocumentSettingsEditsPreserveObjectSelectionAndHierarchy) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Settings Independent Box");
+  const std::optional<quader::QuaderEntitySnapshot> before_entity =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(before_entity.has_value());
+  EXPECT_EQ(before_entity->parent, quader::kInvalidEntityId);
+  const quader::QuaderSceneSettings before = editor.query().scene_settings();
+  const quader::QuaderRevisionStamp before_revisions = editor.revisions();
+  quader::QuaderSceneSettings edited = before;
+  edited.fog.enabled = !before.fog.enabled;
+  ASSERT_TRUE(editor.scene().set_scene_settings(edited).ok());
+  const quader::QuaderRevisionStamp edited_revisions = editor.revisions();
+  EXPECT_GT(edited_revisions.scene_revision, before_revisions.scene_revision);
+  EXPECT_GT(edited_revisions.scene_settings_revision,
+            before_revisions.scene_settings_revision);
+  EXPECT_EQ(edited_revisions.scene_layer_revision,
+            before_revisions.scene_layer_revision);
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{box.entity});
+  EXPECT_EQ(editor.query().entities().size(), 1u);
+  const std::optional<quader::QuaderEntitySnapshot> after_entity =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(after_entity.has_value());
+  EXPECT_EQ(after_entity->parent, quader::kInvalidEntityId);
+  EXPECT_EQ(after_entity->uuid, before_entity->uuid);
+  EXPECT_TRUE(after_entity->active);
+  expect_scene_settings_eq(editor.query().scene_settings(), edited);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_scene_settings_eq(editor.query().scene_settings(), before);
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{box.entity});
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_scene_settings_eq(editor.query().scene_settings(), edited);
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{box.entity});
+}
+
+TEST(EditorApiTests, ObjectSelectAllAndInvertUseSceneEntitiesAndExcludeLocked) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
 
@@ -15226,13 +15441,8 @@ TEST(EditorApiTests, ObjectSelectAllAndInvertUseSceneEntitiesAndExcludeLockedAnd
     std::sort(expected.begin(), expected.end());
     EXPECT_EQ(selected_entities(editor), expected);
 
-    const std::optional<quader::QuaderEntitySnapshot> root = scene_root(editor);
-    ASSERT_TRUE(root.has_value());
     const std::vector<quader::EntityId> after_select_all =
         selected_entities(editor);
-    EXPECT_EQ(
-        std::find(after_select_all.begin(), after_select_all.end(), root->id),
-        after_select_all.end());
     EXPECT_EQ(std::find(after_select_all.begin(), after_select_all.end(),
                         locked_box.entity),
               after_select_all.end());
@@ -16712,33 +16922,31 @@ TEST(EditorApiTests, MixedEntitySelectionGroupsMeshAndLightThroughSceneHierarchy
 TEST(EditorApiTests, CameraExposureTogglePreservesAuthoredSettingsAcrossUndoRedo) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
-  const std::optional<quader::QuaderEntitySnapshot> root = scene_root(editor);
-  ASSERT_TRUE(root.has_value());
-  quader::QuaderSceneSettings enabled = root->scene_settings;
+  quader::QuaderSceneSettings enabled = editor.query().scene_settings();
   ASSERT_TRUE(enabled.camera.use_exposure);
   enabled.camera.aperture = 5.6f;
   enabled.camera.shutter_speed = 1.0f / 250.0f;
   enabled.camera.sensitivity = 800.0f;
-  ASSERT_TRUE(editor.scene().set_scene_settings(root->id, enabled).ok());
+  ASSERT_TRUE(editor.scene().set_scene_settings(enabled).ok());
 
   quader::QuaderSceneSettings disabled = enabled;
   disabled.camera.use_exposure = false;
   const quader::QuaderApiVoidResult toggled =
-      editor.scene().set_scene_settings(root->id, disabled);
+      editor.scene().set_scene_settings(disabled);
   ASSERT_TRUE(toggled.ok()) << toggled.error_message();
   EXPECT_TRUE(toggled.changed());
-  expect_scene_settings_eq(scene_root_settings(editor), disabled);
+  expect_scene_settings_eq(editor.query().scene_settings(), disabled);
   const quader::QuaderApiVoidResult unchanged =
-      editor.scene().set_scene_settings(root->id, disabled);
+      editor.scene().set_scene_settings(disabled);
   ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
   EXPECT_FALSE(unchanged.changed());
 
   ASSERT_TRUE(editor.history().undo().ok());
-  expect_scene_settings_eq(scene_root_settings(editor), enabled);
+  expect_scene_settings_eq(editor.query().scene_settings(), enabled);
   ASSERT_TRUE(editor.history().redo().ok());
-  expect_scene_settings_eq(scene_root_settings(editor), disabled);
-  ASSERT_TRUE(editor.scene().set_scene_settings(root->id, enabled).ok());
-  expect_scene_settings_eq(scene_root_settings(editor), enabled);
+  expect_scene_settings_eq(editor.query().scene_settings(), disabled);
+  ASSERT_TRUE(editor.scene().set_scene_settings(enabled).ok());
+  expect_scene_settings_eq(editor.query().scene_settings(), enabled);
 }
 
 TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
@@ -16746,21 +16954,17 @@ TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
         SCOPED_TRACE(std::string(label));
         CommandTestHarness harness;
         quader::QuaderEditorApi& editor = harness.editor;
-        const std::optional<quader::QuaderEntitySnapshot> root =
-            scene_root(editor);
-        ASSERT_TRUE(root.has_value());
-        ASSERT_TRUE(root->has_scene_settings);
 
-        const quader::QuaderSceneSettings before = root->scene_settings;
+        const quader::QuaderSceneSettings before = editor.query().scene_settings();
         quader::QuaderSceneSettings edited = before;
         mutate(edited);
 
         const quader::QuaderApiVoidResult set =
-            editor.scene().set_scene_settings(root->id, edited);
+            editor.scene().set_scene_settings(edited);
         ASSERT_TRUE(set.ok()) << set.error_message();
         EXPECT_TRUE(set.changed());
-        expect_scene_settings_eq(scene_root_settings(editor), edited);
-        const auto unchanged = editor.scene().set_scene_settings(root->id, edited);
+        expect_scene_settings_eq(editor.query().scene_settings(), edited);
+        const auto unchanged = editor.scene().set_scene_settings(edited);
         ASSERT_TRUE(unchanged.ok());
         EXPECT_FALSE(unchanged.changed());
 
@@ -16768,13 +16972,13 @@ TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
             editor.commands().execute(quader::quader_command::kEditUndo);
         ASSERT_TRUE(undo.ok()) << undo.error_message();
         EXPECT_TRUE(undo.changed());
-        expect_scene_settings_eq(scene_root_settings(editor), before);
+        expect_scene_settings_eq(editor.query().scene_settings(), before);
 
         const quader::QuaderApiVoidResult redo =
             editor.commands().execute(quader::quader_command::kEditRedo);
         ASSERT_TRUE(redo.ok()) << redo.error_message();
         EXPECT_TRUE(redo.changed());
-        expect_scene_settings_eq(scene_root_settings(editor), edited);
+        expect_scene_settings_eq(editor.query().scene_settings(), edited);
     };
 
     exercise("environment.environmentId",
@@ -16896,37 +17100,34 @@ TEST(EditorApiTests, SceneSettingsLiveEditsApplyImmediatelyAndCoalesceByMergeKey
     quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_FALSE(editor.history().can_undo());
 
-    const std::optional<quader::QuaderEntitySnapshot> root = scene_root(editor);
-    ASSERT_TRUE(root.has_value());
-    ASSERT_TRUE(root->has_scene_settings);
-    const quader::QuaderSceneSettings before = root->scene_settings;
+    const quader::QuaderSceneSettings before = editor.query().scene_settings();
 
     quader::QuaderSceneSettings middle = before;
     middle.environment.intensity = 2.0f;
     quader::QuaderApiVoidResult set = editor.scene().set_scene_settings(
-        root->id, middle,
+        middle,
         quader::QuaderSceneEditOptions{
             .merge_key = "inspector.environment.intensity.gesture"});
     ASSERT_TRUE(set.ok()) << set.error_message();
     EXPECT_TRUE(set.changed());
-    expect_scene_settings_eq(scene_root_settings(editor), middle);
+    expect_scene_settings_eq(editor.query().scene_settings(), middle);
 
     quader::QuaderSceneSettings after = middle;
     after.environment.intensity = 3.0f;
     set = editor.scene().set_scene_settings(
-        root->id, after,
+        after,
         quader::QuaderSceneEditOptions{
             .merge_key = "inspector.environment.intensity.gesture"});
     ASSERT_TRUE(set.ok()) << set.error_message();
     EXPECT_TRUE(set.changed());
-    expect_scene_settings_eq(scene_root_settings(editor), after);
+    expect_scene_settings_eq(editor.query().scene_settings(), after);
 
     ASSERT_TRUE(editor.history().undo().ok());
-    expect_scene_settings_eq(scene_root_settings(editor), before);
+    expect_scene_settings_eq(editor.query().scene_settings(), before);
     EXPECT_FALSE(editor.history().can_undo());
 
     ASSERT_TRUE(editor.history().redo().ok());
-    expect_scene_settings_eq(scene_root_settings(editor), after);
+    expect_scene_settings_eq(editor.query().scene_settings(), after);
 }
 
 TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingParentTransform) {
@@ -16972,8 +17173,7 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
     child_snapshot = entity_by_id(editor, child.value().id);
     ASSERT_TRUE(parent_snapshot.has_value());
     ASSERT_TRUE(child_snapshot.has_value());
-    ASSERT_TRUE(scene_root(editor).has_value());
-    EXPECT_EQ(child_snapshot->parent, scene_root(editor)->id);
+    EXPECT_EQ(child_snapshot->parent, quader::kInvalidEntityId);
     EXPECT_NEAR(parent_snapshot->transform.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
 
@@ -17030,8 +17230,7 @@ TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParent
     child_snapshot = entity_by_id(editor, child.value().id);
     ASSERT_TRUE(parent_snapshot.has_value());
     ASSERT_TRUE(child_snapshot.has_value());
-    ASSERT_TRUE(scene_root(editor).has_value());
-    EXPECT_EQ(child_snapshot->parent, scene_root(editor)->id);
+    EXPECT_EQ(child_snapshot->parent, quader::kInvalidEntityId);
     EXPECT_NEAR(parent_snapshot->transform.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
 
@@ -17180,7 +17379,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
     const quader::QuaderApiVoidResult duplicated = editor.commands().execute(
         editor.commands().command_id_for_modeling_action("duplicate_meshes"));
     ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
-    ASSERT_EQ(user_entity_count(editor), 2u);
+    ASSERT_EQ(editor.query().entities().size(), 2u);
   EXPECT_EQ(editor.query().history().undo_label, "Duplicate Meshes");
 
     quader::QuaderTransform moved;
@@ -17203,7 +17402,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
     EXPECT_EQ(editor.query().history().undo_label, "Delete Selection");
 
     ASSERT_TRUE(editor.history().undo().ok());
-    EXPECT_EQ(user_entity_count(editor), 2u);
+    EXPECT_EQ(editor.query().entities().size(), 2u);
     EXPECT_EQ(editor.query().history().redo_label, "Delete Selection");
 
     ASSERT_TRUE(editor.history().undo().ok());
@@ -17213,17 +17412,17 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
     EXPECT_EQ(editor.query().history().redo_label, "Set Transform");
 
     ASSERT_TRUE(editor.history().undo().ok());
-    EXPECT_EQ(user_entity_count(editor), 1u);
+    EXPECT_EQ(editor.query().entities().size(), 1u);
   EXPECT_EQ(editor.query().history().redo_label, "Duplicate Meshes");
 
     ASSERT_TRUE(editor.history().redo().ok());
-    EXPECT_EQ(user_entity_count(editor), 2u);
+    EXPECT_EQ(editor.query().entities().size(), 2u);
     ASSERT_TRUE(editor.history().redo().ok());
     original_snapshot = entity_by_id(editor, original.entity);
     ASSERT_TRUE(original_snapshot.has_value());
     EXPECT_NEAR(original_snapshot->transform.position.x, 3.0f, 0.001f);
     ASSERT_TRUE(editor.history().redo().ok());
-    EXPECT_LT(user_entity_count(editor), 2u);
+    EXPECT_LT(editor.query().entities().size(), 2u);
 }
 
 TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
@@ -17971,8 +18170,13 @@ TEST(EditorApiTests,
 TEST(EditorApiTests, EdgeBevelToolSettingsUseOperationSchemaWidthLimits) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
-  const quader::QuaderModelingObjectRef box =
-      create_selected_box(editor, "Edge Bevel Schema Settings Source");
+  const auto created = editor.modeling().create_box(
+      {.min = {-10000.0f, -10000.0f, -10000.0f},
+       .max = {10000.0f, 10000.0f, 10000.0f}},
+      "Edge Bevel Schema Settings Source");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const quader::QuaderModelingObjectRef box = created.value();
+  ASSERT_TRUE(editor.selection().select_object(box).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
@@ -17989,7 +18193,8 @@ TEST(EditorApiTests, EdgeBevelToolSettingsUseOperationSchemaWidthLimits) {
   ASSERT_NE(width, nullptr);
   EXPECT_DOUBLE_EQ(width->min_value, 0.0);
   EXPECT_DOUBLE_EQ(width->max_value, 512.0);
-  EXPECT_DOUBLE_EQ(width->step, 0.001);
+  EXPECT_DOUBLE_EQ(width->step, 0.01);
+  EXPECT_DOUBLE_EQ(width->number_drag_sensitivity, 0.01);
 
   ASSERT_TRUE(editor.tools()
                   .set_setting("edge_bevel", "operation.edge_bevel.width",
@@ -18004,6 +18209,113 @@ TEST(EditorApiTests, EdgeBevelToolSettingsUseOperationSchemaWidthLimits) {
   EXPECT_DOUBLE_EQ(normalized->number_value, 512.0);
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
+
+TEST(EditorApiTests, EdgeBevelLearningMaximumReportsChangeWithoutGeometryChange) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto source = editor.modeling().create_box(
+      {.min = {-0.25f, -0.125f, -0.25f},
+       .max = {0.25f, 2.125f, 0.25f}}, "Bevel Maximum Feedback Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  const auto width = [&editor]() {
+    const auto target = editor.tools().active_settings();
+    const auto *control = find_tool_setting_control(
+        target, "operation.edge_bevel.width");
+    EXPECT_NE(control, nullptr);
+    return control != nullptr ? *control : quader::QuaderToolSettingControl{};
+  };
+  const auto initial = width();
+  ASSERT_LT(initial.max_value, 1.0);
+  ASSERT_DOUBLE_EQ(initial.number_value, initial.max_value);
+
+  // One segment has no interior profile points. This accepted parameter
+  // change invalidates the old bound without changing the displayed geometry.
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.profile", 0.6).ok());
+  ASSERT_DOUBLE_EQ(width().max_value, 512.0);
+  ASSERT_DOUBLE_EQ(width().number_value, initial.number_value);
+  const auto geometry_before = editor.query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(geometry_before.has_value());
+  const auto settings_revision = editor.tools().active_settings_revision();
+
+  const auto learned = editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 1.0);
+  ASSERT_TRUE(learned.ok()) << learned.error_message();
+  EXPECT_TRUE(learned.changed());
+  EXPECT_DOUBLE_EQ(width().number_value, initial.number_value);
+  EXPECT_DOUBLE_EQ(width().max_value, initial.max_value);
+  const auto geometry_after = editor.query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(geometry_after.has_value());
+  EXPECT_EQ(geometry_after->indices, geometry_before->indices);
+  ASSERT_EQ(geometry_after->vertices.size(), geometry_before->vertices.size());
+  for (std::size_t index = 0; index < geometry_before->vertices.size(); ++index) {
+    const auto &before = geometry_before->vertices[index].position;
+    const auto &after = geometry_after->vertices[index].position;
+    EXPECT_FLOAT_EQ(after.x, before.x);
+    EXPECT_FLOAT_EQ(after.y, before.y);
+    EXPECT_FLOAT_EQ(after.z, before.z);
+  }
+  EXPECT_GT(editor.tools().active_settings_revision(), settings_revision);
+
+  const auto learned_revision = editor.tools().active_settings_revision();
+  const auto assets_revision = editor.revisions().asset_revision;
+  const auto repeated = editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 1.0);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  EXPECT_EQ(editor.tools().active_settings_revision(), learned_revision);
+  EXPECT_EQ(editor.revisions().asset_revision, assets_revision);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(EditorApiTests, EdgeBevelSelectionRestartRecalculatesUsefulWidth) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto source = editor.modeling().create_box(
+      {.min = {-0.25f, -0.125f, -0.25f},
+       .max = {0.25f, 2.125f, 0.25f}}, "Bevel Source");
+  const auto smaller = editor.modeling().create_box(
+      {.min = {-0.125f, -0.125f, -0.125f},
+       .max = {0.125f, 2.125f, 0.125f}}, "Smaller Bevel Source");
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(smaller.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  const auto revision = editor.tools().active_settings_revision();
+  const auto same_selection =
+      editor.selection().select_edge(source.value(), 2, 3);
+  ASSERT_TRUE(same_selection.ok()) << same_selection.error_message();
+  EXPECT_FALSE(same_selection.changed());
+  const auto retained_target = editor.tools().active_settings();
+  const auto *retained_width = find_tool_setting_control(
+      retained_target, "operation.edge_bevel.width");
+  ASSERT_NE(retained_width, nullptr);
+  EXPECT_NEAR(retained_width->max_value, 0.4995, 1.0e-7);
+  EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+  ASSERT_TRUE(editor.selection().select_edge(smaller.value(), 2, 3).ok());
+  EXPECT_GT(editor.tools().active_settings_revision(), revision);
+  auto target = editor.tools().active_settings();
+  const auto *width = find_tool_setting_control(target,
+                                               "operation.edge_bevel.width");
+  ASSERT_NE(width, nullptr);
+  EXPECT_NEAR(width->number_value, 0.24975, 1.0e-7);
+  EXPECT_DOUBLE_EQ(width->number_value, width->max_value);
+  const double accepted_width = width->number_value;
+  ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
+  target = editor.tools().active_settings();
+  width = find_tool_setting_control(target, "operation.edge_bevel.width");
+  ASSERT_NE(width, nullptr);
+  EXPECT_DOUBLE_EQ(width->max_value, 512.0);
+  EXPECT_DOUBLE_EQ(width->number_value, accepted_width);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
 
 TEST(EditorApiTests,
      LinearArrayToolAcceptsMultipleMeshesAndKeepsSharedEndpointFixed) {
@@ -18109,7 +18421,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(canceled.ok()) << canceled.error_message();
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
-  EXPECT_EQ(user_entity_count(editor), 2u);
+  EXPECT_EQ(editor.query().entities().size(), 2u);
 }
 
 TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
@@ -18135,7 +18447,7 @@ TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
       editor.tools().commit_active_tool_preview();
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   EXPECT_TRUE(applied.changed());
-  EXPECT_EQ(user_entity_count(editor), 6u);
+  EXPECT_EQ(editor.query().entities().size(), 6u);
   EXPECT_EQ(selected_entities(editor).size(), 6u);
   EXPECT_EQ(editor.query().history().undo_label, "Linear Array");
   EXPECT_EQ(editor.tools().active_tool(), "select");
@@ -18143,9 +18455,6 @@ TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
   std::vector<float> positions;
   std::optional<quader::QuaderEntitySnapshot> active;
   for (const quader::QuaderEntitySnapshot &entity : editor.query().entities()) {
-    if (entity.is_scene_root) {
-      continue;
-    }
     positions.push_back(entity.transform.position.x);
     if (entity.active) {
       active = entity;
@@ -18163,9 +18472,9 @@ TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
   EXPECT_NEAR(active->transform.position.x, 36.0f, kTestPositionEpsilon);
 
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(user_entity_count(editor), 2u);
+  EXPECT_EQ(editor.query().entities().size(), 2u);
   ASSERT_TRUE(editor.history().redo().ok());
-  EXPECT_EQ(user_entity_count(editor), 6u);
+  EXPECT_EQ(editor.query().entities().size(), 6u);
   EXPECT_EQ(selected_entities(editor).size(), 6u);
 }
 
@@ -18192,7 +18501,7 @@ TEST(EditorApiTests, LinearArrayToolEnforcesTheShared1024ElementLimit) {
       "linear_array", "linear_array.count", 114.0);
   EXPECT_FALSE(oversized.ok());
   EXPECT_FALSE(oversized.changed());
-  EXPECT_EQ(user_entity_count(editor), 9u);
+  EXPECT_EQ(editor.query().entities().size(), 9u);
   EXPECT_EQ(editor.tools().active_tool(), "linear_array");
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
@@ -18665,7 +18974,7 @@ TEST(EditorApiTests, LinearArrayRejectsAnyStaleSourceBeforeApply) {
   const quader::QuaderApiVoidResult applied =
       editor.tools().commit_active_tool_preview();
   EXPECT_FALSE(applied.ok());
-  EXPECT_EQ(user_entity_count(editor), 2u);
+  EXPECT_EQ(editor.query().entities().size(), 2u);
   EXPECT_FALSE(editor.tools().active_settings().active);
 }
 
@@ -18792,7 +19101,7 @@ TEST(EditorApiTests, RadialArraySpacingModePreservesNeighborAnglesThroughUndoRed
   }
   EXPECT_EQ(editor.query().history().undo_label, "Radial Array");
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(user_entity_count(editor), 1u);
+  EXPECT_EQ(editor.query().entities().size(), 1u);
   ASSERT_TRUE(editor.history().redo().ok());
   for (std::size_t index = 0; index < elements.size(); ++index) {
     const auto snapshot = editor.query().entity(elements[index].entity);
@@ -18816,7 +19125,7 @@ TEST(EditorApiTests, RadialArrayRejectsDuplicateSourcesAndOversizedBatches) {
       });
   EXPECT_FALSE(invalid_mode.ok());
   EXPECT_FALSE(invalid_mode.changed());
-  EXPECT_EQ(user_entity_count(editor), 1u);
+  EXPECT_EQ(editor.query().entities().size(), 1u);
 
   const quader::QuaderApiResult<quader::QuaderRadialArrayResult> duplicate =
       editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
@@ -18824,7 +19133,7 @@ TEST(EditorApiTests, RadialArrayRejectsDuplicateSourcesAndOversizedBatches) {
       });
   EXPECT_FALSE(duplicate.ok());
   EXPECT_FALSE(duplicate.changed());
-  EXPECT_EQ(user_entity_count(editor), 1u);
+  EXPECT_EQ(editor.query().entities().size(), 1u);
 
   const quader::QuaderApiResult<quader::QuaderRadialArrayResult> oversized =
       editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
@@ -18834,7 +19143,7 @@ TEST(EditorApiTests, RadialArrayRejectsDuplicateSourcesAndOversizedBatches) {
       });
   EXPECT_FALSE(oversized.ok());
   EXPECT_FALSE(oversized.changed());
-  EXPECT_EQ(user_entity_count(editor), 1u);
+  EXPECT_EQ(editor.query().entities().size(), 1u);
   const quader::QuaderHistorySnapshot history_after =
       editor.query().history();
   EXPECT_EQ(history_after.can_undo, history_before.can_undo);
@@ -18860,9 +19169,9 @@ TEST(EditorApiTests, RadialArrayAccepts1024ElementsAndRejects1025Atomically) {
     ASSERT_TRUE(exact.ok()) << exact.error_message();
     ASSERT_EQ(exact.value().source_arrays.size(), 1u);
     EXPECT_EQ(exact.value().source_arrays.front().elements.size(), 1024u);
-    EXPECT_EQ(user_entity_count(editor), 1024u);
+    EXPECT_EQ(editor.query().entities().size(), 1024u);
     ASSERT_TRUE(editor.history().undo().ok());
-    EXPECT_EQ(user_entity_count(editor), 1u);
+    EXPECT_EQ(editor.query().entities().size(), 1u);
   }
 
   {
@@ -18884,7 +19193,7 @@ TEST(EditorApiTests, RadialArrayAccepts1024ElementsAndRejects1025Atomically) {
         });
     EXPECT_FALSE(oversized.ok());
     EXPECT_FALSE(oversized.changed());
-    EXPECT_EQ(user_entity_count(editor), 5u);
+    EXPECT_EQ(editor.query().entities().size(), 5u);
     const quader::QuaderHistorySnapshot history_after =
         editor.query().history();
     EXPECT_EQ(history_after.undo_label, history_before.undo_label);
@@ -18918,7 +19227,7 @@ TEST(EditorApiTests,
       editor.query().entity(source.entity);
   ASSERT_TRUE(source_before.has_value());
   const quader::QuaderHistorySnapshot history_before = editor.query().history();
-  const std::size_t entities_before = user_entity_count(editor);
+  const std::size_t entities_before = editor.query().entities().size();
 
   const quader::QuaderApiResult<quader::QuaderRadialArrayResult> array =
       editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
@@ -18930,7 +19239,7 @@ TEST(EditorApiTests,
       });
   EXPECT_FALSE(array.ok());
   EXPECT_FALSE(array.changed());
-  EXPECT_EQ(user_entity_count(editor), entities_before);
+  EXPECT_EQ(editor.query().entities().size(), entities_before);
   const std::optional<quader::QuaderEntitySnapshot> source_after =
       editor.query().entity(source.entity);
   ASSERT_TRUE(source_after.has_value());
@@ -19976,6 +20285,76 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
+     ImplicitInstanceCreationPreservesReorderedParentlessMembersAndRootUndoOrder) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto left = editor.scene().create_entity(
+      {.name = "Left", .kind = quader::QuaderEntityKind::Empty});
+  ASSERT_TRUE(left.ok()) << left.error_message();
+  const auto first = create_selected_box(editor, "First Member");
+  const auto middle = editor.scene().create_entity(
+      {.name = "Middle", .kind = quader::QuaderEntityKind::Empty});
+  ASSERT_TRUE(middle.ok()) << middle.error_message();
+  const auto second = create_selected_box(editor, "Second Member");
+  const auto right = editor.scene().create_entity(
+      {.name = "Right", .kind = quader::QuaderEntityKind::Empty});
+  ASSERT_TRUE(right.ok()) << right.error_message();
+  ASSERT_LT(first.entity, second.entity);
+  const std::array<quader::EntityId, 1> moved{second.entity};
+  ASSERT_TRUE(editor.scene().move_entities(
+      moved, quader::kInvalidEntityId, first.entity).ok());
+  const auto visible_children = [&editor](quader::EntityId parent) {
+    std::vector<quader::EntityId> result;
+    for (const auto &entity : editor.query().entity_tree()) {
+      if (entity.parent == parent) result.push_back(entity.id);
+    }
+    return result;
+  };
+  const std::vector<quader::EntityId> original_roots{
+      left.value().id, second.entity, first.entity, middle.value().id, right.value().id};
+  ASSERT_EQ(visible_children(quader::kInvalidEntityId), original_roots);
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first.entity, second.entity}, first.entity).ok());
+
+  const auto created = editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(created.changed());
+  ASSERT_EQ(created.value().definition.members.size(), 2u);
+  EXPECT_EQ(created.value().definition.members[0].id, second.entity);
+  EXPECT_EQ(created.value().definition.members[1].id, first.entity);
+  const auto definition = created.value().definition.root.id;
+  const auto occurrence = created.value().occurrence.root.id;
+  const std::vector<quader::EntityId> visible_instance_roots{
+      left.value().id, middle.value().id, right.value().id, occurrence};
+  const std::vector<quader::EntityId> members{second.entity, first.entity};
+  EXPECT_EQ(visible_children(quader::kInvalidEntityId), visible_instance_roots);
+  EXPECT_TRUE(visible_children(definition).empty());
+  ASSERT_TRUE(editor.query().entity(first.entity).has_value());
+  ASSERT_TRUE(editor.query().entity(second.entity).has_value());
+  EXPECT_EQ(editor.query().entity(first.entity)->parent, definition);
+  EXPECT_EQ(editor.query().entity(second.entity)->parent, definition);
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{occurrence});
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(visible_children(quader::kInvalidEntityId), original_roots);
+  EXPECT_FALSE(editor.query().entity(definition).has_value());
+  EXPECT_FALSE(editor.query().entity(occurrence).has_value());
+  EXPECT_EQ(editor.query().entity(first.entity)->uuid, first.entity_uuid);
+  EXPECT_EQ(editor.query().entity(second.entity)->uuid, second.entity_uuid);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(visible_children(quader::kInvalidEntityId), visible_instance_roots);
+  EXPECT_TRUE(visible_children(definition).empty());
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{occurrence});
+  ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
+  EXPECT_EQ(visible_children(definition), members);
+  ASSERT_TRUE(editor.query().entity(first.entity).has_value());
+  ASSERT_TRUE(editor.query().entity(second.entity).has_value());
+  EXPECT_EQ(editor.query().entity(first.entity)->uuid, first.entity_uuid);
+  EXPECT_EQ(editor.query().entity(second.entity)->uuid, second.entity_uuid);
+  ASSERT_TRUE(editor.modeling().exit_instance_edit().ok());
+}
+
+TEST(EditorApiTests,
      SceneInstancePublicMutationsReturnSceneQualifiedTypedResults) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -20603,7 +20982,7 @@ TEST(EditorApiTests,
     EXPECT_EQ(editor.query().entity(definition).has_value(), !delete_all);
     EXPECT_EQ(editor.query().entity(member.entity).has_value(), !delete_all);
     if (delete_all) {
-      EXPECT_EQ(user_entity_count(editor), 0U);
+      EXPECT_EQ(editor.query().entities().size(), 0U);
     } else {
       ASSERT_TRUE(editor.query().entity(surviving_occurrence).has_value());
       EXPECT_EQ(editor.query().entity(surviving_occurrence)->instance_definition,

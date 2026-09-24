@@ -13,7 +13,6 @@
 #include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "editor/viewport/viewport_path_array_source_picking.hpp"
-#include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_pixel_scale.hpp"
 
@@ -26,28 +25,17 @@ namespace quader {
 namespace {
 
 CommandResult place_active_light_at_world_position(
-    QuaderEditorApi &editor, SceneDocument &document, LightCreationKind kind,
+    QuaderEditorApi &editor, LightCreationKind kind,
     QVec3 world_position) {
-  const EntityId root = document.scene_root();
-  if (root == kInvalidEntityId) {
-    return command_invalid_result("The scene root is unavailable.");
-  }
-  const std::optional<QMat4> root_inverse =
-      try_scene_matrix_inverse(document.world_transform_matrix(root));
-  if (!root_inverse.has_value()) {
-    return command_invalid_result("Scene root transform is not invertible.");
-  }
-  const QVec3 local_position = transform_point(*root_inverse, world_position);
-  if (!std::isfinite(local_position.x) || !std::isfinite(local_position.y) ||
-      !std::isfinite(local_position.z)) {
-    return command_invalid_result("Scene root transform is not invertible.");
+  if (!std::isfinite(world_position.x) || !std::isfinite(world_position.y) ||
+      !std::isfinite(world_position.z)) {
+    return command_invalid_result("Light world position is not finite.");
   }
 
   CommandResult result;
   if (kind == LightCreationKind::Point) {
     QuaderCreatePointLightArgs args;
-    args.parent = root;
-    args.transform.position = local_position;
+    args.transform.position = world_position;
     args.select_created = true;
     const QuaderApiResult<QuaderEntityRef> created =
         editor.scene().create_point_light(args);
@@ -58,8 +46,7 @@ CommandResult place_active_light_at_world_position(
     };
   } else {
     QuaderCreateDirectionalLightArgs args;
-    args.parent = root;
-    args.transform.position = local_position;
+    args.transform.position = world_position;
     args.select_created = true;
     const QuaderApiResult<QuaderEntityRef> created =
         editor.scene().create_directional_light(args);
@@ -1300,7 +1287,7 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
       return output;
     }
     output.native_tool.command_result = place_active_light_at_world_position(
-        editor, document, light_creation->kind,
+        editor, light_creation->kind,
         *output.native_tool.light_creation_world_position);
     if (!frame.runtime_binding.current()) {
       return output;

@@ -1202,7 +1202,7 @@ TEST(ProgrammaticApiGuardrailTests, ObjectAndGroupSelectionCommandsUseSceneDocum
             std::string::npos);
   EXPECT_NE(selection_owner.find("user_selectable_scene_entities_for_mode"),
             std::string::npos);
-  EXPECT_NE(selection_owner.find("scene.is_scene_root(entity)"),
+  EXPECT_EQ(selection_owner.find("scene.is_scene_root(entity)"),
             std::string::npos);
   EXPECT_NE(service_source.find(
                 "make_user_scene_selection(scene_, entities, active)"),
@@ -1503,7 +1503,7 @@ TEST(ProgrammaticApiGuardrailTests,
       read_file(source_root() / "src/ui/qt_tool_settings_panel.cpp");
 
   EXPECT_NE(panel.find("editor_->tools().set_setting("), std::string::npos);
-  EXPECT_NE(panel.find("editor_->tools().reset_active_settings()"),
+  EXPECT_EQ(panel.find("editor_->tools().reset_active_settings()"),
             std::string::npos);
   EXPECT_EQ(panel.find("set_interaction_settings("), std::string::npos);
   EXPECT_EQ(panel.find("context.tool_settings"), std::string::npos);

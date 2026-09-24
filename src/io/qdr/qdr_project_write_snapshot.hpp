@@ -88,6 +88,8 @@ struct QdrProjectWriteSnapshot final {
   std::vector<QdrProjectMaterialAssetWriteSnapshot> materials;
   std::vector<QdrProjectTextureAssetWriteSnapshot> textures;
   std::vector<QdrProjectEntityWriteSnapshot> entities;
+  SceneSettings scene_settings;
+  std::vector<EntityId> root_entities;
   std::vector<ProjectAssetReference> project_asset_dependencies;
   std::vector<QdrProjectSceneLayerWriteSnapshot> layers;
   std::optional<QdrSceneViewportCameraPose> viewport_camera_pose;

@@ -16,5 +16,8 @@ file except through prior written authorization from Francesco Di Blasi.
   `modeling.action.*`, or legacy `modeling.*` command aliases.
 - Session-bound references must reject stale scene generations. Preserve those checks when adding
   handles, batches, previews, or rebinding API facades across scene activation.
+- Scene settings belong to the document: read `query().scene_settings()` and write
+  `scene().set_scene_settings(settings, options)`. Environment and fog color preview references
+  carry session, document-binding, and edit generations; object selection does not cancel them.
 - Add public behavior coverage in `tests/editor_api_tests.cpp` or the matching focused API suite;
   update examples when the public contract changes. Root verification rules apply.

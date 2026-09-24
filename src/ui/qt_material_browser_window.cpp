@@ -9,6 +9,7 @@
 #include "ui/qt_apply_cancel_input_filter.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
+#include "ui/qt_spin_box.hpp"
 #include "ui/qt_context_menu_visibility.hpp"
 #include "ui/qt_tree_relationship_presentation.hpp"
 
@@ -48,7 +49,6 @@
 #include <QShowEvent>
 #include <QShortcut>
 #include <QSignalBlocker>
-#include <QSlider>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStyle>
@@ -219,6 +219,19 @@ int tile_index_for_size(int tile_size) {
   const auto nearest = lower_distance <= upper_distance ? lower : upper;
   return static_cast<int>(std::distance(kTileSizes.begin(), nearest));
 }
+
+/// Presents pixel sizes while arrows and scrubbing retain the authored presets.
+class MaterialThumbnailSizeSpinBox final : public QtSpinBox {
+public:
+  explicit MaterialThumbnailSizeSpinBox(QWidget *parent) : QtSpinBox(parent) {
+    qt_install_numeric_spin_box(*this).set_drag_mode(QtNumericDragMode::NativeSteps);
+  }
+
+protected:
+  void stepBy(int steps) override {
+    setValue(tile_size_for_index(tile_index_for_size(value()) + steps));
+  }
+};
 
 /// Distinguishes Qt's keyboard activation from platform-dependent mouse
 /// activation so a mouse click cannot dispatch the same intent twice.
@@ -881,25 +894,23 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
     auto *popup_layout = new QVBoxLayout(popup);
     thumbnail_size_value_ = new QLabel(popup);
     popup_layout->addWidget(thumbnail_size_value_);
-    tile_slider_ = new QSlider(Qt::Horizontal, popup);
-    popup_layout->addWidget(tile_slider_);
+    tile_size_spin_ = new MaterialThumbnailSizeSpinBox(popup);
+    popup_layout->addWidget(tile_size_spin_);
     auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), popup);
     escape->setContext(Qt::WidgetWithChildrenShortcut);
     QObject::connect(escape, &QShortcut::activated, popup, &QWidget::close);
     popup->hide();
   } else {
-    tile_slider_ = new QSlider(Qt::Horizontal, central_widget);
+    tile_size_spin_ = new MaterialThumbnailSizeSpinBox(central_widget);
   }
-  tile_slider_->setObjectName(QStringLiteral("materialBrowser.tileSize"));
-  tile_slider_->setRange(0, static_cast<int>(kTileSizes.size()) - 1);
-  tile_slider_->setSingleStep(1);
-  tile_slider_->setPageStep(1);
-  tile_slider_->setTickInterval(1);
-  tile_slider_->setTickPosition(QSlider::TicksBelow);
-  tile_slider_->setValue(tile_index_for_size(kDefaultTileSize));
-  tile_slider_->setFixedWidth(150);
+  tile_size_spin_->setObjectName(QStringLiteral("materialBrowser.tileSize"));
+  tile_size_spin_->setRange(kTileSizes.front(), kTileSizes.back());
+  tile_size_spin_->setSingleStep(1);
+  tile_size_spin_->setKeyboardTracking(false);
+  tile_size_spin_->setValue(kDefaultTileSize);
+  tile_size_spin_->setFixedWidth(150);
   if (host_ == QtMaterialBrowserHost::Windowed) {
-    view_toolbar->addWidget(tile_slider_);
+    view_toolbar->addWidget(tile_size_spin_);
   }
   if (host_ == QtMaterialBrowserHost::Windowed) {
     root_layout->addLayout(toolbar);
@@ -1060,10 +1071,15 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   QObject::connect(list_button_, &QToolButton::clicked, this, [this]() {
     set_view_mode(QtMaterialBrowserViewMode::List, true);
   });
-  QObject::connect(tile_slider_, &QSlider::valueChanged, this,
+  QObject::connect(tile_size_spin_, &QSpinBox::valueChanged, this,
                    [this](int value) {
-                     const int tile_size = tile_size_for_index(value);
-                     apply_tile_metrics(tile_size);
+                     const int normalized_size =
+                         tile_size_for_index(tile_index_for_size(value));
+                     if (value != normalized_size) {
+                       const QSignalBlocker blocker(tile_size_spin_);
+                       tile_size_spin_->setValue(normalized_size);
+                     }
+                     apply_tile_metrics(normalized_size);
                      update_tile_size_text();
                      if (presentation_state_changed_) {
                        presentation_state_changed_();
@@ -1574,7 +1590,7 @@ void QtMaterialBrowserWindow::apply_ui_scale(
   static_cast<MaterialFolderTree *>(folder_tree_)->apply_ui_scale(metrics);
   filter_button_->setIconSize(metrics.size(QSize(20, 20)));
   filter_button_->setFixedSize(metrics.size(QSize(28, 28)));
-  tile_slider_->setFixedWidth(metrics.px(150));
+  tile_size_spin_->setFixedWidth(metrics.px(150));
   refresh_usage_badge_style();
   for (QToolButton *button : {import_tool_button_, thumbnail_size_button_}) {
     if (button != nullptr) {
@@ -1601,7 +1617,7 @@ QtMaterialBrowserViewMode QtMaterialBrowserWindow::view_mode() const {
 }
 
 int QtMaterialBrowserWindow::tile_size() const {
-  return tile_size_for_index(tile_slider_->value());
+  return tile_size_spin_->value();
 }
 
 bool QtMaterialBrowserWindow::sidebar_visible() const {
@@ -1668,7 +1684,7 @@ bool QtMaterialBrowserWindow::eventFilter(QObject *watched, QEvent *event) {
   if (!wheel->modifiers().testFlag(Qt::ControlModifier) ||
       !owns_browser_focus(QApplication::focusWidget())) {
     thumbnail_wheel_remainder_ = 0.0;
-    if (watched == tile_slider_ &&
+    if (watched == tile_size_spin_ &&
         wheel->modifiers().testFlag(Qt::ControlModifier)) {
       wheel->accept();
       return true;
@@ -1696,16 +1712,17 @@ bool QtMaterialBrowserWindow::eventFilter(QObject *watched, QEvent *event) {
   const int steps = static_cast<int>(
       std::trunc(thumbnail_wheel_remainder_ / distance_per_preset));
   thumbnail_wheel_remainder_ -= steps * distance_per_preset;
-  const int index = std::clamp(tile_slider_->value() + steps,
-                               tile_slider_->minimum(), tile_slider_->maximum());
-  if ((index == tile_slider_->maximum() && delta > 0) ||
-      (index == tile_slider_->minimum() && delta < 0) ||
+  const int maximum_index = static_cast<int>(kTileSizes.size()) - 1;
+  const int index = std::clamp(tile_index_for_size(tile_size_spin_->value()) + steps,
+                               0, maximum_index);
+  if ((index == maximum_index && delta > 0) ||
+      (index == 0 && delta < 0) ||
       wheel->phase() == Qt::ScrollEnd) {
     thumbnail_wheel_remainder_ = 0.0;
   }
   // Partial motion and attempts beyond either limit still belong to resizing.
   wheel->accept();
-  tile_slider_->setValue(index);
+  tile_size_spin_->setValue(tile_size_for_index(index));
   return true;
 }
 
@@ -1778,7 +1795,7 @@ void QtMaterialBrowserWindow::set_view_mode(QtMaterialBrowserViewMode mode,
     list_button_->setChecked(mode == QtMaterialBrowserViewMode::List);
   }
   if (host_ == QtMaterialBrowserHost::Windowed) {
-    tile_slider_->setVisible(mode == QtMaterialBrowserViewMode::Grid);
+    tile_size_spin_->setVisible(mode == QtMaterialBrowserViewMode::Grid);
   }
   refresh_content_page();
   if (notify && changed && presentation_state_changed_) {
@@ -1791,8 +1808,8 @@ void QtMaterialBrowserWindow::set_tile_size(int tile_size) {
   const int normalized_index = tile_index_for_size(tile_size);
   const int normalized_size = tile_size_for_index(normalized_index);
   {
-    const QSignalBlocker blocker(tile_slider_);
-    tile_slider_->setValue(normalized_index);
+    const QSignalBlocker blocker(tile_size_spin_);
+    tile_size_spin_->setValue(normalized_size);
   }
   apply_tile_metrics(normalized_size);
   update_tile_size_text();
@@ -1831,8 +1848,8 @@ void QtMaterialBrowserWindow::refresh_preview_raster_context(
 void QtMaterialBrowserWindow::update_tile_size_text() {
   const QString value = QLocale().toString(tile_size());
   const QString text = labels_.tile_size_value.arg(value);
-  tile_slider_->setToolTip(text);
-  tile_slider_->setAccessibleName(text);
+  tile_size_spin_->setToolTip(text);
+  tile_size_spin_->setAccessibleName(text);
   if (thumbnail_size_value_ != nullptr) {
     thumbnail_size_value_->setText(text);
   }
@@ -2072,7 +2089,7 @@ void QtMaterialBrowserWindow::show_thumbnail_size_popup() {
     layout->setSpacing(ui_scale_metrics_.px(6));
   }
   show_popup_below(*thumbnail_size_popup_, *thumbnail_size_button_);
-  tile_slider_->setFocus(Qt::PopupFocusReason);
+  tile_size_spin_->setFocus(Qt::PopupFocusReason);
 }
 
 void QtMaterialBrowserWindow::refresh_usage_presentation() {

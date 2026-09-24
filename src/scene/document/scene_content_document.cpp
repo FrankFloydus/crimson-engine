@@ -6,28 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "scene/document/scene_content_document.hpp"
 
-#include "scene/scene_transform.hpp"
-
 #include <unordered_map>
 #include <utility>
 
 namespace quader {
 
-SceneContentDocument::SceneContentDocument(
-    SceneContentDocumentRootPolicy root_policy) {
-  if (root_policy == SceneContentDocumentRootPolicy::EnsureSceneRoot) {
-    (void)ensure_scene_root();
-  }
-}
-
-SceneContentDocument::SceneContentDocument(
-    SceneContentDocumentRecord record,
-    SceneContentDocumentRootPolicy root_policy)
-    : record_(std::move(record)) {
-  if (root_policy == SceneContentDocumentRootPolicy::EnsureSceneRoot) {
-    (void)ensure_scene_root();
-  }
-}
+SceneContentDocument::SceneContentDocument(SceneContentDocumentRecord record)
+    : record_(std::move(record)) {}
 
 void SceneContentDocument::rename(std::string name) {
   if (record_.name == name) {
@@ -134,87 +119,6 @@ SceneContentDocument::validate_asset_references() const {
     }
   }
   return report;
-}
-
-EntityId SceneContentDocument::ensure_scene_root() {
-  EntityId root = scene_.scene_root();
-  bool created_root = false;
-  if (root == kInvalidEntityId) {
-    root = scene_.create_entity("scene", EntityKind::Empty);
-    if (root == kInvalidEntityId) {
-      return kInvalidEntityId;
-    }
-    created_root = true;
-    if (!scene_.set_scene_settings(root, SceneSettingsComponent{})) {
-      return kInvalidEntityId;
-    }
-  }
-
-  if (const NameComponent *name = scene_.name(root);
-      name != nullptr && name->name != "scene") {
-    (void)scene_.rename_entity(root, "scene");
-  }
-  if (scene_.kind(root) != EntityKind::Empty) {
-    (void)scene_.set_entity_kind(root, EntityKind::Empty);
-  }
-  if (const VisibilityComponent *visibility = scene_.visibility(root)) {
-    if (!visibility->visible) {
-      (void)scene_.set_visible(root, true);
-    }
-    if (!visibility->selectable) {
-      (void)scene_.set_selectable(root, true);
-    }
-  }
-  if (const LockComponent *lock = scene_.lock(root);
-      lock != nullptr && lock->locked) {
-    (void)scene_.set_locked(root, false);
-  }
-
-  const std::vector<EntityId> entities = scene_.entities();
-  std::vector<SceneParentAssignment> hierarchy;
-  std::vector<SceneTransformAssignment> preserved_transforms;
-  hierarchy.reserve(entities.size());
-  preserved_transforms.reserve(entities.size());
-  const QMat4 root_world = scene_.world_transform_matrix(root);
-  bool has_orphans = false;
-  for (const EntityId entity : entities) {
-    EntityId parent = scene_.parent(entity);
-    if (entity != root && parent == kInvalidEntityId) {
-      parent = root;
-      has_orphans = true;
-      if (!created_root) {
-        const TransformComponent *current = scene_.transform(entity);
-        if (current == nullptr) {
-          return kInvalidEntityId;
-        }
-        const std::optional<TransformComponent> preserved =
-            try_scene_local_transform_preserving_world(
-                root_world, scene_.world_transform_matrix(entity), *current);
-        if (!preserved.has_value()) {
-          return kInvalidEntityId;
-        }
-        preserved_transforms.push_back(SceneTransformAssignment{
-            .entity = entity,
-            .transform = *preserved,
-        });
-      }
-    }
-    hierarchy.push_back(SceneParentAssignment{
-        .child = entity,
-        .parent = parent,
-    });
-  }
-  if (has_orphans && scene_.replace_hierarchy(hierarchy)) {
-    scene_.set_transforms(preserved_transforms);
-  } else if (has_orphans) {
-    for (const SceneParentAssignment &assignment : hierarchy) {
-      if (assignment.child != root &&
-          scene_.parent(assignment.child) == kInvalidEntityId) {
-        (void)scene_.set_parent(assignment.child, root, true);
-      }
-    }
-  }
-  return root;
 }
 
 std::uint64_t SceneContentDocument::revision() const { return revision_; }

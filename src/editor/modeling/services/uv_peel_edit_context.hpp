@@ -14,19 +14,25 @@
 
 namespace quader {
 
-/// Owns only scene-local settings and edge-selection epochs, never mesh UVs.
+/// Borrows accepted options while owning scene-local guide epochs, never mesh UVs.
 class UvPeelEditContext final {
 public:
+  explicit UvPeelEditContext(UvPeelSessionDefaults *defaults = nullptr);
   [[nodiscard]] ModelingUvPeelSettings synchronize(
       const ModelingSelectedUvPeelSnapshot &snapshot,
       std::uint64_t content_revision, std::uint64_t selection_revision,
       ModelingInstanceEditScope instance_scope);
   ModelingCommandResult set_options(const ModelingUvPeelOptions &options);
   void invalidate_selection();
-  [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
+  [[nodiscard]] std::uint64_t revision() const noexcept {
+    return revision_ + defaults_.revision;
+  }
+  [[nodiscard]] UvPeelSessionDefaults options_snapshot() const { return defaults_; }
+  void restore_options(const UvPeelSessionDefaults &snapshot);
 
 private:
-  ModelingUvPeelOptions options_;
+  UvPeelSessionDefaults owned_defaults_;
+  UvPeelSessionDefaults &defaults_;
   std::vector<ModelingSelectedUvPeelObject> selected_objects_;
   ModelingInstanceEditScope instance_scope_;
   std::uint64_t content_revision_ = 0;

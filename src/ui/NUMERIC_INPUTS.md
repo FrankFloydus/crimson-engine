@@ -9,7 +9,8 @@ file except through prior written authorization from Francesco Di Blasi.
 # Numeric inputs
 
 Use `QtSpinBox` for integers and `QtDoubleSpinBox` for floating-point fields.
-Both attach the same `QtNumericSpinBoxController`. At application startup,
+Use these numeric fields without paired sliders. Both attach the same
+`QtNumericSpinBoxController`. At application startup,
 `qt_install_default_numeric_spin_boxes` also installs it on Qt-created spin
 boxes when they are polished, including color-dialog channels. Installation is
 idempotent and does not scan widgets during frame refresh.
@@ -27,6 +28,15 @@ callbacks and compact sizing.
 
 A stationary center click selects the text for typing. Horizontal movement
 beyond Qt's drag threshold starts a scrub; subsequent travel changes the value.
+Clicking outside the field accepts a valid numeric draft and exits text entry, even
+when the destination cannot take keyboard focus. The click still reaches its
+destination. Escape restores the value from before text entry and consumes that
+key's press, repeats and release before enclosing tool or dialog cancellation;
+a subsequent Escape follows the enclosing system's normal binding.
+Display mode makes the inner text editor read-only, removing its blinking caret
+while retaining spinbox focus for keyboard re-entry and enclosing shortcuts.
+Hosts with domain validation retain rejected drafts through `can_commit_text`,
+so an outside action cannot silently replace invalid text and then execute.
 Release emits `editingFinished`, allowing each host to settle its existing
 preview or coalesced edit. Cancellation restores the starting scalar and calls
 the cancellation hook. Hosts abandon interaction state before replacing runtime
@@ -34,7 +44,14 @@ bindings. Mixed face-texture scrubs defer publication until release because a
 single scalar cannot restore distinct original face values.
 
 Ordinary floating fields change by 0.1 per logical pixel; Inspector position and
-scale use 0.01. Normalized floating ranges within [0, 1] span their range across
+scale use 0.01. Bevel Width uses 0.01 for arrows and ordinary scrubbing, 0.001
+per pixel with Shift, and the current world-space grid interval with Ctrl.
+Bevel presents the applied width once the modeling operation reports complete
+geometric saturation. Owner corrections update the retained
+field during a scrub, discard excess pointer travel, and preserve the original
+value for Escape. Internal precision retains exact geometry bounds independently
+of the compact displayed number.
+Normalized floating ranges within [0, 1] span their range across
 the usable field width, following Blender's factor sliders. Shift slows ordinary
 floating drags tenfold and normalized ranges twentyfold. Ctrl uses the current
 viewport grid, supplied through an application-owned callback with a guarded

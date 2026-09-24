@@ -177,6 +177,17 @@ struct TorusPrimitiveCreationSettings {
   bool flip_faces = false;
 };
 
+/// Remembers only authored tool options for the lifetime of the application.
+/// Placement, live objects and unfinished gestures remain session-owned.
+struct PrimitiveCreationSessionDefaults {
+  PrimitiveCreationKind preferred_kind = PrimitiveCreationKind::Box;
+  BoxPrimitiveCreationSettings box;
+  CylinderPrimitiveCreationSettings cylinder;
+  ConePrimitiveCreationSettings cone;
+  SpherePrimitiveCreationSettings sphere;
+  TorusPrimitiveCreationSettings torus;
+};
+
 /**
  * Owns one modal primitive session with bounded per-shape undo history.
  *
@@ -184,13 +195,14 @@ struct TorusPrimitiveCreationSettings {
  * Apply publishes those steps to editor history; Cancel and per-shape failures
  * restore the pre-session state. The newest accepted primitive remains
  * live-editable only while its sole active selection revision is unchanged.
- * Settings persist between shapes in a session and reset when the session ends.
+ * Accepted settings persist between sessions, including canceled sessions.
  */
 class PrimitiveCreationToolService final {
 public:
   PrimitiveCreationToolService(
       EditorHistoryService &history, ModelingSessionService &modeling,
-      ModelingOperationPreviewCheckpointHooks checkpoint_hooks = {});
+      ModelingOperationPreviewCheckpointHooks checkpoint_hooks = {},
+      PrimitiveCreationSessionDefaults *session_defaults = nullptr);
 
   [[nodiscard]] bool active() const { return session_.has_value(); }
   [[nodiscard]] bool can_apply() const;
@@ -320,10 +332,14 @@ private:
       const ModelingSessionMemento &memento);
   void finish_session();
   void finish_checkpoint(bool restored_by_cancel);
+  void load_settings(const PrimitiveCreationSessionDefaults &settings);
+  void remember_settings();
 
   EditorHistoryService &history_;
   ModelingSessionService &modeling_;
   ModelingOperationPreviewCheckpointHooks checkpoint_hooks_;
+  PrimitiveCreationSessionDefaults accepted_settings_;
+  PrimitiveCreationSessionDefaults *session_defaults_ = nullptr;
   BoxPrimitiveCreationSettings box_settings_;
   CylinderPrimitiveCreationSettings cylinder_settings_;
   ConePrimitiveCreationSettings cone_settings_;

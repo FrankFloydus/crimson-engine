@@ -16,6 +16,7 @@
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
+#include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_tool_toolbar.hpp"
@@ -551,22 +552,19 @@ TEST(PathArrayUiCatalogTests,
           "tool_settings.control.path_array.count.spinner")));
   auto *count_editor = panel.findChild<QSpinBox *>(
       QStringLiteral("tool_settings.control.path_array.count"));
-  auto *distance_slider = panel.findChild<QSlider *>(
-      QStringLiteral("tool_settings.control.path_array.distance.slider"));
+  auto *distance_editor = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.path_array.distance"));
   ASSERT_NE(dropdown, nullptr);
   ASSERT_NE(count_spinner, nullptr);
   ASSERT_NE(count_editor, nullptr);
-  ASSERT_NE(distance_slider, nullptr);
+  ASSERT_NE(distance_editor, nullptr);
+  EXPECT_NE(dynamic_cast<QtDoubleSpinBox *>(distance_editor), nullptr);
   EXPECT_FALSE(dropdown->isEnabled());
   EXPECT_EQ(dropdown->count(), 6);
   EXPECT_EQ(count_spinner->spin_box(), count_editor);
   EXPECT_EQ(count_spinner->single_step(), 1);
-  EXPECT_EQ(panel.findChild<QSlider *>(QStringLiteral(
-                "tool_settings.control.path_array.count.slider")),
-            nullptr);
-  EXPECT_TRUE(distance_slider->hasTracking());
-  EXPECT_EQ(distance_slider->tickInterval(), 0);
-  EXPECT_EQ(distance_slider->tickPosition(), QSlider::NoTicks);
+  EXPECT_TRUE(panel.findChildren<QSlider *>().empty());
+  EXPECT_TRUE(distance_editor->isEnabled());
 
   ASSERT_TRUE(editor.tools()
                   .set_setting("path_array", "path_array.follow_path", true)
@@ -577,6 +575,23 @@ TEST(PathArrayUiCatalogTests,
                     "tool_settings.control.path_array.forward_axis")),
             dropdown);
   EXPECT_TRUE(dropdown->isEnabled());
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(
+                QStringLiteral("tool_settings.control.path_array.distance")),
+            distance_editor);
+  EXPECT_TRUE(distance_editor->isEnabled());
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("path_array", "path_array.follow_path", false)
+                  .ok());
+  panel.refresh();
+  EXPECT_EQ(panel.findChild<QComboBox *>(
+                QStringLiteral("tool_settings.control.path_array.forward_axis")),
+            dropdown);
+  EXPECT_FALSE(dropdown->isEnabled());
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(
+                QStringLiteral("tool_settings.control.path_array.distance")),
+            distance_editor);
+  EXPECT_TRUE(distance_editor->isEnabled());
   panel.unbind();
 }
 

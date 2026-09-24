@@ -155,7 +155,7 @@ public:
     view_.set_overlay_visible(true);
     view_.set_scene_layer_mask(kViewportShadedSceneLayerMask);
     view_.set_shadowing_enabled(false);
-    SceneSettingsComponent settings;
+    SceneSettings settings;
     settings.environment.enabled = false;
     settings.environment.show_background = false;
     settings.post_process.enabled = false;
@@ -512,7 +512,7 @@ void measure_path(bool preview, PerformanceResult &result) {
   EXPECT_EQ(harness.undo_count(), initial_undo);
   ASSERT_TRUE(harness.tool().commit_preview().ok);
   EXPECT_FALSE(harness.tool().preview_active());
-  EXPECT_DOUBLE_EQ(harness.tool().amount(), 0.0);
+  EXPECT_DOUBLE_EQ(harness.tool().amount(), amount);
   ASSERT_TRUE(harness.sync());
   harness.expect_selection_overlay_height(amount);
   ASSERT_TRUE(harness.render());
@@ -575,7 +575,7 @@ void measure_path(bool preview, PerformanceResult &result) {
   harness.expect_selection_overlay_height(amount + 0.002, amount);
   ASSERT_TRUE(harness.tool().commit_preview().ok);
   EXPECT_EQ(harness.undo_count(), initial_undo + 2u);
-  EXPECT_DOUBLE_EQ(harness.tool().amount(), 0.0);
+  EXPECT_DOUBLE_EQ(harness.tool().amount(), 0.002);
   ASSERT_TRUE(harness.sync());
   harness.expect_selection_overlay_height(amount + 0.002, amount);
   EXPECT_TRUE(harness.preview_suppression_empty());

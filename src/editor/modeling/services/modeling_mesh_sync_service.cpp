@@ -56,7 +56,7 @@ namespace {
   const EntityId parent =
       identity.parent != kInvalidEntityId && scene.exists(identity.parent)
           ? identity.parent
-          : scene.scene_root();
+          : kInvalidEntityId;
   if (parent == identity.parent) {
     return apply_scene_entity_state_placement(scene, entity, identity,
                                               parent);
@@ -279,7 +279,7 @@ bool ModelingMeshSyncService::apply_scene_identity_parent(
   const EntityId parent =
       identity.parent != kInvalidEntityId && scene.exists(identity.parent)
           ? identity.parent
-          : scene.scene_root();
+          : kInvalidEntityId;
   return scene.parent(entity) == parent ||
          scene.set_parent(entity, parent, false);
 }
@@ -293,11 +293,11 @@ bool ModelingMeshSyncService::apply_scene_identity_sibling_ordinal(
   const EntityId parent =
       identity.parent != kInvalidEntityId && scene.exists(identity.parent)
           ? identity.parent
-          : scene.scene_root();
+          : kInvalidEntityId;
   if (scene.parent(entity) != parent) {
     return false;
   }
-  // A missing captured parent deliberately falls back to the scene root. Its
+  // A missing captured parent deliberately falls back to top level. Its
   // ordinal belonged to a different sibling collection and cannot be applied
   // to that fallback collection.
   return parent != identity.parent || !identity.sibling_ordinal.has_value() ||
@@ -470,18 +470,16 @@ bool ModelingMeshSyncService::apply_scene_identity_to_duplicate_entity(
   }
   duplicate_identity.instance_definition.reset();
   duplicate_identity.instance_occurrence.reset();
-  duplicate_identity.scene_settings.reset();
   if (!apply_scene_entity_state(
           scene, entity, duplicate_identity,
           {.include_selection = false,
-           .include_instance_roles = false,
-           .include_scene_settings = false})) {
+           .include_instance_roles = false})) {
     return false;
   }
   const EntityId parent =
       identity.parent != kInvalidEntityId && scene.exists(identity.parent)
           ? identity.parent
-          : scene.scene_root();
+          : kInvalidEntityId;
   return scene.parent(entity) == parent || scene.set_parent(entity, parent, false);
 }
 
@@ -494,7 +492,8 @@ bool ModelingMeshSyncService::apply_scene_transforms(
 bool ModelingMeshSyncService::place_created_scene_object(
     SceneDocument &scene, EntityId entity, EntityId parent,
     const TransformComponent &local_transform) const {
-  if (!scene.exists(entity) || !scene.exists(parent) ||
+  if (!scene.exists(entity) ||
+      (parent != kInvalidEntityId && !scene.exists(parent)) ||
       !scene.set_parent(entity, parent, false)) {
     return false;
   }

@@ -15,13 +15,12 @@
 namespace quader {
 
 /**
- * Owns undoable scene-root render settings edits for the document command layer.
+ * Owns undoable document render settings edits for the document command layer.
  */
 class SetSceneSettingsCommand final : public SceneCommand {
 public:
-    SetSceneSettingsCommand(SceneDocument& scene, EntityId entity, SceneSettingsComponent before, SceneSettingsComponent after)
+    SetSceneSettingsCommand(SceneDocument& scene, SceneSettings before, SceneSettings after)
         : SceneCommand(scene, "Set Scene Settings")
-        , entity_(entity)
         , before_(std::move(before))
         , after_(std::move(after)) {}
 
@@ -43,8 +42,7 @@ public:
       }
       const auto *newer =
           dynamic_cast<const SetSceneSettingsCommand *>(&newer_command);
-      if (newer == nullptr || &newer->scene() != &scene() ||
-          newer->entity_ != entity_) {
+      if (newer == nullptr || &newer->scene() != &scene()) {
         return false;
       }
       after_ = newer->after_;
@@ -52,20 +50,16 @@ public:
     }
 
 private:
-    DocumentCommandResult apply(const SceneSettingsComponent& settings) {
-        if (!scene().exists(entity_)) {
-          return document_command_missing_entity_result();
-        }
-        if (!scene().set_scene_settings(entity_, settings)) {
+    DocumentCommandResult apply(const SceneSettings& settings) {
+        if (!scene().set_scene_settings(settings)) {
           return document_command_invalid_request_result(
               "Scene settings cannot be changed");
         }
         return document_command_changed_result();
     }
 
-    EntityId entity_ = kInvalidEntityId;
-    SceneSettingsComponent before_;
-    SceneSettingsComponent after_;
+    SceneSettings before_;
+    SceneSettings after_;
 };
 
 } // namespace quader

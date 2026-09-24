@@ -2468,7 +2468,7 @@ bool QuaderModelingApi::can_duplicate_selected_entity_hierarchy() const {
 
   const SceneDocument &scene = session.scene();
   for (const EntityId entity : scene.selected_entities()) {
-    if (!scene.is_scene_root(entity) && !scene.is_effectively_locked(entity)) {
+    if (!scene.is_effectively_locked(entity)) {
       return true;
     }
   }

@@ -4,6 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "support/curve_modeling_test_support.hpp"
@@ -37,6 +38,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -2043,9 +2045,6 @@ TEST(ModelingSessionServiceSplitTests,
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
-  const EntityId scene_root = scene.create_empty("Scene");
-  ASSERT_NE(scene_root, kInvalidEntityId);
-  ASSERT_TRUE(scene.set_scene_settings(scene_root, SceneSettingsComponent{}));
 
   const ModelingCreateBoxResult first = service.create_box_from_bounds({
       .bounds = {.min = {-2.0f, -1.0f, -1.0f},
@@ -2055,14 +2054,13 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(first.ok) << first.message;
   const EntityId native_sibling = scene.create_empty("Strict Native Sibling");
   ASSERT_NE(native_sibling, kInvalidEntityId);
-  ASSERT_TRUE(scene.set_parent(native_sibling, scene_root, false));
   const ModelingCreateBoxResult second = service.create_box_from_bounds({
       .bounds = {.min = {1.0f, -1.0f, -1.0f},
                  .max = {2.0f, 1.0f, 1.0f}},
       .name = "Strict Restore Second",
   });
   ASSERT_TRUE(second.ok) << second.message;
-  EXPECT_EQ(scene.children(scene_root),
+  EXPECT_EQ(scene.root_entities(),
             (std::vector<EntityId>{first.object.entity, native_sibling,
                                    second.object.entity}));
   const ModelingSessionMemento before = service.capture_history_memento();
@@ -2077,7 +2075,7 @@ TEST(ModelingSessionServiceSplitTests,
   const CommandResult removed = delete_command->redo();
   ASSERT_TRUE(removed.ok) << removed.message;
   ASSERT_TRUE(removed.changed);
-  ASSERT_TRUE(scene.children(scene_root).empty());
+  ASSERT_TRUE(scene.root_entities().empty());
   const std::uint64_t scene_revision = scene.revision();
   const std::uint64_t asset_revision = assets.revision();
 
@@ -2087,7 +2085,7 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_NE(restored.message.find(
                 "SDK history scene identity sibling order could not be restored"),
             std::string::npos);
-  EXPECT_TRUE(scene.children(scene_root).empty());
+  EXPECT_TRUE(scene.root_entities().empty());
   EXPECT_TRUE(service.objects().empty());
   EXPECT_EQ(scene.revision(), scene_revision);
   EXPECT_EQ(assets.revision(), asset_revision);
@@ -2998,6 +2996,241 @@ TEST(ModelingSessionServiceSplitTests,
     EXPECT_EQ(service.modeling_sdk_object_count_for_tests(), 1u);
     EXPECT_EQ(retried.object.modeling_object_id, 1);
   }
+}
+
+const QuaderToolSettingControl *find_bevel_setting_control(
+    const QuaderToolSettingsTarget &target, std::string_view id) {
+  const auto found = std::find_if(
+      target.controls.begin(), target.controls.end(),
+      [id](const QuaderToolSettingControl &control) { return control.id == id; });
+  return found == target.controls.end() ? nullptr : &(*found);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     EdgeBevelPublishesUsefulWidthAndRetainsTheKnownLimitWithoutMeshWork) {
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto source = editor.modeling().create_box(
+      {.min = {-0.25f, -0.125f, -0.25f},
+       .max = {0.25f, 2.125f, 0.25f}}, "Narrow Bevel Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  const auto descriptor = [&editor](std::string_view id) {
+    const auto target = editor.tools().active_settings();
+    const auto *control = find_bevel_setting_control(target, id);
+    EXPECT_NE(control, nullptr);
+    return control != nullptr ? *control : quader::QuaderToolSettingControl{};
+  };
+  constexpr std::string_view kWidth = "operation.edge_bevel.width";
+  const auto initial = descriptor(kWidth);
+  ASSERT_LT(initial.max_value, 1.0);
+  EXPECT_NEAR(initial.number_value, 0.4995, 1.0e-7);
+  EXPECT_DOUBLE_EQ(initial.number_value, initial.max_value);
+  EXPECT_EQ(initial.number_decimals, std::numeric_limits<double>::max_digits10);
+  EXPECT_DOUBLE_EQ(session.modeling().interaction_settings().edge_bevel_width,
+                   initial.number_value);
+  EXPECT_TRUE(descriptor("operation.edge_bevel.profile").enabled);
+
+  const auto revision = editor.tools().active_settings_revision();
+  const auto assets_revision = editor.revisions().asset_revision;
+  const auto before = session.modeling().modeling_sdk_projection_stats_for_tests();
+  for (int repetition = 0; repetition < 8; ++repetition) {
+    const auto unchanged = editor.tools().set_setting("edge_bevel", kWidth, 900.0);
+    ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+    EXPECT_FALSE(unchanged.changed());
+    EXPECT_DOUBLE_EQ(descriptor(kWidth).number_value, initial.number_value);
+    EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+  }
+  const auto after = session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after.mesh_compile_count, before.mesh_compile_count);
+  EXPECT_EQ(after.preview_publication_count, before.preview_publication_count);
+  EXPECT_EQ(after.asset_publication_count, before.asset_publication_count);
+  EXPECT_EQ(editor.revisions().asset_revision, assets_revision);
+
+  ASSERT_TRUE(editor.tools().set_setting("edge_bevel", kWidth, 0.4).ok());
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).number_value, 0.4);
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).max_value, initial.max_value);
+  ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).number_value, initial.max_value);
+
+  ASSERT_TRUE(editor.tools().set_setting("edge_bevel", kWidth, 0.1).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.segments", 3.0).ok());
+  EXPECT_TRUE(descriptor("operation.edge_bevel.profile").enabled);
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).number_value, 0.1);
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).max_value, 512.0);
+  ASSERT_TRUE(editor.tools().set_setting("edge_bevel", kWidth, 1.0).ok());
+  EXPECT_LT(descriptor(kWidth).max_value, 1.0);
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).number_value, descriptor(kWidth).max_value);
+
+  ASSERT_TRUE(editor.tools().set_setting("edge_bevel", kWidth, 0.1).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.profile", 0.6).ok());
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).max_value, 512.0);
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).number_value, 0.1);
+  ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).max_value, initial.max_value);
+  EXPECT_DOUBLE_EQ(descriptor(kWidth).number_value, initial.max_value);
+  EXPECT_TRUE(descriptor("operation.edge_bevel.profile").enabled);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     EdgeBevelFailedPublicationDoesNotAcceptSaturationFeedback) {
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto source = editor.modeling().create_box(
+      {.min = {-0.25f, -0.125f, -0.25f},
+       .max = {0.25f, 2.125f, 0.25f}}, "Failed Bevel Source");
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.12).ok());
+  const auto settings_before = session.modeling().interaction_settings();
+  const auto revision_before = editor.tools().active_settings_revision();
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      quader::ModelingSdkProjectionFailurePoint::PreviewAssetReplace);
+  const auto failed_begin = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges"));
+  EXPECT_FALSE(failed_begin.ok());
+  EXPECT_EQ(session.modeling().interaction_settings(), settings_before);
+  EXPECT_EQ(editor.tools().active_settings_revision(), revision_before);
+  EXPECT_FALSE(session.modeling().operation_preview_active());
+
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      quader::ModelingSdkProjectionFailurePoint::None);
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.1).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.profile", 0.6).ok());
+  const auto previous = session.modeling().interaction_settings();
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      quader::ModelingSdkProjectionFailurePoint::PreviewAssetReplace);
+  const auto failed_update = editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 1.0);
+  EXPECT_FALSE(failed_update.ok());
+  EXPECT_EQ(session.modeling().interaction_settings(), previous);
+  EXPECT_FALSE(session.modeling().operation_preview_active());
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      quader::ModelingSdkProjectionFailurePoint::None);
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  const auto retry = editor.tools().active_settings();
+  const auto *width = find_bevel_setting_control(retry,
+                                               "operation.edge_bevel.width");
+  ASSERT_NE(width, nullptr);
+  EXPECT_DOUBLE_EQ(width->max_value, 512.0);
+  EXPECT_DOUBLE_EQ(width->number_value, 0.1);
+  const auto *profile = find_bevel_setting_control(
+      retry, "operation.edge_bevel.profile");
+  ASSERT_NE(profile, nullptr);
+  EXPECT_DOUBLE_EQ(profile->number_value, 0.6);
+  EXPECT_EQ(session.modeling().interaction_settings(), previous);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(session.modeling().interaction_settings(), previous);
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  EXPECT_EQ(session.modeling().interaction_settings(), previous);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     BorrowedInteractionOptionsOutliveScenesAndLeavePreviewLimitsLocal) {
+  ModelingInteractionSettingsService remembered;
+  ModelingInteractionSettings expected = remembered.settings();
+  expected.bridge_steps = 7;
+  expected.edge_bevel_width = 0.1;
+  expected.edge_bevel_profile = 0.6;
+  expected.edge_bevel_segments = 3;
+  expected.thicken_thickness = 0.375;
+  expected.thicken_from_center = true;
+  expected.slice_quad_x_slices = 3;
+  expected.slice_quad_y_slices = 4;
+  expected.merge_by_distance_tolerance = 0.0625;
+  expected.half_cut_axis = ModelingHalfCutAxis::Z;
+  expected.half_cut_separate_parts = true;
+  expected.half_cut_fill_parts = false;
+  expected.move_auto_merge_vertices = false;
+  expected.lasso_select_partial_intersection = true;
+  {
+    SceneDocument first_scene;
+    AssetRegistry first_assets;
+    ModelingSessionService first(first_scene, first_assets, {}, &remembered);
+    SceneDocument second_scene;
+    AssetRegistry second_assets;
+    ModelingSessionService second(second_scene, second_assets, {}, &remembered);
+    const auto second_revision = second.tool_settings_revision();
+    ASSERT_TRUE(first.set_interaction_settings(expected).ok);
+    EXPECT_EQ(second.interaction_settings(), expected);
+    EXPECT_GT(second.tool_settings_revision(), second_revision);
+    const auto stable_revision = second.tool_settings_revision();
+    EXPECT_EQ(second.tool_settings_revision(), stable_revision);
+    first.reset_from_scene();
+    EXPECT_EQ(first.interaction_settings(), expected);
+
+    const auto created = first.create_box_from_bounds({
+        .bounds = {.min = {-0.25f, -0.125f, -0.25f},
+                   .max = {0.25f, 2.125f, 0.25f}},
+        .name = "Remembered Bevel Source",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    ASSERT_TRUE(first.activate_viewport_tool(ModelingViewportTool::Cut).ok);
+    expected.cut_mode = ModelingCutMode::DiscardRight;
+    ASSERT_TRUE(first.set_interaction_settings(expected).ok);
+    EXPECT_EQ(second.interaction_settings(), expected);
+    ASSERT_TRUE(first.activate_viewport_tool(ModelingViewportTool::Select).ok);
+    ASSERT_TRUE(first.set_selection_mode(ModelingSelectionMode::Edge).ok);
+    ASSERT_TRUE(first.set_component_selection({
+        .modeling_object_id = created.object.modeling_object_id,
+        .mode = ModelingSelectionMode::Edge,
+        .edges = {{2, 3}},
+        .active_kind = ModelingActiveSelectionKind::Edge,
+        .active_edge = {2, 3},
+    }).ok);
+    ASSERT_TRUE(first.execute_context_action("bevel_edges").ok);
+    EXPECT_EQ(first.interaction_settings(), expected);
+    auto candidate = expected;
+    candidate.edge_bevel_width = 1.0;
+    const auto revision_before_failure = remembered.revision();
+    first.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::PreviewAssetReplace);
+    EXPECT_FALSE(first.set_interaction_settings(candidate).ok);
+    EXPECT_EQ(remembered.settings(), expected);
+    EXPECT_EQ(remembered.revision(), revision_before_failure);
+    EXPECT_EQ(second.interaction_settings(), expected);
+    first.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    ASSERT_TRUE(first.execute_context_action("bevel_edges").ok);
+    EXPECT_EQ(first.interaction_settings(), expected);
+    ASSERT_TRUE(first.set_interaction_settings(candidate).ok);
+    EXPECT_TRUE(first.tool_settings_target().edge_bevel_maximum_width.has_value());
+    EXPECT_FALSE(second.tool_settings_target().edge_bevel_maximum_width.has_value());
+    expected = first.interaction_settings();
+    EXPECT_EQ(second.interaction_settings(), expected);
+    ASSERT_TRUE(first.cancel_active_operation_preview().ok);
+    EXPECT_EQ(remembered.settings(), expected);
+  }
+
+  SceneDocument replacement_scene;
+  AssetRegistry replacement_assets;
+  ModelingSessionService replacement(replacement_scene, replacement_assets, {},
+                                     &remembered);
+  EXPECT_EQ(replacement.interaction_settings(), expected);
+  EXPECT_FALSE(replacement.tool_settings_target().edge_bevel_maximum_width.has_value());
+  SceneDocument independent_scene;
+  AssetRegistry independent_assets;
+  ModelingSessionService independent(independent_scene, independent_assets);
+  ModelingInteractionSettingsService fresh_application;
+  EXPECT_EQ(independent.interaction_settings(), fresh_application.settings());
+  EXPECT_NE(independent.interaction_settings(), expected);
 }
 
 TEST(ModelingSessionServiceSplitTests,

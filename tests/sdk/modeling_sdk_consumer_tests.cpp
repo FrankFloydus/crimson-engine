@@ -3362,6 +3362,103 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
+     BevelWidthFeedbackTracksAcceptedMultiObjectPreviewAndRollback) {
+  ModelingSession session;
+  std::vector<ObjectId> objects;
+  for (const float size : {0.5F, 2.0F}) {
+    PolygonDocument document = PolygonDocument::make_box({
+        .min = {-size * 0.5F, -size * 0.5F, -size * 0.5F},
+        .max = {size * 0.5F, size * 0.5F, size * 0.5F},
+    }).or_throw();
+    ASSERT_TRUE(document.select_edge(document.edge_ids().front()).ok());
+    objects.push_back(session.add_document(std::move(document), "Bevel Source").or_throw());
+  }
+  EXPECT_FALSE(session.preview_edge_bevel_width().has_value());
+  const auto candidates = [&](float width) {
+    std::vector<SessionPreviewDocumentUpdate> updates;
+    for (const ObjectId object : objects) {
+      PolygonDocument document = session.preview_active()
+          ? session.preview_base_document_copy(session.preview_summary().id, object).or_throw()
+          : session.document_copy(object).or_throw();
+      OperationResult receipt = document.bevel_selected_edges({
+          .width = width, .profile = 0.25F, .segments = 4,
+      }).or_throw();
+      updates.push_back({.object = object,
+                         .document = std::move(document),
+                         .receipt = std::move(receipt)});
+    }
+    return updates;
+  };
+
+  const PreviewId preview = session.begin_preview_transaction(
+      "edge_bevel", candidates(1.0F)).or_throw();
+  ASSERT_TRUE(session.preview_edge_bevel_width().has_value());
+  EXPECT_FLOAT_EQ(session.preview_edge_bevel_width()->requested_width, 1.0F);
+  EXPECT_FLOAT_EQ(session.preview_edge_bevel_width()->applied_width, 1.0F);
+  EXPECT_TRUE(session.preview_edge_bevel_width()->support_limited);
+  const auto checkpoint = session.capture_preview_checkpoint(preview).or_throw();
+
+  ASSERT_TRUE(session.update_preview_transaction(preview, candidates(3.0F)).ok());
+  const auto saturated = session.preview_edge_bevel_width();
+  ASSERT_TRUE(saturated.has_value());
+  EXPECT_FLOAT_EQ(saturated->requested_width, 3.0F);
+  EXPECT_FLOAT_EQ(saturated->applied_width, 1.998F);
+  EXPECT_TRUE(saturated->support_limited);
+  const auto work_before_queries = session.preview_work_stats();
+  for (int frame = 0; frame < 16; ++frame) {
+    EXPECT_EQ(session.preview_edge_bevel_width(), saturated);
+  }
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count,
+            work_before_queries.mesh_payload_build_count);
+
+  auto rejected = candidates(0.1F);
+  rejected.back().receipt.success = false;
+  rejected.back().receipt.error_code = ErrorCode::ValidationFailed;
+  EXPECT_FALSE(session.update_preview_transaction(preview, std::move(rejected)).ok());
+  EXPECT_EQ(session.preview_edge_bevel_width(), saturated);
+
+  std::vector<SessionPreviewDocumentUpdate> unchanged_geometry;
+  for (std::size_t index = 0; index < objects.size(); ++index) {
+    OperationResult receipt;
+    receipt.changed = true;
+    receipt.edge_bevel_width = EdgeBevelWidthFeedback{
+        .requested_width = 2.5F,
+        .applied_width = index == 0 ? 0.4995F : 1.998F,
+        .support_limited = true,
+    };
+    unchanged_geometry.push_back({
+        .object = objects[index],
+        .document = session.preview_document_copy(preview, objects[index]).or_throw(),
+        .receipt = std::move(receipt),
+    });
+  }
+  const auto before_metadata_update = session.preview_work_stats();
+  const auto metadata_updated = session.update_preview_transaction(
+      preview, std::move(unchanged_geometry));
+  ASSERT_TRUE(metadata_updated.ok()) << metadata_updated.error_message();
+  EXPECT_FALSE(metadata_updated.value().changed);
+  EXPECT_FLOAT_EQ(session.preview_edge_bevel_width()->requested_width, 2.5F);
+  EXPECT_FLOAT_EQ(session.preview_edge_bevel_width()->applied_width, 1.998F);
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count,
+            before_metadata_update.mesh_payload_build_count);
+
+  auto differing_widths = candidates(0.2F);
+  differing_widths.back().receipt.edge_bevel_width->requested_width = 0.3F;
+  ASSERT_TRUE(session.update_preview_transaction(preview, std::move(differing_widths)).ok());
+  EXPECT_FALSE(session.preview_edge_bevel_width().has_value());
+
+  ASSERT_TRUE(session.restore_preview_checkpoint(checkpoint).ok());
+  EXPECT_FLOAT_EQ(session.preview_edge_bevel_width()->requested_width, 1.0F);
+  EXPECT_FLOAT_EQ(session.preview_edge_bevel_width()->applied_width, 1.0F);
+  ASSERT_TRUE(session.cancel_preview(preview).ok());
+  EXPECT_FALSE(session.preview_edge_bevel_width().has_value());
+  const PreviewId committed = session.begin_preview_transaction(
+      "edge_bevel", candidates(0.1F)).or_throw();
+  ASSERT_TRUE(session.commit_preview(committed).ok());
+  EXPECT_FALSE(session.preview_edge_bevel_width().has_value());
+}
+
+TEST(ModelingSdkConsumerTests,
      ModelingApiPreviewPayloadsMaterializeBeforeCommit) {
   ModelingApi quader = ModelingApi::create();
   MeshHandle mesh = quader.create_box({.name = "Preview Source"});

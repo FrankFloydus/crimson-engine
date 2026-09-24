@@ -129,7 +129,7 @@ public:
     view_.set_scene_layer_mask(kViewportRenderedSceneLayerMask);
     view_.set_shadowing_enabled(false);
     view_.set_material_debug_mode(ViewportMaterialDebugMode::Albedo);
-    SceneSettingsComponent settings;
+    SceneSettings settings;
     settings.environment.enabled = false;
     settings.environment.show_background = false;
     settings.environment.clear_color = {};

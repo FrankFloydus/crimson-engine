@@ -42,6 +42,14 @@ inline constexpr std::uint32_t kLinearArrayMaximumCount =
 inline constexpr std::size_t kLinearArrayMaximumTotalElements =
     kLinearArrayLayoutMaximumElements;
 
+/** Keeps user options across tool and scene replacement for this app run. */
+struct LinearArraySessionDefaults final {
+  std::uint32_t count = kLinearArrayDefaultCount;
+
+  friend bool operator==(const LinearArraySessionDefaults &,
+                         const LinearArraySessionDefaults &) = default;
+};
+
 /**
  * Selects the world-space constraint used while dragging endpoint B.
  */
@@ -97,7 +105,8 @@ public:
                          EditorHistoryService &history,
                          ModelingSessionService &modeling,
                          EditorSelectionService &selection,
-                         SceneInstanceService &instances);
+                         SceneInstanceService &instances,
+                         LinearArraySessionDefaults *defaults = nullptr);
 
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
@@ -179,6 +188,8 @@ private:
   ModelingSessionService &modeling_;
   EditorSelectionService &selection_;
   SceneInstanceService &instances_;
+  LinearArraySessionDefaults local_defaults_;
+  LinearArraySessionDefaults &defaults_;
   std::optional<Session> session_;
   std::uint64_t revision_counter_ = 0;
   std::uint64_t tool_settings_revision_counter_ = 0;

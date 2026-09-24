@@ -10,6 +10,7 @@
 #include "api/quader_editor_api.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_spin_box.hpp"
 #include "ui/qt_application_theme.hpp"
 
 #include <QAction>
@@ -44,7 +45,7 @@
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QScrollBar>
-#include <QSlider>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStyleOption>
@@ -591,11 +592,11 @@ TEST(QtMaterialBrowserWindowTests,
         QStringLiteral("materialBrowser.gridView"));
     auto *search = browser.findChild<QLineEdit *>(
         QStringLiteral("materialBrowser.search"));
-    auto *slider = browser.findChild<QSlider *>(
+    auto *size_spin = browser.findChild<QSpinBox *>(
         QStringLiteral("materialBrowser.tileSize"));
     ASSERT_NE(grid, nullptr);
     ASSERT_NE(search, nullptr);
-    ASSERT_NE(slider, nullptr);
+    ASSERT_NE(size_spin, nullptr);
     search->setFocus();
     application.processEvents();
     ASSERT_EQ(QApplication::focusWidget(), search);
@@ -618,9 +619,9 @@ TEST(QtMaterialBrowserWindowTests,
     EXPECT_EQ(browser.current_selected_material(), material.reference);
     EXPECT_EQ(browser.view_mode(), QtMaterialBrowserViewMode::Grid);
 
-    // The slider receives the same one-preset gesture, not Qt's accelerated
+    // The numeric field receives the same one-preset gesture, not Qt's accelerated
     // Ctrl+wheel behavior, even when it lives in the embedded host's popup.
-    EXPECT_TRUE(send_browser_wheel(*slider, 120));
+    EXPECT_TRUE(send_browser_wheel(*size_spin, 120));
     EXPECT_EQ(browser.tile_size(), 128);
     EXPECT_EQ(notifications, 3);
     if (host == QtMaterialBrowserHost::Embedded) {
@@ -628,12 +629,12 @@ TEST(QtMaterialBrowserWindowTests,
           QStringLiteral("materialBrowser.thumbnailSize"));
       ASSERT_NE(size_button, nullptr);
       size_button->click();
-      QWidget *popup = slider->window();
+      QWidget *popup = size_spin->window();
       QApplication::setActiveWindow(popup);
-      slider->setFocus();
+      size_spin->setFocus();
       application.processEvents();
-      ASSERT_EQ(QApplication::focusWidget(), slider);
-      EXPECT_TRUE(send_browser_wheel(*slider, 120));
+      ASSERT_EQ(QApplication::focusWidget(), size_spin);
+      EXPECT_TRUE(send_browser_wheel(*size_spin, 120));
       EXPECT_EQ(browser.tile_size(), 256);
       EXPECT_EQ(notifications, 4);
       popup->close();
@@ -742,10 +743,10 @@ TEST(QtMaterialBrowserWindowTests,
     application.processEvents();
     ASSERT_EQ(QApplication::focusWidget(), &outside);
     send_browser_wheel(viewport, 120);
-    auto *slider = browser.findChild<QSlider *>(
+    auto *size_spin = browser.findChild<QSpinBox *>(
         QStringLiteral("materialBrowser.tileSize"));
-    ASSERT_NE(slider, nullptr);
-    send_browser_wheel(*slider, 120);
+    ASSERT_NE(size_spin, nullptr);
+    send_browser_wheel(*size_spin, 120);
     send_browser_wheel(outside, 120);
     EXPECT_EQ(browser.tile_size(), 64);
     QApplication::setActiveWindow(browser.window());
@@ -2707,7 +2708,7 @@ TEST(QtMaterialBrowserWindowTests,
       QStringLiteral("materialBrowser.grid"));
   auto *list = window.findChild<QToolButton *>(
       QStringLiteral("materialBrowser.list"));
-  auto *tile_size = window.findChild<QSlider *>(
+  auto *tile_size = window.findChild<QSpinBox *>(
       QStringLiteral("materialBrowser.tileSize"));
   ASSERT_NE(grid, nullptr);
   ASSERT_NE(list, nullptr);
@@ -3018,7 +3019,7 @@ TEST(QtMaterialBrowserWindowTests,
       QStringLiteral("materialBrowser.grid"));
   auto *list_button = browser.findChild<QToolButton *>(
       QStringLiteral("materialBrowser.list"));
-  auto *slider = browser.findChild<QSlider *>(
+  auto *size_spin = browser.findChild<QSpinBox *>(
       QStringLiteral("materialBrowser.tileSize"));
   auto *tree = browser.findChild<QTreeWidget *>(
       QStringLiteral("materialBrowser.folderTree"));
@@ -3037,13 +3038,13 @@ TEST(QtMaterialBrowserWindowTests,
   ASSERT_NE(folders, nullptr);
   ASSERT_NE(grid_button, nullptr);
   ASSERT_NE(list_button, nullptr);
-  ASSERT_NE(slider, nullptr);
+  ASSERT_NE(size_spin, nullptr);
   ASSERT_NE(tree, nullptr);
   EXPECT_FALSE(import_button->isHidden());
   EXPECT_FALSE(filter->isHidden());
   EXPECT_TRUE(grid_button->isHidden());
   EXPECT_TRUE(list_button->isHidden());
-  EXPECT_FALSE(slider->isVisible());
+  EXPECT_FALSE(size_spin->isVisible());
   for (QToolButton *button : {filter, folders, import_button, thumbnail_size}) {
     EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
     EXPECT_FALSE(button->icon().isNull());
@@ -3099,7 +3100,7 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(browser.view_mode(), QtMaterialBrowserViewMode::Grid);
   EXPECT_TRUE(grid_button->isHidden());
   EXPECT_TRUE(list_button->isHidden());
-  EXPECT_FALSE(slider->isVisible());
+  EXPECT_FALSE(size_spin->isVisible());
 
   QuaderMaterialReference opened;
   browser.set_open_material_callback(
@@ -3155,11 +3156,11 @@ TEST(QtMaterialBrowserWindowTests,
       QStringLiteral("materialBrowser.thumbnailSizePopup"));
   ASSERT_NE(size_popup, nullptr);
   EXPECT_TRUE(size_popup->isVisible());
-  EXPECT_EQ(size_popup->findChild<QSlider *>(
+  EXPECT_EQ(size_popup->findChild<QSpinBox *>(
                 QStringLiteral("materialBrowser.tileSize")),
-            slider);
-  EXPECT_TRUE(slider->isVisible());
-  slider->setValue(3);
+            size_spin);
+  EXPECT_TRUE(size_spin->isVisible());
+  size_spin->setValue(128);
   EXPECT_EQ(browser.tile_size(), 128);
   EXPECT_GT(presentation_changes, 0);
   size_popup->close();
@@ -3171,10 +3172,10 @@ TEST(QtMaterialBrowserWindowTests,
   size_popup = browser.findChild<QWidget *>(
       QStringLiteral("materialBrowser.thumbnailSizePopup"));
   ASSERT_NE(size_popup, nullptr);
-  EXPECT_EQ(size_popup->findChild<QSlider *>(
+  EXPECT_EQ(size_popup->findChild<QSpinBox *>(
                 QStringLiteral("materialBrowser.tileSize")),
-            slider);
-  EXPECT_EQ(slider->value(), 3);
+            size_spin);
+  EXPECT_EQ(size_spin->value(), 128);
   size_popup->close();
   QCoreApplication::processEvents();
   click_current();
@@ -3284,7 +3285,7 @@ TEST(QtMaterialBrowserWindowTests,
       QStringLiteral("materialBrowser.grid"));
   auto *list_button = window->findChild<QToolButton *>(
       QStringLiteral("materialBrowser.list"));
-  auto *slider = window->findChild<QSlider *>(
+  auto *size_spin = window->findChild<QSpinBox *>(
       QStringLiteral("materialBrowser.tileSize"));
   auto *file_menu = window->findChild<QMenu *>(
       QStringLiteral("materialBrowser.fileMenu"));
@@ -3299,7 +3300,7 @@ TEST(QtMaterialBrowserWindowTests,
   ASSERT_NE(empty, nullptr);
   ASSERT_NE(grid_button, nullptr);
   ASSERT_NE(list_button, nullptr);
-  ASSERT_NE(slider, nullptr);
+  ASSERT_NE(size_spin, nullptr);
   EXPECT_EQ(file_menu, nullptr);
   ASSERT_NE(import_button, nullptr);
   ASSERT_NE(accept_button, nullptr);
@@ -3318,14 +3319,12 @@ TEST(QtMaterialBrowserWindowTests,
   import_button->click();
   EXPECT_EQ(import_count, 1);
 
-  EXPECT_EQ(slider->minimum(), 0);
-  EXPECT_EQ(slider->maximum(), 5);
-  EXPECT_EQ(slider->singleStep(), 1);
-  EXPECT_EQ(slider->pageStep(), 1);
-  EXPECT_EQ(slider->tickInterval(), 1);
-  EXPECT_EQ(slider->tickPosition(), QSlider::TicksBelow);
-  EXPECT_EQ(slider->toolTip(), QStringLiteral("Tile size = 128 pixels"));
-  EXPECT_EQ(slider->accessibleName(), QStringLiteral("Tile size = 128 pixels"));
+  EXPECT_NE(dynamic_cast<QtSpinBox *>(size_spin), nullptr);
+  EXPECT_EQ(size_spin->minimum(), 16);
+  EXPECT_EQ(size_spin->maximum(), 512);
+  EXPECT_EQ(size_spin->singleStep(), 1);
+  EXPECT_EQ(size_spin->toolTip(), QStringLiteral("Tile size = 128 pixels"));
+  EXPECT_EQ(size_spin->accessibleName(), QStringLiteral("Tile size = 128 pixels"));
 
   QListView stock_grid;
   QTableView stock_list;
@@ -3433,13 +3432,13 @@ TEST(QtMaterialBrowserWindowTests,
       [&state_changes]() { ++state_changes; });
   list_button->click();
   EXPECT_EQ(window->view_mode(), QtMaterialBrowserViewMode::List);
-  EXPECT_TRUE(slider->isHidden());
+  EXPECT_TRUE(size_spin->isHidden());
   grid_button->click();
-  EXPECT_FALSE(slider->isHidden());
+  EXPECT_FALSE(size_spin->isHidden());
   const std::vector<int> tile_presets{16, 32, 64, 128, 256, 512};
   for (int index = 0; index < static_cast<int>(tile_presets.size()); ++index) {
-    slider->setValue(index);
     const int preset = tile_presets[static_cast<std::size_t>(index)];
+    size_spin->setValue(preset);
     EXPECT_EQ(window->view_mode(), QtMaterialBrowserViewMode::Grid);
     EXPECT_EQ(window->tile_size(), preset);
     EXPECT_EQ(grid->iconSize(), QSize(preset, preset));
@@ -3450,9 +3449,9 @@ TEST(QtMaterialBrowserWindowTests,
                                       .value<QIcon>();
     EXPECT_EQ(current_preview.actualSize(QSize(preset, preset)),
               QSize(preset, preset / 2));
-    EXPECT_EQ(slider->toolTip(),
+    EXPECT_EQ(size_spin->toolTip(),
               QStringLiteral("Tile size = %1 pixels").arg(preset));
-    EXPECT_EQ(slider->accessibleName(), slider->toolTip());
+    EXPECT_EQ(size_spin->accessibleName(), size_spin->toolTip());
   }
 
   window->restore_presentation_state(QtMaterialBrowserViewMode::Grid, 128);
@@ -3464,8 +3463,8 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(grid->iconSize(), QSize(256, 256));
   EXPECT_EQ(grid->gridSize(), QSize(288, 356));
   EXPECT_EQ(grid->spacing(), 16);
-  EXPECT_EQ(slider->minimumWidth(), 300);
-  EXPECT_EQ(slider->maximumWidth(), 300);
+  EXPECT_EQ(size_spin->minimumWidth(), 300);
+  EXPECT_EQ(size_spin->maximumWidth(), 300);
   EXPECT_EQ(window->size(), unscaled_window_size)
       << "a live scale event must preserve retained top-level geometry";
   EXPECT_EQ(state_changes, changes_before_scale)
@@ -3476,7 +3475,7 @@ TEST(QtMaterialBrowserWindowTests,
   window->apply_ui_scale(QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(grid->iconSize(), QSize(128, 128));
   EXPECT_EQ(grid->gridSize(), QSize(144, 178));
-  EXPECT_EQ(slider->minimumWidth(), 150);
+  EXPECT_EQ(size_spin->minimumWidth(), 150);
   int dpi_decoration_changes = 0;
   QObject::connect(
       grid->model(), &QAbstractItemModel::dataChanged, window,
@@ -3528,6 +3527,20 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(high_resolution_icon_pixmap.size(), QSize(3072, 192));
   EXPECT_EQ(high_resolution_icon_pixmap.toImage().pixelColor(1537, 100),
             Qt::red);
+
+  size_spin->setValue(128);
+  EXPECT_EQ(size_spin->text(), QStringLiteral("128"));
+  size_spin->stepUp();
+  EXPECT_EQ(window->tile_size(), 256);
+  size_spin->stepDown();
+  EXPECT_EQ(window->tile_size(), 128);
+  auto *size_editor = size_spin->findChild<QLineEdit *>();
+  ASSERT_NE(size_editor, nullptr);
+  size_editor->setText(QStringLiteral("200"));
+  size_spin->interpretText();
+  EXPECT_EQ(window->tile_size(), 256)
+      << "typed pixel counts normalize to the nearest supported thumbnail size";
+  EXPECT_EQ(size_spin->text(), QStringLiteral("256"));
 
   const int changes_before_restore = state_changes;
   window->restore_presentation_state(QtMaterialBrowserViewMode::Grid, 24);

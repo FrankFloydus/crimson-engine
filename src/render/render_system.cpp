@@ -745,7 +745,7 @@ void RenderSystem::render_material_preview(
 }
 
 void RenderSystem::apply_scene_settings(
-    const SceneSettingsComponent &settings) {
+    const SceneSettings &settings) {
   if (!engine_ || !scene_) {
     return;
   }

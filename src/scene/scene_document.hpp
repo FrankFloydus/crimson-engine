@@ -48,8 +48,6 @@ struct EntityRecord {
   bool has_mesh = false;
   bool has_curve = false;
   bool has_light = false;
-  bool is_scene_root = false;
-  bool has_scene_settings = false;
   bool has_modeling_object = false;
   bool is_instance_definition = false;
   bool has_instance_occurrence = false;
@@ -329,8 +327,8 @@ public:
     bool set_parent(EntityId child, EntityId parent,
                     bool preserve_world_transform = true);
     /**
-     * Moves an entity within its current parent's authored child order.
-     * The ordinal must name a position in the current child list.
+     * Moves an entity within its parent's children or the document's roots.
+     * The ordinal must name a position in the current sibling list.
      */
     bool set_sibling_ordinal(EntityId entity, std::size_t ordinal);
     /**
@@ -392,8 +390,7 @@ public:
         std::span<const SceneTextureMappingAssignment> mappings);
     bool set_light(EntityId id, LightComponent light);
     bool clear_light(EntityId id);
-    bool set_scene_settings(EntityId id, SceneSettingsComponent settings);
-    bool clear_scene_settings(EntityId id);
+    bool set_scene_settings(SceneSettings settings);
 
     SceneLayerId create_layer(
         std::string name = {},
@@ -438,7 +435,7 @@ public:
     const MaterialComponent* material(EntityId id) const;
     const TextureMappingComponent *texture_mapping(EntityId id) const;
     const LightComponent* light(EntityId id) const;
-    const SceneSettingsComponent *scene_settings(EntityId id) const;
+    const SceneSettings &scene_settings() const { return scene_settings_; }
     const SceneLayerMembershipComponent *layer_membership(EntityId id) const;
 
     [[nodiscard]] const SceneLayerRecord *layer(SceneLayerId id) const;
@@ -456,9 +453,9 @@ public:
     std::vector<EntityId> entities() const;
     /** Returns authored-curve entities without visiting unrelated scene nodes. */
     [[nodiscard]] std::vector<EntityId> curve_entities() const;
-    EntityId scene_root() const;
-    bool is_scene_root(EntityId id) const;
+    /** Returns parentless entities in their authored document order. */
     std::vector<EntityId> root_entities() const;
+    /** An invalid parent identifies the document's ordered root list. */
     std::vector<EntityId> children(EntityId id) const;
     [[nodiscard]] std::optional<std::size_t>
     sibling_ordinal(EntityId entity) const;
@@ -556,6 +553,9 @@ public:
       return light_property_revision_;
     }
     std::uint64_t layer_revision() const { return layer_revision_; }
+    std::uint64_t scene_settings_revision() const {
+      return scene_settings_revision_;
+    }
 
     /**
      * Captures only the requested participants and modeling projection
@@ -727,6 +727,9 @@ private:
   std::uint64_t render_component_revision_ = 0;
   std::uint64_t light_property_revision_ = 0;
   std::uint64_t layer_revision_ = 0;
+  std::uint64_t scene_settings_revision_ = 0;
+  SceneSettings scene_settings_;
+  std::vector<EntityId> root_entities_;
   EditorObjectIdAllocator editor_object_id_allocator_;
   entt::registry registry_;
   std::unordered_map<EntityId, entt::entity> entities_;

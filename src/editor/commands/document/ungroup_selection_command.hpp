@@ -50,6 +50,7 @@ public:
         }
 
         std::unordered_map<EntityId, EntityId> remapped_entities;
+        std::vector<DocumentEntityPlacement> group_placements;
         std::vector<EntityId> restored_groups;
         restored_groups.reserve(groups_.size());
         for (UngroupedEntity& group : groups_) {
@@ -75,8 +76,17 @@ public:
             }
             scene().set_transform(child.entity, child.transform);
           }
+          group_placements.push_back({
+              .entity = restored_group,
+              .parent = parent,
+              .sibling_ordinal = group.snapshot.sibling_ordinal,
+          });
           group.snapshot.id = restored_group;
           restored_groups.push_back(restored_group);
+        }
+        if (!document_command_restore_placement_order(scene(), group_placements)) {
+          return document_command_invalid_request_result(
+              "Ungrouped hierarchy order cannot be restored");
         }
         document_command_apply_selection(
             scene(), document_command_remap_selection(before_selection_,
@@ -125,6 +135,31 @@ public:
                                      state.ungrouped_transforms.end());
       }
 
+      std::unordered_map<EntityId, const UngroupedEntity *> expanded_groups;
+      std::unordered_set<EntityId> affected_parents;
+      for (const UngroupedEntity &state : *planned_groups) {
+        expanded_groups.emplace(state.snapshot.id, &state);
+        affected_parents.insert(state.parent);
+      }
+      std::vector<DocumentEntityPlacement> promoted_placements;
+      for (const EntityId parent : affected_parents) {
+        std::size_t ordinal = 0u;
+        for (const EntityId sibling : scene().children(parent)) {
+          const auto expanded = expanded_groups.find(sibling);
+          if (expanded == expanded_groups.end()) {
+            ++ordinal;
+            continue;
+          }
+          for (const DocumentEntityPlacement &child : expanded->second->children) {
+            promoted_placements.push_back({
+                .entity = child.entity,
+                .parent = parent,
+                .sibling_ordinal = ordinal++,
+            });
+          }
+        }
+      }
+
       if (scene().set_parents(parent_assignments)) {
         scene().set_transforms(transform_assignments);
         // Enroll group selection removal in the forward compensation scope;
@@ -151,6 +186,10 @@ public:
         }
       }
 
+        if (!document_command_restore_placement_order(scene(), promoted_placements)) {
+          return document_command_invalid_request_result(
+              "Ungrouped child order cannot be preserved");
+        }
         before_selection_ = before_selection;
         groups_ = std::move(*planned_groups);
         current_groups_.clear();
@@ -226,7 +265,7 @@ private:
     }
 
     bool is_ungroupable(EntityId entity) const {
-      return scene().exists(entity) && !scene().is_scene_root(entity) &&
+      return scene().exists(entity) &&
              scene().kind(entity) == EntityKind::Empty &&
              scene().has_children(entity);
     }

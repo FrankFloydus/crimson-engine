@@ -52,6 +52,15 @@ inline constexpr double kCurveOvalDefaultLength = 4.0;
 /// Selects point-by-point drawing or one complete closed placement shape.
 enum class CurveCreationKind { Draw = 0, Circle = 1, Oval = 2 };
 
+/// Remembers creation preferences across scene owners for one app lifetime.
+struct CurveSessionDefaults {
+  CurveCreationKind creation_kind = CurveCreationKind::Draw;
+  bool closed = false;
+  double circle_radius = kCurvePresetDefaultRadius;
+  double oval_radius = kCurvePresetDefaultRadius;
+  double oval_length = kCurveOvalDefaultLength;
+};
+
 /// Pins the snapped construction-plane frame used by one preset placement.
 struct CurvePresetPlacementFrame {
   QVec3 center{};
@@ -70,7 +79,8 @@ public:
                    EditorHistoryService &history,
                    ModelingSessionService &modeling,
                    EditorSelectionService &selection,
-                   DocumentCommandService &document_commands);
+                   DocumentCommandService &document_commands,
+                   CurveSessionDefaults *session_defaults = nullptr);
 
   [[nodiscard]] bool active() const { return active_; }
   [[nodiscard]] bool has_session() const { return active_; }
@@ -234,6 +244,7 @@ private:
   void detach_source();
   void invalidate(bool settings_changed = false);
   void observe_owner_revisions();
+  void restore_session_defaults();
 
   SceneDocument &scene_;
   AssetRegistry &assets_;
@@ -241,6 +252,8 @@ private:
   ModelingSessionService &modeling_;
   EditorSelectionService &selection_;
   DocumentCommandService &document_commands_;
+  CurveSessionDefaults local_session_defaults_;
+  CurveSessionDefaults *session_defaults_ = nullptr;
   bool active_ = false;
   bool drawing_ = true;
   bool preferred_closed_ = false;

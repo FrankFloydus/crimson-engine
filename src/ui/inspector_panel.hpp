@@ -38,7 +38,7 @@ struct InspectorMaterialPresentationSnapshot final {
 };
 
 /**
- * Presents scene, component-selection, transform, and component properties
+ * Presents object, component-selection, transform, and component properties
  * while routing every mutation through editor-owned APIs and services.
  */
 class InspectorPanel final : public QWidget {

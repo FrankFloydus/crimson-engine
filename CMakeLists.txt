@@ -494,6 +494,16 @@ if(QUADER_BUILD_QDR_TOOLS)
         "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
         "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
     target_link_libraries(qdr_dump PRIVATE quader_project_qdr_io)
+
+    add_executable(qdr_migrate
+        tools/qdr_migrate_main.cpp
+        tools/qdr_retired_schema10_converter.cpp)
+    target_compile_features(qdr_migrate PRIVATE cxx_std_20)
+    target_include_directories(qdr_migrate PRIVATE
+        "${QUADER_QDR_GENERATED_DIR}")
+    target_link_libraries(qdr_migrate PRIVATE
+        quader_project_qdr_io quader_modeling_sdk_qdr_document flatbuffers::flatbuffers)
+    add_dependencies(qdr_migrate quader_qdr_flatbuffers_generated)
 endif()
 
 add_library(quader_project_session STATIC
@@ -923,6 +933,7 @@ set(QUADER_MATERIAL_BROWSER_ICON_FILES
 add_library(quader_ui STATIC
     src/ui/console_panel.cpp
     src/ui/inspector_panel.cpp
+    src/ui/qt_environment_settings_popup.cpp
     src/ui/layer_panel.cpp
     src/ui/outliner_panel.cpp
     src/ui/qt_face_texture_panel.cpp
@@ -1608,6 +1619,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_horizontal_pointer_capture_tests.cpp
         tests/qt_retained_message_box_tests.cpp
         tests/qt_settings_controller_tests.cpp
+        tests/qt_environment_settings_popup_tests.cpp
         tests/qt_settings_dialog_tests.cpp
         tests/qt_startup_presentation_tests.cpp
         tests/qt_tool_settings_number_slider_tests.cpp
@@ -1655,6 +1667,8 @@ if(QUADER_BUILD_TESTS)
         tests/curve_solid_render_tests.cpp
         tests/qdr_binary_container_tests.cpp
         tests/qdr_binary_scene_codec_tests.cpp
+        tests/qdr_migration_tests.cpp
+        tools/qdr_retired_schema10_converter.cpp
         tests/qdr_material_usage_tests.cpp
         tests/modeling_session_service_split_tests.cpp
         tests/modeling_legacy_local_frame_upgrade_tests.cpp
@@ -1701,6 +1715,7 @@ if(QUADER_BUILD_TESTS)
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest)
     target_link_libraries(quader_tests PRIVATE quader_bridge_reader)
+    target_link_libraries(quader_tests PRIVATE quader_modeling_sdk_qdr_document)
     quader_deploy_test_runtime_dlls(quader_tests)
     if(WIN32)
         quader_deploy_windows_qt_runtime(quader_tests)

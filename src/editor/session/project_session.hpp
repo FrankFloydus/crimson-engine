@@ -230,6 +230,7 @@ private:
   std::size_t history_max_steps_ = EditorHistoryService::kDefaultMaxSteps;
   std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;
   std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults_;
+  std::shared_ptr<ToolSessionDefaults> tool_defaults_;
   SceneSession fallback_scene_;
   ProjectMaterialCatalog material_catalog_;
   std::uint64_t material_texture_revision_ = 0u;

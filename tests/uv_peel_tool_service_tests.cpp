@@ -11,6 +11,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/session/tool_session_defaults.hpp"
 #include "editor/tools/uv_peel_tool_service.hpp"
 #include "scene/scene_document.hpp"
 
@@ -24,6 +25,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -35,6 +37,8 @@ namespace {
 
 /// Keeps public workflow calls attached to an inspectable native scene owner.
 struct UvPeelHarness final {
+  explicit UvPeelHarness(std::shared_ptr<ToolSessionDefaults> defaults = {})
+      : session(nullptr, nullptr, std::move(defaults)) {}
   SceneSession session;
   QuaderEditorApi editor{
       QuaderApiSessionInternalAccess::from_scene_session(session)};
@@ -708,7 +712,7 @@ TEST(UvPeelToolServiceTests, UnchangedFramesDoNotRebuildOrRepublishThePreview) {
   expect_mesh_equal(editor.query().compiled_object_mesh(strip), *mesh);
 }
 
-TEST(UvPeelToolServiceTests, SceneReplacementEndsTheToolAndResetsSceneLocalOptions) {
+TEST(UvPeelToolServiceTests, SceneReplacementEndsTheToolAndKeepsAcceptedOptions) {
   UvPeelHarness harness;
   auto &editor = harness.editor;
   const auto strip = create_strip(editor);
@@ -720,13 +724,13 @@ TEST(UvPeelToolServiceTests, SceneReplacementEndsTheToolAndResetsSceneLocalOptio
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_FALSE(editor.query().entity(strip.entity).has_value());
   EXPECT_FALSE(editor.history().can_undo());
-  EXPECT_EQ(editor.modeling().uv_peel_settings().options, QuaderUvPeelOptions{});
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options.u_offset, 0.25);
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
   EXPECT_FALSE(editor.tools().active_settings().can_apply);
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
-TEST(UvPeelToolServiceTests, SceneSwitchCancelsPreviewAndKeepsEachScenesOptions) {
+TEST(UvPeelToolServiceTests, SceneSwitchCancelsPreviewAndSharesAcceptedOptions) {
   ScopedPeelProjectDirectory directory;
   ProjectSession project;
   const auto created = project.create(directory.path());
@@ -738,14 +742,18 @@ TEST(UvPeelToolServiceTests, SceneSwitchCancelsPreviewAndKeepsEachScenesOptions)
   ASSERT_TRUE(editor.selection().select_edge(strip, 2, 5).ok());
   const auto original = editor.query().compiled_object_mesh(strip);
   ASSERT_TRUE(original.has_value());
-  const QuaderUvPeelOptions remembered{.world_space = false, .u_offset = 0.25};
+  QuaderUvPeelOptions remembered{.world_space = false, .u_offset = 0.25};
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
   set_options(editor, remembered);
   ASSERT_TRUE(editor.tools().active_settings().can_apply);
   const auto second = editor.scene_documents().new_scene();
   ASSERT_TRUE(second.ok()) << second.error_message();
   EXPECT_EQ(editor.tools().active_tool(), "select");
-  EXPECT_EQ(editor.modeling().uv_peel_settings().options, QuaderUvPeelOptions{});
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, remembered);
+  remembered.v_repeat = 4.0;
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  set_options(editor, remembered);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   ASSERT_TRUE(editor.scene_documents().activate(first_scene).ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Edge);
@@ -758,6 +766,43 @@ TEST(UvPeelToolServiceTests, SceneSwitchCancelsPreviewAndKeepsEachScenesOptions)
   ASSERT_TRUE(editor.scene_documents().activate(first_scene).ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
   expect_mesh_equal(editor.query().compiled_object_mesh(strip), *original);
+}
+
+TEST(UvPeelToolServiceTests,
+     FailedPreviewRestoresBorrowedAcceptedOptionsAndInvalidatesRevision) {
+  const auto defaults = std::make_shared<ToolSessionDefaults>();
+  UvPeelHarness first(defaults);
+  UvPeelHarness second(defaults);
+  auto &editor = first.editor;
+  const auto strip = create_strip(editor);
+  ASSERT_TRUE(editor.selection().select_edge(strip, 2, 5).ok());
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  const QuaderUvPeelOptions remembered{.world_space = false, .u_offset = 0.25};
+  set_options(editor, remembered);
+  ASSERT_TRUE(editor.tools().active_settings().can_apply);
+  const auto revision = defaults->uv_peel.revision;
+  first.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::PreviewAssetReplace);
+  const auto rejected =
+      editor.tools().set_setting("uv_peel", "uv_peel.u_offset", 0.75);
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, remembered);
+  EXPECT_EQ(second.editor.modeling().uv_peel_settings().options, remembered);
+  EXPECT_GT(defaults->uv_peel.revision, revision);
+  EXPECT_EQ(second.editor.selection().summary().selected_edge_count, 0u);
+  EXPECT_FALSE(second.session.modeling().uv_peel_preview_active());
+  first.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  EXPECT_TRUE(editor.tools().active_settings().can_apply);
+  expect_uv_bounds(editor.query().compiled_object_mesh(strip),
+                   0.25f, 1.25f, -0.5f, 0.5f);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+
+  UvPeelHarness fresh;
+  EXPECT_EQ(fresh.editor.modeling().uv_peel_settings().options,
+            QuaderUvPeelOptions{});
 }
 
 TEST(UvPeelToolServiceTests, LockedTargetsNeverPublishAndCanRecoverAfterUnlock) {

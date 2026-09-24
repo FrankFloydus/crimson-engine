@@ -35,7 +35,6 @@ class QLabel;
 class QLineEdit;
 class QMenu;
 class QPushButton;
-class QSlider;
 class QTimer;
 class QToolButton;
 class QVBoxLayout;
@@ -352,7 +351,7 @@ private:
   static constexpr std::size_t kTextureTransformCount = 7;
   static constexpr std::size_t kPreviewMeshCount = 5;
 
-  /// Retains the latest live-slider value until its bounded dispatch cadence.
+  /// Retains the latest numeric scrub value until its bounded dispatch cadence.
   struct LiveNumberDispatch final {
     QTimer *timer = nullptr;
     std::optional<double> pending_value;
@@ -372,11 +371,10 @@ private:
     bool preview_icon_initialized = false;
   };
 
-  /// Groups the numeric and sliding controls for one transform component.
+  /// Groups the numeric field and dispatch state for one transform component.
   struct TextureTransformControls final {
     QLabel *label = nullptr;
     QDoubleSpinBox *spin = nullptr;
-    QSlider *slider = nullptr;
     LiveNumberDispatch live_dispatch;
   };
 
@@ -447,13 +445,10 @@ private:
   std::uint64_t interaction_generation_ = 0u;
   QLabel *roughness_label_ = nullptr;
   QDoubleSpinBox *roughness_spin_ = nullptr;
-  QSlider *roughness_slider_ = nullptr;
   QLabel *metallic_label_ = nullptr;
   QDoubleSpinBox *metallic_spin_ = nullptr;
-  QSlider *metallic_slider_ = nullptr;
   QLabel *normal_strength_label_ = nullptr;
   QDoubleSpinBox *normal_strength_spin_ = nullptr;
-  QSlider *normal_strength_slider_ = nullptr;
   std::array<LiveNumberDispatch, kScalarCount> scalar_live_dispatches_{};
   QCheckBox *direct_x_normal_ = nullptr;
   std::array<TextureControls, kTextureSlotCount> texture_controls_{};

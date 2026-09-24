@@ -1256,13 +1256,13 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_EQ(editor.tools().active_tool(), "extrude");
     press_key(Qt::Key_Space);
     EXPECT_FALSE(editor.tools().active_settings().preview_active);
-    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), 2.15);
     EXPECT_EQ(session.history().undo_count(), steps_before_extrude + 1u);
     click(other_position);
     ASSERT_EQ(editor.selection().summary().active_object_id,
               other.value().modeling_object_id);
     ASSERT_TRUE(session.extrude().preview_active());
-    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), 2.15);
     press_key(Qt::Key_Escape);
     EXPECT_FALSE(session.extrude().preview_active());
     EXPECT_EQ(session.history().undo_count(), steps_before_extrude + 1u);

@@ -44,8 +44,6 @@ struct SceneEntityState {
   std::optional<LightComponent> light;
   std::optional<InstanceDefinitionComponent> instance_definition;
   std::optional<InstanceOccurrenceComponent> instance_occurrence;
-  bool scene_root = false;
-  std::optional<SceneSettingsComponent> scene_settings;
   SceneLayerId layer_id = kInvalidSceneLayerId;
 };
 
@@ -59,7 +57,6 @@ struct SceneEntityStateApplyOptions {
   bool include_modeling_object = true;
   bool include_selection = false;
   bool include_instance_roles = true;
-  bool include_scene_settings = true;
   bool include_texture_mapping = true;
   bool include_layer_membership = true;
   bool include_hierarchy_placement = false;

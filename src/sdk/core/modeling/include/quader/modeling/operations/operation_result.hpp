@@ -9,10 +9,26 @@
 #include <quader/modeling/payloads.hpp>
 #include <quader/modeling/result.hpp>
 
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace quader::modeling {
+
+/**
+ * Summarizes canonical bevel support clipping in mesh-local units. Applied
+ * width is the maximum consumed across all sides and terminal patches. If it
+ * is below requested width, replaying that applied width reproduces the same
+ * candidate. Partial clipping alone does not limit still-changing larger sides.
+ */
+struct EdgeBevelWidthFeedback {
+  float requested_width = 0.0F;
+  float applied_width = 0.0F;
+  bool support_limited = false;
+
+  friend bool operator==(const EdgeBevelWidthFeedback &,
+                         const EdgeBevelWidthFeedback &) = default;
+};
 
 /**
  * Reports structured operation status, topology deltas, dirty flags, and remaps.
@@ -29,6 +45,7 @@ struct OperationResult {
   ElementDelta modified;
   DirtyFlags dirty;
   SelectionRemap selection_remap;
+  std::optional<EdgeBevelWidthFeedback> edge_bevel_width;
 };
 
 } // namespace quader::modeling

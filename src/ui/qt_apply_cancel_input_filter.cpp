@@ -8,6 +8,7 @@
 
 #include "api/quader_commands_api.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 
 #include <QAbstractButton>
 #include <QAbstractSpinBox>
@@ -114,6 +115,10 @@ void QtApplyCancelInputFilter::retire_if_unused() {
 }
 
 bool QtApplyCancelInputFilter::eventFilter(QObject *watched, QEvent *event) {
+  if (qt_handle_numeric_text_edit_key(watched, event)) {
+    reset_pending();
+    return true;
+  }
   if (event == nullptr) {
     return false;
   }

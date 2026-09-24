@@ -1201,10 +1201,14 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
     break;
   }
   case ModelingToolSettingsTargetKind::EdgeBevel: {
-    result.controls.push_back(number_control(
+    auto width = number_control(
         "operation.edge_bevel.width", "Width", settings.edge_bevel_width,
-        kEdgeBevel.width.minimum, kEdgeBevel.width.maximum,
-        kEdgeBevel.width.step));
+        kEdgeBevel.width.minimum,
+        target.edge_bevel_maximum_width.value_or(kEdgeBevel.width.maximum),
+        0.01);
+    width.number_drag_sensitivity = width.step;
+    width.number_decimals = std::numeric_limits<double>::max_digits10;
+    result.controls.push_back(std::move(width));
     result.controls.push_back(number_control(
         "operation.edge_bevel.segments", "Segments",
         settings.edge_bevel_segments,

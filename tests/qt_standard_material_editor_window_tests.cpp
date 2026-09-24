@@ -8,6 +8,7 @@
 
 #include "core/localization_service.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_texture_info_window.hpp"
 
@@ -47,6 +48,39 @@
 
 namespace quader {
 namespace {
+
+/// Begins the shared pointer gesture before injecting exact owner-facing samples.
+void begin_numeric_scrub(QDoubleSpinBox &spin) {
+  spin.window()->show();
+  QCoreApplication::processEvents();
+  auto *editor = spin.findChild<QLineEdit *>();
+  ASSERT_NE(editor, nullptr);
+  const QPoint origin = editor->rect().center();
+  const QPoint moved = origin + QPoint(QApplication::startDragDistance() + 1, 0);
+  QMouseEvent press(QEvent::MouseButtonPress, QPointF(origin),
+                    QPointF(editor->mapToGlobal(origin)), Qt::LeftButton,
+                    Qt::LeftButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(editor, &press);
+  QMouseEvent move(QEvent::MouseMove, QPointF(moved),
+                   QPointF(editor->mapToGlobal(moved)), Qt::NoButton,
+                   Qt::LeftButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(editor, &move);
+  ASSERT_TRUE(qt_install_numeric_spin_box(spin).is_dragging());
+}
+
+void end_numeric_scrub(QDoubleSpinBox &spin) {
+  auto *editor = spin.findChild<QLineEdit *>();
+  ASSERT_NE(editor, nullptr);
+  // Samples above use setValue to isolate dispatch cadence from sensitivity.
+  // Release where the pointer stopped, without inventing a reverse movement.
+  qt_install_numeric_spin_box(spin).rebase_drag();
+  const QPoint position = editor->rect().center() +
+                          QPoint(QApplication::startDragDistance() + 1, 0);
+  QMouseEvent release(QEvent::MouseButtonRelease, QPointF(position),
+                      QPointF(editor->mapToGlobal(position)), Qt::LeftButton,
+                      Qt::NoButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(editor, &release);
+}
 
 /// Observes tooltip publications independently of paint scheduling.
 class MaterialTooltipEvents final : public QObject {
@@ -405,12 +439,6 @@ TEST(QtStandardMaterialEditorWindowTests,
       QStringLiteral("standardMaterialEditor.metallic"));
   auto *normal_strength = window->findChild<QDoubleSpinBox *>(
       QStringLiteral("standardMaterialEditor.normalStrength"));
-  auto *roughness_slider = window->findChild<QSlider *>(
-      QStringLiteral("standardMaterialEditor.roughness.slider"));
-  auto *metallic_slider = window->findChild<QSlider *>(
-      QStringLiteral("standardMaterialEditor.metallic.slider"));
-  auto *normal_strength_slider = window->findChild<QSlider *>(
-      QStringLiteral("standardMaterialEditor.normalStrength.slider"));
   auto *direct_x = window->findChild<QCheckBox *>(
       QStringLiteral("standardMaterialEditor.directXNormal"));
   auto *albedo_path = window->findChild<QLabel *>(
@@ -423,11 +451,10 @@ TEST(QtStandardMaterialEditorWindowTests,
   ASSERT_NE(name, nullptr);
   ASSERT_NE(albedo, nullptr);
   ASSERT_NE(roughness, nullptr);
+  EXPECT_TRUE(window->findChildren<QSlider *>().isEmpty());
+  EXPECT_NE(dynamic_cast<QtDoubleSpinBox *>(roughness), nullptr);
   ASSERT_NE(metallic, nullptr);
   ASSERT_NE(normal_strength, nullptr);
-  ASSERT_NE(roughness_slider, nullptr);
-  ASSERT_NE(metallic_slider, nullptr);
-  ASSERT_NE(normal_strength_slider, nullptr);
   ASSERT_NE(direct_x, nullptr);
   ASSERT_NE(albedo_path, nullptr);
   ASSERT_NE(metallic_path, nullptr);
@@ -443,18 +470,8 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_DOUBLE_EQ(roughness->value(), 0.35);
   EXPECT_DOUBLE_EQ(metallic->value(), 0.8);
   EXPECT_DOUBLE_EQ(normal_strength->value(), 1.25);
-  EXPECT_EQ(roughness_slider->minimum(), 0);
-  EXPECT_EQ(roughness_slider->maximum(), 100);
-  EXPECT_EQ(roughness_slider->singleStep(), 1);
-  EXPECT_EQ(roughness_slider->value(), 35);
-  EXPECT_EQ(metallic_slider->singleStep(), 1);
-  EXPECT_EQ(metallic_slider->value(), 80);
   EXPECT_EQ(normal_strength->minimum(), -16.0);
   EXPECT_EQ(normal_strength->maximum(), 16.0);
-  EXPECT_EQ(normal_strength_slider->minimum(), -1600);
-  EXPECT_EQ(normal_strength_slider->maximum(), 1600);
-  EXPECT_EQ(normal_strength_slider->singleStep(), 1);
-  EXPECT_EQ(normal_strength_slider->value(), 125);
   EXPECT_TRUE(direct_x->isChecked());
   const QList<QDoubleSpinBox *> decimal_inputs =
       window->findChildren<QDoubleSpinBox *>();
@@ -514,17 +531,17 @@ TEST(QtStandardMaterialEditorWindowTests,
       QMetaObject::invokeMethod(name, "editingFinished", Qt::DirectConnection));
   roughness->setValue(0.5);
   auto *roughness_dispatch_timer = window->findChild<QTimer *>(
-      QStringLiteral("standardMaterialEditor.roughness.slider.dispatchTimer"));
+      QStringLiteral("standardMaterialEditor.roughness.dispatchTimer"));
   ASSERT_NE(roughness_dispatch_timer, nullptr);
   EXPECT_TRUE(roughness_dispatch_timer->isSingleShot());
-  roughness_slider->setSliderDown(true);
-  roughness_slider->setValue(51);
-  roughness_slider->setValue(67);
-  roughness_slider->setValue(83);
+  begin_numeric_scrub(*roughness);
+  roughness->setValue(0.51);
+  roughness->setValue(0.67);
+  roughness->setValue(0.83);
   EXPECT_DOUBLE_EQ(roughness->value(), 0.83)
-      << "the paired spin box must follow every live slider sample";
+      << "the numeric field must retain every live scrub sample";
   ASSERT_EQ(scalar_edits.size(), 1U)
-      << "live slider samples stay pending until the bounded dispatch";
+      << "live scrub samples stay pending until the bounded dispatch";
   EXPECT_TRUE(roughness_dispatch_timer->isActive());
   ASSERT_TRUE(QMetaObject::invokeMethod(
       roughness_dispatch_timer, "timeout", Qt::DirectConnection));
@@ -534,11 +551,11 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_DOUBLE_EQ(scalar_edits.back().second, 0.83)
       << "one interval dispatches only the latest pending sample";
   EXPECT_FALSE(roughness_dispatch_timer->isActive());
-  roughness_slider->setValue(84);
-  roughness_slider->setValue(91);
+  roughness->setValue(0.84);
+  roughness->setValue(0.91);
   EXPECT_DOUBLE_EQ(roughness->value(), 0.91);
   ASSERT_EQ(scalar_edits.size(), 2U);
-  roughness_slider->setSliderDown(false);
+  end_numeric_scrub(*roughness);
   ASSERT_EQ(scalar_edits.size(), 3U);
   EXPECT_EQ(scalar_edits.back().first,
             QtStandardMaterialScalar::Roughness);
@@ -605,29 +622,24 @@ TEST(QtStandardMaterialEditorWindowTests,
 
   auto *center_u = window->findChild<QDoubleSpinBox *>(
       QStringLiteral("standardMaterialEditor.textureTransform.centerU"));
-  auto *scale_v_slider = window->findChild<QSlider *>(
-      QStringLiteral("standardMaterialEditor.textureTransform.scaleV.slider"));
   auto *scale_v = window->findChild<QDoubleSpinBox *>(
       QStringLiteral("standardMaterialEditor.textureTransform.scaleV"));
   auto *rotation = window->findChild<QDoubleSpinBox *>(
       QStringLiteral("standardMaterialEditor.textureTransform.rotation"));
   ASSERT_NE(center_u, nullptr);
-  ASSERT_NE(scale_v_slider, nullptr);
   ASSERT_NE(scale_v, nullptr);
   ASSERT_NE(rotation, nullptr);
   EXPECT_DOUBLE_EQ(center_u->value(), 0.25);
-  EXPECT_EQ(scale_v_slider->singleStep(), 1);
-  EXPECT_EQ(scale_v_slider->value(), -100);
   EXPECT_DOUBLE_EQ(rotation->value(), 45.0);
   auto *scale_v_dispatch_timer = window->findChild<QTimer *>(
-      QStringLiteral("standardMaterialEditor.textureTransform.scaleV.slider."
+      QStringLiteral("standardMaterialEditor.textureTransform.scaleV."
                      "dispatchTimer"));
   ASSERT_NE(scale_v_dispatch_timer, nullptr);
   EXPECT_TRUE(scale_v_dispatch_timer->isSingleShot());
-  scale_v_slider->setSliderDown(true);
-  scale_v_slider->setValue(-99);
-  scale_v_slider->setValue(-25);
-  scale_v_slider->setValue(125);
+  begin_numeric_scrub(*scale_v);
+  scale_v->setValue(-0.99);
+  scale_v->setValue(-0.25);
+  scale_v->setValue(1.25);
   EXPECT_DOUBLE_EQ(scale_v->value(), 1.25)
       << "transform presentation remains live while owner dispatch is bounded";
   EXPECT_TRUE(transform_edits.empty());
@@ -639,11 +651,11 @@ TEST(QtStandardMaterialEditorWindowTests,
             QtStandardMaterialTextureTransformComponent::ScaleV);
   EXPECT_DOUBLE_EQ(transform_edits.back().second, 1.25);
   EXPECT_FALSE(scale_v_dispatch_timer->isActive());
-  scale_v_slider->setValue(150);
-  scale_v_slider->setValue(225);
+  scale_v->setValue(1.5);
+  scale_v->setValue(2.25);
   EXPECT_DOUBLE_EQ(scale_v->value(), 2.25);
   ASSERT_EQ(transform_edits.size(), 1U);
-  scale_v_slider->setSliderDown(false);
+  end_numeric_scrub(*scale_v);
   ASSERT_EQ(transform_edits.size(), 2U);
   EXPECT_EQ(transform_edits.back().first,
             QtStandardMaterialTextureTransformComponent::ScaleV);
@@ -923,7 +935,7 @@ TEST(QtStandardMaterialEditorWindowTests,
 }
 
 TEST(QtStandardMaterialEditorWindowTests,
-     PendingSliderEditsRespectDocumentAndLifecycleBoundaries) {
+     PendingNumericScrubsRespectDocumentAndLifecycleBoundaries) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-standard-material-editor-lifecycle-tests";
@@ -938,22 +950,18 @@ TEST(QtStandardMaterialEditorWindowTests,
   window->setAttribute(Qt::WA_DontShowOnScreen, true);
   auto *roughness = window->findChild<QDoubleSpinBox *>(
       QStringLiteral("standardMaterialEditor.roughness"));
-  auto *roughness_slider = window->findChild<QSlider *>(
-      QStringLiteral("standardMaterialEditor.roughness.slider"));
   auto *roughness_timer = window->findChild<QTimer *>(
-      QStringLiteral("standardMaterialEditor.roughness.slider.dispatchTimer"));
+      QStringLiteral("standardMaterialEditor.roughness.dispatchTimer"));
   auto *scale_v = window->findChild<QDoubleSpinBox *>(
       QStringLiteral("standardMaterialEditor.textureTransform.scaleV"));
-  auto *scale_v_slider = window->findChild<QSlider *>(
-      QStringLiteral("standardMaterialEditor.textureTransform.scaleV.slider"));
   auto *scale_v_timer = window->findChild<QTimer *>(
-      QStringLiteral("standardMaterialEditor.textureTransform.scaleV.slider."
+      QStringLiteral("standardMaterialEditor.textureTransform.scaleV."
                      "dispatchTimer"));
   ASSERT_NE(roughness, nullptr);
-  ASSERT_NE(roughness_slider, nullptr);
+  EXPECT_TRUE(window->findChildren<QSlider *>().isEmpty());
+  EXPECT_NE(dynamic_cast<QtDoubleSpinBox *>(roughness), nullptr);
   ASSERT_NE(roughness_timer, nullptr);
   ASSERT_NE(scale_v, nullptr);
-  ASSERT_NE(scale_v_slider, nullptr);
   ASSERT_NE(scale_v_timer, nullptr);
 
   QtStandardMaterialEditorDocument first{
@@ -984,8 +992,8 @@ TEST(QtStandardMaterialEditorWindowTests,
       });
 
   window->set_document(first);
-  roughness_slider->setSliderDown(true);
-  roughness_slider->setValue(41);
+  begin_numeric_scrub(*roughness);
+  roughness->setValue(0.41);
   ASSERT_TRUE(roughness_timer->isActive());
   window->set_document(replacement);
   EXPECT_TRUE(scalar_edits.empty());
@@ -996,11 +1004,11 @@ TEST(QtStandardMaterialEditorWindowTests,
                                         Qt::DirectConnection));
   EXPECT_TRUE(scalar_edits.empty())
       << "a stale timeout must not edit the replacement document";
-  roughness_slider->setSliderDown(false);
+  end_numeric_scrub(*roughness);
 
   window->set_document(first);
-  scale_v_slider->setSliderDown(true);
-  scale_v_slider->setValue(230);
+  begin_numeric_scrub(*scale_v);
+  scale_v->setValue(2.3);
   ASSERT_TRUE(scale_v_timer->isActive());
   window->clear_document();
   EXPECT_TRUE(transform_edits.empty());
@@ -1009,7 +1017,7 @@ TEST(QtStandardMaterialEditorWindowTests,
                                         Qt::DirectConnection));
   EXPECT_TRUE(transform_edits.empty())
       << "a stale timeout must not edit after the document is cleared";
-  scale_v_slider->setSliderDown(false);
+  end_numeric_scrub(*scale_v);
 
   QtStandardMaterialEditorDocument authoritative = first;
   bool file_action_saw_latest_edit = false;
@@ -1027,8 +1035,8 @@ TEST(QtStandardMaterialEditorWindowTests,
             authoritative.dirty && authoritative.roughness == 0.64;
       });
   window->set_document(authoritative);
-  roughness_slider->setSliderDown(true);
-  roughness_slider->setValue(64);
+  begin_numeric_scrub(*roughness);
+  roughness->setValue(0.64);
   ASSERT_TRUE(roughness_timer->isActive());
   QAction *save_action =
       find_action(*window, "standardMaterialEditor.file.save");
@@ -1036,9 +1044,9 @@ TEST(QtStandardMaterialEditorWindowTests,
   ASSERT_TRUE(save_action->isEnabled());
   save_action->trigger();
   EXPECT_TRUE(file_action_saw_latest_edit)
-      << "file lifecycle decisions must observe the latest slider edit";
+      << "file lifecycle decisions must observe the latest numeric edit";
   EXPECT_FALSE(roughness_timer->isActive());
-  roughness_slider->setSliderDown(false);
+  end_numeric_scrub(*roughness);
 
   bool close_request_saw_latest_edit = false;
   window->set_texture_transform_edited_callback(
@@ -1060,8 +1068,8 @@ TEST(QtStandardMaterialEditorWindowTests,
   window->set_document(authoritative);
   window->show();
   QCoreApplication::processEvents();
-  scale_v_slider->setSliderDown(true);
-  scale_v_slider->setValue(275);
+  begin_numeric_scrub(*scale_v);
+  scale_v->setValue(2.75);
   ASSERT_TRUE(scale_v_timer->isActive());
   EXPECT_TRUE(window->close());
   EXPECT_TRUE(close_request_saw_latest_edit)
@@ -1343,13 +1351,9 @@ TEST(QtStandardMaterialEditorWindowTests,
           QStringLiteral("standardMaterialEditor.textureTransform.%1")
               .arg(QString::fromUtf8(kNames[index]));
       auto *spin = window.findChild<QDoubleSpinBox *>(stable_name);
-      auto *slider = window.findChild<QSlider *>(stable_name + QStringLiteral(".slider"));
       ASSERT_EQ(spin, retained[index].data());
-      ASSERT_NE(slider, nullptr);
       EXPECT_EQ(spin->toolTip(), tooltips[index]);
-      EXPECT_EQ(slider->toolTip(), tooltips[index]);
       spin->installEventFilter(&events);
-      slider->installEventFilter(&events);
     }
     EXPECT_EQ(retained[2]->accessibleName(), labels.texture_scale + QStringLiteral(" U"));
     for (int frame = 0; frame < 20; ++frame) {

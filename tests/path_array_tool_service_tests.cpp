@@ -129,7 +129,7 @@ std::vector<EntityId> hierarchy_roots_named(const SceneDocument &scene,
   std::vector<EntityId> matches;
   for (const EntityId entity : scene.entities()) {
     const NameComponent *name = scene.name(entity);
-    if (!scene.is_scene_root(entity) && name != nullptr &&
+    if (name != nullptr &&
         name->name.starts_with(prefix)) {
       matches.push_back(entity);
     }
@@ -295,6 +295,65 @@ TEST(PathArrayToolServiceTests,
             std::vector<EntityId>{path.entity});
   EXPECT_EQ(harness.session.scene().primary_selection(), path.entity);
   EXPECT_EQ(curve.control_selection(), control_baseline);
+}
+
+TEST(PathArrayToolServiceTests,
+     RemembersEveryOptionAcrossCancelApplyAndSceneReplacement) {
+  const auto defaults = std::make_shared<PathArraySessionDefaults>();
+  const auto expect_vector = [](QVec3 actual, QVec3 expected) {
+    EXPECT_FLOAT_EQ(actual.x, expected.x);
+    EXPECT_FLOAT_EQ(actual.y, expected.y);
+    EXPECT_FLOAT_EQ(actual.z, expected.z);
+  };
+  for (int run = 0; run < 3; ++run) {
+    PathArrayHarness harness(defaults);
+    const auto path = create_path(harness.editor, {18.0F, 0.0F, 0.0F});
+    const auto source = create_box(harness.editor);
+    select_path(harness, path);
+    PathArrayToolService &tool = harness.session.path_array();
+    ASSERT_TRUE(tool.activate().ok);
+    EXPECT_FALSE(tool.has_source());
+    if (run == 0) {
+      ASSERT_TRUE(tool.select_source(source.entity).ok);
+      ASSERT_TRUE(tool.set_count(6U).ok);
+      ASSERT_TRUE(tool.set_distance(2.25).ok);
+      ASSERT_TRUE(tool.set_follow_path(false).ok);
+      ASSERT_TRUE(tool.set_forward_axis(PathArraySignedAxis::NegativeZ).ok);
+      ASSERT_TRUE(tool.set_rotation_offset_degrees({2, 3, 4}).ok);
+      ASSERT_TRUE(tool.set_rotation_random_min_degrees({-10, -20, -30}).ok);
+      ASSERT_TRUE(tool.set_rotation_random_max_degrees({10, 20, 30}).ok);
+      ASSERT_TRUE(tool.set_scale_offset_factors({1.1F, 0.9F, 1.2F}).ok);
+      ASSERT_TRUE(tool.set_scale_random_min_factors({0.5F, 0.6F, 0.7F}).ok);
+      ASSERT_TRUE(tool.set_scale_random_max_factors({1.5F, 1.6F, 1.7F}).ok);
+      // Cancel resolves any valid option batch that has not been rendered yet.
+      ASSERT_TRUE(tool.cancel().ok);
+      ASSERT_TRUE(tool.activate().ok);
+      EXPECT_FALSE(tool.has_source());
+    }
+    EXPECT_EQ(tool.count(), 6U);
+    EXPECT_DOUBLE_EQ(tool.distance(), 2.25);
+    EXPECT_FALSE(tool.follow_path());
+    EXPECT_EQ(tool.forward_axis(), PathArraySignedAxis::NegativeZ);
+    expect_vector(tool.rotation_offset_degrees(), {2, 3, 4});
+    expect_vector(tool.rotation_random_min_degrees(), {-10, -20, -30});
+    expect_vector(tool.rotation_random_max_degrees(), {10, 20, 30});
+    expect_vector(tool.scale_offset_factors(), {1.1F, 0.9F, 1.2F});
+    expect_vector(tool.scale_random_min_factors(), {0.5F, 0.6F, 0.7F});
+    expect_vector(tool.scale_random_max_factors(), {1.5F, 1.6F, 1.7F});
+    EXPECT_FALSE(tool.set_count(kPathArrayMaximumCount + 1U).ok);
+    EXPECT_FALSE(tool.set_scale_offset_factors({0, 1, 1}).ok);
+    EXPECT_EQ(defaults->count, 6U);
+    EXPECT_FLOAT_EQ(defaults->scale_offset_factors.x, 1.1F);
+    ASSERT_TRUE(tool.select_source(source.entity).ok);
+    ASSERT_TRUE(tool.preview_valid());
+    ASSERT_TRUE(tool.apply().ok);
+  }
+  PathArrayHarness fresh;
+  const auto path = create_path(fresh.editor, {18.0F, 0.0F, 0.0F});
+  select_path(fresh, path);
+  ASSERT_TRUE(fresh.session.path_array().activate().ok);
+  EXPECT_EQ(fresh.session.path_array().count(), kPathArrayDefaultCount);
+  EXPECT_TRUE(fresh.session.path_array().follow_path());
 }
 
 TEST(PathArrayToolServiceTests,
@@ -758,7 +817,7 @@ TEST(PathArrayToolServiceTests,
       tool.layout_work_stats_for_tests();
 
   for (const EntityId invalid : {path.entity, other_curve.entity, empty.id,
-                                 harness.session.scene().scene_root()}) {
+                                 kInvalidEntityId}) {
     const CommandResult rejected = tool.select_source(invalid);
     EXPECT_FALSE(rejected.ok);
     EXPECT_EQ(tool.source_root(), first.entity);
@@ -837,7 +896,8 @@ TEST(PathArrayToolServiceTests,
 
 TEST(PathArrayToolServiceTests,
      ShadowLightBudgetDynamicallyLowersCountWithoutDroppingParticipants) {
-  PathArrayHarness harness;
+  const auto defaults = std::make_shared<PathArraySessionDefaults>();
+  PathArrayHarness harness(defaults);
   const QuaderModelingObjectRef path =
       create_path(harness.editor, {12.0F, 0.0F, 0.0F});
   const QuaderEntityRef group = create_empty(harness.editor, "Light Group");
@@ -858,6 +918,7 @@ TEST(PathArrayToolServiceTests,
 
   PathArrayToolService &tool = harness.session.path_array();
   ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.set_count(7U).ok);
   const double distance_before_source = tool.distance();
   const double maximum_distance_before_source = tool.maximum_distance();
   ASSERT_TRUE(tool.select_source(group.id).ok);
@@ -867,6 +928,7 @@ TEST(PathArrayToolServiceTests,
   EXPECT_DOUBLE_EQ(tool.distance(), distance_before_source);
   EXPECT_DOUBLE_EQ(tool.maximum_distance(), maximum_distance_before_source);
   EXPECT_FALSE(tool.set_count(4U).ok);
+  EXPECT_EQ(defaults->count, 7U);
 
   const PathArrayPreviewState &preview = tool.preview_state();
   ASSERT_TRUE(preview.active);
@@ -883,6 +945,10 @@ TEST(PathArrayToolServiceTests,
     EXPECT_NE(std::ranges::find(preview.scene.suppression.entities, light),
               preview.scene.suppression.entities.end());
   }
+  ASSERT_TRUE(tool.cancel().ok);
+  ASSERT_TRUE(tool.activate().ok);
+  EXPECT_EQ(tool.count(), 7U)
+      << "a temporary source-capacity clamp must not replace the authored count";
 }
 
 TEST(PathArrayToolServiceTests,
@@ -1080,7 +1146,8 @@ TEST(PathArrayToolServiceTests,
 
 TEST(PathArrayToolServiceTests,
      AtomicPreviewRetainsLastValidSnapshotAfterUnrepresentableSetting) {
-  PathArrayHarness harness;
+  const auto defaults = std::make_shared<PathArraySessionDefaults>();
+  PathArrayHarness harness(defaults);
   const QuaderModelingObjectRef path =
       create_path(harness.editor, {8.0F, 8.0F, 0.0F}, "Diagonal Path");
   QuaderTransform parent_transform;
@@ -1110,6 +1177,7 @@ TEST(PathArrayToolServiceTests,
             std::vector<EntityId>{path.entity});
 
   ASSERT_TRUE(tool.set_follow_path(false).ok);
+  EXPECT_FALSE(defaults->follow_path);
   ASSERT_TRUE(tool.select_source(source.entity).ok);
   ASSERT_TRUE(tool.preview_valid());
   const PathArrayPreviewState valid = tool.preview_state();
@@ -1125,6 +1193,8 @@ TEST(PathArrayToolServiceTests,
             valid.scene.suppression.entities);
   EXPECT_EQ(retained.root_world_transforms.size(),
             valid.root_world_transforms.size());
+  EXPECT_FALSE(defaults->follow_path)
+      << "a rejected preview must not replace the remembered valid options";
 
   const CommandResult applied = tool.apply();
   EXPECT_FALSE(applied.ok);
@@ -1135,6 +1205,10 @@ TEST(PathArrayToolServiceTests,
   EXPECT_FALSE(harness.session.history().can_undo());
   EXPECT_TRUE(tool.has_session());
   EXPECT_EQ(tool.source_root(), source.entity);
+  EXPECT_FALSE(defaults->follow_path);
+  ASSERT_TRUE(tool.cancel().ok);
+  ASSERT_TRUE(tool.activate().ok);
+  EXPECT_FALSE(tool.follow_path());
 }
 
 } // namespace

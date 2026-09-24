@@ -31,6 +31,7 @@ public:
         }
 
         std::unordered_map<EntityId, EntityId> remapped_entities;
+        std::vector<DocumentEntityPlacement> placements;
         if (orphan_definition_snapshot_.has_value()) {
           const EntityId definition_parent =
               orphan_definition_snapshot_->parent !=
@@ -41,10 +42,15 @@ public:
                   : kInvalidEntityId;
           definition_ = document_command_restore_entity_snapshot_tree(
               scene(), *orphan_definition_snapshot_, definition_parent,
-              remapped_entities);
+              remapped_entities, true, false);
           if (definition_ == kInvalidEntityId || !scene().exists(definition_)) {
             return document_command_missing_entity_result();
           }
+          placements.push_back({
+              .entity = definition_,
+              .parent = definition_parent,
+              .sibling_ordinal = orphan_definition_snapshot_->sibling_ordinal,
+          });
         }
         const EntityId parent =
             snapshot_->parent != kInvalidEntityId &&
@@ -52,13 +58,22 @@ public:
                 ? snapshot_->parent
                 : kInvalidEntityId;
         entity_ = document_command_restore_entity_snapshot_tree(
-            scene(), *snapshot_, parent, remapped_entities);
+            scene(), *snapshot_, parent, remapped_entities, true, false);
         if (entity_ == kInvalidEntityId || !scene().exists(entity_)) {
           if (definition_ != kInvalidEntityId && scene().exists(definition_)) {
             (void)scene().destroy_entity(definition_);
             definition_ = kInvalidEntityId;
           }
           return document_command_missing_entity_result();
+        }
+        placements.push_back({
+            .entity = entity_,
+            .parent = parent,
+            .sibling_ordinal = snapshot_->sibling_ordinal,
+        });
+        if (!document_command_restore_placement_order(scene(), placements)) {
+          return document_command_invalid_request_result(
+              "Deleted entity order cannot be restored");
         }
         document_command_apply_selection(
             scene(), document_command_remap_selection(before_selection_,

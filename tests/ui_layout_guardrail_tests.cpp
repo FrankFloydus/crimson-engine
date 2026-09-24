@@ -633,15 +633,17 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(inspector, "panel_.setFocusProxy(tree_)");
   expect_contains(inspector, "event->reason() == Qt::TabFocusReason");
   expect_missing(inspector, "event->reason() == Qt::MouseFocusReason");
-  expect_contains(inspector, "editor_->scene().set_scene_settings(");
+  const std::string environment_popup =
+      read_source_file("src/ui/qt_environment_settings_popup.cpp");
+  expect_contains(environment_popup, "editor_->scene().set_scene_settings(");
   expect_contains(inspector, "editor_->scene().set_light_component(");
   expect_contains(inspector, "editor_->scene().begin_light_color_edit(");
   expect_contains(inspector, "editor_->scene().update_light_color_edit(");
   expect_contains(inspector, "editor_->scene().finish_light_color_edit(");
-  expect_contains(inspector, "editor_->scene().begin_environment_color_edit(");
-  expect_contains(inspector, "editor_->scene().update_environment_color_edit(");
-  expect_contains(inspector, "editor_->scene().finish_environment_color_edit(");
-  expect_missing(inspector, "document_->set_scene_settings(");
+  expect_contains(environment_popup, "editor_->scene().begin_environment_color_edit(");
+  expect_contains(environment_popup, "editor_->scene().update_environment_color_edit(");
+  expect_contains(environment_popup, "editor_->scene().finish_environment_color_edit(");
+  expect_missing(environment_popup, "document_->set_scene_settings(");
   expect_missing(inspector, "document_->set_light(");
 
   expect_contains(layer_header,
@@ -1101,18 +1103,17 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(control_widgets, "new QToolButton(this)");
   expect_missing(tool,
                   "QStringLiteral(\"tool_settings.section.description\")");
-  expect_contains(tool,
+  expect_missing(tool,
                   "QStringLiteral(\"tool_settings.reset_defaults\")");
   expect_contains(tool, "QStringLiteral(\"tool_settings.apply\")");
   expect_contains(tool, "QStringLiteral(\"tool_settings.cancel\")");
   expect_contains(tool, "new QCheckBox");
   expect_contains(number_slider_header,
                   "class QtToolSettingsNumberSlider final : public QSlider");
-  expect_contains(tool,
-                  "new QtToolSettingsNumberSlider(Qt::Horizontal, row)");
-  expect_contains(tool, "slider->setTracking(true)");
-  expect_contains(tool, "const QSignalBlocker spin_blocker(spin)");
-  expect_contains(tool, "const QSignalBlocker slider_blocker(slider)");
+  expect_missing(tool, "new QtToolSettingsNumberSlider");
+  expect_contains(tool, "new QtSpinBox(row)");
+  expect_contains(tool, "new QtDoubleSpinBox(row)");
+  expect_contains(tool, "bind_number_interaction(*spin");
   expect_contains(tool,
                   "std::max(4, decimal_places_for_step(control.step))");
   expect_contains(tool, "dispatch_timer->setTimerType(Qt::PreciseTimer)");
@@ -1121,20 +1122,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "!binding.number_dispatch_timer->isActive()");
   expect_contains(tool, "binding.number_dispatch_timer->start()");
   expect_contains(tool, "flush_number_dispatch(control_index)");
-  expect_contains(tool, "queue_number_dispatch(control_index, spin->value())");
+  expect_contains(tool, "queue_number_dispatch(control_index, value)");
   expect_contains(tool, "&QSpinBox::editingFinished");
   expect_contains(tool, "&QDoubleSpinBox::editingFinished");
   expect_contains(tool, "flush_pending_number_dispatches()");
   expect_contains(tool, "discard_pending_number_dispatches()");
   expect_contains(tool,
-                  "reset_button_->setFocusPolicy(Qt::TabFocus)");
-  expect_contains(tool,
                   "cancel_button_->setFocusPolicy(Qt::TabFocus)");
-  expect_contains(tool,
-                  "QObject::connect(reset_button_, &QPushButton::pressed, "
-                  "&panel_, [this]() {\n"
-                  "      discard_pending_number_dispatches();\n"
-                  "    })");
   expect_contains(tool,
                   "QObject::connect(cancel_button_, &QPushButton::pressed, "
                   "&panel_, [this]() {\n"
@@ -1169,11 +1163,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "new QRadioButton");
   expect_contains(tool, "new QPushButton");
   expect_contains(tool, "new QGridLayout(row)");
-  expect_contains(tool, "row_layout->addWidget(field_label, 0, 0, 1, 2)");
+  expect_contains(tool, "row_layout->addWidget(field_label, 0, 0, Qt::AlignLeft");
+  expect_contains(tool, "row_layout->addWidget(toggle, 0, 1");
+  expect_missing(tool, "maximum_label");
   expect_contains(tool,
                   "option_localization_key = \"tool_settings.\"");
   expect_contains(tool, "editor_->tools().active_settings()");
-  expect_contains(tool, "editor_->tools().reset_active_settings()");
+  expect_missing(tool, "editor_->tools().reset_active_settings()");
   expect_contains(tool, "editor_->tools().commit_active_tool_preview()");
   expect_contains(tool, "editor_->tools().cancel_active_tool_preview()");
   expect_contains(tool, "editor_->tools().execute_action(");

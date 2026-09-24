@@ -52,6 +52,43 @@ void expect_orthonormal_right_handed(const glm::mat3 &basis) {
   EXPECT_NEAR(glm::determinant(basis), 1.0F, kEpsilon);
 }
 
+TEST(SceneTransformTests, UnparentPreservesWorldTransformAndAppendsAuthoredRoot) {
+  quader::SceneDocument scene;
+  const auto group = scene.create_empty("Group");
+  const auto child = scene.create_empty("Child");
+  const auto sibling = scene.create_empty("Sibling");
+  ASSERT_TRUE(scene.set_transform(group, {
+      .position = {4.0f, 2.0f, -1.0f},
+      .rotation_euler = {0.0f, 0.5f, 0.0f},
+      .scale = {2.0f, 2.0f, 2.0f},
+  }));
+  ASSERT_TRUE(scene.set_transform(child, {.position = {3.0f, 0.0f, 1.0f}}));
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+  const auto before = scene.world_transform_matrix(child);
+  ASSERT_TRUE(scene.set_parent(child, quader::kInvalidEntityId, true));
+  expect_matrix_near(scene.world_transform_matrix(child), before);
+  EXPECT_EQ(scene.root_entities(),
+            std::vector<quader::EntityId>({group, sibling, child}));
+  EXPECT_TRUE(scene.children(group).empty());
+}
+
+TEST(SceneTransformTests, FailedReparentPreservesRootOrderAndLocalTransform) {
+  quader::SceneDocument scene;
+  const auto group = scene.create_empty("Singular Group");
+  const auto first = scene.create_empty("First");
+  const auto second = scene.create_empty("Second");
+  ASSERT_TRUE(scene.set_transform(group, {.scale = {0.0f, 1.0f, 1.0f}}));
+  ASSERT_TRUE(scene.set_sibling_ordinal(second, 0u));
+  const auto roots = scene.root_entities();
+  const auto before = scene.world_transform_matrix(first);
+  const auto revision = scene.revision();
+  EXPECT_FALSE(scene.set_parent(first, group, true));
+  EXPECT_EQ(scene.parent(first), quader::kInvalidEntityId);
+  EXPECT_EQ(scene.root_entities(), roots);
+  expect_matrix_near(scene.world_transform_matrix(first), before);
+  EXPECT_EQ(scene.revision(), revision);
+}
+
 TEST(SceneTransformTests,
      PureWorldRotationRemovesPositiveNonuniformScale) {
   const quader::QVec3 euler{0.37F, -0.61F, 1.12F};

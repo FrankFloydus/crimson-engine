@@ -813,6 +813,12 @@ std::string capture_documents(const CaptureData &data) {
 
 std::string capture_scene(const CaptureData &data) {
   CanonicalWriter writer;
+  writer.line("scene.settings", scene_settings_text(data.snapshot.scene_settings));
+  const auto tree = data.editor.query().entity_tree();
+  for (std::size_t index = 0; index < tree.size(); ++index) {
+    writer.line("scene.order[" + std::to_string(index) + "]",
+                data.entity_label(tree[index].id));
+  }
   std::vector<const QuaderEntitySnapshot *> entities;
   entities.reserve(data.entities.size());
   for (const QuaderEntitySnapshot &entity : data.entities) {
@@ -854,13 +860,6 @@ std::string capture_scene(const CaptureData &data) {
     writer.line(prefix + ".has_light", bool_text(entity->has_light));
     if (entity->has_light) {
       writer.line(prefix + ".light", light_text(entity->light));
-    }
-    writer.line(prefix + ".scene_root", bool_text(entity->is_scene_root));
-    writer.line(prefix + ".has_scene_settings",
-                bool_text(entity->has_scene_settings));
-    if (entity->has_scene_settings) {
-      writer.line(prefix + ".scene_settings",
-                  scene_settings_text(entity->scene_settings));
     }
     writer.line(prefix + ".has_modeling_object",
                 bool_text(entity->has_modeling_object));
@@ -1734,6 +1733,8 @@ void write_revision_stamp(CanonicalWriter &writer, std::string_view prefix,
               std::to_string(revisions.project_revision));
   writer.line(std::string(prefix) + ".scene",
               std::to_string(revisions.scene_revision));
+  writer.line(std::string(prefix) + ".scene_settings",
+              std::to_string(revisions.scene_settings_revision));
   writer.line(std::string(prefix) + ".scene_layer",
               std::to_string(revisions.scene_layer_revision));
   writer.line(std::string(prefix) + ".asset",

@@ -473,6 +473,7 @@ void App::shutdown() {
 }
 
 void App::bind_active_scene(SceneSession &scene) {
+  scene_settings_binding_.reset();
   default_material_ = kInvalidAssetId;
   if (!project_session_.has_project()) {
     const ProjectDefaultAssets defaults =
@@ -658,12 +659,14 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   if (const OpenSceneSession *active_scene = project_session_.active_scene();
       active_scene != nullptr && active_scene->session != nullptr) {
     const SceneSessionReadView session_view = active_scene->session->read_view();
-    if (const EntityId root = session_view.scene.scene_root();
-        root != kInvalidEntityId) {
-      if (const SceneSettingsComponent *settings =
-              session_view.scene.scene_settings(root)) {
-        render_system_.apply_scene_settings(*settings);
-      }
+    const QuaderSceneDocumentBinding binding =
+        editor_->query().document_binding();
+    const std::uint64_t revision = session_view.scene.scene_settings_revision();
+    if (scene_settings_binding_ != binding ||
+        scene_settings_revision_ != revision) {
+      render_system_.apply_scene_settings(session_view.scene.scene_settings());
+      scene_settings_binding_ = binding;
+      scene_settings_revision_ = revision;
     }
   }
   const auto scene_settings_end = std::chrono::steady_clock::now();

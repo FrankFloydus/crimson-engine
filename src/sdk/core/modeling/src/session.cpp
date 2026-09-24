@@ -241,6 +241,7 @@ struct PreviewTransaction {
   std::vector<PreviewTransactionObject> objects;
   std::unordered_map<std::uint64_t, std::size_t> object_index;
   PreviewTransactionObjectSummaryList object_summaries;
+  std::optional<EdgeBevelWidthFeedback> edge_bevel_width;
 };
 
 void rebuild_preview_object_index(PreviewTransaction &preview) {
@@ -587,6 +588,30 @@ void merge_receipt(OperationResult &destination, const OperationResult &source,
                source.selection_remap.destination);
 }
 
+void refresh_preview_edge_bevel_width(PreviewTransaction &preview) {
+  preview.edge_bevel_width.reset();
+  for (const PreviewTransactionObject &object : preview.objects) {
+    if (object.action == SessionPreviewAction::RemoveExisting ||
+        !object.receipt.edge_bevel_width.has_value()) {
+      preview.edge_bevel_width.reset();
+      return;
+    }
+    const EdgeBevelWidthFeedback &feedback = *object.receipt.edge_bevel_width;
+    if (!preview.edge_bevel_width.has_value()) {
+      preview.edge_bevel_width = feedback;
+      continue;
+    }
+    auto &merged = *preview.edge_bevel_width;
+    // A shared replay width is meaningful only for one shared input value.
+    if (merged.requested_width != feedback.requested_width) {
+      preview.edge_bevel_width.reset();
+      return;
+    }
+    merged.applied_width = std::max(merged.applied_width, feedback.applied_width);
+    merged.support_limited |= feedback.support_limited;
+  }
+}
+
 void refresh_preview_object_summaries(PreviewTransaction &preview) {
   std::vector<PreviewTransactionObjectSummary> summaries;
   summaries.reserve(preview.objects.size());
@@ -605,6 +630,7 @@ void refresh_preview_object_summaries(PreviewTransaction &preview) {
   }
   preview.object_summaries =
       PreviewTransactionObjectSummaryList(std::move(summaries));
+  refresh_preview_edge_bevel_width(preview);
 }
 
 /**
@@ -627,6 +653,7 @@ make_preview_checkpoint_snapshot(const PreviewTransaction &source) {
       source.compatibility_single_object_selection;
   snapshot.object_index = source.object_index;
   snapshot.object_summaries = source.object_summaries;
+  snapshot.edge_bevel_width = source.edge_bevel_width;
   snapshot.objects.reserve(source.objects.size());
   for (const PreviewTransactionObject &source_object : source.objects) {
     PreviewTransactionObject object;
@@ -4037,6 +4064,8 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
     ToolPreviewPayload payload;
     bool payload_valid = false;
     bool publication_changed = false;
+    bool feedback_changed = false;
+    std::optional<EdgeBevelWidthFeedback> edge_bevel_width;
   };
   std::vector<StagedPreviewUpdate> staged;
   staged.reserve(impl_->preview.objects.size());
@@ -4067,7 +4096,10 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
     const bool candidate_changed =
         !same_preview_candidate(current.preview_document, update.document);
     if (!candidate_changed) {
-      staged.push_back({});
+      staged.push_back({
+          .feedback_changed = current.receipt.edge_bevel_width != update.receipt.edge_bevel_width,
+          .edge_bevel_width = update.receipt.edge_bevel_width,
+      });
       continue;
     }
 
@@ -4111,9 +4143,22 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
     update.payload_valid = true;
   }
 
+  // Feedback belongs to the accepted candidate even when its geometry is
+  // already current. Publish it only after every participant has validated.
+  bool feedback_changed = false;
+  for (std::size_t index = 0; index < staged.size(); ++index) {
+    if (staged[index].feedback_changed) {
+      impl_->preview.objects[index].receipt.edge_bevel_width =
+          staged[index].edge_bevel_width;
+      feedback_changed = true;
+    }
+  }
   if (std::ranges::none_of(staged, [](const StagedPreviewUpdate &update) {
         return update.publication_changed;
       })) {
+    if (feedback_changed) {
+      refresh_preview_edge_bevel_width(impl_->preview);
+    }
     OperationResult unchanged;
     unchanged.message = "Preview unchanged.";
     return Result<OperationResult>::success(std::move(unchanged));
@@ -5522,6 +5567,11 @@ PreviewTransactionSummary ModelingSession::preview_summary() const {
       .objects = impl_->preview.object_summaries,
   };
   return summary;
+}
+
+std::optional<EdgeBevelWidthFeedback>
+ModelingSession::preview_edge_bevel_width() const noexcept {
+  return impl_->preview.active ? impl_->preview.edge_bevel_width : std::nullopt;
 }
 
 SessionPreviewWorkStats ModelingSession::preview_work_stats() const {

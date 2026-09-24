@@ -21,6 +21,7 @@
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_face_texture_canvas.hpp"
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -39,6 +40,7 @@
 #include <QScrollArea>
 #include <QWindow>
 #include <QEnterEvent>
+#include <QEventLoop>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLineEdit>
@@ -51,6 +53,7 @@
 #include <QPushButton>
 #include <QTabBar>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QTreeView>
 #include <QWidget>
@@ -190,14 +193,19 @@ TEST(QtCommandEventFilterTests,
               quader::QuaderViewportKeybindingDispatch::Kind::Command);
     ASSERT_EQ(dispatch.command_id,
               quader::quader_command::kToolsActivateExtrudeAlongNormals.string());
+    const double remembered_amount = session.extrude().amount();
     ASSERT_TRUE(editor.commands().execute(dispatch.command_id).ok());
     const auto after = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(after.has_value());
-    EXPECT_EQ(after->indices, before->indices);
-    EXPECT_EQ(after->vertices.size(), before->vertices.size());
+    if (remembered_amount == 0.0) {
+      EXPECT_EQ(after->indices, before->indices);
+      EXPECT_EQ(after->vertices.size(), before->vertices.size());
+    } else {
+      EXPECT_GT(after->indices.size(), before->indices.size());
+    }
     EXPECT_EQ(editor.tools().active_tool(), "extrude");
     EXPECT_TRUE(editor.tools().active_settings().preview_active);
-    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), remembered_amount);
     EXPECT_EQ(session.history().undo_count(), history_before);
     ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 1.0).ok());
     const auto preview = editor.query().compiled_object_mesh(box.value());
@@ -205,7 +213,7 @@ TEST(QtCommandEventFilterTests,
     EXPECT_GT(preview->indices.size(), before->indices.size());
     ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
     EXPECT_FALSE(editor.tools().active_settings().preview_active);
-    EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+    EXPECT_DOUBLE_EQ(session.extrude().amount(), 1.0);
     EXPECT_EQ(session.history().undo_count(), history_before + 1u);
     EXPECT_EQ(menu_openings, 0);
     QKeyEvent release(QEvent::KeyRelease, key, Qt::AltModifier);
@@ -504,13 +512,13 @@ TEST(QtCommandEventFilterTests,
 
   send_key_press(*tree, Qt::Key_G, Qt::ControlModifier, QStringLiteral("g"));
   const auto group = document.parent(first.value().id);
-  ASSERT_NE(group, document.scene_root());
+  ASSERT_NE(group, quader::kInvalidEntityId);
   EXPECT_EQ(document.parent(second.value().id), group);
   send_key_press(*tree, Qt::Key_G,
                  Qt::ControlModifier | Qt::ShiftModifier, QStringLiteral("G"));
   EXPECT_FALSE(document.exists(group));
-  EXPECT_EQ(document.parent(first.value().id), document.scene_root());
-  EXPECT_EQ(document.parent(second.value().id), document.scene_root());
+  EXPECT_EQ(document.parent(first.value().id), quader::kInvalidEntityId);
+  EXPECT_EQ(document.parent(second.value().id), quader::kInvalidEntityId);
 
   send_key_press(*tree, Qt::Key_Delete, Qt::NoModifier);
   EXPECT_FALSE(document.exists(first.value().id));
@@ -943,7 +951,7 @@ TEST(QtCommandEventFilterTests,
 }
 
 TEST(QtCommandEventFilterTests,
-     SettingsLifecycleKeysOverrideEveryFocusedControlForNativeAndOperationPreviews) {
+     SettingsLifecycleKeysRespectNumericEditsForNativeAndOperationPreviews) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-settings-lifecycle-focus-tests";
@@ -1034,14 +1042,43 @@ TEST(QtCommandEventFilterTests,
           send_key_press(*line, Qt::Key_2, Qt::NoModifier,
                          bevel ? QStringLiteral("0.2") : QStringLiteral("2.5"));
         }
+        QObject *receiver = target;
+        if (bevel && target == number) {
+          // Native window delivery precedes QWidget dispatch in the real app.
+          ASSERT_NE(panel.windowHandle(), nullptr);
+          receiver = panel.windowHandle();
+        }
+        const auto press_lifecycle_key = [&] {
+          QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+          QCoreApplication::sendEvent(receiver, &press);
+        };
         QKeyEvent override_event(QEvent::ShortcutOverride, key, Qt::NoModifier);
         override_event.ignore();
-        QCoreApplication::sendEvent(target, &override_event);
+        QCoreApplication::sendEvent(receiver, &override_event);
         EXPECT_TRUE(override_event.isAccepted());
         EXPECT_TRUE(editor.tools().active_settings().preview_active);
-        send_key_press(*target, key, Qt::NoModifier);
+        press_lifecycle_key();
+        if (target == number && key == Qt::Key_Escape) {
+          EXPECT_FALSE(quader::qt_install_numeric_spin_box(*number).is_editing());
+          EXPECT_TRUE(editor.tools().active_settings().preview_active);
+          EXPECT_DOUBLE_EQ(number->value(), bevel ? 0.1 : 1.0);
+          EXPECT_DOUBLE_EQ(bevel
+              ? session.modeling().interaction_settings().edge_bevel_width
+              : session.extrude().amount(), bevel ? 0.1 : 1.0);
+          EXPECT_EQ(session.history().undo_count(), 0U);
+          QKeyEvent repeat(QEvent::KeyPress, key, Qt::NoModifier, {}, true);
+          QCoreApplication::sendEvent(cancel, &repeat);
+          QKeyEvent repeated_release(QEvent::KeyRelease, key,
+                                     Qt::NoModifier, {}, true);
+          QCoreApplication::sendEvent(cancel, &repeated_release);
+          EXPECT_TRUE(editor.tools().active_settings().preview_active);
+          QKeyEvent first_release(QEvent::KeyRelease, key, Qt::NoModifier);
+          QCoreApplication::sendEvent(receiver, &first_release);
+          EXPECT_TRUE(editor.tools().active_settings().preview_active);
+          press_lifecycle_key();
+        }
         QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
-        QCoreApplication::sendEvent(target, &release);
+        QCoreApplication::sendEvent(receiver, &release);
         EXPECT_FALSE(editor.tools().active_settings().preview_active);
         EXPECT_EQ(button_clicks, 0);
         EXPECT_EQ(session.history().undo_count(), key == Qt::Key_Space ? 1U : 0U);
@@ -1050,7 +1087,7 @@ TEST(QtCommandEventFilterTests,
           if (target == number) {
             EXPECT_DOUBLE_EQ(bevel
                 ? session.modeling().interaction_settings().edge_bevel_width
-                : session.extrude().amount(), bevel ? 0.2 : 0.0);
+                : session.extrude().amount(), bevel ? 0.2 : 2.5);
           }
           ASSERT_TRUE(editor.history().undo().ok());
         }
@@ -1133,7 +1170,6 @@ TEST(QtCommandEventFilterTests,
   const auto expect_space_does_not_activate_a_button = [&] {
     for (const QString &name : {QStringLiteral("tool_settings.apply"),
                                QStringLiteral("tool_settings.cancel"),
-                               QStringLiteral("tool_settings.reset_defaults"),
                                QStringLiteral("tool_settings.target_title")}) {
       SCOPED_TRACE(name.toStdString());
       auto *button = panel.findChild<QAbstractButton *>(name);
@@ -1204,7 +1240,7 @@ TEST(QtCommandEventFilterTests,
 }
 
 TEST(QtCommandEventFilterTests,
-     NativeToolSettingsFinalizeFlushesTypedAmountAndEscapeDiscardsIt) {
+     NativeToolSettingsFinalizeFlushesTypedAmountAndEscapeFirstDiscardsItsDraft) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-tool-settings-pending-number-tests";
@@ -1264,6 +1300,7 @@ TEST(QtCommandEventFilterTests,
     ASSERT_NE(line, nullptr);
     panel.show();
     panel.activateWindow();
+    QApplication::setActiveWindow(&panel);
     line->setFocus(Qt::OtherFocusReason);
     QCoreApplication::processEvents();
     ASSERT_EQ(QApplication::focusWidget(), amount);
@@ -1272,10 +1309,30 @@ TEST(QtCommandEventFilterTests,
     ASSERT_TRUE(panel.numeric_interaction_active());
     ASSERT_DOUBLE_EQ(session.extrude().amount(), 0.0);
 
-    // Dispatch before the trailing number timer can deliver the typed sample.
+    if (completion_key == Qt::Key_Escape) {
+      // Preserve live typed previews, then restore them when the draft is canceled.
+      QEventLoop pause;
+      QTimer::singleShot(40, &pause, &QEventLoop::quit);
+      pause.exec();
+      ASSERT_DOUBLE_EQ(session.extrude().amount(), 7.25);
+      ASSERT_TRUE(quader::qt_install_numeric_spin_box(*amount).is_editing());
+    }
+
+    // Apply must settle the queued draft; Escape must discard it.
     send_key_press(*line, completion_key, Qt::NoModifier);
     QKeyEvent completion_release(QEvent::KeyRelease, completion_key, Qt::NoModifier);
     QCoreApplication::sendEvent(line, &completion_release);
+    if (completion_key == Qt::Key_Escape) {
+      EXPECT_TRUE(editor.tools().active_settings().preview_active);
+      EXPECT_EQ(editor.tools().active_tool(), "extrude");
+      EXPECT_FALSE(quader::qt_install_numeric_spin_box(*amount).is_editing());
+      EXPECT_FALSE(panel.numeric_interaction_active());
+      EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+      EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      EXPECT_EQ(session.history().undo_count(), 0U);
+      send_key_press(*line, completion_key, Qt::NoModifier);
+      QCoreApplication::sendEvent(line, &completion_release);
+    }
     EXPECT_FALSE(editor.tools().active_settings().preview_active);
     EXPECT_FALSE(panel.numeric_interaction_active());
     EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
@@ -1289,9 +1346,9 @@ TEST(QtCommandEventFilterTests,
       EXPECT_EQ(restored->vertices.size(), source->vertices.size());
     } else {
       EXPECT_EQ(session.history().undo_count(), 1U);
-      EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      EXPECT_DOUBLE_EQ(session.extrude().amount(), 7.25);
       panel.refresh();
-      EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+      EXPECT_DOUBLE_EQ(amount->value(), 7.25);
       const auto committed = editor.query().compiled_object_mesh(box.value());
       ASSERT_TRUE(committed.has_value());
       EXPECT_EQ(committed->indices, expected->indices);
@@ -1304,19 +1361,19 @@ TEST(QtCommandEventFilterTests,
         EXPECT_FLOAT_EQ(position.z, expected_position.z);
       }
       // The next step may start and finish before a frame observes its preview.
-      // Retained focus must accept the new amount and show the owner's reset.
+      // Retained focus must accept the new amount and keep the accepted option.
       ASSERT_TRUE(amount->hasFocus());
       send_key_press(*line, Qt::Key_A, Qt::ControlModifier);
       send_key_press(*line, Qt::Key_2, Qt::NoModifier, QStringLiteral("2.5"));
-      ASSERT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      ASSERT_DOUBLE_EQ(session.extrude().amount(), 7.25);
       ASSERT_FALSE(editor.tools().active_settings().preview_active);
       send_key_press(*line, completion_key, Qt::NoModifier);
       QCoreApplication::sendEvent(line, &completion_release);
       EXPECT_EQ(session.history().undo_count(), 2U);
       EXPECT_FALSE(editor.tools().active_settings().preview_active);
-      EXPECT_DOUBLE_EQ(session.extrude().amount(), 0.0);
+      EXPECT_DOUBLE_EQ(session.extrude().amount(), 2.5);
       panel.refresh();
-      EXPECT_DOUBLE_EQ(amount->value(), 0.0);
+      EXPECT_DOUBLE_EQ(amount->value(), 2.5);
       const auto second_step = editor.query().compiled_object_mesh(box.value());
       ASSERT_TRUE(second_step.has_value());
       EXPECT_GT(second_step->indices.size(), committed->indices.size());

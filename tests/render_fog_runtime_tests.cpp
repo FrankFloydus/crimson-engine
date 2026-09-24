@@ -503,7 +503,7 @@ public:
     return capture_image(rendered, 0u, 0u, size_, size_);
   }
 
-  SceneSettingsComponent settings;
+  SceneSettings settings;
   ViewportSettings presentation_settings = ViewportSettings::defaults();
 
 private:

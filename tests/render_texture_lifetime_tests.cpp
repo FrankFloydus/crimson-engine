@@ -4,10 +4,15 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/session/scene_session.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_cache.hpp"
 #include "render/png_texture_loader.hpp"
+#include "render/scene_render_bridge.hpp"
 #include "render/texture_binding_service.hpp"
 
 #include <gtest/gtest.h>
@@ -19,11 +24,16 @@
 
 #include <filament/Camera.h>
 #include <filament/Renderer.h>
+#include <filament/SwapChain.h>
 #include <filament/View.h>
 #include <filament/Viewport.h>
+#include <backend/PixelBufferDescriptor.h>
 #include <utils/EntityManager.h>
 
 #include <array>
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -40,6 +50,9 @@ public:
     if (engine_ == nullptr) {
       return;
     }
+    (void)engine_->flushAndWait(10'000'000'000ull);
+    engine_->pumpMessageQueues();
+    bridge_.shutdown();
     cache_.shutdown();
     factory_.shutdown();
     materials_.shutdown();
@@ -69,7 +82,9 @@ public:
   }
 
   bool initialize(filament::Engine::Backend backend =
-                      filament::Engine::Backend::NOOP) {
+                      filament::Engine::Backend::NOOP,
+                  std::uint32_t size = 128u) {
+    size_ = size;
     engine_ = filament::Engine::create(backend);
     if (engine_ == nullptr) {
       return false;
@@ -99,7 +114,8 @@ public:
     factory_.initialize(*engine_, *scene_, materials_);
     cache_.initialize(factory_);
     renderer_ = engine_->createRenderer();
-    swap_chain_ = engine_->createSwapChain(128u, 128u);
+    swap_chain_ = engine_->createSwapChain(
+        size_, size_, filament::SwapChain::CONFIG_READABLE);
     view_ = engine_->createView();
     camera_entity_ = utils::EntityManager::get().create();
     filament::Camera *camera = engine_->createCamera(camera_entity_);
@@ -107,7 +123,7 @@ public:
     camera->lookAt({0.0, 0.0, 4.0}, {0.0, 0.0, 0.0});
     view_->setCamera(camera);
     view_->setScene(scene_);
-    view_->setViewport({0u, 0u, 128u, 128u});
+    view_->setViewport({0u, 0u, size_, size_});
     view_->setVisibleLayers(0xffu, kViewportRenderedSceneLayerMask);
     view_->setPostProcessingEnabled(false);
     return renderer_ != nullptr && swap_chain_ != nullptr;
@@ -140,7 +156,69 @@ public:
   MaterialBindingService &materials() { return materials_; }
   TextureBindingService &textures() { return textures_; }
 
+  void initialize_scene_bridge() {
+    const std::filesystem::path resources(
+        qEnvironmentVariable("QT_PLUGIN_PATH").toStdWString());
+    bridge_.initialize(
+        *engine_, *scene_, library_.quader_mesh(), library_.quader_mesh_lit(),
+        library_.vertex_color_overlay(), library_.instance_selection_fill(),
+        library_.overlay_line(), library_.selected_object_line(),
+        library_.edit_wire_line(), library_.overlay_point(),
+        library_.overlay_icon(), *solid_color_texture_, resources);
+    view_->setVisibleLayers(0xffu, kViewportShadedSceneLayerMask);
+    renderer_->setClearOptions(
+        {.clearColor = {0.0f, 0.0f, 0.0f, 1.0f}, .clear = true});
+  }
+
+  SceneRenderBridge &bridge() { return bridge_; }
+
+  QImage capture_scene(int corner) {
+    auto *camera = engine_->getCameraComponent(camera_entity_);
+    const double coordinate = 4.0 * static_cast<double>(corner);
+    camera->lookAt({coordinate, coordinate, coordinate}, {0.0, 0.0, 0.0});
+    for (int frame_index = 0; frame_index < 3; ++frame_index) {
+      if (!frame()) return {};
+    }
+    bool begun = false;
+    for (std::size_t attempt = 0; attempt < 32u && !begun; ++attempt) {
+      begun = renderer_->beginFrame(swap_chain_);
+      if (!begun && !engine_->flushAndWait(10'000'000'000ull)) return {};
+    }
+    if (!begun) return {};
+    renderer_->render(view_);
+    auto readback = std::make_shared<Readback>();
+    readback->pixels.resize(size_ * size_ * 4u);
+    auto *owner = new std::shared_ptr<Readback>(readback);
+    renderer_->readPixels(
+        0u, 0u, size_, size_,
+        filament::backend::PixelBufferDescriptor(
+            readback->pixels.data(), readback->pixels.size(),
+            filament::backend::PixelDataFormat::RGBA,
+            filament::backend::PixelDataType::UBYTE,
+            [](void *, std::size_t, void *user) {
+              auto *holder = static_cast<std::shared_ptr<Readback> *>(user);
+              (*holder)->complete.store(true, std::memory_order_release);
+              delete holder;
+            }, owner));
+    renderer_->endFrame();
+    for (int attempt = 0; attempt < 10 &&
+         !readback->complete.load(std::memory_order_acquire); ++attempt) {
+      if (!engine_->flushAndWait(1'000'000'000ull)) return {};
+      engine_->pumpMessageQueues();
+    }
+    if (!readback->complete.load(std::memory_order_acquire)) return {};
+    return QImage(readback->pixels.data(), static_cast<int>(size_),
+                  static_cast<int>(size_), QImage::Format_RGBA8888).copy();
+  }
+
 private:
+  /// Owns asynchronous pixel bytes until Filament acknowledges the transfer.
+  struct Readback {
+    std::vector<unsigned char> pixels;
+    std::atomic<bool> complete{false};
+  };
+
+  std::uint32_t size_ = 128u;
   filament::Engine *engine_ = nullptr;
   filament::Scene *scene_ = nullptr;
   filament::Renderer *renderer_ = nullptr;
@@ -152,6 +230,7 @@ private:
   MaterialBindingService materials_;
   MeshRenderableFactory factory_;
   MeshRenderableCache cache_;
+  SceneRenderBridge bridge_;
   filament::Texture *solid_color_texture_ = nullptr;
 };
 
@@ -554,6 +633,105 @@ TEST(RenderTextureLifetimeTests, VulkanMaterialEditAndRetirementStress) {
   harness.cache().shutdown();
   ASSERT_TRUE(harness.frame());
   EXPECT_EQ(harness.stats().resource_count, 0u);
+}
+
+TEST(RenderTextureLifetimeTests, VulkanSingleEdgeBevelSettingsUpdateScenePixels) {
+  if (qEnvironmentVariable("QUADER_RUN_VULKAN_TEXTURE_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_TEXTURE_TESTS=1 for windowless Bevel "
+                    "preview pixel verification.";
+  }
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize(filament::Engine::Backend::VULKAN, 256u));
+  harness.initialize_scene_bridge();
+  SceneSession session;
+  QuaderEditorApi editor{
+      QuaderApiSessionInternalAccess::from_scene_session(session)};
+  const auto source = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Bevel GPU settings source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(source.value(), 1, 2).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Move).ok());
+
+  const auto capture = [&] {
+    const auto scene = QuaderRenderApiRuntimeAccess::sync_scene(
+        editor.render(), harness.bridge());
+    EXPECT_TRUE(scene.ok()) << scene.error_message();
+    const auto preview = QuaderRenderApiRuntimeAccess::sync_tool_previews(
+        editor.render(), harness.bridge());
+    EXPECT_TRUE(preview.ok()) << preview.error_message();
+    // Opposite views expose every box edge without depending on the primitive's
+    // particular vertex ordering. Post-processing is disabled by the harness.
+    std::array<QImage, 2u> images{
+        harness.capture_scene(1), harness.capture_scene(-1)};
+    for (const QImage &image : images) EXPECT_FALSE(image.isNull());
+    return images;
+  };
+  const auto changed_pixels = [](const std::array<QImage, 2u> &before,
+                                const std::array<QImage, 2u> &after) {
+    std::size_t count = 0u;
+    for (std::size_t view = 0; view < before.size(); ++view) {
+      if (before[view].isNull() || after[view].isNull() ||
+          before[view].size() != after[view].size()) continue;
+      for (int y = 0; y < before[view].height(); ++y) {
+        for (int x = 0; x < before[view].width(); ++x) {
+          const QRgb previous = before[view].pixel(x, y);
+          const QRgb current = after[view].pixel(x, y);
+          if (std::abs(qRed(previous) - qRed(current)) > 2 ||
+              std::abs(qGreen(previous) - qGreen(current)) > 2 ||
+              std::abs(qBlue(previous) - qBlue(current)) > 2) ++count;
+        }
+      }
+    }
+    return count;
+  };
+
+  const auto original = capture();
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.15).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.segments", 1.0).ok());
+  const auto narrow = capture();
+  const auto narrow_resources = harness.bridge().diagnostics();
+  EXPECT_GT(changed_pixels(original, narrow), 8u);
+
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.7).ok());
+  const auto wide = capture();
+  const auto wide_resources = harness.bridge().diagnostics();
+  EXPECT_GT(wide_resources.gpu_geometry_upload_count,
+            narrow_resources.gpu_geometry_upload_count);
+  EXPECT_GT(changed_pixels(narrow, wide), 8u)
+      << "Width-only preview changes must reach the retained GPU geometry.";
+
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.segments", 5.0).ok());
+  const auto segmented = capture();
+  const auto segmented_resources = harness.bridge().diagnostics();
+  EXPECT_GT(segmented_resources.gpu_geometry_upload_count,
+            wide_resources.gpu_geometry_upload_count);
+  EXPECT_GT(changed_pixels(wide, segmented), 8u);
+
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.profile", 0.2).ok());
+  const auto profiled = capture();
+  const auto profiled_resources = harness.bridge().diagnostics();
+  EXPECT_GT(profiled_resources.gpu_geometry_upload_count,
+            segmented_resources.gpu_geometry_upload_count);
+  EXPECT_GT(changed_pixels(segmented, profiled), 8u);
+
+  const auto unchanged = capture();
+  EXPECT_EQ(unchanged, profiled);
+  EXPECT_EQ(harness.bridge().diagnostics().gpu_geometry_upload_count,
+            profiled_resources.gpu_geometry_upload_count);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  const auto canceled = capture();
+  EXPECT_EQ(canceled, original);
 }
 
 } // namespace

@@ -678,6 +678,7 @@ private:
     std::string message;
     quader_editor_core::EditorOperationId operation{};
     quader_editor_core::EditorOperationSettings settings;
+    std::optional<double> edge_bevel_maximum_width;
   };
 
   /// Keys the derived selection summary by every SDK and host owner revision.
@@ -738,6 +739,7 @@ private:
         active_preview_operation;
     std::optional<quader_editor_core::EditorOperationSettings>
         active_preview_settings;
+    std::optional<double> active_edge_bevel_maximum_width;
     std::size_t active_preview_deleted_vertex_count = 0;
     ModelingSdkProjectionStats stats;
   };
@@ -1041,6 +1043,7 @@ public:
     active_preview_operation_id_.clear();
     active_preview_operation_.reset();
     active_preview_settings_.reset();
+    active_edge_bevel_maximum_width_.reset();
     selection_mode_ = ModelingSelectionMode::Object;
     persistent_content_revision_ = 0;
     mode_revision_ = 0;
@@ -1815,11 +1818,6 @@ public:
       return rollback("Injected failure after SDK scene entity creation.");
     }
 
-    const EntityId root = scene_.scene_root();
-    if (root != kInvalidEntityId && scene_.exists(root) &&
-        !mesh_sync_.parent_projected_entity(scene_, entity, root)) {
-      return rollback("SDK box scene entity could not be parented.");
-    }
     if (initial_scene_transform.has_value() &&
         !mesh_sync_.set_projected_transform(scene_, entity,
                                             *initial_scene_transform)) {
@@ -2184,11 +2182,6 @@ public:
       return rollback("Injected failure after SDK scene entity creation.");
     }
 
-    const EntityId root = scene_.scene_root();
-    if (root != kInvalidEntityId && scene_.exists(root) &&
-        !mesh_sync_.parent_projected_entity(scene_, entity, root)) {
-      return rollback("SDK mesh scene entity could not be parented.");
-    }
     if (initial_scene_transform.has_value() &&
         !mesh_sync_.set_projected_transform(scene_, entity,
                                             *initial_scene_transform)) {
@@ -4012,6 +4005,9 @@ public:
     if (result.ok) {
       active_preview_operation_ = operation;
       active_preview_settings_ = settings;
+      if (operation == quader_editor_core::EditorOperationId::EdgeBevel) {
+        accept_edge_bevel_preview_settings(settings, true);
+      }
     }
     return result;
   }
@@ -4057,10 +4053,22 @@ public:
     if (!mutation) {
       return failure("SDK operation does not support a document preview.");
     }
+    const auto previous_bevel = active_edge_bevel_settings();
     ModelingCommandResult result = update_mesh_preview_transaction(
         mutation, "SDK operation preview failed.");
     if (result.ok) {
       active_preview_settings_ = settings;
+      if (operation == quader_editor_core::EditorOperationId::EdgeBevel) {
+        const auto &bevel =
+            std::get<quader_editor_core::EdgeBevelOperationSettings>(settings);
+        const bool geometry_parameters_changed =
+            !previous_bevel.has_value() ||
+            previous_bevel->segments != bevel.segments ||
+            previous_bevel->profile != bevel.profile ||
+            previous_bevel->profile_type != bevel.profile_type;
+        accept_edge_bevel_preview_settings(settings,
+                                           geometry_parameters_changed);
+      }
     }
     return result;
   }
@@ -4080,6 +4088,49 @@ public:
   [[nodiscard]] std::optional<quader_editor_core::EditorOperationId>
   active_preview_operation() const noexcept {
     return active_preview_operation_;
+  }
+
+  [[nodiscard]] std::optional<double>
+  active_edge_bevel_maximum_width() const noexcept {
+    return active_preview_operation_ ==
+                   quader_editor_core::EditorOperationId::EdgeBevel
+               ? active_edge_bevel_maximum_width_
+               : std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<quader_editor_core::EdgeBevelOperationSettings>
+  active_edge_bevel_settings() const noexcept {
+    if (active_preview_operation_ !=
+            quader_editor_core::EditorOperationId::EdgeBevel ||
+        !active_preview_settings_.has_value()) return std::nullopt;
+    const auto *settings =
+        std::get_if<quader_editor_core::EdgeBevelOperationSettings>(
+            &*active_preview_settings_);
+    return settings != nullptr ? std::optional(*settings) : std::nullopt;
+  }
+
+  void set_edge_bevel_preview_settings_handler(
+      std::function<void(const quader_editor_core::EdgeBevelOperationSettings &)>
+          handler) {
+    edge_bevel_preview_settings_handler_ = std::move(handler);
+  }
+
+  void accept_edge_bevel_preview_settings(
+      const quader_editor_core::EditorOperationSettings &settings,
+      bool reset_limit) {
+    auto accepted =
+        std::get<quader_editor_core::EdgeBevelOperationSettings>(settings);
+    if (reset_limit) active_edge_bevel_maximum_width_.reset();
+    const auto feedback = session_.preview_edge_bevel_width();
+    if (feedback.has_value() &&
+        feedback->applied_width < feedback->requested_width) {
+      accepted.width = static_cast<double>(feedback->applied_width);
+      active_edge_bevel_maximum_width_ = accepted.width;
+    }
+    active_preview_settings_ = accepted;
+    if (edge_bevel_preview_settings_handler_) {
+      edge_bevel_preview_settings_handler_(accepted);
+    }
   }
 
   [[nodiscard]] std::size_t
@@ -7143,6 +7194,7 @@ public:
     active_preview_operation_id_ = "translate_selection";
     active_preview_operation_.reset();
     active_preview_settings_.reset();
+    active_edge_bevel_maximum_width_.reset();
     if (!acknowledge_preview_owner_fence()) {
       return abort_preview_publication(
           begun.value().preview_id,
@@ -9129,7 +9181,7 @@ public:
     if (restore_scene_hierarchy) {
       // Restore every captured parent before applying any captured sibling
       // ordinal. Merely recreating every participant is insufficient: a later
-      // Bridge participant can exist at the scene root while an earlier
+      // Bridge participant can exist at top level while an earlier
       // participant's ordinal is validated against their eventual parent.
       for (const RestoredSceneIdentity &restored :
            restored_scene_identities) {
@@ -9139,10 +9191,45 @@ public:
               "SDK history scene identity parent could not be restored.");
         }
       }
-      for (const RestoredSceneIdentity &restored :
-           restored_scene_identities) {
+      std::vector<const RestoredSceneIdentity *> ordered_placements;
+      std::unordered_map<EntityId, std::size_t> sibling_counts;
+      for (const RestoredSceneIdentity &restored : restored_scene_identities) {
+        const EntityId parent = scene_.parent(restored.entity);
+        if (parent != restored.identity.parent ||
+            !restored.identity.sibling_ordinal.has_value() ||
+            scene_.sibling_ordinal(restored.entity) ==
+                restored.identity.sibling_ordinal) {
+          continue;
+        }
+        auto [count, inserted] = sibling_counts.try_emplace(parent, 0u);
+        if (inserted) {
+          count->second = scene_.children(parent).size();
+        }
+        if (*restored.identity.sibling_ordinal >= count->second) {
+          return rollback(
+              "SDK history scene identity sibling order could not be restored.");
+        }
+        ordered_placements.push_back(&restored);
+      }
+      // Determine the displaced subset before moving anything. Parking an
+      // already-correct identity would mutate its Structure domain during a
+      // semantic inverse even when the forward publication never touched it.
+      for (const RestoredSceneIdentity *restored : ordered_placements) {
+        if (!scene_.set_sibling_ordinal(
+                restored->entity,
+                sibling_counts.at(restored->identity.parent) - 1u)) {
+          return rollback(
+              "SDK history scene identity sibling order could not be restored.");
+        }
+      }
+      std::ranges::sort(ordered_placements, [](const auto *left, const auto *right) {
+        return left->identity.parent != right->identity.parent
+                   ? left->identity.parent < right->identity.parent
+                   : left->identity.sibling_ordinal < right->identity.sibling_ordinal;
+      });
+      for (const RestoredSceneIdentity *restored : ordered_placements) {
         if (!mesh_sync_.apply_scene_identity_sibling_ordinal(
-                scene_, restored.entity, restored.identity)) {
+                scene_, restored->entity, restored->identity)) {
           return rollback(
               "SDK history scene identity sibling order could not be restored.");
         }
@@ -9299,6 +9386,7 @@ private:
     }
     state.operation = *active_preview_operation_;
     state.settings = *active_preview_settings_;
+    state.edge_bevel_maximum_width = active_edge_bevel_maximum_width_;
     ModelingCommandResult canceled = cancel_translate_preview();
     if (!canceled.ok) {
       state.ok = false;
@@ -9326,6 +9414,12 @@ private:
               .message = rebuilt.message.empty()
                              ? "SDK operation preview could not be rebuilt."
                              : rebuilt.message};
+    }
+    if (!result.changed && !state.uv_peel &&
+        state.operation == quader_editor_core::EditorOperationId::EdgeBevel) {
+      // A rejected or identical selection leaves the same source and shape
+      // settings. Replaying the accepted width need not hit the clamp again.
+      active_edge_bevel_maximum_width_ = state.edge_bevel_maximum_width;
     }
     return result;
   }
@@ -13022,6 +13116,7 @@ private:
         .active_preview_operation_id = active_preview_operation_id_,
         .active_preview_operation = active_preview_operation_,
         .active_preview_settings = active_preview_settings_,
+        .active_edge_bevel_maximum_width = active_edge_bevel_maximum_width_,
         .active_preview_deleted_vertex_count =
             active_preview_deleted_vertex_count_,
         .stats = stats_,
@@ -13043,6 +13138,7 @@ private:
     active_preview_operation_id_ = std::move(state.active_preview_operation_id);
     active_preview_operation_ = std::move(state.active_preview_operation);
     active_preview_settings_ = std::move(state.active_preview_settings);
+    active_edge_bevel_maximum_width_ = state.active_edge_bevel_maximum_width;
     active_preview_deleted_vertex_count_ =
         state.active_preview_deleted_vertex_count;
     stats_ = state.stats;
@@ -13535,6 +13631,7 @@ private:
     active_preview_operation_.reset();
     active_preview_settings_.reset();
     active_preview_deleted_vertex_count_ = 0U;
+    active_edge_bevel_maximum_width_.reset();
   }
 
   SceneDocument &scene_;
@@ -13587,6 +13684,9 @@ private:
       active_preview_operation_;
   std::optional<quader_editor_core::EditorOperationSettings>
       active_preview_settings_;
+  std::optional<double> active_edge_bevel_maximum_width_;
+  std::function<void(const quader_editor_core::EdgeBevelOperationSettings &)>
+      edge_bevel_preview_settings_handler_;
   std::size_t active_preview_deleted_vertex_count_ = 0U;
   mutable std::optional<SelectionSummaryCacheKey>
       selection_summary_cache_key_;
@@ -13903,6 +14003,22 @@ ModelingSdkProjectionAdapter::active_preview_operation_id() const noexcept {
 std::optional<quader_editor_core::EditorOperationId>
 ModelingSdkProjectionAdapter::active_preview_operation() const noexcept {
   return impl_->active_preview_operation();
+}
+
+std::optional<double>
+ModelingSdkProjectionAdapter::active_edge_bevel_maximum_width() const noexcept {
+  return impl_->active_edge_bevel_maximum_width();
+}
+
+std::optional<quader_editor_core::EdgeBevelOperationSettings>
+ModelingSdkProjectionAdapter::active_edge_bevel_settings() const noexcept {
+  return impl_->active_edge_bevel_settings();
+}
+
+void ModelingSdkProjectionAdapter::set_edge_bevel_preview_settings_handler(
+    std::function<void(const quader_editor_core::EdgeBevelOperationSettings &)>
+        handler) {
+  impl_->set_edge_bevel_preview_settings_handler(std::move(handler));
 }
 
 std::size_t

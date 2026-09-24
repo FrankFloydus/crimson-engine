@@ -35,8 +35,6 @@ struct QuaderEntitySnapshot {
   bool has_mesh = false;
   bool has_material = false;
   bool has_light = false;
-  bool is_scene_root = false;
-  bool has_scene_settings = false;
   bool has_modeling_object = false;
   bool is_instance_definition = false;
   bool has_instance_occurrence = false;
@@ -45,7 +43,6 @@ struct QuaderEntitySnapshot {
   AssetId mesh = kInvalidAssetId;
   AssetId material = kInvalidAssetId;
   QuaderLightComponent light;
-  QuaderSceneSettings scene_settings;
   QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;
   /// Per-occurrence texture placement; absence denotes the identity mapping.
   std::optional<QMat4> texture_sampling_from_local;
@@ -108,6 +105,7 @@ struct QuaderHistorySnapshot {
  */
 struct QuaderApiSnapshot {
     QuaderRevisionStamp revisions;
+    QuaderSceneSettings scene_settings;
     std::vector<QuaderEntitySnapshot> entities;
     std::vector<QuaderLayerSnapshot> layers;
     std::vector<QuaderModelingObjectRecord> modeling_objects;

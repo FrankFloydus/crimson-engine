@@ -595,6 +595,9 @@ private:
         queue_texture_dispatch(index, value);
       };
       auto &numeric = qt_install_numeric_spin_box(*binding.spin);
+      numeric.can_commit_text = [this, index]() {
+        return !texture_controls_[index].invalid_value;
+      };
       if (scale) {
         numeric.set_drag_sensitivity(description.step);
       }

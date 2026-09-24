@@ -13,6 +13,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -442,6 +443,10 @@ void QtCommandEventFilter::set_input_context_provider(
 }
 
 bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
+  if (qt_handle_numeric_text_edit_key(watched, event)) {
+    reset_pending_chord();
+    return true;
+  }
   if (editor_ == nullptr || event == nullptr) {
     return QObject::eventFilter(watched, event);
   }

@@ -335,10 +335,6 @@ const std::vector<IncludeException> &allowed_include_exceptions() {
        "editor/projection/mesh_projection_service.hpp",
        "binary QDR hydration still rebuilds compiled mesh payloads through "
        "editor projection"},
-      {"src/ui/qt_settings_control_widgets.hpp",
-       "quader/modeling/neutral/polygon/face_texture_scale_steps.hpp",
-       "texture scale arrows share the modeling owner's stateless scalar "
-       "stepping rule; this header exposes no document or topology access"},
   };
   return kExceptions;
 }
@@ -348,6 +344,7 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"filament_sdk", {}},
       {"ground_grid_material", {}},
       {"qdr_dump", {"quader_project_qdr_io"}},
+      {"qdr_migrate", {"quader_project_qdr_io", "quader_modeling_sdk_qdr_document"}},
       {"qdr_fixture_performance_baseline", {"quader_runtime"}},
       {"qdr_performance_baseline",
        {"quader_assets", "quader_modeling", "quader_modeling_polygon",
@@ -450,7 +447,7 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_sdk_example_qdr_roundtrip", {"quader_modeling_sdk"}},
       {"quader_sdk_example_session_preview", {"quader_modeling_sdk"}},
       {"quader_selected_object_line_material", {}},
-      {"quader_tests", {"quader_bridge_reader", "quader_runtime"}},
+      {"quader_tests", {"quader_bridge_reader", "quader_runtime", "quader_modeling_sdk_qdr_document"}},
       {"quader_ui",
        {"quader_editor_api", "quader_editor_metadata", "quader_editor_viewport",
         "quader_modeling_profile", "quader_platform", "quader_render"}},

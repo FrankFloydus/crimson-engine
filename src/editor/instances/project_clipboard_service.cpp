@@ -830,7 +830,7 @@ private:
     for (const ClipboardDefinition &source_definition :
          payload_.definitions) {
       DocumentEntitySnapshot definition = source_definition.snapshot;
-      definition.parent = session.scene().scene_root();
+      definition.parent = kInvalidEntityId;
       if (!normalize_imported_snapshot_layers(definition,
                                                layer_plan->remap)) {
         return rollback(clipboard_failure(
@@ -917,7 +917,7 @@ private:
 
     std::vector<DocumentEntitySnapshot> occurrences;
     occurrences.reserve(payload_.occurrences.size());
-    const EntityId destination_parent = session.scene().scene_root();
+    const EntityId destination_parent = kInvalidEntityId;
     const QMat4 parent_world =
         session.scene().world_transform_matrix(destination_parent);
     for (const ClipboardOccurrence &source : payload_.occurrences) {

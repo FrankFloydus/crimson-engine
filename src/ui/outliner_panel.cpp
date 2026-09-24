@@ -123,8 +123,7 @@ bool outliner_projection_matches(std::span<const EntityRecord> left,
         a.effectively_visible != b.effectively_visible ||
         a.locked != b.locked ||
         a.effectively_locked != b.effectively_locked ||
-        a.has_children != b.has_children ||
-        a.is_scene_root != b.is_scene_root) {
+        a.has_children != b.has_children) {
       return false;
     }
   }
@@ -718,12 +717,10 @@ private:
           }
 
           auto *name_item = new QStandardItem(qt_text(entity_record->name));
-          name_item->setEditable(!entity_record->is_scene_root);
-          name_item->setDragEnabled(!entity_record->is_scene_root &&
-                                    !entity_record->effectively_locked);
+          name_item->setEditable(true);
+          name_item->setDragEnabled(!entity_record->effectively_locked);
           name_item->setDropEnabled(!entity_record->effectively_locked &&
-                                    (entity_record->is_scene_root ||
-                                     entity_record->kind == EntityKind::Empty));
+                                    entity_record->kind == EntityKind::Empty);
           name_item->setData(static_cast<qulonglong>(entity_record->id),
                              kEntityIdRole);
           name_item->setData(!entity_record->effectively_visible ||
@@ -986,7 +983,7 @@ private:
     for (const QModelIndex &index : indexes) {
       const EntityRecord *entity_record = record(entity_id(index));
       if (index.model() != model_ || entity_record == nullptr ||
-          entity_record->is_scene_root || entity_record->effectively_locked) {
+          entity_record->effectively_locked) {
         return nullptr;
       }
       data->entities.push_back(entity_record->id);
@@ -1014,16 +1011,13 @@ private:
     }
     const EntityId destination =
         parent.isValid() ? entity_id(parent)
-                        : (instance_scope_definition_ != kInvalidEntityId
-                               ? instance_scope_definition_
-                               : document_->scene_root());
+                        : instance_scope_definition_;
     const EntityRecord *destination_record = record(destination);
     if ((destination_record == nullptr &&
          destination != instance_scope_definition_) ||
         (destination_record != nullptr &&
          (destination_record->effectively_locked ||
-          (row == -1 && !destination_record->is_scene_root &&
-           destination_record->kind != EntityKind::Empty)))) {
+          (row == -1 && destination_record->kind != EntityKind::Empty)))) {
       return false;
     }
     for (const EntityId entity : drag.entities) {
@@ -1036,9 +1030,6 @@ private:
         row >= 0 && row < model_->rowCount(parent)
             ? entity_id(model_->index(row, 0, parent))
             : kInvalidEntityId;
-    if (before_sibling == document_->scene_root()) {
-      return false;
-    }
     if (!commit) {
       return true;
     }
@@ -1076,10 +1067,6 @@ private:
     const EntityId entity = entity_id(item->index());
     const EntityRecord *entity_record = record(entity);
     if (entity_record == nullptr) {
-      return;
-    }
-
-    if (entity_record->is_scene_root) {
       return;
     }
 
@@ -1159,7 +1146,7 @@ private:
     bool all_selected_locked = true;
     for (const EntityId selected : selected_entities) {
       const EntityRecord *selected_record = record(selected);
-      if (selected_record == nullptr || selected_record->is_scene_root) {
+      if (selected_record == nullptr) {
         continue;
       }
       selected_objects.push_back(selected);
@@ -1216,7 +1203,6 @@ private:
       rename_action =
           menu.addAction(localized("ui.outliner.rename", "Rename"));
       rename_action->setObjectName(QStringLiteral("outliner.action.rename"));
-      rename_action->setEnabled(!entity_record->is_scene_root);
 
       focus_action = add_command_action(
           "ui.outliner.focus_selection", "Focus Selection",

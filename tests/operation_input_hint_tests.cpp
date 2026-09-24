@@ -564,10 +564,11 @@ TEST_F(QtOperationInputHintTests, SameFacadeSceneRebindRetiresPreviousHints) {
   EXPECT_FALSE(widget.hints().empty());
   EXPECT_FALSE(widget.isHidden());
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("LMB")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("H")));
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
   widget.refresh(editor.tools(), editor.commands(), localization);
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("Shift+F")));
-  EXPECT_FALSE(contains_badge(widget, QStringLiteral("H")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("H")));
 }
 
 } // namespace

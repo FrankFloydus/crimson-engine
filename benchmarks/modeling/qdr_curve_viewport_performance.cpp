@@ -251,9 +251,7 @@ public:
     mark(3);
     require_ok(QuaderRenderApiRuntimeAccess::sync_scene(editor_.render(), bridge_));
     mark(4);
-    if (const auto *settings = session().scene().scene_settings(session().scene().scene_root())) {
-      renderer_.apply_scene_settings(*settings);
-    }
+    renderer_.apply_scene_settings(session().scene().scene_settings());
     mark(5);
     ui_.prepare_viewports(bridge_, overlays_);
     mark(6);

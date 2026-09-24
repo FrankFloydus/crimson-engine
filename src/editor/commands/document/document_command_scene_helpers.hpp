@@ -13,7 +13,9 @@
 #include "scene/scene_entity_naming.hpp"
 
 #include <algorithm>
+#include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -34,6 +36,7 @@ struct DocumentEntityPlacement {
   EntityId parent = kInvalidEntityId;
   TransformComponent transform;
   SceneLayerId layer_id = kInvalidSceneLayerId;
+  std::optional<std::size_t> sibling_ordinal;
 };
 
 inline std::vector<EntityId>
@@ -46,8 +49,10 @@ document_command_normalize_existing_entities(const SceneDocument &scene,
       result.push_back(entity);
     }
   }
-  std::sort(result.begin(), result.end());
-  result.erase(std::unique(result.begin(), result.end()), result.end());
+  std::unordered_set<EntityId> seen;
+  std::erase_if(result, [&seen](EntityId entity) {
+    return !seen.insert(entity).second;
+  });
   return result;
 }
 
@@ -125,7 +130,7 @@ inline void document_command_apply_entity_snapshot_common_state(
 }
 
 inline EntityId document_command_create_entity_from_snapshot(
-    SceneDocument &scene, const DocumentEntitySnapshot &snapshot,
+    SceneDocument &scene, const SceneEntityState &snapshot,
     EntityId parent, std::string name, bool include_modeling_object,
     bool preserve_identity = false) {
   return create_scene_entity_from_state(
@@ -154,14 +159,22 @@ struct DocumentDuplicateSnapshotRollback final {
   std::vector<ReusedEntity> reused;
 };
 
+inline bool document_command_restore_placement_order(
+    SceneDocument &scene, std::span<const DocumentEntityPlacement> placements);
+
 inline void document_command_rollback_duplicate_snapshot_tree(
     SceneDocument &scene, DocumentDuplicateSnapshotRollback &rollback) {
+  std::vector<DocumentEntityPlacement> placements;
   for (auto it = rollback.reused.rbegin(); it != rollback.reused.rend(); ++it) {
     if (!scene.exists(it->entity)) {
       continue;
     }
-    (void)apply_scene_entity_state_placement(scene, it->entity, it->before,
-                                             it->before.parent);
+    (void)scene.set_parent(it->entity, it->before.parent, false);
+    placements.push_back({
+        .entity = it->entity,
+        .parent = it->before.parent,
+        .sibling_ordinal = it->before.sibling_ordinal,
+    });
     document_command_apply_entity_snapshot_common_state(
         scene, it->entity, it->before, it->before.name);
   }
@@ -171,6 +184,7 @@ inline void document_command_rollback_duplicate_snapshot_tree(
       (void)scene.destroy_entity(*it);
     }
   }
+  (void)document_command_restore_placement_order(scene, placements);
 }
 
 inline EntityId document_command_duplicate_entity_snapshot_tree_impl(
@@ -260,9 +274,13 @@ inline void document_command_erase_snapshot_remaps(
 inline EntityId document_command_restore_entity_snapshot_tree(
     SceneDocument &scene, const DocumentEntitySnapshot &snapshot,
     EntityId parent, std::unordered_map<EntityId, EntityId> &remapped_entities,
-    bool include_modeling_object = true) {
+    bool include_modeling_object = true, bool restore_root_ordinal = true) {
+  SceneEntityState state = snapshot;
+  if (!restore_root_ordinal) {
+    state.sibling_ordinal.reset();
+  }
   const EntityId restored = document_command_create_entity_from_snapshot(
-      scene, snapshot, parent, snapshot.name, include_modeling_object, true);
+      scene, state, parent, snapshot.name, include_modeling_object, true);
   if (restored == kInvalidEntityId) {
     return kInvalidEntityId;
   }
@@ -288,9 +306,6 @@ document_command_selected_root_entities(const SceneDocument &scene) {
   std::vector<EntityId> roots;
   for (const EntityId entity : scene.entity_tree_order()) {
     if (!selected_set.contains(entity)) {
-      continue;
-    }
-    if (scene.is_scene_root(entity)) {
       continue;
     }
     if (scene.is_effectively_locked(entity)) {
@@ -351,9 +366,59 @@ document_command_capture_placements(const SceneDocument &scene,
         .parent = scene.parent(entity),
         .transform = transform == nullptr ? TransformComponent{} : *transform,
         .layer_id = scene.entity_layer(entity),
+        .sibling_ordinal = scene.sibling_ordinal(entity),
     });
   }
   return placements;
+}
+
+/** Restores captured sibling slots after every participant has its final parent. */
+inline bool document_command_restore_placement_order(
+    SceneDocument &scene, std::span<const DocumentEntityPlacement> placements) {
+  std::map<EntityId, std::vector<const DocumentEntityPlacement *>> by_parent;
+  for (const DocumentEntityPlacement &placement : placements) {
+    if (!scene.exists(placement.entity) ||
+        scene.parent(placement.entity) != placement.parent) {
+      return false;
+    }
+    if (placement.sibling_ordinal.has_value()) {
+      by_parent[placement.parent].push_back(&placement);
+    }
+  }
+  std::map<EntityId, std::size_t> sibling_counts;
+  for (auto &[parent, positioned] : by_parent) {
+    const std::size_t count = scene.children(parent).size();
+    sibling_counts.emplace(parent, count);
+    std::unordered_set<EntityId> restored;
+    std::unordered_set<std::size_t> ordinals;
+    for (const DocumentEntityPlacement *placement : positioned) {
+      const std::size_t ordinal = *placement->sibling_ordinal;
+      if (ordinal >= count || !ordinals.insert(ordinal).second ||
+          !restored.insert(placement->entity).second) {
+        return false;
+      }
+    }
+    std::ranges::sort(positioned, [](const auto *left, const auto *right) {
+      return left->sibling_ordinal < right->sibling_ordinal;
+    });
+  }
+  // Move only captured participants. Touching untouched siblings would advance
+  // their mutation counters and invalidate otherwise unrelated checkpoints.
+  for (const auto &[parent, positioned] : by_parent) {
+    for (const DocumentEntityPlacement *placement : positioned) {
+      if (!scene.set_sibling_ordinal(placement->entity,
+                                     sibling_counts.at(parent) - 1u)) {
+        return false;
+      }
+    }
+    for (const DocumentEntityPlacement *placement : positioned) {
+      if (!scene.set_sibling_ordinal(placement->entity,
+                                     *placement->sibling_ordinal)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 inline DocumentCommandResult

@@ -40,6 +40,7 @@
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_face_texture_panel.hpp"
+#include "ui/qt_environment_settings_popup.hpp"
 #include "ui/qt_numeric_format.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
 #include "ui/qt_viewport_edge_length_hud.hpp"
@@ -73,6 +74,8 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSizePolicy>
+#include <QStylePainter>
+#include <QStyleOptionButton>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -95,6 +98,25 @@ namespace quader {
 namespace {
 
 using ViewportProbeClock = std::chrono::steady_clock;
+
+/// Uses native menu-button chrome while opening a retained settings window.
+class QtEnvironmentLauncherButton final : public QPushButton {
+public:
+  using QPushButton::QPushButton;
+  QSize sizeHint() const override {
+    QSize result = QPushButton::sizeHint();
+    result.rwidth() += style()->pixelMetric(QStyle::PM_MenuButtonIndicator, nullptr, this);
+    return result;
+  }
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QStylePainter painter(this);
+    QStyleOptionButton option;
+    initStyleOption(&option);
+    option.features |= QStyleOptionButton::HasMenu;
+    painter.drawControl(QStyle::CE_PushButton, option);
+  }
+};
 
 /** Paints only a masked native border above the viewport's child window. */
 class QtViewportFocusFrame final : public QWidget {
@@ -513,6 +535,7 @@ QtViewportPanel::QtViewportPanel(QWidget *parent)
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setAutoFillBackground(true);
 
+  environment_popup_ = new QtEnvironmentSettingsPopup(this);
   panes_[viewport_pane_index(ViewportPaneId::Perspective)].id =
       ViewportPaneId::Perspective;
   panes_[viewport_pane_index(ViewportPaneId::Top)].id = ViewportPaneId::Top;
@@ -568,6 +591,7 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
 }
 
 void QtViewportPanel::shutdown() {
+  environment_popup_->abandon_runtime();
   abandon_settings_overlay();
   hide_primitive_feedback();
   set_modal_tool_owns_viewport_snapshot(false);
@@ -644,6 +668,7 @@ void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
 }
 
 void QtViewportPanel::abandon_interactions() {
+  environment_popup_->abandon_runtime();
   abandon_settings_overlay();
   hide_primitive_feedback();
   ++runtime_binding_generation_;
@@ -849,6 +874,7 @@ void QtViewportPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
     return;
   }
   ui_scale_metrics_ = metrics;
+  environment_popup_->apply_ui_scale(metrics);
   hide_primitive_feedback();
   context_menu_presenter_.apply_ui_scale(metrics);
   for (Pane &pane_state : panes_) {
@@ -1087,6 +1113,7 @@ void QtViewportPanel::prepare_viewports(
     ModelingSessionService &modeling,
     NativeViewportToolCoordinator &native_tools) {
   QDR_PROFILE_FUNCTION();
+  environment_popup_->refresh(editor, document, localization_);
   const bool diagnostics_enabled = viewport_frame_diagnostics_enabled();
   const ViewportProbeClock::time_point prepare_start =
       diagnostics_enabled ? ViewportProbeClock::now()
@@ -1325,16 +1352,11 @@ void QtViewportPanel::prepare_viewports(
         viewport_material_debug_mode(shading),
         shading == ViewportShadingMode::Solid);
 
-    if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
-      if (const SceneSettingsComponent *scene_settings =
-              document.scene_settings(root)) {
-        pane_workspace.camera.set_clip_planes(scene_settings->camera.near_plane,
-                                              scene_settings->camera.far_plane);
-        renderer.apply_scene_settings(
-            *scene_settings, viewport_shading_uses_scene_lighting(shading),
-            settings);
-      }
-    }
+    const SceneSettings &scene_settings = document.scene_settings();
+    pane_workspace.camera.set_clip_planes(scene_settings.camera.near_plane,
+                                          scene_settings.camera.far_plane);
+    renderer.apply_scene_settings(
+        scene_settings, viewport_shading_uses_scene_lighting(shading), settings);
     renderer.update_camera(pane_workspace.camera);
     renderer.update_ground_grid(pane_workspace.camera, grid_world_size,
                                 settings, grid_visible);
@@ -1822,6 +1844,15 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   auto *toolbar_layout = new QHBoxLayout(pane_state.toolbar);
   toolbar_layout->setContentsMargins(0, 0, 0, 0);
 
+  pane_state.environment_button = new QtEnvironmentLauncherButton(pane_state.toolbar);
+  pane_state.environment_button->setObjectName(
+      QStringLiteral("viewportEnvironment_%1")
+          .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  connect(pane_state.environment_button, &QPushButton::clicked, this,
+          [this, &pane_state]() {
+            environment_popup_->show_below(*pane_state.environment_button);
+          });
+  toolbar_layout->addWidget(pane_state.environment_button);
   pane_state.display_button = new QPushButton(pane_state.toolbar);
   pane_state.display_button->setObjectName(
       QStringLiteral("viewportShading_%1")
@@ -1957,6 +1988,14 @@ void QtViewportPanel::refresh_keybinding_presentation(
 }
 
 void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
+  const QString environment_label = localization_ != nullptr
+      ? QString::fromStdString(localization_->text("ui.inspector.environment", "Environment"))
+      : QStringLiteral("Environment");
+  if (pane_state.environment_button->text() != environment_label) {
+    pane_state.environment_button->setText(environment_label);
+    pane_state.environment_button->setAccessibleName(environment_label);
+    pane_state.environment_button->setToolTip(environment_label);
+  }
   for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
     const ViewportShadingMode shading = kShadingModes[index];
     QString text = localized_shading_label(localization_, shading);
@@ -2098,17 +2137,26 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
   }
   const int overlay_inset = ui_scale_metrics_.px(6);
   const QSize display_size = pane_state.display_button->sizeHint();
+  const QSize environment_size = pane_state.environment_button->sizeHint();
   const QtViewportChromeLayout chrome = qt_viewport_chrome_layout(
       pane_state.frame->width(), display_size.width(), overlay_inset,
-      ui_scale_metrics_.px(kQtViewportDisplayMenuMinimumWidth));
+      ui_scale_metrics_.px(kQtViewportDisplayMenuMinimumWidth),
+      environment_size.width(), ui_scale_metrics_.px(4));
   if (pane_state.display_button->minimumWidth() != chrome.menu_width ||
       pane_state.display_button->maximumWidth() != chrome.menu_width) {
     pane_state.display_button->setFixedWidth(chrome.menu_width);
   }
+  if (pane_state.environment_button->minimumWidth() != chrome.environment_width ||
+      pane_state.environment_button->maximumWidth() != chrome.environment_width) {
+    pane_state.environment_button->setFixedWidth(chrome.environment_width);
+  }
+  if (pane_state.toolbar->layout()->spacing() != chrome.menu_spacing) {
+    pane_state.toolbar->layout()->setSpacing(chrome.menu_spacing);
+  }
   if (pane_state.display_menu->minimumWidth() != chrome.menu_width) {
     pane_state.display_menu->setMinimumWidth(chrome.menu_width);
   }
-  const int toolbar_height = std::max(1, display_size.height());
+  const int toolbar_height = std::max({1, display_size.height(), environment_size.height()});
   const QRect toolbar_geometry{chrome.toolbar_x, overlay_inset,
                                chrome.toolbar_width, toolbar_height};
   if (pane_state.toolbar->geometry() != toolbar_geometry) {

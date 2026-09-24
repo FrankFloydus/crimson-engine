@@ -1307,14 +1307,16 @@ TEST(ViewportInteractionControllerTests,
     ViewportInteractionHarness harness;
     harness.camera.view_axis(quader::ViewportViewAxis::Y, 1);
     harness.input.orthographic_view = true;
-    const quader::EntityId root = harness.session.scene().scene_root();
-    ASSERT_NE(root, quader::kInvalidEntityId);
+    const quader::EntityId unrelated = harness.session.scene().create_entity(
+        "Unrelated transformed object", quader::EntityKind::Empty);
+    ASSERT_NE(unrelated, quader::kInvalidEntityId);
     ASSERT_TRUE(harness.session.scene().set_transform(
-        root, quader::TransformComponent{
+        unrelated, quader::TransformComponent{
                   .position = {10.0f, 2.0f, -4.0f},
                   .rotation_euler = {0.0f, 0.25f, 0.0f},
                   .scale = {1.5f, 0.75f, 2.0f},
               }));
+    EXPECT_EQ(harness.session.scene().parent(unrelated), quader::kInvalidEntityId);
     harness.session.mark_clean();
     const quader::QuaderEventSubscription dirty_subscription =
         harness.editor.events().subscribe(
@@ -1404,6 +1406,7 @@ TEST(ViewportInteractionControllerTests,
         });
     ASSERT_NE(light, entities.end());
     EXPECT_EQ(light->light.type, light_case.type);
+    EXPECT_EQ(light->parent, quader::kInvalidEntityId);
     EXPECT_TRUE(light->selected);
     EXPECT_TRUE(light->active);
     const quader::QVec3 created_world = quader::transform_point(
@@ -1434,6 +1437,7 @@ TEST(ViewportInteractionControllerTests,
         harness.editor.query().entity(light->id);
     ASSERT_TRUE(restored.has_value());
     EXPECT_EQ(restored->light.type, light_case.type);
+    EXPECT_EQ(restored->parent, quader::kInvalidEntityId);
     EXPECT_TRUE(restored->selected);
     EXPECT_TRUE(restored->active);
     EXPECT_EQ(selected_entities(harness),
@@ -1583,6 +1587,7 @@ TEST(ViewportInteractionControllerTests,
         return entity.has_light;
       });
   ASSERT_NE(light, entities.end());
+  EXPECT_EQ(light->parent, quader::kInvalidEntityId);
   const quader::QVec3 placed_world = quader::transform_point(
       harness.session.scene().world_transform_matrix(light->id), {});
   EXPECT_NEAR(placed_world.x, kExpectedSurfaceWorld.x, 0.001f);
@@ -1592,15 +1597,17 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     LightCreationRejectsNonInvertibleSceneRootWithoutMutation) {
+     LightCreationIgnoresUnrelatedSingularParentlessObject) {
   int dirty_changed_events = 0;
   ViewportInteractionHarness harness;
   harness.camera.view_axis(quader::ViewportViewAxis::Y, 1);
   harness.input.orthographic_view = true;
-  const quader::EntityId root = harness.session.scene().scene_root();
-  ASSERT_NE(root, quader::kInvalidEntityId);
+  const quader::EntityId unrelated = harness.session.scene().create_entity(
+      "Unrelated singular object", quader::EntityKind::Empty);
+  ASSERT_NE(unrelated, quader::kInvalidEntityId);
   ASSERT_TRUE(harness.session.scene().set_transform(
-      root, quader::TransformComponent{.scale = {0.0f, 1.0f, 1.0f}}));
+      unrelated, quader::TransformComponent{.scale = {0.0f, 1.0f, 1.0f}}));
+  EXPECT_EQ(harness.session.scene().parent(unrelated), quader::kInvalidEntityId);
   harness.session.mark_clean();
   const quader::QuaderEventSubscription dirty_subscription =
       harness.editor.events().subscribe(
@@ -1623,7 +1630,7 @@ TEST(ViewportInteractionControllerTests,
   harness.input.modal_tool_active = true;
   const quader::ViewportInteractionFrame interaction =
       harness.frame(true, true, false, expected_screen.position);
-  const quader::ViewportToolPointerLifecycleResult rejected =
+  const quader::ViewportToolPointerLifecycleResult placed =
       harness.controller.handle_tool_pointer_lifecycle(
           harness.editor, harness.session.scene(), harness.session.assets(),
           harness.session.native_tools(), &harness.session.point_placement(),
@@ -1641,15 +1648,43 @@ TEST(ViewportInteractionControllerTests,
                       .grid_snap_enabled = false,
                   },
           });
-  ASSERT_TRUE(rejected.native_tool.command_attempted);
-  EXPECT_FALSE(rejected.native_tool.command_result.ok);
-  EXPECT_EQ(rejected.native_tool.command_result.message,
-            "Scene root transform is not invertible.");
-  EXPECT_EQ(harness.editor.query().entities().size(), entity_count_before);
-  EXPECT_EQ(harness.session.history().undo_count(), undo_count_before);
-  EXPECT_TRUE(harness.session.native_tools().light_creation_active());
-  EXPECT_FALSE(harness.session.dirty());
-  EXPECT_EQ(dirty_changed_events, 0);
+  ASSERT_TRUE(placed.native_tool.command_attempted);
+  ASSERT_TRUE(placed.native_tool.command_result.ok)
+      << placed.native_tool.command_result.message;
+  EXPECT_TRUE(placed.native_tool.command_result.changed);
+  const auto entities = harness.editor.query().entities();
+  ASSERT_EQ(entities.size(), entity_count_before + 1u);
+  const auto light = std::find_if(
+      entities.begin(), entities.end(),
+      [](const quader::QuaderEntitySnapshot &entity) { return entity.has_light; });
+  ASSERT_NE(light, entities.end());
+  EXPECT_EQ(light->parent, quader::kInvalidEntityId);
+  EXPECT_TRUE(light->selected);
+  EXPECT_TRUE(light->active);
+  const quader::QVec3 placed_world = quader::transform_point(
+      harness.session.scene().world_transform_matrix(light->id), {});
+  EXPECT_NEAR(placed_world.x, kExpectedWorld.x, 0.0001f);
+  EXPECT_NEAR(placed_world.y, kExpectedWorld.y, 0.0001f);
+  EXPECT_NEAR(placed_world.z, kExpectedWorld.z, 0.0001f);
+  EXPECT_EQ(harness.session.history().undo_count(), undo_count_before + 1u);
+  EXPECT_FALSE(harness.session.native_tools().light_creation_active());
+  EXPECT_EQ(harness.editor.tools().active_tool(), "select");
+  EXPECT_TRUE(harness.session.dirty());
+  EXPECT_EQ(dirty_changed_events, 1);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FALSE(harness.editor.query().entity(light->id).has_value());
+  EXPECT_TRUE(selected_entities(harness).empty());
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  const auto restored = harness.editor.query().entity(light->id);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->parent, quader::kInvalidEntityId);
+  EXPECT_TRUE(restored->selected);
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{light->id});
+  const quader::QVec3 restored_world = quader::transform_point(
+      harness.session.scene().world_transform_matrix(restored->id), {});
+  EXPECT_NEAR(restored_world.x, kExpectedWorld.x, 0.0001f);
+  EXPECT_NEAR(restored_world.y, kExpectedWorld.y, 0.0001f);
+  EXPECT_NEAR(restored_world.z, kExpectedWorld.z, 0.0001f);
   EXPECT_TRUE(harness.editor.events().unsubscribe(dirty_subscription));
 }
 

@@ -26,14 +26,6 @@ struct SceneContentDocumentRecord {
 };
 
 /**
- * Selects whether a SceneContentDocument constructor should immediately synthesize the real scene root.
- */
-enum class SceneContentDocumentRootPolicy {
-    EnsureSceneRoot,
-    DeferSceneRoot,
-};
-
-/**
  * Stores the Project Document Identity Issue data contract used by the editor document ownership layer.
  */
 struct SceneContentDocumentIdentityIssue {
@@ -76,11 +68,8 @@ struct SceneContentDocumentAssetReferenceReport {
  */
 class SceneContentDocument {
 public:
-  explicit SceneContentDocument(SceneContentDocumentRootPolicy root_policy =
-                               SceneContentDocumentRootPolicy::EnsureSceneRoot);
-  explicit SceneContentDocument(SceneContentDocumentRecord record,
-                           SceneContentDocumentRootPolicy root_policy =
-                               SceneContentDocumentRootPolicy::EnsureSceneRoot);
+  SceneContentDocument() = default;
+  explicit SceneContentDocument(SceneContentDocumentRecord record);
   SceneContentDocument(const SceneContentDocument &) = delete;
   SceneContentDocument &operator=(const SceneContentDocument &) = delete;
   SceneContentDocument(SceneContentDocument &&) noexcept = default;
@@ -98,7 +87,6 @@ public:
 
   SceneContentDocumentIdentityReport validate_object_identity_invariants() const;
   SceneContentDocumentAssetReferenceReport validate_asset_references() const;
-  EntityId ensure_scene_root();
 
   std::uint64_t revision() const;
 

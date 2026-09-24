@@ -4191,28 +4191,6 @@ bool ModelingInteractionSettingsService::reset_for_target(
   return true;
 }
 
-void ModelingInteractionSettingsService::reset_for_preview_action(
-    ModelingActionPreviewKind preview_kind) {
-  switch (preview_kind) {
-  case ModelingActionPreviewKind::EdgeBevel:
-    (void)reset_for_target(ModelingToolSettingsTargetKind::EdgeBevel);
-    return;
-  case ModelingActionPreviewKind::Thicken:
-    (void)reset_for_target(ModelingToolSettingsTargetKind::Thicken);
-    return;
-  case ModelingActionPreviewKind::MergeByDistance:
-    (void)reset_for_target(ModelingToolSettingsTargetKind::MergeByDistance);
-    return;
-  case ModelingActionPreviewKind::HalfCut:
-    (void)reset_for_target(ModelingToolSettingsTargetKind::HalfCut);
-    return;
-  case ModelingActionPreviewKind::Bridge:
-  case ModelingActionPreviewKind::SliceQuad:
-  case ModelingActionPreviewKind::None:
-    break;
-  }
-}
-
 void ModelingInteractionSettingsService::set_cut_mode(ModelingCutMode mode) {
   if (settings_.cut_mode == mode) {
     return;
