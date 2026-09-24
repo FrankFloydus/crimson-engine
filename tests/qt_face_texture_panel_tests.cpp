@@ -8,6 +8,7 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_auxiliary_window_state.hpp"
 #include "ui/qt_face_texture_canvas.hpp"
 #include "ui/qt_face_texture_controls.hpp"
 #include "ui/qt_face_texture_panel.hpp"
@@ -204,6 +205,13 @@ protected:
     material.thumbnail = make_qt_material_thumbnail(material);
     panel_->set_material_presentation(material);
     panel_->browser().set_materials({material});
+    const QtAuxiliaryWindowState defaults;
+    panel_->browser().restore_presentation_state(
+        defaults.face_texture_browser_grid_mode ? QtMaterialBrowserViewMode::Grid
+                                                : QtMaterialBrowserViewMode::List,
+        defaults.face_texture_browser_tile_size,
+        defaults.face_texture_browser_sidebar_visible,
+        defaults.face_texture_browser_sidebar_width);
   }
 
   void expect_presented_settings(bool editable) {
@@ -467,10 +475,12 @@ TEST_F(QtFaceTexturePanelTests,
     ASSERT_TRUE(QDir().mkpath(target));
     prepare_screenshot_scene();
   }
-  QApplication::setPalette(qt_obsidian_application_palette(QApplication::palette()));
+  apply_qt_obsidian_application_theme(QApplication::palette());
   QtUiScaleApplicationController scale_controller(*application_);
+  int scale_iteration = 0;
   for (const float scale : {1.0f, 1.5f, 2.0f, 1.0f}) {
     SCOPED_TRACE(scale);
+    SCOPED_TRACE(::testing::Message() << "scale_iteration=" << scale_iteration++);
     scale_controller.apply_factor(scale);
     const QtUiScaleMetrics metrics(scale, static_cast<std::uint64_t>(scale * 10));
     panel_->apply_ui_scale(metrics);
@@ -514,8 +524,9 @@ TEST_F(QtFaceTexturePanelTests,
                                 std::pair{shift_x, rotate}}) {
         const int gap = rows.second->y() - rows.first->geometry().bottom() - 1;
         EXPECT_GE(gap, metrics.px(4));
-        EXPECT_LE(gap, metrics.px(6));
       }
+      std::array<QRect, 3> numeric_row_bounds;
+      std::size_t numeric_index = 0;
       for (const char *id : {"scale_x", "scale_y", "shift_x", "shift_y", "rotate"}) {
         const auto *spin = number(id);
         ASSERT_NE(spin, nullptr);
@@ -533,6 +544,17 @@ TEST_F(QtFaceTexturePanelTests,
         ASSERT_NE(label, nullptr);
         EXPECT_LT(label->geometry().right(), spin->x());
         EXPECT_LE(label->heightForWidth(label->width()), label->height());
+        numeric_row_bounds[numeric_index / 2] =
+            numeric_row_bounds[numeric_index / 2]
+                .united(spin->geometry())
+                .united(label->geometry());
+        ++numeric_index;
+      }
+      for (std::size_t row = 0; row < 2; ++row) {
+        const int gap = numeric_row_bounds[row + 1].top() -
+                        numeric_row_bounds[row].bottom() - 1;
+        EXPECT_GE(gap, metrics.px(4));
+        EXPECT_LE(gap, metrics.px(6));
       }
       const auto *align = panel_->findChild<QPushButton *>(
           QStringLiteral("face_texture.edit_texture.align_to_grid"));
@@ -924,7 +946,7 @@ TEST_F(QtFaceTexturePanelTests,
 
   ASSERT_TRUE(editor().selection().clear().ok());
   panel_->refresh();
-  QApplication::setPalette(qt_obsidian_application_palette(QApplication::palette()));
+  apply_qt_obsidian_application_theme(QApplication::palette());
   QtUiScaleApplicationController scale_controller(*application_);
   const QString screenshot_path = face_texture_screenshot_directory();
   for (const float factor : {1.0f, 1.5f, 2.0f}) {

@@ -13,6 +13,7 @@
 #include "ui/inspector_panel.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
+#include "ui/qt_panel_section_header.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
@@ -32,6 +33,7 @@
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPointer>
+#include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -42,6 +44,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace quader {
 namespace {
@@ -221,11 +224,14 @@ private:
 
 TEST_F(QtInspectorNumericDragTests,
        TransformAxesStayStackedAlignedAndReadableInNarrowScaledPanels) {
-  application().setPalette(
-      qt_obsidian_application_palette(application().palette()));
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
   QtUiScaleApplicationController scale_controller(application());
   InspectorTransformRuntime runtime;
   runtime.initialize_box();
+  ASSERT_TRUE(runtime.editor.scene()
+                  .set_transform(runtime.entity,
+                                 {.position = {-123.456F, 0.5F, -4.5F}})
+                  .ok());
   InspectorPanel panel;
   scale_controller.add_change_listener(
       panel, [&](const QtUiScaleMetrics &metrics) {
@@ -240,7 +246,7 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_TRUE(name->hasFrame());
   EXPECT_FALSE(name->isReadOnly());
 
-  for (const float scale : {1.0F, 2.0F}) {
+  for (const float scale : {1.0F, 1.5F, 2.0F}) {
     scale_controller.apply_factor(scale);
     for (const int design_width : {418, 320}) {
       SCOPED_TRACE(::testing::Message()
@@ -248,6 +254,7 @@ TEST_F(QtInspectorNumericDragTests,
       panel.resize(scale_controller.metrics().size(QSize(design_width, 760)));
       settle_inspector_layout(panel);
       EXPECT_EQ(panel.width(), scale_controller.metrics().px(design_width));
+      QRect previous_group_last_axis;
       for (const char *property : {"position", "rotation", "scale"}) {
         const QString row_name =
             QStringLiteral("inspector.transform.%1")
@@ -288,6 +295,16 @@ TEST_F(QtInspectorNumericDragTests,
 
           const QRect viewport_rect =
               relative_geometry(*field, *tree->viewport());
+          if (axis == std::string_view("x") &&
+              !previous_group_last_axis.isNull()) {
+            const int group_gap = viewport_rect.top() -
+                                  previous_group_last_axis.bottom() - 1;
+            EXPECT_GE(group_gap, scale_controller.metrics().px(8));
+            EXPECT_GT(group_gap, scale_controller.metrics().px(3));
+          }
+          if (axis == std::string_view("z")) {
+            previous_group_last_axis = viewport_rect;
+          }
           EXPECT_GE(viewport_rect.left(), tree->columnWidth(0));
           EXPECT_LE(viewport_rect.right(), tree->viewport()->rect().right());
           EXPECT_GE(field->height(), field->minimumSizeHint().height());
@@ -361,6 +378,85 @@ TEST_F(QtInspectorNumericDragTests,
       }
     }
   }
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       SectionsSeparateHeaderAndBodyFromNeighborsAcrossInterfaceScales) {
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  QtUiScaleApplicationController scale_controller(application());
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  InspectorPanel panel;
+  scale_controller.add_change_listener(
+      panel, [&](const QtUiScaleMetrics &metrics) {
+        panel.apply_ui_scale(metrics);
+      });
+  show(panel, runtime);
+  auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_GT(tree->topLevelItemCount(), 1);
+  const auto scene_revision = runtime.session.scene().revision();
+  const auto undo_count = runtime.session.history().undo_count();
+  auto *field = position_x(panel);
+  ASSERT_NE(field, nullptr);
+
+  for (const float scale : {1.0F, 1.5F, 2.0F}) {
+    scale_controller.apply_factor(scale);
+    panel.resize(scale_controller.metrics().size(QSize(320, 1000)));
+    settle_inspector_layout(panel);
+    EXPECT_GE(tree->geometry().left(), scale_controller.metrics().px(8));
+    EXPECT_GE(panel.rect().right() - tree->geometry().right(),
+              scale_controller.metrics().px(8));
+    const QImage viewport_image = tree->viewport()->grab().toImage();
+    const qreal ratio = viewport_image.devicePixelRatio();
+    int previous_section_bottom = -1;
+    for (int index = 0; index < tree->topLevelItemCount(); ++index) {
+      auto *item = tree->topLevelItem(index);
+      auto *header =
+          dynamic_cast<QtPanelSectionHeader *>(tree->itemWidget(item, 0));
+      ASSERT_NE(header, nullptr);
+      const QRect header_rect = relative_geometry(*header, *tree->viewport());
+      const QRect surface =
+          header->content_rect().translated(header_rect.topLeft());
+      EXPECT_GE(surface.height(), scale_controller.metrics().px(30));
+      if (index > 0) {
+        const int section_gap = surface.top() - previous_section_bottom - 1;
+        EXPECT_GE(section_gap, scale_controller.metrics().px(8));
+        const QPoint gap_sample(surface.center().x(),
+                                previous_section_bottom + 1 + section_gap / 2);
+        if (tree->viewport()->rect().contains(gap_sample)) {
+          EXPECT_EQ(viewport_image.pixelColor(qRound(gap_sample.x() * ratio),
+                                               qRound(gap_sample.y() * ratio)),
+                    tree->palette().color(QPalette::Window));
+        }
+      }
+      if (item->childCount() > 0 && item->isExpanded()) {
+        const QRect body_start = tree->visualItemRect(item->child(0));
+        previous_section_bottom =
+            tree->visualItemRect(item->child(item->childCount() - 1)).bottom();
+        const QPoint body_sample(scale_controller.metrics().px(8),
+                                 body_start.center().y());
+        if (tree->viewport()->rect().contains(body_sample)) {
+          EXPECT_EQ(viewport_image.pixelColor(qRound(body_sample.x() * ratio),
+                                               qRound(body_sample.y() * ratio)),
+                    tree->palette().color(QPalette::AlternateBase));
+        }
+      } else {
+        previous_section_bottom = surface.bottom();
+      }
+      if (index > 0) {
+        const bool expanded = item->isExpanded();
+        click(*header, QPoint(header->width() / 2,
+                             header->content_rect().top() / 2));
+        EXPECT_EQ(item->isExpanded(), expanded)
+            << "Section spacing is not part of the disclosure hit target.";
+      }
+    }
+    EXPECT_EQ(position_x(panel), field);
+  }
+  EXPECT_EQ(runtime.session.scene().revision(), scene_revision);
+  EXPECT_EQ(runtime.session.history().undo_count(), undo_count);
   panel.abandon_runtime();
 }
 
@@ -650,8 +746,8 @@ TEST_F(QtInspectorNumericDragTests,
 
 TEST_F(QtInspectorNumericDragTests,
        MixedAxesAndReadOnlySummariesStayDistinctFromEditableFields) {
-  application().setPalette(
-      qt_obsidian_application_palette(application().palette()));
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  QtUiScaleApplicationController scale_controller(application());
   InspectorTransformRuntime runtime;
   runtime.initialize();
   const auto second = runtime.editor.scene().create_empty();

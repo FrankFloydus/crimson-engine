@@ -14,9 +14,9 @@ namespace quader {
 [[nodiscard]] QColor qt_current_item_outline_color();
 
 /**
- * Builds Quader's Obsidian-inspired colors on top of Fusion's widget contract.
+ * Builds Quader's dark colors with logo-purple accents on Fusion's contract.
  *
- * Fusion continues to own metrics and base interaction rendering. The returned
+ * Fusion continues to own metrics and interaction behavior. The returned
  * palette supplies one deterministic application-wide color source.
  */
 [[nodiscard]] QPalette
@@ -24,7 +24,7 @@ qt_obsidian_application_palette(const QPalette &fusion_palette);
 
 /**
  * Returns an unresolved palette when Windows requests high contrast so Qt can
- * keep resolving live platform colors. Otherwise returns Quader's Obsidian
+ * keep resolving live platform colors. Otherwise returns Quader's dark
  * palette.
  */
 [[nodiscard]] QPalette qt_application_palette_for_contrast_preference(

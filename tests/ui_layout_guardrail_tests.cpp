@@ -329,7 +329,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(dock_source, "height: %11px");
   expect_contains(dock_source, "icon-size: %12px");
   expect_contains(dock_source, ".arg(metrics.px(18))");
-  expect_contains(dock_source, ".arg(metrics.px(24))");
+  expect_contains(dock_source, ".arg(metrics.px(22))");
   expect_contains(dock_source, "QDockWidget::close-button:hover");
   expect_contains(dock_source, "QDockWidget::float-button:hover");
   expect_contains(dock_source,
@@ -1394,7 +1394,8 @@ TEST(UiLayoutGuardrailTests,
 
   expect_missing(settings, "setStyleSheet(");
   expect_missing(settings, "setPalette(");
-  expect_missing(settings, "QPalette");
+  // Delegates may select inherited palette roles without overriding widgets.
+  expect_contains(settings, "option->palette.color(");
   expect_missing(swatch, "setStyleSheet(");
   expect_missing(swatch, "paintEvent(");
 }
@@ -3629,10 +3630,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(presenter, "QuaderSelectionMode::Group");
   expect_contains(presenter, "input_router.set_selection_mode(");
   expect_contains(presenter, "menu.addSeparator()");
-  expect_contains(
-      presenter,
-      "QMenu#viewport_operations_context_menu::separator");
-  expect_contains(presenter, "palette(mid)");
+  expect_missing(presenter, "setStyleSheet(");
   expect_missing(presenter, "QMenu::item");
   expect_missing(presenter, "QApplication::setStyleSheet(");
   expect_missing(presenter, "\"viewport.material.sample_face\"");

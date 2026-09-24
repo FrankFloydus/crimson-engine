@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_toolbar_button_presentation.hpp"
 
+#include "ui/qt_application_style.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAction>
@@ -59,6 +60,11 @@ public:
   void drawControl(ControlElement element, const QStyleOption *option,
                    QPainter *painter,
                    const QWidget *widget = nullptr) const override {
+    if (element != CE_ToolBar &&
+        qt_draw_application_control(element, option, painter, *this,
+                                    scaled_metrics_style_.metrics(), widget)) {
+      return;
+    }
     QProxyStyle::drawControl(element, option, painter, widget);
     if (element != CE_ToolBar || option == nullptr || painter == nullptr) {
       return;
@@ -94,6 +100,10 @@ public:
   void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
                      QPainter *painter,
                      const QWidget *widget = nullptr) const override {
+    if (qt_draw_application_primitive(element, option, painter, *this,
+                                      scaled_metrics_style_.metrics(), widget)) {
+      return;
+    }
     if (element == PE_IndicatorToolBarSeparator && option != nullptr &&
         painter != nullptr) {
       const qreal device_pixel_ratio =
@@ -172,6 +182,17 @@ public:
                                                              -1.5),
                              1.0, 1.0);
     painter->restore();
+  }
+
+  void drawComplexControl(ComplexControl control,
+                          const QStyleOptionComplex *option,
+                          QPainter *painter,
+                          const QWidget *widget = nullptr) const override {
+    if (!qt_draw_application_complex_control(
+            control, option, painter, *this, scaled_metrics_style_.metrics(),
+            widget)) {
+      QProxyStyle::drawComplexControl(control, option, painter, widget);
+    }
   }
 
 private:

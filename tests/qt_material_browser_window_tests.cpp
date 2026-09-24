@@ -44,7 +44,6 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPointer>
-#include <QProxyStyle>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -131,27 +130,17 @@ ProjectAssetId required_project_id(std::string_view text) {
   return parsed.value_or(ProjectAssetId{});
 }
 
-class PaletteBrowserIconStyle final : public QProxyStyle {
-public:
-  PaletteBrowserIconStyle() : QProxyStyle(QStringLiteral("fusion")) {}
-
-  QIcon standardIcon(StandardPixmap standard_pixmap,
-                     const QStyleOption *option,
-                     const QWidget *widget) const override {
-    if (standard_pixmap == SP_FileDialogListView ||
-        standard_pixmap == SP_FileDialogDetailedView) {
-      const QPalette palette =
-          widget != nullptr ? widget->palette() : QApplication::palette();
-      QPixmap pixmap(16, 16);
-      pixmap.fill(palette.color(QPalette::ButtonText));
-      return QIcon(pixmap);
+QColor icon_stroke_color(const QIcon &icon) {
+  const QImage image = icon.pixmap(QSize(96, 96)).toImage();
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor pixel = image.pixelColor(x, y);
+      if (pixel.alpha() == 255) {
+        return pixel;
+      }
     }
-    return QProxyStyle::standardIcon(standard_pixmap, option, widget);
   }
-};
-
-QColor icon_center_color(const QIcon &icon) {
-  return icon.pixmap(QSize(16, 16)).toImage().pixelColor(8, 8);
+  return {};
 }
 
 QTreeWidgetItem *folder_item(QTreeWidget &tree, const QString &path) {
@@ -286,31 +275,54 @@ void expect_regions_equal(const QImage &actual, const QImage &expected,
 }
 
 TEST(QtMaterialBrowserWindowTests,
-     FilterIconResourceRetainsVisibleAndTransparentRgbaPixels) {
+     ChromeGlyphsStayMonochromeTransparentAndScalableAcrossNativeModes) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char name[] = "quader-material-filter-icon-tests";
   char *argv[] = {name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  QApplication::setPalette(qt_obsidian_application_palette(
+      QApplication::style()->standardPalette()));
+  QtMaterialBrowserWindow browser(nullptr, QtMaterialBrowserHost::Embedded);
 
-  const QImage icon(QStringLiteral(":/quader/icons/material_filter.png"));
-  ASSERT_FALSE(icon.isNull())
-      << "the material-browser filter icon must be registered as a Qt resource";
-  EXPECT_TRUE(icon.hasAlphaChannel());
-
-  bool has_transparent_pixel = false;
-  bool has_visible_pixel = false;
-  for (int y = 0; y < icon.height(); ++y) {
-    for (int x = 0; x < icon.width(); ++x) {
-      const int alpha = icon.pixelColor(x, y).alpha();
-      has_transparent_pixel = has_transparent_pixel || alpha == 0;
-      has_visible_pixel = has_visible_pixel || alpha > 0;
+  for (const auto *name : {"folders", "grid", "list", "filter", "importTool",
+                             "thumbnailSize"}) {
+    SCOPED_TRACE(name);
+    const auto *button = browser.findChild<QToolButton *>(
+        QStringLiteral("materialBrowser.") + QString::fromLatin1(name));
+    ASSERT_NE(button, nullptr);
+    EXPECT_EQ(icon_stroke_color(button->icon()),
+              browser.palette().color(QPalette::ButtonText));
+    for (const auto mode : {QIcon::Normal, QIcon::Disabled, QIcon::Selected}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      const QImage image =
+          button->icon().pixmap(QSize(20, 20), 2.0, mode).toImage();
+      ASSERT_FALSE(image.isNull());
+      EXPECT_EQ(image.size(), QSize(40, 40));
+      EXPECT_DOUBLE_EQ(image.devicePixelRatio(), 2.0);
+      bool visible = false;
+      bool transparent = false;
+      for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+          const int alpha = image.pixelColor(x, y).alpha();
+          visible = visible || alpha > 0;
+          transparent = transparent || alpha == 0;
+        }
+      }
+      EXPECT_TRUE(visible);
+      EXPECT_TRUE(transparent);
     }
+    EXPECT_NE(button->icon().pixmap(QSize(20, 20), QIcon::Normal).toImage(),
+              button->icon().pixmap(QSize(20, 20), QIcon::Disabled).toImage());
   }
-  EXPECT_TRUE(has_transparent_pixel)
-      << "the generated asset must keep a genuinely transparent background";
-  EXPECT_TRUE(has_visible_pixel);
+  auto *tree = browser.findChild<QTreeWidget *>(
+      QStringLiteral("materialBrowser.folderTree"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_NE(tree->topLevelItem(0), nullptr);
+  EXPECT_EQ(icon_stroke_color(tree->topLevelItem(0)->icon(0)),
+            browser.palette().color(QPalette::Text));
 }
 
 TEST(QtMaterialBrowserWindowTests,
@@ -320,9 +332,10 @@ TEST(QtMaterialBrowserWindowTests,
   char name[] = "quader-material-browser-layout-tests";
   char *argv[] = {name, nullptr};
   QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  apply_qt_obsidian_application_theme(
+      QApplication::style()->standardPalette());
   QtUiScaleApplicationController scale_controller(application);
-  QApplication::setPalette(qt_obsidian_application_palette(
-      QApplication::style()->standardPalette()));
   const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
   if (!directory.isEmpty()) {
     ASSERT_TRUE(QDir().mkpath(directory));
@@ -2790,7 +2803,7 @@ TEST(QtMaterialBrowserWindowTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
-  application.setStyle(new PaletteBrowserIconStyle());
+  QApplication::setStyle(QStringLiteral("Fusion"));
 
   QPalette palette = QApplication::palette();
   const QColor initial_color(211, 37, 53);
@@ -2810,8 +2823,8 @@ TEST(QtMaterialBrowserWindowTests,
   const qint64 initial_grid_key = grid->icon().cacheKey();
   const qint64 initial_list_key = list->icon().cacheKey();
   const int retained_tile_size = tile_size->value();
-  EXPECT_EQ(icon_center_color(grid->icon()), initial_color);
-  EXPECT_EQ(icon_center_color(list->icon()), initial_color);
+  EXPECT_EQ(icon_stroke_color(grid->icon()), initial_color);
+  EXPECT_EQ(icon_stroke_color(list->icon()), initial_color);
 
   const QColor application_color(29, 197, 83);
   palette.setColor(QPalette::ButtonText, application_color);
@@ -2821,8 +2834,8 @@ TEST(QtMaterialBrowserWindowTests,
   const qint64 application_list_key = list->icon().cacheKey();
   EXPECT_NE(application_grid_key, initial_grid_key);
   EXPECT_NE(application_list_key, initial_list_key);
-  EXPECT_EQ(icon_center_color(grid->icon()), application_color);
-  EXPECT_EQ(icon_center_color(list->icon()), application_color);
+  EXPECT_EQ(icon_stroke_color(grid->icon()), application_color);
+  EXPECT_EQ(icon_stroke_color(list->icon()), application_color);
   EXPECT_EQ(tile_size->value(), retained_tile_size);
 
   const QColor local_color(37, 89, 223);
@@ -2831,8 +2844,8 @@ TEST(QtMaterialBrowserWindowTests,
   QCoreApplication::processEvents();
   EXPECT_NE(grid->icon().cacheKey(), application_grid_key);
   EXPECT_NE(list->icon().cacheKey(), application_list_key);
-  EXPECT_EQ(icon_center_color(grid->icon()), local_color);
-  EXPECT_EQ(icon_center_color(list->icon()), local_color);
+  EXPECT_EQ(icon_stroke_color(grid->icon()), local_color);
+  EXPECT_EQ(icon_stroke_color(list->icon()), local_color);
   EXPECT_EQ(tile_size->value(), retained_tile_size);
 }
 

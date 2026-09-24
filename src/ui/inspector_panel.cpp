@@ -42,6 +42,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPalette>
 #include <QPen>
 #include <QPersistentModelIndex>
@@ -88,6 +89,7 @@ constexpr float kInspectorLightRangeMax = 100.0f;
 constexpr int kInspectorMinimumValueColumnWidth = 96;
 constexpr int kInspectorAxisRowPaddingRole = Qt::UserRole + 1;
 constexpr int kInspectorPropertyInsetRole = Qt::UserRole + 2;
+constexpr int kInspectorAxisRowSpacingRole = Qt::UserRole + 3;
 constexpr int kInspectorMaterialPreviewSize = 56;
 constexpr int kInspectorMaterialActionSize = 24;
 constexpr int kInspectorMaterialActionIconSize = 16;
@@ -387,26 +389,102 @@ public:
       return;
     }
     QStyleOptionViewItem styled(option);
-    styled.backgroundBrush = option.palette.window();
     painter->save();
-    painter->fillRect(option.rect, styled.backgroundBrush);
     if (!index.parent().isValid() && index.model()->hasChildren(index)) {
       // The retained native button owns the complete section-header surface.
+      painter->fillRect(option.rect, option.palette.window());
       painter->restore();
       return;
     }
+    styled.backgroundBrush = index.parent().isValid()
+                                 ? option.palette.alternateBase()
+                                 : option.palette.window();
+    painter->fillRect(option.rect, styled.backgroundBrush);
     if (index.column() == 0) {
       styled.rect.setLeft(option.rect.left() +
                           index.data(kInspectorPropertyInsetRole).toInt());
+      for (const QPalette::ColorGroup group :
+           {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+        styled.palette.setColor(
+            group, QPalette::Text,
+            option.palette.color(group, QPalette::WindowText));
+      }
       const int axis_row_padding =
           index.data(kInspectorAxisRowPaddingRole).toInt();
       if (axis_row_padding > 0) {
-        styled.rect.setHeight((option.rect.height() + axis_row_padding) / 3);
+        const int axis_row_spacing =
+            index.data(kInspectorAxisRowSpacingRole).toInt();
+        styled.rect.setTop(option.rect.top() + axis_row_padding);
+        styled.rect.setHeight((option.rect.height() - 2 * axis_row_padding -
+                               2 * axis_row_spacing) /
+                              3);
       }
     }
     QStyledItemDelegate::paint(painter, styled, index);
     painter->restore();
   }
+};
+
+/// Draws a common boundary around each retained header and its property rows.
+class InspectorPropertyTree final : public QTreeWidget {
+public:
+  using QTreeWidget::QTreeWidget;
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) { metrics_ = metrics; }
+
+protected:
+  void paintEvent(QPaintEvent *event) override {
+    QTreeWidget::paintEvent(event);
+    QPainter painter(viewport());
+    painter.setRenderHint(QPainter::Antialiasing);
+    const qreal stroke = 1.0 / std::max<qreal>(1.0, devicePixelRatioF());
+    painter.setPen(QPen(palette().color(QPalette::Mid), stroke));
+    painter.setBrush(Qt::NoBrush);
+    const qreal radius = metrics_.px(6.0);
+    for (int index = 0; index < topLevelItemCount(); ++index) {
+      QTreeWidgetItem *item = topLevelItem(index);
+      if (item->isHidden()) {
+        continue;
+      }
+      const auto *header =
+          dynamic_cast<QtPanelSectionHeader *>(itemWidget(item, 0));
+      if (header == nullptr) {
+        continue;
+      }
+      QRect bounds = visualItemRect(item);
+      bounds.setTop(bounds.top() + header->content_rect().top());
+      if (item->isExpanded()) {
+        for (int child_index = item->childCount() - 1; child_index >= 0;
+             --child_index) {
+          if (!item->child(child_index)->isHidden()) {
+            bounds.setBottom(visualItemRect(item->child(child_index)).bottom());
+            break;
+          }
+        }
+      }
+      bounds.setLeft(0);
+      bounds.setRight(viewport()->rect().right());
+      if (!bounds.intersects(viewport()->rect())) {
+        continue;
+      }
+      const QRectF outline = QRectF(bounds).adjusted(
+          stroke * 0.5, stroke * 0.5, -stroke * 0.5, -stroke * 0.5);
+      QPainterPath section_surface;
+      section_surface.addRoundedRect(outline, radius, radius);
+      QPainterPath outer_corners;
+      outer_corners.addRect(bounds);
+      painter.fillPath(outer_corners.subtracted(section_surface),
+                       palette().window());
+      painter.save();
+      painter.setClipRect(visualItemRect(item), Qt::IntersectClip);
+      painter.fillPath(section_surface, palette().alternateBase());
+      painter.restore();
+      painter.drawRoundedRect(outline, radius, radius);
+    }
+  }
+
+private:
+  QtUiScaleMetrics metrics_;
 };
 
 /// Identifies which transform component an inspector preview edits.
@@ -488,15 +566,16 @@ struct InspectorPanel::Impl {
 
     auto *root_layout = new QVBoxLayout(&panel_);
     root_layout->setObjectName(QStringLiteral("inspector.layout"));
-    root_layout->setContentsMargins(0, 0, 0, 0);
+    root_layout->setContentsMargins(8, 8, 8, 8);
 
-    tree_ = new QTreeWidget(&panel_);
+    tree_ = new InspectorPropertyTree(&panel_);
     tree_->setObjectName(QStringLiteral("inspector.tree"));
     tree_->setColumnCount(2);
     tree_->setRootIsDecorated(false);
     tree_->setItemsExpandable(true);
     tree_->setAlternatingRowColors(false);
     tree_->setIndentation(0);
+    tree_->setFrameShape(QFrame::NoFrame);
     tree_->viewport()->setBackgroundRole(QPalette::Window);
     tree_->setUniformRowHeights(false);
     tree_->setWordWrap(false);
@@ -759,7 +838,7 @@ struct InspectorPanel::Impl {
     for (MaterialRow &row : material_rows_) {
       row.item->setSizeHint(
           0, QSize(0, metrics.px(kInspectorMaterialPreviewSize + 8)));
-      row.layout->setContentsMargins(metrics.margins(QMargins(4, 4, 4, 4)));
+      row.layout->setContentsMargins(metrics.margins(QMargins(8, 4, 8, 4)));
       row.layout->setSpacing(metrics.px(6));
       row.preview->setFixedSize(preview_size);
       row.edit->setFixedSize(action_size);
@@ -842,19 +921,24 @@ private:
   }
 
   void update_property_layout_metrics() {
+    panel_.layout()->setContentsMargins(ui_scale_metrics_.margins(
+        QMargins(8, 8, 8, 8)));
+    tree_->apply_ui_scale(ui_scale_metrics_);
     scaled_default_label_column_width_ = scaled_px(140);
     for (PropertyRow &row : property_rows_) {
-      row.layout->setContentsMargins(scaled_px(6), scaled_px(3),
-                                     scaled_px(6), scaled_px(3));
+      const int vertical_padding = scaled_px(row.axes != nullptr ? 5 : 4);
+      row.layout->setContentsMargins(scaled_px(8), vertical_padding,
+                                     scaled_px(8), vertical_padding);
       scaled_default_label_column_width_ = std::max(
           scaled_default_label_column_width_,
           tree_->fontMetrics().horizontalAdvance(row.item->text(0)) +
-              scaled_px(36));
-      row.item->setData(0, kInspectorPropertyInsetRole, scaled_px(24));
+              scaled_px(28));
+      row.item->setData(0, kInspectorPropertyInsetRole, scaled_px(16));
       if (row.axes != nullptr) {
         row.axes->setHorizontalSpacing(scaled_px(6));
         row.axes->setVerticalSpacing(scaled_px(3));
-        row.item->setData(0, kInspectorAxisRowPaddingRole, scaled_px(6));
+        row.item->setData(0, kInspectorAxisRowPaddingRole, vertical_padding);
+        row.item->setData(0, kInspectorAxisRowSpacingRole, scaled_px(3));
       }
     }
     for (const SectionHeader &header : section_headers_) {
@@ -1152,6 +1236,7 @@ private:
     header->setAccessibleName(title);
     header->setChecked(state->second);
     header->setArrowType(state->second ? Qt::DownArrow : Qt::RightArrow);
+    header->set_leading_spacing(section_headers_.empty() ? 0 : 8);
     tree_->setItemWidget(item, 0, header);
     section_headers_.push_back({item, header});
     const QPersistentModelIndex index(tree_->indexFromItem(item));
@@ -1179,12 +1264,12 @@ private:
 
     auto *container = new QWidget(section.editor_parent);
     container->setObjectName(stable_name(stable_id) + QStringLiteral(".container"));
-    container->setAutoFillBackground(true);
-    container->setBackgroundRole(QPalette::Window);
+    container->setAutoFillBackground(false);
     auto *layout = new QVBoxLayout(container);
     layout->setSpacing(0);
-    layout->setContentsMargins(scaled_px(6), scaled_px(3),
-                               scaled_px(6), scaled_px(3));
+    const int vertical_padding = scaled_px(axes != nullptr ? 5 : 4);
+    layout->setContentsMargins(scaled_px(8), vertical_padding,
+                               scaled_px(8), vertical_padding);
     field->setMinimumWidth(0);
     QSizePolicy policy = field->sizePolicy();
     policy.setHorizontalPolicy(QSizePolicy::Ignored);
@@ -1240,7 +1325,7 @@ private:
       auto *row = new QWidget(section.editor_parent);
       row->setObjectName(stable_name(stable_id + ".row"));
       auto *layout = new QHBoxLayout(row);
-      layout->setContentsMargins(scaled_px(4), scaled_px(4), scaled_px(4),
+      layout->setContentsMargins(scaled_px(8), scaled_px(4), scaled_px(8),
                                  scaled_px(4));
       layout->setSpacing(scaled_px(6));
 
@@ -2424,7 +2509,7 @@ private:
   }
 
   InspectorPanel &panel_;
-  QTreeWidget *tree_ = nullptr;
+  InspectorPropertyTree *tree_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   const SceneDocument *document_ = nullptr;
   const ModelingSessionService *modeling_ = nullptr;

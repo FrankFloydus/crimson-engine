@@ -42,6 +42,7 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPointer>
 #include <QPushButton>
 #include <QScopedValueRollback>
@@ -83,6 +84,97 @@ constexpr auto kFolderDragMime = "application/x-quader-material-browser-folder";
 constexpr int kFolderPathRole = Qt::UserRole;
 constexpr std::uint64_t kPreviewIconCacheBudgetBytes =
     96ULL * 1024ULL * 1024ULL;
+
+enum class MaterialBrowserGlyph { Folder, Root, Grid, List, Filter, Import, Size };
+
+QIcon material_browser_icon(MaterialBrowserGlyph glyph, const QPalette &palette,
+                             QPalette::ColorRole role = QPalette::ButtonText) {
+  QImage source(96, 96, QImage::Format_ARGB32_Premultiplied);
+  source.fill(Qt::transparent);
+  QPainter painter(&source);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.scale(4.0, 4.0);
+  QPen pen(palette.color(role), 1.6);
+  pen.setCapStyle(Qt::RoundCap);
+  pen.setJoinStyle(Qt::RoundJoin);
+  painter.setPen(pen);
+  painter.setBrush(Qt::NoBrush);
+  QPainterPath path;
+  switch (glyph) {
+  case MaterialBrowserGlyph::Folder:
+    path.moveTo(3.0, 7.0);
+    path.quadTo(3.0, 5.0, 5.0, 5.0);
+    path.lineTo(9.0, 5.0);
+    path.lineTo(12.0, 8.0);
+    path.lineTo(19.0, 8.0);
+    path.quadTo(21.0, 8.0, 21.0, 10.0);
+    path.lineTo(21.0, 18.0);
+    path.quadTo(21.0, 20.0, 19.0, 20.0);
+    path.lineTo(5.0, 20.0);
+    path.quadTo(3.0, 20.0, 3.0, 18.0);
+    path.closeSubpath();
+    break;
+  case MaterialBrowserGlyph::Root:
+    path.moveTo(3.0, 11.0);
+    path.lineTo(12.0, 3.0);
+    path.lineTo(21.0, 11.0);
+    path.moveTo(5.0, 10.0);
+    path.lineTo(5.0, 20.0);
+    path.lineTo(19.0, 20.0);
+    path.lineTo(19.0, 10.0);
+    path.moveTo(10.0, 20.0);
+    path.lineTo(10.0, 14.0);
+    path.lineTo(14.0, 14.0);
+    path.lineTo(14.0, 20.0);
+    break;
+  case MaterialBrowserGlyph::Grid:
+    for (const qreal y : {4.0, 14.0}) {
+      for (const qreal x : {4.0, 14.0}) {
+        path.addRoundedRect(QRectF(x, y, 6.0, 6.0), 1.0, 1.0);
+      }
+    }
+    break;
+  case MaterialBrowserGlyph::List:
+    for (const qreal y : {5.0, 12.0, 19.0}) {
+      path.moveTo(4.0, y);
+      path.lineTo(5.0, y);
+      path.moveTo(9.0, y);
+      path.lineTo(20.0, y);
+    }
+    break;
+  case MaterialBrowserGlyph::Filter:
+    path.moveTo(3.0, 4.0);
+    path.lineTo(21.0, 4.0);
+    path.lineTo(14.0, 12.0);
+    path.lineTo(14.0, 19.0);
+    path.lineTo(10.0, 21.0);
+    path.lineTo(10.0, 12.0);
+    path.closeSubpath();
+    break;
+  case MaterialBrowserGlyph::Import:
+    path.moveTo(3.0, 16.0);
+    path.lineTo(3.0, 21.0);
+    path.lineTo(21.0, 21.0);
+    path.lineTo(21.0, 16.0);
+    path.moveTo(12.0, 3.0);
+    path.lineTo(12.0, 15.0);
+    path.moveTo(8.0, 11.0);
+    path.lineTo(12.0, 15.0);
+    path.lineTo(16.0, 11.0);
+    break;
+  case MaterialBrowserGlyph::Size:
+    path.addRoundedRect(QRectF(3.0, 3.0, 18.0, 18.0), 2.0, 2.0);
+    path.moveTo(7.0, 17.0);
+    path.lineTo(17.0, 7.0);
+    path.lineTo(12.0, 7.0);
+    path.moveTo(17.0, 7.0);
+    path.lineTo(17.0, 12.0);
+    break;
+  }
+  painter.drawPath(path);
+  painter.end();
+  return qt_multiresolution_icon(source);
+}
 
 /// Keeps folder rows comfortably aligned with the other native panel lists.
 class MaterialFolderDelegate final : public QStyledItemDelegate {
@@ -847,7 +939,8 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   folders_button_->setToolButtonStyle(
       host_ == QtMaterialBrowserHost::Embedded ? Qt::ToolButtonIconOnly
                                               : Qt::ToolButtonTextBesideIcon);
-  folders_button_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+  folders_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Folder,
+                                                   palette()));
   toolbar->addWidget(folders_button_);
   search_ = new QLineEdit(central_widget);
   search_->setObjectName(QStringLiteral("materialBrowser.search"));
@@ -862,8 +955,8 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   filter_button_->setAutoRaise(true);
   filter_button_->setFocusPolicy(Qt::StrongFocus);
   filter_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-  filter_button_->setIcon(
-      QIcon(QStringLiteral(":/quader/icons/material_filter.png")));
+  filter_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Filter,
+                                                  palette()));
   filter_button_->setIconSize(QSize(20, 20));
   filter_button_->setFixedSize(QSize(28, 28));
   toolbar->addWidget(filter_button_);
@@ -907,8 +1000,8 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
     import_tool_button_->setObjectName(QStringLiteral("materialBrowser.importTool"));
     import_tool_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
     import_tool_button_->setAutoRaise(true);
-    import_tool_button_->setIcon(
-        QIcon(QStringLiteral(":/quader/icons/material_import.png")));
+    import_tool_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Import,
+                                                         palette()));
     import_tool_button_->setIconSize(QSize(20, 20));
     import_tool_button_->setFixedSize(QSize(28, 28));
     toolbar->addWidget(import_tool_button_);
@@ -916,8 +1009,8 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
     thumbnail_size_button_->setObjectName(QStringLiteral("materialBrowser.thumbnailSize"));
     thumbnail_size_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
     thumbnail_size_button_->setAutoRaise(true);
-    thumbnail_size_button_->setIcon(
-        QIcon(QStringLiteral(":/quader/icons/material_thumbnail_size.png")));
+    thumbnail_size_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Size,
+                                                            palette()));
     thumbnail_size_button_->setIconSize(QSize(20, 20));
     thumbnail_size_button_->setFixedSize(QSize(28, 28));
     toolbar->addWidget(thumbnail_size_button_);
@@ -1807,32 +1900,37 @@ bool QtMaterialBrowserWindow::eventFilter(QObject *watched, QEvent *event) {
 
 void QtMaterialBrowserWindow::refresh_view_mode_icons() {
   if (filter_button_ != nullptr) {
-    filter_button_->setIcon(
-        QIcon(QStringLiteral(":/quader/icons/material_filter.png")));
+    filter_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Filter,
+                                                    palette()));
   }
   if (import_tool_button_ != nullptr) {
-    import_tool_button_->setIcon(
-        QIcon(QStringLiteral(":/quader/icons/material_import.png")));
-    thumbnail_size_button_->setIcon(
-        QIcon(QStringLiteral(":/quader/icons/material_thumbnail_size.png")));
+    import_tool_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Import,
+                                                         palette()));
+    thumbnail_size_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Size,
+                                                            palette()));
   }
   refresh_usage_badge_style();
   if (grid_button_ != nullptr) {
-    grid_button_->setIcon(style()->standardIcon(
-        QStyle::SP_FileDialogListView, nullptr, this));
+    grid_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Grid,
+                                                 palette()));
   }
   if (list_button_ != nullptr) {
-    list_button_->setIcon(style()->standardIcon(
-        QStyle::SP_FileDialogDetailedView, nullptr, this));
+    list_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::List,
+                                                 palette()));
   }
   if (folders_button_ != nullptr) {
-    folders_button_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+    folders_button_->setIcon(material_browser_icon(MaterialBrowserGlyph::Folder,
+                                                    palette()));
   }
   if (folder_tree_ != nullptr) {
+    const QIcon root = material_browser_icon(MaterialBrowserGlyph::Root,
+                                              palette(), QPalette::Text);
+    const QIcon folder = material_browser_icon(MaterialBrowserGlyph::Folder,
+                                                palette(), QPalette::Text);
     for (QTreeWidgetItemIterator it(folder_tree_); *it != nullptr; ++it) {
-      (*it)->setIcon(0, style()->standardIcon(
+      (*it)->setIcon(0,
           (*it)->data(0, kFolderPathRole).toString() == QStringLiteral("Materials")
-              ? QStyle::SP_DirHomeIcon : QStyle::SP_DirIcon));
+              ? root : folder);
     }
   }
 }
@@ -2103,10 +2201,13 @@ void QtMaterialBrowserWindow::rebuild_folder_tree() {
   {
     const QSignalBlocker blocker(folder_tree_);
     folder_tree_->clear();
+    const QIcon folder_icon = material_browser_icon(MaterialBrowserGlyph::Folder,
+                                                     palette(), QPalette::Text);
     auto *all = new QTreeWidgetItem(folder_tree_, {labels_.all});
     all->setData(0, kFolderPathRole, QStringLiteral("Materials"));
     all->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDropEnabled);
-    all->setIcon(0, style()->standardIcon(QStyle::SP_DirHomeIcon));
+    all->setIcon(0, material_browser_icon(MaterialBrowserGlyph::Root,
+                                          palette(), QPalette::Text));
     std::map<QString, QTreeWidgetItem *> nodes;
     for (const QString &path : sorted) {
       const qsizetype separator = path.lastIndexOf(QLatin1Char('/'));
@@ -2124,7 +2225,7 @@ void QtMaterialBrowserWindow::rebuild_folder_tree() {
       }
       item->setData(0, kFolderPathRole, path);
       item->setToolTip(0, path);
-      item->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+      item->setIcon(0, folder_icon);
       item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                      Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);
       item->setExpanded(expanded.contains(path));

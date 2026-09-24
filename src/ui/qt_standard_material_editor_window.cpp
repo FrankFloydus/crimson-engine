@@ -351,7 +351,7 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   auto *properties_layout = new QVBoxLayout(properties_content);
   qt_settings_detail::set_scalable_margins(*properties_layout,
                                          QMargins(0, 0, 0, 0));
-  qt_settings_detail::set_scalable_spacing(*properties_layout, 6);
+  qt_settings_detail::set_scalable_spacing(*properties_layout, 10);
   properties_group_ = new qt_settings_detail::QtSettingsSection(
       QStringLiteral("standardMaterialEditor.properties"), properties_content);
   auto *form = new QFormLayout(properties_group_->content());

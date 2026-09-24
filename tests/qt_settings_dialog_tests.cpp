@@ -970,8 +970,9 @@ TEST(QtSettingsDialogTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  apply_qt_obsidian_application_theme(application.palette());
   QtUiScaleApplicationController scale_controller(application);
-  application.setPalette(qt_obsidian_application_palette(application.palette()));
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -1028,9 +1029,16 @@ TEST(QtSettingsDialogTests,
           auto *section_header = section->findChild<QToolButton *>(
               section->objectName() + QStringLiteral(".header"));
           ASSERT_NE(section_header, nullptr);
-          EXPECT_EQ(section_header->width(), section->width());
+          const int section_inset = scale_controller.metrics().px(1);
+          EXPECT_EQ(section_header->width(),
+                    section->width() - 2 * section_inset);
+          EXPECT_EQ(section_header->mapTo(section, QPoint()),
+                    QPoint(section_inset, section_inset));
+          EXPECT_EQ(section_header->geometry().left(),
+                    section->content()->geometry().left());
+          EXPECT_EQ(section_header->width(), section->content()->width());
           EXPECT_GE(section_header->height(),
-                    scale_controller.metrics().px(26));
+                    scale_controller.metrics().px(30));
           auto *form = qobject_cast<QFormLayout *>(section->content()->layout());
           ASSERT_NE(form, nullptr);
           for (int row = 0; row < form->rowCount(); ++row) {

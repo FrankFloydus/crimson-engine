@@ -182,9 +182,10 @@ TEST(LayerPanelTests, ScaledRowsCenterAndRetainControlsAndSelection) {
   char application_name[] = "quader-layer-panel-layout-tests";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(
+      QApplication::style()->standardPalette());
   quader::QtUiScaleApplicationController scale_controller(application);
-  QApplication::setPalette(quader::qt_obsidian_application_palette(
-      QApplication::style()->standardPalette()));
 
   quader::SceneSession session;
   quader::QuaderEditorApi editor(

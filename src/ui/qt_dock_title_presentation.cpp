@@ -272,7 +272,7 @@ QDockWidget::title {
   background-color: %1;
   color: %2;
   border-bottom: 1px solid %3;
-  padding: 0 %10px;
+  padding: %13px %10px;
   text-align: left;
 }
 QDockWidget::title:active {
@@ -284,6 +284,7 @@ QDockWidget::close-button,
 QDockWidget::float-button {
   background-color: %7;
   border: 1px solid transparent;
+  border-radius: %14px;
   padding: 0;
   width: %11px;
   height: %11px;
@@ -291,8 +292,8 @@ QDockWidget::float-button {
 }
 QDockWidget::close-button:hover,
 QDockWidget::float-button:hover {
-  background-color: %7;
-  border-color: %8;
+  background-color: %9;
+  border-color: %6;
 }
 QDockWidget::close-button:pressed,
 QDockWidget::float-button:pressed {
@@ -309,9 +310,11 @@ QDockWidget::float-button:pressed {
       .arg(button_background)
       .arg(accent)
       .arg(pressed_background)
-      .arg(metrics.px(4))
+      .arg(metrics.px(8))
+      .arg(metrics.px(22))
       .arg(metrics.px(18))
-      .arg(metrics.px(24));
+      .arg(metrics.px(2))
+      .arg(metrics.px(4));
 }
 
 void install_palette_aware_dock_title_presentation(QDockWidget &dock) {

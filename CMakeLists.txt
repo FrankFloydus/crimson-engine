@@ -967,6 +967,8 @@ add_library(quader_ui STATIC
     src/ui/qt_face_texture_controls.cpp
     src/ui/qt_application_cursor.cpp
     src/ui/qt_application_theme.cpp
+    src/ui/qt_application_style.cpp
+    src/ui/qt_application_style.hpp
     src/ui/qt_command_event_filter.cpp
     src/ui/qt_command_palette.cpp
     src/ui/qt_color_swatch_button.cpp
@@ -1655,6 +1657,7 @@ if(QUADER_BUILD_TESTS)
         tests/ui_panel_manager_tests.cpp
         tests/qt_auxiliary_window_state_tests.cpp
         tests/qt_application_theme_tests.cpp
+        tests/qt_application_style_tests.cpp
         tests/qt_command_event_filter_tests.cpp
         tests/qt_command_palette_tests.cpp
         tests/qt_input_adapter_tests.cpp

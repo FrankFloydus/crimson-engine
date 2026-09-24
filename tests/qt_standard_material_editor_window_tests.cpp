@@ -1376,8 +1376,7 @@ TEST(QtStandardMaterialEditorWindowTests,
   char *argv[] = {executable, nullptr};
   QApplication application(argc, argv);
   QApplication::setStyle(QStringLiteral("Fusion"));
-  application.setPalette(
-      qt_obsidian_application_palette(application.palette()));
+  apply_qt_obsidian_application_theme(application.style()->standardPalette());
   QtUiScaleApplicationController scale_controller(application);
   QtStandardMaterialEditorWindow window;
   window.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -1443,12 +1442,17 @@ TEST(QtStandardMaterialEditorWindowTests,
     scale_controller.apply_factor(scale);
     window.resize(scale_controller.metrics().size(QSize(1040, 820)));
     settle_layout();
-    EXPECT_EQ(material_header->width(), properties->width());
-    EXPECT_EQ(transform_header->width(), transform->width());
-    EXPECT_EQ(material_header->mapTo(properties, QPoint()).x(), 0);
-    EXPECT_EQ(transform_header->mapTo(transform, QPoint()).x(), 0);
+    const int section_inset = scale_controller.metrics().px(1);
+    EXPECT_EQ(material_header->width(),
+              properties->width() - 2 * section_inset);
+    EXPECT_EQ(transform_header->width(),
+              transform->width() - 2 * section_inset);
+    EXPECT_EQ(material_header->mapTo(properties, QPoint()),
+              QPoint(section_inset, section_inset));
+    EXPECT_EQ(transform_header->mapTo(transform, QPoint()),
+              QPoint(section_inset, section_inset));
     EXPECT_EQ(material_header->height(), transform_header->height());
-    EXPECT_GE(material_header->height(), scale_controller.metrics().px(26));
+    EXPECT_GE(material_header->height(), scale_controller.metrics().px(30));
     const int field_left = name->mapTo(scroll->widget(), QPoint()).x();
     EXPECT_EQ(roughness->mapTo(scroll->widget(), QPoint()).x(), field_left);
     EXPECT_EQ(scale_u->mapTo(scroll->widget(), QPoint()).x(), field_left);

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/qt_application_style.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QEvent>
@@ -24,8 +25,8 @@ class QtPanelSectionHeader final : public QToolButton {
 public:
   explicit QtPanelSectionHeader(QWidget *parent = nullptr) : QToolButton(parent) {
     setAutoRaise(true);
-    setAutoFillBackground(true);
-    setBackgroundRole(QPalette::Button);
+    setAutoFillBackground(false);
+    setBackgroundRole(QPalette::Window);
     setCheckable(true);
     setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     // The host settles drafts before giving a mouse-clicked header focus.
@@ -38,6 +39,31 @@ public:
     metrics_ = metrics;
     update_metrics();
   }
+
+  void set_leading_spacing(int design_pixels) {
+    const int spacing = std::max(0, design_pixels);
+    if (leading_spacing_ != spacing) {
+      leading_spacing_ = spacing;
+      update_metrics();
+      update();
+    }
+  }
+
+  [[nodiscard]] int leading_spacing() const { return leading_spacing_; }
+
+  [[nodiscard]] QRect content_rect() const {
+    return rect().adjusted(0, metrics_.px(leading_spacing_), 0, 0);
+  }
+
+  QSize sizeHint() const override {
+    QSize hint = QToolButton::sizeHint();
+    hint.rwidth() += metrics_.px(16);
+    hint.setHeight(std::max(hint.height(), header_height()) +
+                   metrics_.px(leading_spacing_));
+    return hint;
+  }
+
+  QSize minimumSizeHint() const override { return sizeHint(); }
 
 protected:
   void changeEvent(QEvent *event) override {
@@ -56,20 +82,73 @@ protected:
     if (!isDown()) {
       option.state |= QStyle::State_Raised;
     }
-    option.font.setBold(true);
+    option.font.setWeight(QFont::DemiBold);
     option.fontMetrics = QFontMetrics(option.font);
+    option.rect = content_rect();
+    for (const QPalette::ColorGroup group :
+         {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+      option.palette.setColor(group, QPalette::ButtonText,
+                              option.palette.color(group, QPalette::Text));
+    }
     QStylePainter painter(this);
     painter.setFont(option.font);
-    painter.drawComplexControl(QStyle::CC_ToolButton, option);
-    if (hasFocus()) {
-      QStyleOptionFocusRect focus;
-      focus.initFrom(this);
-      focus.state |= QStyle::State_KeyboardFocusChange;
-      const int inset = metrics_.px(3);
-      focus.rect = rect().adjusted(inset, inset, -inset, -inset);
-      focus.backgroundColor = palette().color(QPalette::Button);
-      painter.drawPrimitive(QStyle::PE_FrameFocusRect, focus);
+    const bool themed = qt_application_style_active(&option);
+    if (themed) {
+      const QPalette::ColorGroup group =
+          isEnabled() ? (isActiveWindow() ? QPalette::Active
+                                         : QPalette::Inactive)
+                      : QPalette::Disabled;
+      QColor fill = palette().color(group, QPalette::AlternateBase);
+      const QColor tint = palette().color(
+          group, isDown() ? QPalette::Shadow : QPalette::WindowText);
+      const qreal amount = isDown() ? 0.16 : (underMouse() ? 0.035 : 0.0);
+      fill = QColor::fromRgbF(
+          fill.redF() + (tint.redF() - fill.redF()) * amount,
+          fill.greenF() + (tint.greenF() - fill.greenF()) * amount,
+          fill.blueF() + (tint.blueF() - fill.blueF()) * amount);
+      // The enclosing section owns its one outline; leave it visible beneath
+      // this child, including the rounded upper corners and the leading gap.
+      const qreal inset = 1.0 / std::max<qreal>(1.0, devicePixelRatioF());
+      const QRectF surface = QRectF(option.rect).adjusted(
+          inset, inset, -inset, -inset);
+      painter.setRenderHint(QPainter::Antialiasing);
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(fill);
+      painter.drawRoundedRect(surface, metrics_.px(6.0), metrics_.px(6.0));
+      option.rect.adjust(metrics_.px(8), 0, -metrics_.px(8), 0);
+      painter.drawControl(QStyle::CE_ToolButtonLabel, option);
+    } else {
+      painter.drawComplexControl(QStyle::CC_ToolButton, option);
     }
+    if (hasFocus()) {
+      if (themed) {
+        const qreal line_width =
+            1.0 / std::max<qreal>(1.0, devicePixelRatioF());
+        const qreal inset = metrics_.px(2.0) + line_width * 0.5;
+        const QRectF focus_rect = QRectF(content_rect()).adjusted(
+            inset, inset, -inset, -inset);
+        const QPalette::ColorGroup group =
+            isActiveWindow() ? QPalette::Active : QPalette::Inactive;
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(palette().color(group, QPalette::Accent),
+                            line_width));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(focus_rect, metrics_.px(4.0),
+                                 metrics_.px(4.0));
+      } else {
+        QStyleOptionFocusRect focus;
+        focus.initFrom(this);
+        focus.state |= QStyle::State_KeyboardFocusChange;
+        const int inset = metrics_.px(3);
+        focus.rect = content_rect().adjusted(inset, inset, -inset, -inset);
+        focus.backgroundColor = palette().color(backgroundRole());
+        painter.drawPrimitive(QStyle::PE_FrameFocusRect, focus);
+      }
+    }
+  }
+
+  bool hitButton(const QPoint &position) const override {
+    return content_rect().contains(position) && QToolButton::hitButton(position);
   }
 
   void keyPressEvent(QKeyEvent *event) override {
@@ -93,19 +172,25 @@ protected:
   }
 
 private:
+  [[nodiscard]] int header_height() const {
+    return std::max(metrics_.px(30),
+                    fontMetrics().height() + metrics_.px(12));
+  }
+
   void update_metrics() {
     const QSize icon_size = metrics_.size(QSize(16, 16));
     if (iconSize() != icon_size) {
       setIconSize(icon_size);
     }
-    const int height = std::max(metrics_.px(26),
-                                fontMetrics().height() + metrics_.px(10));
+    const int height = header_height() + metrics_.px(leading_spacing_);
     if (minimumHeight() != height) {
       setMinimumHeight(height);
     }
+    updateGeometry();
   }
 
   QtUiScaleMetrics metrics_;
+  int leading_spacing_ = 0;
 };
 
 } // namespace quader

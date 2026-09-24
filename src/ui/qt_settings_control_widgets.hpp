@@ -21,6 +21,7 @@
 #include <QPointer>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStyleOptionFrame>
 #include <QToolButton>
 #include <QVariant>
 #include <QVBoxLayout>
@@ -101,24 +102,6 @@ inline void apply_scalable_layout_metrics(QObject &root,
   }
 }
 
-inline void apply_scalable_widget_metrics(QWidget &root,
-                                          const QtUiScaleMetrics &metrics) {
-  const auto apply_minimum_width = [&metrics](QWidget &widget) {
-    if (auto *header = dynamic_cast<QtPanelSectionHeader *>(&widget)) {
-      header->apply_ui_scale(metrics);
-    }
-    const QVariant width = widget.property(kUiScaleMinimumWidthProperty);
-    if (width.isValid()) {
-      widget.setMinimumWidth(metrics.px(width.toInt()));
-    }
-  };
-  apply_minimum_width(root);
-  const QList<QWidget *> widgets = root.findChildren<QWidget *>();
-  for (QWidget *widget : widgets) {
-    apply_minimum_width(*widget);
-  }
-}
-
 /// Keeps one disclosure section expanded/collapsed without rebuilding it.
 class QtSettingsSection final : public QWidget {
 public:
@@ -129,7 +112,7 @@ public:
       : QWidget(parent) {
     setObjectName(stable_name);
     auto *layout = new QVBoxLayout(this);
-    set_scalable_margins(*layout, QMargins(0, 0, 0, 0));
+    set_scalable_margins(*layout, QMargins(1, 1, 1, 1));
     set_scalable_spacing(*layout, 0);
 
     header_ = new QtPanelSectionHeader(this);
@@ -191,7 +174,9 @@ public:
   [[nodiscard]] QWidget *content() const { return content_; }
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    metrics_ = metrics;
     header_->apply_ui_scale(metrics);
+    update();
   }
 
   [[nodiscard]] bool expanded() const { return header_->isChecked(); }
@@ -202,10 +187,57 @@ public:
     }
   }
 
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QStyleOptionFrame option;
+    option.initFrom(this);
+    QStylePainter painter(this);
+    if (!qt_application_style_active(&option)) {
+      option.lineWidth = style()->pixelMetric(QStyle::PM_DefaultFrameWidth,
+                                              &option, this);
+      painter.drawPrimitive(QStyle::PE_FrameGroupBox, option);
+      return;
+    }
+    const QPalette::ColorGroup group =
+        isEnabled() ? (isActiveWindow() ? QPalette::Active
+                                       : QPalette::Inactive)
+                    : QPalette::Disabled;
+    const qreal line_width =
+        1.0 / std::max<qreal>(1.0, devicePixelRatioF());
+    const QRectF bounds = QRectF(rect()).adjusted(
+        line_width * 0.5, line_width * 0.5,
+        -line_width * 0.5, -line_width * 0.5);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(palette().color(group, QPalette::Mid), line_width));
+    painter.setBrush(palette().color(group, QPalette::AlternateBase));
+    painter.drawRoundedRect(bounds, metrics_.px(6.0), metrics_.px(6.0));
+  }
+
 private:
+  QtUiScaleMetrics metrics_;
   QtPanelSectionHeader *header_ = nullptr;
   QFrame *content_ = nullptr;
 };
+
+inline void apply_scalable_widget_metrics(QWidget &root,
+                                          const QtUiScaleMetrics &metrics) {
+  const auto apply_metrics = [&metrics](QWidget &widget) {
+    if (auto *section = dynamic_cast<QtSettingsSection *>(&widget)) {
+      section->apply_ui_scale(metrics);
+    } else if (auto *header = dynamic_cast<QtPanelSectionHeader *>(&widget)) {
+      header->apply_ui_scale(metrics);
+    }
+    const QVariant width = widget.property(kUiScaleMinimumWidthProperty);
+    if (width.isValid()) {
+      widget.setMinimumWidth(metrics.px(width.toInt()));
+    }
+  };
+  apply_metrics(root);
+  const QList<QWidget *> widgets = root.findChildren<QWidget *>();
+  for (QWidget *widget : widgets) {
+    apply_metrics(*widget);
+  }
+}
 
 /// A mixed value is presentation state, never a sentinel domain value.
 class QtMixedNumberSpinBox final : public QtDoubleSpinBox {

@@ -65,9 +65,12 @@ file except through prior written authorization from Francesco Di Blasi.
   Recompute measurements only when layout inputs change, never on unchanged refreshes. Composite
   fields keep their controls in the field column and actions align with fields. The overlay has
   no Reset Settings action or numeric limit labels.
-- `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system
+- `main.cpp` selects Fusion; `qt_application_theme.*` supplies the dark palette and live system
   High Contrast fallback. Preserve native control behavior and accessible default, hover, selected,
   pressed, focused, inactive, and disabled states when styling.
+  `qt_application_style.*` paints flat surfaces through the existing scale and local toolbar/tree
+  Fusion proxies; native geometry, hit testing, text, and editor semantics stay with Qt.
+  Accent uses Quader's logo purple; viewport/material selection and axis colors remain semantic.
   Property sections share `QtPanelSectionHeader` for a full-width native disclosure surface;
   `qt_settings_detail::QtSettingsSection` retains its body and settles focused drafts before collapse.
   Keep labels aligned beside native editors, with stacked components where a narrow panel would

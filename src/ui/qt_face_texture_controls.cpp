@@ -15,7 +15,9 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QCheckBox>
+#include <QEvent>
 #include <QLabel>
+#include <QObject>
 #include <QPushButton>
 #include <QTimer>
 
@@ -214,7 +216,7 @@ constexpr std::array<TextureActionGroup, 6> kTextureActionGroups{{
 } // namespace
 
 /// Retains face texture presentation; all mutations belong to the modeling API.
-struct QtFaceTextureControls::Impl {
+struct QtFaceTextureControls::Impl : public QObject {
   /// Retained input and pending gesture state; the modeling API owns face data.
   struct TextureControlWidget {
     QuaderFaceTextureField field = QuaderFaceTextureField::ScaleX;
@@ -231,7 +233,7 @@ struct QtFaceTextureControls::Impl {
     bool defer_drag_publication = false;
   };
 
-  explicit Impl(QtFaceTextureControls &panel) : panel_(panel) {
+  explicit Impl(QtFaceTextureControls &panel) : QObject(&panel), panel_(panel) {
     panel_.setObjectName(QStringLiteral("face_texture.controls"));
     panel_.setMinimumWidth(240);
     auto *layout = new QVBoxLayout(&panel_);
@@ -242,6 +244,7 @@ struct QtFaceTextureControls::Impl {
     texture_section_ = new QtSettingsSection(
         QStringLiteral("face_texture.section.texture"), &panel_);
     build_texture_controls();
+    texture_section_->content()->installEventFilter(this);
     layout->addWidget(texture_section_);
     edit_texture_section_ = new QtSettingsSection(
         QStringLiteral("face_texture.section.edit_texture"), &panel_);
@@ -251,7 +254,7 @@ struct QtFaceTextureControls::Impl {
     refresh_texture_settings();
   }
 
-  ~Impl() { discard_texture_dispatches(); }
+  ~Impl() override { discard_texture_dispatches(); }
 
   void bind(QuaderEditorApi &editor) {
     unbind();
@@ -303,6 +306,15 @@ struct QtFaceTextureControls::Impl {
   }
 
 private:
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (texture_section_ != nullptr && watched == texture_section_->content() &&
+        (event->type() == QEvent::Resize ||
+         event->type() == QEvent::LayoutRequest)) {
+      schedule_control_metrics();
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
   void refresh_control_metrics() {
     int numeric_label_width = 0;
     for (const TextureControlWidget &binding : texture_controls_) {
@@ -311,6 +323,27 @@ private:
     }
     numeric_label_width =
         std::min(numeric_label_width, ui_scale_metrics_.px(72));
+    QWidget *numeric_content = texture_section_->content();
+    auto *numeric_layout = qobject_cast<QGridLayout *>(numeric_content->layout());
+    if (numeric_layout != nullptr && numeric_content->width() > 0) {
+      int first_field_width = 0;
+      int second_field_width = 0;
+      for (std::size_t index = 0; index < 4; ++index) {
+        int &field_width = index % 2 == 0 ? first_field_width : second_field_width;
+        field_width = std::max(field_width,
+                               texture_controls_[index].spin->minimumWidth());
+      }
+      const QMargins margins = numeric_layout->contentsMargins();
+      const int available_label_width =
+          (numeric_content->width() - margins.left() - margins.right() -
+           3 * numeric_layout->horizontalSpacing() - first_field_width -
+           second_field_width) /
+          2;
+      // Compact numeric fields reserve their readable value and hover arrows.
+      // Wrap labels first when a narrow dock cannot fit both complete labels.
+      numeric_label_width = std::min(
+          numeric_label_width, std::max(1, available_label_width));
+    }
     int action_label_width = ui_scale_metrics_.px(96);
     for (const QLabel *label : texture_action_group_labels_) {
       action_label_width = std::max(action_label_width,
@@ -326,6 +359,40 @@ private:
     };
     for (const TextureControlWidget &binding : texture_controls_) {
       align_label(binding.label, numeric_label_width);
+    }
+    if (numeric_layout != nullptr) {
+      std::array<int, 3> row_heights{};
+      for (std::size_t index = 0; index < texture_controls_.size(); ++index) {
+        const TextureControlWidget &binding = texture_controls_[index];
+        row_heights[index / 2] = std::max(
+            row_heights[index / 2],
+            std::max(binding.label->heightForWidth(numeric_label_width),
+                     binding.spin->minimumSizeHint().height()));
+      }
+      bool row_metrics_changed = false;
+      const QMargins margins = numeric_layout->contentsMargins();
+      int minimum_height = margins.top() + margins.bottom() +
+                           2 * numeric_layout->verticalSpacing();
+      for (std::size_t row = 0; row < row_heights.size(); ++row) {
+        const int grid_row = static_cast<int>(row);
+        if (numeric_layout->rowMinimumHeight(grid_row) != row_heights[row]) {
+          numeric_layout->setRowMinimumHeight(grid_row, row_heights[row]);
+          row_metrics_changed = true;
+        }
+        minimum_height += row_heights[row];
+      }
+      if (numeric_content->minimumHeight() != minimum_height) {
+        numeric_content->setMinimumHeight(minimum_height);
+        row_metrics_changed = true;
+      }
+      if (row_metrics_changed) {
+        // Publish the wrapped rows through the retained section to the scroll
+        // area's natural-height fit instead of enlarging labels in old slots.
+        texture_section_->layout()->invalidate();
+        texture_section_->updateGeometry();
+        panel_.layout()->invalidate();
+        panel_.updateGeometry();
+      }
     }
     for (QLabel *label : texture_action_group_labels_) {
       align_label(label, action_label_width);
@@ -345,7 +412,7 @@ private:
     }
     control_metrics_scheduled_ = true;
     // Application-font propagation completes after the scale listener returns.
-    QTimer::singleShot(0, &panel_, [this]() {
+    QTimer::singleShot(0, this, [this]() {
       control_metrics_scheduled_ = false;
       refresh_control_metrics();
     });
@@ -600,7 +667,6 @@ private:
     auto *layout = new QGridLayout(texture_section_->content());
     set_scalable_margins(*layout, QMargins(6, 6, 6, 6));
     set_scalable_grid_spacing(*layout, 6, 4);
-    layout->setAlignment(Qt::AlignTop);
     layout->setColumnStretch(1, 1);
     layout->setColumnStretch(3, 1);
     for (std::size_t index = 0; index < kTextureControls.size(); ++index) {
@@ -625,7 +691,9 @@ private:
       const int column = static_cast<int>(index % 2) * 2;
       const bool rotation = binding.field == QuaderFaceTextureField::Rotate;
       layout->addWidget(binding.label, row, column);
-      layout->addWidget(binding.spin, row, column + 1, 1, rotation ? 3 : 1);
+      // Center fixed-height fields without capping a wrapped label's row.
+      layout->addWidget(binding.spin, row, column + 1, 1, rotation ? 3 : 1,
+                         Qt::AlignVCenter);
       binding.dispatch_timer = new QTimer(binding.spin);
       binding.dispatch_timer->setSingleShot(true);
       binding.dispatch_timer->setInterval(kNumberDispatchIntervalMs);

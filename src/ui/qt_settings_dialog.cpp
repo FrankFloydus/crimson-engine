@@ -50,6 +50,8 @@
 #include <QSignalBlocker>
 #include <QShowEvent>
 #include <QStackedWidget>
+#include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
 #include <QStringList>
 #include <QTableView>
 #include <QTimer>
@@ -72,6 +74,67 @@
 
 namespace quader {
 namespace {
+
+class QtSettingsCategoryDelegate final : public QStyledItemDelegate {
+public:
+  explicit QtSettingsCategoryDelegate(QObject *parent)
+      : QStyledItemDelegate(parent) {}
+
+protected:
+  void initStyleOption(QStyleOptionViewItem *option,
+                       const QModelIndex &index) const override {
+    QStyledItemDelegate::initStyleOption(option, index);
+    const bool selected = option->state.testFlag(QStyle::State_Selected);
+    for (const QPalette::ColorGroup group :
+         {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+      option->palette.setColor(
+          group, QPalette::Text,
+          option->palette.color(group, selected ? QPalette::Text
+                                                 : QPalette::WindowText));
+    }
+    option->displayAlignment = Qt::AlignLeft | Qt::AlignVCenter;
+  }
+};
+
+class QtSettingsCategoryList final : public QListWidget {
+public:
+  explicit QtSettingsCategoryList(QWidget *parent) : QListWidget(parent) {
+    setFrameShape(QFrame::NoFrame);
+    setUniformItemSizes(true);
+    setItemDelegate(new QtSettingsCategoryDelegate(this));
+  }
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    metrics_ = metrics;
+    update_item_metrics();
+  }
+
+protected:
+  void changeEvent(QEvent *event) override {
+    QListWidget::changeEvent(event);
+    if (event->type() == QEvent::FontChange ||
+        event->type() == QEvent::StyleChange) {
+      update_item_metrics();
+    }
+  }
+
+private:
+  void update_item_metrics() {
+    const int padding = metrics_.px(8);
+    setViewportMargins(padding, padding, padding, padding);
+    setSpacing(metrics_.px(2));
+    const int row_height = std::max(metrics_.px(32),
+                                    fontMetrics().height() + metrics_.px(12));
+    for (int row = 0; row < count(); ++row) {
+      const QSize hint(0, row_height);
+      if (item(row)->sizeHint() != hint) {
+        item(row)->setSizeHint(hint);
+      }
+    }
+  }
+
+  QtUiScaleMetrics metrics_;
+};
 
 QString qtext(const LocalizationService *localization, std::string_view key,
               std::string_view fallback) {
@@ -1527,7 +1590,7 @@ struct QtSettingsDialog::Impl {
     qt_settings_detail::set_scalable_spacing(*dialog_layout, 10);
     auto *content_layout = new QHBoxLayout();
     qt_settings_detail::set_scalable_spacing(*content_layout, 12);
-    category_list = new QListWidget(&owner);
+    category_list = new QtSettingsCategoryList(&owner);
     category_list->setObjectName(QStringLiteral("settingsCategories"));
     category_list->setMinimumWidth(160);
     category_list->setMaximumWidth(220);
@@ -1728,7 +1791,7 @@ struct QtSettingsDialog::Impl {
     auto *form = new QFormLayout();
     qt_settings_detail::set_scalable_margins(
         *form, QMargins(0, 0, 0, 0));
-    qt_settings_detail::set_scalable_spacing(*form, 6);
+    qt_settings_detail::set_scalable_spacing(*form, 10);
     form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     content_layout->addLayout(form);
@@ -2723,6 +2786,8 @@ struct QtSettingsDialog::Impl {
     measured_localization_revision = locale_revision;
     measured_font = font;
     measured_scale = layout_metrics.factor();
+    static_cast<QtSettingsCategoryList *>(category_list)->apply_ui_scale(
+        layout_metrics);
     for (const GroupWidgets &group : groups) {
       int label_width = layout_metrics.px(140);
       for (const GroupWidgets &peer : groups) {

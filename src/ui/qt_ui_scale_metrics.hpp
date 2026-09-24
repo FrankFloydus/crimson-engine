@@ -65,9 +65,22 @@ public:
   pixelMetric(PixelMetric metric, const QStyleOption *option = nullptr,
               const QWidget *widget = nullptr) const override;
 
+  [[nodiscard]] QSize
+  sizeFromContents(ContentsType type, const QStyleOption *option,
+                   const QSize &contents_size,
+                   const QWidget *widget = nullptr) const override;
+
   void drawControl(ControlElement element, const QStyleOption *option,
                    QPainter *painter,
                    const QWidget *widget = nullptr) const override;
+
+  void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
+                     QPainter *painter,
+                     const QWidget *widget = nullptr) const override;
+
+  void drawComplexControl(ComplexControl control,
+                          const QStyleOptionComplex *option, QPainter *painter,
+                          const QWidget *widget = nullptr) const override;
 
   [[nodiscard]] int
   styleHint(StyleHint hint, const QStyleOption *option = nullptr,

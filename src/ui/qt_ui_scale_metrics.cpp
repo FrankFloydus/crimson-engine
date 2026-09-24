@@ -6,11 +6,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_ui_scale_metrics.hpp"
 
+#include "ui/qt_application_style.hpp"
 #include "ui/ui_settings.hpp"
 
 #include <QApplication>
 #include <QEvent>
+#include <QMenu>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPalette>
 #include <QPointer>
 #include <QStyleOption>
@@ -213,6 +216,16 @@ void QtUiScaleProxyStyle::set_metrics(
 int QtUiScaleProxyStyle::pixelMetric(PixelMetric metric,
                                      const QStyleOption *option,
                                      const QWidget *widget) const {
+  if ((metric == PM_MenuHMargin || metric == PM_MenuVMargin) &&
+      qobject_cast<const QMenu *>(widget) != nullptr) {
+    // QMenu's layout supplies an option, but its scroller paint does not.
+    // Both must resolve the same themed content inset.
+    QStyleOption menu_option;
+    menu_option.initFrom(widget);
+    if (qt_application_style_active(option != nullptr ? option : &menu_option)) {
+      return metrics_.px(4);
+    }
+  }
   // Fusion derives metrics such as PM_TabBarIconSize through
   // proxy()->pixelMetric(). Querying QProxyStyle's installed base would route
   // that dependency back through this override, producing factor-squared
@@ -229,39 +242,78 @@ int QtUiScaleProxyStyle::pixelMetric(PixelMetric metric,
   return std::max(1, metrics_.px(unscaled));
 }
 
+QSize QtUiScaleProxyStyle::sizeFromContents(
+    ContentsType type, const QStyleOption *option, const QSize &contents_size,
+    const QWidget *widget) const {
+  QSize size = QProxyStyle::sizeFromContents(type, option, contents_size, widget);
+  const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
+  if (type != CT_MenuItem || item == nullptr ||
+      qobject_cast<const QMenu *>(widget) == nullptr ||
+      !qt_application_style_active(option)) {
+    return size;
+  }
+  if (item->menuItemType == QStyleOptionMenuItem::Separator) {
+    if (item->text.isEmpty() && item->icon.isNull()) {
+      size.setHeight(metrics_.px(8));
+    }
+    return size;
+  }
+  if (item->menuItemType == QStyleOptionMenuItem::Normal ||
+      item->menuItemType == QStyleOptionMenuItem::DefaultItem ||
+      item->menuItemType == QStyleOptionMenuItem::SubMenu) {
+    const int height = std::max({size.height(), metrics_.px(28),
+                                item->fontMetrics.height() + metrics_.px(8)});
+    // Fusion derives its check/icon column from the painted row height.
+    // Reserve the added height horizontally too, so longer labels and the
+    // shortcut column retain their native separation at every scale.
+    size.rwidth() += height - size.height();
+    size.setHeight(height);
+  }
+  return size;
+}
+
 void QtUiScaleProxyStyle::drawControl(ControlElement element,
                                       const QStyleOption *option,
                                       QPainter *painter,
                                       const QWidget *widget) const {
-  if (element == CE_MenuItem && option != nullptr && painter != nullptr &&
-      QApplication::palette().resolveMask() != 0) {
-    const auto *menu_item =
-        qstyleoption_cast<const QStyleOptionMenuItem *>(option);
-    if (menu_item != nullptr &&
-        menu_item->menuItemType == QStyleOptionMenuItem::Separator) {
-      const qreal device_pixel_ratio =
-          painter->device() != nullptr
-              ? std::max<qreal>(1.0, painter->device()->devicePixelRatioF())
-              : 1.0;
-      const qreal extent = 1.0 / device_pixel_ratio;
-      const QRectF bounds(menu_item->rect);
-      const qreal inset = std::max<qreal>(0.0, metrics_.px(8));
-      if (bounds.width() > inset * 2.0) {
-        const QRectF line(bounds.left() + inset,
-                          bounds.center().y() - (extent * 0.5),
-                          bounds.width() - (inset * 2.0), extent);
-        painter->fillRect(line,
-                          menu_item->palette.brush(QPalette::Light));
-      }
-      return;
-    }
+  if (!qt_draw_application_control(element, option, painter, *this, metrics_,
+                                    widget)) {
+    QProxyStyle::drawControl(element, option, painter, widget);
   }
-  QProxyStyle::drawControl(element, option, painter, widget);
+}
+
+void QtUiScaleProxyStyle::drawPrimitive(PrimitiveElement element,
+                                       const QStyleOption *option,
+                                       QPainter *painter,
+                                       const QWidget *widget) const {
+  if (!qt_draw_application_primitive(element, option, painter, *this, metrics_,
+                                      widget)) {
+    QProxyStyle::drawPrimitive(element, option, painter, widget);
+  }
+}
+
+void QtUiScaleProxyStyle::drawComplexControl(
+    ComplexControl control, const QStyleOptionComplex *option,
+    QPainter *painter, const QWidget *widget) const {
+  if (!qt_draw_application_complex_control(control, option, painter, *this,
+                                            metrics_, widget)) {
+    QProxyStyle::drawComplexControl(control, option, painter, widget);
+  }
 }
 
 int QtUiScaleProxyStyle::styleHint(StyleHint hint, const QStyleOption *option,
                                    const QWidget *widget,
                                    QStyleHintReturn *return_data) const {
+  if (hint == SH_Menu_Mask && qobject_cast<const QMenu *>(widget) != nullptr &&
+      qt_application_style_active(option)) {
+    if (auto *mask = qstyleoption_cast<QStyleHintReturnMask *>(return_data)) {
+      QPainterPath outline;
+      outline.addRoundedRect(QRectF(option->rect), metrics_.px(6.0),
+                             metrics_.px(6.0));
+      mask->region = QRegion(outline.toFillPolygon().toPolygon());
+    }
+    return 1;
+  }
   if (hint == SH_Table_GridLineColor && option != nullptr &&
       QApplication::palette().resolveMask() != 0) {
     return static_cast<int>(option->palette.color(QPalette::Midlight).rgba());

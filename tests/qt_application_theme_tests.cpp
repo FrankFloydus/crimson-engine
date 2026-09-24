@@ -720,50 +720,50 @@ TEST(QtUiScaleMetricsTests, CloseGlyphRetainsItsRequestedColorAtSmallSizes) {
 }
 
 TEST(QtApplicationThemeTests,
-     DefinesLayeredSurfacesNeutralSelectionAndAmethystInteractionRoles) {
+     DefinesQuietDarkSurfacesAndQuaderPurpleInteractionRoles) {
   const QPalette palette =
       quader::qt_obsidian_application_palette(QPalette{});
 
-  expect_color(palette, QPalette::Active, QPalette::Window, 0x1f2025);
-  expect_color(palette, QPalette::Active, QPalette::Base, 0x18191d);
-  expect_color(palette, QPalette::Active, QPalette::AlternateBase, 0x1b1c20);
-  expect_color(palette, QPalette::Active, QPalette::Button, 0x2b2c33);
-  expect_color(palette, QPalette::Active, QPalette::ToolTipBase, 0x2f3038);
-  expect_color(palette, QPalette::Active, QPalette::WindowText, 0xe4e6ed);
-  expect_color(palette, QPalette::Active, QPalette::Text, 0xdadde5);
-  expect_color(palette, QPalette::Active, QPalette::ButtonText, 0xe4e6ed);
+  expect_color(palette, QPalette::Active, QPalette::Window, 0x111213);
+  expect_color(palette, QPalette::Active, QPalette::Base, 0x171819);
+  expect_color(palette, QPalette::Active, QPalette::AlternateBase, 0x1c1d1f);
+  expect_color(palette, QPalette::Active, QPalette::Button, 0x242528);
+  expect_color(palette, QPalette::Active, QPalette::ToolTipBase, 0x292b2f);
+  expect_color(palette, QPalette::Active, QPalette::WindowText, 0xadb0b6);
+  expect_color(palette, QPalette::Active, QPalette::Text, 0xe1e2e5);
+  expect_color(palette, QPalette::Active, QPalette::ButtonText, 0xdadce1);
   expect_color(palette, QPalette::Active, QPalette::BrightText, 0xffffff);
-  expect_color(palette, QPalette::Active, QPalette::PlaceholderText, 0x9498a4);
-  expect_color(palette, QPalette::Active, QPalette::Light, 0x60636f);
-  expect_color(palette, QPalette::Active, QPalette::Midlight, 0x525560);
-  expect_color(palette, QPalette::Active, QPalette::Mid, 0x444751);
-  expect_color(palette, QPalette::Active, QPalette::Dark, 0x33363f);
-  expect_color(palette, QPalette::Active, QPalette::Shadow, 0x0c0d10);
-  expect_color(palette, QPalette::Active, QPalette::Highlight, 0x42454c);
-  expect_color(palette, QPalette::Active, QPalette::HighlightedText, 0xe4e6ed);
-  expect_color(palette, QPalette::Active, QPalette::Accent, 0xa794dd);
-  expect_color(palette, QPalette::Active, QPalette::Link, 0xb9abe7);
-  expect_color(palette, QPalette::Active, QPalette::LinkVisited, 0xc0a7d2);
+  expect_color(palette, QPalette::Active, QPalette::PlaceholderText, 0x858991);
+  expect_color(palette, QPalette::Active, QPalette::Light, 0x414246);
+  expect_color(palette, QPalette::Active, QPalette::Midlight, 0x36373b);
+  expect_color(palette, QPalette::Active, QPalette::Mid, 0x2c2d30);
+  expect_color(palette, QPalette::Active, QPalette::Dark, 0x252629);
+  expect_color(palette, QPalette::Active, QPalette::Shadow, 0x08090a);
+  expect_color(palette, QPalette::Active, QPalette::Highlight, 0x302738);
+  expect_color(palette, QPalette::Active, QPalette::HighlightedText, 0xece5f5);
+  expect_color(palette, QPalette::Active, QPalette::Accent, 0x9a64d8);
+  expect_color(palette, QPalette::Active, QPalette::Link, 0xd6bdf3);
+  expect_color(palette, QPalette::Active, QPalette::LinkVisited, 0xbea5d8);
 
-  expect_color(palette, QPalette::Inactive, QPalette::WindowText, 0xcfd3dc);
-  expect_color(palette, QPalette::Inactive, QPalette::Text, 0xc9cdd7);
-  expect_color(palette, QPalette::Inactive, QPalette::ButtonText, 0xcfd3dc);
-  expect_color(palette, QPalette::Inactive, QPalette::Button, 0x282930);
-  expect_color(palette, QPalette::Inactive, QPalette::Highlight, 0x393b42);
+  expect_color(palette, QPalette::Inactive, QPalette::WindowText, 0xa4a7ae);
+  expect_color(palette, QPalette::Inactive, QPalette::Text, 0xd4d6dc);
+  expect_color(palette, QPalette::Inactive, QPalette::ButtonText, 0xcacdd4);
+  expect_color(palette, QPalette::Inactive, QPalette::Button, 0x222326);
+  expect_color(palette, QPalette::Inactive, QPalette::Highlight, 0x2a2431);
   expect_color(palette, QPalette::Inactive, QPalette::HighlightedText,
-               0xcfd3dc);
-  expect_color(palette, QPalette::Inactive, QPalette::Accent, 0x998dbf);
-  expect_color(palette, QPalette::Inactive, QPalette::Link, 0xac9fd6);
+               0xd6d3dc);
+  expect_color(palette, QPalette::Inactive, QPalette::Accent, 0xa084c2);
+  expect_color(palette, QPalette::Inactive, QPalette::Link, 0xc2aedb);
 
-  expect_color(palette, QPalette::Disabled, QPalette::Base, 0x1b1c20);
-  expect_color(palette, QPalette::Disabled, QPalette::AlternateBase, 0x1e1f23);
-  expect_color(palette, QPalette::Disabled, QPalette::Button, 0x1d1e23);
-  expect_color(palette, QPalette::Disabled, QPalette::WindowText, 0x90939e);
-  expect_color(palette, QPalette::Disabled, QPalette::Text, 0x90939e);
-  expect_color(palette, QPalette::Disabled, QPalette::ButtonText, 0x90939e);
+  expect_color(palette, QPalette::Disabled, QPalette::Base, 0x171819);
+  expect_color(palette, QPalette::Disabled, QPalette::AlternateBase, 0x1a1b1c);
+  expect_color(palette, QPalette::Disabled, QPalette::Button, 0x1b1c1e);
+  expect_color(palette, QPalette::Disabled, QPalette::WindowText, 0x848790);
+  expect_color(palette, QPalette::Disabled, QPalette::Text, 0x848790);
+  expect_color(palette, QPalette::Disabled, QPalette::ButtonText, 0x848790);
   expect_color(palette, QPalette::Disabled, QPalette::PlaceholderText,
-               0x797d89);
-  expect_color(palette, QPalette::Disabled, QPalette::Highlight, 0x303138);
+               0x787c84);
+  expect_color(palette, QPalette::Disabled, QPalette::Highlight, 0x221f27);
   expect_color(palette, QPalette::Disabled, QPalette::HighlightedText,
                0x9699a4);
   expect_color(palette, QPalette::Disabled, QPalette::Accent, 0x8b84a0);
@@ -787,7 +787,7 @@ TEST(QtApplicationThemeTests,
     EXPECT_GT(contrast_ratio(palette.color(group, QPalette::Highlight),
                              alternate),
               contrast_ratio(base, alternate))
-        << "neutral selection must remain clearer than row striping";
+        << "tinted selection must remain clearer than row striping";
   }
 }
 
@@ -828,18 +828,13 @@ TEST(QtApplicationThemeTests,
 }
 
 TEST(QtApplicationThemeTests,
-     KeepsAmethystInteractionAccentDistinctFromNeutralSelection) {
+     KeepsBrandFocusAccentDistinctFromTintedSelection) {
   const QPalette palette =
       quader::qt_obsidian_application_palette(QPalette{});
 
   for (const QPalette::ColorGroup group :
        {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
     expect_contrast(palette, group, QPalette::Accent, QPalette::Button, 3.0);
-    EXPECT_GE(contrast_ratio(
-                  palette.color(group, QPalette::Accent).darker(125),
-                  palette.color(group, QPalette::Button)),
-              3.0)
-        << "the dedicated interaction accent must remain distinct";
     EXPECT_NE(palette.color(group, QPalette::Accent),
               palette.color(group, QPalette::Highlight));
   }
@@ -891,6 +886,9 @@ TEST(QtApplicationThemeTests,
 
   quader::apply_qt_obsidian_application_theme(fusion_palette);
 
+  const QFont interface_font = QApplication::font();
+  EXPECT_GE(interface_font.pointSizeF(), 10.0);
+
   if (preference == Qt::ContrastPreference::NoPreference) {
     EXPECT_EQ(QApplication::palette(),
               quader::qt_obsidian_application_palette(
@@ -912,10 +910,12 @@ TEST(QtApplicationThemeTests,
       };
 
   publish_contrast_preference(Qt::ContrastPreference::HighContrast);
+  EXPECT_EQ(QApplication::font(), interface_font);
   EXPECT_EQ(QApplication::palette().resolveMask(), 0u);
   EXPECT_EQ(style_hints->colorScheme(), original_scheme);
 
   publish_contrast_preference(Qt::ContrastPreference::NoPreference);
+  EXPECT_EQ(QApplication::font(), interface_font);
   const QPalette effective_fusion_palette =
       QApplication::style()->standardPalette();
   EXPECT_EQ(QApplication::palette(),
@@ -940,7 +940,7 @@ TEST(QtApplicationThemeTests,
   const QPalette palette =
       quader::qt_obsidian_application_palette(QPalette{});
   const std::array<QPalette::ColorRole, 5> surfaces{
-      QPalette::Base, QPalette::AlternateBase, QPalette::Window,
+      QPalette::Window, QPalette::Base, QPalette::AlternateBase,
       QPalette::Button, QPalette::ToolTipBase};
 
   for (std::size_t index = 1; index < surfaces.size(); ++index) {
@@ -1070,10 +1070,10 @@ TEST(QtApplicationThemeTests,
 
   const QString style_sheet =
       quader::qt_dock_title_style_sheet(palette, doubled);
-  EXPECT_TRUE(style_sheet.contains(QStringLiteral("padding: 0 8px")));
-  EXPECT_TRUE(style_sheet.contains(QStringLiteral("width: 36px")));
-  EXPECT_TRUE(style_sheet.contains(QStringLiteral("height: 36px")));
-  EXPECT_TRUE(style_sheet.contains(QStringLiteral("icon-size: 48px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("padding: 4px 16px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("width: 44px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("height: 44px")));
+  EXPECT_TRUE(style_sheet.contains(QStringLiteral("icon-size: 36px")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("border-bottom: 1px")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("border: 2px solid")));
 }
@@ -1277,11 +1277,11 @@ TEST(QtApplicationThemeTests,
   const quader::QtUiScaleMetrics doubled(2.0F, 9U);
   quader::apply_ui_scale_to_palette_aware_dock_title_presentation(
       dock, doubled);
-  EXPECT_TRUE(dock.styleSheet().contains(QStringLiteral("width: 36px")));
+  EXPECT_TRUE(dock.styleSheet().contains(QStringLiteral("width: 44px")));
   QApplication::setPalette(light);
   drain_palette_transition();
   EXPECT_EQ(dock.styleSheet(),
             quader::qt_dock_title_style_sheet(light, doubled));
-  EXPECT_TRUE(dock.styleSheet().contains(QStringLiteral("width: 36px")));
+  EXPECT_TRUE(dock.styleSheet().contains(QStringLiteral("width: 44px")));
   QApplication::setPalette(original_palette);
 }

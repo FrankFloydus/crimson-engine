@@ -14,6 +14,7 @@
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
 #include "viewport/viewport_input_router.hpp"
 
@@ -23,6 +24,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
+#include <QDir>
 #include <QImage>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -62,9 +64,11 @@ struct ContextActionSnapshot final {
 
 struct ContextMenuSnapshot final {
   bool opened = false;
+  bool inherits_application_style = false;
   std::vector<ContextActionSnapshot> actions;
   QString style_sheet;
   std::size_t separator_count = 0u;
+  std::size_t on_screen_separator_count = 0u;
   std::size_t visible_separator_count = 0u;
 };
 
@@ -103,12 +107,12 @@ ContextMenuSnapshot show_and_snapshot(
     const quader::QuaderActionSet &action_set,
     const quader::QuaderSelectionSummary &selection, bool target_hit,
     std::optional<quader::QuaderHoverTarget> material_face_target = std::nullopt,
-    QString trigger_action_name = {}) {
+    QString trigger_action_name = {}, QString capture_filename = {}) {
   ContextMenuSnapshot snapshot;
   QTimer snapshot_timer;
   snapshot_timer.setSingleShot(true);
   QObject::connect(&snapshot_timer, &QTimer::timeout, &owner,
-                   [&snapshot, trigger_action_name]() {
+                   [&snapshot, trigger_action_name, capture_filename]() {
     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
     if (menu == nullptr ||
         menu->objectName() !=
@@ -121,10 +125,18 @@ ContextMenuSnapshot show_and_snapshot(
     }
 
     snapshot.opened = true;
+    snapshot.inherits_application_style = menu->style() == QApplication::style();
     snapshot.style_sheet = menu->styleSheet();
     QImage rendered(menu->size(), QImage::Format_ARGB32_Premultiplied);
     rendered.fill(Qt::transparent);
     menu->render(&rendered);
+    const QString capture_directory =
+        qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+    if (!capture_directory.isEmpty() && !capture_filename.isEmpty()) {
+      EXPECT_TRUE(QDir().mkpath(capture_directory));
+      EXPECT_TRUE(rendered.save(
+          QDir(capture_directory).filePath(capture_filename)));
+    }
     const QColor separator_color =
         menu->palette().color(QPalette::Active, QPalette::Mid);
     for (QAction *action : menu->actions()) {
@@ -134,6 +146,9 @@ ContextMenuSnapshot show_and_snapshot(
           ++snapshot.separator_count;
           const QRect region =
               menu->actionGeometry(action).intersected(rendered.rect());
+          if (!region.isEmpty()) {
+            ++snapshot.on_screen_separator_count;
+          }
           bool visible = false;
           for (int y = region.top(); y <= region.bottom() && !visible; ++y) {
             for (int x = region.left(); x <= region.right(); ++x) {
@@ -457,8 +472,9 @@ TEST(QtViewportContextMenuTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   QApplication::setStyle(QStringLiteral("Fusion"));
-  QApplication::setPalette(quader::qt_obsidian_application_palette(
-      QApplication::style()->standardPalette()));
+  quader::apply_qt_obsidian_application_theme(
+      QApplication::style()->standardPalette());
+  quader::QtUiScaleApplicationController scale_controller(application);
   application.setQuitOnLastWindowClosed(false);
 
   quader::SceneSession session;
@@ -536,19 +552,40 @@ TEST(QtViewportContextMenuTests,
        enabled_tool("create_primitive", "Create Primitive"),
        enabled_action("delete_selection", "Delete Selection")});
 
-  presenter.apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1U});
+  presenter.apply_ui_scale(scale_controller.metrics());
   const ContextMenuSnapshot object_menu = show_and_snapshot(
       owner, presenter, editor, input_router, localization, object_actions,
-      editor.selection().summary(), true);
+      editor.selection().summary(), true, std::nullopt, {},
+      QStringLiteral("viewport-context-menu-object-100.png"));
   ASSERT_TRUE(object_menu.opened);
+  EXPECT_TRUE(object_menu.inherits_application_style);
+  EXPECT_TRUE(object_menu.style_sheet.isEmpty());
   EXPECT_GT(object_menu.separator_count, 0u);
-  EXPECT_EQ(object_menu.visible_separator_count, object_menu.separator_count);
-  EXPECT_TRUE(object_menu.style_sheet.contains(
-      QStringLiteral("QMenu#viewport_operations_context_menu::separator")));
-  EXPECT_TRUE(object_menu.style_sheet.contains(QStringLiteral("palette(mid)")));
-  EXPECT_TRUE(
-      object_menu.style_sheet.contains(QStringLiteral("margin: 8px 16px")));
-  presenter.apply_ui_scale(quader::QtUiScaleMetrics{1.0F, 2U});
+  EXPECT_GT(object_menu.on_screen_separator_count, 0u);
+  EXPECT_EQ(object_menu.visible_separator_count,
+            object_menu.on_screen_separator_count);
+
+  scale_controller.apply_factor(2.0F);
+  presenter.apply_ui_scale(scale_controller.metrics());
+  const ContextMenuSnapshot large_object_menu = show_and_snapshot(
+      owner, presenter, editor, input_router, localization, object_actions,
+      editor.selection().summary(), true, std::nullopt, {},
+      QStringLiteral("viewport-context-menu-object-200.png"));
+  expect_flat_available_menu(large_object_menu);
+  EXPECT_TRUE(large_object_menu.inherits_application_style);
+  EXPECT_TRUE(large_object_menu.style_sheet.isEmpty());
+  EXPECT_GT(large_object_menu.on_screen_separator_count, 0u);
+  EXPECT_EQ(large_object_menu.visible_separator_count,
+            large_object_menu.on_screen_separator_count);
+  ASSERT_EQ(large_object_menu.actions.size(), object_menu.actions.size());
+  for (std::size_t index = 0; index < object_menu.actions.size(); ++index) {
+    EXPECT_EQ(large_object_menu.actions[index].object_name,
+              object_menu.actions[index].object_name);
+    EXPECT_EQ(large_object_menu.actions[index].text,
+              object_menu.actions[index].text);
+  }
+  scale_controller.apply_factor(1.0F);
+  presenter.apply_ui_scale(scale_controller.metrics());
 
   ASSERT_GE(object_menu.actions.size(), 4u);
   EXPECT_EQ(object_menu.actions[0].object_name,

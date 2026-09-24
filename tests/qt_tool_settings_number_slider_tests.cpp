@@ -4576,8 +4576,8 @@ TEST(QtToolSettingsPanelTests,
   char *argv[] = {executable, nullptr};
   QApplication application(argc, argv);
   QApplication::setStyle(QStringLiteral("Fusion"));
-  QApplication::setPalette(quader::qt_obsidian_application_palette(
-      QApplication::palette()));
+  quader::apply_qt_obsidian_application_theme(
+      QApplication::palette());
   quader::QtUiScaleApplicationController scale_controller(application);
   const auto settle_layout = [] {
     auto *dispatcher = QAbstractEventDispatcher::instance();
@@ -5878,8 +5878,8 @@ TEST(QtToolSettingsPanelTests,
   char *argv[] = {executable, nullptr};
   QApplication application(argc, argv);
   QApplication::setStyle(QStringLiteral("Fusion"));
-  QApplication::setPalette(quader::qt_obsidian_application_palette(
-      QApplication::palette()));
+  quader::apply_qt_obsidian_application_theme(
+      QApplication::palette());
   quader::QtUiScaleApplicationController scale_controller(application);
   quader::LocalizationService localization;
   ASSERT_TRUE(localization.load(

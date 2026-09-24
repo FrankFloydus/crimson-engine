@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_tree_relationship_presentation.hpp"
 
+#include "ui/qt_application_style.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QApplication>
@@ -49,6 +50,11 @@ public:
   void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
                      QPainter *painter,
                      const QWidget *widget = nullptr) const override {
+    if (element != PE_IndicatorBranch &&
+        qt_draw_application_primitive(element, option, painter, *this,
+                                      scaled_metrics_style_.metrics(), widget)) {
+      return;
+    }
     if (element != PE_IndicatorBranch || option == nullptr ||
         painter == nullptr || option->rect.isEmpty()) {
       QProxyStyle::drawPrimitive(element, option, painter, widget);
@@ -63,6 +69,26 @@ public:
 
     // Fusion owns the disclosure glyph, including open/closed and RTL arrows.
     QProxyStyle::drawPrimitive(element, option, painter, widget);
+  }
+
+  void drawControl(ControlElement element, const QStyleOption *option,
+                   QPainter *painter,
+                   const QWidget *widget = nullptr) const override {
+    if (!qt_draw_application_control(element, option, painter, *this,
+                                     scaled_metrics_style_.metrics(), widget)) {
+      QProxyStyle::drawControl(element, option, painter, widget);
+    }
+  }
+
+  void drawComplexControl(ComplexControl control,
+                          const QStyleOptionComplex *option,
+                          QPainter *painter,
+                          const QWidget *widget = nullptr) const override {
+    if (!qt_draw_application_complex_control(
+            control, option, painter, *this, scaled_metrics_style_.metrics(),
+            widget)) {
+      QProxyStyle::drawComplexControl(control, option, painter, widget);
+    }
   }
 
 protected:
