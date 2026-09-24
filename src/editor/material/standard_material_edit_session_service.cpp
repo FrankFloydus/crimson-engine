@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/standard_material_edit_session_service.hpp"
 
+#include "core/release_features.hpp"
 #include "core/qstr.hpp"
 #include "editor/material/project_material_persistence.hpp"
 #include "io/project/project_bridge_notifications.hpp"
@@ -146,6 +147,10 @@ void StandardMaterialEditSessionService::reset_with(
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::new_material() {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (current_ && current_->snapshot.dirty) {
     return failure("Current Standard Material has unsaved changes.");
   }
@@ -166,6 +171,10 @@ StandardMaterialEditSessionService::new_material() {
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::open(ProjectAssetId id) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (project_ != nullptr && project_->manifest() != nullptr &&
       project_->manifest()->is_material_deleted(id)) {
     return failure("This material was permanently deleted.");
@@ -194,6 +203,10 @@ StandardMaterialEditSessionService::open(ProjectAssetId id) {
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::open(ProjectRelativePath path) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (project_ == nullptr || !project_->has_project()) {
     return failure("Open a project before editing materials.");
   }
@@ -254,6 +267,10 @@ void StandardMaterialEditSessionService::advance_scene_preview_revision() {
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_name(std::string name) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (!current_) {
     return failure("No Standard Material is open.");
   }
@@ -270,6 +287,10 @@ StandardMaterialEditSessionService::set_name(std::string name) {
 
 StandardMaterialEditResult StandardMaterialEditSessionService::set_base_color(
     std::array<float, 3> color) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (current_ && current_->base_color_preview.has_value()) {
     return failure("Finish the active albedo preview before editing its color.");
   }
@@ -290,6 +311,10 @@ StandardMaterialEditResult StandardMaterialEditSessionService::set_base_color(
 StandardMaterialEditResult
 StandardMaterialEditSessionService::begin_base_color_preview(
     MaterialEditSessionId session_id) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (!current_ || current_->snapshot.session_id != session_id) {
     return failure("The Standard Material edit session has expired.");
   }
@@ -306,6 +331,10 @@ StandardMaterialEditSessionService::begin_base_color_preview(
 StandardMaterialEditResult
 StandardMaterialEditSessionService::update_base_color_preview(
     MaterialEditSessionId session_id, std::array<float, 3> color) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (!current_ || current_->snapshot.session_id != session_id ||
       !current_->base_color_preview.has_value()) {
     return failure("The Standard Material albedo preview has expired.");
@@ -329,6 +358,10 @@ StandardMaterialEditSessionService::update_base_color_preview(
 StandardMaterialEditResult
 StandardMaterialEditSessionService::finish_base_color_preview(
     MaterialEditSessionId session_id, bool accept) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (!current_ || current_->snapshot.session_id != session_id ||
       !current_->base_color_preview.has_value()) {
     return failure("The Standard Material albedo preview has expired.");
@@ -374,6 +407,10 @@ StandardMaterialEditSessionService::cancel_base_color_preview() {
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_roughness(float value) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr || !finite_unit(value)) {
     return failure("Roughness must be a finite value from 0 to 1.");
@@ -387,6 +424,10 @@ StandardMaterialEditSessionService::set_roughness(float value) {
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_metallic(float value) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr || !finite_unit(value)) {
     return failure("Metallic must be a finite value from 0 to 1.");
@@ -400,6 +441,10 @@ StandardMaterialEditSessionService::set_metallic(float value) {
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_normal_strength(float value) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr ||
       !is_valid_standard_material_normal_strength(value)) {
@@ -415,6 +460,10 @@ StandardMaterialEditSessionService::set_normal_strength(float value) {
 
 StandardMaterialEditResult StandardMaterialEditSessionService::set_scalar(
     StandardMaterialScalar scalar, float value) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   switch (scalar) {
   case StandardMaterialScalar::Roughness:
     return set_roughness(value);
@@ -429,6 +478,10 @@ StandardMaterialEditResult StandardMaterialEditSessionService::set_scalar(
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_normal_convention(
     NormalMapConvention convention) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr) {
     return failure("No Standard Material is open.");
@@ -442,6 +495,10 @@ StandardMaterialEditSessionService::set_normal_convention(
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_diffuse_model(MaterialDiffuseModel model) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (!is_valid_material_diffuse_model(model)) {
     return failure("The Standard Material diffuse model is invalid.");
   }
@@ -459,6 +516,10 @@ StandardMaterialEditSessionService::set_diffuse_model(MaterialDiffuseModel model
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_texture_transform(
     StandardMaterialTextureTransform transform) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr ||
       !is_valid_standard_material_texture_transform(transform)) {
@@ -474,6 +535,10 @@ StandardMaterialEditSessionService::set_texture_transform(
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_texture_transform_component(
     StandardMaterialTextureTransformComponent component, float value) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr) {
     return failure("No Standard Material is open.");
@@ -508,6 +573,10 @@ StandardMaterialEditSessionService::set_texture_transform_component(
 StandardMaterialEditResult StandardMaterialEditSessionService::import_texture(
     StandardMaterialTextureSlot slot,
     const std::filesystem::path &source_path) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr || slot_index(slot) >= 4u) {
     return failure("No Standard Material is open.");
@@ -549,6 +618,10 @@ StandardMaterialEditResult StandardMaterialEditSessionService::import_texture(
 
 StandardMaterialEditResult StandardMaterialEditSessionService::clear_texture(
     StandardMaterialTextureSlot slot) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   ProjectStandardMaterialDefinition *material = standard();
   if (material == nullptr || slot_index(slot) >= 4u) {
     return failure("No Standard Material is open.");
@@ -651,6 +724,10 @@ StandardMaterialEditSessionService::texture_preview(
 }
 
 StandardMaterialEditResult StandardMaterialEditSessionService::save() {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (!current_) {
     return failure("No Standard Material is open.");
   }
@@ -662,11 +739,19 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save() {
 
 StandardMaterialEditResult
 StandardMaterialEditSessionService::save_as(ProjectRelativePath path) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   return save_to(std::move(path), true);
 }
 
 StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     ProjectRelativePath path, bool save_as) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   if (current_ && current_->base_color_preview.has_value()) {
     return failure("Finish the albedo preview before saving the material.");
   }

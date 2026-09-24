@@ -150,19 +150,8 @@ function Assert-NativeExecutableLinkContract {
     }
 }
 
-function Assert-NativeRuntimeDeployment {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$ExecutablePath
-    )
-
-    [void](Resolve-NativeFatalDiagnosticsExecutable -ExecutablePath $ExecutablePath)
-    $runtimeDirectory = Split-Path -Parent $ExecutablePath
-    $buildDirectory = Split-Path -Parent $runtimeDirectory
-    $releaseBin = Join-Path $buildDirectory 'vcpkg_installed\x64-windows\bin'
-    $releaseImageFormats = Join-Path $buildDirectory `
-        'vcpkg_installed\x64-windows\Qt6\plugins\imageformats'
-    foreach ($required in @(
+function Get-NativeRuntimeDeploymentFiles {
+    return @(
             'Qt6Core.dll',
             'Qt6Gui.dll',
             'Qt6Widgets.dll',
@@ -186,7 +175,22 @@ function Assert-NativeRuntimeDeployment {
             'imageformats\qtga.dll',
             'imageformats\qtiff.dll',
             'imageformats\qwebp.dll',
-            'tiff.dll')) {
+            'tiff.dll')
+}
+
+function Assert-NativeRuntimeDeployment {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExecutablePath
+    )
+
+    [void](Resolve-NativeFatalDiagnosticsExecutable -ExecutablePath $ExecutablePath)
+    $runtimeDirectory = Split-Path -Parent $ExecutablePath
+    $buildDirectory = Split-Path -Parent $runtimeDirectory
+    $releaseBin = Join-Path $buildDirectory 'vcpkg_installed\x64-windows\bin'
+    $releaseImageFormats = Join-Path $buildDirectory `
+        'vcpkg_installed\x64-windows\Qt6\plugins\imageformats'
+    foreach ($required in @(Get-NativeRuntimeDeploymentFiles)) {
         $requiredPath = Join-Path $runtimeDirectory $required
         if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
             throw "The native runtime is missing Release Qt file: $requiredPath"

@@ -915,7 +915,7 @@ TEST_F(ProjectMaterialDeletionTests,
   ASSERT_EQ(nlohmann::json::parse(baseline_manifest)
                 .at("version")
                 .get<std::uint64_t>(),
-            2u);
+            4u);
   const std::array ids{deletion_material_id()};
   ASSERT_TRUE(workspace.value().manifest.mark_materials_deleted(ids).ok());
   ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());

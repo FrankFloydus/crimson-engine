@@ -417,8 +417,12 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
           quader::find_command_presentation(command_id);
       ASSERT_NE(presentation, nullptr) << command_id;
       EXPECT_EQ(presentation->domain, expected_domain) << command_id;
-      EXPECT_TRUE(quader::has_command_presentation_surface(
-          *presentation, CommandPresentationSurface::MainMenu))
+      const bool quick_bridge =
+          command_id == quader::quader_command::kModelingBridgeEdges.string() ||
+          command_id == quader::quader_command::kModelingBridgeFaces.string();
+      EXPECT_EQ(quader::has_command_presentation_surface(
+                    *presentation, CommandPresentationSurface::MainMenu),
+                !quick_bridge)
           << command_id;
       ++checked_operation_count;
     }

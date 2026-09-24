@@ -9,6 +9,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/placement/scene_surface_query.hpp"
@@ -600,6 +601,9 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
                                         const ViewportInteractionFrame &frame,
                                         ViewportCurveInteractionPort *curve_tool) {
   QDR_PROFILE_FUNCTION();
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    curve_tool = nullptr;
+  }
   ViewportBeforeToolInteractionResult result;
 
   bool curve_refresh_ok = true;

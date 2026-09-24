@@ -74,6 +74,10 @@ public:
   [[nodiscard]] ProjectSessionResult
   create(const std::filesystem::path &root,
          bool discard_existing_dirty = false);
+  /// Checks product compatibility before any close, recovery, or provisioning.
+  [[nodiscard]] static ProjectSessionResult preflight_open(
+      const std::filesystem::path &manifest_path,
+      std::optional<ProjectRelativePath> required_scene = std::nullopt);
   [[nodiscard]] ProjectSessionResult
   open(const std::filesystem::path &manifest_path,
        bool discard_existing_dirty = false);
@@ -191,7 +195,8 @@ private:
              std::optional<ProjectRelativePath> path,
              SceneContentDocument document,
              std::optional<ViewportCameraPose> viewport_camera_pose =
-                 std::nullopt);
+                 std::nullopt,
+             ProductRelease minimum_product_release = current_product_release());
   /** Stages a new tab, persists it, then cancels the outgoing scene before binding. */
   [[nodiscard]] ProjectSessionResult install_scene_and_activate(
       std::unique_ptr<OpenSceneSession> scene, ProjectManifest manifest);

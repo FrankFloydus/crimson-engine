@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_material_import_service.hpp"
 
+#include "core/release_features.hpp"
 #include "editor/material/project_image_decoder.hpp"
 #include "editor/material/project_material_persistence.hpp"
 #include "editor/session/project_session.hpp"
@@ -47,6 +48,10 @@ ProjectMaterialImportReport
 ProjectMaterialImportService::import_textures_as_materials(
     std::span<const std::filesystem::path> source_paths,
     std::string_view destination_folder) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.message = release_feature_unavailable_message()};
+  }
+
   ProjectMaterialImportReport report;
   if (project_ == nullptr || !project_->has_project() ||
       project_->workspace() == nullptr) {

@@ -8,6 +8,7 @@
 
 #include "editor/selection/scene_selection_summary.hpp"
 
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -814,6 +815,11 @@ ModelingCommandResult EditorSelectionService::clear() {
 ModelingCommandResult EditorSelectionService::apply_component_selection_command(
     ModelingComponentSelectionCommand command,
     std::span<const ModelingSelectionMode> allowed_modes) {
+  if (command == ModelingComponentSelectionCommand::SelectFacesWithSameMaterial &&
+      !release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const auto preflight = selection_edit_preflight();
   if (!preflight.ok) {
     return preflight;

@@ -289,8 +289,12 @@ std::uint64_t qdr_binary_content_hash(std::span<const std::byte> bytes) {
 
 QdrBinaryContainerBuildResult build_qdr_binary_container_with_stats(
     std::array<std::byte, 16> scene_uuid,
-    std::vector<QdrBinaryChunkInput> chunks) {
+    std::vector<QdrBinaryChunkInput> chunks,
+    quader::ProductRelease minimum_product_release) {
   QDR_PROFILE_FUNCTION();
+  if (minimum_product_release == 0u) {
+    throw std::runtime_error("QDR binary minimum product release is invalid.");
+  }
   if (chunks.empty()) {
     throw std::runtime_error("QDR binary container requires at least one chunk.");
   }
@@ -363,14 +367,16 @@ QdrBinaryContainerBuildResult build_qdr_binary_container_with_stats(
                          static_cast<std::uint64_t>(encoded_chunks.size()));
   write_little_endian_at(output, 48u,
                          static_cast<std::uint64_t>(output.size()));
-  write_little_endian_at(output, 56u, std::uint64_t{0});
+  write_little_endian_at(output, 56u, minimum_product_release);
   return {.bytes = std::move(output), .stats = stats};
 }
 
 std::vector<std::byte> build_qdr_binary_container(
     std::array<std::byte, 16> scene_uuid,
-    std::vector<QdrBinaryChunkInput> chunks) {
-  return build_qdr_binary_container_with_stats(scene_uuid, std::move(chunks))
+    std::vector<QdrBinaryChunkInput> chunks,
+    quader::ProductRelease minimum_product_release) {
+  return build_qdr_binary_container_with_stats(
+             scene_uuid, std::move(chunks), minimum_product_release)
       .bytes;
 }
 
@@ -436,9 +442,13 @@ read_qdr_binary_container(std::vector<std::byte> file_bytes) {
     return container_error("qdr.binary.invalid_endian_marker",
                            "QDR binary byte-order marker is invalid.");
   }
-  if (header_flags != 0u || header_reserved != 0u) {
+  if (header_flags != 0u || (minor < 2u && header_reserved != 0u)) {
     return container_error("qdr.binary.unsupported_header_flags",
                            "QDR binary header contains unsupported flags.");
+  }
+  if (minor >= 2u && header_reserved == 0u) {
+    return container_error("qdr.binary.invalid_product_release",
+                           "QDR binary minimum product release is invalid.");
   }
   if (declared_file_size != bytes.size()) {
     return container_error("qdr.binary.file_size_mismatch",
@@ -583,6 +593,8 @@ read_qdr_binary_container(std::vector<std::byte> file_bytes) {
 
   QdrBinaryContainerReadResult result{
       .ok = true,
+      .minimum_product_release =
+          minor >= 2u ? header_reserved : quader::kInternalFullRelease,
       .chunks = std::move(chunks),
       .stored_chunk_bytes = total_stored_bytes,
       .raw_chunk_bytes = total_raw_bytes,

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "app/app.hpp"
 #include "core/logger.hpp"
+#include "core/release_features.hpp"
 #include "core/user_config_paths.hpp"
 #include "platform/fatal_error_handler.hpp"
 #include "platform/sentry_client.hpp"
@@ -152,7 +153,12 @@ int main(int argc, char** argv) {
   const std::filesystem::path exe = executable_path(argc, argv);
   const CommandLineOptions command_line = parse_command_line(argc, argv);
   const std::filesystem::path executable_dir = exe.parent_path();
-  const std::filesystem::path log_path = executable_dir / "quader.log";
+  const std::filesystem::path log_path =
+      executable_dir /
+      (quader::current_product_release() == quader::kInternalFullRelease
+           ? "quader.log"
+           : "quader-" + quader::product_release_label(
+                             quader::current_product_release()) + ".log");
   quader::Logger::initialize({.file_path = log_path.string()});
   quader::install_fatal_error_handler(log_path);
 #if defined(QUADER_ENABLE_SENTRY) && QUADER_ENABLE_SENTRY
@@ -170,6 +176,8 @@ int main(int argc, char** argv) {
   }
 #endif
   LOG_INFO("Booting Quader from {}", exe.string());
+  LOG_INFO("Product release: {}",
+           quader::product_release_label(quader::current_product_release()));
   LOG_INFO("Qt Widgets style: Fusion with accessibility-aware Obsidian palette");
   LOG_INFO("Render backend: {}",
            quader::to_string(command_line.render_backend));

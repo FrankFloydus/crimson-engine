@@ -7,6 +7,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include "core/qstr.hpp"
+#include "core/release_features.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "viewport/viewport_navigation_defaults.hpp"
 #include "viewport/viewport_settings_defaults.hpp"
@@ -23,9 +24,25 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace quader {
 namespace {
+
+bool setting_available(ViewportColorSettingId id) {
+  return (id != ViewportColorSettingId::MeshGridMinor &&
+          id != ViewportColorSettingId::MeshGridMajor) ||
+         release_has_feature(ReleaseFeature::MeshGrid);
+}
+
+bool setting_available(ViewportBoolSettingId id) {
+  if (id == ViewportBoolSettingId::ShowMeshGrid) {
+    return release_has_feature(ReleaseFeature::MeshGrid);
+  }
+  return (id != ViewportBoolSettingId::TextureLock &&
+          id != ViewportBoolSettingId::TextureLockScale) ||
+         release_has_feature(ReleaseFeature::UvEditing);
+}
 
 constexpr std::string_view kViewportSettingsPrefix = "QVertexWorks.Quader.Viewport.";
 constexpr float kMinGizmoSize = 0.5f;
@@ -328,15 +345,33 @@ float sanitize_float_setting(ViewportFloatSettingId id, float value) {
 
 } // namespace
 
-const std::array<ViewportSettingsSectionDescriptor,
-                 kViewportSettingsSectionCount> &
+std::span<const ViewportSettingsSectionDescriptor>
 viewport_settings_sections() {
-  return kSections;
+  static const auto sections = [] {
+    std::vector<ViewportSettingsSectionDescriptor> available;
+    for (const auto &section : kSections) {
+      if (section.id != ViewportSettingsSectionId::Texturing ||
+          release_has_feature(ReleaseFeature::UvEditing)) {
+        available.push_back(section);
+      }
+    }
+    return available;
+  }();
+  return sections;
 }
 
-const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> &
+std::span<const ViewportColorSettingDescriptor>
 viewport_color_settings() {
-  return kColorSettings;
+  static const auto settings = [] {
+    std::vector<ViewportColorSettingDescriptor> available;
+    for (const auto &setting : kColorSettings) {
+      if (setting_available(setting.id)) {
+        available.push_back(setting);
+      }
+    }
+    return available;
+  }();
+  return settings;
 }
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> &
@@ -344,9 +379,18 @@ viewport_float_settings() {
   return kFloatSettings;
 }
 
-const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> &
+std::span<const ViewportBoolSettingDescriptor>
 viewport_bool_settings() {
-  return kBoolSettings;
+  static const auto settings = [] {
+    std::vector<ViewportBoolSettingDescriptor> available;
+    for (const auto &setting : kBoolSettings) {
+      if (setting_available(setting.id)) {
+        available.push_back(setting);
+      }
+    }
+    return available;
+  }();
+  return settings;
 }
 
 const std::array<double, kViewportRotationSnapAngleCount> &
@@ -399,7 +443,17 @@ bool viewport_rotation_snap_active(const ViewportSettings &settings,
           temporary_toggle_pressed);
 }
 
-ViewportSettings::ViewportSettings() { (void)reset_to_defaults(); }
+ViewportSettings::ViewportSettings() {
+  for (const auto &descriptor : kColorSettings) {
+    colors_[index(descriptor.id)] = descriptor.default_value;
+  }
+  for (const auto &descriptor : kFloatSettings) {
+    floats_[index(descriptor.id)] = descriptor.default_value;
+  }
+  for (const auto &descriptor : kBoolSettings) {
+    bools_[index(descriptor.id)] = descriptor.default_value;
+  }
+}
 
 ViewportSettings ViewportSettings::defaults() {
     ViewportSettings settings;
@@ -517,7 +571,7 @@ bool ViewportSettings::save(const std::filesystem::path& path) const {
     file << "[Viewport]\n";
     for (const ViewportColorSettingDescriptor& descriptor : kColorSettings) {
       file << full_key(descriptor.key) << '='
-           << color_to_hex(color(descriptor.id)) << '\n';
+           << color_to_hex(colors_[index(descriptor.id)]) << '\n';
     }
     file << std::fixed << std::setprecision(6);
     for (const ViewportFloatSettingDescriptor& descriptor : kFloatSettings) {
@@ -526,7 +580,7 @@ bool ViewportSettings::save(const std::filesystem::path& path) const {
     }
     for (const ViewportBoolSettingDescriptor& descriptor : kBoolSettings) {
       file << full_key(descriptor.key) << '='
-           << (bool_value(descriptor.id) ? "true" : "false") << '\n';
+           << (bools_[index(descriptor.id)] ? "true" : "false") << '\n';
     }
     file.flush();
     return file.good();
@@ -535,6 +589,9 @@ bool ViewportSettings::save(const std::filesystem::path& path) const {
 bool ViewportSettings::reset_to_defaults() {
   bool changed = false;
   for (const ViewportColorSettingDescriptor &descriptor : kColorSettings) {
+    if (!setting_available(descriptor.id)) {
+      continue;
+    }
     changed = !viewport_setting_colors_approximately(
                   colors_[index(descriptor.id)], descriptor.default_value) ||
               changed;
@@ -547,6 +604,9 @@ bool ViewportSettings::reset_to_defaults() {
     floats_[index(descriptor.id)] = descriptor.default_value;
   }
   for (const ViewportBoolSettingDescriptor &descriptor : kBoolSettings) {
+    if (!setting_available(descriptor.id)) {
+      continue;
+    }
     changed = bools_[index(descriptor.id)] != descriptor.default_value ||
               changed;
     bools_[index(descriptor.id)] = descriptor.default_value;
@@ -555,11 +615,17 @@ bool ViewportSettings::reset_to_defaults() {
 }
 
 ViewportSettingColor ViewportSettings::color(ViewportColorSettingId id) const {
+    if (!setting_available(id)) {
+      return color_descriptor(id).default_value;
+    }
     return colors_[index(id)];
 }
 
 bool ViewportSettings::set_color(ViewportColorSettingId id,
                                  ViewportSettingColor value) {
+  if (!setting_available(id)) {
+    return false;
+  }
   const ViewportSettingColor sanitized =
       sanitize_color_setting(id, value);
   if (viewport_setting_colors_approximately(colors_[index(id)], sanitized)) {
@@ -571,6 +637,9 @@ bool ViewportSettings::set_color(ViewportColorSettingId id,
 
 bool ViewportSettings::restore_color(ViewportColorSettingId id,
                                      ViewportSettingColor value) {
+  if (!setting_available(id)) {
+    return false;
+  }
   const ViewportSettingColor sanitized =
       sanitize_color_setting(id, value);
   const ViewportSettingColor current = colors_[index(id)];
@@ -596,10 +665,19 @@ bool ViewportSettings::set_float_value(ViewportFloatSettingId id, float value) {
 }
 
 bool ViewportSettings::bool_value(ViewportBoolSettingId id) const {
+  if (id == ViewportBoolSettingId::ShowMeshGrid && !setting_available(id)) {
+    return false;
+  }
+  if (!setting_available(id)) {
+    return bool_descriptor(id).default_value;
+  }
   return bools_[index(id)];
 }
 
 bool ViewportSettings::set_bool_value(ViewportBoolSettingId id, bool value) {
+  if (!setting_available(id)) {
+    return false;
+  }
   (void)bool_descriptor(id);
   if (bools_[index(id)] == value) {
     return false;

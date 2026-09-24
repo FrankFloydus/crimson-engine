@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/array/linear_array_tool_service.hpp"
+#include "core/release_features.hpp"
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
@@ -205,6 +206,9 @@ bool LinearArrayToolService::valid_source_selection(
 }
 
 bool LinearArrayToolService::can_activate() const {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return false;
+  }
   QDR_PROFILE_SCOPE("Linear array can activate");
   const std::uint64_t scene_revision = scene_.revision();
   const int selection_mode = static_cast<int>(selection_.mode());
@@ -421,6 +425,9 @@ std::uint32_t LinearArrayToolService::maximum_count() const {
 }
 
 CommandResult LinearArrayToolService::activate(double fallback_grid_size) {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   std::vector<EntityId> ordered_sources;
   EntityId primary_source = kInvalidEntityId;
   bool instance_occurrences = false;
@@ -540,6 +547,9 @@ CommandResult LinearArrayToolService::cancel() {
 }
 
 CommandResult LinearArrayToolService::apply() {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_unchanged_result();
   }
@@ -604,6 +614,9 @@ CommandResult LinearArrayToolService::apply() {
 }
 
 CommandResult LinearArrayToolService::set_count(std::uint32_t count) {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Linear Array tool is not active.");
   }
@@ -623,6 +636,9 @@ CommandResult LinearArrayToolService::set_count(std::uint32_t count) {
 }
 
 CommandResult LinearArrayToolService::reset_settings() {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Linear Array tool is not active.");
   }
@@ -641,6 +657,9 @@ CommandResult LinearArrayToolService::reset_settings() {
 }
 
 CommandResult LinearArrayToolService::adjust_count(int delta) {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Linear Array tool is not active.");
   }
@@ -654,6 +673,9 @@ CommandResult LinearArrayToolService::adjust_count(int delta) {
 
 CommandResult LinearArrayToolService::set_axis_constraint(
     LinearArrayAxisConstraint constraint) {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Linear Array tool is not active.");
   }
@@ -674,6 +696,9 @@ CommandResult LinearArrayToolService::set_axis_constraint(
 CommandResult LinearArrayToolService::set_endpoint(QVec3 world_position,
                                                    bool snap_to_grid,
                                                    double grid_size) {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Linear Array tool is not active.");
   }
@@ -696,6 +721,9 @@ CommandResult LinearArrayToolService::set_endpoint(QVec3 world_position,
 }
 
 void LinearArrayToolService::begin_endpoint_drag() {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return;
+  }
   if (session_.has_value() && !session_->dragging) {
     session_->dragging = true;
     session_->revision = issue_revision();

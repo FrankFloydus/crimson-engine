@@ -13,6 +13,11 @@ file except through prior written authorization from Francesco Di Blasi.
 - `UISystem` composes `QMainWindow`, docks, tool windows, localization, and retained presentation.
   `UIPanelManager` maps public panels to docks. Widgets dispatch editor intent through public APIs
   and commands; they own only presentation state.
+- Immutable product releases filter controls at construction through the shared release feature
+  requirements. Omit excluded docks and tool windows so restored layouts cannot reopen them;
+  keep null action slots safe in retained toolbar/pane synchronization. Camera settings, mesh
+  shadow controls and advanced selection discovery can be hidden independently of their native
+  values and APIs. Feature execution gates remain with the native owners.
 - Outliner drag/drop uses Qt's native `InternalMove` view and model MIME/drop hooks, with
   `scene().move_entities()` owning atomic hierarchy/order edits and history. The model must not
   apply Qt's trailing source-row removal after the scene has already moved those entities.
@@ -53,9 +58,11 @@ file except through prior written authorization from Francesco Di Blasi.
   metadata pins the overlay to the initiating pane; hover and parameter edits never move it.
   Collapse settles field drafts without terminating the operation. See
   `tests/qt_viewport_settings_overlay_tests.cpp` and the settings-control tests.
-  Each value uses one label-left, field-right row, with a shared scaled label width and wrapping
-  for localized labels. Composite fields keep their controls in the field column. Actions align
-  with fields. The overlay has no Reset Settings action or numeric limit labels.
+  Each value uses one label-left, field-right row. Measure localized labels with the active font
+  for a shared width, bounded so long labels wrap; size checkbox fields to their contents.
+  Recompute measurements only when layout inputs change, never on unchanged refreshes. Composite
+  fields keep their controls in the field column and actions align with fields. The overlay has
+  no Reset Settings action or numeric limit labels.
 - `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system
   High Contrast fallback. Preserve native control behavior and accessible default, hover, selected,
   pressed, focused, inactive, and disabled states when styling.
@@ -100,6 +107,12 @@ file except through prior written authorization from Francesco Di Blasi.
   Workspace toggles for snapping, backface selection, texture locks, and display visibility belong
   in their menus/toolbars. Appearance values, picking tolerances, and gizmo size are separate
   preferences and remain in Settings when no other surface edits them.
+  The Viewport page's Default Material image is a profile preference, available even
+  when material authoring is excluded. Stage its PNG/JPG choice and preview locally;
+  import through `DefaultMaterialTextureStore`, persist, then publish
+  `DefaultMaterialCommit`. Cancel and failed persistence do not change live appearance.
+  Keep the canonical scene material references untouched. See
+  `tests/qt_settings_dialog_tests.cpp` and `tests/public_release_ui_tests.cpp`.
 
 ## Retained frame performance
 

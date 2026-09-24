@@ -7,6 +7,7 @@
 #include "editor/transform/mesh_arrangement_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/commands/document_command_service.hpp"
@@ -301,6 +302,9 @@ bool MeshArrangementService::can_distribute_selected_meshes() const {
 }
 
 MeshArrangementAvailability MeshArrangementService::availability() const {
+  if (!release_has_feature(ReleaseFeature::Arrangement)) {
+    return {};
+  }
   // UI command predicates only need a cheap structural preflight. The command
   // path below still computes and validates exact transformed geometry bounds
   // immediately before applying edits.
@@ -311,6 +315,9 @@ DocumentCommandResult
 MeshArrangementService::align_selected_meshes(MeshArrangementAxis axis,
                                               MeshAlignmentMode alignment,
                                               MeshArrangementOptions options) {
+  if (!release_has_feature(ReleaseFeature::Arrangement)) {
+    return document_command_invalid_request_result(release_feature_unavailable_message());
+  }
   if (!valid_snap_options(options)) {
     return document_command_invalid_request_result(
         "Grid size must be finite and greater than zero.");
@@ -357,6 +364,9 @@ MeshArrangementService::align_selected_meshes(MeshArrangementAxis axis,
 DocumentCommandResult MeshArrangementService::distribute_selected_meshes(
     MeshArrangementAxis axis, MeshDistributionMode distribution,
     MeshArrangementOptions options) {
+  if (!release_has_feature(ReleaseFeature::Arrangement)) {
+    return document_command_invalid_request_result(release_feature_unavailable_message());
+  }
   if (!valid_snap_options(options)) {
     return document_command_invalid_request_result(
         "Grid size must be finite and greater than zero.");

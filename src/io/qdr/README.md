@@ -44,6 +44,14 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 
 Current scene metadata schema is 16; schema versions and defaults are enforced in the codec.
 
+Container 1.2 stores a nonzero minimum product release in the 64-bit header word at byte 56.
+Container 1.0/1.1 retain a zero reserved word and are treated as Internal Full releases.
+Low-level container inspection is unrestricted. Authoring callers pass their executable release
+to `QdrDocumentReader`, which checks the verified requirement before metadata decoding or scene
+hydration. `read_project_release_requirement` provides the same container validation without
+hydration for workspace preflight. Write snapshots preserve their explicit release requirement;
+the session stamps the writer's release without lowering an existing requirement.
+
 | Version | Durable data/defaults |
 | --- | --- |
 | 1-3 | Legacy CSR topology is reader-only; current writes use SDK topology |
@@ -92,6 +100,8 @@ to retain verified originals and publish validated schema-16 files with per-file
 and rollback on ordinary failures. Its isolated converter also handles the retired
 metadata-10/geometry-2 dialect; that dialect is not accepted by the normal scene reader.
 Persistent backups provide recovery after interruption; the batch is not crash-atomic.
+Migration preserves the decoded minimum product release, including Internal Full for legacy
+containers; a format-only conversion never promotes or lowers the release requirement.
 
 Light metadata does not replace authored RGB or canonical intensity. Reading historical scenes
 preserves those values and their falloff, including values outside the current Inspector slider

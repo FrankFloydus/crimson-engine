@@ -5,6 +5,8 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/modeling_command_dispatcher.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 
 #include "editor/commands/modeling_command_tool_catalog.hpp"
 
@@ -25,6 +27,11 @@ ModelingCommandDispatcher::history_policy(std::string_view tool_id) const {
 ModelingCommandAvailability ModelingCommandDispatcher::availability(
     std::string_view tool_id, ModelingSessionService &modeling,
     EditorSelectionService *selection) const {
+  if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
+      !release_allows_tool(tool_id)) {
+    return ModelingCommandAvailability::unavailable(
+        release_feature_unavailable_message());
+  }
   const CommandTool *tool = find(tool_id);
   if (tool == nullptr) {
     return ModelingCommandAvailability::unavailable(
@@ -39,6 +46,11 @@ ModelingCommandResult
 ModelingCommandDispatcher::execute(std::string_view tool_id,
                                    ModelingSessionService &modeling,
                                    EditorSelectionService *selection) const {
+  if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
+      !release_allows_tool(tool_id)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandTool *tool = find(tool_id);
   if (tool == nullptr) {
     return {
@@ -54,6 +66,12 @@ ModelingCommandResult ModelingCommandDispatcher::execute(
         const CommandTool& tool,
         ModelingSessionService& modeling,
         EditorSelectionService* selection) const {
+    if (!release_allows_action(tool.id()) ||
+        !release_allows_operation(tool.id()) ||
+        !release_allows_tool(tool.id())) {
+      return {.ok = false, .changed = false,
+              .message = release_feature_unavailable_message()};
+    }
     ModelingCommandExecutionContext context{.modeling = modeling,
                                             .selection = selection};
     const ModelingCommandAvailability available = tool.availability(context);

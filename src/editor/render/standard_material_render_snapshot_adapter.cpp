@@ -10,6 +10,7 @@
 #include "editor/material/project_material_texture_snapshot.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <array>
 #include <cstddef>
@@ -83,10 +84,39 @@ make_standard_material_render_evaluation(
 std::uint64_t ProjectSessionRenderMaterialResolver::revision() const noexcept {
   if (project_ == nullptr || !project_->has_project() ||
       project_->manifest() == nullptr) {
-    return 0u;
+    return default_material_revision_;
   }
   return project_->material_texture_revision() +
-         project_->standard_material_editor().scene_preview_revision();
+         project_->standard_material_editor().scene_preview_revision() +
+         default_material_revision_;
+}
+
+void ProjectSessionRenderMaterialResolver::set_default_material_texture(
+    const std::filesystem::path &path) {
+  if (default_material_texture_ == path) {
+    return;
+  }
+  default_material_texture_ = path;
+  ++default_material_revision_;
+  if (path.empty()) {
+    default_material_override_.reset();
+    return;
+  }
+  default_material_override_ = packaged_default_render_material();
+  auto &material = *default_material_override_;
+  material.revision += default_material_revision_;
+  auto &albedo = material.textures.front();
+  albedo.texture.source_path = path;
+  // This private texture shares no authored asset identity. Its revision also
+  // distinguishes it from the packaged texture while retired GPU consumers live.
+  albedo.texture.revision.value += default_material_revision_;
+}
+
+const RenderMaterialAssetSnapshot *
+ProjectSessionRenderMaterialResolver::default_material_override() const noexcept {
+  return default_material_override_.has_value()
+             ? &*default_material_override_
+             : nullptr;
 }
 
 ProjectAssetId ProjectSessionRenderMaterialResolver::canonical_material_id(

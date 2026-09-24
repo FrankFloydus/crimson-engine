@@ -147,6 +147,12 @@ foreach(_quader_sdk_only_target IN LISTS _quader_sdk_only_targets)
             _quader_sdk_only_target MATCHES "^quader_modeling_domain_" OR
             _quader_sdk_only_target STREQUAL "qdr_performance_baseline" OR
             _quader_sdk_only_target STREQUAL "quader" OR
+            _quader_sdk_only_target STREQUAL "quader_public_app" OR
+            _quader_sdk_only_target STREQUAL "quader_public_release_tests" OR
+            _quader_sdk_only_target STREQUAL "quader_editor_release_policy" OR
+            _quader_sdk_only_target STREQUAL "quader_release_features" OR
+            _quader_sdk_only_target STREQUAL "quader_release_profile_full" OR
+            _quader_sdk_only_target STREQUAL "quader_release_profile_public" OR
             _quader_sdk_only_target STREQUAL "quader_fatal_diagnostics" OR
             _quader_sdk_only_target STREQUAL "quader_editor_metadata" OR
             _quader_sdk_only_target STREQUAL "quader_geometry" OR
@@ -201,6 +207,7 @@ endforeach()
 foreach(_quader_forbidden_sdk_only_test IN ITEMS
         quader_modeling_domain_tests
         quader_modeling_sdk_parity_tests
+        quader_public_release_tests
         quader_tests)
     string(FIND "${_quader_list_tests_output}"
         "${_quader_forbidden_sdk_only_test}"

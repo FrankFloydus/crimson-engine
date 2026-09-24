@@ -14,6 +14,7 @@
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "viewport/viewport_input_router.hpp"
 
@@ -103,6 +104,9 @@ QAction *add_command_action(
     QuaderEditorApi &editor, const LocalizationService &localization,
     std::string_view localization_key, std::string_view fallback,
     QuaderCommandId command_id) {
+  if (!release_allows_command(command_id.string())) {
+    return nullptr;
+  }
   QAction *action = menu.addAction(
       localized(localization, localization_key, fallback));
   action->setObjectName(QString::fromUtf8(
@@ -156,23 +160,25 @@ void build_add_menu(QMenu &menu,
       "ui.viewport.quick_menu.add.curve", "Curve",
       quader_command::kToolsActivateCreateCurve);
 
-  QMenu *light_menu = menu.addMenu(localized(
-      localization, "ui.viewport.quick_menu.add.light", "Light"));
-  light_menu->setObjectName(QStringLiteral("viewport_add_light_submenu"));
-  (void)add_command_action(
-      *light_menu, bound_commands, editor, localization,
-      "ui.viewport.quick_menu.add.point", "Point",
-      quader_command::kSceneCreatePointLight);
-  QAction *spotlight_action = light_menu->addAction(localized(
-      localization, "ui.viewport.quick_menu.add.spotlight_nyi",
-      "Spotlight (NYI)"));
-  spotlight_action->setObjectName(
-      QStringLiteral("viewport_add_spotlight_nyi"));
-  spotlight_action->setEnabled(false);
-  (void)add_command_action(
-      *light_menu, bound_commands, editor, localization,
-      "ui.viewport.quick_menu.add.directional", "Directional",
-      quader_command::kSceneCreateDirectionalLight);
+  if (release_allows_command(quader_command::kSceneCreatePointLight.string())) {
+    QMenu *light_menu = menu.addMenu(localized(
+        localization, "ui.viewport.quick_menu.add.light", "Light"));
+    light_menu->setObjectName(QStringLiteral("viewport_add_light_submenu"));
+    (void)add_command_action(
+        *light_menu, bound_commands, editor, localization,
+        "ui.viewport.quick_menu.add.point", "Point",
+        quader_command::kSceneCreatePointLight);
+    QAction *spotlight_action = light_menu->addAction(localized(
+        localization, "ui.viewport.quick_menu.add.spotlight_nyi",
+        "Spotlight (NYI)"));
+    spotlight_action->setObjectName(
+        QStringLiteral("viewport_add_spotlight_nyi"));
+    spotlight_action->setEnabled(false);
+    (void)add_command_action(
+        *light_menu, bound_commands, editor, localization,
+        "ui.viewport.quick_menu.add.directional", "Directional",
+        quader_command::kSceneCreateDirectionalLight);
+  }
 
   (void)add_command_action(
       menu, bound_commands, editor, localization,
@@ -201,6 +207,9 @@ void build_shading_menu(
     QAction *action = add_command_action(
         menu, bound_commands, editor, localization, localization_key,
         fallback, command_id);
+    if (action == nullptr) {
+      return;
+    }
     action->setCheckable(true);
     action->setChecked(current_shading == shading);
     group->addAction(action);

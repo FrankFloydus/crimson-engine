@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_commands_api.hpp"
+#include "core/user_config_paths.hpp"
 
 #include "api/quader_api.hpp"
 #include "api/quader_mesh_arrangement_catalog.hpp"
@@ -18,6 +19,8 @@
 #include "api/quader_ui_api.hpp"
 #include "api/quader_viewport_api.hpp"
 #include "core/public_command_targets.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/editor_command_registry.hpp"
 #include "editor/commands/modeling_command_tool_catalog.hpp"
@@ -186,11 +189,7 @@ std::string keybinding_target_id_for_grid_preset(int preset) {
 }
 
 std::filesystem::path default_keybindings_path() {
-  if (const char *local_app_data = std::getenv("LOCALAPPDATA")) {
-    return std::filesystem::path(local_app_data) / "Quader" /
-           "keybindings.json";
-  }
-  return std::filesystem::path("keybindings.json");
+  return quader_user_config_directory({}) / "keybindings.json";
 }
 
 constexpr std::string_view global_command_keybinding_context() {
@@ -1333,6 +1332,9 @@ std::string QuaderCommandsApi::Impl::keybinding_target_id_for_grid_preset(
 
 std::string
 QuaderCommandsApi::Impl::shortcut_for(std::string_view command_id) const {
+  if (!release_allows_input_target(command_id)) {
+    return {};
+  }
   return keybindings_.shortcut_for(command_id);
 }
 
@@ -1342,7 +1344,11 @@ QuaderCommandsApi::Impl::shortcut_for(QuaderCommandId command_id) const {
 }
 
 std::vector<QuaderKeybindingRule> QuaderCommandsApi::Impl::keybindings() const {
-    return keybindings_.keybindings();
+  auto rules = keybindings_.keybindings();
+  std::erase_if(rules, [](const QuaderKeybindingRule &rule) {
+    return !release_allows_input_target(rule.target_id);
+  });
+  return rules;
 }
 
 std::vector<QuaderKeybindingCatalogEntry>
@@ -1507,7 +1513,11 @@ std::string QuaderCommandsApi::Impl::format_input_mapping(
 std::vector<QuaderKeybindingConflict>
 QuaderCommandsApi::Impl::conflicts_for_shortcut(std::string_view shortcut,
                                                 std::string_view when) const {
-  return keybindings_.conflicts_for(shortcut, when);
+  auto conflicts = keybindings_.conflicts_for(shortcut, when);
+  std::erase_if(conflicts, [](const QuaderKeybindingConflict &conflict) {
+    return !release_allows_input_target(conflict.target_id);
+  });
+  return conflicts;
 }
 
 const QuaderKeybindingCatalogEntry *
@@ -1563,6 +1573,10 @@ QuaderCommandsApi::Impl::analyze_shortcut_assignment(
     analysis.message = "Unknown keybinding action.";
     return analysis;
   }
+  if (!release_allows_input_target(proposed_entry->target_id)) {
+    analysis.message = release_feature_unavailable_message();
+    return analysis;
+  }
   if (material_assignment_uses_reserved_bare_right_mouse(action,
                                                            *proposed)) {
     analysis.message =
@@ -1590,7 +1604,8 @@ QuaderCommandsApi::Impl::analyze_shortcut_assignment(
       proposed_entry->default_shortcut == analysis.canonical_shortcut;
 
   for (const QuaderKeybindingCatalogEntry &entry : catalog) {
-    if (entry.key == action || entry.shortcut.empty()) {
+    if (entry.key == action || entry.shortcut.empty() ||
+        !release_allows_input_target(entry.target_id)) {
       continue;
     }
     const std::string &existing_shortcut = entry.shortcut;
@@ -1826,8 +1841,13 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::reset_action_shortcut(
 }
 
 QuaderApiVoidResult QuaderCommandsApi::Impl::reset_all_shortcuts() {
+  // Keep dormant overrides so a later cumulative release restores them.
+  auto retained = keybindings_.user_keybindings();
+  std::erase_if(retained, [](const QuaderKeybindingRule &rule) {
+    return release_allows_input_target(rule.target_id);
+  });
   const QuaderKeybindingMutationResult mutation =
-      keybindings_.replace_user_keybindings({});
+      keybindings_.replace_user_keybindings(std::move(retained));
   if (!mutation.ok) {
     return failure(mutation.message);
   }
@@ -1894,6 +1914,9 @@ bool QuaderCommandsApi::Impl::resolve_viewport_input_action(
   const QuaderKeybindingDispatch dispatch =
       keybindings_.resolve_sequence(
           {chord}, context, [](std::string_view target_id) {
+            if (!release_allows_input_target(target_id)) {
+              return false;
+            }
             ViewportInputActionKind candidate = ViewportInputActionKind::None;
             return viewport_input_action_for_target_id(target_id, candidate);
           });
@@ -1939,6 +1962,9 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
       api_.history().can_undo(), api_.history().can_redo(), tools_);
   const auto target_available = [this, &state, panel_owns_input](
                                     std::string_view target_id) {
+    if (!release_allows_input_target(target_id)) {
+      return false;
+    }
     const bool registered = registry_.contains(target_id);
     // Editor panels execute commands and the two owner-only mode/grid intents.
     // Pointer, navigation, and popup targets need the viewport's semantic router.
@@ -2056,6 +2082,9 @@ QuaderCommandsApi::Impl::tool_settings_keybinding_context(
 
 QuaderNativeToolSettingsIntent
 QuaderCommandsApi::Impl::tool_settings_intent(std::string_view target_id) const {
+  if (!release_allows_input_target(target_id)) {
+    return QuaderNativeToolSettingsIntent::None;
+  }
   if (target_id == quader_command::kModelingApplyActivePreview.string()) {
     return QuaderNativeToolSettingsIntent::Apply;
   }
@@ -2140,6 +2169,9 @@ QuaderCommandsApi::Impl::resolve_modal_lifecycle_input_binding(
   const auto dispatch = keybindings_.resolve_next_chord(
       chord, modal_lifecycle_keybinding_context(),
       [this](std::string_view target_id) {
+        if (!release_allows_input_target(target_id)) {
+          return false;
+        }
         const auto *metadata = keybinding_target_metadata(target_id);
         return metadata != nullptr &&
             (metadata->action_id == "tools.finalize" ||
@@ -2177,6 +2209,9 @@ QuaderCommandsApi::Impl::dispatch_modal_lifecycle_input_binding(
   const auto dispatch = keybindings_.dispatch(
       chord, modal_lifecycle_keybinding_context(),
       [this](std::string_view target_id) {
+        if (!release_allows_input_target(target_id)) {
+          return false;
+        }
         const auto *metadata = keybinding_target_metadata(target_id);
         return metadata != nullptr &&
             (metadata->action_id == "tools.finalize" ||
@@ -3119,7 +3154,8 @@ void QuaderCommandsApi::Impl::register_commands() {
         [this, tool_id = std::string(tool->id())] {
           return api_.modeling().execute_tool(tool_id);
         },
-        {}, [this, tool_id = std::string(tool->id())] {
+        tool->id() == "bridge" ? "B" : "",
+        [this, tool_id = std::string(tool->id())] {
           return api_.modeling().can_execute_tool(tool_id);
         });
     if (tool->kind() != CommandToolKind::Preview &&
@@ -3709,7 +3745,11 @@ std::vector<QuaderKeybindingRule> QuaderCommandsApi::keybindings() const {
 
 std::vector<QuaderKeybindingCatalogEntry>
 QuaderCommandsApi::keybinding_catalog() const {
-  return impl_->keybinding_catalog();
+  auto catalog = impl_->keybinding_catalog();
+  std::erase_if(catalog, [](const QuaderKeybindingCatalogEntry &entry) {
+    return !release_allows_input_target(entry.target_id);
+  });
+  return catalog;
 }
 
 std::string QuaderCommandsApi::format_input_mapping(

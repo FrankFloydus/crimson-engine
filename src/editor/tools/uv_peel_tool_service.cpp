@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/uv_peel_tool_service.hpp"
+#include "core/release_features.hpp"
 
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/uv_peel_history_command.hpp"
@@ -56,6 +57,9 @@ std::uint64_t UvPeelToolService::tool_settings_revision() const {
 }
 
 CommandResult UvPeelToolService::activate() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (active_) {
     return command_unchanged_result();
   }
@@ -90,6 +94,9 @@ CommandResult UvPeelToolService::refresh() {
 }
 
 CommandResult UvPeelToolService::set_options(const ModelingUvPeelOptions &options) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   const CommandResult configured =
       command_result(modeling_.set_uv_peel_options(options));
   if (!configured.ok || !configured.changed || !active_) {
@@ -105,6 +112,9 @@ CommandResult UvPeelToolService::reset_settings() {
 }
 
 CommandResult UvPeelToolService::apply() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!active_) {
     return command_invalid_result("No UV Peel tool is active.");
   }

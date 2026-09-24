@@ -18,6 +18,7 @@
 #include "api/quader_project_api.hpp"
 #include "api/quader_project_assets_api.hpp"
 #include "api/quader_render_api.hpp"
+#include "api/quader_release_types.hpp"
 #include "api/quader_scene_documents_api.hpp"
 #include "api/quader_standard_material_documents_api.hpp"
 #include "api/quader_tools_api.hpp"
@@ -52,6 +53,11 @@ public:
     QuaderEditorApi& operator=(const QuaderEditorApi&) = delete;
     QuaderEditorApi(QuaderEditorApi&&) noexcept;
     QuaderEditorApi& operator=(QuaderEditorApi&&) noexcept;
+
+    /** Returns the executable's immutable product release, not the app version. */
+    [[nodiscard]] QuaderReleaseInfo release_info() const;
+    /** Reports release support independently of the current selection/context. */
+    [[nodiscard]] bool feature_available(ReleaseFeature feature) const noexcept;
 
     [[nodiscard]] QuaderApi& api();
     [[nodiscard]] const QuaderApi& api() const;

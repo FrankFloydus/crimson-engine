@@ -52,6 +52,7 @@ QdrProjectWriteSnapshot snapshot_from_read(const QdrProjectReadResult &read) {
   }
   snapshot.value().project_asset_dependencies = read.project_asset_dependencies;
   snapshot.value().viewport_camera_pose = read.viewport_camera_pose;
+  snapshot.value().minimum_product_release = read.minimum_product_release;
   return snapshot.take_value();
 }
 

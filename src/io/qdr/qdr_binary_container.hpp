@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/release_features.hpp"
 #include "io/qdr/qdr_diagnostic.hpp"
 
 #include <array>
@@ -23,7 +24,7 @@ inline constexpr std::array<std::byte, 4> kQdrBinaryMagic{
     static_cast<std::byte>('Q'), static_cast<std::byte>('D'),
     static_cast<std::byte>('R'), static_cast<std::byte>('B')};
 inline constexpr std::uint16_t kQdrBinaryContainerMajor = 1;
-inline constexpr std::uint16_t kQdrBinaryContainerMinor = 1;
+inline constexpr std::uint16_t kQdrBinaryContainerMinor = 2;
 inline constexpr std::uint32_t kQdrBinaryEndianMarker = 0x01020304u;
 inline constexpr std::size_t kQdrBinaryHeaderSize = 64u;
 inline constexpr std::size_t kQdrBinaryDirectoryEntrySize = 64u;
@@ -110,6 +111,7 @@ private:
 struct QdrBinaryContainerReadResult final {
   bool ok = false;
   std::array<std::byte, 16> scene_uuid{};
+  quader::ProductRelease minimum_product_release = quader::kInternalFullRelease;
   std::vector<QdrBinaryChunk> chunks;
   std::string message;
   std::vector<QdrDiagnostic> diagnostics;
@@ -140,11 +142,13 @@ qdr_binary_content_hash(std::span<const std::byte> bytes);
 
 [[nodiscard]] std::vector<std::byte> build_qdr_binary_container(
     std::array<std::byte, 16> scene_uuid,
-    std::vector<QdrBinaryChunkInput> chunks);
+    std::vector<QdrBinaryChunkInput> chunks,
+    quader::ProductRelease minimum_product_release = quader::kInternalFullRelease);
 [[nodiscard]] QdrBinaryContainerBuildResult
 build_qdr_binary_container_with_stats(
     std::array<std::byte, 16> scene_uuid,
-    std::vector<QdrBinaryChunkInput> chunks);
+    std::vector<QdrBinaryChunkInput> chunks,
+    quader::ProductRelease minimum_product_release = quader::kInternalFullRelease);
 
 [[nodiscard]] QdrBinaryContainerReadResult
 read_qdr_binary_container(std::vector<std::byte> file_bytes);

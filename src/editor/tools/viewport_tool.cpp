@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/viewport_tool.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 
 #include "editor/modeling/services/modeling_session_service.hpp"
 
@@ -32,7 +33,7 @@ ToolKind Tool::kind() const { return descriptor_.kind; }
 
 ToolMenuGroup Tool::menu_group() const { return descriptor_.menu_group; }
 
-bool Tool::available() const { return true; }
+bool Tool::available() const { return release_allows_tool(id()); }
 
 bool Tool::owns_viewport() const { return descriptor_.owns_viewport; }
 

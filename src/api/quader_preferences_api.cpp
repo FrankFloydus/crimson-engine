@@ -7,6 +7,7 @@
 #include "api/quader_preferences_api.hpp"
 
 #include "api/quader_commands_api.hpp"
+#include "core/release_features.hpp"
 
 #include <cmath>
 #include <utility>
@@ -83,6 +84,18 @@ QuaderPreferencesApi::set_session_settings(SessionPreferences settings) {
 
 std::uint64_t QuaderPreferencesApi::keybindings_revision() const noexcept {
   return commands_ != nullptr ? commands_->keybindings_revision() : 0;
+}
+
+std::filesystem::path QuaderPreferencesApi::default_material_texture() const {
+  return hooks_.default_material_texture ? hooks_.default_material_texture()
+                                         : std::filesystem::path{};
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::set_default_material_texture(
+    std::filesystem::path path) {
+  return hooks_.set_default_material_texture
+             ? hooks_.set_default_material_texture(std::move(path))
+             : unavailable("Preferences runtime is not attached.");
 }
 
 QuaderApiVoidResult
@@ -198,12 +211,18 @@ bool QuaderPreferencesApi::gizmos_visible() const {
 
 QuaderApiVoidResult
 QuaderPreferencesApi::set_mesh_grid_visible(bool visible) {
+  if (!release_has_feature(ReleaseFeature::MeshGrid)) {
+    return unavailable(release_feature_unavailable_message());
+  }
   return hooks_.set_mesh_grid_visible
              ? hooks_.set_mesh_grid_visible(visible)
              : unavailable("Preferences runtime is not attached.");
 }
 
 bool QuaderPreferencesApi::mesh_grid_visible() const {
+  if (!release_has_feature(ReleaseFeature::MeshGrid)) {
+    return false;
+  }
   return hooks_.mesh_grid_visible ? hooks_.mesh_grid_visible() : false;
 }
 
@@ -229,23 +248,35 @@ bool QuaderPreferencesApi::collisions_visible() const {
 
 QuaderApiVoidResult
 QuaderPreferencesApi::set_texture_lock_enabled(bool enabled) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return unavailable(release_feature_unavailable_message());
+  }
   return hooks_.set_texture_lock_enabled
              ? hooks_.set_texture_lock_enabled(enabled)
              : unavailable("Preferences runtime is not attached.");
 }
 
 bool QuaderPreferencesApi::texture_lock_enabled() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return true;
+  }
   return hooks_.texture_lock_enabled ? hooks_.texture_lock_enabled() : true;
 }
 
 QuaderApiVoidResult
 QuaderPreferencesApi::set_texture_lock_scale_enabled(bool enabled) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return unavailable(release_feature_unavailable_message());
+  }
   return hooks_.set_texture_lock_scale_enabled
              ? hooks_.set_texture_lock_scale_enabled(enabled)
              : unavailable("Preferences runtime is not attached.");
 }
 
 bool QuaderPreferencesApi::texture_lock_scale_enabled() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return false;
+  }
   return hooks_.texture_lock_scale_enabled ? hooks_.texture_lock_scale_enabled()
                                          : false;
 }

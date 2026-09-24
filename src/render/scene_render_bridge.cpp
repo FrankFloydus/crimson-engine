@@ -124,6 +124,7 @@ void SceneRenderBridge::set_project_material_resolver(
     return;
   }
   project_material_resolver_ = resolver;
+  material_binding_.set_project_material_resolver(resolver);
   previous_scene_snapshot_ = {};
   has_previous_scene_snapshot_ = false;
 }

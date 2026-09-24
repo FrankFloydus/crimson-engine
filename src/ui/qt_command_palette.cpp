@@ -10,6 +10,7 @@
 #include "api/quader_commands_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/metadata/command_presentation_catalog.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -328,7 +329,7 @@ struct QtCommandPalette::Impl final {
     for (const QuaderCommandDescriptor &command : public_commands) {
       const CommandPresentationDescriptor *presentation =
           find_command_presentation(command.id);
-      if (presentation == nullptr ||
+      if (!release_presents_command(command.id) || presentation == nullptr ||
           presentation->palette_policy != CommandPalettePolicy::Searchable ||
           !has_command_presentation_surface(
               *presentation, CommandPresentationSurface::CommandPalette)) {

@@ -10,6 +10,8 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_mesh_arrangement_catalog.hpp"
 #include "core/localization_service.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/metadata/command_presentation_catalog.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -781,7 +783,8 @@ struct QtMainMenu::Impl {
          command_presentation_catalog()) {
       if (!has_command_presentation_surface(
               presentation, CommandPresentationSurface::MainMenu) ||
-          !predicate(presentation)) {
+          !predicate(presentation) ||
+          !release_presents_command(presentation.command_id.string())) {
         continue;
       }
       QAction *action = add_presented_command_action(menu, presentation);
@@ -840,7 +843,8 @@ struct QtMainMenu::Impl {
     return static_cast<std::size_t>(std::ranges::count_if(
         command_presentation_catalog(),
         [domain, group](const CommandPresentationDescriptor &presentation) {
-          return presentation.domain == domain &&
+          return release_presents_command(presentation.command_id.string()) &&
+                 presentation.domain == domain &&
                  presentation.group == group &&
                  has_command_presentation_surface(
                      presentation, CommandPresentationSurface::MainMenu);
@@ -1122,6 +1126,9 @@ struct QtMainMenu::Impl {
   }
 
   void build_arrangement_submenu(QMenu &parent) {
+    if (!release_has_feature(ReleaseFeature::Arrangement)) {
+      return;
+    }
     QMenu *arrangement_menu = parent.addMenu(
         qtext(context.localization, "ui.menu.object.arrange", "Arrange"));
     arrangement_menu->setObjectName(QStringLiteral("menu_object_arrange"));
@@ -1212,29 +1219,31 @@ struct QtMainMenu::Impl {
                                 CommandPresentationDomain::Object,
                                 CommandPresentationGroup::Duplication);
 
-    QMenu *materials = menu->addMenu(
-        qtext(context.localization, "ui.menu.object.materials", "Materials"));
-    materials->setObjectName(QStringLiteral("menu_object_materials"));
-    (void)add_presented_group(*materials, CommandPresentationDomain::Object,
-                              CommandPresentationGroup::Materials);
-    material_find_replace_action = materials->addAction(
-        qtext(context.localization, "ui.menu.object.materials.find_replace",
-              "Find/Replace Materials..."));
-    material_find_replace_action->setObjectName(
-        QStringLiteral("action_material_find_replace"));
-    material_find_replace_action->setEnabled(
-        context.material_find_replace_available
-            ? context.material_find_replace_available()
-            : false);
-    QObject::connect(material_find_replace_action, &QAction::triggered,
-                     connection_context.get(), [this]() {
-                       QDR_PROFILE_SCOPE(
-                           "Qt main menu dispatch presentation action");
-                       if (context.show_material_find_replace) {
-                         context.show_material_find_replace();
-                       }
-                     });
+    if (release_has_feature(ReleaseFeature::Materials)) {
+      QMenu *materials = menu->addMenu(
+          qtext(context.localization, "ui.menu.object.materials", "Materials"));
+      materials->setObjectName(QStringLiteral("menu_object_materials"));
+      (void)add_presented_group(*materials, CommandPresentationDomain::Object,
+                                CommandPresentationGroup::Materials);
+      material_find_replace_action = materials->addAction(
+          qtext(context.localization, "ui.menu.object.materials.find_replace",
+                "Find/Replace Materials..."));
+      material_find_replace_action->setObjectName(
+          QStringLiteral("action_material_find_replace"));
+      material_find_replace_action->setEnabled(
+          context.material_find_replace_available
+              ? context.material_find_replace_available()
+              : false);
+      QObject::connect(material_find_replace_action, &QAction::triggered,
+                       connection_context.get(), [this]() {
+                         QDR_PROFILE_SCOPE(
+                             "Qt main menu dispatch presentation action");
+                         if (context.show_material_find_replace) {
+                           context.show_material_find_replace();
+                         }
+                       });
 
+    }
     (void)add_presented_submenu(*menu, "ui.menu.object.visibility",
                                 "Visibility", "menu_object_visibility",
                                 CommandPresentationDomain::Object,
@@ -1323,6 +1332,9 @@ struct QtMainMenu::Impl {
   }
 
   void build_uv_menu() {
+    if (!release_has_feature(ReleaseFeature::UvEditing)) {
+      return;
+    }
     QMenu *menu = add_top_level_menu("ui.menu.uv", "&UV");
     menu->setObjectName(QStringLiteral("menu_uv"));
 
@@ -1422,18 +1434,20 @@ struct QtMainMenu::Impl {
                          context.set_viewport_display_toolbar_visible(visible);
                        }
                      });
-    texture_toolbar_action = toolbars->addAction(
-        qtext(context.localization, "ui.toolbar.texture.title", "Texturing"));
-    texture_toolbar_action->setObjectName(QStringLiteral("toolbar_texture"));
-    texture_toolbar_action->setCheckable(true);
-    QObject::connect(texture_toolbar_action, &QAction::toggled,
-                     connection_context.get(), [this](bool visible) {
-                       QDR_PROFILE_SCOPE(
-                           "Qt main menu dispatch toolbar visibility");
-                       if (context.set_texture_toolbar_visible) {
-                         context.set_texture_toolbar_visible(visible);
-                       }
-                     });
+    if (release_has_feature(ReleaseFeature::UvEditing)) {
+      texture_toolbar_action = toolbars->addAction(
+          qtext(context.localization, "ui.toolbar.texture.title", "Texturing"));
+      texture_toolbar_action->setObjectName(QStringLiteral("toolbar_texture"));
+      texture_toolbar_action->setCheckable(true);
+      QObject::connect(texture_toolbar_action, &QAction::toggled,
+                       connection_context.get(), [this](bool visible) {
+                         QDR_PROFILE_SCOPE(
+                             "Qt main menu dispatch toolbar visibility");
+                         if (context.set_texture_toolbar_visible) {
+                           context.set_texture_toolbar_visible(visible);
+                         }
+                       });
+    }
     tool_toolbar_action = toolbars->addAction(
         qtext(context.localization, "ui.toolbar.tools.title", "Tools"));
     tool_toolbar_action->setObjectName(QStringLiteral("toolbar_tools"));
@@ -1453,6 +1467,9 @@ struct QtMainMenu::Impl {
         qtext(context.localization, "ui.menu.window.panels", "Panels"));
     panels->setObjectName(QStringLiteral("menu_window_panels"));
     for (UIPanelId id : kUiDockPanelIds) {
+      if (!ui_panel_available(id)) {
+        continue;
+      }
       QAction *action = panels->addAction(qtext(context.localization,
                                                 ui_panel_localization_key(id),
                                                 ui_panel_key(id)));
@@ -1515,19 +1532,21 @@ struct QtMainMenu::Impl {
                                 *spawn, CommandPresentationSurface::MainMenu)) {
       (void)add_presented_command_action(*menu, *spawn);
     }
-    material_browser_action = menu->addAction(
-        qtext(context.localization, "ui.menu.view.material_browser",
-              "Material Browser"));
-    material_browser_action->setObjectName(
-        QStringLiteral("action_material_browser"));
-    QObject::connect(material_browser_action, &QAction::triggered,
-                     connection_context.get(), [this]() {
-                       QDR_PROFILE_SCOPE(
-                           "Qt main menu dispatch presentation action");
-                       if (context.show_material_browser) {
-                         context.show_material_browser();
-                       }
-                     });
+    if (release_has_feature(ReleaseFeature::Materials)) {
+      material_browser_action = menu->addAction(
+          qtext(context.localization, "ui.menu.view.material_browser",
+                "Material Browser"));
+      material_browser_action->setObjectName(
+          QStringLiteral("action_material_browser"));
+      QObject::connect(material_browser_action, &QAction::triggered,
+                       connection_context.get(), [this]() {
+                         QDR_PROFILE_SCOPE(
+                             "Qt main menu dispatch presentation action");
+                         if (context.show_material_browser) {
+                           context.show_material_browser();
+                         }
+                       });
+    }
     menu->addSeparator();
     build_layout_submenu(*menu);
     build_toolbar_submenu(*menu);

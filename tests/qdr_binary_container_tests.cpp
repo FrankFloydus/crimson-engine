@@ -50,7 +50,8 @@ template <typename Integer>
 }
 
 [[nodiscard]] std::vector<std::byte> sample_container(
-    std::array<std::byte, 16> uuid = {}) {
+    std::array<std::byte, 16> uuid = {},
+    quader::ProductRelease minimum_product_release = quader::kInternalFullRelease) {
   std::vector<QdrBinaryChunkInput> chunks;
   chunks.push_back({
       .type = QdrBinaryChunkType::SceneMetadata,
@@ -69,7 +70,49 @@ template <typename Integer>
       .bytes = bytes("geometry"),
       .allow_compression = true,
   });
-  return build_qdr_binary_container(uuid, std::move(chunks));
+  return build_qdr_binary_container(uuid, std::move(chunks),
+                                     minimum_product_release);
+}
+
+TEST(QdrBinaryContainerTests, PreservesExplicitMinimumProductRelease) {
+  for (const quader::ProductRelease release :
+       {quader::ProductRelease{1u}, quader::ProductRelease{2u},
+        quader::kInternalFullRelease}) {
+    const auto encoded = sample_container({}, release);
+    EXPECT_EQ(read_little_endian<std::uint16_t>(encoded, 6u), 2u);
+    EXPECT_EQ(read_little_endian<std::uint64_t>(encoded, 56u), release);
+    const auto read = read_qdr_binary_container(encoded);
+    ASSERT_TRUE(read.ok) << read.message;
+    EXPECT_EQ(read.minimum_product_release, release);
+  }
+}
+
+TEST(QdrBinaryContainerTests, LegacyContainersRequireFullAndRetainReservedValidation) {
+  for (const std::uint16_t minor : {std::uint16_t{0u}, std::uint16_t{1u}}) {
+    auto encoded = sample_container();
+    write_little_endian(encoded, 6u, minor);
+    write_little_endian(encoded, 56u, std::uint64_t{0u});
+    const auto read = read_qdr_binary_container(encoded);
+    ASSERT_TRUE(read.ok) << read.message;
+    EXPECT_EQ(read.minimum_product_release, quader::kInternalFullRelease);
+
+    write_little_endian(encoded, 56u, std::uint64_t{1u});
+    const auto invalid = read_qdr_binary_container(std::move(encoded));
+    ASSERT_FALSE(invalid.ok);
+    ASSERT_FALSE(invalid.diagnostics.empty());
+    EXPECT_EQ(invalid.diagnostics.front().code,
+              "qdr.binary.unsupported_header_flags");
+  }
+}
+
+TEST(QdrBinaryContainerTests, RejectsMissingMinimumProductRelease) {
+  auto encoded = sample_container();
+  write_little_endian(encoded, 56u, std::uint64_t{0u});
+  const auto read = read_qdr_binary_container(std::move(encoded));
+  ASSERT_FALSE(read.ok);
+  ASSERT_FALSE(read.diagnostics.empty());
+  EXPECT_EQ(read.diagnostics.front().code, "qdr.binary.invalid_product_release");
+  EXPECT_THROW((void)sample_container({}, 0u), std::runtime_error);
 }
 
 TEST(QdrBinaryContainerTests, RoundTripPreservesEnvelopeAndChunks) {

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "core/user_config_paths.hpp"
+#include "core/release_features.hpp"
 
 #include <cstdlib>
 
@@ -12,20 +13,23 @@ namespace quader {
 
 std::filesystem::path
 quader_user_config_directory(const std::filesystem::path &executable_dir) {
+  const bool public_release = current_product_release() != kInternalFullRelease;
 #ifdef _WIN32
   if (const char *local_app_data = std::getenv("LOCALAPPDATA")) {
     if (local_app_data[0] != '\0') {
-      return std::filesystem::path(local_app_data) / "Quader";
+      const auto root = std::filesystem::path(local_app_data) / "Quader";
+      return public_release ? root / "Public" : root;
     }
   }
 #else
     if (const char* configHome = std::getenv("XDG_CONFIG_HOME")) {
         if (configHome[0] != '\0') {
-            return std::filesystem::path(configHome) / "Quader";
+            const auto root = std::filesystem::path(configHome) / "Quader";
+            return public_release ? root / "Public" : root;
         }
     }
 #endif
-  return executable_dir;
+  return public_release ? executable_dir / "Public" : executable_dir;
 }
 
 } // namespace quader

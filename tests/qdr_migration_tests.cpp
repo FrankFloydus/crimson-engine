@@ -81,7 +81,9 @@ std::vector<std::byte> retired_geometry(RetiredMigrationFixtureOptions options) 
   return flatbuffer_bytes(builder);
 }
 
-quader_io::QdrBinaryContainerReadResult retired_scene(RetiredMigrationFixtureOptions options = {}) {
+quader_io::QdrBinaryContainerReadResult retired_scene(
+    RetiredMigrationFixtureOptions options = {},
+    ProductRelease minimum_product_release = kInternalFullRelease) {
   flatbuffers::FlatBufferBuilder builder;
   const auto material_id = builder.CreateString(kMaterialId);
   const std::array slots{retired::CreateProjectMaterialSlotBinding(builder, 3u, material_id)};
@@ -155,7 +157,22 @@ quader_io::QdrBinaryContainerReadResult retired_scene(RetiredMigrationFixtureOpt
       {.type = quader_io::QdrBinaryChunkType::SceneMetadata, .schema_version = 10u, .id = 0u,
        .content_hash = quader_io::qdr_binary_content_hash(metadata), .bytes = std::move(metadata)},
       {.type = quader_io::QdrBinaryChunkType::Geometry, .schema_version = 2u, .id = 1u,
-       .content_hash = quader_io::qdr_binary_content_hash(geometry), .bytes = std::move(geometry)}}));
+       .content_hash = quader_io::qdr_binary_content_hash(geometry), .bytes = std::move(geometry)}},
+      minimum_product_release));
+}
+
+TEST(QdrMigrationTests, RetiredConversionPreservesMinimumProductRelease) {
+  for (const ProductRelease required :
+       {kPublicRelease01, product_release(0u, 2u), kInternalFullRelease}) {
+    const auto source = retired_scene({}, required);
+    ASSERT_TRUE(source.ok) << source.message;
+    const auto snapshot = migration::decode_retired_schema10(source);
+    EXPECT_EQ(snapshot.minimum_product_release, required);
+    const auto converted = QdrDocumentReader::deserialize_project_document(
+        QdrDocumentWriter::serialize_project_document_bytes(snapshot));
+    ASSERT_TRUE(converted.ok) << converted.message;
+    EXPECT_EQ(converted.minimum_product_release, required);
+  }
 }
 
 TEST(QdrMigrationTests, RetiredAuthoredScenePreservesIdentityOrderComponentsAndDependencies) {

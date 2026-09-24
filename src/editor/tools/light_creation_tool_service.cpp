@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/light_creation_tool_service.hpp"
+#include "core/release_features.hpp"
 
 namespace quader {
 
@@ -18,6 +19,9 @@ std::string_view LightCreationToolService::active_tool_id() const {
 }
 
 CommandResult LightCreationToolService::begin(LightCreationKind kind) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (active_kind_ == kind) {
     return command_unchanged_result();
   }

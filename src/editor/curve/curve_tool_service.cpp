@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/curve/curve_tool_service.hpp"
+#include "core/release_features.hpp"
 
 #include "assets/asset_registry.hpp"
 #include "editor/commands/document_command_service.hpp"
@@ -264,24 +265,48 @@ void CurveToolService::restore_session_defaults() {
   preset_document_cache_.reset();
 }
 
+bool CurveToolService::can_activate() const {
+  return release_has_feature(ReleaseFeature::Curves);
+}
+
+bool CurveToolService::controls_editable() const {
+  return release_has_feature(ReleaseFeature::Curves) &&
+         ((active_ && drawing_) || (!drawing_ && entity_ != kInvalidEntityId));
+}
+
 bool CurveToolService::can_apply() const {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return false;
+  }
   return active_ && drawing_ && draft_.point_count() >= 2u && !dragging();
 }
 
 bool CurveToolService::can_change_creation_kind() const {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return false;
+  }
   return active_ && drawing_ && !dragging() &&
          (draft_.point_count() == 0u || procedural_draft_);
 }
 
 bool CurveToolService::can_reset_settings() const {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return false;
+  }
   return active_ && drawing_ && !dragging();
 }
 
 bool CurveToolService::has_editable_existing_curve() const {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return false;
+  }
   return editable_existing_curve_component() != nullptr;
 }
 
 bool CurveToolService::can_apply_solidify() const {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return false;
+  }
   const CurveComponent *component = editable_existing_curve_component();
   return component != nullptr && component->solidify && !dragging();
 }
@@ -425,6 +450,9 @@ void CurveToolService::rebuild_preview_cache(
 }
 
 bool CurveToolService::editable_source(EntityId entity) const {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return false;
+  }
   const CurveComponent *curve = scene_.curve(entity);
   const VisibilityComponent *visibility = scene_.visibility(entity);
   return curve != nullptr && curve_component_is_valid(*curve) &&
@@ -585,6 +613,9 @@ void CurveToolService::observe_owner_revisions() {
 }
 
 CommandResult CurveToolService::activate() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (active_) {
     return command_unchanged_result();
   }
@@ -602,6 +633,9 @@ CommandResult CurveToolService::activate() {
 }
 
 CommandResult CurveToolService::refresh() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_unchanged_result();
+  }
   const bool lost_preview =
       drag_ && !drawing_ && !modeling_.curve_document_preview_active();
   if (!lost_preview && observed_scene_revision_ == scene_.revision() &&
@@ -678,6 +712,9 @@ CommandResult CurveToolService::cancel() {
 }
 
 CommandResult CurveToolService::apply() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!can_apply()) {
     return command_invalid_result(
         "Place at least two points and finish the current drag.");
@@ -695,6 +732,9 @@ CommandResult CurveToolService::apply() {
 }
 
 CommandResult CurveToolService::begin_new_curve() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!can_begin_new_curve()) {
     return command_invalid_result("Finish or cancel the current curve first.");
   }
@@ -715,6 +755,9 @@ CommandResult CurveToolService::begin_new_curve() {
 }
 
 CommandResult CurveToolService::new_curve() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!active_) {
     return command_invalid_result("The Curve tool is not active.");
   }
@@ -731,6 +774,9 @@ CommandResult CurveToolService::new_curve() {
 }
 
 CommandResult CurveToolService::set_closed(bool closed_value) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (dragging()) {
     return command_invalid_result(
         "Finish the active curve drag before changing closure.");
@@ -787,6 +833,9 @@ CommandResult CurveToolService::set_closed(bool closed_value) {
 }
 
 CommandResult CurveToolService::set_solidify(bool enabled) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return refreshed;
@@ -807,6 +856,9 @@ CommandResult CurveToolService::set_solidify(bool enabled) {
 CommandResult
 CurveToolService::set_solidify_resolution(
     std::uint32_t resolution, UndoRedoExecuteOptions options) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (resolution <
           static_cast<std::uint32_t>(kCurveSolidifyMinimumResolution) ||
       resolution >
@@ -833,6 +885,9 @@ CurveToolService::set_solidify_resolution(
 
 CommandResult CurveToolService::set_solidify_radius(
     double radius, UndoRedoExecuteOptions options) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!std::isfinite(radius) || radius < kCurveSolidifyMinimumRadius ||
       radius > kCurveSolidifyMaximumRadius) {
     return command_invalid_result("Invalid Curve solidify radius.");
@@ -857,6 +912,9 @@ CommandResult CurveToolService::set_solidify_radius(
 }
 
 CommandResult CurveToolService::apply_solidify() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return refreshed;
@@ -890,6 +948,9 @@ CommandResult CurveToolService::apply_solidify() {
 }
 
 CommandResult CurveToolService::set_creation_kind(CurveCreationKind kind) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!can_change_creation_kind()) {
     return command_invalid_result("Curve type can only change before drawing "
                                   "or while a preset remains procedural.");
@@ -959,6 +1020,9 @@ CommandResult CurveToolService::set_creation_kind(CurveCreationKind kind) {
 }
 
 CommandResult CurveToolService::set_preset_radius(double radius) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!active_ || !drawing_ || dragging() ||
       creation_kind_ == CurveCreationKind::Draw) {
     return command_invalid_result(
@@ -1026,6 +1090,9 @@ CommandResult CurveToolService::set_preset_radius(double radius) {
 }
 
 CommandResult CurveToolService::set_oval_length(double length_value) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!active_ || !drawing_ || dragging() ||
       creation_kind_ != CurveCreationKind::Oval) {
     return command_invalid_result(
@@ -1077,6 +1144,9 @@ CommandResult CurveToolService::set_oval_length(double length_value) {
 }
 
 CommandResult CurveToolService::reset_settings() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!can_reset_settings()) {
     return command_invalid_result(
         "Curve settings cannot reset in the current state.");
@@ -1133,6 +1203,9 @@ CommandResult CurveToolService::reset_settings() {
 
 CommandResult
 CurveToolService::toggle_point_smoothness(modeling::CurvePointId point) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!controls_editable() || dragging()) {
     return command_invalid_result(
         "Finish the active curve drag before converting a point.");
@@ -1185,6 +1258,9 @@ CurveToolService::toggle_point_smoothness(modeling::CurvePointId point) {
 }
 
 CommandResult CurveToolService::set_hover(std::optional<QVec3> position) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (position && !finite_point(*position)) {
     return command_invalid_result("Curve hover position must be finite.");
   }
@@ -1203,6 +1279,9 @@ CommandResult CurveToolService::set_hover(std::optional<QVec3> position) {
 
 CommandResult CurveToolService::set_preset_hover(
     std::optional<CurvePresetPlacementFrame> frame) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   std::optional<CurvePresetPlacementFrame> normalized;
   if (frame.has_value()) {
     normalized = normalized_preset_frame(*frame);
@@ -1237,6 +1316,9 @@ CommandResult CurveToolService::set_preset_hover(
 }
 
 CommandResult CurveToolService::place_preset(CurvePresetPlacementFrame frame) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!active_ || !drawing_ || dragging() ||
       creation_kind_ == CurveCreationKind::Draw) {
     return command_invalid_result(
@@ -1292,6 +1374,11 @@ ModelingCommandResult CurveToolService::edit_control_selection_checked(
     quader_editor_core::SelectionEditOperation operation,
     const CurveControlSelection *baseline,
     std::optional<CurveControlTarget> direct_hit) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false,
+            .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return modeling_result(refreshed);
@@ -1422,6 +1509,11 @@ ModelingCommandResult CurveToolService::edit_sub_elements(
     std::span<const EditorSubSelectionTarget> hits, EditorSubSelectionEdit edit,
     const EditorSubSelectionBaseline *baseline,
     std::optional<EditorSubSelectionTarget> direct_hit) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false,
+            .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return modeling_result(refreshed);
@@ -1521,6 +1613,11 @@ ModelingCommandResult CurveToolService::edit_sub_elements(
 
 ModelingCommandResult CurveToolService::restore_sub_selection_baseline(
     const EditorSubSelectionBaseline &baseline) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false,
+            .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return {.ok = false,
@@ -1595,6 +1692,11 @@ ModelingCommandResult CurveToolService::restore_sub_selection_baseline(
 
 ModelingCommandResult CurveToolService::preview_sub_element_hover(
     std::optional<EditorSubSelectionTarget> target) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false,
+            .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return modeling_result(refreshed);
@@ -1636,6 +1738,11 @@ ModelingCommandResult CurveToolService::preview_sub_element_hover(
 }
 
 ModelingCommandResult CurveToolService::select_all_sub_elements() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false,
+            .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return modeling_result(refreshed);
@@ -1661,6 +1768,11 @@ ModelingCommandResult CurveToolService::select_all_sub_elements() {
 }
 
 ModelingCommandResult CurveToolService::invert_sub_elements() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false,
+            .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return modeling_result(refreshed);
@@ -1680,6 +1792,11 @@ ModelingCommandResult CurveToolService::invert_sub_elements() {
 }
 
 ModelingCommandResult CurveToolService::clear_sub_elements() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false,
+            .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return modeling_result(refreshed);
@@ -1698,6 +1815,11 @@ ModelingCommandResult CurveToolService::clear_sub_elements() {
 }
 
 ModelingCommandResult CurveToolService::delete_selected_sub_elements() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false,
+            .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return modeling_result(refreshed);
@@ -1836,6 +1958,9 @@ std::optional<QVec3> CurveToolService::selected_controls_world_pivot() const {
 }
 
 CommandResult CurveToolService::begin_point(QVec3 world_position) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!active_ || !drawing_ || dragging() ||
       creation_kind_ != CurveCreationKind::Draw ||
       !finite_point(world_position)) {
@@ -1879,6 +2004,9 @@ CommandResult CurveToolService::begin_point(QVec3 world_position) {
 }
 
 CommandResult CurveToolService::begin_selected_control_drag() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   const CommandResult refreshed = refresh();
   if (!refreshed.ok) {
     return refreshed;
@@ -1927,6 +2055,9 @@ CommandResult CurveToolService::begin_selected_control_drag() {
 }
 
 CommandResult CurveToolService::update_drag(QVec3 world_position) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!drag_ || !finite_point(world_position)) {
     return command_invalid_result("A finite curve drag position is required.");
   }
@@ -2028,6 +2159,9 @@ CommandResult CurveToolService::update_drag(QVec3 world_position) {
 }
 
 CommandResult CurveToolService::commit_drag() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!drag_) {
     return command_unchanged_result();
   }

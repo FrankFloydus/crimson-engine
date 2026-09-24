@@ -9,9 +9,13 @@
 #include "api/quader_commands_api.hpp"
 #include "ui/qt_apply_cancel_input_filter.hpp"
 #include "core/localization_service.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
+#include "editor/material/default_material_texture_store.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_material_presentation.hpp"
 #include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_controller.hpp"
 #include "ui/qt_spin_box.hpp"
@@ -28,6 +32,8 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QFile>
+#include <QFileDialog>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -967,6 +973,14 @@ struct QtSettingsDialog::Impl {
   QtSettingsController controller;
   QtSettingsController::ChangeCallback settings_changed;
   std::function<bool()> persist_interface_settings;
+  std::filesystem::path settings_directory;
+  std::filesystem::path built_in_default_texture;
+  std::function<std::optional<std::filesystem::path>()> default_texture_picker;
+  std::uint64_t context_generation = 0;
+  bool default_material_dirty = false;
+  std::filesystem::path default_material_target_baseline;
+  std::filesystem::path default_material_preview_path;
+  QtMaterialPresentationItem default_material_preview_item;
   std::array<bool, kViewportColorSettingCount> dirty_colors{};
   std::array<bool, kViewportFloatSettingCount> dirty_floats{};
   std::array<bool, kViewportBoolSettingCount> dirty_bools{};
@@ -990,6 +1004,9 @@ struct QtSettingsDialog::Impl {
   QLabel *interface_scale_label = nullptr;
   QSpinBox *interface_scale_spin_box = nullptr;
   QCheckBox *vsync_check_box = nullptr;
+  QLabel *default_material_preview = nullptr;
+  QLabel *default_material_path = nullptr;
+  QPushButton *default_material_browse = nullptr;
   QLabel *undo_steps_label = nullptr;
   QSpinBox *undo_steps_spin_box = nullptr;
   QLabel *undo_help_label = nullptr;
@@ -1037,12 +1054,14 @@ struct QtSettingsDialog::Impl {
     dirty_bools.fill(false);
     interface_scale_dirty = false;
     vsync_dirty = false;
+    default_material_dirty = false;
     locale_dirty = false;
     session_dirty.fill(false);
   }
 
   [[nodiscard]] bool has_pending_changes() const {
     return interface_scale_dirty || vsync_dirty || locale_dirty ||
+           default_material_dirty ||
            std::any_of(session_dirty.begin(), session_dirty.end(),
                        [](bool dirty) { return dirty; }) ||
            std::any_of(dirty_colors.begin(), dirty_colors.end(),
@@ -1151,7 +1170,21 @@ struct QtSettingsDialog::Impl {
       vsync_target_baseline = target_vsync;
     }
     synchronize_session_draft(force);
+    synchronize_default_material_draft(force);
     refresh_action_state();
+  }
+
+  void synchronize_default_material_draft(bool force) {
+    const std::filesystem::path &target = target_ui_settings->default_material_texture();
+    const bool externally_changed = !force && transaction_active &&
+        target != default_material_target_baseline;
+    if (!force && default_material_dirty && !externally_changed) {
+      default_material_dirty = draft_ui_settings.default_material_texture() != target;
+    } else {
+      draft_ui_settings.set_default_material_texture(target);
+      default_material_dirty = false;
+    }
+    default_material_target_baseline = target;
   }
 
   void synchronize_session_draft(bool force) {
@@ -1275,6 +1308,17 @@ struct QtSettingsDialog::Impl {
     const UISettings previous_ui_settings = *target_ui_settings;
     const ViewportSettings previous_viewport_settings =
         *target_viewport_settings;
+    std::filesystem::path imported_default_material =
+        target_ui_settings->default_material_texture();
+    if (default_material_dirty) {
+      const auto imported = DefaultMaterialTextureStore::import_image(
+          draft_ui_settings.default_material_texture(), settings_directory);
+      if (!imported.ok()) {
+        show_default_material_error();
+        return false;
+      }
+      imported_default_material = imported.value();
+    }
     if (locale_dirty &&
         (!localization->has_locale(draft_ui_settings.locale()) ||
          !localization->select_locale(draft_ui_settings.locale()))) {
@@ -1326,6 +1370,11 @@ struct QtSettingsDialog::Impl {
     const bool vsync_changed =
         vsync_dirty && target_ui_settings->vsync_enabled() !=
                            draft_ui_settings.vsync_enabled();
+    const bool default_material_changed =
+        imported_default_material != target_ui_settings->default_material_texture();
+    if (default_material_changed) {
+      target_ui_settings->set_default_material_texture(imported_default_material);
+    }
     SessionPreferences merged_session = target_ui_settings->session_settings();
     const SessionPreferences &draft_session = draft_ui_settings.session_settings();
     if (session_dirty[0]) {
@@ -1359,7 +1408,8 @@ struct QtSettingsDialog::Impl {
     const float committed_interface_scale =
         target_ui_settings->interface_scale();
 
-    if ((locale_changed || scale_changed || vsync_changed || session_changed) &&
+    if ((locale_changed || scale_changed || vsync_changed || session_changed ||
+         default_material_changed) &&
         persist_interface_settings &&
         !persist_interface_settings()) {
       *target_ui_settings = previous_ui_settings;
@@ -1419,6 +1469,10 @@ struct QtSettingsDialog::Impl {
     if (session_changed && settings_changed) {
       settings_changed({.kind = QtSettingsChangeKind::SessionCommit,
                         .session_settings = merged_session});
+    }
+    if (default_material_changed && settings_changed) {
+      settings_changed({.kind = QtSettingsChangeKind::DefaultMaterialCommit,
+                        .default_material_texture = imported_default_material});
     }
 
     clear_dirty();
@@ -1521,6 +1575,7 @@ struct QtSettingsDialog::Impl {
     const OptionsPageWidgets viewport_page = create_category(
         "viewport", "ui.settings.viewport", "Viewport");
     create_display_group(viewport_page);
+    create_default_material_group(viewport_page);
     const OptionsPageWidgets appearance_page = create_category(
         "appearance", "ui.settings.appearance", "Colors & Overlays");
     const OptionsPageWidgets editing_page = create_category(
@@ -1580,6 +1635,11 @@ struct QtSettingsDialog::Impl {
     color_controls.reserve(kViewportColorSettingCount);
     for (const ViewportColorSettingDescriptor &descriptor :
          viewport_color_settings()) {
+      if (!release_has_feature(ReleaseFeature::MeshGrid) &&
+          (descriptor.id == ViewportColorSettingId::MeshGridMinor ||
+           descriptor.id == ViewportColorSettingId::MeshGridMajor)) {
+        continue;
+      }
       QFormLayout *form =
           section_forms[static_cast<std::size_t>(descriptor.section)];
       auto *label = new QLabel(form->parentWidget());
@@ -1681,6 +1741,126 @@ struct QtSettingsDialog::Impl {
     groups.push_back(
         {box, std::string(localization_key), std::string(label)});
     return form;
+  }
+
+  void create_default_material_group(const OptionsPageWidgets &page) {
+    QFormLayout *form = create_group(page, "default_material",
+        "ui.settings.group.default_material", "Default Material");
+    auto *row = new QWidget(form->parentWidget());
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    default_material_preview = new QLabel(row);
+    default_material_preview->setObjectName(
+        QStringLiteral("settingsDefaultMaterialPreview"));
+    default_material_preview->setAlignment(Qt::AlignCenter);
+    default_material_preview->setFixedSize(64, 64);
+    default_material_path = new QLabel(row);
+    default_material_path->setObjectName(
+        QStringLiteral("settingsDefaultMaterialPath"));
+    default_material_path->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    default_material_path->setMinimumWidth(40);
+    default_material_browse = new QPushButton(row);
+    default_material_browse->setObjectName(
+        QStringLiteral("settingsDefaultMaterialBrowse"));
+    layout->addWidget(default_material_preview);
+    layout->addWidget(default_material_path, 1);
+    layout->addWidget(default_material_browse);
+    form->addRow(row);
+    QObject::connect(default_material_browse, &QPushButton::clicked, &owner,
+                     [this]() { choose_default_material(); });
+  }
+
+  void show_default_material_error() {
+    if (keybinding_message_box->set_presentation({
+            .icon = QMessageBox::Critical,
+            .object_name = QStringLiteral("settingsDefaultMaterialErrorDialog"),
+            .title = qtext(localization, "ui.panel.settings", "Settings"),
+            .text = qtext(localization,
+                "ui.settings.default_material.import_failed",
+                "The default material image could not be imported. Choose a valid PNG or JPEG image."),
+            .buttons = {{
+                .button = QtRetainedMessageBoxButton::Primary,
+                .object_name = QStringLiteral("settingsDefaultMaterialErrorDialog.ok"),
+                .label = qtext(localization, "ui.action.ok", "OK"),
+                .role = QMessageBox::AcceptRole}},
+            .default_button = QtRetainedMessageBoxButton::Primary,
+            .escape_button = QtRetainedMessageBoxButton::Primary,
+            .close_button = QtRetainedMessageBoxButton::Primary})) {
+      keybinding_message_box->prewarm();
+      keybinding_message_box->open();
+    }
+  }
+
+  void choose_default_material() {
+    if (!transaction_active || !has_context()) {
+      return;
+    }
+    const std::uint64_t generation = context_generation;
+    std::optional<std::filesystem::path> selected;
+    if (default_texture_picker) {
+      const auto picker = default_texture_picker;
+      selected = picker();
+    } else {
+      const QString path = QFileDialog::getOpenFileName(
+          &owner, qtext(localization, "ui.settings.group.default_material",
+                         "Default Material"),
+          QString::fromStdWString(draft_ui_settings.default_material_texture().wstring()),
+          qtext(localization, "ui.settings.default_material.image_filter",
+                "Images (*.png *.jpg *.jpeg)"));
+      if (!path.isEmpty()) {
+        selected = std::filesystem::path(path.toStdWString());
+      }
+    }
+    if (generation != context_generation || !transaction_active ||
+        !selected.has_value()) {
+      return;
+    }
+    if (!selected->empty() &&
+        !DefaultMaterialTextureStore::validate_image(*selected).ok()) {
+      show_default_material_error();
+      return;
+    }
+    draft_ui_settings.set_default_material_texture(*selected);
+    default_material_dirty = *selected != target_ui_settings->default_material_texture();
+    refresh_default_material();
+    refresh_action_state();
+  }
+
+  void refresh_default_material(bool force_pixmap = false) {
+    if (default_material_preview == nullptr) {
+      return;
+    }
+    default_material_browse->setText(
+        qtext(localization, "ui.action.browse", "Browse..."));
+    const std::filesystem::path configured = ui_settings != nullptr
+        ? ui_settings->default_material_texture() : std::filesystem::path{};
+    const std::filesystem::path path = configured.empty()
+        ? built_in_default_texture : configured;
+    const bool path_changed = path != default_material_preview_path;
+    if (path_changed) {
+      default_material_preview_path = path;
+      default_material_preview_item = {};
+      QFile file(QString::fromStdWString(path.wstring()));
+      if (file.open(QIODevice::ReadOnly) && file.size() > 0 &&
+          file.size() <= static_cast<qint64>(kMaximumProjectTextureEncodedBytes)) {
+        default_material_preview_item.encoded_albedo =
+            file.read(static_cast<qint64>(kMaximumProjectTextureEncodedBytes));
+        default_material_preview_item.has_valid_albedo =
+            !default_material_preview_item.encoded_albedo.isEmpty();
+      }
+      default_material_preview_item.thumbnail =
+          make_qt_material_thumbnail(default_material_preview_item);
+    }
+    default_material_path->setText(configured.empty()
+        ? qtext(localization, "ui.settings.default_material.built_in", "Default")
+        : QString::fromStdWString(configured.filename().wstring()));
+    default_material_path->setToolTip(QString::fromStdWString(path.wstring()));
+    if (path_changed || force_pixmap) {
+      default_material_preview->setPixmap(qt_material_preview_pixmap(
+          default_material_preview_item,
+          default_material_preview->size() - QSize(8, 8),
+          default_material_preview->devicePixelRatioF()));
+    }
   }
 
   void create_interface_page() {
@@ -2273,7 +2453,11 @@ struct QtSettingsDialog::Impl {
                    LocalizationService &new_localization,
                    QuaderCommandsApi &new_commands,
                    QtSettingsController::ChangeCallback new_settings_changed,
-                   std::function<bool()> new_persist_interface_settings) {
+                   std::function<bool()> new_persist_interface_settings,
+                   std::filesystem::path new_settings_directory,
+                   std::filesystem::path new_built_in_default_texture,
+                   std::function<std::optional<std::filesystem::path>()> new_picker) {
+    ++context_generation;
     const bool restart_visible_transaction = owner.isVisible();
     const bool preserve_transaction =
         transaction_active && target_ui_settings == &new_ui_settings &&
@@ -2291,6 +2475,15 @@ struct QtSettingsDialog::Impl {
     settings_changed = std::move(new_settings_changed);
     persist_interface_settings =
         std::move(new_persist_interface_settings);
+    const std::filesystem::path executable_directory(
+        QCoreApplication::applicationDirPath().toStdWString());
+    settings_directory = new_settings_directory.empty()
+        ? UISettings::resolve_paths(executable_directory).directory
+        : std::move(new_settings_directory);
+    built_in_default_texture = new_built_in_default_texture.empty()
+        ? executable_directory / "materials" / "default" / "default_albedo.png"
+        : std::move(new_built_in_default_texture);
+    default_texture_picker = std::move(new_picker);
     controller.bind(
         draft_ui_settings, draft_viewport_settings, new_localization,
         [this](const QtSettingsChange &change) {
@@ -2416,6 +2609,7 @@ struct QtSettingsDialog::Impl {
     refresh_interface_scale();
     refresh_vsync_enabled();
     refresh_session_controls();
+    refresh_default_material();
     refresh_locale_combo();
     refresh_keybindings();
     refresh_keybinding_editor();
@@ -2496,6 +2690,10 @@ struct QtSettingsDialog::Impl {
       rows.reserve(catalog.size());
       for (std::size_t index = 0u; index < catalog.size(); ++index) {
         const QuaderKeybindingCatalogEntry &entry = catalog[index];
+        if (!release_allows_input_target(entry.action_id) ||
+            !release_presents_command(entry.action_id)) {
+          continue;
+        }
         const QString shortcut = QString::fromStdString(entry.shortcut);
         rows.push_back({
             .key = entry.key,
@@ -2592,6 +2790,8 @@ struct QtSettingsDialog::Impl {
   }
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    default_material_preview->setFixedSize(metrics.px(64), metrics.px(64));
+    refresh_default_material(true);
     category_list->setMinimumWidth(metrics.px(160));
     category_list->setMaximumWidth(metrics.px(220));
 
@@ -2676,6 +2876,15 @@ struct QtSettingsDialog::Impl {
     }
     synchronize_session_draft(false);
     refresh_session_controls();
+    refresh_action_state();
+  }
+
+  void synchronize_default_material_texture() {
+    if (!has_context()) {
+      return;
+    }
+    synchronize_default_material_draft(true);
+    refresh_default_material();
     refresh_action_state();
   }
 
@@ -2775,10 +2984,17 @@ void QtSettingsDialog::set_context(UISettings &ui_settings,
                                    QtSettingsController::ChangeCallback
                                        settings_changed,
                                    std::function<bool()>
-                                       persist_interface_settings) {
+                                       persist_interface_settings,
+                                   std::filesystem::path settings_directory,
+                                   std::filesystem::path built_in_default_texture,
+                                   std::function<std::optional<std::filesystem::path>()>
+                                       default_texture_picker) {
   impl_->set_context(ui_settings, viewport_settings, localization, commands,
                      std::move(settings_changed),
-                     std::move(persist_interface_settings));
+                     std::move(persist_interface_settings),
+                     std::move(settings_directory),
+                     std::move(built_in_default_texture),
+                     std::move(default_texture_picker));
 }
 
 void QtSettingsDialog::apply_ui_scale(const QtUiScaleMetrics &metrics) {
@@ -2795,6 +3011,10 @@ void QtSettingsDialog::synchronize_vsync_enabled() {
 
 void QtSettingsDialog::synchronize_session_settings() {
   impl_->synchronize_session_settings();
+}
+
+void QtSettingsDialog::synchronize_default_material_texture() {
+  impl_->synchronize_default_material_texture();
 }
 
 void QtSettingsDialog::refresh() { impl_->refresh(); }

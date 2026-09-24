@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/viewport_workspace_service.hpp"
 
+#include "core/release_features.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 
@@ -197,14 +198,23 @@ bool ViewportWorkspaceService::set_grid_preset(int preset) {
 ViewportShadingMode
 ViewportWorkspaceService::shading_mode(ViewportPaneId pane_id) const {
   const ViewportWorkspacePaneState &pane_state = pane(pane_id);
-  return uses_orthographic_shading(pane_state.camera)
-             ? pane_state.orthographic_shading
-             : pane_state.perspective_shading;
+  const bool orthographic = uses_orthographic_shading(pane_state.camera);
+  const ViewportShadingMode mode = orthographic
+                                       ? pane_state.orthographic_shading
+                                       : pane_state.perspective_shading;
+  if (!release_has_feature(ReleaseFeature::RenderedViewport) &&
+      viewport_shading_uses_rendered_materials(mode)) {
+    return orthographic ? ViewportShadingMode::Wireframe
+                        : ViewportShadingMode::Shaded;
+  }
+  return mode;
 }
 
 bool ViewportWorkspaceService::set_shading_mode(ViewportPaneId pane_id,
                                                 ViewportShadingMode mode) {
-  if (!viewport_shading_mode_is_valid(mode)) {
+  if (!viewport_shading_mode_is_valid(mode) ||
+      (!release_has_feature(ReleaseFeature::RenderedViewport) &&
+       viewport_shading_uses_rendered_materials(mode))) {
     return false;
   }
   ViewportWorkspacePaneState &pane_state = pane(pane_id);

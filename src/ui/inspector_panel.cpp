@@ -15,6 +15,7 @@
 #include "scene/light_properties.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/transform_pivot.hpp"
+#include "core/release_features.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
@@ -1053,7 +1054,8 @@ private:
   }
 
   void build_material_section() {
-    if (!material_presentation_.section_visible) {
+    if (!release_has_feature(ReleaseFeature::Materials) ||
+        !material_presentation_.section_visible) {
       return;
     }
 
@@ -2010,13 +2012,15 @@ private:
 
     Section lighting =
         add_section("lighting", localized("ui.inspector.lighting", "Lighting"));
-    add_checkbox(lighting, "lighting.cast_shadows",
-                 localized("ui.inspector.cast_shadows", "Cast Shadows"),
-                 mesh->cast_shadows, [this, entity](bool enabled) {
-                   apply_mesh_component(entity, [enabled](MeshComponent &next) {
-                     next.cast_shadows = enabled;
+    if (release_has_feature(ReleaseFeature::CastShadows)) {
+      add_checkbox(lighting, "lighting.cast_shadows",
+                   localized("ui.inspector.cast_shadows", "Cast Shadows"),
+                   mesh->cast_shadows, [this, entity](bool enabled) {
+                     apply_mesh_component(entity, [enabled](MeshComponent &next) {
+                       next.cast_shadows = enabled;
+                     });
                    });
-                 });
+    }
     add_checkbox(lighting, "lighting.double_sided",
                  localized("ui.inspector.double_sided", "Double sided"),
                  mesh->double_sided, [this, entity](bool enabled) {
@@ -2127,6 +2131,9 @@ private:
   }
 
   void build_light_section() {
+    if (!release_has_feature(ReleaseFeature::Lights)) {
+      return;
+    }
     const LightComponent *light = document_->light(primary_);
     if (light == nullptr) {
       return;
@@ -2258,9 +2265,11 @@ private:
     add_read_only_value(section, "components.meshes",
                         localized("ui.inspector.meshes", "Meshes"),
                         QString::number(static_cast<qulonglong>(mesh_count)));
-    add_read_only_value(section, "components.lights",
-                        localized("ui.inspector.lights", "Lights"),
-                        QString::number(static_cast<qulonglong>(light_count)));
+    if (release_has_feature(ReleaseFeature::Lights)) {
+      add_read_only_value(section, "components.lights",
+                          localized("ui.inspector.lights", "Lights"),
+                          QString::number(static_cast<qulonglong>(light_count)));
+    }
   }
 
   InspectorPanel &panel_;

@@ -11,6 +11,14 @@ locale.it-IT.name=Italiano
 ui.action.apply=Applica
 ui.action.ok=OK
 ui.action.cancel=Annulla
+ui.action.browse=Sfoglia...
+ui.settings.group.default_material=Materiale predefinito
+ui.settings.default_material.built_in=Predefinito
+ui.settings.default_material.image_filter=Immagini (*.png *.jpg *.jpeg)
+ui.settings.default_material.import_failed=Impossibile importare l'immagine del materiale predefinito. Scegli un'immagine PNG o JPEG valida.
+
+release.feature_unavailable=Questa funzionalità non è disponibile in questa versione.
+release.file_requires=Questo file richiede Quader {release}.
 
 ui.about.title=Informazioni su Quader
 ui.about.version=Quader %1

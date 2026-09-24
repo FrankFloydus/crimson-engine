@@ -29,6 +29,19 @@ cmake --preset vs2026
 cmake --build --preset vs2026-release --target quader
 ```
 
+For the public feature release, build `quader_public_app`, producing
+`build/vs2026/Release/quader-0.1.exe`. Its dependency on `quader` serializes deployment
+of the two shared-directory hosts. Public distribution includes only the public executable,
+its required runtime files/resources and `quader_fatal_diagnostics.exe`; exclude `quader.exe`,
+tests, examples, inspection tools and developer artifacts. Do not archive the whole build directory.
+After the public Release build passes validation, run
+`tools/package_public_release.ps1 -PlanOnly` to inspect the allowlist, then run it without
+`-PlanOnly` to create `build/distributions/quader-0.1`. `-Destination <new-directory>` selects
+another new folder; existing destinations are always rejected. The package carries the Public
+host, diagnostics helper, required Release DLLs/Qt plugins, runtime resources, MSVC redistributable
+and a SHA-256 manifest. Dependency notices come from the current repository's `thirdparty/licenses`.
+Full/developer binaries, libraries, symbols and logs are excluded.
+
 Configure only when needed. Release is the default and only required native executable; build
 Debug/Profile only on explicit request. Test targets can use `vs2026-debug` without building the
 Debug app. Documentation/tooling changes need their own checks, not app builds. Report only the
@@ -64,6 +77,8 @@ artifact actually built. Allow ten minutes per process; asynchronous yields must
   after explicitly requested dual builds. It must not require an unused configuration's executable.
   Each runtime also requires the isolated `quader_fatal_diagnostics.exe` companion and its imports.
   It shares read-only assertions with `boot_tracy.ps1` through `native_build_contract.ps1`.
+  Select `-Profile Public` for `quader-0.1.exe`, or `-Profile Full,Public` to validate both.
+  Full remains the default. Profile selection never selects a different build configuration.
 - `update_command_behavior_baseline.ps1` is the separate intentional-change path. It must require a
   non-empty reason and leave the resulting baseline diff for review.
 
@@ -88,6 +103,7 @@ artifact actually built. Allow ten minutes per process; asynchronous yields must
 - `boot_smoke.ps1` launches the app for Vulkan/window checks and collects screenshots and a log
   copy; error/critical/fatal log entries fail the check. Check window chrome/layout, every visible
   viewport, resize, and orbit/pan/zoom when relevant to the change.
+  The public executable uses `quader-0.1.log`; the Full executable uses `quader.log`.
 - `build_filament_sdk.ps1` builds the pinned, patched Release /MD dependency outside the app tree;
   `verify_filament_source.py` checks cached inputs against the archive and exact patch. Downloads
   require `-AllowDownload`. Flags, artifact identity, ABI requirements, and upgrade checks are in

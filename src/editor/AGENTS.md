@@ -48,3 +48,7 @@ file except through prior written authorization from Francesco Di Blasi.
   unrelated drafts, selection and history intact; permanent deleted UUIDs resolve through the manifest.
   Recover `.quader/material-deletions` journals before opening catalogs or scenes, rejecting links,
   corrupt baselines and newer document content instead of overwriting them.
+
+- Immutable product-release checks belong before owner mutation, preview settlement and history
+  creation. Scene/document and material authoring services enforce `core/release_features.hpp`;
+  raw asset storage remains available for default-material bootstrap and read caches.

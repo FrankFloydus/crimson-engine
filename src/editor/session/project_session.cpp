@@ -221,6 +221,8 @@ SceneWriteSnapshotResult scene_write_snapshot(
     return {.message = snapshot_result.error().message};
   }
   QdrProjectWriteSnapshot snapshot = snapshot_result.take_value();
+  snapshot.minimum_product_release = std::max(
+      session.minimum_product_release(), current_product_release());
   if (!manifest.deleted_material_ids().empty()) {
     for (QdrProjectEntityWriteSnapshot &entity : snapshot.entities) {
       if (entity.material.has_value()) {
@@ -245,6 +247,57 @@ SceneWriteSnapshotResult scene_write_snapshot(
       .ok = true,
       .snapshot = std::move(snapshot),
   };
+}
+
+/// Publishes a scene together with a raised project requirement, retaining the
+/// old scene until the manifest update has committed.
+QdrProjectWriteResult write_scene_with_project_requirement(
+    ProjectWorkspaceStorage &workspace, const std::filesystem::path &path,
+    const QdrProjectWriteSnapshot &snapshot, const SceneId &scene_id) {
+  if (workspace.manifest.minimum_product_release() >= snapshot.minimum_product_release) {
+    return QdrDocumentWriter::write_project_document_atomic(
+        path, snapshot, scene_id.bytes());
+  }
+  auto candidate = workspace.manifest;
+  candidate.require_product_release(snapshot.minimum_product_release);
+  quader_io::QdrAtomicFileTransaction transaction;
+  const auto prepared = transaction.prepare(path);
+  if (!prepared.ok) {
+    return {.message = prepared.message};
+  }
+  auto written = QdrDocumentWriter::write_project_document_atomic(
+      transaction.staging_path(), snapshot, scene_id.bytes());
+  if (!written.ok) {
+    return written;
+  }
+  const auto published = transaction.publish();
+  if (!published.ok) {
+    return {.message = published.message};
+  }
+  const auto persisted = ProjectManifestStore::save_atomic(
+      workspace.file_system, workspace.manifest_path, candidate);
+  if (!persisted.ok()) {
+    return {.message = persisted.error().message};
+  }
+  const auto committed = transaction.commit();
+  if (!committed.ok) {
+    const auto restored = ProjectManifestStore::save_atomic(workspace);
+    if (!restored.ok()) {
+      (void)transaction.preserve_published_for_recovery();
+      workspace.manifest = std::move(candidate);
+      return {.message = committed.message + "; previous project manifest could not be restored: " +
+                         restored.error().message};
+    }
+    return {.message = committed.message};
+  }
+  workspace.manifest = std::move(candidate);
+  if (!committed.message.empty()) {
+    if (!written.message.empty()) {
+      written.message += "; ";
+    }
+    written.message += committed.message;
+  }
+  return written;
 }
 
 std::optional<std::string> validate_scene_project_dependencies(
@@ -440,7 +493,8 @@ ProjectSessionResult ProjectSession::recover_scene(
   if (!absolute.ok()) {
     return failure(absolute.error().message);
   }
-  QdrProjectReadResult read = QdrDocumentReader::read_project_document(absolute.value());
+  QdrProjectReadResult read = QdrDocumentReader::read_project_document(
+          absolute.value(), current_product_release());
   if (!read.ok) {
     return failure(read.message.empty() ? "Recovery copy could not be read." : read.message);
   }
@@ -458,7 +512,8 @@ ProjectSessionResult ProjectSession::recover_scene(
   }
   auto scene = make_scene(SceneId::generate(), std::move(display_name), std::nullopt,
                           std::move(read.document),
-                          viewport_camera_pose_from_qdr(read.viewport_camera_pose));
+                          viewport_camera_pose_from_qdr(read.viewport_camera_pose),
+      read.minimum_product_release);
   scene->identity_dirty = true;
   ProjectSessionResult result =
       install_scene_and_activate(std::move(scene), workspace_->manifest);
@@ -553,6 +608,44 @@ ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
   return result;
 }
 
+ProjectSessionResult ProjectSession::preflight_open(
+    const std::filesystem::path &manifest_path,
+    std::optional<ProjectRelativePath> required_scene) {
+  auto opened = ProjectManifestStore::open(manifest_path);
+  if (!opened.ok()) {
+    return failure(opened.error().message);
+  }
+  const auto &candidate = opened.value();
+  const auto required = candidate.manifest.minimum_product_release();
+  if (!product_release_can_open(current_product_release(), required)) {
+    return failure(product_release_unavailable_message(required));
+  }
+  if (current_product_release() == kInternalFullRelease) {
+    return success(false, "Project release is compatible.");
+  }
+  std::vector<ProjectRelativePath> paths(
+      candidate.manifest.open_scene_paths().begin(),
+      candidate.manifest.open_scene_paths().end());
+  if (required_scene && std::find(paths.begin(), paths.end(), *required_scene) == paths.end()) {
+    paths.push_back(*required_scene);
+  }
+  for (const auto &path : paths) {
+    const auto absolute = candidate.file_system.resolve_existing_file(path);
+    if (!absolute.ok()) {
+      continue; // Existing restoration reports missing scenes without opening them.
+    }
+    const auto candidate_scene = QdrDocumentReader::read_project_document(
+        absolute.value(), current_product_release());
+    // Any malformed existing candidate prevents compatibility from being
+    // established. Reject before closing scenes or running recovery/provisioning;
+    // limiting this to named release diagnostics misses earlier header failures.
+    if (!candidate_scene.ok) {
+      return failure(path.portable_string() + ": " + candidate_scene.message);
+    }
+  }
+  return success(false, "Project release is compatible.");
+}
+
 ProjectSessionResult
 ProjectSession::open(const std::filesystem::path &manifest_path,
                      bool discard_existing_dirty) {
@@ -577,6 +670,10 @@ ProjectSessionResult ProjectSession::open_workspace(
   if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
       !discard_existing_dirty && !prepare_replacement) {
     return failure("Project contains unsaved document changes.");
+  }
+  const auto compatible = preflight_open(manifest_path, required_scene);
+  if (!compatible.ok) {
+    return compatible;
   }
   ProjectIoResult<ProjectWorkspaceStorage> opened =
       ProjectManifestStore::open(manifest_path);
@@ -649,7 +746,8 @@ ProjectSessionResult ProjectSession::open_workspace(
       continue;
     }
     QdrProjectReadResult read =
-        QdrDocumentReader::read_project_document(absolute.value());
+        QdrDocumentReader::read_project_document(
+            absolute.value(), current_product_release());
     if (!read.ok) {
       warnings.push_back(path.portable_string() + ": " + read.message);
       continue;
@@ -681,7 +779,8 @@ ProjectSessionResult ProjectSession::open_workspace(
         make_scene(catalog->id, display_name_for_path(path), path,
                    std::move(read.document),
                    viewport_camera_pose_from_qdr(
-                       read.viewport_camera_pose));
+                       read.viewport_camera_pose),
+                   read.minimum_product_release);
     scene->identity_dirty = identity_mismatch;
     if (identity_mismatch) {
       warnings.push_back(
@@ -789,7 +888,8 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
     return activated;
   }
   QdrProjectReadResult read =
-      QdrDocumentReader::read_project_document(absolute.value());
+      QdrDocumentReader::read_project_document(
+          absolute.value(), current_product_release());
   if (!read.ok) {
     return failure(read.message.empty() ? "Scene open failed." : read.message);
   }
@@ -830,7 +930,8 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
   std::unique_ptr<OpenSceneSession> scene = make_scene(
       scene_id, display_name_for_path(session_path), session_path,
       std::move(read.document),
-      viewport_camera_pose_from_qdr(read.viewport_camera_pose));
+      viewport_camera_pose_from_qdr(read.viewport_camera_pose),
+      read.minimum_product_release);
   if (reseeded_duplicate || identity_mismatch) {
     scene->identity_dirty = true;
   }
@@ -914,9 +1015,8 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   }
   ProjectSessionResult success_result = success(true, "Scene saved.", id);
   success_result.warnings.reserve(1u);
-  QdrProjectWriteResult written =
-      QdrDocumentWriter::write_project_document_atomic(
-          absolute.value(), snapshot.snapshot, scene->scene_id.bytes());
+  QdrProjectWriteResult written = write_scene_with_project_requirement(
+      *workspace_, absolute.value(), snapshot.snapshot, scene->scene_id);
   if (!written.ok) {
     return failure(written.message.empty() ? "Scene save failed."
                                            : written.message);
@@ -924,6 +1024,8 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   if (scene->session->content_revision_stamp() == stamp) {
     scene->session->mark_clean();
   }
+  scene->session->set_minimum_product_release(
+      snapshot.snapshot.minimum_product_release);
   scene->identity_dirty = false;
   if (!written.message.empty()) {
     success_result.warnings.push_back(std::move(written.message));
@@ -976,6 +1078,7 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
   }
   ProjectManifest candidate_manifest = workspace_->manifest;
   ProjectManifest recovery_manifest = candidate_manifest;
+  candidate_manifest.require_product_release(snapshot.snapshot.minimum_product_release);
   PersistedWorkspaceState previous_workspace_state =
       workspace_state_for(open_scenes_, active_scene_id_);
   ProjectIoResult<void> recovery_workspace_set = recovery_manifest.set_workspace(
@@ -1257,6 +1360,8 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
   if (mark_clean_after_publish) {
     scene->session->mark_clean_at(stamp);
   }
+  scene->session->set_minimum_product_release(
+      snapshot.snapshot.minimum_product_release);
   scene->identity_dirty = false;
   append_bridge_notification_warning(
       success_result, ProjectBridgeNotifications::publish_scene(
@@ -1377,6 +1482,14 @@ ProjectSessionResult ProjectSession::install_material_catalog(
   if (!default_material.has_value() ||
       material_catalog.find(*default_material) == nullptr) {
     return failure("Built-in default project material is unavailable.");
+  }
+  if (workspace_->manifest.minimum_product_release() < current_product_release()) {
+    auto manifest = workspace_->manifest;
+    manifest.require_product_release(current_product_release());
+    auto persisted = persist_prepared_manifest(*workspace_, std::move(manifest));
+    if (!persisted.ok) {
+      return persisted;
+    }
   }
   material_catalog_ = std::move(material_catalog);
   invalidate_material_textures();
@@ -1666,10 +1779,12 @@ void ProjectSession::release_open_scene_ids() {
 std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
     SceneId scene_id, std::string display_name,
     std::optional<ProjectRelativePath> path, SceneContentDocument document,
-    std::optional<ViewportCameraPose> viewport_camera_pose) {
+    std::optional<ViewportCameraPose> viewport_camera_pose,
+    ProductRelease minimum_product_release) {
   auto session = std::make_unique<SceneSession>(path_array_defaults_,
                                                  std::move(document),
                                                  extrude_defaults_, tool_defaults_);
+  session->set_minimum_product_release(minimum_product_release);
   session->set_history_max_steps(history_max_steps_);
   (void)session->restore_persisted_viewport_camera_pose(
       viewport_camera_pose);

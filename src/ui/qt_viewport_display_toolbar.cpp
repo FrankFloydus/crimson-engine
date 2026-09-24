@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -72,6 +73,9 @@ QtViewportDisplayToolbar::QtViewportDisplayToolbar(QWidget *parent)
 
   for (std::size_t index = 0; index < kDisplaySpecs.size(); ++index) {
     const DisplaySpec &spec = kDisplaySpecs[index];
+    if (!release_allows_command(spec.command_id.string())) {
+      continue;
+    }
     QAction *action = addAction(
         qt_multiresolution_icon(QString::fromUtf8(spec.icon_path)),
         QString::fromUtf8(spec.fallback.data(),
@@ -96,6 +100,9 @@ QtViewportDisplayToolbar::QtViewportDisplayToolbar(QWidget *parent)
   QStyle &button_presentation =
       install_native_toolbar_button_presentation(*this);
   for (const DisplayAction &entry : display_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
     configure_native_toolbar_button_face(*this, *entry.action,
                                          button_presentation);
     if (auto *button =
@@ -115,6 +122,9 @@ void QtViewportDisplayToolbar::apply_ui_scale(
 
   const int scaled_button_height = metrics.px(kTopToolbarButtonHeight);
   for (const DisplayAction &entry : display_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
     apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
     if (auto *button =
             qobject_cast<QToolButton *>(widgetForAction(entry.action));
@@ -132,6 +142,9 @@ void QtViewportDisplayToolbar::set_localization(
                                 "ui.toolbar.viewport_display.title",
                                 "Viewport Display"));
   for (const DisplayAction &entry : display_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
     const QString text = localized_text(localization, entry.localization_key,
                                         entry.fallback);
     entry.action->setText(text);
@@ -159,6 +172,9 @@ void QtViewportDisplayToolbar::synchronize(const QuaderEditorApi &editor,
 
   for (std::size_t index = 0; index < display_actions_.size(); ++index) {
     const DisplayAction &entry = display_actions_[index];
+    if (entry.action == nullptr) {
+      continue;
+    }
     if (entry.action->isChecked() != state.toggles[index]) {
       const QSignalBlocker blocker(entry.action);
       entry.action->setChecked(state.toggles[index]);

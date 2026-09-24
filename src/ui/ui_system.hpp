@@ -152,6 +152,11 @@ public:
   [[nodiscard]] const SessionPreferences &session_settings() const {
     return settings_.session_settings();
   }
+  [[nodiscard]] const std::filesystem::path &default_material_texture() const {
+    return settings_.default_material_texture();
+  }
+  void set_default_material_texture_changed_callback(
+      std::function<void(const std::filesystem::path &)> callback);
   void set_session_settings_changed_callback(
       std::function<void(const SessionPreferences &)> callback);
   void save_window_state();
@@ -294,6 +299,8 @@ private:
   UISettings settings_;
   std::function<void(const SessionPreferences &)>
       session_settings_changed_;
+  std::function<void(const std::filesystem::path &)>
+      default_material_texture_changed_;
   UISettingsPaths settings_paths_;
   QtAuxiliaryWindowState auxiliary_window_state_;
   ViewportSettings viewport_settings_;

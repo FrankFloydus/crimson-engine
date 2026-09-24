@@ -107,6 +107,9 @@ build_render_material_binding_snapshot(const AssetRegistry &assets,
                                        const MaterialComponent *material,
                                        const RenderProjectMaterialResolver *
                                            project_material_resolver = nullptr);
+/** Immutable packaged default; never reads a project's editable material. */
+[[nodiscard]] const RenderMaterialAssetSnapshot &
+packaged_default_render_material();
 [[nodiscard]] std::uint64_t render_material_binding_signature(
     const RenderMaterialBindingSnapshot &material);
 [[nodiscard]] RenderSceneSnapshot

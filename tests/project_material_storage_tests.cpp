@@ -1120,7 +1120,7 @@ TEST(ProjectMaterialWorkspaceTests,
   ASSERT_NE(project.manifest(), nullptr);
 
   const std::string manifest_text = read_text(project.manifest_path());
-  EXPECT_NE(manifest_text.find("\"version\": 2"), std::string::npos);
+  EXPECT_NE(manifest_text.find("\"version\": 4"), std::string::npos);
   EXPECT_EQ(manifest_text.find("\"activeMaterial\""),
             std::string::npos);
 
@@ -1152,7 +1152,7 @@ TEST(ProjectMaterialWorkspaceTests,
 }
 
 TEST(ProjectMaterialWorkspaceTests,
-     OpensV1ManifestBackfillsAssetsAndMigratesToV2) {
+     OpensV1ManifestBackfillsAssetsAndMigratesToV4) {
   ScopedMaterialTestDirectory temporary("migration");
   const std::filesystem::path root =
       temporary.make_empty_project("Legacy");
@@ -1190,7 +1190,7 @@ TEST(ProjectMaterialWorkspaceTests,
   EXPECT_TRUE(std::filesystem::is_regular_file(
       root / "Textures" / "default_albedo.png"));
   EXPECT_NE(read_text(created.value().manifest_path)
-                .find("\"version\": 2"),
+                .find("\"version\": 4"),
             std::string::npos);
 }
 
@@ -1308,7 +1308,7 @@ TEST(ProjectMaterialWorkspaceTests,
   ASSERT_TRUE(ProjectManifestStore::save_atomic(*project.workspace()).ok());
   const auto saved_manifest = read_text(manifest);
   EXPECT_EQ(saved_manifest.find("\"activeMaterial\""), std::string::npos);
-  EXPECT_NE(saved_manifest.find("\"version\": 2"), std::string::npos);
+  EXPECT_NE(saved_manifest.find("\"version\": 4"), std::string::npos);
   ASSERT_TRUE(project.close(true).ok);
   ASSERT_TRUE(project.open(manifest).ok);
   EXPECT_NE(project.material_catalog().find(alternate.id), nullptr);

@@ -7,9 +7,11 @@
 #pragma once
 
 #include "render/project_material_resolver.hpp"
+#include "render/render_scene_snapshot.hpp"
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 
 namespace quader {
@@ -52,6 +54,11 @@ public:
       : project_(&project) {}
 
   [[nodiscard]] std::uint64_t revision() const noexcept override;
+  /// Receives a validated immutable PNG imported by the preference owner.
+  /// An empty path restores the built-in/default project presentation.
+  void set_default_material_texture(const std::filesystem::path &path);
+  [[nodiscard]] const RenderMaterialAssetSnapshot *
+  default_material_override() const noexcept override;
   [[nodiscard]] ProjectAssetId
   canonical_material_id(ProjectAssetId id) const override;
   [[nodiscard]] std::optional<RenderProjectMaterialSnapshot>
@@ -59,6 +66,9 @@ public:
 
 private:
   ProjectSession *project_ = nullptr;
+  std::filesystem::path default_material_texture_;
+  std::optional<RenderMaterialAssetSnapshot> default_material_override_;
+  std::uint64_t default_material_revision_ = 0u;
 };
 
 } // namespace quader

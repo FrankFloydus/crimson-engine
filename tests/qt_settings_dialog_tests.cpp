@@ -48,6 +48,7 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QItemSelectionModel>
+#include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -830,6 +831,8 @@ TEST(QtSettingsDialogTests,
     EXPECT_TRUE(page->isAncestorOf(group)) << group_name;
   };
   expect_group("settingsVSync", "settingsGroup_display",
+                "settingsPage_viewport");
+  expect_group("settingsDefaultMaterialBrowse", "settingsGroup_default_material",
                 "settingsPage_viewport");
   expect_group("settingsUndoSteps", "settingsGroup_undo",
                 "settingsPage_editing");
@@ -6212,6 +6215,217 @@ TEST(QtMainWindowTests, MenuExitAndNativeCloseShareOneRequestBoundary) {
   EXPECT_TRUE(main_window.close());
   EXPECT_EQ(close_requests, 3);
   EXPECT_FALSE(main_window.isVisible());
+}
+
+TEST(QtSettingsDialogTests, DefaultMaterialStagesThenPublishesOnlyAfterPersistence) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-default-material-settings";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QtUiScaleApplicationController scale_controller(application);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path directory(temporary.path().toStdWString());
+  const std::filesystem::path image_path = directory / "selected.png";
+  QImage image(16, 8, QImage::Format_RGBA8888);
+  image.fill(QColor(28, 180, 70));
+  ASSERT_TRUE(image.save(QString::fromStdWString(image_path.wstring())));
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings settings;
+  ViewportSettings viewport = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::optional<std::filesystem::path> selection;
+  std::vector<QtSettingsChange> changes;
+  int persistence_calls = 0;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  scale_controller.add_change_listener(dialog, [&](const QtUiScaleMetrics &metrics) {
+    dialog.apply_ui_scale(metrics);
+  });
+  dialog.set_context(settings, viewport, localization, editor.commands(),
+      [&](const QtSettingsChange &change) {
+        EXPECT_EQ(UISettings::load(directory / "ui.ini").default_material_texture(),
+                  settings.default_material_texture());
+        changes.push_back(change);
+      }, [&]() {
+        ++persistence_calls;
+        return settings.save(directory / "ui.ini");
+      }, directory, image_path, [&]() { return selection; });
+  auto *browse = dialog.findChild<QPushButton *>(QStringLiteral("settingsDefaultMaterialBrowse"));
+  auto *preview = dialog.findChild<QLabel *>(QStringLiteral("settingsDefaultMaterialPreview"));
+  auto *path = dialog.findChild<QLabel *>(QStringLiteral("settingsDefaultMaterialPath"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(browse, nullptr);
+  ASSERT_NE(preview, nullptr);
+  ASSERT_NE(path, nullptr);
+  ASSERT_NE(apply, nullptr);
+  dialog.show();
+  QCoreApplication::processEvents();
+  browse->click();
+  EXPECT_FALSE(apply->isEnabled());
+  selection = image_path;
+  browse->click();
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(settings.default_material_texture().empty());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_EQ(persistence_calls, 0);
+  EXPECT_EQ(path->text(), QStringLiteral("selected.png"));
+  ASSERT_FALSE(preview->pixmap().isNull());
+  EXPECT_EQ(preview->pixmap().toImage().pixelColor(2, 2), QColor(28, 180, 70));
+  dialog.reject();
+  EXPECT_TRUE(settings.default_material_texture().empty());
+  EXPECT_FALSE(std::filesystem::exists(directory / "default_material"));
+  dialog.show();
+  browse->click();
+  const QString capture_directory = QString::fromUtf8(
+      qgetenv("QUADER_DEFAULT_MATERIAL_SCREENSHOT_DIR"));
+  auto *categories = dialog.findChild<QListWidget *>(QStringLiteral("settingsCategories"));
+  ASSERT_NE(categories, nullptr);
+  for (int index = 0; index < categories->count(); ++index) {
+    if (categories->item(index)->data(Qt::UserRole).toString() ==
+        QStringLiteral("viewport")) {
+      categories->setCurrentRow(index);
+      break;
+    }
+  }
+  for (float scale : {1.0f, 1.5f, 2.0f}) {
+    (void)scale_controller.apply_factor(scale);
+    EXPECT_EQ(preview->size(), QSize(qRound(64 * scale), qRound(64 * scale)));
+    EXPECT_FALSE(preview->pixmap().isNull());
+    if (!capture_directory.isEmpty() && scale != 1.5f) {
+      ASSERT_TRUE(QDir().mkpath(capture_directory));
+      dialog.resize(qRound(760 * scale), qRound(580 * scale));
+      QCoreApplication::processEvents();
+      const QString capture_path = QDir(capture_directory).filePath(
+          QStringLiteral("default-material-%1.png").arg(qRound(100 * scale)));
+      EXPECT_TRUE(dialog.grab().save(capture_path)) << capture_path.toStdString();
+    }
+  }
+  apply->click();
+  ASSERT_EQ(persistence_calls, 1);
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::DefaultMaterialCommit);
+  const std::filesystem::path imported = settings.default_material_texture();
+  EXPECT_EQ(imported.parent_path().parent_path(), directory / "default_material");
+  EXPECT_EQ(imported.filename(), image_path.filename());
+  EXPECT_EQ(path->text(), QStringLiteral("selected.png"));
+  EXPECT_EQ(changes.back().default_material_texture, imported);
+  EXPECT_FALSE(apply->isEnabled());
+  ASSERT_TRUE(std::filesystem::remove(image_path));
+  EXPECT_TRUE(std::filesystem::exists(imported));
+  EXPECT_EQ(UISettings::load(directory / "ui.ini").default_material_texture(), imported);
+  selection = std::filesystem::path{};
+  browse->click();
+  dialog.accept();
+  EXPECT_TRUE(settings.default_material_texture().empty());
+  EXPECT_EQ(persistence_calls, 2);
+  ASSERT_EQ(changes.size(), 2u);
+  EXPECT_TRUE(changes.back().default_material_texture->empty());
+}
+
+TEST(QtSettingsDialogTests, DefaultMaterialFailurePreservesDraftForRetryAndRebind) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-default-material-failure";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path directory(temporary.path().toStdWString());
+  const std::filesystem::path selected_path = directory / "new.png";
+  QImage image(4, 4, QImage::Format_RGB32);
+  image.fill(Qt::blue);
+  ASSERT_TRUE(image.save(QString::fromStdWString(selected_path.wstring())));
+  SceneSession first;
+  SceneSession second;
+  QuaderEditorApi old_editor(QuaderApiSessionInternalAccess::from_scene_session(first));
+  QuaderEditorApi new_editor(QuaderApiSessionInternalAccess::from_scene_session(second));
+  UISettings settings;
+  ViewportSettings viewport = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::filesystem::path selected = selected_path;
+  bool persistence_succeeds = false;
+  int old_notifications = 0;
+  int new_notifications = 0;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto persist = [&]() { return persistence_succeeds; };
+  const auto picker = [&]() { return std::optional{selected}; };
+  dialog.set_context(settings, viewport, localization, old_editor.commands(),
+      [&](const QtSettingsChange &) { ++old_notifications; }, persist,
+      directory, selected_path, picker);
+  auto *browse = dialog.findChild<QPushButton *>(QStringLiteral("settingsDefaultMaterialBrowse"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *label = dialog.findChild<QLabel *>(QStringLiteral("settingsDefaultMaterialPath"));
+  ASSERT_NE(browse, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(label, nullptr);
+  dialog.show();
+  browse->click();
+  apply->click();
+  EXPECT_TRUE(settings.default_material_texture().empty());
+  EXPECT_EQ(old_notifications, 0);
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_EQ(label->text(), QStringLiteral("new.png"));
+  auto *failure = dialog.findChild<QMessageBox *>(QStringLiteral("settingsPersistenceErrorDialog"));
+  ASSERT_NE(failure, nullptr);
+  failure->accept();
+  selected = directory / "missing.png";
+  browse->click();
+  EXPECT_EQ(label->text(), QStringLiteral("new.png"));
+  EXPECT_TRUE(settings.default_material_texture().empty());
+  failure = dialog.findChild<QMessageBox *>(QStringLiteral("settingsDefaultMaterialErrorDialog"));
+  ASSERT_NE(failure, nullptr);
+  failure->accept();
+  dialog.set_context(settings, viewport, localization, new_editor.commands(),
+      [&](const QtSettingsChange &) { ++new_notifications; }, persist,
+      directory, selected_path, picker);
+  EXPECT_TRUE(apply->isEnabled());
+  persistence_succeeds = true;
+  apply->click();
+  EXPECT_FALSE(settings.default_material_texture().empty());
+  EXPECT_EQ(old_notifications, 0);
+  EXPECT_EQ(new_notifications, 1);
+  selected = selected_path;
+  browse->click();
+  settings.set_default_material_texture({});
+  dialog.synchronize_default_material_texture();
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_EQ(label->text(), QStringLiteral("Default"));
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests, DefaultMaterialPickerRejectsAStaleRuntimeSelection) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-default-material-picker-rebind";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings first;
+  UISettings replacement;
+  ViewportSettings viewport = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(first, viewport, localization, editor.commands(), {}, {}, {}, {},
+      [&]() -> std::optional<std::filesystem::path> {
+        dialog.set_context(replacement, viewport, localization, editor.commands(), {});
+        return std::filesystem::path{"not-a-valid-file.png"};
+      });
+  dialog.show();
+  auto *browse = dialog.findChild<QPushButton *>(QStringLiteral("settingsDefaultMaterialBrowse"));
+  ASSERT_NE(browse, nullptr);
+  browse->click();
+  EXPECT_TRUE(first.default_material_texture().empty());
+  EXPECT_TRUE(replacement.default_material_texture().empty());
+  EXPECT_EQ(dialog.findChild<QMessageBox *>(QStringLiteral("settingsDefaultMaterialErrorDialog")), nullptr);
+  dialog.reject();
 }
 
 } // namespace

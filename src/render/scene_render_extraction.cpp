@@ -10,6 +10,8 @@
 #include "assets/curve_asset_payload.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "assets/default_material_catalog.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/curve_solid_geometry_cache.hpp"
 #include "render/material_binding_service.hpp"
@@ -363,10 +365,47 @@ std::vector<MeshPrimitiveSpan> coalesced_render_mesh_primitive_spans(
   return spans;
 }
 
+const RenderMaterialAssetSnapshot &packaged_default_render_material() {
+  static const RenderMaterialAssetSnapshot snapshot = [] {
+    RenderMaterialAssetSnapshot material;
+    material.document = make_default_quader_material();
+    // The snapshot's private packaged texture has no scene-owned asset ID.
+    set_material_texture_slot(material.document,
+                              material_texture_slot::kBaseColor,
+                              kInvalidAssetId);
+    material.present = true;
+    material.revision = 1u;
+    RenderTextureAssetSnapshot albedo;
+    albedo.slot = material_texture_slot::kBaseColor;
+    albedo.texture.name = std::string(kDefaultMaterialAlbedoTextureName);
+    albedo.texture.source_path =
+        std::string(kDefaultMaterialAlbedoTexturePackagePath);
+    albedo.texture.usage = TextureUsage::BaseColor;
+    albedo.texture.color_space = TextureColorSpace::Srgb;
+    albedo.present = true;
+    material.textures.push_back(std::move(albedo));
+    return material;
+  }();
+  return snapshot;
+}
+
 RenderMaterialBindingSnapshot build_render_material_binding_snapshot(
     const AssetRegistry &assets, const MaterialComponent *material,
     const RenderProjectMaterialResolver *project_material_resolver) {
   RenderMaterialBindingSnapshot snapshot;
+  const RenderMaterialAssetSnapshot *default_override =
+      project_material_resolver != nullptr
+          ? project_material_resolver->default_material_override()
+          : nullptr;
+  if (default_override != nullptr ||
+      !release_has_feature(ReleaseFeature::Materials)) {
+    snapshot.primary_material = default_override != nullptr
+                                    ? *default_override
+                                    : packaged_default_render_material();
+    snapshot.present = true;
+    snapshot.revision = render_material_binding_signature(snapshot);
+    return snapshot;
+  }
   if (!material) {
     return snapshot;
   }

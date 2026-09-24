@@ -192,7 +192,8 @@ target_link_libraries(quader_modeling_runtime
         quader_modeling_polygon
     PRIVATE
         quader_geometry
-        quader_modeling_profile)
+        quader_modeling_profile
+        quader_editor_release_policy)
 
 add_library(quader_editor_metadata STATIC
     src/editor/metadata/command_presentation_catalog.cpp
@@ -205,7 +206,7 @@ target_compile_features(quader_editor_metadata PUBLIC cxx_std_20)
 target_include_directories(quader_editor_metadata
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime)
+target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime quader_editor_release_policy)
 endif()
 
 function(quader_configure_modeling_sdk_target target)
@@ -367,7 +368,8 @@ if(QUADER_BUILD_NATIVE_APP AND QUADER_BUILD_PERFORMANCE_BENCHMARKS)
             quader_modeling
             quader_modeling_polygon
             quader_modeling_runtime
-            quader_modeling_profile)
+            quader_modeling_profile
+            quader_release_profile_full)
 endif()
 
 if(QUADER_BUILD_NATIVE_APP)
@@ -435,6 +437,7 @@ function(quader_add_modeling_domain_gtest_target target)
     find_package(GTest CONFIG REQUIRED)
     add_executable(${target} ${ARGN})
     quader_link_modeling_domain_test(${target})
+    target_link_libraries(${target} PRIVATE quader_release_profile_full)
     quader_deploy_test_runtime_dlls(${target})
     add_test(NAME ${target} COMMAND ${target})
 endfunction()
@@ -442,7 +445,7 @@ endfunction()
 function(quader_add_modeling_domain_loop_target target)
     find_package(GTest CONFIG REQUIRED)
     add_executable(${target} EXCLUDE_FROM_ALL ${ARGN})
-    target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main)
+    target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main quader_release_profile_full)
     quader_deploy_test_runtime_dlls(${target})
 endfunction()
 endif()

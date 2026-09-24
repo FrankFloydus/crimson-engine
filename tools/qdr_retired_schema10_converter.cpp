@@ -246,6 +246,7 @@ QdrProjectWriteSnapshot decode_retired_schema10(
   (void)decode_qdr_scene_binary_material_usage(container);
 
   QdrProjectWriteSnapshot result;
+  result.minimum_product_release = container.minimum_product_release;
   result.project_id = source.scene_id();
   result.project_name = text(source.scene_name());
   std::set<AssetId> mesh_ids;

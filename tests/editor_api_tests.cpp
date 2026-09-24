@@ -11364,6 +11364,135 @@ TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
 }
 
 TEST(EditorApiTests,
+     BridgeShortcutCreatesOneStraightSpanAfterRememberedInterpolatedPreview) {
+  using quader::quader_command::kModelingBridgeEdges;
+  using quader::quader_command::kModelingBridgeFaces;
+  using quader::quader_command::kModelingInterpolatedBridgeEdges;
+  using quader::quader_command::kModelingInterpolatedBridgeFaces;
+  for (const auto command : {kModelingBridgeEdges, kModelingBridgeFaces}) {
+    SCOPED_TRACE(command.string());
+    const bool faces = command.string() == kModelingBridgeFaces.string();
+    const auto *contract =
+        quader::test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto objects = editor.query().modeling_objects();
+    ASSERT_EQ(objects.size(), 1u);
+    const auto object = editor.query().modeling_object_for_id(
+        editor.selection().summary().active_object_id);
+    ASSERT_TRUE(object.has_value());
+    const auto initial_mesh = editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(initial_mesh.has_value());
+    ASSERT_EQ(initial_mesh->indices.size(), 12u);
+    // These open islands retain their two source quads. Face Bridge adds
+    // four side quads per step; the edge pair adds one quad per step.
+    const std::size_t indices_per_bridge_step = (faces ? 4u : 1u) * 6u;
+
+    const auto preview_command = faces ? kModelingInterpolatedBridgeFaces
+                                       : kModelingInterpolatedBridgeEdges;
+    ASSERT_TRUE(editor.commands().execute(preview_command).ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting({}, "operation.bridge.steps", 4.0)
+                    .ok());
+    ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    const auto interpolated = editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(interpolated.has_value());
+    EXPECT_EQ(interpolated->indices.size(),
+              initial_mesh->indices.size() + 4u * indices_per_bridge_step);
+    ASSERT_TRUE(editor.modeling().cancel_preview().ok());
+
+    EXPECT_EQ(editor.commands().shortcut_for(command), "B");
+    quader::ViewportInputFrame input;
+    input.viewport_focused = true;
+    input.pressed_input_chords = {single_input_chord("B")};
+    quader::ViewportToolState state;
+    state.selection_mode = faces ? quader::ViewportSelectionMode::Face
+                                 : quader::ViewportSelectionMode::Edge;
+    std::vector<quader::QuaderInputChord> suppressed;
+    double linear_wheel = 0.0;
+    double radial_wheel = 0.0;
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed, linear_wheel, radial_wheel);
+    EXPECT_TRUE(input.keybinding_input_consumed);
+    ASSERT_TRUE(editor.commands().last_status().has_value());
+    EXPECT_TRUE(editor.commands().last_status()->ok());
+    EXPECT_TRUE(editor.commands().last_status()->changed());
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    const auto bridged = editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(bridged.has_value());
+    EXPECT_EQ(bridged->indices.size(),
+              initial_mesh->indices.size() + indices_per_bridge_step);
+    for (const auto &vertex : bridged->vertices) {
+      EXPECT_TRUE(std::any_of(
+          initial_mesh->vertices.begin(), initial_mesh->vertices.end(),
+          [&](const auto &source) {
+            return std::abs(vertex.position.x - source.position.x) < 1.0e-6f &&
+                   std::abs(vertex.position.y - source.position.y) < 1.0e-6f &&
+                   std::abs(vertex.position.z - source.position.z) < 1.0e-6f;
+          }));
+    }
+    if (faces) {
+      EXPECT_EQ(editor.selection().summary().selected_face_count, 4u);
+    }
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto undone = editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(undone.has_value());
+    EXPECT_EQ(undone->indices.size(), initial_mesh->indices.size());
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(editor.query().compiled_object_mesh(*object)->indices.size(),
+              bridged->indices.size());
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.commands().execute(preview_command).ok());
+    const auto settings = editor.tools().active_settings();
+    const auto *steps =
+        find_tool_setting_control(settings, "operation.bridge.steps");
+    ASSERT_NE(steps, nullptr);
+    EXPECT_DOUBLE_EQ(steps->number_value, 4.0);
+    ASSERT_TRUE(editor.modeling().cancel_preview().ok());
+  }
+}
+
+TEST(EditorApiTests, BridgeShortcutPreservesRemappingAndDeliberateUnassignment) {
+  constexpr auto kBridge = quader::quader_command::kModelingBridge;
+  const auto *contract =
+      quader::test::find_command_behavior_contract(kBridge.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+  auto &editor = fixture->editor();
+  const auto path = keybinding_test_path("quick-bridge-override");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(editor.commands().shortcut_for(kBridge), "B");
+  ASSERT_TRUE(editor.commands().set_shortcut(kBridge, "Ctrl+Alt+B").ok());
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  for (const auto command : {
+           kBridge, quader::quader_command::kModelingBridgeEdges,
+           quader::quader_command::kModelingBridgeFaces}) {
+    EXPECT_EQ(editor.commands().shortcut_for(command), "Ctrl+Alt+B");
+  }
+  quader::ViewportToolState state;
+  state.selection_mode = quader::ViewportSelectionMode::Edge;
+  const auto resolve = [&](std::string_view shortcut) {
+    return editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(shortcut), state, true, false);
+  };
+  EXPECT_EQ(resolve("B").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(resolve("Ctrl+Alt+B").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  ASSERT_TRUE(editor.commands().remove_shortcut(kBridge).ok());
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_TRUE(editor.commands().shortcut_for(kBridge).empty());
+  EXPECT_EQ(resolve("B").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(resolve("Ctrl+Alt+B").kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
      DefaultEdgeNormalsCommandUsesCanonicalRoutingAndUndoableEdgeState) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;

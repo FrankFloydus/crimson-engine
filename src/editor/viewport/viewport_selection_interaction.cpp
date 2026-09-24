@@ -9,6 +9,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/interactions/selection_edit.hpp"
 #include "editor/interactions/selection_lasso.hpp"
@@ -120,7 +121,9 @@ QuaderHoverRequest make_hover_request(const ViewportInteractionFrame &frame,
               .direction = world_ray.direction,
       },
       .selected_modifier_pressed = modifiers.primary,
-      .face_plane_hover = kFacePlaneCutGestureEnabled && modifiers.alt,
+      .face_plane_hover = kFacePlaneCutGestureEnabled &&
+                          release_has_feature(ReleaseFeature::CutTool) &&
+                          modifiers.alt,
       .vertex_radius = viewport_scaled_world_pick_radius(
           settings.float_value(ViewportFloatSettingId::PickVertexRadius),
           frame.viewport_pixel_scale, frame.input.device_pixel_ratio),
@@ -227,7 +230,8 @@ bool depth_cycle_context_available(const ViewportInteractionFrame &frame) {
          !frame.input.navigation_active &&
          !frame.input.operation_preview_active &&
          (!frame.input.active_transform_drag ||
-          frame.input_router.state().active_tool == ViewportToolId::LassoSelect) &&
+          (release_has_feature(ReleaseFeature::LassoSelection) &&
+           frame.input_router.state().active_tool == ViewportToolId::LassoSelect)) &&
          !frame.input.modal_tool_active &&
          !frame.input.active_tool_owns_viewport &&
          !frame.input.keybinding_input_consumed &&
@@ -1075,6 +1079,9 @@ void ViewportSelectionInteraction::handle_frame(
     const ViewportBeforeToolInteractionResult &before_tool,
     ViewportToolHoverPort *tool_hover, ViewportCurveInteractionPort *curve) {
   QDR_PROFILE_FUNCTION();
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    curve = nullptr;
+  }
   committed_marquee_.reset();
   bool canceled_release_reserved = box_release_suppression_.consume(
       QuaderMouseButton::Left, frame.left_pressed, frame.left_down,
@@ -1322,7 +1329,8 @@ void ViewportSelectionInteraction::handle_frame(
     refresh_hover_work_after_selection(frame.input.mouse_local, false);
   }
 
-  if (kFacePlaneCutGestureEnabled && !box_state_.active && can_pick &&
+  if (kFacePlaneCutGestureEnabled && release_has_feature(ReleaseFeature::CutTool) &&
+      !box_state_.active && can_pick &&
       frame.input.modifiers.alt &&
       !frame.input.modifiers.primary && !frame.input.modifiers.shift &&
       frame.right_pressed) {
@@ -1394,7 +1402,8 @@ void ViewportSelectionInteraction::handle_frame(
       // Refresh its tint from the captured gesture without another spatial pick.
       preview_hover(box_hovered_before_selection_);
     }
-    if (frame.input_router.state().active_tool == ViewportToolId::LassoSelect) {
+    if (release_has_feature(ReleaseFeature::LassoSelection) &&
+        frame.input_router.state().active_tool == ViewportToolId::LassoSelect) {
       // Only a press resolves settings. Pointer motion retains this snapshot.
       const QuaderToolSettingsTarget settings = editor.tools().active_settings();
       const auto partial = std::find_if(

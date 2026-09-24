@@ -7,6 +7,7 @@
 #include "editor/transform/mesh_transform_bake_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "core/release_features.hpp"
 #include "core/i_undoable_command.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/history/editor_history_service.hpp"
@@ -605,6 +606,9 @@ MeshTransformBakeService::MeshTransformBakeService(
 
 bool MeshTransformBakeService::can_bake(
     const EditorSelectionService &selection, MeshTransformBakeMode mode) const {
+  if (!release_has_feature(ReleaseFeature::TransformBaking)) {
+    return false;
+  }
   if (!valid_mode(mode) || selection.mode() != ModelingSelectionMode::Object ||
       modeling_.operation_preview_active()) {
     return false;
@@ -617,6 +621,9 @@ bool MeshTransformBakeService::can_bake(
 
 CommandResult MeshTransformBakeService::bake(
     const EditorSelectionService &selection, MeshTransformBakeMode mode) {
+  if (!release_has_feature(ReleaseFeature::TransformBaking)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!can_bake(selection, mode)) {
     return command_invalid_result("Select editable unlocked meshes in Mesh selection mode to bake transforms.");
   }

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/release_features.hpp"
 #include "core/types.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/selection/scene_selection_application.hpp"
@@ -27,6 +28,32 @@ namespace quader {
 using DocumentSelectionState = SceneSelectionState;
 
 using DocumentEntitySnapshot = SceneEntityStateTree;
+
+/// Rejects duplication of unpublished entity types before preview/history work.
+[[nodiscard]] inline bool document_command_hierarchy_available_in_release(
+    const SceneDocument &scene, std::span<const EntityId> roots) {
+  const bool lights_available = release_has_feature(ReleaseFeature::Lights);
+  const bool curves_available = release_has_feature(ReleaseFeature::Curves);
+  const bool layers_available = release_has_feature(ReleaseFeature::Layers);
+  if (lights_available && curves_available && layers_available) {
+    return true;
+  }
+  for (const EntityId root : roots) {
+    if (!scene.exists(root)) {
+      continue;
+    }
+    for (const EntityId entity : scene.descendants(root, true)) {
+      if ((!lights_available &&
+           (scene.kind(entity) == EntityKind::Light || scene.light(entity))) ||
+          (!curves_available &&
+           (scene.kind(entity) == EntityKind::Curve || scene.curve(entity))) ||
+          (!layers_available && scene.entity_layer(entity) != kInvalidSceneLayerId)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
 
 /**
  * Represents a Document Entity Placement value used by the editor document command layer.

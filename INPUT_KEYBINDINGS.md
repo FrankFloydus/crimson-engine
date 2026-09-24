@@ -102,6 +102,9 @@ that capability rather than a tool-name list. Active transform drags, previews, 
 cancellation priority; a subsequent Escape clears selection. The existing selection owner handles
 object/group history and component selection. Clear Selection remains remappable through Settings.
 Tool IDs used by input contexts come from the same descriptor catalog as tool activation and presentation.
+`B` invokes the immediate Bridge action in Edge/Face mode, using one straight span regardless of
+remembered interpolated Bridge steps. The edge/face menus expose the interpolated Bridge preview;
+its remembered settings stay independent. Canonical quick-Bridge aliases share the remappable binding.
 Tool Settings Apply/Cancel uses the same canonical lifecycle bindings from the viewport
 and from every settings control: Space applies, Escape cancels by default. Focus on a
 button must not turn Space into a different action, including activating Cancel.
@@ -167,6 +170,10 @@ face clicks cannot alter a pending extrusion's source; the disk accepts Ctrl and
   unknown targets remain errors, preserving strict validation of unrelated overrides.
 - Retained menus/tooltips refresh on keybinding commits/revisions, outside the frame loop. They must
   not enumerate the complete catalog or repeat unchanged Qt setters every frame.
+- Release-disabled targets remain registered and their overrides remain persisted, but are absent
+  from public catalogs, conflict presentation and input eligibility. Resolve release availability
+  before sequence prefixes or deferred pointer reservations; resetting available shortcuts keeps
+  dormant overrides for future cumulative releases.
 - Operation hints declare typed commands and gesture labels at the tool owner. The shared status
   widget resolves current bindings/localization only when their revisions or operation state change;
   disabled or unassigned commands have no badge. Extend the owner catalog for new operations, not

@@ -28,8 +28,10 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFrame>
 #include <QFont>
+#include <QFontMetrics>
 #include <QFocusEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -75,8 +77,25 @@ using namespace qt_settings_detail;
 // Pointer drags publish the latest value at this bounded cadence; keyboard,
 // wheel, and spin edits use it as a trailing coalescing window.
 constexpr int kNumberDispatchIntervalMs = 16;
-constexpr int kControlLabelWidth = 88;
+constexpr int kMinimumControlLabelWidth = 88;
+constexpr int kMaximumControlLabelWidth = 220;
 constexpr int kControlColumnSpacing = 8;
+
+/// Font propagation may arrive after the host applies its scaled metrics.
+class QtToolSettingLabel final : public QLabel {
+public:
+  using QLabel::QLabel;
+  std::function<void()> metrics_changed;
+
+protected:
+  void changeEvent(QEvent *event) override {
+    QLabel::changeEvent(event);
+    if ((event->type() == QEvent::FontChange ||
+         event->type() == QEvent::StyleChange) && metrics_changed) {
+      metrics_changed();
+    }
+  }
+};
 
 QString qtext(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -774,21 +793,77 @@ private:
   void apply_current_ui_scale() {
     apply_scalable_layout_metrics(panel_, ui_scale_metrics_);
     apply_scalable_widget_metrics(panel_, ui_scale_metrics_);
-    for (const ControlWidget &control : controls_) {
-      if (auto *row_layout =
-              dynamic_cast<QGridLayout *>(control.container->layout())) {
-        row_layout->itemAtPosition(0, 0)->widget()->setFixedWidth(
-            ui_scale_metrics_.px(kControlLabelWidth));
-        row_layout->setColumnMinimumWidth(
-            0, ui_scale_metrics_.px(kControlLabelWidth));
-      }
-    }
+    control_label_width_dirty_ = true;
+    synchronize_control_label_width();
     QFont target_font = QApplication::font(target_title_);
     target_font.setBold(true);
     target_title_->setFont(target_font);
     panel_.updateGeometry();
     if (scroll_area_->widget() != nullptr) {
       scroll_area_->widget()->updateGeometry();
+    }
+  }
+
+  /// Measure labels only when their text, target or interface scale changes.
+  void synchronize_control_label_width() {
+    if (!control_label_width_dirty_) {
+      return;
+    }
+    control_label_width_dirty_ = false;
+    int width = ui_scale_metrics_.px(kMinimumControlLabelWidth);
+    int width_limit = ui_scale_metrics_.px(kMaximumControlLabelWidth);
+    const QMargins panel_margins = panel_.layout()->contentsMargins();
+    for (const ControlWidget &control : controls_) {
+      if (control.field_label != nullptr) {
+        const QLabel &label = *control.field_label;
+        width = std::max(width, label.fontMetrics().horizontalAdvance(label.text()));
+      }
+      auto *row_layout =
+          dynamic_cast<QGridLayout *>(control.container->layout());
+      if (row_layout == nullptr) {
+        continue;
+      }
+      const QWidget *field = row_layout->itemAtPosition(0, 1)->widget();
+      int field_width =
+          std::max(field->minimumWidth(), field->minimumSizeHint().width());
+      if (field->layout() != nullptr) {
+        // Composite XYZ fields ignore their outer size hint to shrink with the
+        // viewport. Reserve their actual child minimums before widening labels.
+        field_width = std::max(field_width, field->layout()->minimumSize().width());
+      }
+      int margins = panel_margins.left() + panel_margins.right();
+      for (const QWidget *parent = control.container->parentWidget();
+           parent != nullptr; parent = parent->parentWidget()) {
+        const QMargins content_margins = parent->contentsMargins();
+        margins += content_margins.left() + content_margins.right();
+        if (parent->layout() != nullptr) {
+          const QMargins layout_margins = parent->layout()->contentsMargins();
+          margins += layout_margins.left() + layout_margins.right();
+        }
+        if (parent == controls_container_) {
+          break;
+        }
+      }
+      width_limit = std::min(width_limit,
+          ui_scale_metrics_.px(320) - margins -
+              row_layout->horizontalSpacing() - field_width);
+    }
+    // Ordinary labels fit on one line; unusually long translations wrap before
+    // they displace the numeric and composite editors from a compact overlay.
+    width = std::min(width,
+        std::max(ui_scale_metrics_.px(kMinimumControlLabelWidth), width_limit));
+    for (const ControlWidget &control : controls_) {
+      if (auto *row_layout =
+              dynamic_cast<QGridLayout *>(control.container->layout())) {
+        QWidget *label_cell = row_layout->itemAtPosition(0, 0)->widget();
+        if (label_cell->minimumWidth() != width ||
+            label_cell->maximumWidth() != width) {
+          label_cell->setFixedWidth(width);
+        }
+        if (row_layout->columnMinimumWidth(0) != width) {
+          row_layout->setColumnMinimumWidth(0, width);
+        }
+      }
     }
   }
 
@@ -805,6 +880,7 @@ private:
 
   void clear_controls() {
     ++control_generation_;
+    control_label_width_dirty_ = true;
     const bool was_synchronizing = synchronizing_;
     synchronizing_ = true;
     // Stop old control-owned timers before deleting their rows and callbacks.
@@ -1477,14 +1553,19 @@ private:
     set_scalable_grid_spacing(*row_layout, kControlColumnSpacing, 3);
     row_layout->setColumnStretch(1, 1);
     row_layout->setColumnMinimumWidth(
-        0, ui_scale_metrics_.px(kControlLabelWidth));
+        0, ui_scale_metrics_.px(kMinimumControlLabelWidth));
     QLabel *field_label = nullptr;
     if (control.kind != QuaderToolSettingControlKind::Action) {
-      field_label = new QLabel(label, row);
+      auto *setting_label = new QtToolSettingLabel(label, row);
+      setting_label->metrics_changed = [this]() {
+        control_label_width_dirty_ = true;
+        schedule_refresh();
+      };
+      field_label = setting_label;
       field_label->setObjectName(object_name + QStringLiteral(".label"));
       field_label->setWordWrap(true);
       field_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-      field_label->setFixedWidth(ui_scale_metrics_.px(kControlLabelWidth));
+      field_label->setFixedWidth(ui_scale_metrics_.px(kMinimumControlLabelWidth));
       binding.field_label = field_label;
       row_layout->addWidget(field_label, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
     } else {
@@ -1492,7 +1573,7 @@ private:
       // their height-for-width measurement include the inter-column spacing.
       auto *label_spacer = new QWidget(row);
       label_spacer->setObjectName(object_name + QStringLiteral(".label_spacer"));
-      label_spacer->setFixedWidth(ui_scale_metrics_.px(kControlLabelWidth));
+      label_spacer->setFixedWidth(ui_scale_metrics_.px(kMinimumControlLabelWidth));
       row_layout->addWidget(label_spacer, 0, 0);
     }
     binding.container = row;
@@ -1502,6 +1583,7 @@ private:
       auto *toggle = new QCheckBox(row);
       toggle->setObjectName(object_name);
       toggle->setAccessibleName(label);
+      toggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
       QObject::connect(toggle, &QCheckBox::toggled, &panel_,
                        [this, tool_id = target.tool_id,
                         control_id = control.id](bool checked) {
@@ -2071,6 +2153,7 @@ private:
     if (binding.field_label != nullptr &&
         binding.field_label->text() != label) {
       binding.field_label->setText(label);
+      control_label_width_dirty_ = true;
     }
     if (binding.label_button != nullptr &&
         binding.label_button->text() != label) {
@@ -2335,6 +2418,7 @@ private:
         binding.presented_choice_value = control.choice_value;
       }
     }
+    synchronize_control_label_width();
     synchronizing_ = false;
   }
 
@@ -2367,6 +2451,7 @@ private:
   bool refresh_scheduled_ = false;
   bool inactive_presented_ = false;
   bool localized_text_dirty_ = true;
+  bool control_label_width_dirty_ = true;
 };
 
 QtToolSettingsPanel::QtToolSettingsPanel(QWidget *parent)

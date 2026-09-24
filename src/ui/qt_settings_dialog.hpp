@@ -44,7 +44,11 @@ public:
                    LocalizationService &localization,
                    QuaderCommandsApi &commands,
                    QtSettingsController::ChangeCallback settings_changed,
-                   std::function<bool()> persist_interface_settings = {});
+                   std::function<bool()> persist_interface_settings = {},
+                   std::filesystem::path settings_directory = {},
+                   std::filesystem::path built_in_default_texture = {},
+                   std::function<std::optional<std::filesystem::path>()>
+                       default_texture_picker = {});
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   /** Reconciles only the interface-scale draft after an external API commit. */
   void synchronize_interface_scale();
@@ -52,6 +56,7 @@ public:
   void synchronize_vsync_enabled();
   /** Reconciles only history/autosave drafts after an external API commit. */
   void synchronize_session_settings();
+  void synchronize_default_material_texture();
   void refresh();
   void accept() override;
   void reject() override;

@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/release_features.hpp"
+
 #include <array>
 #include <cstddef>
 
@@ -23,6 +25,17 @@ enum class UIPanelId {
   FaceTexture,
   Count,
 };
+
+/// Reports whether a panel belongs to the immutable executable's presentation.
+inline bool ui_panel_available(UIPanelId id) noexcept {
+  if (id == UIPanelId::FaceTexture) {
+    return release_has_feature(ReleaseFeature::UvEditing);
+  }
+  if (id == UIPanelId::Layers) {
+    return release_has_feature(ReleaseFeature::Layers);
+  }
+  return true;
+}
 
 inline constexpr std::size_t kUiPanelCount =
     static_cast<std::size_t>(UIPanelId::Count);

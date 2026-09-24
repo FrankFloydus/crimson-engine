@@ -13,6 +13,9 @@
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
 #include "core/i_undoable_command.hpp"
+#include "core/release_features.hpp"
+#include "assets/default_material_catalog.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
@@ -4340,18 +4343,36 @@ public:
   }
 
   ModelingCommandResult copy_selection() {
+    if (!document_command_hierarchy_available_in_release(
+            scene_, scene_.selected_entities())) {
+      return {.ok = false, .changed = false,
+              .message = release_feature_unavailable_message()};
+    }
     ModelingSdkClipboardCopyResult copied =
         sdk_projection_adapter_.copy_selection_to_clipboard();
     if (copied.command.ok) {
       clipboard_scene_identities_ =
           object_registry_.capture_scene_identities_for_modeling_objects(
               scene_, copied.source_modeling_object_ids);
+      if (!release_has_feature(ReleaseFeature::Materials)) {
+        for (auto &identity : clipboard_scene_identities_) {
+          identity.material = MaterialComponent{};
+        }
+      }
       clipboard_world_center_ = selection_center();
     }
     return copied.command;
   }
 
   ModelingCommandResult paste_selection() {
+    if (!release_has_feature(ReleaseFeature::Layers) &&
+        std::any_of(clipboard_scene_identities_.begin(),
+                    clipboard_scene_identities_.end(), [](const auto &identity) {
+                      return identity.layer_id != kInvalidSceneLayerId;
+                    })) {
+      return {.ok = false, .changed = false,
+              .message = release_feature_unavailable_message()};
+    }
     const std::optional<QVec3> paste_target = selection_center();
     const ModelingSessionMemento rollback = capture_history_memento();
     const auto rollback_failure = [&](std::string message) {
@@ -5640,6 +5661,19 @@ public:
       bool preserve_duplicate_scene_identity = true) {
     using OperationId = quader_editor_core::EditorOperationId;
     using OperationPhase = quader_editor_core::EditorOperationCommandPhase;
+    if (runtime_operation == OperationId::Thicken &&
+        !release_has_feature(
+            selection_mode() == ModelingSelectionMode::Object
+                ? ReleaseFeature::OuterHull : ReleaseFeature::ThickenFaces)) {
+      return {.ok = false, .changed = false,
+              .message = release_feature_unavailable_message()};
+    }
+    const auto *descriptor =
+        quader_editor_core::editor_operation_for_id(runtime_operation);
+    if (descriptor != nullptr && !release_allows_operation(descriptor->id())) {
+      return {.ok = false, .changed = false,
+              .message = release_feature_unavailable_message()};
+    }
 
     if (!quader_editor_core::command_settings_match_operation(
             runtime_operation, settings)) {
@@ -6123,6 +6157,11 @@ public:
   quader_editor_core::CommandResult execute_repeat_last_action_scene_aware() {
     quader_editor_core::RepeatLastActionState &repeat =
         history_bridge_.repeat_last_action();
+    if (!release_has_feature(ReleaseFeature::UvEditing) &&
+        (repeat.last_action_kind == quader_editor_core::RepeatableActionKind::UvPeel ||
+         repeat.last_action_kind == quader_editor_core::RepeatableActionKind::FaceTexture)) {
+      return {false, false, release_feature_unavailable_message()};
+    }
     if (repeat.last_action_kind ==
         quader_editor_core::RepeatableActionKind::UvPeel) {
       if (!repeat.last_uv_peel.has_value()) {
@@ -6326,6 +6365,10 @@ public:
     std::vector<ModelingInstantOperationDescriptor> operations;
     for (const ModelingInstantOperationCatalogEntry &entry :
          modeling_instant_operation_catalog()) {
+      if (!release_allows_action(entry.id) ||
+          !release_allows_operation(entry.operation_id)) {
+        continue;
+      }
       operations.push_back({
           .operation = entry.operation,
           .id = std::string(entry.id),
@@ -10851,6 +10894,9 @@ ModelingSessionService::query_selection_marquee_hits(
 std::vector<ModelingSelectionHit> ModelingSessionService::query_selection_lasso_hits(
     const ModelingLassoSelectRequest &request,
     std::vector<EntityId> *eligible_entities) const {
+  if (!release_has_feature(ReleaseFeature::LassoSelection)) {
+    return {};
+  }
   return impl_->query_selection_lasso_hits(request, eligible_entities);
 }
 
@@ -10898,28 +10944,50 @@ std::uint64_t ModelingSessionService::face_texture_settings_revision() const {
 }
 
 ModelingFaceTextureSettings ModelingSessionService::face_texture_settings() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {};
+  }
   return impl_->face_texture_settings();
 }
 
 ModelingFaceTextureCanvas ModelingSessionService::face_texture_canvas() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {};
+  }
   return impl_->face_texture_canvas();
 }
 
 ModelingCommandResult ModelingSessionService::begin_face_texture_gesture(
     const ModelingFaceTextureGestureBegin &request) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->begin_face_texture_gesture(request);
 }
 
 ModelingCommandResult ModelingSessionService::update_face_texture_gesture(
     const ModelingFaceTextureGestureUpdate &request) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->update_face_texture_gesture(request);
 }
 
 ModelingCommandResult ModelingSessionService::commit_face_texture_gesture() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->commit_face_texture_gesture();
 }
 
 ModelingCommandResult ModelingSessionService::cancel_face_texture_gesture() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->cancel_face_texture_gesture();
 }
 
@@ -10929,21 +10997,36 @@ void ModelingSessionService::set_face_texture_material_transform_provider(
 }
 
 bool ModelingSessionService::can_project_uv() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return false;
+  }
   return impl_->can_project_uv();
 }
 
 ModelingCommandResult ModelingSessionService::set_face_texture_setting(
     const ModelingFaceTextureEdit &edit) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->set_face_texture_setting(edit);
 }
 
 ModelingCommandResult ModelingSessionService::apply_face_texture_action(
     const ModelingFaceTextureActionRequest &request) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_face_texture_action(request);
 }
 
 ModelingCommandResult ModelingSessionService::transfer_face_texture_to_face(
     int modeling_object_id, int face_id) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->transfer_face_texture_to_face(modeling_object_id, face_id);
 }
 
@@ -10952,20 +11035,35 @@ std::uint64_t ModelingSessionService::uv_peel_settings_revision() const {
 }
 
 ModelingUvPeelSettings ModelingSessionService::uv_peel_settings() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {};
+  }
   return impl_->uv_peel_settings();
 }
 
 ModelingCommandResult ModelingSessionService::set_uv_peel_options(
     const ModelingUvPeelOptions &options) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->set_uv_peel_options(options);
 }
 
 ModelingCommandResult ModelingSessionService::peel_uv(
     const ModelingUvPeelRequest &request) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->peel_uv(request);
 }
 
 ModelingCommandResult ModelingSessionService::refresh_uv_peel_preview() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->refresh_uv_peel_preview();
 }
 
@@ -10982,10 +11080,18 @@ std::string ModelingSessionService::uv_peel_preview_error() const {
 }
 
 ModelingCommandResult ModelingSessionService::commit_uv_peel_preview() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->commit_uv_peel_preview();
 }
 
 ModelingCommandResult ModelingSessionService::cancel_uv_peel_preview() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->cancel_uv_peel_preview();
 }
 
@@ -10999,6 +11105,10 @@ bool ModelingSessionService::face_texture_treat_as_one() const {
 
 ModelingCommandResult ModelingSessionService::set_face_texture_treat_as_one(
     bool enabled) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->set_face_texture_treat_as_one(enabled);
 }
 
@@ -11269,6 +11379,11 @@ ModelingCommandResult ModelingSessionService::clear_selection() {
 
 ModelingCommandResult ModelingSessionService::apply_component_selection_command(
     ModelingComponentSelectionCommand command) {
+  if (command == ModelingComponentSelectionCommand::SelectFacesWithSameMaterial &&
+      !release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_component_selection_command(command);
 }
 
@@ -11339,43 +11454,75 @@ bool ModelingSessionService::has_face_texture_repeat() const {
 
 ModelingCommandResult
 ModelingSessionService::mirror_selection(ModelingMirrorAxis axis) {
+  if (!release_has_feature(ReleaseFeature::MeshMirror)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->mirror_selection(axis);
 }
 
 ModelingCommandResult
 ModelingSessionService::flip_selection(ModelingFlipOrientation orientation) {
+  if (!release_has_feature(ReleaseFeature::MeshFlip)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->flip_selection(orientation);
 }
 
 ModelingCommandResult
 ModelingSessionService::material_selection_status(
     bool material_reference_available) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->material_selection_status(material_reference_available);
 }
 
 ModelingCommandResult
 ModelingSessionService::apply_material_slot(std::uint32_t material_slot) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_material_slot(material_slot);
 }
 
 ModelingCommandResult
 ModelingSessionService::apply_material(MaterialReference material) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_material(material);
 }
 
 ModelingCommandResult ModelingSessionService::apply_material_to_selected_faces(
     MaterialReference material, std::uint64_t selection_token) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_material_to_selected_faces(material, selection_token);
 }
 
 ModelingCommandResult ModelingSessionService::apply_material_to_mesh_at_face(
     int modeling_object_id, int face_id, MaterialReference material) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_material_to_mesh_at_face(modeling_object_id, face_id,
                                                material);
 }
 
 ModelingCommandResult ModelingSessionService::apply_material_to_face(
     int modeling_object_id, int face_id, MaterialReference material) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_material_to_face(modeling_object_id, face_id, material);
 }
 
@@ -11394,6 +11541,10 @@ ModelingSessionService::project_material_for_face(int modeling_object_id,
 
 ModelingCommandResult ModelingSessionService::apply_face_material_to_mesh(
     int modeling_object_id, int face_id) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_face_material_to_mesh(modeling_object_id, face_id);
 }
 
@@ -11456,6 +11607,29 @@ ModelingSessionService::interaction_settings() const {
 
 ModelingCommandResult ModelingSessionService::set_interaction_settings(
     const ModelingInteractionSettings &settings) {
+  const auto current = impl_->interaction_settings();
+  if ((!release_has_feature(ReleaseFeature::BevelEdges) &&
+       (settings.edge_bevel_width != current.edge_bevel_width ||
+        settings.edge_bevel_profile != current.edge_bevel_profile ||
+        settings.edge_bevel_segments != current.edge_bevel_segments)) ||
+      (!release_has_feature(ReleaseFeature::SliceQuads) &&
+       (settings.slice_quad_x_slices != current.slice_quad_x_slices ||
+        settings.slice_quad_y_slices != current.slice_quad_y_slices)) ||
+      (!release_has_feature(ReleaseFeature::HalfCut) &&
+       (settings.half_cut_axis != current.half_cut_axis ||
+        settings.half_cut_separate_parts != current.half_cut_separate_parts ||
+        settings.half_cut_fill_parts != current.half_cut_fill_parts)) ||
+      (!release_has_feature(ReleaseFeature::CutTool) &&
+       (settings.cut_mode != current.cut_mode)) ||
+      (!release_has_feature(ReleaseFeature::LassoSelection) &&
+       (settings.lasso_select_partial_intersection != current.lasso_select_partial_intersection)) ||
+      (!release_has_feature(ReleaseFeature::ThickenFaces) &&
+       !release_has_feature(ReleaseFeature::OuterHull) &&
+       (settings.thicken_thickness != current.thicken_thickness ||
+        settings.thicken_from_center != current.thicken_from_center))) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->set_interaction_settings(settings);
 }
 
@@ -11481,6 +11655,10 @@ ModelingSessionService::context_action(std::string_view action_id,
 
 ModelingCommandResult
 ModelingSessionService::execute_context_action(std::string_view action_id) {
+  if (!release_allows_action(action_id)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->execute_context_action(action_id);
 }
 
@@ -11539,6 +11717,10 @@ ModelingCommandResult ModelingSessionService::update_transform_matrix_preview(
 
 ModelingCommandResult ModelingSessionService::update_transform_extrude_preview(
     QVec3 offset, float closed_edge_ledge_size) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->update_transform_extrude_preview(offset,
                                                  closed_edge_ledge_size);
 }
@@ -11638,11 +11820,20 @@ ModelingCommandResult ModelingSessionService::clear_selection_hover() {
 
 ModelingCommandResult
 ModelingSessionService::cut_selected_meshes_by_hovered_face_plane() {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->cut_selected_meshes_by_hovered_face_plane();
 }
 
 ModelingCommandResult
 ModelingSessionService::activate_viewport_tool(ModelingViewportTool tool) {
+  const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
+  if (descriptor != nullptr && !release_allows_tool(descriptor->id)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->activate_viewport_tool(tool);
 }
 
@@ -11699,85 +11890,157 @@ ModelingCommandResult ModelingSessionService::commit_knife_tool() {
 
 ModelingCommandResult
 ModelingSessionService::update_cut_hover(const ModelingToolRayEvent &event) {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->update_cut_hover(event);
 }
 
 ModelingCommandResult
 ModelingSessionService::click_cut(const ModelingToolRayEvent &event) {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->click_cut(event);
 }
 
 ModelingCommandResult
 ModelingSessionService::begin_cut_point_drag(int point_index) {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->begin_cut_point_drag(point_index);
 }
 
 ModelingCommandResult
 ModelingSessionService::begin_cut_line_drag(const ModelingToolRayEvent &event) {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->begin_cut_line_drag(event);
 }
 
 ModelingCommandResult ModelingSessionService::end_cut_drag() {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->end_cut_drag();
 }
 
 ModelingCommandResult
 ModelingSessionService::set_cut_mode(ModelingCutMode mode) {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->set_cut_mode(mode);
 }
 
 ModelingCommandResult ModelingSessionService::cycle_cut_mode() {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->cycle_cut_mode();
 }
 
 ModelingCommandResult ModelingSessionService::finalize_cut_tool() {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->finalize_cut_tool();
 }
 
 ModelingCommandResult
 ModelingSessionService::update_mirror_hover(const ModelingToolRayEvent &event) {
+  if (!release_has_feature(ReleaseFeature::MirrorTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->update_mirror_hover(event);
 }
 
 ModelingCommandResult
 ModelingSessionService::click_mirror(const ModelingToolRayEvent &event) {
+  if (!release_has_feature(ReleaseFeature::MirrorTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->click_mirror(event);
 }
 
 ModelingCommandResult
 ModelingSessionService::begin_mirror_point_drag(int point_index) {
+  if (!release_has_feature(ReleaseFeature::MirrorTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->begin_mirror_point_drag(point_index);
 }
 
 ModelingCommandResult ModelingSessionService::begin_mirror_line_drag(
     const ModelingToolRayEvent &event) {
+  if (!release_has_feature(ReleaseFeature::MirrorTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->begin_mirror_line_drag(event);
 }
 
 ModelingCommandResult ModelingSessionService::end_mirror_drag() {
+  if (!release_has_feature(ReleaseFeature::MirrorTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->end_mirror_drag();
 }
 
 ModelingCommandResult ModelingSessionService::finalize_mirror_tool() {
+  if (!release_has_feature(ReleaseFeature::MirrorTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->finalize_mirror_tool();
 }
 
 ModelingCommandResult
 ModelingSessionService::update_poly_hover(const ModelingToolRayEvent &event) {
+  if (!release_has_feature(ReleaseFeature::PolyTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->update_poly_hover(event);
 }
 
 ModelingCommandResult ModelingSessionService::accept_poly_point(
     const ModelingToolRayEvent &event) {
+  if (!release_has_feature(ReleaseFeature::PolyTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->accept_poly_point(event);
 }
 
 ModelingCommandResult ModelingSessionService::commit_poly_tool() {
+  if (!release_has_feature(ReleaseFeature::PolyTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->commit_poly_tool();
 }
 
 ModelingCommandResult
 ModelingSessionService::commit_poly_tool(MaterialReference material) {
+  if (!release_has_feature(ReleaseFeature::PolyTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->commit_poly_tool(material);
 }
 
@@ -11787,6 +12050,14 @@ ModelingCommandResult ModelingSessionService::activate_box_tool() {
 
 ModelingCreateBoxResult ModelingSessionService::create_box_from_bounds(
     const ModelingCreateBoxRequest &request) {
+  if (!release_has_feature(ReleaseFeature::Materials) &&
+      request.material.valid() &&
+      (!request.material.project_owned() ||
+       request.material.project_asset() !=
+           *ProjectAssetId::parse(kDefaultProjectMaterialId))) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->create_box_from_bounds(request);
 }
 
@@ -11834,16 +12105,32 @@ ModelingCommandResult ModelingSessionService::cancel_box() {
 
 ModelingCreateBoxResult
 ModelingSessionService::create_mesh(const ModelingCreateMeshRequest &request) {
+  if (!release_has_feature(ReleaseFeature::Materials) &&
+      request.material.valid() &&
+      (!request.material.project_owned() ||
+       request.material.project_asset() !=
+           *ProjectAssetId::parse(kDefaultProjectMaterialId))) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->create_mesh(request);
 }
 
 ModelingCreateBoxResult ModelingSessionService::create_curve(
     modeling::CurveDocument document, std::string name) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->create_curve(std::move(document), std::move(name));
 }
 
 ModelingCreateBoxResult
 ModelingSessionService::apply_curve_solidify(int modeling_object_id) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_curve_solidify(modeling_object_id);
 }
 
@@ -11854,24 +12141,44 @@ std::optional<modeling::CurveDocument> ModelingSessionService::curve_document(
 
 ModelingCommandResult ModelingSessionService::replace_curve_document(
     int modeling_object_id, modeling::CurveDocument document) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->replace_curve_document(modeling_object_id, std::move(document));
 }
 
 ModelingCommandResult ModelingSessionService::begin_curve_document_preview(
     int modeling_object_id) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->begin_curve_document_preview(modeling_object_id);
 }
 
 ModelingCommandResult ModelingSessionService::update_curve_document_preview(
     modeling::CurveDocument document) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->update_curve_document_preview(std::move(document));
 }
 
 ModelingCommandResult ModelingSessionService::commit_curve_document_preview() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->commit_curve_document_preview();
 }
 
 ModelingCommandResult ModelingSessionService::cancel_curve_document_preview() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->cancel_curve_document_preview();
 }
 
@@ -11908,24 +12215,40 @@ bool ModelingSessionService::selected_face_extrusion_hit(
 ModelingCommandResult ModelingSessionService::apply_face_extrusion(
     const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
     double amount_internal, std::optional<QVec3> world_direction) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->apply_face_extrusion(source, mode, amount_internal, world_direction);
 }
 
 ModelingCommandResult ModelingSessionService::begin_face_extrusion_preview(
     const ModelingFaceExtrusionSource &source,
     const ModelingFaceExtrusionSource &retained_cancellation_source) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->begin_face_extrusion_preview(source, false,
                                            retained_cancellation_source);
 }
 
 ModelingCommandResult ModelingSessionService::begin_face_extrusion_adjustment_preview(
     const ModelingFaceExtrusionSource &source) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->begin_face_extrusion_preview(source, true);
 }
 
 ModelingCommandResult ModelingSessionService::update_face_extrusion_preview(
     const ModelingFaceExtrusionSource &source, modeling::FaceExtrudeMode mode,
     double amount_internal, std::optional<QVec3> world_direction) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->update_face_extrusion_preview(source, mode, amount_internal,
                                             world_direction);
 }
@@ -11935,6 +12258,10 @@ bool ModelingSessionService::face_extrusion_preview_active() const {
 }
 
 ModelingCommandResult ModelingSessionService::commit_face_extrusion_preview() {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->commit_face_extrusion_preview();
 }
 
@@ -11951,11 +12278,19 @@ ModelingCommandResult ModelingSessionService::replace_mesh_document(
 
 ModelingLinearArrayResult ModelingSessionService::create_linear_array(
     const ModelingLinearArrayRequest &request) {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->create_linear_array(request);
 }
 
 ModelingRadialArrayResult ModelingSessionService::create_radial_array(
     const ModelingRadialArrayRequest &request) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->create_radial_array(request);
 }
 
@@ -12021,11 +12356,19 @@ ModelingCommandResult ModelingSessionService::apply_resolved_vertex_positions(
 
 ModelingCommandResult ModelingSessionService::assign_material_slot_to_selection(
     std::uint32_t material_slot) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->assign_material_slot_to_selection(material_slot);
 }
 
 ModelingCommandResult ModelingSessionService::assign_material_slot_to_face(
     int modeling_object_id, int face_id, std::uint32_t material_slot) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return impl_->assign_material_slot_to_face(modeling_object_id, face_id,
                                              material_slot);
 }

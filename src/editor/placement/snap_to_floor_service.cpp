@@ -7,6 +7,7 @@
 #include "editor/placement/snap_to_floor_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/commands/document_command_service.hpp"
@@ -281,6 +282,9 @@ SnapToFloorService::SnapToFloorService(
       local_visibility_(local_visibility), surface_query_(surface_query) {}
 
 bool SnapToFloorService::can_snap_selected_meshes_to_floor() const {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return false;
+  }
   if (modeling_.selection_mode() != ModelingSelectionMode::Object ||
       native_tools_.has_pending_tool() ||
       modeling_.can_cancel_active_tool_or_preview()) {
@@ -317,6 +321,9 @@ bool SnapToFloorService::can_snap_selected_meshes_to_floor() const {
 
 DocumentCommandResult
 SnapToFloorService::snap_selected_meshes_to_floor() {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return document_command_invalid_request_result(release_feature_unavailable_message());
+  }
   QDR_PROFILE_FUNCTION();
   const SceneSurfaceQuerySnapshot surface = surface_query_.snapshot();
   const ObjectSnapSelection selection = collect_object_snap_selection(
@@ -363,6 +370,9 @@ SnapToFloorService::snap_selected_meshes_to_floor() {
 }
 
 bool SnapToFloorService::can_snap_selected_vertices_to_floor() const {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return false;
+  }
   const ModelingSelectionSummary summary = modeling_.selection_summary();
   return modeling_.selection_mode() == ModelingSelectionMode::Vertex &&
          summary.selected_vertex_count != 0u &&
@@ -372,6 +382,9 @@ bool SnapToFloorService::can_snap_selected_vertices_to_floor() const {
 }
 
 ModelingCommandResult SnapToFloorService::snap_selected_vertices_to_floor() {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return modeling_failure(release_feature_unavailable_message());
+  }
   QDR_PROFILE_FUNCTION();
   if (instances_.instance_edit_state().active) {
     return modeling_failure(

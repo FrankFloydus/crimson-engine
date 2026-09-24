@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/release_features.hpp"
 #include "io/qdr/qdr_diagnostic.hpp"
 #include "io/qdr/qdr_scene_viewport_camera.hpp"
 #include "io/project/project_asset_resolver.hpp"
@@ -50,12 +51,20 @@ struct QdrProjectReadResult {
     std::string message;
     std::vector<quader_io::QdrDiagnostic> diagnostics;
     std::array<std::byte, 16> scene_uuid{};
+    ProductRelease minimum_product_release = kInternalFullRelease;
     std::vector<ProjectAssetReference> project_asset_dependencies;
     std::optional<QdrSceneViewportCameraPose> viewport_camera_pose;
     QdrProjectReadStats stats;
     /// Identifies the exact bytes decoded, independently of later disk changes.
     std::uint64_t source_byte_count = 0u;
     std::uint64_t source_content_hash = 0u;
+};
+
+/// Verified release requirement without decoding or hydrating scene contents.
+struct QdrProjectReleaseReadResult final {
+  bool ok = false;
+  ProductRelease minimum_product_release = kInternalFullRelease;
+  std::string message;
 };
 
 /// Validated project references without decoding or compiling scene geometry.
@@ -103,9 +112,15 @@ struct QdrMeshMaterialSlotsReadResult final {
 class QdrDocumentReader final {
 public:
   [[nodiscard]] static QdrProjectReadResult
-  deserialize_project_document(std::span<const std::byte> bytes);
+  deserialize_project_document(
+      std::span<const std::byte> bytes,
+      std::optional<ProductRelease> authoring_release = std::nullopt);
   [[nodiscard]] static QdrProjectReadResult
-  read_project_document(const std::filesystem::path &path);
+  read_project_document(
+      const std::filesystem::path &path,
+      std::optional<ProductRelease> authoring_release = std::nullopt);
+  [[nodiscard]] static QdrProjectReleaseReadResult
+  read_project_release_requirement(const std::filesystem::path &path);
   [[nodiscard]] static QdrProjectDependencyReadResult
   deserialize_project_dependencies(std::span<const std::byte> bytes);
   [[nodiscard]] static QdrProjectDependencyReadResult

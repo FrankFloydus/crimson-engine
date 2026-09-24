@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_viewport_api.hpp"
 
+#include "core/release_features.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "viewport/viewport_shading_mode_conversions.hpp"
@@ -119,6 +120,11 @@ QuaderShadingMode QuaderViewportApi::shading_mode(ViewportPaneId pane) const {
 QuaderApiVoidResult
 QuaderViewportApi::set_shading_mode(ViewportPaneId pane,
                                     QuaderShadingMode mode) {
+  if (!release_has_feature(ReleaseFeature::RenderedViewport) &&
+      mode != QuaderShadingMode::Wireframe &&
+      mode != QuaderShadingMode::Solid && mode != QuaderShadingMode::Shaded) {
+    return unavailable(release_feature_unavailable_message());
+  }
   if (mode == QuaderShadingMode::XRay) {
     return unavailable(
         "XRay shading mode is not supported by the native viewport.");

@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/viewport/primitive_creation_api_adapter.hpp"
@@ -68,7 +69,9 @@ bool material_face_source_gesture_mode(ViewportSelectionMode mode) {
 }
 
 bool material_input_blocked(const ViewportInteractionFrame &frame) {
-  return !frame.input.viewport_focused || frame.input.text_input_active ||
+  return (!release_has_feature(ReleaseFeature::Materials) &&
+          !release_has_feature(ReleaseFeature::UvEditing)) ||
+         !frame.input.viewport_focused || frame.input.text_input_active ||
          frame.input.pointer_interaction_canceled ||
          frame.input.navigation_active || frame.input_result.navigation_active ||
          frame.input.modal_tool_active ||
@@ -81,7 +84,8 @@ bool material_interaction_blocked(
     const ViewportInteractionFrame &frame,
     const ViewportToolResult &tool_result,
     const ViewportBeforeToolInteractionResult &before_tool) {
-  return material_input_blocked(frame) ||
+  return !release_has_feature(ReleaseFeature::Materials) ||
+         material_input_blocked(frame) ||
          (before_tool.gizmo_consumed && !before_tool.material_transfer_consumed) ||
          tool_result.handled;
 }
@@ -211,6 +215,14 @@ ViewportInputActionKind material_pointer_action(
              : edge.action;
 }
 
+bool release_allows_material_pointer_action(ViewportInputActionKind action) {
+  return release_has_feature(
+      action == ViewportInputActionKind::None ||
+              action == ViewportInputActionKind::TransferFaceTexture
+          ? ReleaseFeature::UvEditing
+          : ReleaseFeature::Materials);
+}
+
 bool same_pointer_modifiers(const QuaderInputChord &left,
                             const QuaderInputChord &right) {
   return left.mouse_button == right.mouse_button &&
@@ -272,6 +284,9 @@ ViewportInteractionController::handle_before_active_tool_impl(
     NativeViewportToolCoordinator *native_tools) {
   QDR_PROFILE_FUNCTION();
   interaction_cursor_ = ViewportPointerCursor::Default;
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    curve = nullptr;
+  }
   if (!point_light_range_.pointer_active()) {
     if (const auto transfer =
             reserve_material_transfer(editor, frame, native_tools)) {
@@ -292,7 +307,8 @@ ViewportInteractionController::handle_before_active_tool_impl(
   }
   const bool selection_pointer_available =
       frame.active_tool_allows_selection_fallback ||
-      frame.input.curve_controls_editable;
+      (release_has_feature(ReleaseFeature::Curves) &&
+       frame.input.curve_controls_editable);
   const bool selection_pointer_blocked =
       !frame.input.viewport_hovered ||
       frame.input.text_input_active || frame.input.navigation_active ||
@@ -301,7 +317,8 @@ ViewportInteractionController::handle_before_active_tool_impl(
       frame.input.operation_preview_active || frame.input.active_transform_drag ||
       frame.input_result.cancel_requested || frame.input_result.camera_changed ||
       frame.input_result.view_changed ||
-      (!frame.input.curve_controls_editable &&
+      (!(release_has_feature(ReleaseFeature::Curves) &&
+         frame.input.curve_controls_editable) &&
        (frame.input.modal_tool_active || frame.input.active_tool_owns_viewport));
   if (selection_pointer_available && !selection_pointer_blocked) {
     const std::optional<quader_editor_core::SelectionEditOperation> edit =
@@ -315,12 +332,14 @@ ViewportInteractionController::handle_before_active_tool_impl(
       interaction_cursor_ = ViewportPointerCursor::SelectionSubtract;
     }
   }
-  if (frame.input_router.state().active_tool == ViewportToolId::LassoSelect ||
+  if ((release_has_feature(ReleaseFeature::LassoSelection) &&
+       frame.input_router.state().active_tool == ViewportToolId::LassoSelect) ||
       selection_.lasso_pointer_active()) {
     return {.selection_after_pending_pick = resolved_selection};
   }
   bool range_hovered = false;
-  if (!transform_gizmo_.pointer_interaction_active()) {
+  if (release_has_feature(ReleaseFeature::Lights) &&
+      !transform_gizmo_.pointer_interaction_active()) {
     const bool range_consumed = point_light_range_.handle_frame(editor, prepared);
     range_hovered = point_light_range_.hovered();
     if (range_consumed) {
@@ -358,6 +377,10 @@ std::optional<ViewportBeforeToolInteractionResult>
 ViewportInteractionController::reserve_material_transfer(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     NativeViewportToolCoordinator *native_tools) {
+  if (!release_has_feature(ReleaseFeature::Materials) &&
+      !release_has_feature(ReleaseFeature::UvEditing)) {
+    return std::nullopt;
+  }
   const auto retire_released_pointer = [&](std::uint64_t before_sequence = 0u) {
     if (!material_transfer_pointer_.has_value()) {
       return;
@@ -390,6 +413,9 @@ ViewportInteractionController::reserve_material_transfer(
   ViewportInputFrame input = frame.input;
   ViewportBeforeToolInteractionResult result;
   for (const auto &edge : frame.input.material_transfer_edges) {
+    if (!release_allows_material_pointer_action(material_pointer_action(edge))) {
+      continue;
+    }
     const bool press = edge.kind == ViewportSemanticPointerEdgeKind::ReservePress ||
                        edge.semantic_chord.gesture != QuaderInputGesture::Click;
     const auto physical = edge.pointer_edge.value_or(ViewportPointerButtonEdge{
@@ -459,6 +485,21 @@ std::optional<ViewportBeforeToolInteractionResult>
 ViewportInteractionController::reserve_material_pointer_edge(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     NativeViewportToolCoordinator *native_tools) {
+  const ViewportSemanticPointerEdge *trigger = material_transfer_edge(
+      frame.input, ViewportSemanticPointerEdgeKind::Trigger);
+  const ViewportSemanticPointerEdge *reserve = material_transfer_edge(
+      frame.input, ViewportSemanticPointerEdgeKind::ReservePress);
+  ViewportInputActionKind action = material_transfer_pointer_.has_value()
+                                       ? material_transfer_pointer_->action
+                                       : frame.input.material_transfer_action;
+  if (trigger != nullptr) {
+    action = material_pointer_action(*trigger);
+  } else if (reserve != nullptr) {
+    action = material_pointer_action(*reserve);
+  }
+  if (!release_allows_material_pointer_action(action)) {
+    return std::nullopt;
+  }
   if (transfer_release_suppression_.active()) {
     const QuaderMouseButton suppressed_button =
         transfer_release_suppression_.button();
@@ -471,10 +512,6 @@ ViewportInteractionController::reserve_material_pointer_edge(
           .gizmo_consumed = true, .material_transfer_consumed = true};
     }
   }
-  const ViewportSemanticPointerEdge *trigger = material_transfer_edge(
-      frame.input, ViewportSemanticPointerEdgeKind::Trigger);
-  const ViewportSemanticPointerEdge *reserve = material_transfer_edge(
-      frame.input, ViewportSemanticPointerEdgeKind::ReservePress);
   if (material_transfer_pointer_.has_value()) {
     // Consume the release even if focus, scene, or mode changes. No click was
     // started for selection or a gizmo, so none may be synthesized on release.
@@ -662,6 +699,7 @@ ViewportInteractionController::reserve_material_pointer_edge(
                            ? QuaderInputGesture::Click
                            : QuaderInputGesture::Press,
         },
+        .action = frame.input.material_transfer_action,
         .scene_session_id =
             editor.scene_documents().active_scene_id().value_or(SceneSessionId{}),
         .selection_revision = frame.selection_state.summary.selection_revision,
@@ -742,7 +780,9 @@ void ViewportInteractionController::handle_material_interactions(
     const ViewportToolResult &tool_result,
     const ViewportBeforeToolInteractionResult &before_tool,
     ViewportRuntimeBindingToken runtime_binding) {
-  if (!runtime_binding.current()) {
+  if (!runtime_binding.current() ||
+      (!release_has_feature(ReleaseFeature::Materials) &&
+       !release_has_feature(ReleaseFeature::UvEditing))) {
     return;
   }
   const bool batched = !before_tool.material_transfer_requests.empty();
@@ -752,6 +792,10 @@ void ViewportInteractionController::handle_material_interactions(
     ViewportBeforeToolInteractionResult accepted = before_tool;
     accepted.material_transfer_requests.clear();
     for (const auto &request : before_tool.material_transfer_requests) {
+      if (!release_allows_material_pointer_action(
+              material_pointer_action(request))) {
+        continue;
+      }
       input.material_transfer_pressed = true;
       input.material_transfer_edges = {request};
       input.material_transfer_action = material_pointer_action(request);
@@ -775,6 +819,8 @@ void ViewportInteractionController::handle_material_interactions(
   }
   if (!batched && frame.input.material_transfer_pressed) {
     if (!before_tool.material_transfer_requested ||
+        !release_allows_material_pointer_action(
+            frame.input.material_transfer_action) ||
         material_input_blocked(frame) || frame.input_result.cancel_requested ||
         frame.input_result.camera_changed || tool_result.handled ||
         !frame.input.viewport_hovered ||
@@ -878,7 +924,9 @@ ViewportInteractionController::handle_context_menu_pointer(
            QuaderMouseButton::Right) ||
       std::ranges::any_of(
           frame.input.material_transfer_edges, [](const auto &edge) {
-            return edge.semantic_chord.device == QuaderInputDevice::Mouse &&
+            return release_allows_material_pointer_action(
+                       material_pointer_action(edge)) &&
+                   edge.semantic_chord.device == QuaderInputDevice::Mouse &&
                    edge.semantic_chord.mouse_button ==
                        QuaderMouseButton::Right;
           });
@@ -1185,7 +1233,8 @@ ViewportInteractionController::handle_native_tools(
     ViewportCameraController &camera,
     const ViewportNativeToolInteractionFrame &frame) {
   ViewportNativeToolInteractionFrame resolved_frame = frame;
-  if (resolved_frame.input.quick_pivot_down &&
+  if (release_has_feature(ReleaseFeature::Pivot) &&
+      resolved_frame.input.quick_pivot_down &&
       !resolved_frame.selection_transform_pivot.has_value()) {
     resolved_frame.selection_transform_pivot =
         editor.query().selection_transform_pivot();
@@ -1204,7 +1253,9 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   interaction_cursor_ = ViewportPointerCursor::Default;
   ViewportToolPointerLifecycleResult output;
   ViewportInteractionFrame interaction = frame.interaction;
-  const bool light_range_prepass = point_light_range_.pointer_active();
+  const bool light_range_prepass =
+      release_has_feature(ReleaseFeature::Lights) &&
+      point_light_range_.pointer_active();
   if (light_range_prepass) {
     interaction.selection_state = {
         .summary = editor.selection().summary(),
@@ -1217,7 +1268,10 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
         editor, interaction, &native_tools.curve_interaction(), &native_tools);
   }
   std::optional<QuaderSelectionSummary> curve_prepass_selection;
-  ViewportCurveInteractionPort *curve = &native_tools.curve_interaction();
+  ViewportCurveInteractionPort *curve =
+      release_has_feature(ReleaseFeature::Curves)
+          ? &native_tools.curve_interaction()
+          : nullptr;
 
   const bool curve_gizmo_pointer_active =
       transform_gizmo_.pointer_interaction_active();

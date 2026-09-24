@@ -414,6 +414,7 @@ void SceneSession::replace_document_impl(
   preview_content_checkpoint_.reset();
   document_commands_->abandon_property_edit();
   document_ = std::move(document);
+  minimum_product_release_ = current_product_release();
   invalidate_document_binding();
   scene_surface_query_->invalidate();
   point_placement_->invalidate();

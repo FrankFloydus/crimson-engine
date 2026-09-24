@@ -11,6 +11,14 @@ locale.it-IT.name=Italian
 ui.action.apply=Apply
 ui.action.ok=OK
 ui.action.cancel=Cancel
+ui.action.browse=Browse...
+ui.settings.group.default_material=Default Material
+ui.settings.default_material.built_in=Default
+ui.settings.default_material.image_filter=Images (*.png *.jpg *.jpeg)
+ui.settings.default_material.import_failed=The default material image could not be imported. Choose a valid PNG or JPEG image.
+
+release.feature_unavailable=This feature is not available in this release.
+release.file_requires=This file requires Quader {release}.
 
 ui.about.title=About Quader
 ui.about.version=Quader %1

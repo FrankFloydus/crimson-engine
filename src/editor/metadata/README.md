@@ -20,6 +20,10 @@ or own modeling, UI, input capture, or render resources.
   expose semantic values, not shader names or GPU handles. Texture paths are relative to app resources.
 - UI owns rendering, docking, focus, and persistence. Use narrow descriptor lookup for retained
   controls; do not enumerate whole catalogs from frame callbacks.
+- `release_feature_requirements.*` maps canonical native commands, actions, operations, tools and
+  semantic input to the immutable executable release catalog in `core/release_features.hpp`.
+  Keep raw identities registered for shortcut persistence; filter presentation and enforce the
+  same requirements before invoking owner mutations or canceling competing tools.
 
 Descriptor contracts and a minimal consuming shell are tested in
 [tests/modeling_domain/editor_metadata](../../../tests/modeling_domain/editor_metadata), built by

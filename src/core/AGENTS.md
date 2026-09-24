@@ -14,6 +14,9 @@ configuration paths, and narrow value policies. Domain workflows remain with the
 - Keep core code independent of UI, render, platform windowing, and specific editor workflows.
 - Shared helpers should be narrow and reusable; do not turn core into a dumping ground for domain
   behavior.
+- `release_features.*` owns immutable feature scheduling and product-release value rules.
+  Only a final native executable links `release_profile.cpp`; shared libraries never select
+  a profile or expose a mutable override. Command/tool identity mappings belong to editor metadata.
 - User-facing text belongs behind `LocalizationService` and locale resources.
 - Undoable behavior should preserve command ordering, state transitions, and error handling.
 - `logger.*` owns shared logging; fatal runtime hooks and crash presentation belong to

@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace quader {
@@ -91,6 +92,12 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         settings.set_locale(value);
       } else if (key == "VSync") {
         settings.set_vsync_enabled(parse_bool(value, settings.vsync_enabled()));
+      } else if (key == "DefaultMaterialTexture") {
+        try {
+          settings.set_default_material_texture(std::filesystem::u8path(value));
+        } catch (const std::system_error &) {
+          settings.set_default_material_texture({});
+        }
       } else if (key == "UndoSteps") {
         settings.session_settings_.undo_steps = parse_bounded_integer(
             value, SessionPreferences::kMinimumUndoSteps,
@@ -157,6 +164,11 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << "InterfaceScale=" << interface_scale_ << '\n';
     file << "\n[Rendering]\n";
     file << "VSync=" << (vsync_enabled_ ? "true" : "false") << '\n';
+    const std::u8string texture_path = default_material_texture_.generic_u8string();
+    file << "DefaultMaterialTexture=";
+    file.write(reinterpret_cast<const char *>(texture_path.data()),
+               static_cast<std::streamsize>(texture_path.size()));
+    file << '\n';
     file << "\n[History]\n";
     file << "UndoSteps=" << session_settings_.undo_steps << '\n';
     file << "\n[AutoSave]\n";

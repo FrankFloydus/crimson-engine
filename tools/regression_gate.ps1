@@ -47,6 +47,7 @@ try {
         & cmake --build --preset vs2026-debug --target `
             quader_guardrail_tests `
             quader_tests `
+            quader_public_release_tests `
             quader_modeling_domain_tests `
             quader_modeling_sdk_consumer_tests `
             quader_modeling_sdk_parity_tests

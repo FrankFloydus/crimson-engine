@@ -7,6 +7,7 @@
 #include "render/render_system.hpp"
 
 #include "core/logger.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/material_preview_renderer.hpp"
 #include "render/png_texture_loader.hpp"
@@ -749,7 +750,10 @@ void RenderSystem::apply_scene_settings(
   if (!engine_ || !scene_) {
     return;
   }
-  environment_library_.apply(settings.environment);
+  static const SceneEnvironmentSettings default_environment;
+  environment_library_.apply(release_has_feature(ReleaseFeature::Environment)
+                                 ? settings.environment
+                                 : default_environment);
 }
 
 } // namespace quader

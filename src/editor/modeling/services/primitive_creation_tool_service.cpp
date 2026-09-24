@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "core/release_features.hpp"
 
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
@@ -293,6 +294,49 @@ std::string combined_failure(std::string message, std::string_view suffix) {
 
 } // namespace
 
+bool primitive_creation_available_in_release(PrimitiveCreationKind kind) noexcept {
+  switch (kind) {
+  case PrimitiveCreationKind::Cone:
+    return release_has_feature(ReleaseFeature::ConePrimitive);
+  case PrimitiveCreationKind::Torus:
+    return release_has_feature(ReleaseFeature::TorusPrimitive);
+  case PrimitiveCreationKind::Box:
+  case PrimitiveCreationKind::Cylinder:
+  case PrimitiveCreationKind::Sphere:
+    return true;
+  }
+  return false;
+}
+
+bool primitive_sphere_type_available_in_release(PrimitiveSphereType type) noexcept {
+  return type == PrimitiveSphereType::Uv ||
+         (type == PrimitiveSphereType::Quad &&
+          release_has_feature(ReleaseFeature::QuadSpherePrimitive));
+}
+
+bool primitive_setting_available_in_release(std::string_view name,
+                                            double value) noexcept {
+  if (name.starts_with("primitive.cone.")) {
+    return release_has_feature(ReleaseFeature::ConePrimitive);
+  }
+  if (name.starts_with("primitive.torus.")) {
+    return release_has_feature(ReleaseFeature::TorusPrimitive);
+  }
+  if (name == kSphereSubdivisionSetting ||
+      (name == kSphereTypeSetting && value == 1.0)) {
+    return release_has_feature(ReleaseFeature::QuadSpherePrimitive);
+  }
+  if (name == kPrimitiveTypeSetting) {
+    if (value == static_cast<double>(PrimitiveCreationKind::Cone)) {
+      return primitive_creation_available_in_release(PrimitiveCreationKind::Cone);
+    }
+    if (value == static_cast<double>(PrimitiveCreationKind::Torus)) {
+      return primitive_creation_available_in_release(PrimitiveCreationKind::Torus);
+    }
+  }
+  return true;
+}
+
 PrimitiveCreationToolService::PrimitiveCreationToolService(
     EditorHistoryService &history, ModelingSessionService &modeling,
     ModelingOperationPreviewCheckpointHooks checkpoint_hooks,
@@ -374,12 +418,17 @@ std::string_view PrimitiveCreationToolService::active_tool_id() const {
 
 CommandResult
 PrimitiveCreationToolService::activate() {
-  return activate(!session_ && session_defaults_
-                      ? session_defaults_->preferred_kind : preferred_kind_);
+  const auto kind = !session_ && session_defaults_
+                        ? session_defaults_->preferred_kind : preferred_kind_;
+  return activate(primitive_creation_available_in_release(kind)
+                      ? kind : PrimitiveCreationKind::Box);
 }
 
 CommandResult
 PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
+  if (!primitive_creation_available_in_release(kind)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (session_.has_value()) {
     return set_kind(kind);
   }
@@ -422,6 +471,9 @@ PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
 
 CommandResult
 PrimitiveCreationToolService::set_kind(PrimitiveCreationKind kind) {
+  if (!primitive_creation_available_in_release(kind)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   apply_history_limit();
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
@@ -463,6 +515,12 @@ CommandResult PrimitiveCreationToolService::accept_footprint(
 CommandResult PrimitiveCreationToolService::accept_volume(
     const ModelingBoxPreview &preview, std::string name,
     MaterialReference material, bool use_footprint_proportions) {
+  if (session_ &&
+      (!primitive_creation_available_in_release(session_->kind) ||
+       (session_->kind == PrimitiveCreationKind::Sphere &&
+        !primitive_sphere_type_available_in_release(sphere_settings_.type)))) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   apply_history_limit();
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
@@ -765,6 +823,9 @@ CommandResult PrimitiveCreationToolService::cancel() {
 
 CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
                                                         double value) {
+  if (!primitive_setting_available_in_release(name, value)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   apply_history_limit();
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
@@ -1654,11 +1715,15 @@ void PrimitiveCreationToolService::finish_session() {
 
 void PrimitiveCreationToolService::load_settings(
     const PrimitiveCreationSessionDefaults &settings) {
-  preferred_kind_ = settings.preferred_kind;
+  preferred_kind_ = primitive_creation_available_in_release(settings.preferred_kind)
+                        ? settings.preferred_kind : PrimitiveCreationKind::Box;
   box_settings_ = settings.box;
   cylinder_settings_ = settings.cylinder;
   cone_settings_ = settings.cone;
   sphere_settings_ = settings.sphere;
+  if (!primitive_sphere_type_available_in_release(sphere_settings_.type)) {
+    sphere_settings_.type = PrimitiveSphereType::Uv;
+  }
   torus_settings_ = settings.torus;
 }
 

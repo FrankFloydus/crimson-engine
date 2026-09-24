@@ -411,7 +411,9 @@ SceneStructuralLifecycleService::selected_roots() const {
 }
 
 bool SceneStructuralLifecycleService::can_duplicate_selected_hierarchy() const {
-  return !selected_roots().empty();
+  const std::vector<EntityId> roots = selected_roots();
+  return !roots.empty() &&
+         document_command_hierarchy_available_in_release(scene_, roots);
 }
 
 bool SceneStructuralLifecycleService::hierarchy_contains_modeling_content(
@@ -502,6 +504,11 @@ SceneStructuralLifecycleService::duplicate_hierarchy(
     std::span<const EntityId> roots,
     ModelingSelectionMode result_selection_mode, std::string label,
     bool independent_mesh_assets) {
+  if (!document_command_hierarchy_available_in_release(scene_, roots)) {
+    return duplicate_failure(
+        command_invalid_result(release_feature_unavailable_message()));
+  }
+
   QDR_PROFILE_FUNCTION();
   NormalizedRoots normalized = normalize_explicit_roots(roots);
   if (!normalized.status.ok) {
@@ -667,6 +674,13 @@ SceneStructuralLifecycleService::duplicate_hierarchy_batches_in_transaction(
     std::span<const SceneStructuralDuplicateBatch> batches,
     ModelingSelectionMode result_selection_mode, std::string label,
     bool independent_mesh_assets) {
+  for (const SceneStructuralDuplicateBatch &batch : batches) {
+    if (!document_command_hierarchy_available_in_release(scene_, batch.roots)) {
+      return duplicate_batch_failure(
+          command_invalid_result(release_feature_unavailable_message()));
+    }
+  }
+
   QDR_PROFILE_FUNCTION();
   if (!transaction.active()) {
     return duplicate_batch_failure(

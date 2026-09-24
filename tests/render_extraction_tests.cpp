@@ -6,12 +6,15 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/asset_registry.hpp"
 #include "assets/curve_asset_payload.hpp"
+#include "assets/default_material_catalog.hpp"
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
 #include "core/color_space.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/projection/picking_cache_projection.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
+#include "editor/render/standard_material_render_snapshot_adapter.hpp"
+#include "editor/session/project_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/instance_batch_planner.hpp"
@@ -55,6 +58,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <initializer_list>
 #include <limits>
 #include <memory>
@@ -1859,6 +1863,259 @@ TEST(RenderSceneSnapshotTests,
       entity, TransformComponent{.position = {1.0f, 2.0f, 3.0f}});
   EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(
       initial, document, assets, 2u, {}, resolver.revision_value));
+}
+
+TEST(RenderDefaultMaterialTests,
+     ResolverTracksTextureChangesWithoutAnOpenProject) {
+  ProjectSession project;
+  ProjectSessionRenderMaterialResolver resolver(project);
+  ASSERT_FALSE(project.has_project());
+  ASSERT_EQ(resolver.default_material_override(), nullptr);
+  const std::uint64_t initial_revision = resolver.revision();
+  resolver.set_default_material_texture({});
+  EXPECT_EQ(resolver.revision(), initial_revision);
+
+  const std::filesystem::path first_path =
+      std::filesystem::temp_directory_path() / "quader-default-first.png";
+  resolver.set_default_material_texture(first_path);
+  ASSERT_NE(resolver.default_material_override(), nullptr);
+  const RenderMaterialAssetSnapshot first =
+      *resolver.default_material_override();
+  const auto *first_texture =
+      first.texture_for_slot(material_texture_slot::kBaseColor);
+  ASSERT_NE(first_texture, nullptr);
+  EXPECT_EQ(first_texture->texture.source_path, first_path);
+  EXPECT_TRUE(first_texture->texture.source_path.is_absolute());
+  EXPECT_EQ(first_texture->texture.usage, TextureUsage::BaseColor);
+  const std::uint64_t first_revision = resolver.revision();
+  EXPECT_GT(first_revision, initial_revision);
+
+  const auto *const retained_material = resolver.default_material_override();
+  resolver.set_default_material_texture(first_path);
+  EXPECT_EQ(resolver.revision(), first_revision);
+  EXPECT_EQ(resolver.default_material_override(), retained_material);
+  EXPECT_EQ(resolver.default_material_override()->revision, first.revision);
+
+  const std::filesystem::path second_path =
+      first_path.parent_path() / "quader-default-second.png";
+  resolver.set_default_material_texture(second_path);
+  const std::uint64_t second_revision = resolver.revision();
+  EXPECT_GT(second_revision, first_revision);
+  ASSERT_NE(resolver.default_material_override(), nullptr);
+  EXPECT_GT(resolver.default_material_override()->revision, first.revision);
+  const auto *second_texture =
+      resolver.default_material_override()->texture_for_slot(
+          material_texture_slot::kBaseColor);
+  ASSERT_NE(second_texture, nullptr);
+  EXPECT_EQ(second_texture->texture.source_path, second_path);
+  EXPECT_GT(second_texture->texture.revision.value,
+            first_texture->texture.revision.value);
+  EXPECT_EQ(first_texture->texture.source_path, first_path)
+      << "published snapshots retain the prior texture until replaced";
+
+  resolver.set_default_material_texture({});
+  EXPECT_EQ(resolver.default_material_override(), nullptr);
+  EXPECT_GT(resolver.revision(), second_revision);
+  const std::uint64_t reset_revision = resolver.revision();
+  resolver.set_default_material_texture({});
+  EXPECT_EQ(resolver.revision(), reset_revision);
+  const auto *packaged_texture =
+      packaged_default_render_material().texture_for_slot(
+          material_texture_slot::kBaseColor);
+  ASSERT_NE(packaged_texture, nullptr);
+  EXPECT_EQ(packaged_texture->texture.source_path,
+            std::filesystem::path(kDefaultMaterialAlbedoTexturePackagePath));
+  EXPECT_FALSE(project.has_project());
+}
+
+TEST(RenderDefaultMaterialTests,
+     FullOverridesEveryMaterialSlotWithoutEditingAuthoredState) {
+  ProjectSession project;
+  ProjectSessionRenderMaterialResolver resolver(project);
+  SceneDocument document;
+  AssetRegistry assets;
+  MeshAsset mesh_asset = make_authored_quad_mesh();
+  mesh_asset.edit_geometry().primitives = {
+      {.index_offset = 0u, .index_count = 3u, .material_slot = 0u},
+      {.index_offset = 3u, .index_count = 3u, .material_slot = 3u},
+  };
+  const AssetId mesh = assets.add_mesh(std::move(mesh_asset));
+  MaterialDocument authored_material =
+      make_default_quader_material("Authored Default Override Fixture");
+  authored_material.base_color = {0.2f, 0.4f, 0.8f};
+  const AssetId primary = assets.add_material(authored_material);
+  const AssetId slot =
+      assets.add_material(make_default_quader_material("Authored Slot"));
+  const MaterialComponent component{
+      .material = primary,
+      .material_slots = {{3u, slot}},
+  };
+  const EntityId entity =
+      document.create_entity("Existing Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, {.mesh = mesh}));
+  ASSERT_TRUE(document.set_material(entity, component));
+  const auto scene_revision = document.revision();
+  const auto asset_revision = assets.revision();
+  const RenderSceneSnapshot authored = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  ASSERT_EQ(authored.meshes.size(), 1u);
+  const auto &authored_binding = authored.meshes.front().material;
+  EXPECT_EQ(authored_binding.primary_material.material_id, primary);
+  ASSERT_NE(authored_binding.material_for_slot(3u), nullptr);
+  EXPECT_EQ(authored_binding.material_for_slot(3u)->material_id, slot);
+
+  const std::filesystem::path texture_path =
+      std::filesystem::temp_directory_path() / "quader-default-override.png";
+  resolver.set_default_material_texture(texture_path);
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(
+      authored, document, assets, {}, resolver.revision()));
+  RenderSceneSnapshot stale = authored;
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_selection(
+      stale, document, assets, 1u, {}, resolver.revision()));
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(
+      stale, document, assets, 1u, {}, resolver.revision()));
+  const RenderSceneSnapshot overridden = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &authored, .project_material_resolver = &resolver});
+  EXPECT_FALSE(overridden.reused_previous_records);
+  EXPECT_TRUE(overridden.dirty.project_materials_changed);
+  ASSERT_EQ(overridden.meshes.size(), 1u);
+  EXPECT_TRUE(overridden.meshes.front().material_dirty);
+  EXPECT_FALSE(overridden.meshes.front().mesh_dirty);
+  EXPECT_EQ(overridden.meshes.front().mesh.geometry_payload,
+            authored.meshes.front().mesh.geometry_payload);
+  const auto &binding = overridden.meshes.front().material;
+  EXPECT_TRUE(binding.material_slots.empty());
+  for (const auto slot_id : {0u, 3u, 99u}) {
+    const auto *material = binding.material_for_slot(slot_id);
+    ASSERT_NE(material, nullptr);
+    const auto *texture =
+        material->texture_for_slot(material_texture_slot::kBaseColor);
+    ASSERT_NE(texture, nullptr);
+    EXPECT_EQ(texture->texture.source_path, texture_path);
+  }
+  EXPECT_NE(binding.revision, authored_binding.revision);
+  EXPECT_EQ(document.revision(), scene_revision);
+  EXPECT_EQ(assets.revision(), asset_revision);
+  ASSERT_NE(document.material(entity), nullptr);
+  EXPECT_EQ(*document.material(entity), component);
+
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(
+      overridden, document, assets, {}, resolver.revision()));
+  const RenderSceneSnapshot unchanged = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &overridden, .project_material_resolver = &resolver});
+  EXPECT_TRUE(unchanged.reused_previous_records);
+  EXPECT_FALSE(unchanged.dirty.any_dirty());
+  EXPECT_EQ(unchanged.meshes.front().material.revision, binding.revision);
+
+  const std::filesystem::path replacement_path =
+      texture_path.parent_path() / "quader-replacement-default.png";
+  resolver.set_default_material_texture(replacement_path);
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(
+      unchanged, document, assets, {}, resolver.revision()));
+  const RenderSceneSnapshot replaced = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &unchanged, .project_material_resolver = &resolver});
+  EXPECT_TRUE(replaced.dirty.project_materials_changed);
+  ASSERT_EQ(replaced.meshes.size(), 1u);
+  EXPECT_TRUE(replaced.meshes.front().material_dirty);
+  EXPECT_NE(replaced.meshes.front().material.revision, binding.revision);
+  const auto *replacement_texture =
+      replaced.meshes.front().material.primary_material.texture_for_slot(
+          material_texture_slot::kBaseColor);
+  ASSERT_NE(replacement_texture, nullptr);
+  EXPECT_EQ(replacement_texture->texture.source_path, replacement_path);
+  EXPECT_EQ(replaced.meshes.front().mesh.geometry_payload,
+            authored.meshes.front().mesh.geometry_payload);
+
+  resolver.set_default_material_texture({});
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(
+      replaced, document, assets, {}, resolver.revision()));
+  const RenderSceneSnapshot restored = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &replaced, .project_material_resolver = &resolver});
+  ASSERT_EQ(restored.meshes.size(), 1u);
+  EXPECT_TRUE(restored.meshes.front().material_dirty);
+  EXPECT_EQ(restored.meshes.front().material.component, component);
+  EXPECT_EQ(restored.meshes.front().material.revision, authored_binding.revision);
+  EXPECT_EQ(document.revision(), scene_revision);
+  EXPECT_EQ(assets.revision(), asset_revision);
+}
+
+TEST(RenderDefaultMaterialTests,
+     ExistingInstancesNewMeshesAndToolPreviewsShareTheSelectedTexture) {
+  ProjectSession project;
+  ProjectSessionRenderMaterialResolver resolver(project);
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const AssetId material =
+      assets.add_material(make_default_quader_material("Instance Material"));
+  const MaterialComponent component{
+      .material = material,
+      .material_slots = {{3u, material}},
+  };
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Member", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(member, {.mesh = mesh}));
+  ASSERT_TRUE(document.set_material(member, component));
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  for (int index = 0; index < 2; ++index) {
+    const EntityId occurrence =
+        document.create_entity("Occurrence", EntityKind::Instance);
+    ASSERT_TRUE(document.set_instance_occurrence(
+        occurrence, {.definition = definition}));
+  }
+  const std::filesystem::path texture_path =
+      std::filesystem::temp_directory_path() / "quader-shared-default.png";
+  resolver.set_default_material_texture(texture_path);
+  const EntityId created_after_change =
+      document.create_entity("New Mesh", EntityKind::Mesh);
+  const AssetId new_mesh = assets.add_mesh(make_authored_quad_mesh());
+  ASSERT_TRUE(document.set_mesh(created_after_change, {.mesh = new_mesh}));
+  const auto scene_revision = document.revision();
+  const auto asset_revision = assets.revision();
+
+  const auto expect_texture = [&](const RenderMaterialBindingSnapshot &binding) {
+    for (const auto slot_id : {0u, 3u}) {
+      const auto *resolved = binding.material_for_slot(slot_id);
+      ASSERT_NE(resolved, nullptr);
+      const auto *texture =
+          resolved->texture_for_slot(material_texture_slot::kBaseColor);
+      ASSERT_NE(texture, nullptr);
+      EXPECT_EQ(texture->texture.source_path, texture_path);
+    }
+  };
+  const RenderSceneSnapshot snapshot = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  ASSERT_EQ(snapshot.meshes.size(), 1u);
+  EXPECT_EQ(snapshot.meshes.front().entity_id, created_after_change);
+  expect_texture(snapshot.meshes.front().material);
+  ASSERT_EQ(snapshot.instance_primitives.size(), 1u);
+  EXPECT_EQ(snapshot.instance_primitives.front().occurrences.size(), 2u);
+  expect_texture(snapshot.instance_primitives.front().material);
+
+  const auto previews = build_render_tool_preview_snapshot(
+      {ToolPreviewMesh{.source_entity = member,
+                       .material = component,
+                       .mesh = make_overlay_triangle_mesh(),
+                       .instance_transforms = {QMat4{}, QMat4{}}},
+       ToolPreviewMesh{.mesh = make_authored_quad_mesh()}},
+      assets, nullptr, &resolver);
+  ASSERT_EQ(previews.size(), 2u);
+  EXPECT_EQ(previews.front().instance_transforms.size(), 2u);
+  for (const auto &preview : previews) {
+    expect_texture(preview.material);
+  }
+  EXPECT_EQ(document.revision(), scene_revision);
+  EXPECT_EQ(assets.revision(), asset_revision);
+  EXPECT_EQ(*document.material(member), component);
+  EXPECT_EQ(document.material(created_after_change), nullptr);
 }
 
 TEST(RenderSceneSnapshotTests,

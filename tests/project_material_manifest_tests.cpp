@@ -147,12 +147,13 @@ TEST(ProjectMaterialManifestTests,
 
   const std::string serialized =
       ProjectManifestStore::serialize(decoded.value());
-  EXPECT_NE(serialized.find("\"version\": 2"), std::string::npos);
+  EXPECT_NE(serialized.find("\"version\": 4"), std::string::npos);
+  EXPECT_EQ(decoded.value().minimum_product_release(), kInternalFullRelease);
   EXPECT_EQ(serialized.find("\"activeMaterial\""), std::string::npos);
 }
 
 TEST(ProjectMaterialManifestTests,
-     ReadsV1AndWritesV2WithoutRetiredMaterialSelection) {
+     ReadsV1AndWritesV4WithoutRetiredMaterialSelection) {
   const ProjectId project_id = ProjectId::generate();
   ProjectIoResult<ProjectManifest> decoded =
       ProjectManifestStore::deserialize(
@@ -161,12 +162,13 @@ TEST(ProjectMaterialManifestTests,
 
   const std::string serialized =
       ProjectManifestStore::serialize(decoded.value());
-  EXPECT_NE(serialized.find("\"version\": 2"), std::string::npos);
+  EXPECT_NE(serialized.find("\"version\": 4"), std::string::npos);
+  EXPECT_EQ(decoded.value().minimum_product_release(), kInternalFullRelease);
   EXPECT_EQ(serialized.find("\"activeMaterial\""), std::string::npos);
 }
 
 TEST(ProjectMaterialManifestTests,
-     FirstDeletionAuthorsV3WithStableSortedPermanentIdentities) {
+     V4PreservesStableSortedPermanentDeletionIdentities) {
   auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
   ASSERT_TRUE(created.ok());
   ProjectManifest manifest = created.take_value();
@@ -178,14 +180,14 @@ TEST(ProjectMaterialManifestTests,
       *ProjectAssetId::parse("30000000-0000-4000-8000-000000000003");
   EXPECT_EQ(nlohmann::json::parse(ProjectManifestStore::serialize(manifest))
                 .at("version"),
-            2u);
+            4u);
   ASSERT_TRUE(manifest.mark_materials_deleted(
                           std::array{third, first, third})
                   .ok());
   ASSERT_TRUE(manifest.mark_materials_deleted(std::array{second, first}).ok());
   const std::string serialized = ProjectManifestStore::serialize(manifest);
   const nlohmann::json document = nlohmann::json::parse(serialized);
-  EXPECT_EQ(document.at("version"), 3u);
+  EXPECT_EQ(document.at("version"), 4u);
   EXPECT_EQ(document.at("deletedMaterialIds"),
             nlohmann::json::array({std::string(first.str()),
                                    std::string(second.str()),
@@ -260,7 +262,7 @@ TEST(ProjectMaterialManifestTests,
     EXPECT_FALSE(decoded.ok());
     EXPECT_EQ(decoded.error().code, ProjectIoErrorCode::ManifestMalformed);
   }
-  for (const std::uint64_t version : {4ull, 4'294'967'299ull}) {
+  for (const std::uint64_t version : {5ull, 4'294'967'299ull}) {
     document["version"] = version;
     const auto decoded = ProjectManifestStore::deserialize(document.dump());
     EXPECT_FALSE(decoded.ok());
@@ -287,6 +289,8 @@ TEST(ProjectMaterialManifestTests,
     EXPECT_EQ(read_bytes(workspace.manifest_path), original);
     EXPECT_EQ(opened.value().manifest.deleted_material_ids().size(),
               version == 3u ? 1u : 0u);
+    EXPECT_EQ(opened.value().manifest.minimum_product_release(),
+              kInternalFullRelease);
   }
 }
 
@@ -332,7 +336,8 @@ TEST(ProjectMaterialManifestTests,
       const auto saved = nlohmann::json::parse(
           ProjectManifestStore::serialize(decoded.value()));
       EXPECT_FALSE(saved.at("workspace").contains("activeMaterial"));
-      EXPECT_EQ(saved.at("version"), version);
+      EXPECT_EQ(saved.at("version"), 4u);
+      EXPECT_EQ(saved.at("minimumProductRelease"), kInternalFullRelease);
       EXPECT_EQ(decoded.value().is_material_deleted(deleted), version == 3u);
     }
     for (const nlohmann::json &invalid :
@@ -371,7 +376,63 @@ TEST(ProjectMaterialManifestTests,
   ASSERT_TRUE(reopened.close().ok);
   const auto persisted = nlohmann::json::parse(read_bytes(manifest_path));
   EXPECT_FALSE(persisted.at("workspace").contains("activeMaterial"));
-  EXPECT_EQ(persisted.at("version"), 2u);
+  EXPECT_EQ(persisted.at("version"), 4u);
+}
+
+TEST(ProjectMaterialManifestTests,
+     V4RequiresANonzeroUnsignedProductRelease) {
+  auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
+  ASSERT_TRUE(created.ok());
+  const nlohmann::json base = nlohmann::json::parse(
+      ProjectManifestStore::serialize(created.value()));
+  nlohmann::json missing = base;
+  missing.erase("minimumProductRelease");
+  EXPECT_FALSE(ProjectManifestStore::deserialize(missing.dump()).ok());
+  const std::vector<nlohmann::json> invalid_values{
+      nullptr, false, 0u, -1, 1.0, "1", nlohmann::json::array(),
+      nlohmann::json::object()};
+  for (const nlohmann::json &value : invalid_values) {
+    nlohmann::json document = base;
+    document["minimumProductRelease"] = value;
+    const auto decoded = ProjectManifestStore::deserialize(document.dump());
+    EXPECT_FALSE(decoded.ok()) << document.dump();
+    EXPECT_EQ(decoded.error().code, ProjectIoErrorCode::ManifestMalformed);
+  }
+  const auto invalid_hydration = ProjectManifest::hydrate(
+      ProjectId::generate(), "Manifest", {}, {}, std::nullopt, {}, 0u);
+  EXPECT_FALSE(invalid_hydration.ok());
+}
+
+TEST(ProjectMaterialManifestTests,
+     V4PreservesProductReleaseOnReadAndOnlyRaisesItExplicitly) {
+  auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
+  ASSERT_TRUE(created.ok());
+  EXPECT_EQ(created.value().minimum_product_release(), current_product_release());
+  const nlohmann::json base = nlohmann::json::parse(
+      ProjectManifestStore::serialize(created.value()));
+  for (const ProductRelease release :
+       {ProductRelease{1u}, ProductRelease{2u}, kInternalFullRelease}) {
+    nlohmann::json document = base;
+    document["minimumProductRelease"] = release;
+    auto decoded = ProjectManifestStore::deserialize(document.dump());
+    ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+    EXPECT_EQ(decoded.value().minimum_product_release(), release);
+    const auto saved = nlohmann::json::parse(
+        ProjectManifestStore::serialize(decoded.value()));
+    EXPECT_EQ(saved.at("minimumProductRelease"), release);
+  }
+
+  auto hydrated = ProjectManifest::hydrate(
+      ProjectId::generate(), "Manifest", {}, {}, std::nullopt, {}, 1u);
+  ASSERT_TRUE(hydrated.ok());
+  auto &manifest = hydrated.value();
+  manifest.require_product_release(2u);
+  EXPECT_EQ(manifest.minimum_product_release(), 2u);
+  manifest.require_product_release(1u);
+  EXPECT_EQ(manifest.minimum_product_release(), 2u);
+  manifest.require_product_release(kInternalFullRelease);
+  manifest.require_product_release(2u);
+  EXPECT_EQ(manifest.minimum_product_release(), kInternalFullRelease);
 }
 
 TEST(ProjectMaterialProvisionerTests,

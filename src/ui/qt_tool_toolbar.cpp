@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
@@ -125,10 +126,13 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
   action_group->setExclusive(true);
   for (std::size_t index = 0; index < kToolIconSpecs.size(); ++index) {
     const ToolIconSpec &spec = kToolIconSpecs[index];
+    const std::string_view tool_id = viewport_tool_catalog_id(spec.tool);
+    if (!release_allows_tool(tool_id)) {
+      continue;
+    }
     if (spec.separator_before) {
       addSeparator();
     }
-    const std::string_view tool_id = viewport_tool_catalog_id(spec.tool);
     const std::string_view fallback = viewport_tool_label(spec.tool);
     const QIcon icon =
         spec.tool == ViewportToolId::Curve
@@ -154,7 +158,9 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     if (spec.tool == ViewportToolId::Curve) {
       curve_action_ = action;
     }
-    if (spec.tool == ViewportToolId::Pivot) {
+    if (spec.tool == ViewportToolId::Pivot ||
+        (spec.tool == ViewportToolId::Scale &&
+         !release_allows_tool(viewport_tool_catalog_id(ViewportToolId::Pivot)))) {
       transform_space_action_ = addAction(
           qt_multiresolution_icon(
               QStringLiteral(":/quader/icons/tool_transform_local.png")),
@@ -174,6 +180,9 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
   QStyle &button_presentation =
       install_native_toolbar_button_presentation(*this);
   for (const ToolAction &entry : tool_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
     configure_native_toolbar_button_face(*this, *entry.action,
                                          button_presentation);
   }
@@ -205,6 +214,9 @@ void QtToolToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   }
 
   for (const ToolAction &entry : tool_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
     apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
   }
   apply_native_toolbar_button_face_ui_scale(
@@ -216,6 +228,9 @@ void QtToolToolbar::set_localization(
   setWindowTitle(QString::fromStdString(
       localization.text("ui.toolbar.tools.title", "Tools")));
   for (const ToolAction &entry : tool_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
     const QString text = localized_tool_text(
         localization, entry.tool_id, viewport_tool_label(entry.tool));
     entry.action->setText(text);
@@ -253,6 +268,9 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
   synchronized_transform_space_revision_ = transform_space_revision;
 
   for (const ToolAction &entry : tool_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
     const bool checked = active_tool == entry.tool_id;
     if (entry.action->isChecked() != checked) {
       const QSignalBlocker blocker(entry.action);

@@ -10,6 +10,7 @@
 #include "assets/curve_asset.hpp"
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
+#include "core/release_features.hpp"
 #include "io/project/project_asset_resolver.hpp"
 #include "io/project/project_types.hpp"
 #include "io/qdr/qdr_scene_viewport_camera.hpp"
@@ -81,6 +82,7 @@ using QdrProjectEntityWriteSnapshot = SceneEntityState;
  * background export workers.
  */
 struct QdrProjectWriteSnapshot final {
+  ProductRelease minimum_product_release = current_product_release();
   std::uint64_t project_id = 0;
   std::string project_name;
   std::vector<QdrProjectMeshAssetWriteSnapshot> meshes;

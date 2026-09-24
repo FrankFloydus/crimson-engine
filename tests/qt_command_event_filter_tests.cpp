@@ -1571,6 +1571,11 @@ TEST(QtCommandEventFilterTests,
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  // This fixture deliberately remaps a tool to bare B to exercise browser
+  // type-ahead precedence; release its normal quick-Bridge assignment first.
+  ASSERT_TRUE(editor.commands()
+                  .remove_shortcut(quader::quader_command::kModelingBridge)
+                  .ok());
   const auto box = editor.modeling().create_box(
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       "Browser Shortcut Selection");

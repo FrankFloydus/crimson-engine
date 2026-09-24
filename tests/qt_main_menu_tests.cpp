@@ -196,6 +196,29 @@ TEST_F(QtFileMenuTests,
   EXPECT_TRUE(actions[2]->isChecked());
 }
 
+TEST_F(QtFileMenuTests, ComponentMenusPresentOnlyTheInterpolatedBridge) {
+  for (const char *operand : {"edge", "face"}) {
+    const QString component = QString::fromLatin1(operand);
+    auto *menu = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_") + component);
+    ASSERT_NE(menu, nullptr);
+    const QString suffix = component + QStringLiteral("s");
+    EXPECT_EQ(menu->findChild<QAction *>(
+                  QStringLiteral("command_modeling_bridge_") + suffix), nullptr);
+    auto *interpolated = menu->findChild<QAction *>(
+        QStringLiteral("command_modeling_interpolated_bridge_") + suffix);
+    ASSERT_NE(interpolated, nullptr);
+    EXPECT_TRUE(menu->actions().contains(interpolated));
+    int bridge_entries = 0;
+    for (const QAction *action : menu->actions()) {
+      if (action->property("quaderCommandId").toString().contains(
+              QStringLiteral("bridge"))) {
+        ++bridge_entries;
+      }
+    }
+    EXPECT_EQ(bridge_entries, 1);
+  }
+}
+
 TEST_F(QtFileMenuTests, RecentScenesRefreshOnlyWhenOpenedAndKeepFiveEntries) {
   show_recent_menu();
   ASSERT_EQ(recent_menu()->actions().size(), 1);

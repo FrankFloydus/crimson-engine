@@ -9,6 +9,7 @@
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_status_internal.hpp"
+#include "core/release_features.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
 
@@ -51,6 +52,10 @@ QuaderLayersApi::QuaderLayersApi(QuaderApiSession session,
     : session_(std::move(session)), mutations_(mutations) {}
 
 std::vector<QuaderLayerSnapshot> QuaderLayersApi::all() const {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return {};
+  }
+
   const SceneDocument &scene = read_scene_session(session_).scene();
   SceneLayerState state = scene.layer_state();
   std::vector<QuaderLayerSnapshot> snapshots;
@@ -78,6 +83,10 @@ std::vector<QuaderLayerSnapshot> QuaderLayersApi::all() const {
 
 std::optional<QuaderLayerSnapshot>
 QuaderLayersApi::layer(QuaderLayerId id) const {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return {};
+  }
+
   const SceneDocument &scene = read_scene_session(session_).scene();
   const SceneLayerRecord *record = scene.layer(id);
   return record == nullptr
@@ -87,15 +96,27 @@ QuaderLayersApi::layer(QuaderLayerId id) const {
 }
 
 std::uint64_t QuaderLayersApi::revision() const {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return 0u;
+  }
+
   return read_scene_session(session_).scene().layer_revision();
 }
 
 bool QuaderLayersApi::can_create_from_selection() const {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return false;
+  }
+
   const SceneDocument &scene = read_scene_session(session_).scene();
   return !scene.layer_eligible_entities(scene.selected_entities()).empty();
 }
 
 bool QuaderLayersApi::can_add_selection_to(QuaderLayerId id) const {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return false;
+  }
+
   const SceneDocument &scene = read_scene_session(session_).scene();
   if (scene.layer(id) == nullptr) {
     return false;
@@ -109,6 +130,10 @@ bool QuaderLayersApi::can_add_selection_to(QuaderLayerId id) const {
 }
 
 bool QuaderLayersApi::can_remove_selection(QuaderLayerId id) const {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return false;
+  }
+
   const SceneDocument &scene = read_scene_session(session_).scene();
   if (scene.layer(id) == nullptr) {
     return false;
@@ -122,6 +147,10 @@ bool QuaderLayersApi::can_remove_selection(QuaderLayerId id) const {
 }
 
 bool QuaderLayersApi::can_remove_selection_from_all_layers() const {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return false;
+  }
+
   const SceneDocument &scene = read_scene_session(session_).scene();
   const std::vector<EntityId> eligible =
       scene.layer_eligible_entities(scene.selected_entities());
@@ -134,6 +163,12 @@ bool QuaderLayersApi::can_remove_selection_from_all_layers() const {
 
 QuaderApiResult<QuaderLayerSnapshot>
 QuaderLayersApi::create(std::string name, QVec3 wireframe_color) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_result_from_status<QuaderLayerSnapshot>(
+        quader_api_failure_status(read_scene_session(session_),
+                                  release_feature_unavailable_message()));
+  }
+
   if (!mutations_.available()) {
     return quader_api_result_from_status<QuaderLayerSnapshot>(
         inactive_scene_status(session_));
@@ -157,6 +192,12 @@ QuaderLayersApi::create(std::string name, QVec3 wireframe_color) {
 
 QuaderApiResult<QuaderLayerSnapshot> QuaderLayersApi::create_from_selection(
     std::string name, QVec3 wireframe_color) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_result_from_status<QuaderLayerSnapshot>(
+        quader_api_failure_status(read_scene_session(session_),
+                                  release_feature_unavailable_message()));
+  }
+
   if (!mutations_.available()) {
     return quader_api_result_from_status<QuaderLayerSnapshot>(
         inactive_scene_status(session_));
@@ -180,6 +221,11 @@ QuaderApiResult<QuaderLayerSnapshot> QuaderLayersApi::create_from_selection(
 
 QuaderApiVoidResult QuaderLayersApi::rename(QuaderLayerId id,
                                             std::string name) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }
@@ -191,6 +237,11 @@ QuaderApiVoidResult QuaderLayersApi::rename(QuaderLayerId id,
 
 QuaderApiVoidResult QuaderLayersApi::set_visible(QuaderLayerId id,
                                                  bool visible) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }
@@ -202,6 +253,11 @@ QuaderApiVoidResult QuaderLayersApi::set_visible(QuaderLayerId id,
 
 QuaderApiVoidResult
 QuaderLayersApi::set_wireframe_color(QuaderLayerId id, QVec3 color) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }
@@ -214,6 +270,11 @@ QuaderLayersApi::set_wireframe_color(QuaderLayerId id, QVec3 color) {
 
 QuaderApiVoidResult QuaderLayersApi::set_locked(QuaderLayerId id,
                                                 bool locked) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }
@@ -224,6 +285,11 @@ QuaderApiVoidResult QuaderLayersApi::set_locked(QuaderLayerId id,
 }
 
 QuaderApiVoidResult QuaderLayersApi::add_selection(QuaderLayerId id) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }
@@ -234,6 +300,11 @@ QuaderApiVoidResult QuaderLayersApi::add_selection(QuaderLayerId id) {
 }
 
 QuaderApiVoidResult QuaderLayersApi::remove_selection(QuaderLayerId id) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }
@@ -245,6 +316,11 @@ QuaderApiVoidResult QuaderLayersApi::remove_selection(QuaderLayerId id) {
 }
 
 QuaderApiVoidResult QuaderLayersApi::remove_selection_from_all_layers() {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }
@@ -256,6 +332,11 @@ QuaderApiVoidResult QuaderLayersApi::remove_selection_from_all_layers() {
 }
 
 QuaderApiVoidResult QuaderLayersApi::empty(QuaderLayerId id) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }
@@ -265,11 +346,21 @@ QuaderApiVoidResult QuaderLayersApi::empty(QuaderLayerId id) {
 }
 
 QuaderApiVoidResult QuaderLayersApi::destroy(QuaderLayerId id) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   return destroy(std::span<const QuaderLayerId>(&id, 1u));
 }
 
 QuaderApiVoidResult
 QuaderLayersApi::destroy(std::span<const QuaderLayerId> ids) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return quader_api_failure_status(read_scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+
   if (!mutations_.available()) {
     return inactive_scene_status(session_);
   }

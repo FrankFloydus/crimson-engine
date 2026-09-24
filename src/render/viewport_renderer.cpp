@@ -8,6 +8,7 @@
 
 #include "core/color_space.hpp"
 #include "core/logger.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
@@ -365,6 +366,8 @@ void ViewportRenderer::update_camera(
 void ViewportRenderer::apply_scene_settings(
     const SceneSettings &settings, bool rendered_mode,
     const ViewportSettings &viewport_settings) {
+  rendered_mode = rendered_mode &&
+                  release_has_feature(ReleaseFeature::RenderedViewport);
   QDR_PROFILE_FUNCTION();
   if (!view_ || !camera_) {
     return;
@@ -559,6 +562,9 @@ void ViewportRenderer::set_shadowing_enabled(bool enabled) {
 
 void ViewportRenderer::set_material_presentation(
     ViewportMaterialDebugMode mode, bool solid) {
+  if (!release_has_feature(ReleaseFeature::RenderedViewport)) {
+    mode = ViewportMaterialDebugMode::None;
+  }
   if (has_material_presentation_ && material_debug_mode_ == mode &&
       solid_material_presentation_ == solid) {
     return;

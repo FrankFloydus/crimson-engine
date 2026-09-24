@@ -307,6 +307,12 @@ function Add-QuaderTestsFilter {
     Add-Unique $script:Reasons $Reason
 }
 
+function Add-PublicReleaseTestsFilter {
+    param([string]$Filter, [string]$Reason)
+    Add-Unique $script:PublicReleaseTestsFilters $Filter
+    Add-Unique $script:Reasons $Reason
+}
+
 function Add-GuardrailTestsFilter {
     param([string]$Filter, [string]$Reason)
     Add-Unique $script:GuardrailTestsFilters $Filter
@@ -452,6 +458,7 @@ function Add-FullVerification {
     $script:NeedsFullCtest = $true
     Add-BuildTarget "quader_guardrail_tests" $Reason
     Add-BuildTarget "quader_tests" $Reason
+    Add-BuildTarget "quader_public_release_tests" $Reason
     Add-BuildTarget "quader_modeling_domain_tests" $Reason
     Add-BuildTarget "quader_modeling_sdk_consumer_tests" $Reason
     Add-BuildTarget "quader_modeling_sdk_parity_tests" $Reason
@@ -464,6 +471,15 @@ function Add-TestFilePlan {
     param([string]$Path)
     $suiteFilters = Get-GTestSuites @($Path)
     $filter = Join-GTestFilter $suiteFilters
+    if (@(Get-CMakeTargetSourcePaths "quader_public_release_tests").Contains($Path) -and
+        -not @(Get-CMakeTargetSourcePaths "quader_tests").Contains($Path)) {
+        Add-BuildTarget "quader_public_release_tests" "changed public release test source"
+        if ($filter -eq "") {
+            $filter = "*"
+        }
+        Add-PublicReleaseTestsFilter $filter "run suites declared by changed public release test source"
+        return
+    }
     if ($Path -eq "tests/sdk/modeling_sdk_consumer_tests.cpp") {
         Add-BuildTarget "quader_modeling_sdk_consumer_tests" "changed SDK consumer test source"
         if ($filter -eq "") {
@@ -876,6 +892,9 @@ function Remove-RedundantBuildTargets {
     if ($result.Contains("quader_tests")) {
         $covered += $quaderTestsDependencies
     }
+    if ($result.Contains("quader_public_release_tests")) {
+        $covered += $quaderTestsDependencies
+    }
     if ($result.Contains("quader_modeling_domain_tests")) {
         $covered += $modelingDomainDependencies
     }
@@ -978,6 +997,7 @@ if ($MyInvocation.InvocationName -eq ".") {
 $script:BuildTargets = New-Object "System.Collections.Generic.List[string]"
 $script:GuardrailTestsFilters = New-Object "System.Collections.Generic.List[string]"
 $script:QuaderTestsFilters = New-Object "System.Collections.Generic.List[string]"
+$script:PublicReleaseTestsFilters = New-Object "System.Collections.Generic.List[string]"
 $script:ModelingDomainFilters = New-Object "System.Collections.Generic.List[string]"
 $script:SdkConsumerFilters = New-Object "System.Collections.Generic.List[string]"
 $script:SdkParityFilters = New-Object "System.Collections.Generic.List[string]"
@@ -1007,6 +1027,9 @@ if (-not $NoTest) {
     if ($QuaderTestsFilters.Count -gt 0) {
         Add-Unique $script:BuildTargets "quader_tests"
     }
+    if ($PublicReleaseTestsFilters.Count -gt 0) {
+        Add-Unique $script:BuildTargets "quader_public_release_tests"
+    }
     if ($ModelingDomainFilters.Count -gt 0) {
         Add-Unique $script:BuildTargets "quader_modeling_domain_tests"
     }
@@ -1027,6 +1050,7 @@ $buildTargets = @(Remove-RedundantBuildTargets @($BuildTargets | Where-Object { 
 
 $guardrailTestsFilter = Join-GTestFilter @($GuardrailTestsFilters)
 $quaderTestsFilter = Join-GTestFilter @($QuaderTestsFilters)
+$publicReleaseTestsFilter = Join-GTestFilter @($PublicReleaseTestsFilters)
 $modelingDomainFilter = Join-GTestFilter @($ModelingDomainFilters)
 $sdkConsumerFilter = Join-GTestFilter @($SdkConsumerFilters)
 $sdkParityFilter = Join-GTestFilter @($SdkParityFilters)
@@ -1055,6 +1079,9 @@ if (-not $NoTest) {
         if ($quaderTestsFilter -ne "") {
             $commands.Add(@((Join-Path $BuildDir "quader_tests.exe"), "--gtest_color=no", "--gtest_filter=$quaderTestsFilter"))
         }
+        if ($publicReleaseTestsFilter -ne "") {
+            $commands.Add(@((Join-Path $BuildDir "quader_public_release_tests.exe"), "--gtest_color=no", "--gtest_filter=$publicReleaseTestsFilter"))
+        }
         if ($modelingDomainFilter -ne "") {
             $commands.Add(@((Join-Path $BuildDir "quader_modeling_domain_tests.exe"), "--gtest_color=no", "--gtest_filter=$modelingDomainFilter"))
         }
@@ -1078,7 +1105,7 @@ if (-not $NoConfigure -and $NeedsConfigure) {
     $baselineCommands += "cmake --preset $ConfigurePreset"
 }
 $fullBuildTargets = @(
-    "quader_guardrail_tests", "quader_tests", "quader_modeling_domain_tests",
+    "quader_guardrail_tests", "quader_tests", "quader_public_release_tests", "quader_modeling_domain_tests",
     "quader_modeling_sdk_consumer_tests", "quader_modeling_sdk_parity_tests"
 )
 $fullBuildCommand = @("cmake", "--build", "--preset", $BuildPreset, "--target") + $fullBuildTargets

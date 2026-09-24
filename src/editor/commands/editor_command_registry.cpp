@@ -7,6 +7,8 @@
 #include "editor/commands/editor_command_registry.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -43,6 +45,9 @@ bool EditorCommandRegistry::contains(std::string_view command_id) const {
 }
 
 bool EditorCommandRegistry::enabled(std::string_view command_id) const {
+  if (!release_allows_command(command_id)) {
+    return false;
+  }
   const EditorCommandRegistration *command = find(command_id);
   return command != nullptr && (!command->enabled || command->enabled());
 }
@@ -52,6 +57,14 @@ EditorCommandRegistry::execute(std::string_view command_id) const {
   QDR_PROFILE_FUNCTION();
   QDR_PROFILE_NAME(command_id.data(), command_id.size());
   if (const EditorCommandRegistration *command = find(command_id)) {
+    if (!release_allows_command(command_id)) {
+      return QuaderApiVoidResult{
+          .ok = false,
+          .changed = false,
+          .message = release_feature_unavailable_message(),
+          .mutation_kind = QuaderMutationKind::None,
+      };
+    }
     if (command->enabled && !command->enabled()) {
       return QuaderApiVoidResult{
           .ok = false,
@@ -80,7 +93,8 @@ EditorCommandRegistry::descriptor(std::string_view command_id) const {
   QDR_PROFILE_FUNCTION();
   QDR_PROFILE_NAME(command_id.data(), command_id.size());
   const EditorCommandRegistration *command = find(command_id);
-  return command != nullptr && command->visible
+  return command != nullptr && command->visible &&
+                 release_allows_command(command_id)
              ? std::optional<QuaderCommandDescriptor>{make_descriptor(*command)}
              : std::nullopt;
 }
@@ -90,7 +104,7 @@ std::vector<QuaderCommandDescriptor> EditorCommandRegistry::available() const {
     std::vector<QuaderCommandDescriptor> result;
     result.reserve(commands_.size());
     for (const EditorCommandRegistration& command : commands_) {
-        if (!command.visible) {
+        if (!command.visible || !release_allows_command(command.id)) {
             continue;
         }
         result.push_back(make_descriptor(command));

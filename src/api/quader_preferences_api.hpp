@@ -37,6 +37,9 @@ public:
     [[nodiscard]] SessionPreferences session_settings() const;
     /// Persists and applies the group atomically; reducing history is irreversible.
     QuaderApiVoidResult set_session_settings(SessionPreferences settings);
+    /// Shared appearance preference. Empty restores the packaged default.
+    [[nodiscard]] std::filesystem::path default_material_texture() const;
+    QuaderApiVoidResult set_default_material_texture(std::filesystem::path path);
     /** Cheap owner stamp; reads never enumerate or resolve shortcuts. */
     [[nodiscard]] std::uint64_t keybindings_revision() const noexcept;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,

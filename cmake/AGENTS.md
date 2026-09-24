@@ -31,10 +31,17 @@ owns verification selection.
   forced on. Map Debug imports to Release and preserve `/MD`, `NDEBUG`, unchecked iterators, `/O2`,
   symbols, and Filament `md`. Release needs whole-program optimization, no debug information, and
   no Tracy link or definitions. Canonical presets disable Sentry.
-- Suppress vcpkg's configuration-name-based Debug app-local hook for `quader`. Package both native
+- `quader` is the Full executable. `quader_public_app` produces `quader-0.1.exe`; its release
+  number is independent of `VERSION`. Shared native libraries link the release catalog/policy,
+  never a profile. Each final native consumer links exactly one `quader_release_profile_full`
+  or `quader_release_profile_public` object target. The portable SDK has neither dependency.
+- Suppress vcpkg's configuration-name-based Debug app-local hook for both native app targets. Package both native
   artifacts from the Release dependency directory with the recursive vcpkg app-local resolver and
   `windeployqt --force --release`; `$<TARGET_RUNTIME_DLLS>` alone does not include Qt's complete
   private dependency closure.
+- Public app deployment depends on Full app deployment to serialize shared runtime-directory
+  cleanup. The restricted test executable likewise depends on `quader_tests`; do not remove
+  that ordering while their deployment steps share a directory.
 - Build `quader_fatal_diagnostics` with both native hosts and deploy it beside their executables.
   It links only Windows diagnostics/system libraries; SDK-only configurations must exclude it.
 - `QuaderFilamentSdk.cmake` validates the pinned Quader patch and installed header/library hashes

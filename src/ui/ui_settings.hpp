@@ -12,6 +12,7 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
 
 namespace quader {
 
@@ -59,12 +60,19 @@ public:
     }
     /// Rejects an invalid group without changing any stored preference.
     bool set_session_settings(SessionPreferences settings);
+    const std::filesystem::path &default_material_texture() const {
+      return default_material_texture_;
+    }
+    void set_default_material_texture(std::filesystem::path path) {
+      default_material_texture_ = std::move(path);
+    }
 
   private:
     std::string locale_ = "en-US";
     float interface_scale_ = kDefaultInterfaceScale;
     bool vsync_enabled_ = true;
     SessionPreferences session_settings_;
+    std::filesystem::path default_material_texture_;
     bool outliner_visible_ = ui_panel_default_visible(UIPanelId::Outliner);
     bool inspector_visible_ = ui_panel_default_visible(UIPanelId::Inspector);
     bool console_visible_ = ui_panel_default_visible(UIPanelId::Console);

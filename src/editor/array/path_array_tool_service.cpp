@@ -5,6 +5,8 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/array/path_array_tool_service.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 
 #include "assets/asset_registry.hpp"
 #include "assets/curve_asset.hpp"
@@ -472,6 +474,9 @@ bool PathArrayToolService::preview_valid() const {
 }
 
 bool PathArrayToolService::can_activate() const {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return false;
+  }
   QDR_PROFILE_SCOPE("Path Array can activate");
   const std::uint64_t scene_revision = scene_.revision();
   const std::uint64_t asset_revision = assets_.revision();
@@ -611,6 +616,9 @@ std::uint32_t PathArrayToolService::maximum_count() const {
 }
 
 CommandResult PathArrayToolService::activate() {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   std::optional<PathSnapshot> path = capture_selected_path();
   if (!path.has_value()) {
     return command_invalid_result(
@@ -747,6 +755,9 @@ CommandResult PathArrayToolService::cancel() {
 }
 
 CommandResult PathArrayToolService::select_source(EntityId source) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   const std::optional<EntityId> resolved = resolve_source_candidate(source);
   if (!resolved.has_value()) {
     return command_invalid_result(
@@ -822,6 +833,9 @@ CommandResult PathArrayToolService::select_source(EntityId source) {
 }
 
 CommandResult PathArrayToolService::clear_source() {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_unchanged_result();
   }
@@ -849,6 +863,9 @@ CommandResult PathArrayToolService::clear_source() {
 }
 
 CommandResult PathArrayToolService::set_count(std::uint32_t count) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Path Array tool is not active.");
   }
@@ -868,6 +885,9 @@ CommandResult PathArrayToolService::set_count(std::uint32_t count) {
 }
 
 CommandResult PathArrayToolService::set_distance(double distance) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Path Array tool is not active.");
   }
@@ -887,6 +907,9 @@ CommandResult PathArrayToolService::set_distance(double distance) {
 }
 
 CommandResult PathArrayToolService::set_follow_path(bool follow) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Path Array tool is not active.");
   }
@@ -903,6 +926,9 @@ CommandResult PathArrayToolService::set_follow_path(bool follow) {
 
 CommandResult
 PathArrayToolService::set_forward_axis(PathArraySignedAxis axis) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Path Array tool is not active.");
   }
@@ -951,6 +977,9 @@ PathArrayToolService::set_variation(PathArrayVariationSettings variation) {
 
 CommandResult
 PathArrayToolService::set_rotation_offset_degrees(QVec3 value) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   PathArrayVariationSettings variation =
       session_.has_value() ? session_->variation : PathArrayVariationSettings{};
   variation.rotation_offset_degrees = value;
@@ -959,6 +988,9 @@ PathArrayToolService::set_rotation_offset_degrees(QVec3 value) {
 
 CommandResult
 PathArrayToolService::set_rotation_random_min_degrees(QVec3 value) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   PathArrayVariationSettings variation =
       session_.has_value() ? session_->variation : PathArrayVariationSettings{};
   variation.rotation_random_min_degrees = value;
@@ -969,6 +1001,9 @@ PathArrayToolService::set_rotation_random_min_degrees(QVec3 value) {
 
 CommandResult
 PathArrayToolService::set_rotation_random_max_degrees(QVec3 value) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   PathArrayVariationSettings variation =
       session_.has_value() ? session_->variation : PathArrayVariationSettings{};
   variation.rotation_random_max_degrees = value;
@@ -978,6 +1013,9 @@ PathArrayToolService::set_rotation_random_max_degrees(QVec3 value) {
 }
 
 CommandResult PathArrayToolService::set_scale_offset_factors(QVec3 value) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   PathArrayVariationSettings variation =
       session_.has_value() ? session_->variation : PathArrayVariationSettings{};
   variation.scale_offset_factors = value;
@@ -986,6 +1024,9 @@ CommandResult PathArrayToolService::set_scale_offset_factors(QVec3 value) {
 
 CommandResult
 PathArrayToolService::set_scale_random_min_factors(QVec3 value) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   PathArrayVariationSettings variation =
       session_.has_value() ? session_->variation : PathArrayVariationSettings{};
   variation.scale_random_min_factors = value;
@@ -996,6 +1037,9 @@ PathArrayToolService::set_scale_random_min_factors(QVec3 value) {
 
 CommandResult
 PathArrayToolService::set_scale_random_max_factors(QVec3 value) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   PathArrayVariationSettings variation =
       session_.has_value() ? session_->variation : PathArrayVariationSettings{};
   variation.scale_random_max_factors = value;
@@ -1005,6 +1049,9 @@ PathArrayToolService::set_scale_random_max_factors(QVec3 value) {
 }
 
 CommandResult PathArrayToolService::reset_settings() {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Path Array tool is not active.");
   }
@@ -1854,6 +1901,9 @@ CommandResult PathArrayToolService::restore_selection_after_failed_apply(
 }
 
 CommandResult PathArrayToolService::apply() {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value() || !session_->source.has_value()) {
     return command_invalid_result(
         "Select one mesh or group before applying Path Array.");

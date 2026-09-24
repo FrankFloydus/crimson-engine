@@ -7,6 +7,7 @@
 #include "api/quader_ui_api.hpp"
 
 #include "core/logger.hpp"
+#include "core/release_features.hpp"
 
 #include <utility>
 
@@ -36,6 +37,12 @@ QuaderApiVoidResult QuaderUIApi::hide_panel(std::string_view panel) {
 }
 
 QuaderApiVoidResult QuaderUIApi::focus_panel(std::string_view panel) {
+  if (((panel == "face_texture" || panel == "Face Texture") &&
+       !release_has_feature(ReleaseFeature::UvEditing)) ||
+      ((panel == "layers" || panel == "Layers") &&
+       !release_has_feature(ReleaseFeature::Layers))) {
+    return unavailable(release_feature_unavailable_message());
+  }
   return hooks_.focus_panel ? hooks_.focus_panel(panel)
                             : unavailable("UI runtime is not attached.");
 }
@@ -51,6 +58,12 @@ bool QuaderUIApi::command_search_available() const noexcept {
 }
 
 bool QuaderUIApi::panel_visible(std::string_view panel) const {
+  if (((panel == "face_texture" || panel == "Face Texture") &&
+       !release_has_feature(ReleaseFeature::UvEditing)) ||
+      ((panel == "layers" || panel == "Layers") &&
+       !release_has_feature(ReleaseFeature::Layers))) {
+    return false;
+  }
   return hooks_.is_panel_visible ? hooks_.is_panel_visible(panel) : false;
 }
 
@@ -86,6 +99,12 @@ const QuaderConsoleApi& QuaderUIApi::console() const {
 
 QuaderApiVoidResult QuaderUIApi::set_panel_visible(std::string_view panel,
                                                    bool visible) {
+  if (((panel == "face_texture" || panel == "Face Texture") &&
+       !release_has_feature(ReleaseFeature::UvEditing)) ||
+      ((panel == "layers" || panel == "Layers") &&
+       !release_has_feature(ReleaseFeature::Layers))) {
+    return unavailable(release_feature_unavailable_message());
+  }
   return hooks_.set_panel_visible ? hooks_.set_panel_visible(panel, visible)
                                   : unavailable("UI runtime is not attached.");
 }

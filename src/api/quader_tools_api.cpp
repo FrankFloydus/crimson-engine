@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_tools_api.hpp"
 #include "assets/default_material_catalog.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/metadata/operation_input_hint_catalog.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_mutation_runner.hpp"
@@ -50,6 +52,21 @@
 
 namespace quader {
 namespace {
+
+bool release_allows_tool_setting(std::string_view tool_id,
+                                 std::string_view setting_id) {
+  if (!release_allows_tool(tool_id)) {
+    return false;
+  }
+  constexpr std::string_view kOperationPrefix = "operation.";
+  if (setting_id.starts_with(kOperationPrefix)) {
+    setting_id.remove_prefix(kOperationPrefix.size());
+    const auto operation = setting_id.substr(0, setting_id.find('.'));
+    return release_allows_operation(operation) &&
+           release_allows_tool(operation);
+  }
+  return release_allows_tool(setting_id.substr(0, setting_id.find('.')));
+}
 
 std::optional<QuaderPrimitiveCreationShape>
 primitive_creation_shape(PrimitiveCreationKind kind) {
@@ -109,7 +126,8 @@ SceneSession &scene_session(QuaderApiSession session) {
 }
 
 bool passive_curve_settings_available(const SceneSession &session) {
-  return session.modeling().tool_status().active_tool !=
+  return release_has_feature(ReleaseFeature::Curves) &&
+         session.modeling().tool_status().active_tool !=
              ModelingViewportTool::LassoSelect &&
          session.curve().has_editable_existing_curve();
 }
@@ -128,6 +146,9 @@ MaterialReference default_project_material(QuaderApiSession session) {
 
 MaterialReference primitive_creation_material(
     QuaderApiSession session, QuaderMaterialReference requested) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return default_project_material(session);
+  }
   if (requested.valid()) {
     if (requested.embedded() &&
         scene_session(session).assets().material(requested.embedded_asset) !=
@@ -955,6 +976,10 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
                primitive_kind_setting_value(PrimitiveCreationKind::Torus)},
       },
       QuaderToolSettingChoicePresentation::Dropdown));
+  std::erase_if(result.controls.back().choices, [](const auto &choice) {
+    const auto candidate = primitive_kind_from_setting_id(choice.id);
+    return candidate && !primitive_creation_available_in_release(*candidate);
+  });
   switch (*kind) {
   case PrimitiveCreationKind::Box: {
     const BoxPrimitiveCreationSettings &settings = primitive.box_settings();
@@ -1009,6 +1034,10 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
         {{.id = "uv", .label = "UV Sphere", .value = 0.0},
          {.id = "quad", .label = "Quad Sphere", .value = 1.0}},
         QuaderToolSettingChoicePresentation::Dropdown));
+    std::erase_if(result.controls.back().choices, [](const auto &choice) {
+      return choice.id == "quad" &&
+             !primitive_sphere_type_available_in_release(PrimitiveSphereType::Quad);
+    });
     if (settings.type == PrimitiveSphereType::Quad) {
       result.controls.push_back(number_control(
           std::string(kSphereSubdivisionSetting), "Subdivision",
@@ -1414,6 +1443,10 @@ void QuaderToolsApi::rebind_session(QuaderApiSession session) {
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
+  if (!release_allows_tool(tool_id)) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
   const QuaderSettingsOperationOriginCapture origin(session_);
   const auto activate_tool = [&]() -> QuaderApiVoidResult {
     if (scene_session(session_).extrude().preview_active() &&
@@ -1482,6 +1515,10 @@ QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate_extrude(QuaderExtrudeMode mode) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
   const QuaderSettingsOperationOriginCapture origin(session_);
   SceneSession &session = scene_session(session_);
   if (session.document_commands().property_edit_active()) {
@@ -1512,6 +1549,9 @@ QuaderApiVoidResult QuaderToolsApi::activate_extrude(QuaderExtrudeMode mode) {
 }
 
 bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
+  if (!release_allows_tool(tool_id)) {
+    return false;
+  }
   SceneSession &session = scene_session(session_);
   if (session.extrude().preview_active() &&
       tool_id != viewport_tool_catalog_id(ViewportToolId::Extrude)) {
@@ -1550,6 +1590,9 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
   if (!kind.has_value()) {
     return quader_api_failure_status(session, "Unknown primitive shape.");
   }
+  if (!primitive_creation_available_in_release(*kind)) {
+    return quader_api_failure_status(session, release_feature_unavailable_message());
+  }
 
   const bool was_active = session.primitive_creation().active();
   CommandResult canceled = command_unchanged_result();
@@ -1573,6 +1616,10 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
 }
 
 QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
   const QuaderSettingsOperationOriginCapture origin(session_);
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
@@ -1611,6 +1658,10 @@ bool QuaderToolsApi::can_begin_new_curve_creation() const {
 
 QuaderApiVoidResult
 QuaderToolsApi::begin_light_creation(QuaderLightType type) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
   if (!mutations.available()) {
@@ -1778,6 +1829,14 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  double value,
                                                  QuaderToolSettingEditOptions
                                                      options) {
+  if (!primitive_setting_available_in_release(name, value)) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+  if (!release_allows_tool_setting(tool_id, name)) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   if (session.extrude().active()) {
     if (!tool_id.empty() && tool_id != "extrude") {
@@ -2152,6 +2211,19 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  std::string_view value) {
+  const auto primitive_kind = name == kPrimitiveTypeSetting
+                                  ? primitive_kind_from_setting_id(value)
+                                  : std::nullopt;
+  if ((primitive_kind && !primitive_creation_available_in_release(*primitive_kind)) ||
+      (name == kSphereTypeSetting && value == "quad" &&
+       !primitive_sphere_type_available_in_release(PrimitiveSphereType::Quad))) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
+  if (!release_allows_tool_setting(tool_id, name)) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   if (session.extrude().active() && name == "extrude.type") {
     if (value != "region" && value != "along_normals" && value != "individual") {
@@ -2244,6 +2316,10 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
 
 QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
                                                     std::string_view action_id) {
+  if (!release_allows_tool_setting(tool_id, action_id)) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   if (tool_id == "extrude" && action_id == "extrude.apply") {
     const QuaderSettingsOperationOriginCapture origin(session_);
@@ -2619,6 +2695,10 @@ QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
 }
 
 QuaderApiVoidResult QuaderToolsApi::commit_modeling_tool(ViewportToolId tool) {
+  if (!release_allows_tool(viewport_tool_catalog_id(tool))) {
+    return quader_api_failure_status(scene_session(session_),
+                                     release_feature_unavailable_message());
+  }
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
   if (!mutations.available()) {

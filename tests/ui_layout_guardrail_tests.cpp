@@ -1860,7 +1860,10 @@ TEST(UiLayoutGuardrailTests,
                   "quader_command::kViewportToggleTransformSpace");
   expect_contains(toolbar, "QSignalBlocker blocker(transform_space_action_)");
   expect_contains(toolbar,
-                  "if (spec.tool == ViewportToolId::Pivot)");
+                  "if (spec.tool == ViewportToolId::Pivot ||");
+  expect_contains(toolbar, "spec.tool == ViewportToolId::Scale &&");
+  expect_contains(toolbar,
+                  "!release_allows_tool(viewport_tool_catalog_id(ViewportToolId::Pivot))");
   expect_missing(toolbar,
                  "action_group->addAction(transform_space_action_)");
   expect_contains(toolbar,
@@ -4058,13 +4061,18 @@ TEST(UiLayoutGuardrailTests,
   const std::string surface =
       read_source_file("src/ui/qt_material_preview_surface.cpp");
 
+  const std::size_t create_surface =
+      ui_system.find("material_preview_surface_ = new QtMaterialPreviewSurface()");
+  ASSERT_NE(create_surface, std::string::npos);
   const std::size_t create_container =
-      ui_system.find("QWidget::createWindowContainer(\n"
-                     "      material_preview_surface_");
+      ui_system.find("QWidget::createWindowContainer(", create_surface);
   const std::size_t initialize_surface = ui_system.find(
-      "material_preview_surface_->initialize(render_system)");
+      "material_preview_surface_->initialize(render_system)", create_surface);
   ASSERT_NE(create_container, std::string::npos);
   ASSERT_NE(initialize_surface, std::string::npos);
+  expect_contains(ui_system.substr(create_container,
+                                    initialize_surface - create_container),
+                  "material_preview_surface_, standard_material_editor_window_");
   EXPECT_LT(create_container, initialize_surface)
       << "the native child must exist before preview renderer initialization";
   expect_contains(surface, "return true;\n}");
@@ -4211,8 +4219,17 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(allocation, setter);
   expect_contains(workspace,
                   "material_browser_visible || face_texture_panel_visible");
-  expect_contains(browser_refresh,
-                  "{material_browser_window_, &face_texture_panel_->browser()}");
+  const std::string browser_publish = source_slice(
+      browser_refresh, "for (auto *browser :",
+      "material_browser_catalog_signature_ =");
+  expect_contains(browser_publish, "material_browser_window_");
+  expect_contains(browser_publish, "face_texture_panel_ != nullptr");
+  expect_contains(browser_publish, "&face_texture_panel_->browser() : nullptr");
+  const auto null_browser_gate = browser_publish.find("if (browser == nullptr)");
+  const auto catalog_publish = browser_publish.find("browser->set_materials(");
+  ASSERT_NE(null_browser_gate, std::string::npos);
+  ASSERT_NE(catalog_publish, std::string::npos);
+  EXPECT_LT(null_browser_gate, catalog_publish);
   expect_missing(workspace, "project_assets().active_material()");
 
   const std::string refresh = source_slice(

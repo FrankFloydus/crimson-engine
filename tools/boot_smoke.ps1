@@ -116,10 +116,15 @@ public static class NativeWindowCapture {
         throw "Screenshot is empty or too small: $ScreenshotPath"
     }
 
+    $logName = if ([System.IO.Path]::GetFileNameWithoutExtension($exeFullPath) -eq 'quader-0.1') {
+        'quader-0.1.log'
+    } else {
+        'quader.log'
+    }
     $logCandidates = @(
-        (Join-Path $exeDir "quader.log"),
-        (Join-Path $env:TEMP "quader.log"),
-        "C:\tmp\quader.log"
+        (Join-Path $exeDir $logName),
+        (Join-Path $env:TEMP $logName),
+        (Join-Path 'C:\tmp' $logName)
     )
 
     foreach ($candidate in $logCandidates) {

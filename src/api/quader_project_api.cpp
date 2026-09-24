@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_project_api.hpp"
+#include "core/user_config_paths.hpp"
 
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_session_internal_access.hpp"
@@ -229,11 +230,7 @@ bool has_valid_obj_export_mesh(const SceneSession &session) {
 }
 
 std::filesystem::path default_recent_projects_path() {
-  if (const char *local_app_data = std::getenv("LOCALAPPDATA")) {
-    return std::filesystem::path(local_app_data) / "Quader" /
-           "recent-projects.json";
-  }
-  return std::filesystem::path("recent-projects.json");
+  return quader_user_config_directory({}) / "recent-projects.json";
 }
 
 QuaderEvent project_lifecycle_event(std::string_view name,
@@ -419,11 +416,9 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
     }
 
     if (project_session_ != nullptr) {
-      const ProjectIoResult<ProjectWorkspaceStorage> validated =
-          ProjectManifestStore::open(target);
-      if (!validated.ok()) {
-        return quader_api_failure_status(scene_session(session_),
-                                         validated.error().message);
+      const ProjectSessionResult validated = ProjectSession::preflight_open(target);
+      if (!validated.ok) {
+        return quader_api_failure_status(scene_session(session_), validated.message);
       }
       const auto closed = close_open_scenes("project.open");
       if (!closed.status.ok() || !closed.proceed) {
@@ -476,13 +471,22 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
                                     std::move(message));
     }
 
+    // Public compatibility checks precede any user-visible replacement action.
+    // Full retains the existing dirty-close ordering. Always read again after
+    // that boundary because choosing Save may have updated this exact target.
+    if (current_product_release() != kInternalFullRelease) {
+      const auto compatible = QdrDocumentReader::read_project_document(
+          target, current_product_release());
+      if (!compatible.ok) {
+        return quader_api_failure_status(scene_session(session_), compatible.message);
+      }
+    }
     if (std::optional<QuaderApiVoidResult> blocked =
             dirty_replacement_preflight("project.open")) {
       return std::move(*blocked);
     }
-
     QdrProjectReadResult read =
-        QdrDocumentReader::read_project_document(target);
+        QdrDocumentReader::read_project_document(target, current_product_release());
     if (!read.ok) {
       return quader_api_failure_status(scene_session(session_),
                                        read.message.empty()
@@ -497,6 +501,7 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
       return quader_api_failure_status(
           session, "Scene viewport camera pose could not be restored.");
     }
+    session.set_minimum_product_release(read.minimum_product_release);
     path_ = std::move(target);
     return project_runtime_status(session, true, "Scene opened.");
 }

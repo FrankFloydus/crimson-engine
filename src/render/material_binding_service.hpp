@@ -78,6 +78,10 @@ public:
     }
 
     void bind_scene(RenderSceneBindingKey scene_binding);
+    void set_project_material_resolver(
+        const RenderProjectMaterialResolver *resolver) {
+      project_material_resolver_ = resolver;
+    }
 
     std::uint64_t material_revision(const AssetRegistry &assets,
                                     const MaterialComponent *material) const;
@@ -107,6 +111,7 @@ public:
     filament::Material *shaded_mesh_material_ = nullptr;
     filament::Material *rendered_mesh_material_ = nullptr;
     TextureBindingService *texture_binding_ = nullptr;
+    const RenderProjectMaterialResolver *project_material_resolver_ = nullptr;
 };
 
 } // namespace quader

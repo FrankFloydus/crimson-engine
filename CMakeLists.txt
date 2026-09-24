@@ -224,6 +224,28 @@ set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
     src/editor/tools/base/viewport_tool_catalog.cpp
 )
 
+if(QUADER_BUILD_NATIVE_APP)
+    # Product policy is shared, while the selected release has exactly one
+    # strong definition in each final native binary. Never link a profile
+    # transitively through the shared native libraries.
+    add_library(quader_release_features STATIC src/core/release_features.cpp)
+    target_include_directories(quader_release_features PUBLIC src)
+    target_compile_features(quader_release_features PUBLIC cxx_std_20)
+    add_library(quader_editor_release_policy STATIC
+        src/editor/metadata/release_feature_requirements.cpp)
+    target_include_directories(quader_editor_release_policy PUBLIC src)
+    target_compile_features(quader_editor_release_policy PUBLIC cxx_std_20)
+    target_link_libraries(quader_editor_release_policy PUBLIC quader_release_features)
+    add_library(quader_release_profile_full OBJECT src/core/release_profile.cpp)
+    target_include_directories(quader_release_profile_full PRIVATE src)
+    target_compile_features(quader_release_profile_full PRIVATE cxx_std_20)
+    target_compile_definitions(quader_release_profile_full PRIVATE QUADER_PUBLIC_RELEASE_PROFILE=0)
+    add_library(quader_release_profile_public OBJECT src/core/release_profile.cpp)
+    target_include_directories(quader_release_profile_public PRIVATE src)
+    target_compile_features(quader_release_profile_public PRIVATE cxx_std_20)
+    target_compile_definitions(quader_release_profile_public PRIVATE QUADER_PUBLIC_RELEASE_PROFILE=1)
+endif()
+
 include(cmake/QuaderModeling.cmake)
 
 set(QUADER_SDK_CPP_EXAMPLES
@@ -307,7 +329,7 @@ add_library(quader_core_utilities STATIC
 )
 
 quader_configure_core_module(quader_core_utilities)
-target_link_libraries(quader_core_utilities PUBLIC spdlog::spdlog)
+target_link_libraries(quader_core_utilities PUBLIC spdlog::spdlog quader_release_features)
 
 add_library(quader_assets STATIC
     src/assets/asset_registry.cpp
@@ -479,12 +501,13 @@ target_compile_definitions(quader_bridge_reader PRIVATE
     QUADER_BRIDGE_READER_EXPORTS)
 target_link_libraries(quader_bridge_reader PRIVATE
     quader_project_qdr_io
-    quader_modeling)
+    quader_modeling
+    quader_release_profile_full)
 
 if(QUADER_BUILD_QDR_TOOLS)
     add_executable(qdr_validate tools/qdr_validate_main.cpp)
     target_compile_features(qdr_validate PRIVATE cxx_std_20)
-    target_link_libraries(qdr_validate PRIVATE quader_project_qdr_io)
+    target_link_libraries(qdr_validate PRIVATE quader_project_qdr_io quader_release_profile_full)
 
     add_executable(qdr_dump
         tools/qdr_dump_main.cpp
@@ -493,7 +516,7 @@ if(QUADER_BUILD_QDR_TOOLS)
     target_include_directories(qdr_dump PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
         "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
-    target_link_libraries(qdr_dump PRIVATE quader_project_qdr_io)
+    target_link_libraries(qdr_dump PRIVATE quader_project_qdr_io quader_release_profile_full)
 
     add_executable(qdr_migrate
         tools/qdr_migrate_main.cpp
@@ -502,7 +525,8 @@ if(QUADER_BUILD_QDR_TOOLS)
     target_include_directories(qdr_migrate PRIVATE
         "${QUADER_QDR_GENERATED_DIR}")
     target_link_libraries(qdr_migrate PRIVATE
-        quader_project_qdr_io quader_modeling_sdk_qdr_document flatbuffers::flatbuffers)
+        quader_project_qdr_io quader_modeling_sdk_qdr_document flatbuffers::flatbuffers
+        quader_release_profile_full)
     add_dependencies(qdr_migrate quader_qdr_flatbuffers_generated)
 endif()
 
@@ -510,6 +534,7 @@ add_library(quader_project_session STATIC
     src/editor/instances/project_clipboard_service.cpp
     src/editor/material/material_presentation_service.cpp
     src/editor/material/project_asset_dependency_service.cpp
+    src/editor/material/default_material_texture_store.cpp
     src/editor/material/project_image_decoder.cpp
     src/editor/material/project_material_import_service.cpp
     src/editor/material/project_material_organization_service.cpp
@@ -879,7 +904,8 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
         PRIVATE
             quader_modeling
             quader_modeling_sdk
-            quader_render)
+            quader_render
+            quader_release_profile_full)
 endif()
 
 add_library(quader_editor_api STATIC
@@ -1075,7 +1101,7 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
         benchmarks/modeling/qdr_fixture_performance_baseline.cpp)
     quader_enable_common_pch(qdr_fixture_performance_baseline)
     target_compile_features(qdr_fixture_performance_baseline PRIVATE cxx_std_20)
-    target_link_libraries(qdr_fixture_performance_baseline PRIVATE quader_runtime)
+    target_link_libraries(qdr_fixture_performance_baseline PRIVATE quader_runtime quader_release_profile_full)
 
     add_executable(qdr_scene_workspace_performance
         benchmarks/modeling/qdr_scene_workspace_performance.cpp)
@@ -1083,19 +1109,19 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     target_compile_features(qdr_scene_workspace_performance PRIVATE cxx_std_20)
     target_link_libraries(qdr_scene_workspace_performance
         PRIVATE
-            quader_runtime)
+            quader_runtime quader_release_profile_full)
 
     add_executable(qdr_snap_to_floor_performance
         benchmarks/modeling/qdr_snap_to_floor_performance.cpp)
     quader_enable_common_pch(qdr_snap_to_floor_performance)
     target_compile_features(qdr_snap_to_floor_performance PRIVATE cxx_std_20)
-    target_link_libraries(qdr_snap_to_floor_performance PRIVATE quader_runtime)
+    target_link_libraries(qdr_snap_to_floor_performance PRIVATE quader_runtime quader_release_profile_full)
 
     add_executable(qdr_curve_viewport_performance
         benchmarks/modeling/qdr_curve_viewport_performance.cpp)
     quader_enable_common_pch(qdr_curve_viewport_performance)
     target_compile_features(qdr_curve_viewport_performance PRIVATE cxx_std_20)
-    target_link_libraries(qdr_curve_viewport_performance PRIVATE quader_runtime)
+    target_link_libraries(qdr_curve_viewport_performance PRIVATE quader_runtime quader_release_profile_full)
 endif()
 
 if(QUADER_ENABLE_SENTRY AND WIN32)
@@ -1237,9 +1263,24 @@ qt_add_resources(quader "quader_layer_panel_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_LAYER_PANEL_ICON_FILES})
-target_link_libraries(quader PRIVATE quader_runtime)
+target_link_libraries(quader PRIVATE quader_runtime quader_release_profile_full)
 add_dependencies(quader
     quader_fatal_diagnostics
+    ${QUADER_FILAMENT_MATERIAL_TARGETS})
+
+# Reuse the host's main, Windows resources, and generated Qt icon sources.
+# Only the tiny linked release profile differs between these executables.
+get_target_property(QUADER_NATIVE_HOST_SOURCES quader SOURCES)
+set(_QUADER_SAVED_VCPKG_APPLOCAL_DEPS "${VCPKG_APPLOCAL_DEPS}")
+set(VCPKG_APPLOCAL_DEPS OFF)
+add_executable(quader_public_app WIN32 ${QUADER_NATIVE_HOST_SOURCES})
+set(VCPKG_APPLOCAL_DEPS "${_QUADER_SAVED_VCPKG_APPLOCAL_DEPS}")
+unset(_QUADER_SAVED_VCPKG_APPLOCAL_DEPS)
+set_target_properties(quader_public_app PROPERTIES OUTPUT_NAME "quader-0.1")
+target_link_libraries(quader_public_app PRIVATE quader_runtime quader_release_profile_public)
+# Both post-build deployment steps clean and refill the same DLL directories.
+# A target dependency serializes them even during a parallel aggregate build.
+add_dependencies(quader_public_app quader quader_fatal_diagnostics
     ${QUADER_FILAMENT_MATERIAL_TARGETS})
 
 if(WIN32)
@@ -1351,6 +1392,7 @@ if(WIN32)
     endfunction()
 
     quader_deploy_windows_qt_runtime(quader)
+    quader_deploy_windows_qt_runtime(quader_public_app)
 
     # The read-only bridge is consumed outside Quader. Resolve its own Release
     # dependency closure without adding Qt or renderer deployment to the DLL.
@@ -1367,6 +1409,7 @@ endif()
 
 if(MSVC)
     target_link_options(quader PRIVATE /ENTRY:mainCRTStartup)
+    target_link_options(quader_public_app PRIVATE /ENTRY:mainCRTStartup)
 endif()
 
 set(QUADER_PUBLIC_CPP_EXAMPLES
@@ -1377,7 +1420,7 @@ foreach(_quader_public_example IN LISTS QUADER_PUBLIC_CPP_EXAMPLES)
     get_filename_component(_quader_public_example_name "${_quader_public_example}" NAME_WE)
     add_executable("quader_example_${_quader_public_example_name}" "${_quader_public_example}")
     target_compile_features("quader_example_${_quader_public_example_name}" PRIVATE cxx_std_20)
-    target_link_libraries("quader_example_${_quader_public_example_name}" PRIVATE quader_runtime)
+    target_link_libraries("quader_example_${_quader_public_example_name}" PRIVATE quader_runtime quader_release_profile_full)
 endforeach()
 
 file(GLOB_RECURSE QUADER_RUNTIME_IBL_INPUTS
@@ -1499,6 +1542,7 @@ add_custom_command(
 add_custom_target(quader_runtime_resources
     DEPENDS "${QUADER_RUNTIME_RESOURCE_STAMP}")
 add_dependencies(quader quader_runtime_resources)
+add_dependencies(quader_public_app quader_runtime_resources)
 
 if(QUADER_ENABLE_SENTRY AND WIN32)
     add_custom_command(TARGET quader POST_BUILD
@@ -1508,6 +1552,14 @@ if(QUADER_ENABLE_SENTRY AND WIN32)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${QUADER_SENTRY_CRASHPAD_ZDLL}"
                 "$<TARGET_FILE_DIR:quader>/z.dll"
+        VERBATIM)
+    add_custom_command(TARGET quader_public_app POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${QUADER_SENTRY_CRASHPAD_HANDLER}"
+                "$<TARGET_FILE_DIR:quader_public_app>/crashpad_handler.exe"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${QUADER_SENTRY_CRASHPAD_ZDLL}"
+                "$<TARGET_FILE_DIR:quader_public_app>/z.dll"
         VERBATIM)
 endif()
 
@@ -1655,6 +1707,7 @@ if(QUADER_BUILD_TESTS)
         tests/project_material_manifest_tests.cpp
         tests/project_material_storage_tests.cpp
         tests/project_image_decoder_tests.cpp
+        tests/default_material_texture_store_tests.cpp
         tests/material_preview_domain_tests.cpp
         tests/standard_material_documents_tests.cpp
         tests/project_workspace_storage_tests.cpp
@@ -1713,7 +1766,7 @@ if(QUADER_BUILD_TESTS)
     target_compile_definitions(quader_tests
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest)
+    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest quader_release_profile_full)
     target_link_libraries(quader_tests PRIVATE quader_bridge_reader)
     target_link_libraries(quader_tests PRIVATE quader_modeling_sdk_qdr_document)
     quader_deploy_test_runtime_dlls(quader_tests)
@@ -1723,6 +1776,44 @@ if(QUADER_BUILD_TESTS)
     add_dependencies(quader_tests quader_runtime_resources quader_fatal_diagnostics)
     add_test(NAME quader_tests COMMAND quader_tests)
 
+    add_executable(quader_public_release_tests
+        tests/quader_tests_main.cpp
+        tests/public_release_tests.cpp
+        tests/public_release_modeling_tests.cpp
+        tests/public_release_render_tests.cpp
+        tests/public_release_scene_assets_tests.cpp
+        tests/public_release_ui_tests.cpp
+        tests/public_release_layers_tests.cpp
+        tests/support/behavior_expect.cpp
+        tests/support/behavior_scenario.cpp
+        tests/support/command_behavior_contract.cpp
+        tests/support/command_behavior_fixture.cpp
+        tests/support/command_observable_state.cpp
+        tests/support/guardrail_file_scan.cpp
+        tests/support/modeling_test_events.cpp
+        tests/support/project_material_fixture.cpp)
+    quader_enable_common_pch(quader_public_release_tests)
+    if(MSVC)
+        target_compile_options(quader_public_release_tests PRIVATE /bigobj)
+        target_link_options(quader_public_release_tests PRIVATE
+            "$<$<CONFIG:Debug>:/INCREMENTAL:NO>")
+    endif()
+    target_include_directories(quader_public_release_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
+        "${QUADER_QDR_GENERATED_DIR}")
+    target_compile_definitions(quader_public_release_tests PRIVATE
+        QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(quader_public_release_tests PRIVATE
+        quader_runtime quader_modeling_sdk_qdr_document GTest::gtest
+        quader_release_profile_public)
+    quader_deploy_test_runtime_dlls(quader_public_release_tests)
+    if(WIN32)
+        quader_deploy_windows_qt_runtime(quader_public_release_tests)
+    endif()
+    add_dependencies(quader_public_release_tests quader_tests
+        quader_runtime_resources quader_fatal_diagnostics)
+    add_test(NAME quader_public_release_tests COMMAND quader_public_release_tests)
+
     add_executable(quader_modeling_sdk_parity_tests
         tests/sdk/modeling_sdk_parity_tests.cpp)
     quader_enable_common_pch(quader_modeling_sdk_parity_tests)
@@ -1731,6 +1822,7 @@ if(QUADER_BUILD_TESTS)
         PRIVATE
             quader_runtime
             quader_modeling_sdk
+            quader_release_profile_full
             GTest::gtest
             GTest::gtest_main)
     quader_deploy_test_runtime_dlls(quader_modeling_sdk_parity_tests)

@@ -8,6 +8,8 @@
 
 #include "assets/asset_registry.hpp"
 #include "core/logger.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
@@ -134,6 +136,21 @@ ViewportNativeToolInteraction::handle_frame(
     ViewportCameraController &camera,
     const ViewportNativeToolInteractionFrame &frame,
     CurveToolService *curve) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    pivot = nullptr;
+  }
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    linear_array = nullptr;
+  }
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    radial_array = nullptr;
+  }
+  if (!release_allows_tool(kPathArrayToolId)) {
+    path_array = nullptr;
+  }
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    curve = nullptr;
+  }
   ViewportNativeToolInteractionResult output;
   pointer_cursor_ = ViewportPointerCursor::Default;
   const ViewportInputFrame &input = frame.input;
@@ -165,7 +182,8 @@ ViewportNativeToolInteraction::handle_frame(
     output.mark_overlay_dirty = true;
   };
 
-  if (lifecycle.light_creation_active()) {
+  if (release_has_feature(ReleaseFeature::Lights) &&
+      lifecycle.light_creation_active()) {
     pointer_cursor_ = ViewportPointerCursor::PrecisionCross;
     output.consumed = true;
     output.blocks_transform_gizmo = true;

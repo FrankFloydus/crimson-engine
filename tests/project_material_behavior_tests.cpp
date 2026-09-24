@@ -5354,7 +5354,7 @@ TEST(ProjectMaterialPersistenceTests,
 }
 
 TEST(ProjectMaterialPersistenceTests,
-     Qdr11StoresStableReferencesAndDependenciesWithoutMaterialPayloads) {
+     Qdr12StoresStableReferencesAndDependenciesWithoutMaterialPayloads) {
   ProjectMaterialBehaviorHarness harness("qdr-project-reference");
   harness.create();
   constexpr std::string_view kQmatMarker =
@@ -5394,7 +5394,7 @@ TEST(ProjectMaterialPersistenceTests,
       harness.root() / scene_path.native_path();
   const std::vector<std::byte> scene_bytes = read_bytes(scene_file);
   ASSERT_GE(scene_bytes.size(), quader_io::kQdrBinaryHeaderSize);
-  EXPECT_EQ(scene_bytes[6], std::byte{1});
+  EXPECT_EQ(scene_bytes[6], std::byte{2});
   EXPECT_EQ(scene_bytes[7], std::byte{0});
   EXPECT_FALSE(contains_text(scene_bytes, kQmatMarker));
   EXPECT_FALSE(contains_text(scene_bytes, kPreviewMarker));

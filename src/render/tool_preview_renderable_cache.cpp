@@ -1507,9 +1507,11 @@ std::size_t ToolPreviewRenderableCache::group_proxy_count(
 
 std::uint64_t ToolPreviewRenderableCache::preview_material_signature(
     const RenderToolPreviewMeshRecord &preview_mesh) {
-  RenderSignatureBuilder signature(
-      render_material_binding_signature(preview_mesh.material));
-  signature.add_value(preview_mesh.material_revision)
+  RenderSignatureBuilder signature;
+  // The revision normally equals the binding signature. Hash both as values:
+  // seeding with one then XORing the other would cancel all material changes.
+  signature.add_value(render_material_binding_signature(preview_mesh.material))
+      .add_value(preview_mesh.material_revision)
       .add_bool(preview_mesh.double_sided)
       .add_bool(preview_mesh.cast_shadows)
       .add_value(static_cast<std::uint64_t>(

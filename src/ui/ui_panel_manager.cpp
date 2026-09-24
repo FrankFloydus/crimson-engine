@@ -8,6 +8,7 @@
 
 #include "diagnostics/profile.hpp"
 #include "ui/ui_settings.hpp"
+#include "core/release_features.hpp"
 
 #include <QAction>
 #include <QDockWidget>
@@ -19,6 +20,10 @@
 namespace quader {
 
 void UIPanelManager::add(UIPanelId id, QDockWidget &dock_widget) {
+  if (!ui_panel_available(id)) {
+    dock_widget.hide();
+    return;
+  }
   const std::size_t slot = index(id);
   if (slot >= docks_.size()) {
     return;

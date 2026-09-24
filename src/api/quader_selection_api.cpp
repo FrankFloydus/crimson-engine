@@ -10,6 +10,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_api_mutation_runner.hpp"
 #include "diagnostics/profile.hpp"
+#include "core/release_features.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/placement/scene_surface_query.hpp"
@@ -369,6 +370,12 @@ QuaderApiVoidResult QuaderSelectionApi::select_edge_ring() {
 }
 
 QuaderApiVoidResult QuaderSelectionApi::select_faces_with_same_material() {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return mutations_.run_runtime_result(
+        {.ok = false, .changed = false,
+         .message = release_feature_unavailable_message()},
+        "Select Faces With Same Material");
+  }
   return mutations_.run_modeling_result(
       scene_session(session_).selection().select_faces_with_same_material(),
       "Select Faces With Same Material");

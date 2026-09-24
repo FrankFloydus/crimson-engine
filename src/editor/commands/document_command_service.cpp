@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/document_command_service.hpp"
 
+#include "core/release_features.hpp"
 #include "assets/asset_registry.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document/apply_entity_transform_command.hpp"
@@ -304,6 +305,13 @@ DocumentCommandService::create_entity(std::string name, EntityKind kind,
                                       EntityId parent,
                                       TransformComponent transform,
                                       bool select_created) {
+  if ((kind == EntityKind::Light &&
+       !release_has_feature(ReleaseFeature::Lights)) ||
+      (kind == EntityKind::Curve &&
+       !release_has_feature(ReleaseFeature::Curves))) {
+    return invalid_create_result(release_feature_unavailable_message());
+  }
+
   if (!scene_transform_is_finite(transform)) {
     return invalid_create_result("Entity transform must be finite");
   }
@@ -523,6 +531,14 @@ DocumentCommandService::prepare_ungroup_selection_command() {
 
 DocumentDuplicateEntityResult
 DocumentCommandService::duplicate_entity(EntityId entity) {
+  if (!document_command_hierarchy_available_in_release(
+          scene_, std::span<const EntityId>(&entity, 1u))) {
+    DocumentDuplicateEntityResult result;
+    assign_document_command_status(result, document_command_invalid_request_result(
+        release_feature_unavailable_message()));
+    return result;
+  }
+
   if (!scene_.exists(entity)) {
     DocumentDuplicateEntityResult result;
     assign_document_command_status(result,
@@ -558,6 +574,14 @@ DocumentCommandService::duplicate_entity(EntityId entity) {
 
 DocumentDuplicateHierarchyResult
 DocumentCommandService::duplicate_selected_hierarchy() {
+  if (!document_command_hierarchy_available_in_release(
+          scene_, document_command_selected_root_entities(scene_))) {
+    DocumentDuplicateHierarchyResult result;
+    assign_document_command_status(result, document_command_invalid_request_result(
+        release_feature_unavailable_message()));
+    return result;
+  }
+
   QDR_PROFILE_FUNCTION();
   if (document_command_selected_root_contains_modeling_owned_entity(scene_)) {
     DocumentDuplicateHierarchyResult result;
@@ -594,6 +618,14 @@ DocumentDuplicateHierarchyResult
 DocumentCommandService::duplicate_hierarchy_with_existing_clones(
     std::vector<EntityId> roots,
     std::unordered_map<EntityId, EntityId> existing_clones_by_source) {
+  if (!document_command_hierarchy_available_in_release(
+          scene_, roots)) {
+    DocumentDuplicateHierarchyResult result;
+    assign_document_command_status(result, document_command_invalid_request_result(
+        release_feature_unavailable_message()));
+    return result;
+  }
+
   QDR_PROFILE_FUNCTION();
   std::unordered_set<EntityId> seen_roots;
   std::vector<EntityId> existing_roots;
@@ -678,6 +710,10 @@ DocumentCommandService::duplicate_hierarchy_with_existing_clones(
 DocumentCreateEntityResult DocumentCommandService::create_point_light(
     std::string name, LightComponent light, EntityId parent,
     TransformComponent transform, bool select_created) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return invalid_create_result(release_feature_unavailable_message());
+  }
+
   if (!scene_transform_is_finite(transform)) {
     return invalid_create_result("Light transform must be finite");
   }
@@ -730,6 +766,10 @@ DocumentCreateEntityResult DocumentCommandService::create_point_light(
 DocumentCreateEntityResult DocumentCommandService::create_directional_light(
     std::string name, LightComponent light, EntityId parent,
     TransformComponent transform, bool select_created) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return invalid_create_result(release_feature_unavailable_message());
+  }
+
   if (!scene_transform_is_finite(transform)) {
     return invalid_create_result("Light transform must be finite");
   }
@@ -929,6 +969,11 @@ DocumentCommandService::set_locks(std::vector<DocumentLockEdit> edits) {
 
 DocumentCommandResult DocumentCommandService::set_material(EntityId entity,
                                                            AssetId material) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (mutation_blocked(entity)) {
     return document_command_active_tool_entity_result();
   }
@@ -988,6 +1033,11 @@ DocumentCommandService::set_mesh_component(EntityId entity,
 
 DocumentCommandResult DocumentCommandService::set_curve_component(
     EntityId entity, CurveComponent curve, UndoRedoExecuteOptions options) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (mutation_blocked(entity)) {
     return document_command_active_tool_entity_result();
   }
@@ -1024,6 +1074,11 @@ DocumentCommandResult DocumentCommandService::set_curve_component(
 
 DocumentCommandResult DocumentCommandService::set_light_component(
     EntityId entity, LightComponent light, UndoRedoExecuteOptions options) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (!std::isfinite(light.distance_attenuation) ||
       !light_component_metadata_is_valid(light)) {
     return document_command_invalid_request_result("Light properties are invalid");
@@ -1072,6 +1127,11 @@ bool DocumentCommandService::point_light_range_edit_active() const {
 
 DocumentCommandResult
 DocumentCommandService::begin_point_light_range_edit(EntityId entity) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (property_edit_) {
     return document_command_invalid_request_result("A document property edit is already active");
   }
@@ -1091,6 +1151,11 @@ DocumentCommandService::begin_point_light_range_edit(EntityId entity) {
 
 DocumentCommandResult DocumentCommandService::update_point_light_range_edit(
     EntityId entity, float range) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (!point_light_range_edit_active() || property_edit_->entity != entity ||
       !std::isfinite(range) || range < 0.001f) {
     return document_command_invalid_request_result("Invalid point light range edit");
@@ -1120,11 +1185,21 @@ DocumentCommandResult DocumentCommandService::update_point_light_range_edit(
 
 DocumentCommandResult DocumentCommandService::finish_point_light_range_edit(
     EntityId entity, bool cancel) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   return point_light_range_edit_active() && property_edit_->entity == entity
       ? finish_property_edit(cancel) : document_command_unchanged_result();
 }
 
 DocumentCommandResult DocumentCommandService::begin_light_color_edit(EntityId entity) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (property_edit_) {
     return document_command_invalid_request_result("A document property edit is already active");
   }
@@ -1142,6 +1217,11 @@ DocumentCommandResult DocumentCommandService::begin_light_color_edit(EntityId en
 
 DocumentCommandResult DocumentCommandService::update_light_color_edit(
     EntityId entity, std::uint64_t generation, QVec3 color) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (generation == 0u || generation != property_edit_generation_ ||
       !property_edit_ || property_edit_->entity != entity ||
       !std::holds_alternative<LightColorEdit>(property_edit_->value) ||
@@ -1177,6 +1257,11 @@ DocumentCommandResult DocumentCommandService::update_light_color_edit(
 
 DocumentCommandResult DocumentCommandService::finish_light_color_edit(
     EntityId entity, std::uint64_t generation, bool cancel) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (generation == 0u || generation != property_edit_generation_ ||
       (property_edit_ && (property_edit_->entity != entity ||
                          !std::holds_alternative<LightColorEdit>(property_edit_->value)))) {
@@ -1186,6 +1271,11 @@ DocumentCommandResult DocumentCommandService::finish_light_color_edit(
 }
 
 DocumentCommandResult DocumentCommandService::begin_environment_color_edit() {
+  if (!release_has_feature(ReleaseFeature::Environment)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (property_edit_) {
     return document_command_invalid_request_result("A document property edit is already active");
   }
@@ -1199,6 +1289,11 @@ DocumentCommandResult DocumentCommandService::begin_environment_color_edit() {
 
 DocumentCommandResult DocumentCommandService::update_environment_color_edit(
     std::uint64_t generation, QVec3 color) {
+  if (!release_has_feature(ReleaseFeature::Environment)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (generation == 0u || generation != property_edit_generation_ ||
       !property_edit_ ||
       !std::holds_alternative<EnvironmentColorEdit>(property_edit_->value) ||
@@ -1229,6 +1324,11 @@ DocumentCommandResult DocumentCommandService::update_environment_color_edit(
 
 DocumentCommandResult DocumentCommandService::finish_environment_color_edit(
     std::uint64_t generation, bool cancel) {
+  if (!release_has_feature(ReleaseFeature::Environment)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (generation == 0u || generation != property_edit_generation_ ||
       (property_edit_ && !std::holds_alternative<EnvironmentColorEdit>(property_edit_->value))) {
     return document_command_invalid_request_result("Color edit is no longer active");
@@ -1237,6 +1337,11 @@ DocumentCommandResult DocumentCommandService::finish_environment_color_edit(
 }
 
 DocumentCommandResult DocumentCommandService::begin_fog_color_edit() {
+  if (!release_has_feature(ReleaseFeature::Environment)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (property_edit_) {
     return document_command_invalid_request_result("A document property edit is already active");
   }
@@ -1250,6 +1355,11 @@ DocumentCommandResult DocumentCommandService::begin_fog_color_edit() {
 
 DocumentCommandResult DocumentCommandService::update_fog_color_edit(
     std::uint64_t generation, QVec3 color) {
+  if (!release_has_feature(ReleaseFeature::Environment)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (generation == 0u || generation != property_edit_generation_ ||
       !property_edit_ ||
       !std::holds_alternative<FogColorEdit>(property_edit_->value) ||
@@ -1280,6 +1390,11 @@ DocumentCommandResult DocumentCommandService::update_fog_color_edit(
 
 DocumentCommandResult DocumentCommandService::finish_fog_color_edit(
     std::uint64_t generation, bool cancel) {
+  if (!release_has_feature(ReleaseFeature::Environment)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (generation == 0u || generation != property_edit_generation_ ||
       (property_edit_ && !std::holds_alternative<FogColorEdit>(property_edit_->value))) {
     return document_command_invalid_request_result("Color edit is no longer active");
@@ -1379,6 +1494,16 @@ DocumentCommandResult DocumentCommandService::cancel_active_point_light_range_ed
 DocumentCommandResult
 DocumentCommandService::set_scene_settings(SceneSettings settings,
                                            UndoRedoExecuteOptions options) {
+  if (!release_has_feature(ReleaseFeature::Environment)) {
+    SceneSettings permitted = scene_.scene_settings();
+    permitted.camera.near_plane = settings.camera.near_plane;
+    permitted.camera.far_plane = settings.camera.far_plane;
+    if (settings != permitted) {
+      return document_command_invalid_request_result(
+          release_feature_unavailable_message());
+    }
+  }
+
   if (!scene_fog_settings_is_valid(settings.fog)) {
     return document_command_invalid_request_result("Fog settings contain invalid values");
   }
@@ -1471,6 +1596,13 @@ DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
 
 DocumentCreateLayerResult DocumentCommandService::create_layer(
     std::string name, QVec3 wireframe_color, bool add_selection) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    DocumentCreateLayerResult result;
+    assign_document_command_status(result, document_command_invalid_request_result(
+        release_feature_unavailable_message()));
+    return result;
+  }
+
   DocumentCreateLayerResult result;
   const std::vector<EntityId> eligible = add_selection
       ? scene_.layer_eligible_entities(scene_.selected_entities())
@@ -1530,6 +1662,11 @@ DocumentCreateLayerResult DocumentCommandService::create_layer(
 
 DocumentCommandResult DocumentCommandService::rename_layer(
     SceneLayerId layer_id, std::string name) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const SceneLayerRecord *current = scene_.layer(layer_id);
   if (current == nullptr) {
     return document_command_invalid_request_result("Layer does not exist");
@@ -1555,6 +1692,11 @@ DocumentCommandResult DocumentCommandService::rename_layer(
 
 DocumentCommandResult DocumentCommandService::set_layer_visible(
     SceneLayerId layer_id, bool visible) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const SceneLayerRecord *current = scene_.layer(layer_id);
   if (current == nullptr) {
     return document_command_invalid_request_result("Layer does not exist");
@@ -1584,6 +1726,11 @@ DocumentCommandResult DocumentCommandService::set_layer_visible(
 
 DocumentCommandResult DocumentCommandService::set_layer_wireframe_color(
     SceneLayerId layer_id, QVec3 color) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const SceneLayerRecord *current = scene_.layer(layer_id);
   if (current == nullptr) {
     return document_command_invalid_request_result("Layer does not exist");
@@ -1615,6 +1762,11 @@ DocumentCommandResult DocumentCommandService::set_layer_wireframe_color(
 
 DocumentCommandResult DocumentCommandService::set_layer_locked(
     SceneLayerId layer_id, bool locked) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const SceneLayerRecord *current = scene_.layer(layer_id);
   if (current == nullptr) {
     return document_command_invalid_request_result("Layer does not exist");
@@ -1644,6 +1796,11 @@ DocumentCommandResult DocumentCommandService::set_layer_locked(
 
 DocumentCommandResult DocumentCommandService::add_selection_to_layer(
     SceneLayerId layer_id) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (scene_.layer(layer_id) == nullptr) {
     return document_command_invalid_request_result("Layer does not exist");
   }
@@ -1680,6 +1837,11 @@ DocumentCommandResult DocumentCommandService::add_selection_to_layer(
 
 DocumentCommandResult DocumentCommandService::remove_selection_from_layer(
     SceneLayerId layer_id) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (scene_.layer(layer_id) == nullptr) {
     return document_command_invalid_request_result("Layer does not exist");
   }
@@ -1709,6 +1871,11 @@ DocumentCommandResult DocumentCommandService::remove_selection_from_layer(
 
 DocumentCommandResult
 DocumentCommandService::remove_selection_from_all_layers() {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const std::vector<EntityId> eligible =
       scene_.layer_eligible_entities(scene_.selected_entities());
   if (entities_mutation_blocked(eligible)) {
@@ -1734,6 +1901,11 @@ DocumentCommandService::remove_selection_from_all_layers() {
 
 DocumentCommandResult
 DocumentCommandService::empty_layer(SceneLayerId layer_id) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   if (scene_.layer(layer_id) == nullptr) {
     return document_command_invalid_request_result("Layer does not exist");
   }
@@ -1760,6 +1932,11 @@ DocumentCommandService::empty_layer(SceneLayerId layer_id) {
 
 DocumentCommandResult
 DocumentCommandService::delete_layers(std::vector<SceneLayerId> layer_ids) {
+  if (!release_has_feature(ReleaseFeature::Layers)) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   std::sort(layer_ids.begin(), layer_ids.end());
   layer_ids.erase(std::unique(layer_ids.begin(), layer_ids.end()),
                   layer_ids.end());

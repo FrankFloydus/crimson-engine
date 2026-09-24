@@ -44,6 +44,25 @@ scene_result(SceneSession &session, const ProjectSessionResult &result) {
       status, result.scene_session_id.value_or(SceneSessionId{}));
 }
 
+QdrProjectWriteResult write_standalone_scene(
+    const std::filesystem::path &path, SceneSession &session,
+    const SceneId &scene_id) {
+  auto extracted = qdr_project_write_snapshot_from_document(session.document());
+  if (!extracted.ok()) {
+    return {.message = extracted.error().message};
+  }
+  auto snapshot = extracted.take_value();
+  snapshot.minimum_product_release = std::max(
+      session.minimum_product_release(), current_product_release());
+  append_qdr_viewport_camera_pose(session, snapshot);
+  auto written = QdrDocumentWriter::write_project_document_atomic(
+      path, snapshot, scene_id.bytes());
+  if (written.ok) {
+    session.set_minimum_product_release(snapshot.minimum_product_release);
+  }
+  return written;
+}
+
 bool has_uncommitted_preview(const SceneSession &session) {
   return session.document_commands().property_edit_active() ||
          session.native_tools().has_pending_tool() ||
@@ -351,7 +370,7 @@ QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::open_native_path(
         SceneSessionId{});
   }
   QdrProjectReadResult read =
-      QdrDocumentReader::read_project_document(path);
+      QdrDocumentReader::read_project_document(path, current_product_release());
   if (!read.ok) {
     return quader_api_result_from_status(
         status_for(session, false, false,
@@ -367,6 +386,7 @@ QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::open_native_path(
                    "Scene viewport camera pose could not be restored."),
         SceneSessionId{});
   }
+  session.set_minimum_product_release(read.minimum_product_release);
   impl_->standalone_path = path;
   impl_->standalone_scene_id = SceneId::from_bytes(read.scene_uuid);
   impl_->notify_binding_changed();
@@ -411,9 +431,8 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save(SceneSessionId id) {
     }
     const bool was_dirty = session.dirty();
     const QdrProjectWriteResult written =
-        QdrDocumentWriter::write_project_document_atomic(
-            impl_->standalone_path, session.document(),
-            qdr_viewport_camera_pose_for_scene(session));
+        write_standalone_scene(impl_->standalone_path, session,
+                               impl_->standalone_scene_id);
     if (!written.ok) {
       return status_for(session, false, false, written.message);
     }
@@ -501,15 +520,14 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_as_native_path(
           "Commit or cancel the active preview before saving the scene.");
     }
     const bool was_dirty = session.dirty();
+    const SceneId saved_scene_id = SceneId::generate();
     const QdrProjectWriteResult written =
-        QdrDocumentWriter::write_project_document_atomic(
-            path, session.document(),
-            qdr_viewport_camera_pose_for_scene(session));
+        write_standalone_scene(path, session, saved_scene_id);
     if (!written.ok) {
       return status_for(session, false, false, written.message);
     }
     impl_->standalone_path = path;
-    impl_->standalone_scene_id = SceneId::generate();
+    impl_->standalone_scene_id = saved_scene_id;
     session.mark_clean();
     impl_->publish(quader_event::kSceneSaved, id);
     if (was_dirty != session.dirty()) {

@@ -287,6 +287,17 @@ QuaderEditorApi::~QuaderEditorApi() = default;
 QuaderEditorApi::QuaderEditorApi(QuaderEditorApi&&) noexcept = default;
 QuaderEditorApi& QuaderEditorApi::operator=(QuaderEditorApi&&) noexcept = default;
 
+QuaderReleaseInfo QuaderEditorApi::release_info() const {
+  const ProductRelease version = current_product_release();
+  return {.version = version,
+          .label = product_release_label(version),
+          .internal_full = version == kInternalFullRelease};
+}
+
+bool QuaderEditorApi::feature_available(ReleaseFeature feature) const noexcept {
+  return release_has_feature(feature);
+}
+
 void QuaderEditorApi::rebind(QuaderApiSession session) {
   impl_->rebind(session);
 }

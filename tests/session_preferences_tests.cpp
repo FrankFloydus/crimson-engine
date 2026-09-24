@@ -199,5 +199,45 @@ TEST_F(SessionPreferencesTests, ApiPreservesUnavailableAndFailedCommitState) {
   EXPECT_EQ(preferences.session_settings(), requested);
 }
 
+TEST_F(SessionPreferencesTests, DefaultMaterialTextureRoundTripsUnicodeAndReset) {
+  UISettings settings;
+  EXPECT_TRUE(UISettings::load(path_).default_material_texture().empty());
+  const auto texture = std::filesystem::u8path(u8"C:/Utenti/é/default_material/纹理.png");
+  settings.set_default_material_texture(texture);
+  ASSERT_TRUE(settings.save(path_));
+  EXPECT_EQ(UISettings::load(path_).default_material_texture(), texture);
+  settings.set_default_material_texture({});
+  ASSERT_TRUE(settings.save(path_));
+  EXPECT_TRUE(UISettings::load(path_).default_material_texture().empty());
+}
+
+TEST_F(SessionPreferencesTests, InvalidDefaultMaterialPathKeepsOtherPreferences) {
+  write("[Rendering]\nDefaultMaterialTexture=C:/images/\xff.png\nVSync=false\n");
+  UISettings loaded;
+  ASSERT_NO_THROW(loaded = UISettings::load(path_));
+  EXPECT_TRUE(loaded.default_material_texture().empty());
+  EXPECT_FALSE(loaded.vsync_enabled());
+}
+
+TEST_F(SessionPreferencesTests, DefaultMaterialApiDelegatesAndReportsMissingRuntime) {
+  QuaderPreferencesApi preferences;
+  EXPECT_TRUE(preferences.default_material_texture().empty());
+  const auto absent = preferences.set_default_material_texture("new.png");
+  EXPECT_FALSE(absent.ok());
+  EXPECT_FALSE(absent.changed());
+  std::filesystem::path value;
+  preferences.set_runtime_hooks({
+      .default_material_texture = [&]() { return value; },
+      .set_default_material_texture = [&](std::filesystem::path requested) {
+        value = std::move(requested);
+        return QuaderApiVoidResult{.ok = true, .changed = true,
+                                  .mutation_kind = QuaderMutationKind::Runtime};
+      }});
+  EXPECT_TRUE(preferences.set_default_material_texture("chosen.png").ok());
+  EXPECT_EQ(preferences.default_material_texture(), std::filesystem::path{"chosen.png"});
+  EXPECT_TRUE(preferences.set_default_material_texture({}).ok());
+  EXPECT_TRUE(preferences.default_material_texture().empty());
+}
+
 } // namespace
 } // namespace quader

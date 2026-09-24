@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "editor/tools/interactive/create_primitive_tool.hpp"
@@ -87,6 +88,7 @@ const ViewportTool *find_viewport_tool(std::string_view id) {
 bool viewport_tool_available(ViewportToolId tool) {
   const ViewportTool *item = find_viewport_tool(tool);
   return item != nullptr &&
+         release_allows_tool(item->id()) &&
          viewport_tool_has_native_controller(item->viewport_tool());
 }
 

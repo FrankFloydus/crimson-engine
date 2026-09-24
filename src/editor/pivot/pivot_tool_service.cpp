@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "core/release_features.hpp"
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
@@ -1281,6 +1282,9 @@ std::optional<QVec3> PivotToolService::persistent_preview_position() const {
 
 bool PivotToolService::can_activate_persistent(
     const EditorSelectionService &selection) const {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return false;
+  }
   const std::optional<EntityId> target = active_selection_target(selection);
   return target.has_value() &&
          target_is_eligible(*target, target_kind(*target, selection));
@@ -1288,11 +1292,17 @@ bool PivotToolService::can_activate_persistent(
 
 bool PivotToolService::can_copy_pivot_from_active(
     const EditorSelectionService &selection) const {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return false;
+  }
   return collect_copy_pivot_selection(scene_, assets_, selection).ok;
 }
 
 CommandResult
 PivotToolService::activate_persistent(EditorSelectionService &selection) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   const std::optional<EntityId> target = active_selection_target(selection);
   if (!target.has_value()) {
     return command_invalid_result("Select one mesh or group to edit its pivot.");
@@ -1365,6 +1375,9 @@ CommandResult PivotToolService::cancel_persistent() {
 }
 
 CommandResult PivotToolService::apply_persistent() {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!persistent_.has_value()) {
     return command_unchanged_result();
   }
@@ -1396,6 +1409,9 @@ CommandResult PivotToolService::apply_persistent() {
 
 CommandResult PivotToolService::copy_pivot_from_active(
     const EditorSelectionService &selection) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   CopyPivotSelection copy =
       collect_copy_pivot_selection(scene_, assets_, selection,
                                    &planning_stats_);
@@ -1414,6 +1430,9 @@ CommandResult PivotToolService::copy_pivot_from_active(
 
 CommandResult
 PivotToolService::set_snap_enabled(std::string_view setting_id, bool enabled) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   bool *target = nullptr;
   bool *remembered = nullptr;
   if (setting_id == kPivotSnapVertexSetting) {
@@ -1442,6 +1461,9 @@ PivotToolService::set_snap_enabled(std::string_view setting_id, bool enabled) {
 }
 
 CommandResult PivotToolService::reset_settings() {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!persistent_.has_value()) {
     return command_invalid_result("Pivot tool is not active.");
   }
@@ -1459,6 +1481,9 @@ CommandResult PivotToolService::reset_settings() {
 }
 
 CommandResult PivotToolService::execute_align_action(std::string_view action_id) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!persistent_.has_value()) {
     return command_invalid_result("Pivot tool is not active.");
   }
@@ -1483,6 +1508,9 @@ CommandResult PivotToolService::execute_align_action(std::string_view action_id)
 }
 
 void PivotToolService::set_persistent_preview_position(QVec3 world_position) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return;
+  }
   if (!finite_vector(world_position)) {
     return;
   }
@@ -1494,6 +1522,9 @@ void PivotToolService::set_persistent_preview_position(QVec3 world_position) {
 }
 
 void PivotToolService::begin_quick(QVec3 initial_world_position) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return;
+  }
   if (scene_.selected_entities().empty() ||
       !finite_vector(initial_world_position)) {
     clear_quick_override();
@@ -1510,6 +1541,9 @@ void PivotToolService::begin_quick(QVec3 initial_world_position) {
 }
 
 void PivotToolService::set_quick_preview_position(QVec3 world_position) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return;
+  }
   if (!quick_edit_active() || !finite_vector(world_position)) {
     return;
   }

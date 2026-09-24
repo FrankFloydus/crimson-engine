@@ -5,12 +5,15 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/modeling_command_execution_service.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/modeling_preview_command_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -133,6 +136,11 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
     EditorHistoryService &history, ModelingSessionService &modeling,
     EditorSelectionService &selection, std::string_view tool_id,
     SceneStructuralLifecycleService *structural_lifecycle) {
+  if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
+      !release_allows_tool(tool_id)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   const CommandTool *tool = dispatcher_.find(tool_id);
   if (tool == nullptr) {
     return {.ok = false, .message = "Command tool is not registered."};
@@ -209,6 +217,11 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
 ModelingCommandResult ModelingCommandExecutionService::execute_untracked(
     ModelingSessionService &modeling, std::string_view tool_id,
     EditorSelectionService *selection) {
+  if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
+      !release_allows_tool(tool_id)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   if (tool_id == std::string_view("delete_selection") &&
       selection != nullptr) {
     if (auto sub_selection = selection->try_delete_sub_selection()) {
@@ -222,6 +235,11 @@ ModelingCommandResult ModelingCommandExecutionService::begin_preview(
     EditorHistoryService &history, ModelingSessionService &modeling,
     EditorSelectionService &selection, std::string_view action_id,
     SceneStructuralLifecycleService *structural_lifecycle) {
+  if (!release_allows_action(action_id) || !release_allows_operation(action_id) ||
+      !release_allows_tool(action_id)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   if (action_id == std::string_view("delete_selection") ||
       action_id == std::string_view("duplicate_meshes")) {
     return execute(history, modeling, selection, action_id,
@@ -253,6 +271,11 @@ ModelingCommandResult ModelingCommandExecutionService::begin_preview(
 
 ModelingCommandResult ModelingCommandExecutionService::begin_preview_untracked(
     ModelingSessionService &modeling, std::string_view action_id) {
+  if (!release_allows_action(action_id) || !release_allows_operation(action_id) ||
+      !release_allows_tool(action_id)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return modeling.execute_context_action(action_id);
 }
 
@@ -275,6 +298,11 @@ ModelingCommandResult ModelingCommandExecutionService::commit_viewport_tool(
     EditorHistoryService &history, ModelingSessionService &modeling,
     ModelingViewportTool tool, std::string label,
     MaterialReference creation_material) {
+  const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
+  if (descriptor != nullptr && !release_allows_tool(descriptor->id)) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   switch (tool) {
   case ModelingViewportTool::InsertEdgeLoop:
   case ModelingViewportTool::Cut:
@@ -299,6 +327,11 @@ ModelingCommandAvailability ModelingCommandExecutionService::availability(
     ModelingSessionService &modeling, std::string_view tool_id,
     EditorSelectionService *selection,
     SceneStructuralLifecycleService *structural_lifecycle) const {
+  if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
+      !release_allows_tool(tool_id)) {
+    return ModelingCommandAvailability::unavailable(
+        release_feature_unavailable_message());
+  }
   if (tool_id == std::string_view("delete_selection") &&
       selection != nullptr && selection->has_sub_selection()) {
     return ModelingCommandAvailability::available();

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_material_deletion_service.hpp"
 
+#include "core/release_features.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/project_asset_dependency_service.hpp"
 #include "editor/material/project_material_usage_service.hpp"
@@ -671,6 +672,10 @@ ProjectMaterialDeletionPreview ProjectMaterialDeletionService::preview_materials
 
 ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
     std::string_view folder, std::uint64_t preview_revision) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.message = release_feature_unavailable_message()};
+  }
+
   const auto folder_preview = preview_folder(folder);
   if (!folder_preview.complete) {
     return {.message = folder_preview.errors.empty()
@@ -694,6 +699,10 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_folder(
 ProjectSessionResult ProjectMaterialDeletionService::delete_materials(
     std::span<const ProjectAssetId> material_ids,
     std::uint64_t preview_revision) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.message = release_feature_unavailable_message()};
+  }
+
   const auto preview = preview_materials(material_ids);
   if (!preview.complete) {
     return {.message = preview.errors.empty()
@@ -710,6 +719,10 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_materials(
 ProjectSessionResult ProjectMaterialDeletionService::delete_preview(
     const ProjectMaterialDeletionPreview &preview,
     const ProjectMaterialFolderDeletionPreview *folder_preview) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.message = release_feature_unavailable_message()};
+  }
+
   auto &workspace = *project_->workspace_;
   const auto &file_system = workspace.file_system;
   std::vector<StagedFile> staged;
@@ -728,6 +741,7 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_preview(
   try {
     const auto graph = project_->dependencies().snapshot();
     ProjectManifest candidate = workspace.manifest;
+    candidate.require_product_release(current_product_release());
     const auto marked = candidate.mark_materials_deleted(preview.material_ids);
     if (!marked.ok()) {
       throw std::runtime_error(marked.error().message);
@@ -835,6 +849,7 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_preview(
         throw std::runtime_error(extracted.error().message);
       }
       auto snapshot = extracted.take_value();
+      snapshot.minimum_product_release = read.minimum_product_release;
       snapshot.viewport_camera_pose = read.viewport_camera_pose;
       snapshot.project_asset_dependencies = std::move(read.project_asset_dependencies);
       normalize_snapshot(snapshot, candidate, project_->material_catalog_);
@@ -1518,6 +1533,7 @@ ProjectMaterialDeletionService::recover(ProjectWorkspaceStorage &workspace) {
             throw std::runtime_error(extracted.error().message);
           }
           auto snapshot = extracted.take_value();
+          snapshot.minimum_product_release = read.minimum_product_release;
           snapshot.project_asset_dependencies = std::move(read.project_asset_dependencies);
           snapshot.viewport_camera_pose = read.viewport_camera_pose;
           const auto notified = ProjectBridgeNotifications::publish_scene(

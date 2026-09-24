@@ -29,6 +29,9 @@ verification, Release-only default handoff, and versioning. Read the tested owne
   behavior: public API workflows, `BehaviorScenario`, commands, selection/history, viewport state,
   render extraction data, UI models, localization, and app services. Register new files in
   `CMakeLists.txt`.
+- Restricted executable behavior belongs in `tests/public_release*_tests.cpp`, registered in
+  `quader_public_release_tests`. This separate executable links the immutable public profile;
+  ordinary tests retain the Full profile, without runtime profile setters.
 - Root guardrail files belong to `quader_guardrail_tests` and should cover source-policy,
   architecture, dependency, naming, docs, CMake, and tooling invariants.
 - Modeling-domain behavior builds in `quader_modeling_domain_tests`, belongs under

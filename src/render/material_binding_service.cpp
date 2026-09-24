@@ -7,6 +7,7 @@
 #include "render/material_binding_service.hpp"
 
 #include "core/color_space.hpp"
+#include "core/release_features.hpp"
 #include "render/instance_edit_style.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/texture_binding_service.hpp"
@@ -234,6 +235,7 @@ void MaterialBindingService::shutdown() {
   shaded_mesh_material_ = nullptr;
   rendered_mesh_material_ = nullptr;
   texture_binding_ = nullptr;
+  project_material_resolver_ = nullptr;
 }
 
 void MaterialBindingService::bind_scene(RenderSceneBindingKey scene_binding) {
@@ -256,6 +258,16 @@ filament::MaterialInstance *
 MaterialBindingService::create_mesh_material_instance(
     const AssetRegistry &assets, const MaterialDocument *material,
     bool double_sided, bool editor_unlit) const {
+  if (project_material_resolver_ != nullptr &&
+      project_material_resolver_->default_material_override() != nullptr) {
+    return create_mesh_material_instance(
+        project_material_resolver_->default_material_override(), double_sided,
+        editor_unlit);
+  }
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return create_mesh_material_instance(&packaged_default_render_material(),
+                                         double_sided, editor_unlit);
+  }
   if (!shaded_mesh_material_ || !rendered_mesh_material_ || !texture_binding_) {
     return nullptr;
   }
@@ -335,6 +347,15 @@ filament::MaterialInstance *
 MaterialBindingService::create_mesh_material_instance(
     const RenderMaterialAssetSnapshot *material, bool double_sided,
     bool editor_unlit) const {
+  const RenderMaterialAssetSnapshot *default_override =
+      project_material_resolver_ != nullptr
+          ? project_material_resolver_->default_material_override()
+          : nullptr;
+  if (default_override != nullptr) {
+    material = default_override;
+  } else if (!release_has_feature(ReleaseFeature::Materials)) {
+    material = &packaged_default_render_material();
+  }
   if (!shaded_mesh_material_ || !rendered_mesh_material_ || !texture_binding_) {
     return nullptr;
   }
@@ -473,7 +494,10 @@ void MaterialBindingService::apply_mesh_surface_grid(
       settings.float_value(ViewportFloatSettingId::GridMajorLineSize));
   material_instance.setParameter(
       "surfaceGridEnabled",
-      settings.bool_value(ViewportBoolSettingId::ShowMeshGrid) ? 1.0f : 0.0f);
+      release_has_feature(ReleaseFeature::MeshGrid) &&
+              settings.bool_value(ViewportBoolSettingId::ShowMeshGrid)
+          ? 1.0f
+          : 0.0f);
   bind_instance_edit_context_style(
       material_instance, InstanceEditStyle::from_settings(settings));
 }

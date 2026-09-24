@@ -6,7 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/instances/project_clipboard_service.hpp"
 
+#include "assets/default_material_catalog.hpp"
 #include "assets/mesh_asset_payload.hpp"
+#include "core/release_features.hpp"
 #include "editor/commands/asset_command_service.hpp"
 #include "editor/commands/document/duplicate_selected_hierarchy_command.hpp"
 #include "editor/commands/document/set_scene_layer_state_command.hpp"
@@ -92,7 +94,8 @@ bool collect_material_reference(const AssetRegistry &assets,
                                 MaterialReference reference,
                                 InstanceClipboardPayload &payload,
                                 std::string &error) {
-  if (!reference.embedded()) {
+  if (!release_has_feature(ReleaseFeature::Materials) ||
+      !reference.embedded()) {
     return true;
   }
   const AssetId material_id = reference.embedded_asset();
@@ -178,6 +181,10 @@ bool collect_snapshot_layers(const DocumentEntitySnapshot &snapshot,
                              InstanceClipboardPayload &payload,
                              std::string &error) {
   if (snapshot.layer_id != kInvalidSceneLayerId) {
+    if (!release_has_feature(ReleaseFeature::Layers)) {
+      error = release_feature_unavailable_message();
+      return false;
+    }
     const SceneLayerRecord *record = scene.layer(snapshot.layer_id);
     if (record == nullptr) {
       error = "Instance references a missing scene layer.";
@@ -230,6 +237,12 @@ MaterialComponent remap_material_component(
     MaterialComponent source,
     const std::unordered_map<AssetId, AssetId> &material_remap,
     const ProjectManifest *manifest) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.material = manifest != nullptr
+                            ? MaterialReference::project(
+                                  *ProjectAssetId::parse(kDefaultProjectMaterialId))
+                            : MaterialReference{}};
+  }
   source.material =
       remap_material_reference(source.material, material_remap, manifest);
   for (auto &[slot, material] : source.material_slots) {
@@ -496,6 +509,9 @@ public:
   }
 
   CommandResult paste_instance_selection(ProjectSession &project) {
+    if (!release_has_feature(ReleaseFeature::Layers) && !payload_.layers.empty()) {
+      return clipboard_failure(release_feature_unavailable_message());
+    }
     OpenSceneSession *active = project.active_scene();
     if (active == nullptr || active->session == nullptr) {
       return clipboard_failure("No scene is active.");

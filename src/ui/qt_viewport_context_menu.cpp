@@ -10,6 +10,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "core/release_features.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/metadata/command_presentation_catalog.hpp"
@@ -489,7 +490,9 @@ void QtViewportContextMenuPresenter::show(
         };
 
     const auto add_material_actions = [&]() {
-      if (!material_face_target.has_value() ||
+      if (!release_has_feature(ReleaseFeature::Materials) ||
+          !release_has_feature(ReleaseFeature::UvEditing) ||
+          !material_face_target.has_value() ||
           material_face_target->kind != QuaderActiveSelectionKind::Face ||
           selection.mode != QuaderSelectionMode::Face ||
           selection.selected_face_count == 0u) {

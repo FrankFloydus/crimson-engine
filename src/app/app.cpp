@@ -303,6 +303,12 @@ bool App::initialize(QApplication &application,
         project_session_.set_history_max_steps(
             static_cast<std::size_t>(settings.undo_steps));
       });
+  project_material_resolver_->set_default_material_texture(
+      ui_.default_material_texture());
+  ui_.set_default_material_texture_changed_callback(
+      [this](const std::filesystem::path &path) {
+        project_material_resolver_->set_default_material_texture(path);
+      });
   project_session_.set_history_max_steps(
       static_cast<std::size_t>(ui_.session_settings().undo_steps));
   editor_ = std::make_unique<QuaderEditorApi>(project_session_);
@@ -457,6 +463,7 @@ void App::shutdown() {
     autosave_timer_->stop();
   }
   ui_.set_session_settings_changed_callback({});
+  ui_.set_default_material_texture_changed_callback({});
   QObject::disconnect(window_screen_changed_connection_);
   QObject::disconnect(screen_refresh_rate_changed_connection_);
   display_refresh_screen_ = nullptr;

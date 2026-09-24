@@ -13,6 +13,8 @@
 
 namespace quader {
 
+struct RenderMaterialAssetSnapshot;
+
 /// Renderer-neutral projection of one validated project-owned material.
 struct RenderProjectMaterialSnapshot final {
   RenderMaterialEvaluationSnapshot evaluation;
@@ -31,6 +33,12 @@ public:
   virtual ~RenderProjectMaterialResolver() = default;
 
   [[nodiscard]] virtual std::uint64_t revision() const noexcept = 0;
+  /// Trusted application preference, independent of project material authoring.
+  /// The immutable snapshot remains valid until the next preference change.
+  [[nodiscard]] virtual const RenderMaterialAssetSnapshot *
+  default_material_override() const noexcept {
+    return nullptr;
+  }
   /// Maps retired identities without reading material data or changing owners.
   [[nodiscard]] virtual ProjectAssetId
   canonical_material_id(ProjectAssetId id) const {

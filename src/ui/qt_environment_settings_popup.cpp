@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "core/release_features.hpp"
 #include "core/scene_environment_catalog.hpp"
 #include "scene/light_properties.hpp"
 #include "scene/scene_document.hpp"
@@ -197,7 +198,9 @@ struct QtEnvironmentSettingsPopup::Impl {
       expansion[index++] = {item, item->isExpanded()};
     }
     rebuilding_ = true;
-    panel_.setWindowTitle(localized("ui.inspector.environment", "Environment"));
+    panel_.setWindowTitle(release_has_feature(ReleaseFeature::Environment)
+                              ? localized("ui.inspector.environment", "Environment")
+                              : localized("ui.inspector.camera", "Camera"));
     tree_->setHeaderLabels({localized("ui.inspector.property", "Property"),
                             localized("ui.inspector.value", "Value")});
     build_scene_settings_sections();
@@ -735,88 +738,95 @@ struct QtEnvironmentSettingsPopup::Impl {
   void build_scene_settings_sections() {
     const QuaderSceneSettings *settings = &presented_settings_;
 
-    Section environment = add_section(
-        "environment", localized("ui.inspector.environment", "Environment"));
-    add_environment_preset(environment, settings->environment.environment_id);
-    add_checkbox(environment, "environment.enabled",
-                 localized("ui.inspector.enabled", "Enabled"),
-                 settings->environment.enabled, [this](bool enabled) {
-                   apply_scene_settings([enabled](QuaderSceneSettings &next) {
-                     next.environment.enabled = enabled;
+    if (release_has_feature(ReleaseFeature::Environment)) {
+      Section environment = add_section(
+          "environment", localized("ui.inspector.environment", "Environment"));
+      add_environment_preset(environment, settings->environment.environment_id);
+      add_checkbox(environment, "environment.enabled",
+                   localized("ui.inspector.enabled", "Enabled"),
+                   settings->environment.enabled, [this](bool enabled) {
+                     apply_scene_settings([enabled](QuaderSceneSettings &next) {
+                       next.environment.enabled = enabled;
+                     });
                    });
-                 });
-    add_checkbox(environment, "environment.background",
-                 localized("ui.inspector.background", "Background"),
-                 settings->environment.show_background, [this](bool visible) {
-                   apply_scene_settings([visible](QuaderSceneSettings &next) {
-                     next.environment.show_background = visible;
+      add_checkbox(environment, "environment.background",
+                   localized("ui.inspector.background", "Background"),
+                   settings->environment.show_background, [this](bool visible) {
+                     apply_scene_settings([visible](QuaderSceneSettings &next) {
+                       next.environment.show_background = visible;
+                     });
                    });
-                 });
-    add_color_button(environment, "environment.clear_color",
-                     localized("ui.inspector.clear_color", "Clear Color"),
-                     settings->environment.clear_color,
-                     EnvironmentColorProperty::Environment);
-    add_continuous_number(environment, "environment.intensity",
-                          localized("ui.inspector.intensity", "Intensity"),
-                          settings->environment.intensity, 0.0, 16.0, 0.01, 3,
-                          [this](double value, std::string merge_key) {
-                            apply_scene_settings(
-                                [value](QuaderSceneSettings &next) {
-                                  next.environment.intensity =
-                                      static_cast<float>(value);
-                                },
-                                std::move(merge_key));
-                          });
-    add_continuous_number(
-        environment, "environment.background_intensity",
-        localized("ui.inspector.background_intensity", "Background Intensity"),
-        settings->environment.background_intensity, 0.0, 16.0, 0.01, 3,
-        [this](double value, std::string merge_key) {
-          apply_scene_settings(
-              [value](QuaderSceneSettings &next) {
-                next.environment.background_intensity =
-                    static_cast<float>(value);
-              },
-              std::move(merge_key));
-        });
-    add_continuous_number(
-        environment, "environment.rotation",
-        localized("ui.inspector.rotation", "Rotation"),
-        settings->environment.rotation_y * kRadToDeg, -180.0, 180.0, 1.0, 12,
-        [this](double value, std::string merge_key) {
-          apply_scene_settings(
-              [value](QuaderSceneSettings &next) {
-                next.environment.rotation_y =
-                    static_cast<float>(value) * kDegToRad;
-              },
-              std::move(merge_key));
-        });
+      add_color_button(environment, "environment.clear_color",
+                       localized("ui.inspector.clear_color", "Clear Color"),
+                       settings->environment.clear_color,
+                       EnvironmentColorProperty::Environment);
+      add_continuous_number(environment, "environment.intensity",
+                            localized("ui.inspector.intensity", "Intensity"),
+                            settings->environment.intensity, 0.0, 16.0, 0.01, 3,
+                            [this](double value, std::string merge_key) {
+                              apply_scene_settings(
+                                  [value](QuaderSceneSettings &next) {
+                                    next.environment.intensity =
+                                        static_cast<float>(value);
+                                  },
+                                  std::move(merge_key));
+                            });
+      add_continuous_number(
+          environment, "environment.background_intensity",
+          localized("ui.inspector.background_intensity", "Background Intensity"),
+          settings->environment.background_intensity, 0.0, 16.0, 0.01, 3,
+          [this](double value, std::string merge_key) {
+            apply_scene_settings(
+                [value](QuaderSceneSettings &next) {
+                  next.environment.background_intensity =
+                      static_cast<float>(value);
+                },
+                std::move(merge_key));
+          });
+      add_continuous_number(
+          environment, "environment.rotation",
+          localized("ui.inspector.rotation", "Rotation"),
+          settings->environment.rotation_y * kRadToDeg, -180.0, 180.0, 1.0, 12,
+          [this](double value, std::string merge_key) {
+            apply_scene_settings(
+                [value](QuaderSceneSettings &next) {
+                  next.environment.rotation_y =
+                      static_cast<float>(value) * kDegToRad;
+                },
+                std::move(merge_key));
+          });
 
-    build_fog_section(settings->fog);
+      build_fog_section(settings->fog);
+    }
 
-    Section camera =
-        add_section("camera", localized("ui.inspector.camera", "Camera"));
-    add_continuous_number(
-        camera, "camera.near", localized("ui.inspector.near_plane", "Near"),
-        settings->camera.near_plane, 0.001, 10000.0, 0.001, 4,
-        [this](double value, std::string merge_key) {
-          apply_scene_settings(
-              [value](QuaderSceneSettings &next) {
-                next.camera.near_plane = static_cast<float>(value);
-              },
-              std::move(merge_key));
-        });
-    add_continuous_number(
-        camera, "camera.far", localized("ui.inspector.far_plane", "Far"),
-        settings->camera.far_plane, 0.001, 1000000.0, 1.0, 2,
-        [this](double value, std::string merge_key) {
-          apply_scene_settings(
-              [value](QuaderSceneSettings &next) {
-                next.camera.far_plane = static_cast<float>(value);
-              },
-              std::move(merge_key));
-        });
+    if (release_has_feature(ReleaseFeature::CameraSettings)) {
+      Section camera =
+          add_section("camera", localized("ui.inspector.camera", "Camera"));
+      add_continuous_number(
+          camera, "camera.near", localized("ui.inspector.near_plane", "Near"),
+          settings->camera.near_plane, 0.001, 10000.0, 0.001, 4,
+          [this](double value, std::string merge_key) {
+            apply_scene_settings(
+                [value](QuaderSceneSettings &next) {
+                  next.camera.near_plane = static_cast<float>(value);
+                },
+                std::move(merge_key));
+          });
+      add_continuous_number(
+          camera, "camera.far", localized("ui.inspector.far_plane", "Far"),
+          settings->camera.far_plane, 0.001, 1000000.0, 1.0, 2,
+          [this](double value, std::string merge_key) {
+            apply_scene_settings(
+                [value](QuaderSceneSettings &next) {
+                  next.camera.far_plane = static_cast<float>(value);
+                },
+                std::move(merge_key));
+          });
+    }
 
+    if (!release_has_feature(ReleaseFeature::Environment)) {
+      return;
+    }
     Section post = add_section(
         "post_process", localized("ui.inspector.post_process", "Post Process"));
     add_checkbox(post, "post_process.enabled",

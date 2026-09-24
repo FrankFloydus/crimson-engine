@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/release_features.hpp"
 #include "io/project/project_file_system.hpp"
 #include "io/project/project_types.hpp"
 
@@ -22,7 +23,7 @@ namespace quader {
 
 inline constexpr std::string_view kQuaderProjectManifestFormat =
     "quader.project";
-inline constexpr std::uint32_t kQuaderProjectManifestVersion = 3u;
+inline constexpr std::uint32_t kQuaderProjectManifestVersion = 4u;
 inline constexpr std::uint32_t kOldestQuaderProjectManifestVersion = 1u;
 
 /// Maps a persistent scene identity to its project-relative file location.
@@ -47,10 +48,16 @@ public:
       std::vector<ProjectSceneCatalogEntry> scenes,
       std::vector<ProjectRelativePath> open_scene_paths,
       std::optional<ProjectRelativePath> active_scene_path,
-      std::vector<ProjectAssetId> deleted_material_ids = {});
+      std::vector<ProjectAssetId> deleted_material_ids = {},
+      ProductRelease minimum_product_release = kInternalFullRelease);
 
   [[nodiscard]] const ProjectId &id() const noexcept { return id_; }
   [[nodiscard]] const std::string &name() const noexcept { return name_; }
+  [[nodiscard]] ProductRelease minimum_product_release() const noexcept {
+    return minimum_product_release_;
+  }
+  /// Raises the persisted requirement without ever downgrading existing data.
+  void require_product_release(ProductRelease release) noexcept;
   [[nodiscard]] std::span<const ProjectSceneCatalogEntry> scenes() const {
     return scenes_;
   }
@@ -96,6 +103,7 @@ private:
 
   ProjectId id_;
   std::string name_;
+  ProductRelease minimum_product_release_ = kInternalFullRelease;
   std::vector<ProjectSceneCatalogEntry> scenes_;
   std::unordered_map<SceneId, std::size_t, SceneIdHash>
       scene_index_by_id_;

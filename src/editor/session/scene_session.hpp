@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/release_features.hpp"
+
 #include "api/quader_settings_presentation_types.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
@@ -213,6 +215,13 @@ public:
       const std::optional<ViewportCameraPose> &camera_pose);
   void set_document_replacement_finalizer(
       std::function<void(SceneSession &)> finalizer);
+  /// Release required by the loaded scene; authoring saves may only raise it.
+  [[nodiscard]] ProductRelease minimum_product_release() const noexcept {
+    return minimum_product_release_;
+  }
+  void set_minimum_product_release(ProductRelease release) noexcept {
+    minimum_product_release_ = release;
+  }
   void mark_clean();
   /// Keeps a previously saved scene clean after an external reference rewrite,
   /// without accepting or discarding any unrelated transient modeling preview.
@@ -241,6 +250,7 @@ private:
       const std::optional<ViewportCameraPose> &camera_pose);
 
   SceneContentDocument document_;
+  ProductRelease minimum_product_release_ = current_product_release();
   std::function<void(bool)> content_settled_observer_;
   SceneContentRevisionStamp clean_stamp_;
   std::optional<PreviewContentCheckpoint> preview_content_checkpoint_;

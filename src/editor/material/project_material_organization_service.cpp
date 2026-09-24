@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_material_organization_service.hpp"
 
+#include "core/release_features.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/project_material_persistence.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
@@ -354,6 +355,10 @@ bool references_folder(const ProjectMaterialDocument &material,
 ProjectSessionResult
 ProjectMaterialOrganizationService::create_folder(std::string_view parent,
                                                   std::string_view name) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   const auto catalog = current_catalog(project_);
   if (!catalog.ok()) {
     return failure(catalog.error().message);
@@ -396,6 +401,10 @@ ProjectMaterialOrganizationService::create_folder(std::string_view parent,
 ProjectSessionResult
 ProjectMaterialOrganizationService::rename_folder(std::string_view path,
                                                   std::string_view name) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   const auto source = ProjectRelativePath::parse_portable(path);
   if (!source.ok()) {
     return failure(source.error().message);
@@ -414,6 +423,10 @@ ProjectMaterialOrganizationService::rename_folder(std::string_view path,
 
 ProjectSessionResult ProjectMaterialOrganizationService::move_folder(
     std::string_view path, std::string_view destination_parent) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   const auto source = ProjectRelativePath::parse_portable(path);
   if (!source.ok()) {
     return failure(source.error().message);
@@ -433,6 +446,10 @@ ProjectSessionResult ProjectMaterialOrganizationService::move_folder(
 
 ProjectSessionResult ProjectMaterialOrganizationService::relocate_folder(
     std::string_view source, std::string_view destination) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   const auto catalog = current_catalog(project_);
   if (!catalog.ok()) {
     return failure(catalog.error().message);
@@ -562,6 +579,10 @@ ProjectSessionResult ProjectMaterialOrganizationService::relocate_folder(
 ProjectSessionResult ProjectMaterialOrganizationService::move_materials(
     std::span<const ProjectAssetId> materials,
     std::string_view destination) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+
   const auto catalog = current_catalog(project_);
   if (!catalog.ok()) {
     return failure(catalog.error().message);
@@ -646,6 +667,10 @@ ProjectSessionResult ProjectMaterialOrganizationService::move_materials(
 ProjectMaterialOrganizationResult
 ProjectMaterialOrganizationService::rename_material(
     ProjectAssetId material, std::string_view name) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return organization_failure(release_feature_unavailable_message());
+  }
+
   const auto catalog = current_catalog(project_);
   if (!catalog.ok()) {
     return organization_failure(catalog.error().message);
@@ -856,6 +881,10 @@ ProjectMaterialOrganizationService::rename_material(
 ProjectMaterialOrganizationResult
 ProjectMaterialOrganizationService::duplicate_materials(
     std::span<const ProjectAssetId> materials) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return organization_failure(release_feature_unavailable_message());
+  }
+
   return clone_materials(materials, {}, true);
 }
 
@@ -863,6 +892,10 @@ ProjectMaterialOrganizationResult
 ProjectMaterialOrganizationService::copy_materials(
     std::span<const ProjectAssetId> materials,
     std::string_view destination) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return organization_failure(release_feature_unavailable_message());
+  }
+
   return clone_materials(materials, destination, false);
 }
 
@@ -870,6 +903,10 @@ ProjectMaterialOrganizationResult
 ProjectMaterialOrganizationService::clone_materials(
     std::span<const ProjectAssetId> materials, std::string_view destination,
     bool preserve_source_folders) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return organization_failure(release_feature_unavailable_message());
+  }
+
   const auto catalog = current_catalog(project_);
   if (!catalog.ok()) {
     return organization_failure(catalog.error().message);

@@ -41,6 +41,7 @@
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_environment_settings_popup.hpp"
+#include "core/release_features.hpp"
 #include "ui/qt_numeric_format.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
 #include "ui/qt_viewport_edge_length_hud.hpp"
@@ -535,7 +536,10 @@ QtViewportPanel::QtViewportPanel(QWidget *parent)
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setAutoFillBackground(true);
 
-  environment_popup_ = new QtEnvironmentSettingsPopup(this);
+  if (release_has_feature(ReleaseFeature::Environment) ||
+      release_has_feature(ReleaseFeature::CameraSettings)) {
+    environment_popup_ = new QtEnvironmentSettingsPopup(this);
+  }
   panes_[viewport_pane_index(ViewportPaneId::Perspective)].id =
       ViewportPaneId::Perspective;
   panes_[viewport_pane_index(ViewportPaneId::Top)].id = ViewportPaneId::Top;
@@ -591,7 +595,9 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
 }
 
 void QtViewportPanel::shutdown() {
-  environment_popup_->abandon_runtime();
+  if (environment_popup_ != nullptr) {
+    environment_popup_->abandon_runtime();
+  }
   abandon_settings_overlay();
   hide_primitive_feedback();
   set_modal_tool_owns_viewport_snapshot(false);
@@ -668,7 +674,9 @@ void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
 }
 
 void QtViewportPanel::abandon_interactions() {
-  environment_popup_->abandon_runtime();
+  if (environment_popup_ != nullptr) {
+    environment_popup_->abandon_runtime();
+  }
   abandon_settings_overlay();
   hide_primitive_feedback();
   ++runtime_binding_generation_;
@@ -874,7 +882,9 @@ void QtViewportPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
     return;
   }
   ui_scale_metrics_ = metrics;
-  environment_popup_->apply_ui_scale(metrics);
+  if (environment_popup_ != nullptr) {
+    environment_popup_->apply_ui_scale(metrics);
+  }
   hide_primitive_feedback();
   context_menu_presenter_.apply_ui_scale(metrics);
   for (Pane &pane_state : panes_) {
@@ -1113,7 +1123,9 @@ void QtViewportPanel::prepare_viewports(
     ModelingSessionService &modeling,
     NativeViewportToolCoordinator &native_tools) {
   QDR_PROFILE_FUNCTION();
-  environment_popup_->refresh(editor, document, localization_);
+  if (environment_popup_ != nullptr) {
+    environment_popup_->refresh(editor, document, localization_);
+  }
   const bool diagnostics_enabled = viewport_frame_diagnostics_enabled();
   const ViewportProbeClock::time_point prepare_start =
       diagnostics_enabled ? ViewportProbeClock::now()
@@ -1844,15 +1856,18 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   auto *toolbar_layout = new QHBoxLayout(pane_state.toolbar);
   toolbar_layout->setContentsMargins(0, 0, 0, 0);
 
-  pane_state.environment_button = new QtEnvironmentLauncherButton(pane_state.toolbar);
-  pane_state.environment_button->setObjectName(
-      QStringLiteral("viewportEnvironment_%1")
-          .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
-  connect(pane_state.environment_button, &QPushButton::clicked, this,
-          [this, &pane_state]() {
-            environment_popup_->show_below(*pane_state.environment_button);
-          });
-  toolbar_layout->addWidget(pane_state.environment_button);
+  if (environment_popup_ != nullptr) {
+    pane_state.environment_button =
+        new QtEnvironmentLauncherButton(pane_state.toolbar);
+    pane_state.environment_button->setObjectName(
+        QStringLiteral("viewportEnvironment_%1")
+            .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+    connect(pane_state.environment_button, &QPushButton::clicked, this,
+            [this, &pane_state]() {
+              environment_popup_->show_below(*pane_state.environment_button);
+            });
+    toolbar_layout->addWidget(pane_state.environment_button);
+  }
   pane_state.display_button = new QPushButton(pane_state.toolbar);
   pane_state.display_button->setObjectName(
       QStringLiteral("viewportShading_%1")
@@ -1864,6 +1879,10 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   auto *display_group = new QActionGroup(pane_state.display_menu);
   display_group->setExclusive(true);
   for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
+    if (kShadingModes[index] == ViewportShadingMode::Rendered &&
+        !release_has_feature(ReleaseFeature::RenderedViewport)) {
+      continue;
+    }
     QAction *action = pane_state.display_menu->addAction(QString());
     action->setCheckable(true);
     display_group->addAction(action);
@@ -1907,22 +1926,24 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
             });
   }
 
-  pane_state.debug_view_menu = new QMenu(pane_state.display_menu);
-  pane_state.display_menu->addMenu(pane_state.debug_view_menu);
-  for (std::size_t index = 0; index < kDebugViewModes.size(); ++index) {
-    QAction *action = pane_state.debug_view_menu->addAction(QString());
-    action->setCheckable(true);
-    display_group->addAction(action);
-    pane_state.debug_view_actions[index] = action;
-    const ViewportShadingMode shading = kDebugViewModes[index];
-    connect(action, &QAction::triggered, this,
-            [this, &pane_state, shading]() {
-              if (workspace_ != nullptr) {
-                (void)workspace_->focus_pane(pane_state.id);
-                update_focused_pane_indicator();
-              }
-              set_pane_shading(pane_state, shading);
-            });
+  if (release_has_feature(ReleaseFeature::RenderedViewport)) {
+    pane_state.debug_view_menu = new QMenu(pane_state.display_menu);
+    pane_state.display_menu->addMenu(pane_state.debug_view_menu);
+    for (std::size_t index = 0; index < kDebugViewModes.size(); ++index) {
+      QAction *action = pane_state.debug_view_menu->addAction(QString());
+      action->setCheckable(true);
+      display_group->addAction(action);
+      pane_state.debug_view_actions[index] = action;
+      const ViewportShadingMode shading = kDebugViewModes[index];
+      connect(action, &QAction::triggered, this,
+              [this, &pane_state, shading]() {
+                if (workspace_ != nullptr) {
+                  (void)workspace_->focus_pane(pane_state.id);
+                  update_focused_pane_indicator();
+                }
+                set_pane_shading(pane_state, shading);
+              });
+    }
   }
 
   toolbar_layout->addWidget(pane_state.display_button);
@@ -1988,15 +2009,27 @@ void QtViewportPanel::refresh_keybinding_presentation(
 }
 
 void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
-  const QString environment_label = localization_ != nullptr
-      ? QString::fromStdString(localization_->text("ui.inspector.environment", "Environment"))
-      : QStringLiteral("Environment");
-  if (pane_state.environment_button->text() != environment_label) {
-    pane_state.environment_button->setText(environment_label);
-    pane_state.environment_button->setAccessibleName(environment_label);
-    pane_state.environment_button->setToolTip(environment_label);
+  if (pane_state.environment_button != nullptr) {
+    const bool environment_available =
+        release_has_feature(ReleaseFeature::Environment);
+    const char *environment_key = environment_available
+        ? "ui.inspector.environment" : "ui.inspector.camera";
+    const char *environment_fallback =
+        environment_available ? "Environment" : "Camera";
+    const QString environment_label = localization_ != nullptr
+        ? QString::fromStdString(
+              localization_->text(environment_key, environment_fallback))
+        : QString::fromUtf8(environment_fallback);
+    if (pane_state.environment_button->text() != environment_label) {
+      pane_state.environment_button->setText(environment_label);
+      pane_state.environment_button->setAccessibleName(environment_label);
+      pane_state.environment_button->setToolTip(environment_label);
+    }
   }
   for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
+    if (pane_state.shading_actions[index] == nullptr) {
+      continue;
+    }
     const ViewportShadingMode shading = kShadingModes[index];
     QString text = localized_shading_label(localization_, shading);
     if (interaction_editor_ != nullptr) {
@@ -2019,9 +2052,14 @@ void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
     pane_state.camera_actions[index]->setText(
         localized_view_label(localization_, kViewportViews[index]));
   }
-  pane_state.debug_view_menu->setTitle(localized_display_menu_label(
-      localization_, "viewport.display.debug_view", "Debug View"));
+  if (pane_state.debug_view_menu != nullptr) {
+    pane_state.debug_view_menu->setTitle(localized_display_menu_label(
+        localization_, "viewport.display.debug_view", "Debug View"));
+  }
   for (std::size_t index = 0; index < kDebugViewModes.size(); ++index) {
+    if (pane_state.debug_view_actions[index] == nullptr) {
+      continue;
+    }
     pane_state.debug_view_actions[index]->setText(
         localized_shading_label(localization_, kDebugViewModes[index]));
   }
@@ -2050,12 +2088,18 @@ void QtViewportPanel::sync_pane_control_selection(Pane &pane_state) {
     }
   }
   for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
+    if (pane_state.shading_actions[index] == nullptr) {
+      continue;
+    }
     const bool selected = kShadingModes[index] == shading;
     if (pane_state.shading_actions[index]->isChecked() != selected) {
       pane_state.shading_actions[index]->setChecked(selected);
     }
   }
   for (std::size_t index = 0; index < kDebugViewModes.size(); ++index) {
+    if (pane_state.debug_view_actions[index] == nullptr) {
+      continue;
+    }
     const bool selected = kDebugViewModes[index] == shading;
     if (pane_state.debug_view_actions[index]->isChecked() != selected) {
       pane_state.debug_view_actions[index]->setChecked(selected);
@@ -2137,7 +2181,8 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
   }
   const int overlay_inset = ui_scale_metrics_.px(6);
   const QSize display_size = pane_state.display_button->sizeHint();
-  const QSize environment_size = pane_state.environment_button->sizeHint();
+  const QSize environment_size = pane_state.environment_button != nullptr
+      ? pane_state.environment_button->sizeHint() : QSize(0, 0);
   const QtViewportChromeLayout chrome = qt_viewport_chrome_layout(
       pane_state.frame->width(), display_size.width(), overlay_inset,
       ui_scale_metrics_.px(kQtViewportDisplayMenuMinimumWidth),
@@ -2146,8 +2191,9 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
       pane_state.display_button->maximumWidth() != chrome.menu_width) {
     pane_state.display_button->setFixedWidth(chrome.menu_width);
   }
-  if (pane_state.environment_button->minimumWidth() != chrome.environment_width ||
-      pane_state.environment_button->maximumWidth() != chrome.environment_width) {
+  if (pane_state.environment_button != nullptr &&
+      (pane_state.environment_button->minimumWidth() != chrome.environment_width ||
+       pane_state.environment_button->maximumWidth() != chrome.environment_width)) {
     pane_state.environment_button->setFixedWidth(chrome.environment_width);
   }
   if (pane_state.toolbar->layout()->spacing() != chrome.menu_spacing) {
@@ -4232,6 +4278,12 @@ void QtViewportPanel::set_pane_view(Pane &pane_state, ViewportView view) {
 
 void QtViewportPanel::set_pane_shading(Pane &pane_state,
                                        ViewportShadingMode shading) {
+  if (!release_has_feature(ReleaseFeature::RenderedViewport) &&
+      shading != ViewportShadingMode::Wireframe &&
+      shading != ViewportShadingMode::Solid &&
+      shading != ViewportShadingMode::Shaded) {
+    return;
+  }
   if (workspace_ != nullptr) {
     (void)workspace_->set_shading_mode(pane_state.id, shading);
     sync_pane_control_selection(pane_state);

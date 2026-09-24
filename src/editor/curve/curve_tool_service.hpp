@@ -84,7 +84,7 @@ public:
 
   [[nodiscard]] bool active() const { return active_; }
   [[nodiscard]] bool has_session() const { return active_; }
-  [[nodiscard]] bool can_activate() const { return true; }
+  [[nodiscard]] bool can_activate() const;
   [[nodiscard]] bool drawing() const { return active_ && drawing_; }
   /**
    * Reports whether the retained Curve control layer is editable.
@@ -93,16 +93,14 @@ public:
    * owns active(), while one selected Curve in Object/Mesh mode exposes its
    * controls through the normal selection lifecycle.
    */
-  [[nodiscard]] bool controls_editable() const {
-    return (active_ && drawing_) || (!drawing_ && entity_ != kInvalidEntityId);
-  }
+  [[nodiscard]] bool controls_editable() const;
   [[nodiscard]] bool dragging() const { return drag_.has_value(); }
   [[nodiscard]] bool point_construction_dragging() const {
     return drag_.has_value() && drag_->appended_point;
   }
   [[nodiscard]] bool can_apply() const;
   [[nodiscard]] bool can_begin_new_curve() const {
-    return !dragging() &&
+    return can_activate() && !dragging() &&
            (!active_ || !drawing_ || draft_.point_count() == 0u);
   }
   [[nodiscard]] bool can_change_creation_kind() const;

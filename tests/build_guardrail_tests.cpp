@@ -1467,7 +1467,7 @@ TEST(BuildGuardrailTests, QuaderTestsSandboxPerUserStorage) {
   expect_contains(app_target, "tests/quader_tests_main.cpp");
   expect_contains(app_target,
                   "target_link_libraries(quader_tests PRIVATE quader_runtime "
-                  "GTest::gtest)");
+                  "GTest::gtest quader_release_profile_full)");
   expect_missing(app_target, "GTest::gtest_main");
   expect_contains(test_main, "quader-tests-local-app-data-");
   expect_contains(test_main, "_putenv_s(\"LOCALAPPDATA\"");

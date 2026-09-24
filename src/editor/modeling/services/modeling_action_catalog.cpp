@@ -7,6 +7,7 @@
 #include "editor/modeling/services/modeling_action_catalog.hpp"
 
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 
@@ -67,6 +68,11 @@ std::string surface_id_for(ModelingActionSurface surface) {
 void append_if_visible(std::vector<ModelingActionItem> &actions,
                        ModelingActionItem item,
                        const ModelingActionQuery &query) {
+  if (!release_allows_action(item.action_id) ||
+      !release_allows_operation(item.operation_id) ||
+      !release_allows_tool(item.tool_id)) {
+    return;
+  }
   if (item.visibility == ModelingActionVisibility::Hidden &&
       !query.include_hidden) {
     return;
@@ -418,6 +424,9 @@ ModelingActionCatalog::actions_for(const ModelingSelectionSummary &summary,
 std::optional<ModelingActionItem>
 ModelingActionCatalog::action_for(const ModelingSelectionSummary &summary,
                                   std::string_view action_id) {
+  if (!release_allows_action(action_id)) {
+    return std::nullopt;
+  }
   if (const quader_host_contract::HostActionDescriptor *descriptor =
           quader_host_contract::find_action_descriptor(action_id)) {
     return action_from_host_descriptor(summary, *descriptor);
@@ -475,6 +484,9 @@ ModelingActionAvailabilityResult
 ModelingActionCatalog::evaluate_operation_availability(
     const ModelingSelectionSummary &summary, std::string_view operation_id,
     const ModelingActionAvailabilityRule &rule) {
+  if (!release_allows_operation(operation_id)) {
+    return {.visibility = ModelingActionVisibility::Hidden};
+  }
   if (std::optional<ModelingActionAvailabilityResult> host_result =
           evaluate_host_operation_availability(summary, operation_id,
                                                summary.mode)) {

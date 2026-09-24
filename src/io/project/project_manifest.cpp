@@ -123,6 +123,7 @@ ProjectIoResult<ProjectManifest> ProjectManifest::create(ProjectId id,
   ProjectManifest manifest;
   manifest.id_ = std::move(id);
   manifest.name_ = std::move(name);
+  manifest.minimum_product_release_ = current_product_release();
   return ProjectIoResult<ProjectManifest>::success(std::move(manifest));
 }
 
@@ -131,12 +132,17 @@ ProjectIoResult<ProjectManifest> ProjectManifest::hydrate(
     std::vector<ProjectSceneCatalogEntry> scenes,
     std::vector<ProjectRelativePath> open_scene_paths,
     std::optional<ProjectRelativePath> active_scene_path,
-    std::vector<ProjectAssetId> deleted_material_ids) {
+    std::vector<ProjectAssetId> deleted_material_ids,
+    ProductRelease minimum_product_release) {
+  if (minimum_product_release == 0u) {
+    return malformed_manifest("Minimum product release must be nonzero.");
+  }
   ProjectIoResult<ProjectManifest> created = create(std::move(id), std::move(name));
   if (!created.ok()) {
     return created;
   }
   ProjectManifest manifest = created.take_value();
+  manifest.minimum_product_release_ = minimum_product_release;
   for (ProjectSceneCatalogEntry &scene : scenes) {
     ProjectIoResult<void> registered =
         manifest.register_scene(std::move(scene));
@@ -161,6 +167,10 @@ ProjectIoResult<ProjectManifest> ProjectManifest::hydrate(
         deleted_materials.error().path);
   }
   return ProjectIoResult<ProjectManifest>::success(std::move(manifest));
+}
+
+void ProjectManifest::require_product_release(ProductRelease release) noexcept {
+  minimum_product_release_ = std::max(minimum_product_release_, release);
 }
 
 const ProjectSceneCatalogEntry *
@@ -545,9 +555,8 @@ std::string ProjectManifestStore::serialize(const ProjectManifest &manifest) {
   }
   Json root{
       {"format", std::string(kQuaderProjectManifestFormat)},
-      {"version", manifest.deleted_material_ids().empty()
-                      ? 2u
-                      : kQuaderProjectManifestVersion},
+      {"version", kQuaderProjectManifestVersion},
+      {"minimumProductRelease", manifest.minimum_product_release()},
       {"project",
        Json{
            {"id", std::string(manifest.id().str())},
@@ -560,7 +569,7 @@ std::string ProjectManifestStore::serialize(const ProjectManifest &manifest) {
            {"activeScene", std::move(active_scene)},
        }},
   };
-  if (!manifest.deleted_material_ids().empty()) {
+  {
     Json deleted_material_ids = Json::array();
     deleted_material_ids.get_ref<Json::array_t &>().reserve(
         manifest.deleted_material_ids().size());
@@ -602,6 +611,17 @@ ProjectManifestStore::deserialize(std::string_view text) {
       return ProjectIoResult<ProjectManifest>::failure(
           ProjectIoErrorCode::UnsupportedFormat,
           "Project manifest version is not supported.");
+    }
+    ProductRelease minimum_product_release = kInternalFullRelease;
+    if (version >= 4u) {
+      if (!root.contains("minimumProductRelease") ||
+          !root["minimumProductRelease"].is_number_unsigned() ||
+          root["minimumProductRelease"].get<ProductRelease>() == 0u) {
+        return malformed_manifest(
+            "Minimum product release must be a nonzero unsigned integer.");
+      }
+      minimum_product_release =
+          root["minimumProductRelease"].get<ProductRelease>();
     }
     if (!root.contains("project") || !root["project"].is_object() ||
         !root["project"].contains("id") ||
@@ -733,7 +753,7 @@ ProjectManifestStore::deserialize(std::string_view text) {
     return ProjectManifest::hydrate(
         project_id.take_value(), root["project"]["name"].get<std::string>(),
         std::move(scenes), std::move(open_scenes), std::move(active_scene),
-        std::move(deleted_material_ids));
+        std::move(deleted_material_ids), minimum_product_release);
   } catch (const std::exception &exception) {
     return malformed_manifest(std::string("Could not parse project manifest: ") +
                               exception.what());

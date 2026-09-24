@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <span>
 #include <string_view>
 
 namespace quader {
@@ -190,14 +191,13 @@ struct ViewportBoolSettingDescriptor {
     bool default_value = false;
 };
 
-const std::array<ViewportSettingsSectionDescriptor,
-                 kViewportSettingsSectionCount> &
+std::span<const ViewportSettingsSectionDescriptor>
 viewport_settings_sections();
-const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> &
+std::span<const ViewportColorSettingDescriptor>
 viewport_color_settings();
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> &
 viewport_float_settings();
-const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> &
+std::span<const ViewportBoolSettingDescriptor>
 viewport_bool_settings();
 
 const std::array<double, kViewportRotationSnapAngleCount> &

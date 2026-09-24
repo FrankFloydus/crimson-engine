@@ -3065,7 +3065,7 @@ QdrSceneBinaryEncodeResult encode_qdr_scene_binary(
   const auto container_started = std::chrono::steady_clock::now();
   quader_io::QdrBinaryContainerBuildResult container =
       quader_io::build_qdr_binary_container_with_stats(scene_uuid,
-                                                       std::move(chunks));
+          std::move(chunks), snapshot.minimum_product_release);
   result.container_build_and_compression_ms =
       std::chrono::duration<double, std::milli>(
           std::chrono::steady_clock::now() - container_started)

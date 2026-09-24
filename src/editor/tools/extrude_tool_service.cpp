@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/extrude_tool_service.hpp"
+#include "core/release_features.hpp"
 
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/extrude_history_command.hpp"
@@ -255,6 +256,9 @@ CommandResult ExtrudeToolService::activate_preview(
 
 CommandResult ExtrudeToolService::activate_impl(
     modeling::FaceExtrudeMode requested_mode) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   const ExtrudeSessionDefaults options{requested_mode, amount()};
   if (!valid_options(options)) {
     return command_invalid_result("Invalid extrusion settings.");
@@ -321,6 +325,9 @@ CommandResult ExtrudeToolService::extrude() {
 
 CommandResult ExtrudeToolService::start_preview(
     const ExtrudeSessionDefaults &requested_options) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   const ExtrudeSessionDefaults options = requested_options;
   if (!active() || dragging() || !valid_options(options)) {
     return command_invalid_result("The Extrude tool cannot start a preview.");
@@ -363,6 +370,9 @@ CommandResult ExtrudeToolService::begin_selection_preview() {
 
 CommandResult ExtrudeToolService::set_options(
     const ExtrudeSessionDefaults &options) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!valid_options(options)) {
     return command_invalid_result("Invalid extrusion settings.");
   }
@@ -412,6 +422,9 @@ CommandResult ExtrudeToolService::reset_settings() { return set_options({}); }
 
 CommandResult ExtrudeToolService::begin_drag(
     std::optional<QVec3> world_direction) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!active() || dragging()) {
     return command_invalid_result("The Extrude tool cannot start a drag.");
   }

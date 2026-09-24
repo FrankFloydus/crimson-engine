@@ -8,6 +8,8 @@
 
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "core/release_features.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <algorithm>
@@ -30,11 +32,13 @@ const ViewportTool* ViewportToolRegistry::find(std::string_view id) const {
 bool ViewportToolRegistry::available(ViewportToolId tool) const {
     const ViewportTool* item = find(tool);
     return item != nullptr &&
+           release_allows_tool(item->id()) &&
            viewport_tool_has_native_controller(item->viewport_tool());
 }
 
 bool ViewportToolHost::available(const ViewportTool& tool) const {
-  return viewport_tool_has_native_controller(tool.viewport_tool());
+  return release_allows_tool(tool.id()) &&
+         viewport_tool_has_native_controller(tool.viewport_tool());
 }
 
 bool ViewportToolHost::owns_viewport(const ViewportTool &tool) const {
@@ -54,6 +58,10 @@ bool ViewportToolHost::allows_selection_fallback(
 ModelingCommandResult
 ViewportToolHost::activate_tool(const ViewportTool &tool,
                                 ModelingSessionService &modeling) const {
+  if (!release_allows_tool(tool.id())) {
+    return {.ok = false, .changed = false,
+            .message = release_feature_unavailable_message()};
+  }
   return tool.activate(modeling);
 }
 
@@ -170,7 +178,9 @@ bool ViewportToolRuntime::set_active_tool(ViewportToolState &state,
 }
 
 void ViewportToolRuntime::sync_active_tool(ViewportToolId tool) {
-  active_tool_ = registry_.find(tool);
+  active_tool_ = registry_.find(registry_.available(tool)
+                                   ? tool
+                                   : ViewportToolId::Select);
 }
 
 bool ViewportToolRuntime::has_active_modal_preview(
@@ -267,8 +277,9 @@ bool ViewportToolRuntime::handle_shortcut(const ViewportShortcut &shortcut,
   case ViewportShortcutKind::RepeatLastAction:
   case ViewportShortcutKind::MergeActive:
   case ViewportShortcutKind::MergeCenter:
-  case ViewportShortcutKind::MirrorAxis:
     return true;
+  case ViewportShortcutKind::MirrorAxis:
+    return release_has_feature(ReleaseFeature::MeshMirror);
   case ViewportShortcutKind::FlipMeshNormals:
     if (active_tool_blocks_viewport_focus_shortcuts()) {
       return false;
@@ -276,7 +287,8 @@ bool ViewportToolRuntime::handle_shortcut(const ViewportShortcut &shortcut,
     return state.selection_mode == ViewportSelectionMode::Object;
   case ViewportShortcutKind::FlipHorizontal:
   case ViewportShortcutKind::FlipVertical:
-    return state.selection_mode == ViewportSelectionMode::Object;
+    return release_has_feature(ReleaseFeature::MeshFlip) &&
+           state.selection_mode == ViewportSelectionMode::Object;
   case ViewportShortcutKind::None:
     return false;
   }
@@ -399,6 +411,9 @@ bool ViewportToolRuntime::native_lifecycle_pending(
 
 bool ViewportToolRuntime::can_activate_native_lifecycle(
     std::string_view tool_id) const {
+  if (!release_allows_tool(tool_id)) {
+    return false;
+  }
   const ViewportNativeToolLifecycleAdapter *adapter =
       find_native_lifecycle(tool_id);
   return adapter != nullptr && adapter->can_activate();
@@ -473,6 +488,9 @@ ViewportToolRuntime::active_native_lifecycle_history_state() const {
 CommandResult ViewportToolRuntime::activate_native_lifecycle(
     std::string_view tool_id, double grid_world_size,
     const std::function<CommandResult()> &cancel_competing_state) {
+  if (!release_allows_tool(tool_id)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   ViewportNativeToolLifecycleAdapter *adapter =
       find_native_lifecycle(tool_id);
   if (adapter == nullptr) {

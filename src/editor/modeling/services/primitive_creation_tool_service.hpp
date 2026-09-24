@@ -88,6 +88,14 @@ enum class PrimitiveCreationKind {
 /// Selects the topology family used by authored spheres.
 enum class PrimitiveSphereType { Uv = 0, Quad = 1 };
 
+/// Shared release gates for primitive activation and retained settings choices.
+[[nodiscard]] bool
+primitive_creation_available_in_release(PrimitiveCreationKind kind) noexcept;
+[[nodiscard]] bool
+primitive_sphere_type_available_in_release(PrimitiveSphereType type) noexcept;
+[[nodiscard]] bool primitive_setting_available_in_release(
+    std::string_view name, double value) noexcept;
+
 /// Returns the canonical scene-name stem for a generated primitive kind.
 [[nodiscard]] std::string_view
 primitive_creation_default_name(PrimitiveCreationKind kind);

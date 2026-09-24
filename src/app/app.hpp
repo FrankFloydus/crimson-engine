@@ -31,6 +31,7 @@ class QTimer;
 namespace quader {
 
 class QuaderEditorApi;
+class ProjectSessionRenderMaterialResolver;
 
 /// Options owned by the native Qt application shell.
 struct AppOptions {
@@ -70,7 +71,7 @@ private:
   AppFrameSchedule frame_schedule_;
   RenderSystem render_system_;
   SceneRenderBridge render_bridge_;
-  std::unique_ptr<RenderProjectMaterialResolver> project_material_resolver_;
+  std::unique_ptr<ProjectSessionRenderMaterialResolver> project_material_resolver_;
   UISystem ui_;
   ProjectSession project_session_;
   RenderOverlaySnapshotCache render_overlay_snapshot_cache_;

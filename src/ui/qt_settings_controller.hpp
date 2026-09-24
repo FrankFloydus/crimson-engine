@@ -10,6 +10,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <functional>
+#include <filesystem>
 #include <optional>
 #include <string_view>
 
@@ -27,6 +28,7 @@ enum class QtSettingsChangeKind {
   RenderingPreview,
   RenderingCommit,
   SessionCommit,
+  DefaultMaterialCommit,
   KeybindingsCommit,
 };
 
@@ -36,6 +38,7 @@ struct QtSettingsChange final {
   std::optional<float> interface_scale;
   std::optional<bool> vsync_enabled;
   std::optional<SessionPreferences> session_settings;
+  std::optional<std::filesystem::path> default_material_texture;
 };
 
 /**

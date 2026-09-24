@@ -18,6 +18,7 @@
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "io/project/qmat_codec.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
+#include "io/qdr/qdr_document_writer.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <gtest/gtest.h>
@@ -3093,6 +3094,145 @@ TEST(ProjectSessionWorkspace,
   EXPECT_EQ(original.value().manifest.scenes().front(), first_catalog_entry);
   EXPECT_EQ(original.value().manifest.find_scene(second_path), nullptr);
 #endif
+}
+
+TEST(ProjectSessionWorkspace,
+     FullOpeningPublicProjectAndSavingWorkspacePreservesItsRelease) {
+  ASSERT_EQ(current_product_release(), kInternalFullRelease);
+  ScopedProjectSessionDirectory temporary("public-release-bookkeeping");
+  auto storage = ProjectManifestStore::create_in_empty_directory(
+      temporary.make_empty_child("PublicProject"));
+  ASSERT_TRUE(storage.ok()) << storage.error().message;
+  auto public_manifest = ProjectManifest::hydrate(
+      storage.value().manifest.id(), storage.value().manifest.name(), {}, {},
+      std::nullopt, {}, kPublicRelease01);
+  ASSERT_TRUE(public_manifest.ok());
+  storage.value().manifest = public_manifest.take_value();
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(storage.value()).ok());
+
+  ProjectSession project;
+  const auto opened = project.open(storage.value().manifest_path);
+  ASSERT_TRUE(opened.ok) << opened.message;
+  ASSERT_NE(project.manifest(), nullptr);
+  EXPECT_EQ(project.manifest()->minimum_product_release(), kPublicRelease01);
+  EXPECT_NE(project.material_catalog().find(
+                *ProjectAssetId::parse(kDefaultProjectMaterialId)),
+            nullptr);
+
+  QuaderEditorApi editor(project);
+  const auto added = editor.scene_documents().new_scene();
+  ASSERT_TRUE(added.ok()) << added.error_message();
+  ASSERT_TRUE(editor.scene_documents().close(added.value()).ok());
+  EXPECT_EQ(project.manifest()->minimum_product_release(), kPublicRelease01);
+  const auto persisted = ProjectManifestStore::open(project.manifest_path());
+  ASSERT_TRUE(persisted.ok()) << persisted.error().message;
+  EXPECT_EQ(persisted.value().manifest.minimum_product_release(),
+            kPublicRelease01);
+  ASSERT_TRUE(project.close().ok);
+  const auto after_close =
+      ProjectManifestStore::open(storage.value().manifest_path);
+  ASSERT_TRUE(after_close.ok()) << after_close.error().message;
+  EXPECT_EQ(after_close.value().manifest.minimum_product_release(),
+            kPublicRelease01);
+}
+
+TEST(ProjectSessionWorkspace,
+     FullAuthoringSavePromotesPublicProjectOnlyAfterSuccessfulCommit) {
+  ASSERT_EQ(current_product_release(), kInternalFullRelease);
+  ScopedProjectSessionDirectory temporary("public-release-authoring");
+  auto storage = ProjectManifestStore::create_in_empty_directory(
+      temporary.make_empty_child("PublicProject"));
+  ASSERT_TRUE(storage.ok()) << storage.error().message;
+  auto public_manifest = ProjectManifest::hydrate(
+      storage.value().manifest.id(), storage.value().manifest.name(), {}, {},
+      std::nullopt, {}, kPublicRelease01);
+  ASSERT_TRUE(public_manifest.ok());
+  storage.value().manifest = public_manifest.take_value();
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(storage.value()).ok());
+
+  ProjectSession project;
+  ASSERT_TRUE(project.open(storage.value().manifest_path).ok);
+  QuaderEditorApi editor(project);
+  const auto added = editor.scene_documents().new_scene();
+  ASSERT_TRUE(added.ok()) << added.error_message();
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Authored in Full").ok());
+  EXPECT_EQ(project.manifest()->minimum_product_release(), kPublicRelease01);
+  const auto scene_path = project_path("Scenes/Authored.qdr");
+  {
+    ScopedManifestWriteFailure blocked(project.manifest_path());
+    ASSERT_TRUE(blocked.ready()) << blocked.message();
+    EXPECT_FALSE(editor.scene_documents().save_as(added.value(), scene_path).ok());
+    EXPECT_EQ(project.manifest()->minimum_product_release(), kPublicRelease01);
+    EXPECT_FALSE(std::filesystem::exists(
+        project.root() / scene_path.native_path()));
+  }
+
+  const auto saved = editor.scene_documents().save_as(added.value(), scene_path);
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  EXPECT_EQ(project.manifest()->minimum_product_release(), kInternalFullRelease);
+  const auto persisted = ProjectManifestStore::open(project.manifest_path());
+  ASSERT_TRUE(persisted.ok()) << persisted.error().message;
+  EXPECT_EQ(persisted.value().manifest.minimum_product_release(),
+            kInternalFullRelease);
+  const auto scene = QdrDocumentReader::read_project_document(
+      project.root() / scene_path.native_path());
+  ASSERT_TRUE(scene.ok) << scene.message;
+  EXPECT_EQ(scene.minimum_product_release, kInternalFullRelease);
+}
+
+TEST(ProjectSessionWorkspace,
+     FullSaveOfLoadedPublicScenePreservesOriginalOnManifestFailure) {
+  ScopedProjectSessionDirectory temporary("public-scene-save");
+  auto storage = ProjectManifestStore::create_in_empty_directory(
+      temporary.make_empty_child("PublicProject"));
+  ASSERT_TRUE(storage.ok()) << storage.error().message;
+  const auto scene_path = project_path("Scenes/Public.qdr");
+  const auto scene_id = SceneId::generate();
+  auto public_manifest = ProjectManifest::hydrate(
+      storage.value().manifest.id(), storage.value().manifest.name(),
+      {{.id = scene_id, .path = scene_path}}, {scene_path}, scene_path, {},
+      kPublicRelease01);
+  ASSERT_TRUE(public_manifest.ok());
+  storage.value().manifest = public_manifest.take_value();
+  auto extracted = qdr_project_write_snapshot_from_document(SceneContentDocument{});
+  ASSERT_TRUE(extracted.ok()) << extracted.error().message;
+  extracted.value().minimum_product_release = kPublicRelease01;
+  const auto absolute = storage.value().file_system.root() / scene_path.native_path();
+  ASSERT_TRUE(QdrDocumentWriter::write_project_document_atomic(
+      absolute, extracted.value(), scene_id.bytes()).ok);
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(storage.value()).ok());
+  const auto original_bytes = read_file_bytes(absolute);
+
+  ProjectSession project;
+  ASSERT_TRUE(project.open(storage.value().manifest_path).ok);
+  ASSERT_NE(project.active_scene(), nullptr);
+  EXPECT_EQ(project.active_scene()->session->minimum_product_release(), kPublicRelease01);
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "New geometry").ok());
+  const auto active_id = project.active_scene_id();
+  {
+    ScopedManifestWriteFailure blocked(project.manifest_path());
+    ASSERT_TRUE(blocked.ready()) << blocked.message();
+    EXPECT_FALSE(project.save(active_id).ok);
+    EXPECT_EQ(read_file_bytes(absolute), original_bytes);
+    EXPECT_TRUE(project.active_scene()->dirty());
+    EXPECT_EQ(project.manifest()->minimum_product_release(), kPublicRelease01);
+    EXPECT_EQ(project.active_scene()->session->minimum_product_release(), kPublicRelease01);
+  }
+  const auto saved = project.save(active_id);
+  ASSERT_TRUE(saved.ok) << saved.message;
+  EXPECT_EQ(project.manifest()->minimum_product_release(), kInternalFullRelease);
+  EXPECT_EQ(project.active_scene()->session->minimum_product_release(), kInternalFullRelease);
+  const auto read = QdrDocumentReader::read_project_document(absolute);
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_EQ(read.minimum_product_release, kInternalFullRelease);
+  const auto persisted = ProjectManifestStore::open(project.manifest_path());
+  ASSERT_TRUE(persisted.ok());
+  EXPECT_EQ(persisted.value().manifest.minimum_product_release(), kInternalFullRelease);
 }
 
 } // namespace

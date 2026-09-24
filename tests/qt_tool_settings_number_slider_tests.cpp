@@ -39,6 +39,7 @@
 #include <QDockWidget>
 #include <QDir>
 #include <QEventLoop>
+#include <QFontMetrics>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QImage>
@@ -5921,6 +5922,7 @@ TEST(QtToolSettingsPanelTests,
         const auto target = editor.tools().active_settings();
         ASSERT_FALSE(target.controls.empty());
         std::optional<int> field_left;
+        std::optional<int> label_width;
         for (const auto &control : target.controls) {
           SCOPED_TRACE(control.id);
           kinds_seen[static_cast<std::size_t>(control.kind)] = true;
@@ -5951,8 +5953,25 @@ TEST(QtToolSettingsPanelTests,
             EXPECT_GT(field->geometry().left(), label->geometry().right());
             EXPECT_LE(std::abs(field->geometry().center().y() -
                                label->geometry().center().y()), 1);
-            EXPECT_EQ(label->width(), scale_controller.metrics().px(88));
+            if (label_width.has_value()) {
+              EXPECT_EQ(label->width(), *label_width);
+            } else {
+              label_width = label->width();
+            }
             EXPECT_GE(label->height(), label->heightForWidth(label->width()));
+            if (control.id == "auto_merge_vertices") {
+              // This sole Move setting used to wrap within 88px while most of
+              // the row stayed empty. Its actual label fits in either locale.
+              EXPECT_GE(label->width(),
+                        label->fontMetrics().horizontalAdvance(label->text()));
+              EXPECT_LE(label->heightForWidth(label->width()),
+                        label->fontMetrics().lineSpacing());
+            }
+          }
+          if (control.kind == quader::QuaderToolSettingControlKind::Toggle) {
+            auto *toggle = qobject_cast<QCheckBox *>(field);
+            ASSERT_NE(toggle, nullptr);
+            EXPECT_EQ(toggle->width(), toggle->sizeHint().width());
           }
           if (control.kind == quader::QuaderToolSettingControlKind::Number) {
             if (auto *spin = field->findChild<QSpinBox *>()) {

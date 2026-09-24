@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/array/radial_array_tool_service.hpp"
+#include "core/release_features.hpp"
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
@@ -158,6 +159,9 @@ bool RadialArrayToolService::valid_source_selection(
 }
 
 bool RadialArrayToolService::can_activate() const {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return false;
+  }
   QDR_PROFILE_SCOPE("Radial array can activate");
   const std::uint64_t scene_revision = scene_.revision();
   const int selection_mode = static_cast<int>(selection_.mode());
@@ -431,6 +435,9 @@ RadialArrayToolService::source_visible_pivot(EntityId entity) const {
 }
 
 CommandResult RadialArrayToolService::activate(double fallback_grid_size) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   std::vector<EntityId> ordered_sources;
   EntityId primary_source = kInvalidEntityId;
   bool instance_occurrences = false;
@@ -546,6 +553,9 @@ CommandResult RadialArrayToolService::cancel() {
 }
 
 CommandResult RadialArrayToolService::apply() {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_unchanged_result();
   }
@@ -819,6 +829,9 @@ CommandResult RadialArrayToolService::apply_instance_array(
 
 CommandResult RadialArrayToolService::update_center_candidate(
     QVec3 world_position, QVec3 world_normal, double fallback_grid_size) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -860,6 +873,9 @@ CommandResult RadialArrayToolService::update_center_candidate(
 }
 
 CommandResult RadialArrayToolService::clear_center_candidate() {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value() || session_->center_locked ||
       !session_->candidate_valid) {
     return command_unchanged_result();
@@ -871,6 +887,9 @@ CommandResult RadialArrayToolService::clear_center_candidate() {
 }
 
 CommandResult RadialArrayToolService::lock_center() {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -890,6 +909,9 @@ CommandResult RadialArrayToolService::lock_center() {
 }
 
 CommandResult RadialArrayToolService::set_degrees(double degrees) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -909,6 +931,9 @@ CommandResult RadialArrayToolService::set_degrees(double degrees) {
 }
 
 CommandResult RadialArrayToolService::set_mode(RadialArrayMode mode) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -924,6 +949,9 @@ CommandResult RadialArrayToolService::set_mode(RadialArrayMode mode) {
 }
 
 CommandResult RadialArrayToolService::set_create_instances(bool enabled) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -935,6 +963,9 @@ CommandResult RadialArrayToolService::set_create_instances(bool enabled) {
 }
 
 CommandResult RadialArrayToolService::set_copies(std::uint32_t copies) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -954,6 +985,9 @@ CommandResult RadialArrayToolService::set_copies(std::uint32_t copies) {
 }
 
 CommandResult RadialArrayToolService::adjust_copies(int delta) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -967,6 +1001,9 @@ CommandResult RadialArrayToolService::adjust_copies(int delta) {
 }
 
 CommandResult RadialArrayToolService::set_repeats(std::uint32_t repeats) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -986,6 +1023,9 @@ CommandResult RadialArrayToolService::set_repeats(std::uint32_t repeats) {
 }
 
 CommandResult RadialArrayToolService::adjust_repeats(int delta) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -999,6 +1039,9 @@ CommandResult RadialArrayToolService::adjust_repeats(int delta) {
 }
 
 CommandResult RadialArrayToolService::set_repeat_spacing(double spacing) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }
@@ -1021,6 +1064,9 @@ CommandResult RadialArrayToolService::set_repeat_spacing(double spacing) {
 }
 
 CommandResult RadialArrayToolService::reset_settings() {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (!session_.has_value()) {
     return command_invalid_result("Radial Array tool is not active.");
   }

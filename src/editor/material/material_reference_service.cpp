@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/material_reference_service.hpp"
 
+#include "core/release_features.hpp"
 #include "assets/asset_registry.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -460,6 +461,10 @@ MaterialReferenceService::prepare_replacement(
     MaterialReference source, MaterialReference replacement,
     MaterialReferenceUsageScope scope,
     const DestinationValidator &destination_is_valid) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return {.ok = false, .message = release_feature_unavailable_message()};
+  }
+
   if (!source.valid()) {
     return {
         .ok = false,

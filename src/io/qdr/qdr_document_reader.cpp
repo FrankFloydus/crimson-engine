@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/qdr/qdr_document_reader.hpp"
 
+#include "assets/default_material_catalog.hpp"
 #include "diagnostics/profile.hpp"
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_scene_binary_codec.hpp"
@@ -56,8 +57,93 @@ copy_bytes(std::span<const std::byte> bytes) {
   return {bytes.begin(), bytes.end()};
 }
 
+/// A release tag describes compatibility, but does not authorize unsupported
+/// authored content. Inspect the isolated candidate before it can be published.
+[[nodiscard]] bool unsupported_authoring_content(
+    const SceneContentDocument &document, ProductRelease release) {
+  const bool allow_lights = product_release_has_feature(release, ReleaseFeature::Lights);
+  const bool allow_curves = product_release_has_feature(release, ReleaseFeature::Curves);
+  const bool allow_materials = product_release_has_feature(release, ReleaseFeature::Materials);
+  const auto &scene = document.scene();
+  const auto &assets = document.assets();
+  if (!product_release_has_feature(release, ReleaseFeature::Layers)) {
+    const SceneLayerState layers = scene.layer_state();
+    if (!layers.layers.empty() || !layers.assignments.empty()) {
+      return true;
+    }
+  }
+  if (!allow_curves && !assets.curve_ids().empty()) {
+    return true;
+  }
+  if (!product_release_has_feature(release, ReleaseFeature::Environment)) {
+    auto settings = scene.scene_settings();
+    const SceneSettings defaults;
+    settings.camera.near_plane = defaults.camera.near_plane;
+    settings.camera.far_plane = defaults.camera.far_plane;
+    if (!(settings == defaults)) {
+      return true;
+    }
+  }
+  const auto permitted_material = [&](const MaterialReference &reference) {
+    if (!reference.valid()) {
+      return true;
+    }
+    if (reference.project_owned()) {
+      return reference.project_asset().str() == kDefaultProjectMaterialId;
+    }
+    const auto *material = assets.material(reference.embedded_asset());
+    const auto expected = make_default_quader_material();
+    if (material == nullptr || material->base_color.x != expected.base_color.x ||
+        material->base_color.y != expected.base_color.y ||
+        material->base_color.z != expected.base_color.z ||
+        material->roughness != expected.roughness ||
+        material->metallic != expected.metallic ||
+        material->diffuse_model != expected.diffuse_model ||
+        material->node_graph_reserved != expected.node_graph_reserved) {
+      return false;
+    }
+    for (const auto &[slot, id] : material->texture_slots) {
+      const auto *texture = assets.texture(id);
+      const bool albedo = slot == material_texture_slot::kBaseColor;
+      const bool roughness = slot == material_texture_slot::kRoughness;
+      if (texture == nullptr || texture->generated || (!albedo && !roughness) ||
+          texture->source_path.generic_string() !=
+              (albedo ? kDefaultMaterialAlbedoTexturePackagePath
+                      : kDefaultMaterialRoughnessTexturePackagePath) ||
+          texture->usage != (albedo ? TextureUsage::BaseColor : TextureUsage::Roughness) ||
+          texture->color_space != (albedo ? TextureColorSpace::Srgb : TextureColorSpace::Linear)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  for (const auto entity : scene.entities()) {
+    if ((!allow_lights && (scene.light(entity) != nullptr || scene.kind(entity) == EntityKind::Light)) ||
+        (!allow_curves && (scene.curve(entity) != nullptr || scene.kind(entity) == EntityKind::Curve))) {
+      return true;
+    }
+    if (!allow_materials) {
+      const auto *material = scene.material(entity);
+      if (material == nullptr) {
+        continue;
+      }
+      if (!permitted_material(material->material)) {
+        return true;
+      }
+      for (const auto &[slot, reference] : material->material_slots) {
+        if (!permitted_material(reference)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 [[nodiscard]] QdrProjectReadResult
-deserialize_owned_project_document(std::vector<std::byte> bytes) {
+deserialize_owned_project_document(
+    std::vector<std::byte> bytes,
+    std::optional<ProductRelease> authoring_release) {
   QdrProjectReadStats stats;
   stats.file_bytes = bytes.size();
   const std::uint64_t source_content_hash =
@@ -91,11 +177,32 @@ deserialize_owned_project_document(std::vector<std::byte> bytes) {
   stats.decompressed_bytes = container.decompressed_bytes;
   stats.compressed_chunk_count = container.compressed_chunk_count;
   stats.decompression_ms = container.decompression_ms;
+  if (authoring_release.has_value() &&
+      !product_release_can_open(*authoring_release,
+                                container.minimum_product_release)) {
+    QdrProjectReadResult result = project_error_result(
+        "qdr.binary.unsupported_product_release",
+        product_release_unavailable_message(container.minimum_product_release));
+    result.minimum_product_release = container.minimum_product_release;
+    result.scene_uuid = container.scene_uuid;
+    result.stats = stats;
+    return result;
+  }
   const std::array<std::byte, 16> scene_uuid = container.scene_uuid;
   QdrSceneBinaryDecodeResult decoded = [&]() {
     QDR_PROFILE_SCOPE("QDR hydrate binary scene");
     return decode_qdr_scene_binary_with_stats(container);
   }();
+  if (authoring_release.has_value() &&
+      *authoring_release != kInternalFullRelease &&
+      unsupported_authoring_content(decoded.document, *authoring_release)) {
+    auto result = project_error_result("qdr.binary.unavailable_feature",
+                                       release_feature_unavailable_message());
+    result.minimum_product_release = container.minimum_product_release;
+    result.scene_uuid = scene_uuid;
+    result.stats = stats;
+    return result;
+  }
   stats.logical_geometry_count = decoded.stats.logical_geometry_count;
   stats.unique_geometry_decoded_count =
       decoded.stats.unique_geometry_decoded_count;
@@ -120,6 +227,7 @@ deserialize_owned_project_document(std::vector<std::byte> bytes) {
       .message = {},
       .diagnostics = {},
       .scene_uuid = scene_uuid,
+      .minimum_product_release = container.minimum_product_release,
       .project_asset_dependencies =
           std::move(decoded.project_asset_dependencies),
       .viewport_camera_pose = std::move(decoded.viewport_camera_pose),
@@ -222,10 +330,11 @@ deserialize_owned_project_material_usage(std::vector<std::byte> bytes) {
 } // namespace
 
 QdrProjectReadResult QdrDocumentReader::deserialize_project_document(
-    std::span<const std::byte> bytes) {
+    std::span<const std::byte> bytes,
+    std::optional<ProductRelease> authoring_release) {
   QDR_PROFILE_FUNCTION();
   try {
-    return deserialize_owned_project_document(copy_bytes(bytes));
+    return deserialize_owned_project_document(copy_bytes(bytes), authoring_release);
   } catch (const quader_io::QdrDiagnosticException &exception) {
     return project_error_result(exception.diagnostic());
   } catch (const std::exception &exception) {
@@ -237,7 +346,8 @@ QdrProjectReadResult QdrDocumentReader::deserialize_project_document(
 }
 
 QdrProjectReadResult QdrDocumentReader::read_project_document(
-    const std::filesystem::path &path) {
+    const std::filesystem::path &path,
+    std::optional<ProductRelease> authoring_release) {
   QDR_PROFILE_FUNCTION();
   const auto byte_read_started = std::chrono::steady_clock::now();
   try {
@@ -263,7 +373,8 @@ QdrProjectReadResult QdrDocumentReader::read_project_document(
                                     byte_read_started)
                                     .count();
     QdrProjectReadResult result =
-        deserialize_owned_project_document(std::move(source.bytes));
+        deserialize_owned_project_document(std::move(source.bytes),
+                                            authoring_release);
     result.stats.byte_read_ms = byte_read_ms;
     return project_read_result_with_source_path(std::move(result), path);
   } catch (const quader_io::QdrDiagnosticException &exception) {
@@ -278,6 +389,28 @@ QdrProjectReadResult QdrDocumentReader::read_project_document(
         project_error_result("qdr.binary.unknown_error",
                              "Unknown error reading QDR binary scene."),
         path);
+  }
+}
+
+QdrProjectReleaseReadResult QdrDocumentReader::read_project_release_requirement(
+    const std::filesystem::path &path) {
+  QDR_PROFILE_FUNCTION();
+  try {
+    quader_io::SharedFileReadResult source =
+        quader_io::read_file_bytes_shared(path);
+    if (!source.ok) {
+      return {.message = "Could not read QDR scene '" + path.string() +
+                         "': " + source.message};
+    }
+    const quader_io::QdrBinaryContainerReadResult container =
+        quader_io::read_qdr_binary_container(std::move(source.bytes));
+    return {.ok = container.ok,
+            .minimum_product_release = container.minimum_product_release,
+            .message = container.message};
+  } catch (const std::exception &exception) {
+    return {.message = exception.what()};
+  } catch (...) {
+    return {.message = "Unknown error reading QDR binary scene requirement."};
   }
 }
 

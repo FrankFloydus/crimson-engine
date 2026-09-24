@@ -797,6 +797,88 @@ TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
       << "selection is transient and must not be stored in QDR";
 }
 
+TEST(QdrBinarySceneCodecTests, ProductReleaseRoundTripsAndRestrictsAuthoringReaders) {
+  for (const ProductRelease required :
+       {ProductRelease{1u}, ProductRelease{2u}, kInternalFullRelease}) {
+    auto snapshot = required_write_snapshot(simple_scene());
+    snapshot.minimum_product_release = required;
+    const auto bytes = QdrDocumentWriter::serialize_project_document_bytes(snapshot);
+    const auto unrestricted = QdrDocumentReader::deserialize_project_document(bytes);
+    ASSERT_TRUE(unrestricted.ok) << unrestricted.message;
+    EXPECT_EQ(unrestricted.minimum_product_release, required);
+    for (const ProductRelease authoring :
+         {ProductRelease{1u}, ProductRelease{2u}, kInternalFullRelease}) {
+      const auto read =
+          QdrDocumentReader::deserialize_project_document(bytes, authoring);
+      EXPECT_EQ(read.minimum_product_release, required);
+      const bool expected = authoring == kInternalFullRelease || authoring >= required;
+      ASSERT_EQ(read.ok, expected) << read.message;
+      if (expected) {
+        EXPECT_EQ(read.document.name(), "Binary Scene");
+      } else {
+        ASSERT_FALSE(read.diagnostics.empty());
+        EXPECT_EQ(read.diagnostics.front().code,
+                  "qdr.binary.unsupported_product_release");
+        EXPECT_TRUE(read.document.scene().entities().empty());
+        EXPECT_EQ(read.stats.unique_geometry_decoded_count, 0u);
+        EXPECT_EQ(read.stats.unique_geometry_compiled_count, 0u);
+        EXPECT_EQ(read.stats.hydration_ms, 0.0);
+      }
+    }
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, LegacySceneIsFullOnlyBeforeHydration) {
+  auto bytes = QdrDocumentWriter::serialize_project_document_bytes(
+      required_write_snapshot(simple_scene()));
+  bytes[6u] = std::byte{1u};
+  bytes[7u] = std::byte{0u};
+  std::fill_n(bytes.begin() + 56u, sizeof(ProductRelease), std::byte{0u});
+  const auto rejected = QdrDocumentReader::deserialize_project_document(bytes, 1u);
+  EXPECT_FALSE(rejected.ok);
+  EXPECT_EQ(rejected.minimum_product_release, kInternalFullRelease);
+  EXPECT_TRUE(rejected.document.scene().entities().empty());
+  EXPECT_EQ(rejected.stats.hydration_ms, 0.0);
+  const auto accepted =
+      QdrDocumentReader::deserialize_project_document(bytes, kInternalFullRelease);
+  ASSERT_TRUE(accepted.ok) << accepted.message;
+  EXPECT_EQ(accepted.document.name(), "Binary Scene");
+}
+
+TEST(QdrBinarySceneCodecTests, ReleasePreflightAndRejectionDoNotDecodeMetadata) {
+  std::vector<quader_io::QdrBinaryChunkInput> chunks;
+  chunks.push_back({.bytes = {std::byte{0u}}});
+  const auto bytes =
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks), 2u);
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const auto path = std::filesystem::path(directory.path().toStdWString()) /
+                    "newer-release.qdr";
+  {
+    std::ofstream stream(path, std::ios::binary);
+    stream.write(reinterpret_cast<const char *>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    ASSERT_TRUE(stream.good());
+  }
+  const auto requirement = QdrDocumentReader::read_project_release_requirement(path);
+  ASSERT_TRUE(requirement.ok) << requirement.message;
+  EXPECT_EQ(requirement.minimum_product_release, 2u);
+  const auto rejected = QdrDocumentReader::read_project_document(path, 1u);
+  ASSERT_FALSE(rejected.ok);
+  ASSERT_FALSE(rejected.diagnostics.empty());
+  EXPECT_EQ(rejected.diagnostics.front().code,
+            "qdr.binary.unsupported_product_release");
+  EXPECT_EQ(rejected.diagnostics.front().source_path, path);
+  EXPECT_TRUE(rejected.document.scene().entities().empty());
+  EXPECT_EQ(rejected.stats.metadata_access_ms, 0.0);
+  EXPECT_EQ(rejected.stats.hydration_ms, 0.0);
+  const auto unrestricted = QdrDocumentReader::read_project_document(path);
+  ASSERT_FALSE(unrestricted.ok);
+  ASSERT_FALSE(unrestricted.diagnostics.empty());
+  EXPECT_NE(unrestricted.diagnostics.front().code,
+            "qdr.binary.unsupported_product_release");
+}
+
 TEST(QdrBinarySceneCodecTests,
      CurrentWriterOmitsLegacyObjectRecordsAndKeepsEntityIdentityExact) {
   SceneContentDocument document = simple_scene();
@@ -1796,7 +1878,8 @@ TEST(QdrBinarySceneCodecTests, RejectsInvalidDiffuseModelInWriteSnapshot) {
   auto snapshot = required_write_snapshot(scene_with_material(MaterialDiffuseModel::Burley));
   ASSERT_EQ(snapshot.materials.size(), 1u);
   snapshot.materials.front().material.diffuse_model = static_cast<MaterialDiffuseModel>(255u);
-  EXPECT_THROW(QdrDocumentWriter::serialize_project_document_bytes(snapshot, test_uuid()),
+  EXPECT_THROW((void)QdrDocumentWriter::serialize_project_document_bytes(
+                   snapshot, test_uuid()),
                std::runtime_error);
 }
 
@@ -3496,6 +3579,46 @@ TEST(QdrBinarySceneCodecTests,
                       .vertices.front()
                       .position.x,
                   0.0f);
+}
+
+TEST(QdrBinarySceneCodecTests, PublicTagDoesNotPermitUnsupportedAuthoredContent) {
+  std::vector<SceneContentDocument> documents;
+  documents.push_back(scene_with_light(LightComponent{}));
+  documents.push_back(scene_with_curve());
+  documents.push_back(scene_with_material(MaterialDiffuseModel::Lambert));
+  documents.push_back(scene_with_fog(authored_fog_settings()));
+  auto custom_project_material = simple_scene();
+  ASSERT_TRUE(custom_project_material.scene().set_material(100u, {
+      .material = MaterialReference::project(ProjectAssetId::generate()),
+  }));
+  documents.push_back(std::move(custom_project_material));
+  for (const auto &document : documents) {
+    auto snapshot = required_write_snapshot(document);
+    snapshot.minimum_product_release = kPublicRelease01;
+    const auto bytes = QdrDocumentWriter::serialize_project_document_bytes(snapshot, test_uuid());
+    const auto unrestricted = QdrDocumentReader::deserialize_project_document(bytes);
+    ASSERT_TRUE(unrestricted.ok) << unrestricted.message;
+    const auto restricted = QdrDocumentReader::deserialize_project_document(bytes, kPublicRelease01);
+    EXPECT_FALSE(restricted.ok);
+    ASSERT_FALSE(restricted.diagnostics.empty());
+    EXPECT_EQ(restricted.diagnostics.front().code, "qdr.binary.unavailable_feature");
+    EXPECT_TRUE(restricted.document.scene().entities().empty());
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, PublicAuthoringAcceptsDefaultMaterialAndCameraClipping) {
+  auto document = scene_with_material(MaterialDiffuseModel::Burley);
+  auto settings = document.scene().scene_settings();
+  settings.camera.near_plane = 0.25f;
+  settings.camera.far_plane = 2000.0f;
+  ASSERT_TRUE(document.scene().set_scene_settings(settings));
+  auto snapshot = required_write_snapshot(document);
+  snapshot.minimum_product_release = kPublicRelease01;
+  const auto bytes = QdrDocumentWriter::serialize_project_document_bytes(snapshot, test_uuid());
+  const auto read = QdrDocumentReader::deserialize_project_document(bytes, kPublicRelease01);
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_FLOAT_EQ(read.document.scene().scene_settings().camera.near_plane, 0.25f);
+  EXPECT_FLOAT_EQ(read.document.scene().scene_settings().camera.far_plane, 2000.0f);
 }
 
 TEST(QdrBinarySceneCodecTests, ProducesDeterministicSameBuildBytes) {

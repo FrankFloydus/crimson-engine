@@ -10,6 +10,13 @@ file except through prior written authorization from Francesco Di Blasi.
 
 - Render extraction, Filament resources, material/texture binding, overlays, and viewport drawing
   belong here. Scene, assets, and modeling remain authoritative; render caches never mutate them.
+- The shared default-material image preference arrives through the narrow
+  `RenderProjectMaterialResolver::default_material_override()` snapshot. Apply it to
+  meshes, instances and previews without changing scene asset references or consulting
+  authored material resolution in restricted profiles. Its revision invalidates retained
+  bindings only when the choice changes; unchanged frames perform no image reads.
+  Preserve Solid's flat-color shader behavior. See `tests/public_release_render_tests.cpp`
+  and the default-material cases in `tests/render_extraction_tests.cpp`.
 - `RenderSourceStamp` gates extraction; `RenderSceneSnapshot` feeds `SceneRenderBridge` and caches.
   Put dirty/revision checks before topology hashes, geometry compilation, snapshots, or uploads.
 - Apply the [preview projection contract](../editor/modeling/runtime/README.md#live-preview-projection-contract)

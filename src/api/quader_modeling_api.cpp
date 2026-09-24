@@ -15,7 +15,9 @@
 #include "assets/default_material_catalog.hpp"
 #include "api/quader_selection_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/history/curve_history_commands.hpp"
@@ -704,6 +706,9 @@ void inject_native_modeling_actions(QuaderActionSet &action_set,
       native_modeling_action_execution_is_available(session);
   for (const NativeModelingActionDescriptor &descriptor :
        kNativeModelingActions) {
+    if (!release_allows_action(descriptor.action_id)) {
+      continue;
+    }
     QuaderActionItem action = native_modeling_action(
         session, summary, execution_is_available, descriptor);
     if (!action_is_included(action, query)) {
@@ -995,6 +1000,10 @@ QuaderApiVoidResult QuaderModelingSelection::toggle() const {
 
 QuaderApiVoidResult QuaderModelingSelection::execute_after_replace(
     std::string_view action_id) const {
+  if (!release_allows_action(action_id) ||
+      !release_allows_operation(action_id)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   const QuaderApiVoidResult selected = replace();
   if (!selected.ok()) {
     return selected;
@@ -1005,6 +1014,18 @@ QuaderApiVoidResult QuaderModelingSelection::execute_after_replace(
 QuaderPreviewHandle QuaderModelingSelection::begin_preview_after_replace(
     std::string_view action_id, const QuaderPreviewSettings &settings,
     std::string default_label) const {
+  if (!release_allows_action(action_id) ||
+      !release_allows_operation(action_id)) {
+    if (mutations_ == nullptr) {
+      QuaderPreviewHandle unavailable;
+      unavailable.begin_status_ =
+          invalid_api_status(session_, release_feature_unavailable_message());
+      return unavailable;
+    }
+    return QuaderPreviewHandle(
+        session_, *mutations_, std::move(default_label),
+        invalid_api_status(session_, release_feature_unavailable_message()));
+  }
   QuaderApiVoidResult selected = replace();
   if (!selected.ok()) {
     return QuaderPreviewHandle(session_, *mutations_, std::move(default_label),
@@ -1064,6 +1085,9 @@ QuaderApiVoidResult QuaderObjectSelection::combine_selected() const {
 }
 
 QuaderApiVoidResult QuaderObjectSelection::snap_to_floor() const {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   QuaderApiVoidResult selected = replace();
   if (!selected.ok()) {
     return selected;
@@ -1089,6 +1113,9 @@ QuaderApiVoidResult QuaderVertexSelection::snap_to_active() const {
 }
 
 QuaderApiVoidResult QuaderVertexSelection::snap_to_floor() const {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   QuaderApiVoidResult selected = replace();
   if (!selected.ok()) {
     return selected;
@@ -1272,6 +1299,9 @@ QuaderApiVoidResult QuaderFaceSelection::shade_flat() const {
 
 QuaderApiVoidResult
 QuaderFaceSelection::assign_material_slot(std::uint32_t material_slot) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   const QuaderApiVoidResult selected = replace();
   if (!selected.ok()) {
     return selected;
@@ -1405,6 +1435,9 @@ QuaderMeshMaterials::QuaderMeshMaterials(
 
 QuaderApiVoidResult
 QuaderMeshMaterials::assign_slot(std::uint32_t material_slot) const {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (mutations_ == nullptr) {
     return invalid_api_status(session_, "Invalid mesh handle.");
   }
@@ -1517,6 +1550,10 @@ QuaderModelingApi::QuaderModelingApi(QuaderApiSession session,
 
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_box(const QuaderCreateBoxArgs &args) {
+  if (!release_has_feature(ReleaseFeature::Materials) && args.material.has_value()) {
+    return result_from_create(
+        invalid_api_status(session_, release_feature_unavailable_message()), {});
+  }
   if (args.material.has_value() &&
       (!mutations_.available() || !assignment_material_exists(session_, *args.material))) {
     return result_from_create(
@@ -1569,6 +1606,11 @@ QuaderModelingApi::create_box_mesh(QuaderBounds bounds, std::string name) {
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::commit_box_preview(std::string name,
                                       AssetId default_material) {
+  if (!release_has_feature(ReleaseFeature::Materials) &&
+      default_material != kInvalidAssetId) {
+    return result_from_create(
+        invalid_api_status(session_, release_feature_unavailable_message()), {});
+  }
   const MaterialReference material = default_material != kInvalidAssetId
       ? MaterialReference(default_material)
       : default_project_material(session_);
@@ -1590,6 +1632,10 @@ QuaderModelingApi::commit_box_preview(std::string name,
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
                                QuaderCreateMeshArgs args) {
+  if (!release_has_feature(ReleaseFeature::Materials) && args.material.has_value()) {
+    return result_from_create(
+        invalid_api_status(session_, release_feature_unavailable_message()), {});
+  }
   if (args.material.has_value() &&
       (!mutations_.available() || !assignment_material_exists(session_, *args.material))) {
     return result_from_create(
@@ -1618,6 +1664,9 @@ QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
 
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_curve(const QuaderCreateCurveArgs &args) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return quader_api_result_from_status<QuaderModelingObjectRef>(invalid_api_status(session_, release_feature_unavailable_message()));
+  }
   if (!mutations_.can_mutate_modeling_content()) {
     return quader_api_result_from_status<QuaderModelingObjectRef>(
         mutations_.modeling_content_blocked_status("creating a curve."));
@@ -1640,6 +1689,9 @@ QuaderModelingApi::create_curve(const QuaderCreateCurveArgs &args) {
 
 QuaderApiResult<QuaderCurveSnapshot> QuaderModelingApi::curve_snapshot(
     QuaderModelingObjectRef object, bool include_preview) const {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return quader_api_result_from_status<QuaderCurveSnapshot>(invalid_api_status(session_, release_feature_unavailable_message()));
+  }
   if (!mutations_.belongs_to_active_scene(object.scene_session_id)) {
     return quader_api_result_from_status<QuaderCurveSnapshot>(
         mutations_.stale_scene_reference_status("Curve"));
@@ -1668,6 +1720,9 @@ QuaderApiResult<QuaderCurveSnapshot> QuaderModelingApi::curve_snapshot(
 
 QuaderApiVoidResult QuaderModelingApi::replace_curve(
     QuaderModelingObjectRef object, modeling::CurveDocument document) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   const auto current = curve_snapshot(object, false);
   if (!current.ok()) {
     return quader_api_status_from_result(current);
@@ -1685,6 +1740,9 @@ QuaderApiVoidResult QuaderModelingApi::replace_curve(
 QuaderApiVoidResult QuaderModelingApi::set_curve_point(
     QuaderModelingObjectRef object, modeling::CurvePointId point,
     const modeling::CurvePointSpec &value) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   auto current = curve_snapshot(object, false);
   if (!current.ok()) {
     return quader_api_status_from_result(current);
@@ -1698,6 +1756,9 @@ QuaderApiVoidResult QuaderModelingApi::set_curve_point(
 
 QuaderApiVoidResult QuaderModelingApi::toggle_curve_point_smoothness(
     QuaderModelingObjectRef object, modeling::CurvePointId point) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   auto current = curve_snapshot(object, false);
   if (!current.ok()) {
     return quader_api_status_from_result(current);
@@ -1711,6 +1772,9 @@ QuaderApiVoidResult QuaderModelingApi::toggle_curve_point_smoothness(
 
 QuaderApiVoidResult QuaderModelingApi::set_curve_closed(
     QuaderModelingObjectRef object, bool closed) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   auto current = curve_snapshot(object, false);
   if (!current.ok()) {
     return quader_api_status_from_result(current);
@@ -1723,6 +1787,9 @@ QuaderApiVoidResult QuaderModelingApi::set_curve_closed(
 }
 
 QuaderApiVoidResult QuaderModelingApi::begin_curve_preview(QuaderModelingObjectRef object) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   const auto current = curve_snapshot(object, false);
   if (!current.ok()) {
     return quader_api_status_from_result(current);
@@ -1741,6 +1808,9 @@ QuaderApiVoidResult QuaderModelingApi::begin_curve_preview(QuaderModelingObjectR
 }
 
 QuaderApiVoidResult QuaderModelingApi::update_curve_preview(modeling::CurveDocument document) {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -1750,6 +1820,9 @@ QuaderApiVoidResult QuaderModelingApi::update_curve_preview(modeling::CurveDocum
 }
 
 QuaderApiVoidResult QuaderModelingApi::commit_curve_preview() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -1759,6 +1832,9 @@ QuaderApiVoidResult QuaderModelingApi::commit_curve_preview() {
 }
 
 QuaderApiVoidResult QuaderModelingApi::cancel_curve_preview() {
+  if (!release_has_feature(ReleaseFeature::Curves)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -1769,6 +1845,9 @@ QuaderApiVoidResult QuaderModelingApi::cancel_curve_preview() {
 
 QuaderApiResult<QuaderLinearArrayResult>
 QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return quader_api_result_from_status<QuaderLinearArrayResult>(invalid_api_status(session_, release_feature_unavailable_message()));
+  }
   SceneSession &session = scene_session(session_);
   if (!mutations_.belongs_to_active_scene(args.source.scene_session_id)) {
     return quader_api_result_from_status<QuaderLinearArrayResult>(
@@ -1836,6 +1915,9 @@ QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
 
 QuaderApiResult<QuaderRadialArrayResult>
 QuaderModelingApi::create_radial_array(const QuaderRadialArrayArgs &args) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return quader_api_result_from_status<QuaderRadialArrayResult>(invalid_api_status(session_, release_feature_unavailable_message()));
+  }
   SceneSession &session = scene_session(session_);
   const SceneDocument &scene = session.scene();
   if (args.sources.empty()) {
@@ -1967,6 +2049,10 @@ QuaderModelingApi::set_selection_mode(QuaderSelectionMode mode) {
 }
 
 bool QuaderModelingApi::can_execute_tool(std::string_view tool_id) const {
+  if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
+      !release_allows_tool(tool_id)) {
+    return false;
+  }
   if (ProjectSession *project =
           QuaderApiSessionInternalAccess::project_session(session_)) {
     if (tool_id == "copy_selection" &&
@@ -1988,6 +2074,10 @@ bool QuaderModelingApi::can_execute_tool(std::string_view tool_id) const {
 }
 
 QuaderApiVoidResult QuaderModelingApi::execute_tool(std::string_view tool_id) {
+  if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
+      !release_allows_tool(tool_id)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (tool_id == "copy_selection") {
     return copy_selection();
   }
@@ -2076,11 +2166,17 @@ QuaderApiVoidResult QuaderModelingApi::remove_doubles() {
 }
 
 bool QuaderModelingApi::can_copy_pivot_from_active() const {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return false;
+  }
   const SceneSession &session = scene_session(session_);
   return copy_pivot_from_active_is_available(session);
 }
 
 QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool() ||
       session.modeling().can_cancel_active_tool_or_preview()) {
@@ -2095,6 +2191,9 @@ QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
 }
 
 bool QuaderModelingApi::can_bake_transforms(QuaderTransformBakeMode mode) const {
+  if (!release_has_feature(ReleaseFeature::TransformBaking)) {
+    return false;
+  }
   const SceneSession &session = scene_session(session_);
   const auto native_mode = to_mesh_transform_bake_mode(mode);
   return native_mode.has_value() &&
@@ -2105,6 +2204,9 @@ bool QuaderModelingApi::can_bake_transforms(QuaderTransformBakeMode mode) const 
 
 QuaderApiVoidResult
 QuaderModelingApi::bake_transforms(QuaderTransformBakeMode mode) {
+  if (!release_has_feature(ReleaseFeature::TransformBaking)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   const auto native_mode = to_mesh_transform_bake_mode(mode);
   if (!native_mode.has_value()) {
@@ -2120,12 +2222,18 @@ QuaderModelingApi::bake_transforms(QuaderTransformBakeMode mode) {
 }
 
 bool QuaderModelingApi::can_snap_selected_meshes_to_floor() const {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return false;
+  }
   const SceneSession &session = scene_session(session_);
   return native_modeling_action_execution_is_available(session) &&
          session.snap_to_floor().can_snap_selected_meshes_to_floor();
 }
 
 QuaderApiVoidResult QuaderModelingApi::snap_selected_meshes_to_floor() {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   if (!native_modeling_action_execution_is_available(session)) {
     return invalid_api_status(
@@ -2138,12 +2246,18 @@ QuaderApiVoidResult QuaderModelingApi::snap_selected_meshes_to_floor() {
 }
 
 bool QuaderModelingApi::can_snap_selected_vertices_to_floor() const {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return false;
+  }
   const SceneSession &session = scene_session(session_);
   return native_modeling_action_execution_is_available(session) &&
          session.snap_to_floor().can_snap_selected_vertices_to_floor();
 }
 
 QuaderApiVoidResult QuaderModelingApi::snap_selected_vertices_to_floor() {
+  if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   if (!native_modeling_action_execution_is_available(session)) {
     return invalid_api_status(
@@ -2219,16 +2333,25 @@ QuaderModelingApi::mesh_arrangement_availability() const {
 }
 
 bool QuaderModelingApi::can_align_selected_meshes() const {
+  if (!release_has_feature(ReleaseFeature::Arrangement)) {
+    return false;
+  }
   return mesh_arrangement_availability().can_align;
 }
 
 bool QuaderModelingApi::can_distribute_selected_meshes() const {
+  if (!release_has_feature(ReleaseFeature::Arrangement)) {
+    return false;
+  }
   return mesh_arrangement_availability().can_distribute;
 }
 
 QuaderApiVoidResult QuaderModelingApi::align_selected_meshes(
     QuaderTransformAxis axis, QuaderMeshAlignment alignment,
     QuaderMeshArrangementOptions options) {
+  if (!release_has_feature(ReleaseFeature::Arrangement)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   const std::optional<MeshArrangementAxis> arrangement_axis =
       mesh_arrangement_axis(axis);
   if (!arrangement_axis.has_value()) {
@@ -2250,6 +2373,9 @@ QuaderApiVoidResult QuaderModelingApi::align_selected_meshes(
 QuaderApiVoidResult QuaderModelingApi::distribute_selected_meshes(
     QuaderTransformAxis axis, QuaderMeshDistribution distribution,
     QuaderMeshArrangementOptions options) {
+  if (!release_has_feature(ReleaseFeature::Arrangement)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   const std::optional<MeshArrangementAxis> arrangement_axis =
       mesh_arrangement_axis(axis);
   if (!arrangement_axis.has_value()) {
@@ -2270,6 +2396,10 @@ QuaderApiVoidResult QuaderModelingApi::distribute_selected_meshes(
 
 QuaderApiVoidResult
 QuaderModelingApi::begin_preview(std::string_view action_id) {
+  if (!release_allows_action(action_id) || !release_allows_operation(action_id) ||
+      !release_allows_tool(action_id)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   return mutations_.begin_tracked_modeling_preview(action_id);
 }
 
@@ -2332,6 +2462,9 @@ QuaderModelingApi::update_transform_matrix(const QuaderTransform3 &transform,
 QuaderApiVoidResult
 QuaderModelingApi::update_transform_extrude(QVec3 offset,
                                             float closed_edge_ledge_size) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   return mutations_.run_modeling_result(
       scene_session(session_).modeling().update_transform_extrude_preview(
           offset, closed_edge_ledge_size),
@@ -2633,6 +2766,9 @@ QuaderInstanceEditState QuaderModelingApi::instance_edit_state() const {
 
 QuaderApiVoidResult
 QuaderModelingApi::apply_material(QuaderMaterialReference material) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available() || !assignment_material_exists(session_, material)) {
     return invalid_api_status(session_, "The requested material is unavailable.");
   }
@@ -2645,6 +2781,9 @@ QuaderModelingApi::apply_material(QuaderMaterialReference material) {
 QuaderApiVoidResult QuaderModelingApi::apply_material_to_selected_faces(
     QuaderMaterialReference material, SceneSessionId scene_session_id,
     std::uint64_t selection_token) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available() ||
       scene_session_id != mutations_.scene_session_id()) {
     return invalid_api_status(session_, "The scene changed before material assignment.");
@@ -2671,6 +2810,9 @@ QuaderApiVoidResult QuaderModelingApi::apply_material_to_selected_faces(
 QuaderApiVoidResult QuaderModelingApi::apply_material_to_mesh(
     QuaderModelingObjectId object_id, QuaderElementId face_id,
     QuaderMaterialReference material) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available() || !assignment_material_exists(session_, material)) {
     return invalid_api_status(session_, "The requested material is unavailable.");
   }
@@ -2685,6 +2827,9 @@ QuaderApiVoidResult QuaderModelingApi::apply_material_to_mesh(
 QuaderApiVoidResult QuaderModelingApi::apply_material_to_face(
     QuaderModelingObjectId object_id, QuaderElementId face_id,
     QuaderMaterialReference material) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available() || !assignment_material_exists(session_, material)) {
     return invalid_api_status(session_, "The requested material is unavailable.");
   }
@@ -2698,6 +2843,9 @@ QuaderApiVoidResult QuaderModelingApi::apply_material_to_face(
 
 QuaderApiVoidResult QuaderModelingApi::apply_selected_face_material_to_face(
     QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -2716,6 +2864,9 @@ QuaderApiVoidResult QuaderModelingApi::apply_selected_face_material_to_face(
 
 QuaderApiVoidResult QuaderModelingApi::apply_selected_face_material_to_mesh(
     QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -2734,6 +2885,9 @@ QuaderApiVoidResult QuaderModelingApi::apply_selected_face_material_to_mesh(
 
 QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_selected_faces(
     QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -2771,6 +2925,9 @@ QuaderModelingApi::project_material_for_face(
 
 QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_mesh(
     QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   const ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(session_);
   if (project != nullptr && project->manifest() != nullptr) {
@@ -2797,6 +2954,9 @@ QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_mesh(
 
 QuaderApiVoidResult QuaderModelingApi::assign_material_slot_to_selection(
     std::uint32_t material_slot) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   return mutations_.run_modeling_command(
       std::make_unique<AssignMaterialSlotToSelectionHistoryCommand>(
           scene_session(session_).modeling(), material_slot),
@@ -2821,6 +2981,9 @@ QuaderFaceTextureRevision QuaderModelingApi::face_texture_settings_revision() co
 }
 
 bool QuaderModelingApi::can_project_uv() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return false;
+  }
   if (!mutations_.available()) {
     return false;
   }
@@ -2830,6 +2993,9 @@ bool QuaderModelingApi::can_project_uv() const {
 }
 
 QuaderFaceTextureSettings QuaderModelingApi::face_texture_settings() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {};
+  }
   if (!mutations_.available()) {
     return {};
   }
@@ -2872,6 +3038,9 @@ QuaderFaceTextureSettings QuaderModelingApi::face_texture_settings() const {
 }
 
 QuaderFaceTextureCanvas QuaderModelingApi::face_texture_canvas() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {};
+  }
   if (!mutations_.available()) return {};
   const auto native = scene_session(session_).modeling().face_texture_canvas();
   ProjectAssetId material_id = native.material.project_owned()
@@ -2910,6 +3079,9 @@ QuaderFaceTextureCanvas QuaderModelingApi::face_texture_canvas() const {
 
 QuaderApiVoidResult QuaderModelingApi::begin_face_texture_gesture(
     const QuaderFaceTextureGestureBegin &request) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.can_mutate_modeling_content()) {
     return mutations_.modeling_content_blocked_status("starting a face texture gesture.");
   }
@@ -2929,6 +3101,9 @@ QuaderApiVoidResult QuaderModelingApi::begin_face_texture_gesture(
 
 QuaderApiVoidResult QuaderModelingApi::update_face_texture_gesture(
     const QuaderFaceTextureGestureUpdate &request) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) return invalid_api_status(session_, "No scene is active.");
   auto &session = scene_session(session_);
   return mutations_.run_modeling_result(session.modeling().update_face_texture_gesture({
@@ -2938,6 +3113,9 @@ QuaderApiVoidResult QuaderModelingApi::update_face_texture_gesture(
 }
 
 QuaderApiVoidResult QuaderModelingApi::commit_face_texture_gesture() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) return invalid_api_status(session_, "No scene is active.");
   return mutations_.run_modeling_command(
       std::make_unique<FaceTextureGestureHistoryCommand>(scene_session(session_).modeling()),
@@ -2945,6 +3123,9 @@ QuaderApiVoidResult QuaderModelingApi::commit_face_texture_gesture() {
 }
 
 QuaderApiVoidResult QuaderModelingApi::cancel_face_texture_gesture() {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) return invalid_api_status(session_, "No scene is active.");
   return mutations_.run_modeling_result(scene_session(session_).modeling().cancel_face_texture_gesture(),
                                          "Cancel Face Texture Gesture");
@@ -2952,6 +3133,9 @@ QuaderApiVoidResult QuaderModelingApi::cancel_face_texture_gesture() {
 
 QuaderApiVoidResult QuaderModelingApi::set_face_texture_setting(
     const QuaderFaceTextureEdit &edit) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (mutations_.available() &&
       scene_session(session_).native_tools().has_pending_tool()) {
     return mutations_.modeling_content_blocked_status("editing texture settings.");
@@ -2987,6 +3171,9 @@ QuaderApiVoidResult QuaderModelingApi::set_face_texture_setting(
 
 QuaderApiVoidResult QuaderModelingApi::apply_face_texture_action(
     const QuaderFaceTextureActionRequest &request) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -3019,6 +3206,9 @@ QuaderApiVoidResult QuaderModelingApi::apply_face_texture_action(
 
 QuaderApiVoidResult QuaderModelingApi::transfer_face_texture_to_face(
     QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -3038,6 +3228,9 @@ bool QuaderModelingApi::face_texture_treat_as_one() const {
 }
 
 QuaderApiVoidResult QuaderModelingApi::set_face_texture_treat_as_one(bool enabled) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -3066,6 +3259,9 @@ QuaderUvPeelRevision QuaderModelingApi::uv_peel_settings_revision() const {
 }
 
 QuaderUvPeelSettings QuaderModelingApi::uv_peel_settings() const {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return {};
+  }
   if (!mutations_.available()) {
     return {};
   }
@@ -3103,6 +3299,9 @@ QuaderUvPeelSettings QuaderModelingApi::uv_peel_settings() const {
 
 QuaderApiVoidResult
 QuaderModelingApi::set_uv_peel_options(const QuaderUvPeelOptions &options) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -3117,6 +3316,9 @@ QuaderModelingApi::set_uv_peel_options(const QuaderUvPeelOptions &options) {
 }
 
 QuaderApiVoidResult QuaderModelingApi::peel_uv(const QuaderUvPeelRequest &request) {
+  if (!release_has_feature(ReleaseFeature::UvEditing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
@@ -3140,6 +3342,9 @@ QuaderApiVoidResult
 QuaderModelingApi::assign_material_slot_to_face(QuaderModelingObjectRef object,
                                                  QuaderElementId face,
                                                  std::uint32_t material_slot) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   if (!mutations_.belongs_to_active_scene(object.scene_session_id)) {
     return mutations_.stale_scene_reference_status("Modeling object");
   }
@@ -3152,6 +3357,9 @@ QuaderModelingApi::assign_material_slot_to_face(QuaderModelingObjectRef object,
 
 QuaderApiVoidResult
 QuaderModelingApi::cut_selected_meshes_by_hovered_face_plane() {
+  if (!release_has_feature(ReleaseFeature::CutTool)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   return mutations_.run_modeling_command(
       std::make_unique<CutSelectedMeshesByHoveredFacePlaneHistoryCommand>(
           scene_session(session_).modeling()),

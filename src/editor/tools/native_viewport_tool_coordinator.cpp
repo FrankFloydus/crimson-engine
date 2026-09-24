@@ -6,11 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/uv_peel_tool_service.hpp"
+#include "core/release_features.hpp"
 
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
+#include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -253,7 +255,9 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .tool = ViewportToolId::UvPeel,
       .active_priority = 6,
       .commit_label = "UV Peel",
-      .can_activate = [] { return true; },
+      .can_activate = [] {
+        return release_has_feature(ReleaseFeature::UvEditing);
+      },
       .active = [&] { return uv_peel_.active(); },
       .pending = [&] { return uv_peel_.active(); },
       .pending_history_preview = [&] { return uv_peel_.active(); },
@@ -290,6 +294,9 @@ bool NativeViewportToolCoordinator::handles(std::string_view tool_id) const {
 
 bool NativeViewportToolCoordinator::can_activate(
     std::string_view tool_id) const {
+  if (!release_allows_tool(tool_id)) {
+    return false;
+  }
   if (extrude_.preview_active() && tool_id != kExtrudeToolId) {
     return false;
   }
@@ -448,6 +455,9 @@ bool NativeViewportToolCoordinator::curve_control_gizmo_start_allowed(
 
 CommandResult NativeViewportToolCoordinator::activate(
     std::string_view tool_id, double grid_world_size) {
+  if (!release_allows_tool(tool_id)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (extrude_.preview_active() && tool_id != kExtrudeToolId) {
     return command_invalid_result(
         "Apply or cancel the extrusion before changing tools.");
@@ -462,6 +472,9 @@ CommandResult NativeViewportToolCoordinator::activate(
 
 CommandResult NativeViewportToolCoordinator::activate_extrude(
     modeling::FaceExtrudeMode mode) {
+  if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (extrude_.active()) {
     return extrude_.activate_preview(mode);
   }
@@ -476,6 +489,9 @@ CommandResult NativeViewportToolCoordinator::activate_extrude(
 
 CommandResult NativeViewportToolCoordinator::begin_light_creation(
     LightCreationKind kind) {
+  if (!release_has_feature(ReleaseFeature::Lights)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
   if (light_creation_.active_kind() == kind) {
     return command_unchanged_result();
   }

@@ -298,6 +298,9 @@ struct QuaderPreferencesRuntimeHooks {
     std::function<QuaderApiVoidResult(bool)> set_vsync_enabled;
     std::function<SessionPreferences()> session_settings;
     std::function<QuaderApiVoidResult(SessionPreferences)> set_session_settings;
+    std::function<std::filesystem::path()> default_material_texture;
+    std::function<QuaderApiVoidResult(std::filesystem::path)>
+        set_default_material_texture;
     std::function<QuaderApiVoidResult()> save;
     std::function<bool()> snapping_enabled;
     std::function<QuaderApiVoidResult(bool)> set_snapping_enabled;

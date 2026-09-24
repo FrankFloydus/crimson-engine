@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/asset_command_service.hpp"
 
+#include "core/release_features.hpp"
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
 #include "editor/commands/add_asset_command.hpp"
@@ -93,6 +94,13 @@ AssetCreateResult AssetCommandService::add_mesh(MeshAsset mesh) {
 
 AssetCreateResult
 AssetCommandService::add_material(MaterialDocument material) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    AssetCreateResult result;
+    assign_asset_command_status(result, asset_command_invalid_request_result(
+        release_feature_unavailable_message()));
+    return result;
+  }
+
   const AssetRegistryValidationResult validation =
       assets_.validate_material(material);
   if (!validation.ok) {
@@ -114,6 +122,13 @@ AssetCommandService::add_material(MaterialDocument material) {
 }
 
 AssetCreateResult AssetCommandService::add_texture(TextureAsset texture) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    AssetCreateResult result;
+    assign_asset_command_status(result, asset_command_invalid_request_result(
+        release_feature_unavailable_message()));
+    return result;
+  }
+
   auto command =
       std::make_unique<AddTextureAssetCommand>(assets_, std::move(texture));
   AddTextureAssetCommand *add_command = command.get();
@@ -160,6 +175,11 @@ AssetCommandService::update_mesh(
 AssetCommandResult AssetCommandService::update_material(
     AssetId material, const std::function<void(MaterialDocument &)> &update,
     std::string label) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return asset_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const MaterialDocument *current = assets_.material(material);
   if (current == nullptr) {
     return asset_command_invalid_request_result("Material asset does not exist");
@@ -173,6 +193,11 @@ AssetCommandResult AssetCommandService::update_material(
 AssetCommandResult AssetCommandService::update_texture(
     AssetId texture, const std::function<void(TextureAsset &)> &update,
     std::string label) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return asset_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const TextureAsset *current = assets_.texture(texture);
   if (current == nullptr) {
     return asset_command_invalid_request_result("Texture asset does not exist");
@@ -186,6 +211,11 @@ AssetCommandResult AssetCommandService::update_texture(
 AssetCommandResult
 AssetCommandService::set_material_texture(AssetId material, std::string slot,
                                           AssetId texture) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return asset_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const MaterialDocument *current = assets_.material(material);
   if (current == nullptr) {
     return asset_command_invalid_request_result("Material asset does not exist");
@@ -226,6 +256,11 @@ AssetCommandResult
 AssetCommandService::replace_material_with_label(AssetId material,
                                                  MaterialDocument replacement,
                                                  std::string label) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return asset_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   MaterialDocument normalized = std::move(replacement);
   const AssetRegistryValidationResult validation =
       assets_.validate_material(normalized);
@@ -249,6 +284,11 @@ AssetCommandResult
 AssetCommandService::replace_texture_with_label(AssetId texture,
                                                 TextureAsset replacement,
                                                 std::string label) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return asset_command_invalid_request_result(
+        release_feature_unavailable_message());
+  }
+
   const TextureAsset *current = assets_.texture(texture);
   if (current == nullptr) {
     return asset_command_invalid_request_result("Texture asset does not exist");
