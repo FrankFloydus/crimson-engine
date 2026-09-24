@@ -715,6 +715,38 @@ quader::QuaderComponentSelectionArgs component_orientation_selection(
   return args;
 }
 
+std::array<quader::QVec3, 4> beveled_box_side_positions(bool oblique = false) {
+  std::array positions{
+      quader::QVec3{3.0f, -0.5f, 3.5f},
+      quader::QVec3{3.0f, -0.2142857313156128f, 3.0f},
+      quader::QVec3{3.0f, -0.2142857313156128f, -3.0f},
+      quader::QVec3{3.0f, -0.5f, -3.5f},
+  };
+  if (oblique) {
+    const float cosine = std::cos(0.3f);
+    const float sine = std::sin(0.3f);
+    for (auto &position : positions) {
+      position = {cosine * position.x - sine * position.y,
+                  sine * position.x + cosine * position.y, position.z};
+    }
+  }
+  return positions;
+}
+
+quader::QuaderPolygonDocument beveled_box_side_document(
+    std::size_t first_corner = 0U, bool oblique = false) {
+  quader_poly::Document document;
+  std::array<quader_poly::ElementId, 4> vertices;
+  const auto positions = beveled_box_side_positions(oblique);
+  for (std::size_t index = 0; index < vertices.size(); ++index) {
+    vertices[index] = quader_poly::add_vertex(document, positions[index]);
+  }
+  std::rotate(vertices.begin(), vertices.begin() + first_corner, vertices.end());
+  (void)quader_poly::add_face(document, vertices);
+  return quader::QuaderPolygonDocumentInternalAccess::from_backend(
+      std::move(document));
+}
+
 const std::array<quader::QVec3, 4> &local_transform_tetrahedron_positions() {
   static constexpr std::array<quader::QVec3, 4> kPositions{
       quader::QVec3{0.0f, 0.0f, 0.0f},
@@ -839,7 +871,8 @@ quader::QuaderRay local_component_drag_ray() {
 quader::QuaderTransformDragPreview perform_local_component_drag(
     quader::test::BehaviorScenario &scenario,
     quader::QuaderTransformTool tool,
-    const quader::QuaderTransform3 &orientation, quader::QVec3 pivot) {
+    const quader::QuaderTransform3 &orientation, quader::QVec3 pivot,
+    quader::QuaderTransformAxis axis = quader::QuaderTransformAxis::X) {
   const bool scale = tool == quader::QuaderTransformTool::Scale;
   const bool rotate = tool == quader::QuaderTransformTool::Rotate;
   const quader::QVec2 screen_pivot =
@@ -859,12 +892,17 @@ quader::QuaderTransformDragPreview perform_local_component_drag(
                       : quader::QVec2{120.0f, 0.0f});
   const quader::QuaderViewportCamera camera = local_component_drag_camera();
   const quader::QuaderRay ray = local_component_drag_ray();
+  const auto world_direction = axis == quader::QuaderTransformAxis::Y
+                                   ? orientation.y_axis
+                               : axis == quader::QuaderTransformAxis::Z
+                                   ? orientation.z_axis
+                                   : orientation.x_axis;
 
   const quader::QuaderApiResult<quader::QuaderTransformDragPreview> begin =
       scenario.api().modeling().begin_transform_drag({
           .tool = tool,
           .operation = quader::QuaderTransformOperation::Transform,
-          .axis = quader::QuaderTransformAxis::X,
+          .axis = axis,
           .space = quader::QuaderTransformSpace::Local,
           .orientation = orientation,
           .pivot = pivot,
@@ -872,7 +910,7 @@ quader::QuaderTransformDragPreview perform_local_component_drag(
           .screen_pivot = screen_pivot,
           .screen_tip = screen_tip,
           .has_world_direction = true,
-          .world_direction = orientation.x_axis,
+          .world_direction = world_direction,
           .ray = ray,
           .camera = camera,
           .grid_size = 1.0,
@@ -970,8 +1008,10 @@ quader::QVec3 expected_local_component_position(
     return pivot +
            orientation.x_axis *
                (quader::dot(relative, orientation.x_axis) * preview.scale.x) +
-           orientation.y_axis * quader::dot(relative, orientation.y_axis) +
-           orientation.z_axis * quader::dot(relative, orientation.z_axis);
+           orientation.y_axis *
+               (quader::dot(relative, orientation.y_axis) * preview.scale.y) +
+           orientation.z_axis *
+               (quader::dot(relative, orientation.z_axis) * preview.scale.z);
   }
   }
   return point;
@@ -2568,6 +2608,136 @@ TEST(ProgrammaticBehaviorScenarioTests, ComponentGizmoMoveRotateScaleKeepCompone
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,
+     LocalFaceFrameUsesTextureAxesInsteadOfTheBeveledBoxPerimeterStart) {
+  for (std::size_t first_corner = 0U; first_corner < 4U; ++first_corner) {
+    SCOPED_TRACE(first_corner);
+    auto s = quader::test::BehaviorScenario::new_project();
+    s.given().mesh("side", beveled_box_side_document(first_corner),
+                   "Box Face 10 Local Frame");
+    ASSERT_TRUE(s.api().selection().select_face(s.object("side"), 1).ok());
+    const auto orientation = s.api().query().selection_transform_orientation();
+    ASSERT_TRUE(orientation.has_value());
+    expect_orientation_near(*orientation,
+                            {.x_axis = {0.0f, 0.0f, 1.0f},
+                             .y_axis = {0.0f, 1.0f, 0.0f},
+                             .z_axis = {-1.0f, 0.0f, 0.0f}});
+  }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     LocalComponentFramesPreserveAuthoredFaceAndEdgeDirectionsThroughTransforms) {
+  const float quarter_turn = static_cast<float>(std::acos(-1.0) * 0.5);
+  for (const bool oblique : {false, true}) {
+    for (const quader::QVec3 scale : {
+             quader::QVec3{1.0f, 1.0f, 1.0f},
+             quader::QVec3{1.4f, 0.8f, 1.9f},
+             quader::QVec3{-1.4f, 0.8f, 1.9f},
+         }) {
+      SCOPED_TRACE(oblique);
+      SCOPED_TRACE(scale.x);
+      auto s = quader::test::BehaviorScenario::new_project();
+      s.given()
+          .mesh("side", beveled_box_side_document(0U, oblique),
+                 "Transformed Box Face 10")
+          .transform("side", {.position = {2.0f, 1.0f, -3.0f},
+                               .rotation_euler = {0.0f, quarter_turn, 0.0f},
+                               .scale = scale});
+      const auto object = s.object("side");
+      const auto positions = beveled_box_side_positions(oblique);
+      // The authored scene rotation is a positive quarter turn about Y.
+      const auto world_direction = [&](quader::QVec3 direction) {
+        return quader::QVec3{scale.z * direction.z, scale.y * direction.y,
+                             -scale.x * direction.x};
+      };
+      const auto first_edge = world_direction(positions[1] - positions[0]);
+      const auto diagonal = world_direction(positions[2] - positions[0]);
+      const auto world_normal =
+          quader::normalize(quader::cross(first_edge, diagonal));
+      for (const auto mode : {quader::QuaderSelectionMode::Face,
+                              quader::QuaderSelectionMode::Edge,
+                              quader::QuaderSelectionMode::Vertex}) {
+        SCOPED_TRACE(static_cast<int>(mode));
+        if (mode == quader::QuaderSelectionMode::Face) {
+          ASSERT_TRUE(s.api().selection().select_face(object, 1).ok());
+        } else if (mode == quader::QuaderSelectionMode::Edge) {
+          // Reversed request endpoints must retain the face's directed edge.
+          ASSERT_TRUE(s.api().selection().select_edge(object, 2, 1).ok());
+        } else {
+          ASSERT_TRUE(s.api().selection().select_vertex(object, 1).ok());
+        }
+        const auto orientation = s.api().query().selection_transform_orientation();
+        ASSERT_TRUE(orientation.has_value());
+        quader::QuaderTransform3 expected;
+        expected.z_axis = world_normal;
+        if (mode == quader::QuaderSelectionMode::Face) {
+          // Both source normals use the generated downward V axis. Their
+          // texture U direction is +Z, unaffected by the short beveled edge.
+          expected.x_axis = quader::normalize(world_direction({0.0f, 0.0f, 1.0f}));
+          expected.y_axis = quader::cross(expected.z_axis, expected.x_axis);
+        } else {
+          expected.y_axis = quader::normalize(first_edge) * -1.0f;
+          expected.x_axis = quader::cross(expected.y_axis, expected.z_axis);
+        }
+        expect_orientation_near(*orientation, expected);
+        EXPECT_NEAR(quader::length(orientation->x_axis), 1.0f, 0.001f);
+        EXPECT_NEAR(quader::length(orientation->y_axis), 1.0f, 0.001f);
+        EXPECT_NEAR(quader::length(orientation->z_axis), 1.0f, 0.001f);
+        expect_vec3_near(quader::cross(orientation->x_axis, orientation->y_axis),
+                         orientation->z_axis);
+      }
+    }
+  }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     NonplanarComponentFramesProjectAuthoredEdgesAfterWorldScaling) {
+  for (const float scale_x : {2.0f, -2.0f}) {
+    SCOPED_TRACE(scale_x);
+    quader_poly::Document document;
+    std::array<quader_poly::ElementId, 4> vertices;
+    const std::array positions{
+        quader::QVec3{0.0f, 0.0f, 0.0f},
+        quader::QVec3{1.0f, 0.0f, 1.0f},
+        quader::QVec3{1.0f, 1.0f, 0.0f},
+        quader::QVec3{0.0f, 1.0f, 0.0f},
+    };
+    for (std::size_t index = 0; index < vertices.size(); ++index) {
+      vertices[index] = quader_poly::add_vertex(document, positions[index]);
+    }
+    (void)quader_poly::add_face(document, vertices);
+    auto s = quader::test::BehaviorScenario::new_project();
+    s.given()
+        .mesh("warped", quader::QuaderPolygonDocumentInternalAccess::from_backend(
+                            std::move(document)),
+               "Nonplanar Local Component Frame")
+        .transform("warped", {.scale = {scale_x, 1.0f, 4.0f}});
+    const auto object = s.object("warped");
+    // These are the Newell normal and authored edge in the scaled geometry.
+    // Projecting the local edge before scaling would lose its normal component.
+    const auto world_normal = quader::normalize(
+        quader::QVec3{-4.0f, 4.0f * scale_x, 2.0f * scale_x});
+    const quader::QVec3 world_edge{scale_x, 0.0f, 4.0f};
+    const auto world_x = quader::normalize(quader::cross(world_normal, world_edge));
+    const quader::QuaderTransform3 expected{
+        .x_axis = world_x,
+        .y_axis = quader::cross(world_normal, world_x),
+        .z_axis = world_normal,
+    };
+    for (const bool select_edge : {false, true}) {
+      SCOPED_TRACE(select_edge);
+      if (select_edge) {
+        ASSERT_TRUE(s.api().selection().select_edge(object, 2, 1).ok());
+      } else {
+        ASSERT_TRUE(s.api().selection().select_vertex(object, 1).ok());
+      }
+      const auto orientation = s.api().query().selection_transform_orientation();
+      ASSERT_TRUE(orientation.has_value());
+      expect_orientation_near(*orientation, expected);
+    }
+  }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
      LocalComponentOrientationUsesExplicitActiveVertexEdgeAndFace) {
   for (const quader::QuaderSelectionMode mode : {
            quader::QuaderSelectionMode::Vertex,
@@ -2677,7 +2847,14 @@ TEST(ProgrammaticBehaviorScenarioTests,
           s.api().query().selection_transform_pivot();
       ASSERT_TRUE(orientation.has_value());
       ASSERT_TRUE(pivot.has_value());
-      EXPECT_TRUE(orientation_is_slanted(*orientation));
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        expect_orientation_near(*orientation,
+                                {.x_axis = {0.0f, 1.0f, 0.0f},
+                                 .y_axis = {1.0f, 0.0f, 0.0f},
+                                 .z_axis = {0.0f, 0.0f, -1.0f}});
+      } else {
+        EXPECT_TRUE(orientation_is_slanted(*orientation));
+      }
       EXPECT_LT(std::abs(quader::dot(
                     quader::normalize(orientation->x_axis),
                     quader::QVec3{1.0f, 0.0f, 0.0f})),
@@ -2691,9 +2868,17 @@ TEST(ProgrammaticBehaviorScenarioTests,
         EXPECT_TRUE(mesh_contains_position(*before_mesh, position));
       }
 
+      // The selected vertices lie along this vertex frame's Y axis. Scaling
+      // X would correctly leave both points on the unchanged pivot plane.
+      const bool scale_vertex_along_y =
+          mode == quader::QuaderSelectionMode::Vertex &&
+          transform_case.tool == quader::QuaderTransformTool::Scale;
       const quader::QuaderTransformDragPreview preview =
           perform_local_component_drag(s, transform_case.tool, *orientation,
-                                       *pivot);
+                                       *pivot,
+                                       scale_vertex_along_y
+                                           ? quader::QuaderTransformAxis::Y
+                                           : quader::QuaderTransformAxis::X);
       if (transform_case.tool == quader::QuaderTransformTool::Move) {
         ASSERT_GT(quader::length(preview.move_delta), 0.01f);
         EXPECT_GT(quader::dot(quader::normalize(preview.move_delta),
@@ -2703,8 +2888,13 @@ TEST(ProgrammaticBehaviorScenarioTests,
                  quader::QuaderTransformTool::Rotate) {
         EXPECT_GT(std::abs(preview.rotate_angle_degrees), 1.0);
       } else {
-        EXPECT_GT(std::abs(preview.scale.x - 1.0f), 0.01f);
-        EXPECT_NEAR(preview.scale.y, 1.0f, 0.001f);
+        if (scale_vertex_along_y) {
+          EXPECT_NEAR(preview.scale.x, 1.0f, 0.001f);
+          EXPECT_GT(std::abs(preview.scale.y - 1.0f), 0.01f);
+        } else {
+          EXPECT_GT(std::abs(preview.scale.x - 1.0f), 0.01f);
+          EXPECT_NEAR(preview.scale.y, 1.0f, 0.001f);
+        }
         EXPECT_NEAR(preview.scale.z, 1.0f, 0.001f);
       }
 

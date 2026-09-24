@@ -827,8 +827,7 @@ private:
       int field_width =
           std::max(field->minimumWidth(), field->minimumSizeHint().width());
       if (field->layout() != nullptr) {
-        // Composite XYZ fields ignore their outer size hint to shrink with the
-        // viewport. Reserve their actual child minimums before widening labels.
+        // Reserve composite editors' actual child minima before widening labels.
         field_width = std::max(field_width, field->layout()->minimumSize().width());
       }
       int margins = panel_margins.left() + panel_margins.right();
@@ -1808,7 +1807,9 @@ private:
       auto *fields = new QWidget(row);
       fields->setObjectName(object_name + QStringLiteral(".fields"));
       fields->setMinimumWidth(0);
-      fields->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+      // Retain the child editors' readable minima when the form allocates its
+      // field column. Each editor still ignores its potentially unbounded hint.
+      fields->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
       auto *fields_layout = new QGridLayout(fields);
       set_scalable_margins(*fields_layout, QMargins(0, 0, 0, 0));
       set_scalable_grid_horizontal_spacing(*fields_layout, 4);

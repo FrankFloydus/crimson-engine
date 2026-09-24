@@ -5987,6 +5987,13 @@ TEST(QtToolSettingsPanelTests,
               ASSERT_NE(spin, nullptr);
               EXPECT_TRUE(field->rect().contains(spin->geometry()));
               EXPECT_GE(spin->width(), scale_controller.metrics().px(44));
+              auto *editor = spin->findChild<QLineEdit *>();
+              ASSERT_NE(editor, nullptr);
+              const QMargins margins = editor->textMargins();
+              EXPECT_GE(editor->contentsRect().width() - margins.left() -
+                            margins.right() - 4,
+                        editor->fontMetrics().horizontalAdvance(editor->text()))
+                  << editor->text().toStdString();
             }
           }
         }

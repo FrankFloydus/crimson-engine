@@ -29,6 +29,8 @@
 #include <QEnterEvent>
 #include <QEventLoop>
 #include <QFocusEvent>
+#include <QFormLayout>
+#include <QHBoxLayout>
 #include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
@@ -57,11 +59,19 @@ class QtNumericSpinBoxTests : public ::testing::Test {
 protected:
   void SetUp() override {
     ASSERT_EQ(QCoreApplication::instance(), nullptr);
+    // Keyboard fixtures type decimal points; localized behavior opts into its
+    // own widget locale below instead of inheriting the host machine's locale.
+    QLocale::setDefault(QLocale::c());
     application_ = std::make_unique<QApplication>(argc_, argv_);
     application_->setQuitOnLastWindowClosed(false);
     QApplication::setStyle(QStringLiteral("Fusion"));
     application_->setPalette(
         quader::qt_obsidian_application_palette(application_->palette()));
+  }
+
+  void TearDown() override {
+    application_.reset();
+    QLocale::setDefault(previous_locale_);
   }
 
   void show(QWidget &widget) {
@@ -74,6 +84,7 @@ protected:
   QApplication &application() { return *application_; }
 
 private:
+  const QLocale previous_locale_;
   int argc_ = 1;
   char executable_[30] = "quader-numeric-spin-box-tests";
   char *argv_[2] = {executable_, nullptr};
@@ -406,6 +417,205 @@ TEST_F(QtNumericSpinBoxTests,
   EXPECT_EQ(decrease->width(), initial_width);
   EXPECT_EQ(spin.sizeHint(), initial_hint);
   export_review_image(spin, QStringLiteral("numeric-scale-100.png"));
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       CompactWholeNumberRangesReserveTheirFractionalTextInNarrowForms) {
+  quader::QtUiScaleApplicationController scale_controller(application());
+  QWidget host;
+  auto *form = new QFormLayout(&host);
+  form->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+  auto *spin = new quader::QtDoubleSpinBox(&host);
+  spin->setDecimals(3);
+  spin->setRange(0.0, 12.0);
+  spin->setValue(0.5);
+  form->addRow(QStringLiteral("Selected Growth"), spin);
+  show(host);
+  auto *editor = spin->findChild<QLineEdit *>();
+  ASSERT_NE(editor, nullptr);
+  auto *decrease = spin->findChild<QToolButton *>(
+      QStringLiteral("numeric_spin_box.decrease"));
+  auto *increase = spin->findChild<QToolButton *>(
+      QStringLiteral("numeric_spin_box.increase"));
+  ASSERT_NE(decrease, nullptr);
+  ASSERT_NE(increase, nullptr);
+
+  for (const float scale : {1.0F, 1.5F, 2.0F, 1.0F}) {
+    SCOPED_TRACE(scale);
+    scale_controller.apply_factor(scale);
+    QCoreApplication::processEvents();
+    host.resize(form->minimumSize());
+    form->activate();
+    QCoreApplication::processEvents();
+    const QSize initial_hint = spin->sizeHint();
+    const QSize initial_minimum_hint = spin->minimumSizeHint();
+    for (const double value : {0.5, 0.501, 11.999, 0.0, 12.0}) {
+      SCOPED_TRACE(value);
+      spin->setValue(value);
+      QCoreApplication::processEvents();
+      for (const bool hovered : {false, true}) {
+        if (hovered) {
+          enter(*spin);
+        } else {
+          leave(*spin);
+        }
+        const QMargins margins = editor->textMargins();
+        // QLineEdit retains two pixels of internal padding on each side.
+        const int text_width = editor->contentsRect().width() -
+                               margins.left() - margins.right() - 4;
+        EXPECT_GE(text_width,
+                  editor->fontMetrics().horizontalAdvance(editor->text()))
+            << editor->text().toStdString();
+        EXPECT_EQ(decrease->isVisible(), hovered);
+        EXPECT_EQ(increase->isVisible(), hovered);
+        EXPECT_EQ(spin->sizeHint(), initial_hint);
+        EXPECT_EQ(spin->minimumSizeHint(), initial_minimum_hint);
+      }
+    }
+    spin->setValue(0.5);
+    leave(*spin);
+    export_review_image(host, QStringLiteral("numeric-fraction-form-%1.png")
+                                  .arg(qRound(scale * 100.0F)));
+    spin->setValue(11.999);
+    enter(*spin);
+    export_review_image(host,
+                        QStringLiteral("numeric-fraction-form-hover-%1.png")
+                            .arg(qRound(scale * 100.0F)));
+  }
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       MinimumSizeIncludesLocalizedFractionalValuesAndAffixes) {
+  quader::QtDoubleSpinBox spin;
+  spin.setDecimals(9);
+  spin.setRange(-12.0, 12.0);
+  spin.setLocale(QLocale(QLocale::German, QLocale::Germany));
+  spin.setPrefix(QStringLiteral("x "));
+  spin.setSuffix(QStringLiteral(" cm"));
+  spin.setValue(-11.987654321);
+  show(spin);
+  spin.resize(spin.minimumSizeHint());
+  QCoreApplication::processEvents();
+  auto *editor = spin.findChild<QLineEdit *>();
+  ASSERT_NE(editor, nullptr);
+  EXPECT_EQ(editor->text(), QStringLiteral("x -11,9877 cm"));
+  const QMargins margins = editor->textMargins();
+  EXPECT_GE(editor->contentsRect().width() - margins.left() - margins.right() - 4,
+            editor->fontMetrics().horizontalAdvance(editor->text()));
+  export_review_image(spin, QStringLiteral("numeric-fraction-affixes.png"));
+}
+
+TEST_F(QtNumericSpinBoxTests,
+       IgnoredSizePoliciesRetainReadableValuesWithoutReservingUnboundedRanges) {
+  quader::QtUiScaleApplicationController scale_controller(application());
+  QWidget host;
+  auto *layout = new QHBoxLayout(&host);
+  std::array<quader::QtDoubleSpinBox *, 3> fields{};
+  std::array<QLabel *, 3> labels{};
+  constexpr std::array<const char *, 3> kAxisNames{"X", "Y", "Z"};
+  for (std::size_t index = 0; index < fields.size(); ++index) {
+    auto *label = new QLabel(QString::fromLatin1(kAxisNames[index]), &host);
+    labels[index] = label;
+    layout->addWidget(label);
+    auto *field = new quader::QtDoubleSpinBox(&host);
+    fields[index] = field;
+    field->setRange(-std::numeric_limits<double>::max(),
+                    std::numeric_limits<double>::max());
+    field->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    field->setMinimumWidth(0);
+    field->setValue(0.5);
+    layout->addWidget(field);
+  }
+  QSizePolicy authored_policy = fields.back()->sizePolicy();
+  authored_policy.setHorizontalStretch(2);
+  fields.back()->setSizePolicy(authored_policy);
+  show(host);
+
+  const auto shrink_to_contents = [&]() {
+    process_editor_events();
+    host.resize(layout->minimumSize());
+    layout->activate();
+    process_editor_events();
+  };
+  const auto expect_readable = [&]() {
+    for (std::size_t index = 0; index < fields.size(); ++index) {
+      auto *field = fields[index];
+      const auto *label = labels[index];
+      EXPECT_EQ(field->sizePolicy().horizontalPolicy(), QSizePolicy::Ignored);
+      SCOPED_TRACE(::testing::Message()
+                   << "axis=" << index << " host_width=" << host.width()
+                   << " layout_minimum=" << layout->minimumSize().width()
+                   << " field_minimum=" << field->minimumWidth()
+                   << " item_minimum="
+                   << layout->itemAt(static_cast<int>(index * 2 + 1))
+                          ->minimumSize().width()
+                   << " field_x=" << field->x()
+                   << " field_width=" << field->width()
+                   << " label_x=" << label->x()
+                   << " label_width=" << label->width());
+      EXPECT_TRUE(host.contentsRect().contains(field->geometry()));
+      EXPECT_TRUE(host.contentsRect().contains(label->geometry()));
+      EXPECT_GE(label->contentsRect().width(),
+                label->fontMetrics().horizontalAdvance(label->text()));
+      EXPECT_LT(label->geometry().right(), field->geometry().left());
+      if (index > 0) {
+        EXPECT_LT(fields[index - 1]->geometry().right(),
+                  label->geometry().left());
+      }
+      auto *editor = field->findChild<QLineEdit *>();
+      ASSERT_NE(editor, nullptr);
+      enter(*field);
+      const QMargins margins = editor->textMargins();
+      EXPECT_GE(editor->contentsRect().width() - margins.left() -
+                    margins.right() - 4,
+                editor->fontMetrics().horizontalAdvance(editor->text()))
+                  << editor->text().toStdString();
+    }
+    EXPECT_EQ(fields.back()->sizePolicy().horizontalStretch(), 2);
+  };
+  shrink_to_contents();
+  expect_readable();
+  const int initial_minimum = fields.front()->minimumWidth();
+  EXPECT_LT(initial_minimum, fields.front()->minimumSizeHint().width());
+
+  for (const float scale : {2.0F, 1.0F}) {
+    scale_controller.apply_factor(scale);
+    shrink_to_contents();
+    expect_readable();
+    const int scaled_minimum = fields.front()->minimumWidth();
+    const auto *first_editor = fields.front()->findChild<QLineEdit *>();
+    ASSERT_NE(first_editor, nullptr);
+    const QMargins arrow_margins = first_editor->textMargins();
+    for (auto *field : fields) {
+      field->setValue(-123.4567);
+    }
+    shrink_to_contents();
+    expect_readable();
+    EXPECT_GT(fields.front()->minimumWidth(), scaled_minimum);
+    export_review_image(host, QStringLiteral("numeric-ignored-fractions-%1.png")
+                                  .arg(qRound(scale * 100.0F)));
+    EXPECT_EQ(first_editor->textMargins(), arrow_margins);
+    for (auto *field : fields) {
+      field->setValue(0.0);
+    }
+    shrink_to_contents();
+    expect_readable();
+    EXPECT_EQ(first_editor->textMargins(), arrow_margins);
+    for (auto *field : fields) {
+      field->setValue(0.5);
+    }
+    shrink_to_contents();
+    expect_readable();
+    EXPECT_EQ(fields.front()->minimumWidth(), scaled_minimum);
+  }
+  EXPECT_EQ(fields.front()->minimumWidth(), initial_minimum);
+
+  const int authored_minimum = initial_minimum + 40;
+  fields.front()->setMinimumWidth(authored_minimum);
+  fields.front()->setValue(0.25);
+  shrink_to_contents();
+  expect_readable();
+  EXPECT_EQ(fields.front()->minimumWidth(), authored_minimum);
 }
 
 TEST_F(QtNumericSpinBoxTests,

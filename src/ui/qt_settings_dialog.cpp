@@ -1671,7 +1671,10 @@ struct QtSettingsDialog::Impl {
       spin_box->setDecimals(3);
       spin_box->setRange(static_cast<double>(descriptor.minimum),
                          static_cast<double>(descriptor.maximum));
-      spin_box->setSingleStep(0.001);
+      spin_box->setSingleStep(0.1);
+      auto &numeric = qt_install_numeric_spin_box(*spin_box);
+      numeric.set_drag_sensitivity(0.1);
+      numeric.set_drag_snap_increment(1.0);
       spin_box->setAccelerated(true);
       spin_box->setKeyboardTracking(true);
       label->setBuddy(spin_box);
@@ -1884,6 +1887,8 @@ struct QtSettingsDialog::Impl {
         QStringLiteral("settingsInterfaceScale"));
     interface_scale_spin_box->setRange(50, 300);
     interface_scale_spin_box->setSingleStep(5);
+    qt_install_numeric_spin_box(*interface_scale_spin_box)
+        .set_drag_snap_increment(1.0);
     interface_scale_spin_box->setSuffix(QStringLiteral("%"));
     interface_scale_spin_box->setAccelerated(true);
     interface_scale_spin_box->setKeyboardTracking(true);
@@ -1923,6 +1928,8 @@ struct QtSettingsDialog::Impl {
     undo_steps_spin_box->setRange(SessionPreferences::kMinimumUndoSteps,
                                   SessionPreferences::kMaximumUndoSteps);
     undo_steps_spin_box->setAccelerated(true);
+    qt_install_numeric_spin_box(*undo_steps_spin_box)
+        .set_drag_snap_increment(1.0);
     undo_steps_label->setBuddy(undo_steps_spin_box);
     form->addRow(undo_steps_label, undo_steps_spin_box);
     undo_help_label = new QLabel(form->parentWidget());
@@ -1948,6 +1955,8 @@ struct QtSettingsDialog::Impl {
     autosave_interval_spin_box->setRange(
         SessionPreferences::kMinimumAutoSaveIntervalMinutes,
         SessionPreferences::kMaximumAutoSaveIntervalMinutes);
+    qt_install_numeric_spin_box(*autosave_interval_spin_box)
+        .set_drag_snap_increment(1.0);
     autosave_interval_label->setBuddy(autosave_interval_spin_box);
     form->addRow(autosave_interval_label, autosave_interval_spin_box);
     autosave_max_files_label = new QLabel(form->parentWidget());
@@ -1957,6 +1966,8 @@ struct QtSettingsDialog::Impl {
     autosave_max_files_spin_box->setRange(
         SessionPreferences::kMinimumAutoSaveMaxFiles,
         SessionPreferences::kMaximumAutoSaveMaxFiles);
+    qt_install_numeric_spin_box(*autosave_max_files_spin_box)
+        .set_drag_snap_increment(1.0);
     autosave_max_files_label->setBuddy(autosave_max_files_spin_box);
     form->addRow(autosave_max_files_label, autosave_max_files_spin_box);
     autosave_help_label = new QLabel(form->parentWidget());

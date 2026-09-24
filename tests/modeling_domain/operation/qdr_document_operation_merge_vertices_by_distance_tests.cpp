@@ -352,6 +352,8 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests,
   const float bridged_face_area_before =
       compiled_primitive_area(compile_document(document),
                               face_count_before - 1U);
+  // The three exact out-and-back boundary spurs enclose no surface area.
+  EXPECT_NEAR(bridged_face_area_before, 4.0F, 0.0001F);
 
   Selection selection = qdr_test::vertex_selection(
       {bridge_left, disconnected_bridge_left});
@@ -388,6 +390,7 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests,
       compile_document(document),
       static_cast<std::size_t>(
           std::distance(document.faces.begin(), repaired_face)));
+  EXPECT_NEAR(bridged_face_area_after, 4.0F, 0.0001F);
   EXPECT_NEAR(bridged_face_area_after, bridged_face_area_before, 0.0001F);
 }
 

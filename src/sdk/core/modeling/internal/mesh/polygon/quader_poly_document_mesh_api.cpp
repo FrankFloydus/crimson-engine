@@ -463,10 +463,16 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
                 continue;
             }
 
-            const quader_geometry::QVec3f triangle_area_vector =
-                quader_geometry::triangle_area_vector(geometry_triangle(a->position, b->position, c->position));
+            // Subtract in double so short boundary edges retain their winding
+            // even when the triangle's other corner is far from the edge.
+            const auto triangle_area_vector = quader_geometry::triangle_area_vector(
+                quader_geometry::QTriangle3<double>{
+                    {a->position.x, a->position.y, a->position.z},
+                    {b->position.x, b->position.y, b->position.z},
+                    {c->position.x, c->position.y, c->position.z}});
             mesh.indices.push_back(compiled_face_vertices[triangle.a]);
-            if (quader_geometry::dot(triangle_area_vector, geometry_vec3(normal)) >= 0.0F) {
+            if (quader_geometry::dot(triangle_area_vector,
+                    quader_geometry::QVec3d{normal.x, normal.y, normal.z}) >= 0.0) {
                 mesh.indices.push_back(compiled_face_vertices[triangle.b]);
                 mesh.indices.push_back(compiled_face_vertices[triangle.c]);
             } else {

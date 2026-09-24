@@ -11364,6 +11364,143 @@ TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
 }
 
 TEST(EditorApiTests,
+     FillHolePreservesNonplanarBoundaryInCompiledMeshSelectionAndHistory) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  // The Box opening has two real edges that collapse in its YZ projection.
+  constexpr std::array<quader::QVec3, 6> kBoundary{{
+      {-3.0F, -0.5F, 3.5F}, {-3.0F, 3.5F, 3.5F},
+      {-3.0F, 3.5F, 2.5F}, {-5.0F, 3.5F, 2.5F},
+      {-5.0F, -0.5F, 0.5F}, {-3.0F, -0.5F, 0.5F},
+  }};
+  quader_poly::Document document;
+  std::array<quader_poly::ElementId, kBoundary.size()> vertices{};
+  for (std::size_t index = 0; index < kBoundary.size(); ++index) {
+    const auto position = kBoundary[index];
+    vertices[index] = quader_poly::add_vertex(
+        document, {position.x, position.y, position.z});
+  }
+  const auto apex = quader_poly::add_vertex(document, {-1.0F, 1.5F, 2.0F});
+  for (std::size_t index = 0; index < vertices.size(); ++index) {
+    const std::array side{vertices[index],
+                          vertices[(index + 1U) % vertices.size()], apex};
+    ASSERT_NE(quader_poly::add_face(document, side),
+              quader_poly::kInvalidElementId);
+  }
+  const auto created = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(
+          std::move(document)),
+      quader::QuaderCreateMeshArgs{.name = "Nonplanar Box Opening"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  for (std::size_t index = 0; index < vertices.size(); ++index) {
+    ASSERT_TRUE(editor.selection()
+                    .select_edge(object, vertices[index],
+                                 vertices[(index + 1U) % vertices.size()],
+                                 index == 0U ? quader::QuaderSelectionEdit::Replace
+                                             : quader::QuaderSelectionEdit::Add)
+                    .ok());
+  }
+  const auto initial = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(initial.has_value());
+  ASSERT_EQ(initial->indices.size(), 18U);
+  ASSERT_EQ(editor.selection().summary().selected_edge_count, 6U);
+  const auto expect_no_selected_face_overlay = [&] {
+    const auto overlay = editor.render().selection_overlay_frame();
+    EXPECT_TRUE(std::none_of(
+        overlay.triangles.begin(), overlay.triangles.end(),
+        [&](const quader::QuaderOverlayTriangle &triangle) {
+          return triangle.layer == quader::QuaderOverlayLayer::SelectedVisibleFace &&
+                 triangle.element.object_id == object.modeling_object_id;
+        }));
+  };
+  expect_no_selected_face_overlay();
+
+  const auto corner_index = [&](quader::QVec3 point) {
+    const auto corner = std::find_if(
+        kBoundary.begin(), kBoundary.end(), [&](quader::QVec3 candidate) {
+          return std::abs(point.x - candidate.x) < kTestPositionEpsilon &&
+                 std::abs(point.y - candidate.y) < kTestPositionEpsilon &&
+                 std::abs(point.z - candidate.z) < kTestPositionEpsilon;
+        });
+    return static_cast<std::size_t>(corner - kBoundary.begin());
+  };
+  const auto expect_complete_cap = [&](const auto &triangles) {
+    ASSERT_EQ(triangles.size(), 4U);
+    std::array<std::array<std::size_t, kBoundary.size()>, kBoundary.size()>
+        edge_uses{};
+    for (const auto &triangle : triangles) {
+      for (std::size_t edge = 0; edge < triangle.size(); ++edge) {
+        const auto a = triangle[edge];
+        const auto b = triangle[(edge + 1U) % triangle.size()];
+        ASSERT_LT(a, kBoundary.size());
+        ASSERT_LT(b, kBoundary.size());
+        ASSERT_NE(a, b);
+        ++edge_uses[std::min(a, b)][std::max(a, b)];
+      }
+    }
+    for (std::size_t index = 0; index < kBoundary.size(); ++index) {
+      const auto next = (index + 1U) % kBoundary.size();
+      EXPECT_EQ(edge_uses[std::min(index, next)][std::max(index, next)], 1U)
+          << "Missing boundary edge " << index << " -> " << next;
+    }
+  };
+  const auto expect_filled_projection = [&] {
+    const auto selection = editor.selection().summary();
+    ASSERT_EQ(selection.mode, quader::QuaderSelectionMode::Face);
+    ASSERT_EQ(selection.selected_face_count, 1U);
+    ASSERT_EQ(selection.selected_edge_count, 0U);
+    const auto mesh = editor.query().compiled_object_mesh(object);
+    ASSERT_TRUE(mesh.has_value());
+    ASSERT_EQ(mesh->indices.size(), initial->indices.size() + 12U);
+    std::vector<std::array<std::size_t, 3>> compiled_cap;
+    for (std::size_t offset = 0; offset < mesh->indices.size(); offset += 3U) {
+      std::array<std::size_t, 3> triangle{};
+      for (std::size_t corner = 0; corner < triangle.size(); ++corner) {
+        const auto vertex = mesh->indices[offset + corner];
+        ASSERT_LT(vertex, mesh->vertices.size());
+        triangle[corner] = corner_index(mesh->vertices[vertex].position);
+      }
+      if (std::all_of(triangle.begin(), triangle.end(),
+                      [&](std::size_t corner) { return corner < kBoundary.size(); })) {
+        compiled_cap.push_back(triangle);
+      }
+    }
+    expect_complete_cap(compiled_cap);
+    std::vector<std::array<std::size_t, 3>> selected_cap;
+    for (const auto &triangle : editor.render().selection_overlay_frame().triangles) {
+      if (triangle.layer == quader::QuaderOverlayLayer::SelectedVisibleFace &&
+          triangle.element.object_id == object.modeling_object_id &&
+          triangle.element.face_id == selection.active_face_id) {
+        selected_cap.push_back({corner_index(triangle.a), corner_index(triangle.b),
+                                corner_index(triangle.c)});
+      }
+    }
+    expect_complete_cap(selected_cap);
+  };
+
+  const auto filled =
+      editor.commands().execute(quader::quader_command::kModelingFillHole);
+  ASSERT_TRUE(filled.ok()) << filled.error_message();
+  ASSERT_TRUE(filled.changed());
+  expect_filled_projection();
+  const auto filled_face = editor.selection().summary().active_face_id;
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto undone = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(undone.has_value());
+  EXPECT_EQ(undone->indices, initial->indices);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+  EXPECT_EQ(editor.selection().summary().selected_edge_count, 6U);
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 0U);
+  expect_no_selected_face_overlay();
+
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_filled_projection();
+  EXPECT_EQ(editor.selection().summary().active_face_id, filled_face);
+}
+
+TEST(EditorApiTests,
      BridgeShortcutCreatesOneStraightSpanAfterRememberedInterpolatedPreview) {
   using quader::quader_command::kModelingBridgeEdges;
   using quader::quader_command::kModelingBridgeFaces;

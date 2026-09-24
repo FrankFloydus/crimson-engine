@@ -7,11 +7,11 @@
 #include "editor/modeling/runtime/component_orientation.hpp"
 
 #include <quader/modeling/neutral/geometry/geometry.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 namespace quader_editor_core {
 namespace {
@@ -32,6 +32,17 @@ bool usable_vector(quader::QVec3 value) {
 quader::QVec3 normalized_or_zero(quader::QVec3 value) {
   return usable_vector(value) ? quader::normalize_or_zero(value)
                               : quader::QVec3{};
+}
+
+quader::QVec3 normalized_gradient(quader::QVec3 value) {
+  if (!finite_vector(value)) {
+    return {};
+  }
+  const float magnitude = std::max({std::abs(value.x), std::abs(value.y),
+                                     std::abs(value.z)});
+  // Texture scale changes gradient magnitude, never the direction of its axes.
+  return magnitude > 0.0F ? quader::normalize_or_zero(value / magnitude)
+                          : quader::QVec3{};
 }
 
 quader_geometry::QVec3f geometry_vector(quader::QVec3 value) {
@@ -85,99 +96,36 @@ quader_poly::Transform3 frame_from_normal_and_tangent(
 
 quader_poly::Transform3 frame_from_edge_and_normal(
     quader::QVec3 origin, quader::QVec3 edge_direction,
-    quader::QVec3 incident_normal,
+    quader::QVec3 face_normal,
     const quader_poly::Transform3 &object_fallback) {
-  const quader::QVec3 x_axis = normalized_or_zero(edge_direction);
+  if (!usable_vector(edge_direction)) {
+    return frame_from_normal_and_tangent(
+        origin, object_fallback.z_axis, object_fallback.x_axis,
+        object_fallback);
+  }
+  const quader::QVec3 z_axis = resolved_normal(face_normal, object_fallback);
+  const quader::QVec3 x_axis = quader::cross(z_axis, edge_direction);
   if (!usable_vector(x_axis)) {
     return frame_from_normal_and_tangent(
         origin, object_fallback.z_axis, object_fallback.x_axis,
         object_fallback);
   }
+  // The supporting face supplies the normal; its directed edge lies on -Y.
+  return frame_from_normal_and_tangent(origin, z_axis, x_axis,
+                                        object_fallback);
+}
 
-  quader::QVec3 z_axis =
-      incident_normal - x_axis * quader::dot(incident_normal, x_axis);
-  z_axis = normalized_or_zero(z_axis);
-  if (!usable_vector(z_axis)) {
-    const auto fallback_plane = quader_geometry::make_plane_basis(
-        geometry_vector(origin), geometry_vector(x_axis),
-        geometry_vector(object_fallback.z_axis), kOrientationEpsilon);
-    z_axis = fallback_plane.valid ? app_vector(fallback_plane.u)
-                                  : quader::QVec3{0.0F, 0.0F, 1.0F};
-  }
-
-  quader::QVec3 y_axis =
-      normalized_or_zero(quader::cross(z_axis, x_axis));
-  if (!usable_vector(y_axis)) {
-    return frame_from_normal_and_tangent(
-        origin, object_fallback.z_axis, object_fallback.x_axis,
-        object_fallback);
-  }
-  z_axis = normalized_or_zero(quader::cross(x_axis, y_axis));
-  return {
-      .x_axis = x_axis,
-      .y_axis = y_axis,
-      .z_axis = z_axis,
-      .origin = origin,
+quader::QVec3 face_texture_v_gradient(const quader_poly::Document &document,
+                                      const quader_poly::Face &face,
+                                      quader::QVec3 normal) {
+  const auto carrier = quader_poly::face_texture_carrier(document, face, normal);
+  const auto component = [&](quader::QVec3 axis) {
+    const quader::QVec2 uv = quader_poly::generated_texture_uv(axis, normal);
+    return carrier[2] * uv.x + carrier[3] * uv.y;
   };
-}
-
-bool face_contains_vertex(const quader_poly::Face &face,
-                          quader_poly::ElementId vertex_id) {
-  return std::find(face.vertices.begin(), face.vertices.end(), vertex_id) !=
-         face.vertices.end();
-}
-
-bool face_contains_edge(const quader_poly::Face &face,
-                        quader_poly::Edge edge) {
-  edge = quader_poly::make_edge(edge.a, edge.b);
-  for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-    const quader_poly::Edge perimeter = quader_poly::make_edge(
-        face.vertices[index], face.vertices[(index + 1) % face.vertices.size()]);
-    if (perimeter == edge) {
-      return true;
-    }
-  }
-  return false;
-}
-
-quader::QVec3 incident_vertex_normal(
-    const quader_poly::Document &document,
-    quader_poly::ElementId vertex_id) {
-  quader::QVec3 normal;
-  for (const quader_poly::Face &face : document.faces) {
-    if (face_contains_vertex(face, vertex_id)) {
-      normal += quader_poly::face_normal(document, face);
-    }
-  }
-  return normal;
-}
-
-quader::QVec3 incident_edge_normal(const quader_poly::Document &document,
-                                   quader_poly::Edge edge) {
-  quader::QVec3 normal;
-  for (const quader_poly::Face &face : document.faces) {
-    if (face_contains_edge(face, edge)) {
-      normal += quader_poly::face_normal(document, face);
-    }
-  }
-  return normal;
-}
-
-std::vector<quader_poly::ElementId> vertex_neighbors(
-    const quader_poly::Document &document,
-    quader_poly::ElementId vertex_id) {
-  std::vector<quader_poly::ElementId> neighbors;
-  for (const quader_poly::Edge edge : quader_poly::document_edges(document)) {
-    if (edge.a == vertex_id) {
-      neighbors.push_back(edge.b);
-    } else if (edge.b == vertex_id) {
-      neighbors.push_back(edge.a);
-    }
-  }
-  std::ranges::sort(neighbors);
-  neighbors.erase(std::unique(neighbors.begin(), neighbors.end()),
-                  neighbors.end());
-  return neighbors;
+  return {component({1.0F, 0.0F, 0.0F}),
+          component({0.0F, 1.0F, 0.0F}),
+          component({0.0F, 0.0F, 1.0F})};
 }
 
 std::optional<quader::QVec3>
@@ -204,40 +152,51 @@ std::optional<quader_poly::Transform3>
 component_vertex_local_orientation(
     const quader_poly::Document &document,
     quader_poly::ElementId vertex_id,
-    const quader_poly::Transform3 &object_fallback) {
+    const quader_poly::Transform3 &object_fallback,
+    quader::QVec3 *directed_edge) {
+  if (directed_edge != nullptr) {
+    *directed_edge = {};
+  }
   const quader_poly::Vertex *vertex =
       quader_poly::find_vertex(document, vertex_id);
   if (vertex == nullptr || !finite_vector(vertex->position)) {
     return std::nullopt;
   }
 
-  const quader::QVec3 z_axis =
-      resolved_normal(incident_vertex_normal(document, vertex_id),
-                      object_fallback);
-  quader::QVec3 preferred_tangent;
-  for (const quader_poly::ElementId neighbor_id :
-       vertex_neighbors(document, vertex_id)) {
-    const quader_poly::Vertex *neighbor =
-        quader_poly::find_vertex(document, neighbor_id);
-    if (neighbor == nullptr || !finite_vector(neighbor->position)) {
+  for (const quader_poly::Face &face : document.faces) {
+    const auto found = std::find(face.vertices.begin(), face.vertices.end(),
+                                  vertex_id);
+    if (found == face.vertices.end()) {
       continue;
     }
-    quader::QVec3 tangent = neighbor->position - vertex->position;
-    tangent = tangent - z_axis * quader::dot(tangent, z_axis);
-    if (usable_vector(tangent)) {
-      preferred_tangent = tangent;
-      break;
+    const std::size_t index = static_cast<std::size_t>(
+        found - face.vertices.begin());
+    const quader_poly::Vertex *next = quader_poly::find_vertex(
+        document, face.vertices[(index + 1) % face.vertices.size()]);
+    const quader::QVec3 normal = quader_poly::face_normal(document, face);
+    if (next != nullptr && finite_vector(next->position) &&
+        usable_vector(normal) && usable_vector(next->position - vertex->position)) {
+      if (directed_edge != nullptr) {
+        *directed_edge = next->position - vertex->position;
+      }
+      return frame_from_edge_and_normal(vertex->position,
+                                        next->position - vertex->position,
+                                        normal, object_fallback);
     }
   }
-
   return frame_from_normal_and_tangent(
-      vertex->position, z_axis, preferred_tangent, object_fallback);
+      vertex->position, object_fallback.z_axis, object_fallback.x_axis,
+      object_fallback);
 }
 
 std::optional<quader_poly::Transform3>
 component_edge_local_orientation(
     const quader_poly::Document &document, quader_poly::Edge edge,
-    const quader_poly::Transform3 &object_fallback) {
+    const quader_poly::Transform3 &object_fallback,
+    quader::QVec3 *directed_edge) {
+  if (directed_edge != nullptr) {
+    *directed_edge = {};
+  }
   edge = quader_poly::make_edge(edge.a, edge.b);
   const quader_poly::Vertex *first =
       quader_poly::find_vertex(document, edge.a);
@@ -248,19 +207,34 @@ component_edge_local_orientation(
     return std::nullopt;
   }
 
-  const bool live_edge = std::any_of(
-      document.faces.begin(), document.faces.end(),
-      [edge](const quader_poly::Face &face) {
-        return face_contains_edge(face, edge);
-      });
-  if (!live_edge) {
-    return std::nullopt;
+  const quader::QVec3 origin = (first->position + second->position) * 0.5F;
+  bool live_edge = false;
+  for (const quader_poly::Face &face : document.faces) {
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+      const auto a = face.vertices[index];
+      const auto b = face.vertices[(index + 1) % face.vertices.size()];
+      if (quader_poly::make_edge(a, b) != edge) {
+        continue;
+      }
+      live_edge = true;
+      const quader::QVec3 normal = quader_poly::face_normal(document, face);
+      if (usable_vector(normal)) {
+        const quader::QVec3 direction = a == edge.a
+            ? second->position - first->position
+            : first->position - second->position;
+        if (directed_edge != nullptr && usable_vector(direction)) {
+          *directed_edge = direction;
+        }
+        return frame_from_edge_and_normal(origin, direction, normal,
+                                          object_fallback);
+      }
+    }
   }
-
-  return frame_from_edge_and_normal(
-      (first->position + second->position) * 0.5F,
-      second->position - first->position,
-      incident_edge_normal(document, edge), object_fallback);
+  return live_edge
+      ? std::optional{frame_from_normal_and_tangent(
+            origin, object_fallback.z_axis, object_fallback.x_axis,
+            object_fallback)}
+      : std::nullopt;
 }
 
 std::optional<quader_poly::Transform3>
@@ -277,25 +251,12 @@ component_face_local_orientation(
     return std::nullopt;
   }
 
-  quader::QVec3 preferred_tangent;
-  for (std::size_t index = 0; index < face->vertices.size(); ++index) {
-    const quader_poly::Vertex *current =
-        quader_poly::find_vertex(document, face->vertices[index]);
-    const quader_poly::Vertex *next = quader_poly::find_vertex(
-        document, face->vertices[(index + 1) % face->vertices.size()]);
-    if (current == nullptr || next == nullptr) {
-      continue;
-    }
-    const quader::QVec3 edge_direction = next->position - current->position;
-    if (usable_vector(edge_direction)) {
-      preferred_tangent = edge_direction;
-      break;
-    }
-  }
-
+  const quader::QVec3 normal = quader_poly::face_normal(document, *face);
+  // The texture gradient fixes in-plane roll independently of perimeter order.
+  const quader::QVec3 tangent = quader::cross(
+      normal, normalized_gradient(face_texture_v_gradient(document, *face, normal)));
   return frame_from_normal_and_tangent(
-      *center, quader_poly::face_normal(document, *face), preferred_tangent,
-      object_fallback);
+      *center, normal, tangent, object_fallback);
 }
 
 } // namespace quader_editor_core

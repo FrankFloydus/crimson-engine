@@ -16,6 +16,9 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
+#include <map>
+#include <utility>
 #include <span>
 #include <vector>
 
@@ -149,31 +152,106 @@ TriangulationAxisCandidate triangulation_axis_candidate(
     };
 }
 
-std::vector<Triangle> triangulate_face_local_indices_for_axis(
-    const Face& face,
-    int dropped_axis,
-    const VertexLookupIndex& vertex_lookup)
+void restore_projected_boundary_corners(
+    std::span<const quader_geometry::QVec2d> points,
+    std::vector<Triangle>& triangles, double area_epsilon)
 {
-    QDR_PROFILE_SCOPE("qdr_document.triangulate_face_local_indices_for_axis");
-    std::vector<quader_geometry::QVec2d> projected_points;
-    projected_points.reserve(face.vertices.size());
-
-    for (const ElementId vertex_id : face.vertices) {
-        const Vertex* vertex = vertex_lookup.find(vertex_id);
-        if (vertex == nullptr) {
-            return {};
+    // Earcut may remove a projected straight corner that still bends in 3D.
+    // Split only exposed triangle edges along unused, ordered boundary corners.
+    for (std::size_t pass = 0; pass < points.size(); ++pass) {
+        std::vector<bool> used(points.size(), false);
+        std::map<std::pair<std::size_t, std::size_t>, unsigned> edge_counts;
+        for (const Triangle& triangle : triangles) {
+            const std::array<std::size_t, 3> corners {triangle.a, triangle.b, triangle.c};
+            for (std::size_t index = 0; index < corners.size(); ++index) {
+                const auto first = corners[index];
+                const auto last = corners[(index + 1U) % corners.size()];
+                used[first] = true;
+                ++edge_counts[{std::min(first, last), std::max(first, last)}];
+            }
         }
-        projected_points.push_back(projected_point_for_axis(vertex->position, dropped_axis));
+        bool restored = false;
+        for (std::size_t index = 0; index < triangles.size() && !restored; ++index) {
+            const Triangle triangle = triangles[index];
+            const std::array<std::size_t, 3> corners {triangle.a, triangle.b, triangle.c};
+            for (std::size_t edge = 0; edge < corners.size() && !restored; ++edge) {
+                const auto first = corners[edge];
+                const auto last = corners[(edge + 1U) % corners.size()];
+                const auto opposite = corners[(edge + 2U) % corners.size()];
+                if (edge_counts.at({std::min(first, last), std::max(first, last)}) != 1U) {
+                    continue;
+                }
+                const auto direction = points[last] - points[first];
+                const double extent_squared = quader_geometry::length_squared(direction);
+                if (extent_squared == 0.0) {
+                    continue;
+                }
+                for (const std::size_t step : {std::size_t{1}, points.size() - 1U}) {
+                    std::vector<std::size_t> chain {first};
+                    double previous_factor = 0.0;
+                    for (std::size_t corner = (first + step) % points.size(); corner != last;
+                         corner = (corner + step) % points.size()) {
+                        const auto offset = points[corner] - points[first];
+                        const double factor = quader_geometry::dot(offset, direction) / extent_squared;
+                        constexpr double kRoundoff = 64.0 * std::numeric_limits<double>::epsilon();
+                        if (used[corner] || factor <= previous_factor || factor >= 1.0 ||
+                            quader_geometry::length_squared(offset - direction * factor) >
+                                kRoundoff * kRoundoff * extent_squared) {
+                            break;
+                        }
+                        chain.push_back(corner);
+                        previous_factor = factor;
+                    }
+                    if (chain.size() < 2U || (chain.back() + step) % points.size() != last) {
+                        continue;
+                    }
+                    chain.push_back(last);
+                    const double orientation = quader_geometry::triangle_signed_area(
+                        points[first], points[last], points[opposite]);
+                    std::vector<Triangle> replacements;
+                    for (std::size_t part = 0; part + 1U < chain.size(); ++part) {
+                        const auto a = chain[part];
+                        const auto b = chain[part + 1U];
+                        const double area = quader_geometry::triangle_signed_area(
+                            points[a], points[b], points[opposite]);
+                        if (std::abs(area) <= area_epsilon || std::signbit(area) != std::signbit(orientation)) {
+                            replacements.clear();
+                            break;
+                        }
+                        replacements.push_back({static_cast<std::uint32_t>(a),
+                            static_cast<std::uint32_t>(b), static_cast<std::uint32_t>(opposite)});
+                    }
+                    if (!replacements.empty()) {
+                        triangles[index] = replacements.front();
+                        triangles.insert(triangles.end(), replacements.begin() + 1, replacements.end());
+                        restored = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!restored) {
+            return;
+        }
     }
+}
 
+std::vector<Triangle> triangulate_face_projected_indices(
+    const Face& face,
+    std::span<const quader_geometry::QVec2d> projected_points,
+    const VertexLookupIndex& vertex_lookup,
+    double area_epsilon = 0.000001,
+    bool restore_corners = false,
+    std::vector<Triangle>* legacy_projection = nullptr)
+{
     const double polygon_area = std::abs(
-        quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::QVec2d>(projected_points)));
-    if (polygon_area <= 0.000001) {
+        quader_geometry::polygon_signed_area<double>(projected_points));
+    if (!std::isfinite(polygon_area) || polygon_area <= area_epsilon) {
         return {};
     }
 
     const std::vector<quader_geometry::QTriangleIndices> indices =
-        quader_geometry::triangulate_projected_polygon(std::span<const quader_geometry::QVec2d>(projected_points));
+        quader_geometry::triangulate_projected_polygon(projected_points, area_epsilon);
     if (indices.empty()) {
         return {};
     }
@@ -197,7 +275,7 @@ std::vector<Triangle> triangulate_face_local_indices_for_axis(
             projected_points[triangle_indices[0]],
             projected_points[triangle_indices[1]],
             projected_points[triangle_indices[2]]);
-        if (triangle_area <= 0.000001) {
+        if (triangle_area <= area_epsilon) {
             continue;
         }
 
@@ -211,9 +289,10 @@ std::vector<Triangle> triangulate_face_local_indices_for_axis(
             return {};
         }
 
-        if (triangle_cross_length_squared(a->position, b->position,
-                                          c->position) <=
-            kFaceAreaScoreEpsilon) {
+        const auto area_vector = quader_geometry::cross(
+            geometry_vec3d(b->position) - geometry_vec3d(a->position),
+            geometry_vec3d(c->position) - geometry_vec3d(a->position));
+        if (quader_geometry::length_squared(area_vector) <= kFaceAreaScoreEpsilon) {
           continue;
         }
 
@@ -221,12 +300,93 @@ std::vector<Triangle> triangulate_face_local_indices_for_axis(
         covered_area += triangle_area;
     }
 
-    const double coverage_tolerance = std::max(0.000001, polygon_area * 0.001);
-    if (triangles.empty() || covered_area + coverage_tolerance < polygon_area) {
+    const double coverage_tolerance = std::max(area_epsilon, polygon_area * 0.001);
+    if (triangles.empty() || std::abs(covered_area - polygon_area) > coverage_tolerance) {
         return {};
+    }
+    if (!triangulation_preserves_face_boundary(face, vertex_lookup, triangles)) {
+        if (!restore_corners) {
+            if (legacy_projection != nullptr && legacy_projection->empty()) {
+                *legacy_projection = std::move(triangles);
+            }
+            return {};
+        }
+        restore_projected_boundary_corners(projected_points, triangles, area_epsilon);
+        if (!triangulation_preserves_face_boundary(face, vertex_lookup, triangles)) {
+            return {};
+        }
     }
 
     return triangles;
+}
+
+std::vector<Triangle> triangulate_face_local_indices_for_axis(
+    const Face& face, int dropped_axis, const VertexLookupIndex& vertex_lookup,
+    std::vector<Triangle>& legacy_projection)
+{
+    QDR_PROFILE_SCOPE("qdr_document.triangulate_face_local_indices_for_axis");
+    std::vector<quader_geometry::QVec2d> projected_points;
+    projected_points.reserve(face.vertices.size());
+    for (const ElementId vertex_id : face.vertices) {
+        const Vertex* vertex = vertex_lookup.find(vertex_id);
+        if (vertex == nullptr) {
+            return {};
+        }
+        projected_points.push_back(projected_point_for_axis(vertex->position, dropped_axis));
+    }
+    return triangulate_face_projected_indices(
+        face, projected_points, vertex_lookup, 0.000001, false, &legacy_projection);
+}
+
+std::vector<Triangle> triangulate_face_in_normal_plane(
+    const Face& face, const VertexLookupIndex& vertex_lookup)
+{
+    const Vertex* first = vertex_lookup.find(face.vertices.front());
+    if (first == nullptr) {
+        return {};
+    }
+    const auto origin = geometry_vec3d(first->position);
+    std::vector<quader_geometry::QVec3d> positions;
+    positions.reserve(face.vertices.size());
+    double extent = 0.0;
+    for (const ElementId id : face.vertices) {
+        const Vertex* vertex = vertex_lookup.find(id);
+        if (vertex == nullptr) {
+            return {};
+        }
+        const auto delta = geometry_vec3d(vertex->position) - origin;
+        if (!std::isfinite(delta.x) || !std::isfinite(delta.y) || !std::isfinite(delta.z)) {
+            return {};
+        }
+        positions.push_back(delta);
+        extent = std::max({extent, std::abs(delta.x), std::abs(delta.y), std::abs(delta.z)});
+    }
+    if (extent == 0.0) {
+        return {};
+    }
+    for (auto& position : positions) {
+        position = position / extent;
+    }
+
+    // An anchored Newell normal retains bends that collapse in every axis view.
+    // Normalize the local metric so translation and scale do not bias projection.
+    quader_geometry::QVec3d normal{};
+    for (std::size_t index = 0; index < positions.size(); ++index) {
+        normal = normal + quader_geometry::cross(
+            positions[index], positions[(index + 1U) % positions.size()]);
+    }
+    const auto basis = quader_geometry::make_plane_basis<double>({}, normal, {}, 1.0e-12);
+    if (!basis.valid) {
+        return {};
+    }
+    std::vector<quader_geometry::QVec2d> projected_points;
+    projected_points.reserve(positions.size());
+    for (const auto& position : positions) {
+        const auto coordinates = quader_geometry::plane_coordinates(position, basis);
+        projected_points.push_back({coordinates.u, coordinates.v});
+    }
+    return triangulate_face_projected_indices(
+        face, projected_points, vertex_lookup, std::numeric_limits<double>::epsilon(), true);
 }
 
 std::vector<Triangle> triangulate_quad_face_local_indices(
@@ -433,6 +593,112 @@ int dropped_axis_for_normal(const quader::QVec3& normal)
     return dropped_axis_from_geometry_axis(quader_geometry::dominant_axis(geometry_vec3(normal)));
 }
 
+bool triangulation_preserves_face_boundary(
+    const Face& face, const VertexLookupIndex& vertex_lookup,
+    std::span<const Triangle> triangles)
+{
+    if (face.vertices.size() < 3U) {
+        return false;
+    }
+    std::vector<quader_geometry::QVec3d> positions;
+    positions.reserve(face.vertices.size());
+    for (const ElementId id : face.vertices) {
+        const Vertex* vertex = vertex_lookup.find(id);
+        if (vertex == nullptr || !std::isfinite(vertex->position.x) ||
+            !std::isfinite(vertex->position.y) || !std::isfinite(vertex->position.z)) {
+            return false;
+        }
+        positions.push_back({vertex->position.x, vertex->position.y, vertex->position.z});
+    }
+    if (triangles.empty()) {
+        return false;
+    }
+    std::map<std::pair<std::size_t, std::size_t>, unsigned> edge_counts;
+    for (const Triangle& triangle : triangles) {
+        const std::array<std::size_t, 3> corners {triangle.a, triangle.b, triangle.c};
+        if (std::ranges::any_of(corners, [&](std::size_t corner) {
+                return corner >= positions.size();
+            })) {
+            return false;
+        }
+        const auto area = quader_geometry::cross(positions[triangle.b] - positions[triangle.a],
+            positions[triangle.c] - positions[triangle.a]);
+        if (quader_geometry::length_squared(area) <= kFaceAreaScoreEpsilon) {
+            return false;
+        }
+        for (std::size_t index = 0U; index < corners.size(); ++index) {
+            const auto first = corners[index];
+            const auto second = corners[(index + 1U) % corners.size()];
+            if (++edge_counts[{std::min(first, second), std::max(first, second)}] > 2U) {
+                return false;
+            }
+        }
+    }
+    const auto follows_straight_boundary = [&](std::size_t first, std::size_t last) {
+        if ((first + 1U) % positions.size() == last) {
+            return true;
+        }
+        const auto direction = positions[last] - positions[first];
+        const double extent_squared = quader_geometry::length_squared(direction);
+        if (extent_squared <= kFaceAreaScoreEpsilon) {
+            return false;
+        }
+        constexpr double kBoundaryTolerance = 64.0 * std::numeric_limits<double>::epsilon();
+        const double tolerance_squared = kBoundaryTolerance * kBoundaryTolerance *
+            std::max(1.0, extent_squared);
+        // Incident loops may retrace an exact zero-area spur through distinct IDs.
+        // Cancel only coincident A-B-A paths before checking the retained boundary.
+        std::vector<std::size_t> chain {first};
+        for (std::size_t corner = (first + 1U) % positions.size();;
+             corner = (corner + 1U) % positions.size()) {
+            if (quader_geometry::length_squared(positions[corner] - positions[chain.back()]) != 0.0) {
+                if (chain.size() >= 2U && quader_geometry::length_squared(
+                        positions[corner] - positions[chain[chain.size() - 2U]]) == 0.0) {
+                    chain.pop_back();
+                } else {
+                    chain.push_back(corner);
+                }
+            }
+            if (corner == last) {
+                break;
+            }
+        }
+        double previous_factor = 0.0;
+        for (const std::size_t corner : chain) {
+            const auto offset = positions[corner] - positions[first];
+            const double factor = quader_geometry::dot(offset, direction) / extent_squared;
+            if (factor < previous_factor - kBoundaryTolerance ||
+                factor > 1.0 + kBoundaryTolerance ||
+                quader_geometry::length_squared(offset - direction * factor) > tolerance_squared) {
+                return false;
+            }
+            previous_factor = factor;
+        }
+        return true;
+    };
+    std::vector<bool> covered_segments(positions.size(), false);
+    for (const auto& [edge, count] : edge_counts) {
+        if (count != 1U) {
+            continue;
+        }
+        auto [first, last] = edge;
+        if (!follows_straight_boundary(first, last)) {
+            std::swap(first, last);
+            if (!follows_straight_boundary(first, last)) {
+                return false;
+            }
+        }
+        for (std::size_t corner = first; corner != last;
+             corner = (corner + 1U) % positions.size()) {
+            if (covered_segments[corner]) {
+                return false;
+            }
+            covered_segments[corner] = true;
+        }
+    }
+    return std::ranges::all_of(covered_segments, [](bool covered) { return covered; });
+}
+
 std::vector<Triangle> triangulate_face_local_indices(const Document& document, const Face& face)
 {
     if (face.vertices.size() < 3U) {
@@ -498,6 +764,7 @@ std::vector<Triangle> triangulate_face_local_indices(
         return left.dropped_axis == preferred_axis && right.dropped_axis != preferred_axis;
     });
 
+    std::vector<Triangle> legacy_projection;
     for (const TriangulationAxisCandidate& axis : axes) {
         if (axis.projected_area <= 0.000001) {
             continue;
@@ -505,31 +772,21 @@ std::vector<Triangle> triangulate_face_local_indices(
         triangles = triangulate_face_local_indices_for_axis(
             face,
             axis.dropped_axis,
-            vertex_lookup);
+            vertex_lookup,
+            legacy_projection);
         if (!triangles.empty()) {
             return triangles;
         }
     }
 
-    triangles.clear();
-    triangles.reserve(face.vertices.size() - 2U);
-    for (std::uint32_t index = 1; index + 1U < face.vertices.size(); ++index) {
-        const Vertex* a = vertex_lookup.find(face.vertices[0]);
-        const Vertex* b = vertex_lookup.find(face.vertices[index]);
-        const Vertex* c = vertex_lookup.find(face.vertices[index + 1U]);
-        if (a == nullptr || b == nullptr || c == nullptr) {
-            triangles.clear();
-            return triangles;
-        }
-        if (triangle_cross_length_squared(a->position, b->position,
-                                          c->position) <=
-            kFaceAreaScoreEpsilon) {
-          triangles.clear();
-          return triangles;
-        }
-        triangles.push_back({ 0U, index, index + 1U });
+    triangles = triangulate_face_in_normal_plane(face, vertex_lookup);
+    if (!triangles.empty()) {
+        return triangles;
     }
-    return triangles;
+    // Keep existing malformed faces renderable. Fill Hole and Combine Faces
+    // explicitly reject incomplete boundaries, including this legacy result.
+    // Never invent an unchecked fan when every projection fails.
+    return legacy_projection;
 }
 
 FaceUvBasis generated_face_uv_basis(const Document& document, const Face& face, const quader::QVec3& normal)

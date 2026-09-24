@@ -11,6 +11,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
@@ -199,7 +200,10 @@ OperationResult FillHoleFromEdgesOperation::apply(Document& document, Selection&
         trial.faces.push_back(fill_face);
         prune_invalid_faces(trial);
         prune_normal_edge_states(trial);
-        if (find_face(trial, fill_face_id) == nullptr || !every_face_triangulates(trial)) {
+        const Face* retained_fill_face = find_face(trial, fill_face_id);
+        if (retained_fill_face == nullptr || !every_face_triangulates(trial) ||
+            !face_triangulation_preserves_boundary(
+                trial, *retained_fill_face, VertexLookupIndex(trial))) {
             continue;
         }
 

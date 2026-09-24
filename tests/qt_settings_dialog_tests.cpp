@@ -76,6 +76,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -935,6 +936,114 @@ TEST(QtSettingsDialogTests,
   EXPECT_EQ(pages->findChildren<QWidget *>(), original_pages)
       << "localization must update the retained pages in place";
   capture_pages(QStringLiteral("it-IT"));
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
+     FloatingPreferencesUseConsistentStepsPrecisionAndUnitControlSnap) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-numeric-step-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(ui_settings, viewport_settings, localization,
+                     editor.commands(), {});
+  qt_set_numeric_snap_increment_provider(application, dialog,
+                                         []() { return 8.0; });
+  auto *pages = dialog.findChild<QStackedWidget *>(
+      QStringLiteral("settingsPages"));
+  ASSERT_NE(pages, nullptr);
+  dialog.show();
+  QCoreApplication::processEvents();
+
+  const auto show_field = [&](QWidget &field) {
+    for (int page = 0; page < pages->count(); ++page) {
+      if (pages->widget(page)->isAncestorOf(&field)) {
+        pages->setCurrentIndex(page);
+        QCoreApplication::processEvents();
+        return;
+      }
+    }
+    ADD_FAILURE() << "Missing Settings page for "
+                  << field.objectName().toStdString();
+  };
+  const auto scrub = [](QAbstractSpinBox &field, int pixels,
+                         Qt::KeyboardModifiers modifiers) {
+    auto *line = field.findChild<QLineEdit *>();
+    ASSERT_NE(line, nullptr);
+    const auto send_mouse = [&](QEvent::Type type, QPoint position,
+                                Qt::MouseButton button,
+                                Qt::MouseButtons buttons) {
+      QMouseEvent event(type, QPointF(position),
+                        QPointF(line->mapToGlobal(position)), button, buttons,
+                        modifiers);
+      QCoreApplication::sendEvent(line, &event);
+    };
+    const QPoint center = line->rect().center();
+    const QPoint origin =
+        center + QPoint(QApplication::startDragDistance() + 1, 0);
+    send_mouse(QEvent::MouseButtonPress, center, Qt::LeftButton,
+                 Qt::LeftButton);
+    send_mouse(QEvent::MouseMove, origin, Qt::NoButton, Qt::LeftButton);
+    ASSERT_TRUE(qt_install_numeric_spin_box(field).is_dragging());
+    const QPoint destination = origin + QPoint(pixels, 0);
+    send_mouse(QEvent::MouseMove, destination, Qt::NoButton, Qt::LeftButton);
+    send_mouse(QEvent::MouseButtonRelease, destination, Qt::LeftButton,
+                 Qt::NoButton);
+  };
+
+  const auto floating_fields = dialog.findChildren<QDoubleSpinBox *>();
+  ASSERT_EQ(floating_fields.size(), kViewportFloatSettingCount - 1u);
+  for (auto *field : floating_fields) {
+    SCOPED_TRACE(field->objectName().toStdString());
+    show_field(*field);
+    ASSERT_TRUE(field->isVisible());
+    ASSERT_TRUE(field->isEnabled());
+    EXPECT_DOUBLE_EQ(field->singleStep(), 0.1);
+    field->setValue(std::max(0.26, field->minimum() + 0.26));
+    const double initial = field->value();
+    field->stepUp();
+    EXPECT_NEAR(field->value(), initial + 0.1, 0.000001);
+
+    field->setValue(initial);
+    scrub(*field, 1, Qt::NoModifier);
+    EXPECT_NEAR(field->value(), initial + 0.1, 0.000001);
+    field->setValue(initial);
+    scrub(*field, 1, Qt::ShiftModifier);
+    EXPECT_NEAR(field->value(), initial + 0.01, 0.000001);
+    field->setValue(initial);
+    scrub(*field, 4, Qt::ControlModifier);
+    EXPECT_NEAR(field->value(),
+                std::clamp(std::round(initial + 0.4), field->minimum(),
+                           field->maximum()),
+                0.000001);
+  }
+
+  auto *autosave = dialog.findChild<QCheckBox *>(
+      QStringLiteral("settingsAutosaveEnabled"));
+  ASSERT_NE(autosave, nullptr);
+  autosave->setChecked(true);
+  for (auto *field : dialog.findChildren<QSpinBox *>()) {
+    SCOPED_TRACE(field->objectName().toStdString());
+    show_field(*field);
+    ASSERT_TRUE(field->isEnabled());
+    field->setValue(field->minimum() + 5);
+    const int initial = field->value();
+    // Engaging Ctrl must retain an existing whole value rather than snap it to
+    // the unrelated viewport grid, even before any further pointer travel.
+    scrub(*field, 0, Qt::ControlModifier);
+    EXPECT_EQ(field->value(), initial);
+  }
   dialog.reject();
 }
 

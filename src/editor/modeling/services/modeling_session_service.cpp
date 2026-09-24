@@ -205,7 +205,8 @@ std::optional<QVec3> remap_local_move_delta(
 
 std::optional<ModelingTransform3> modeling_component_world_orientation(
     const quader_poly::Transform3 &local_orientation,
-    const QMat4 &world_matrix) {
+    const QMat4 &world_matrix, bool align_to_y_axis,
+    QVec3 directed_edge) {
   constexpr float kOrientationEpsilon = 0.000001F;
   if (!scene_matrix_is_finite(world_matrix)) {
     return std::nullopt;
@@ -229,21 +230,30 @@ std::optional<ModelingTransform3> modeling_component_world_orientation(
   }
   z_axis /= z_length;
 
-  glm::vec3 x_axis = linear * to_glm(local_orientation.x_axis);
-  x_axis -= z_axis * glm::dot(x_axis, z_axis);
-  float x_length = glm::length(x_axis);
-  if (!std::isfinite(x_length) || x_length <= kOrientationEpsilon) {
+  // Face X is normal crossed with a texture covector; its direction transports
+  // linearly. Edge/vertex frames instead retain the directed edge along -Y.
+  // Project the raw edge only after transport: a nonplanar face's local
+  // projection does not commute with nonuniform scale or shear.
+  const QVec3 local_tangent = align_to_y_axis
+      ? (length_squared(directed_edge) > 0.0F ? directed_edge * -1.0F
+                                             : local_orientation.y_axis)
+      : local_orientation.x_axis;
+  glm::vec3 tangent = linear * to_glm(local_tangent);
+  tangent -= z_axis * glm::dot(tangent, z_axis);
+  float tangent_length = glm::length(tangent);
+  if (!std::isfinite(tangent_length) || tangent_length <= kOrientationEpsilon) {
     if (const std::optional<glm::mat3> object_basis =
             try_scene_pure_world_rotation_basis(world_matrix)) {
-      x_axis = (*object_basis)[0] -
-               z_axis * glm::dot((*object_basis)[0], z_axis);
-      x_length = glm::length(x_axis);
+      const glm::vec3 fallback = (*object_basis)[align_to_y_axis ? 1 : 0];
+      tangent = fallback - z_axis * glm::dot(fallback, z_axis);
+      tangent_length = glm::length(tangent);
     }
   }
-  if (!std::isfinite(x_length) || x_length <= kOrientationEpsilon) {
+  if (!std::isfinite(tangent_length) || tangent_length <= kOrientationEpsilon) {
     return std::nullopt;
   }
-  x_axis /= x_length;
+  tangent /= tangent_length;
+  glm::vec3 x_axis = align_to_y_axis ? glm::cross(tangent, z_axis) : tangent;
 
   glm::vec3 y_axis = glm::cross(z_axis, x_axis);
   const float y_length = glm::length(y_axis);
@@ -3381,15 +3391,16 @@ public:
     }
 
     std::optional<quader_poly::Transform3> local_orientation;
+    QVec3 directed_edge;
     switch (active.kind) {
     case quader_editor_core::ActiveSelectionKind::Vertex:
       local_orientation =
           quader_editor_core::component_vertex_local_orientation(
-              object->document.read(), active.vertex_id);
+              object->document.read(), active.vertex_id, {}, &directed_edge);
       break;
     case quader_editor_core::ActiveSelectionKind::Edge:
       local_orientation = quader_editor_core::component_edge_local_orientation(
-          object->document.read(), active.edge);
+          object->document.read(), active.edge, {}, &directed_edge);
       break;
     case quader_editor_core::ActiveSelectionKind::Face:
       local_orientation = quader_editor_core::component_face_local_orientation(
@@ -3405,9 +3416,12 @@ public:
 
     const std::optional<QMat4> world =
         modeling_object_world_transform(active.object_id);
+    const bool align_to_y_axis =
+        active.kind != quader_editor_core::ActiveSelectionKind::Face;
     return world.has_value()
                ? modeling_component_world_orientation(*local_orientation,
-                                                       *world)
+                                                       *world, align_to_y_axis,
+                                                       directed_edge)
                : std::nullopt;
   }
 

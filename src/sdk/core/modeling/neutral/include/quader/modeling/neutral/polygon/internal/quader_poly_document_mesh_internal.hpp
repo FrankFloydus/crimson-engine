@@ -123,6 +123,11 @@ struct MergeFaceUvAssignment {
     const VertexLookupIndex& vertex_lookup,
     const quader::QVec3& normal);
 
+// A projected triangulation may skip only corners on a straight 3D boundary.
+[[nodiscard]] bool triangulation_preserves_face_boundary(
+    const Face& face, const VertexLookupIndex& vertex_lookup,
+    std::span<const Triangle> triangles);
+
 [[nodiscard]] FaceUvBasis generated_face_uv_basis(const Document& document, const Face& face, const quader::QVec3& normal);
 [[nodiscard]] FaceUvBasis generated_face_uv_basis(
     const Document& document,

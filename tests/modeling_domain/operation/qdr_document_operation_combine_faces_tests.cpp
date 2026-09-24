@@ -276,7 +276,7 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineRemovesAnInteriorSeamAndKeeps
     qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 }
 
-TEST(QdrDocumentOperationCombineFacesTests, CombineRejectsCubeCornersWhoseTriangulationDropsTheBoundary) {
+TEST(QdrDocumentOperationCombineFacesTests, CombineCubeCornersPreserveTheCompleteCompiledBoundary) {
     const Document cube = make_cube({});
     for (std::size_t first = 0U; first < cube.faces.size(); ++first) {
         for (std::size_t second = first + 1U; second < cube.faces.size(); ++second) {
@@ -295,16 +295,42 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineRejectsCubeCornersWhoseTriang
                     }
                     find_face(document, second_id)->texture_transform.shift_uv = {3.0F, -2.0F};
                 }
-                const Document original = document;
                 Selection selection = qdr_test::face_selection({first_id, second_id}, first_id);
-                const Selection original_selection = selection;
 
                 const OperationResult result = combine_selected_faces(document, selection);
 
-                EXPECT_FALSE(result.success);
-                EXPECT_FALSE(result.changed);
-                EXPECT_EQ(result.message, "Combine Faces would create invalid face geometry.");
-                expect_combine_state_unchanged(document, original, selection, original_selection);
+                ASSERT_TRUE(result.success) << result.message;
+                ASSERT_TRUE(result.changed);
+                ASSERT_EQ(document.faces.size(), 5U);
+                ASSERT_EQ(selection.faces.size(), 1U);
+                const Face* combined = find_face(document, selection.faces.front());
+                ASSERT_NE(combined, nullptr);
+                ASSERT_EQ(combined->vertices.size(), 6U);
+                Document combined_document = document;
+                combined_document.faces = { *combined };
+                const CompiledMesh mesh = compile_document(combined_document);
+                ASSERT_EQ(mesh.indices.size(), 12U);
+                std::map<std::pair<ElementId, ElementId>, int> boundary;
+                for (std::size_t triangle = 0; triangle < mesh.indices.size(); triangle += 3U) {
+                    for (std::size_t corner = 0; corner < 3U; ++corner) {
+                        const auto from = mesh.vertices[mesh.indices[triangle + corner]].source_vertex_id;
+                        const auto to = mesh.vertices[mesh.indices[triangle + (corner + 1U) % 3U]].source_vertex_id;
+                        ++boundary[std::minmax(from, to)];
+                    }
+                }
+                for (std::size_t corner = 0; corner < combined->vertices.size(); ++corner) {
+                    const auto from = combined->vertices[corner];
+                    const auto to = combined->vertices[(corner + 1U) % combined->vertices.size()];
+                    const auto key = std::minmax(from, to);
+                    EXPECT_EQ(boundary[key], 1) << "missing authored boundary " << from << "," << to;
+                    boundary.erase(key);
+                }
+                for (const auto& entry : boundary) {
+                    EXPECT_EQ(entry.second, 2);
+                }
+                EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+                EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+                qdr_test::expect_valid_polygon_document_after_success(document, result);
             }
         }
     }

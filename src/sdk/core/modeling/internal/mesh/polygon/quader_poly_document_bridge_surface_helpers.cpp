@@ -727,88 +727,9 @@ bool inherit_merged_face_texture(const Document& source_document,
 bool face_triangulation_preserves_boundary(const Document& document, const Face& face,
     const VertexLookupIndex& vertex_lookup)
 {
-    if (face.vertices.size() < 3U) {
-        return false;
-    }
-    std::vector<quader_geometry::QVec3d> positions;
-    positions.reserve(face.vertices.size());
-    for (const ElementId id : face.vertices) {
-        const Vertex* vertex = vertex_lookup.find(id);
-        if (vertex == nullptr || !std::isfinite(vertex->position.x) ||
-            !std::isfinite(vertex->position.y) || !std::isfinite(vertex->position.z)) {
-            return false;
-        }
-        positions.push_back({vertex->position.x, vertex->position.y, vertex->position.z});
-    }
-    const auto triangles = triangulate_face_local_indices(document, face, vertex_lookup);
-    if (triangles.empty()) {
-        return false;
-    }
-    std::map<std::pair<std::size_t, std::size_t>, unsigned> edge_counts;
-    for (const Triangle& triangle : triangles) {
-        const std::array<std::size_t, 3> corners {triangle.a, triangle.b, triangle.c};
-        if (std::ranges::any_of(corners, [&](std::size_t corner) {
-                return corner >= positions.size();
-            })) {
-            return false;
-        }
-        const auto area = quader_geometry::cross(positions[triangle.b] - positions[triangle.a],
-            positions[triangle.c] - positions[triangle.a]);
-        if (quader_geometry::length_squared(area) <= kFaceAreaScoreEpsilon) {
-            return false;
-        }
-        for (std::size_t index = 0U; index < corners.size(); ++index) {
-            const auto first = corners[index];
-            const auto second = corners[(index + 1U) % corners.size()];
-            if (++edge_counts[{std::min(first, second), std::max(first, second)}] > 2U) {
-                return false;
-            }
-        }
-    }
-    const auto follows_straight_boundary = [&](std::size_t first, std::size_t last) {
-        const auto direction = positions[last] - positions[first];
-        const double extent_squared = quader_geometry::length_squared(direction);
-        if (extent_squared <= kFaceAreaScoreEpsilon) {
-            return false;
-        }
-        constexpr double kBoundaryTolerance = 0.00001;
-        const double tolerance_squared = kBoundaryTolerance * kBoundaryTolerance *
-            std::max(1.0, extent_squared);
-        double previous_factor = 0.0;
-        for (std::size_t corner = (first + 1U) % positions.size(); corner != last;
-             corner = (corner + 1U) % positions.size()) {
-            const auto offset = positions[corner] - positions[first];
-            const double factor = quader_geometry::dot(offset, direction) / extent_squared;
-            if (factor < previous_factor - kBoundaryTolerance ||
-                factor > 1.0 + kBoundaryTolerance ||
-                quader_geometry::length_squared(offset - direction * factor) > tolerance_squared) {
-                return false;
-            }
-            previous_factor = factor;
-        }
-        return true;
-    };
-    std::vector<bool> covered_segments(positions.size(), false);
-    for (const auto& [edge, count] : edge_counts) {
-        if (count != 1U) {
-            continue;
-        }
-        auto [first, last] = edge;
-        if (!follows_straight_boundary(first, last)) {
-            std::swap(first, last);
-            if (!follows_straight_boundary(first, last)) {
-                return false;
-            }
-        }
-        for (std::size_t corner = first; corner != last;
-             corner = (corner + 1U) % positions.size()) {
-            if (covered_segments[corner]) {
-                return false;
-            }
-            covered_segments[corner] = true;
-        }
-    }
-    return std::ranges::all_of(covered_segments, [](bool covered) { return covered; });
+    return triangulation_preserves_face_boundary(
+        face, vertex_lookup,
+        triangulate_face_local_indices(document, face, vertex_lookup));
 }
 
 std::vector<ElementId> face_vertices_between(const Face& face, std::size_t start_index, std::size_t end_index)

@@ -396,6 +396,27 @@ create_unit_box(ViewportInteractionHarness &harness) {
   return box.value();
 }
 
+quader::QuaderModelingObjectRef
+create_beveled_box_side(ViewportInteractionHarness &harness) {
+  quader_poly::Document document;
+  std::array<quader_poly::ElementId, 4> vertices;
+  const std::array positions{
+      quader::QVec3{3.0f, -0.5f, 3.5f},
+      quader::QVec3{3.0f, -0.2142857313156128f, 3.0f},
+      quader::QVec3{3.0f, -0.2142857313156128f, -3.0f},
+      quader::QVec3{3.0f, -0.5f, -3.5f},
+  };
+  for (std::size_t index = 0; index < vertices.size(); ++index) {
+    vertices[index] = quader_poly::add_vertex(document, positions[index]);
+  }
+  (void)quader_poly::add_face(document, vertices);
+  const auto created = harness.editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+      {.name = "Box Face 10 Gizmo Regression"});
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.value();
+}
+
 /// Exercises native picking against a capped cylinder's authored edge IDs.
 struct CylinderEdgeSelectionScenario final {
   using EdgeId = std::pair<quader::QuaderElementId, quader::QuaderElementId>;
@@ -10773,6 +10794,125 @@ TEST(ViewportInteractionControllerTests,
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Face);
     EXPECT_EQ(selection.selected_face_count, 1u);
     EXPECT_EQ(selection.selected_object_count, 1u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     BeveledBoxLocalComponentGizmoUsesStableFramesForDrawingDragAndHistory) {
+  for (const auto mode : {quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Vertex}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ViewportInteractionHarness harness;
+    harness.camera.set_view_direction({-0.45f, -0.35f, -0.82f});
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::GridSnap, false));
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::VertexSnap, false));
+    const auto object = create_beveled_box_side(harness);
+    select_single_component(harness, object, mode);
+    ASSERT_TRUE(harness.editor.viewports()
+                    .set_transform_space(quader::QuaderTransformSpace::Local)
+                    .ok());
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    harness.session.history().clear();
+
+    quader::QuaderTransform3 expected{
+        .x_axis = {0.0f, 0.0f, 1.0f},
+        .y_axis = {0.0f, 1.0f, 0.0f},
+        .z_axis = {-1.0f, 0.0f, 0.0f},
+    };
+    if (mode != quader::QuaderSelectionMode::Face) {
+      const auto edge = quader::normalize(quader::QVec3{
+          0.0f, 0.5f - 0.2142857313156128f, -0.5f});
+      expected.x_axis = quader::cross(expected.z_axis, edge);
+      expected.y_axis = edge * -1.0f;
+    }
+    const auto orientation = harness.editor.query().selection_transform_orientation();
+    ASSERT_TRUE(orientation.has_value());
+    expect_vec3_near(orientation->x_axis, expected.x_axis);
+    expect_vec3_near(orientation->y_axis, expected.y_axis);
+    expect_vec3_near(orientation->z_axis, expected.z_axis);
+    const auto before_center = harness.editor.query().selection_center();
+    ASSERT_TRUE(before_center.has_value());
+    const auto selection_before = harness.editor.selection().summary();
+
+    (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+    const auto expect_drawn_axes = [&]() {
+      const auto *frame = harness.controller.transform_gizmo_frame();
+      ASSERT_NE(frame, nullptr);
+      for (const auto &[axis, direction] :
+           std::array{
+               std::pair{quader_editor_core::TransformAxis::X, expected.x_axis},
+               std::pair{quader_editor_core::TransformAxis::Y, expected.y_axis},
+               std::pair{quader_editor_core::TransformAxis::Z, expected.z_axis},
+           }) {
+        const auto *primitive = find_axis(*frame, axis);
+        ASSERT_NE(primitive, nullptr);
+        expect_vec3_near(gizmo_axis_world_direction(*primitive), direction);
+      }
+    };
+    expect_drawn_axes();
+    const auto cache_before = harness.controller.transform_gizmo_selection_cache_stats();
+    for (int repeat = 0; repeat < 3; ++repeat) {
+      (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+      expect_drawn_axes();
+    }
+    harness.camera.set_view_direction({-0.6f, -0.3f, -0.7f});
+    (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+    expect_drawn_axes();
+    const auto cache_after = harness.controller.transform_gizmo_selection_cache_stats();
+    EXPECT_EQ(cache_after.selection_pivot_recompute_count,
+              cache_before.selection_pivot_recompute_count);
+    EXPECT_EQ(cache_after.selection_cache_hit_count,
+              cache_before.selection_cache_hit_count + 4U);
+
+    const auto *frame = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(frame, nullptr);
+    const auto *axis = find_axis(*frame, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(axis, nullptr);
+    const auto screen_delta = axis->screen_tip - axis->screen_start;
+    const float screen_length = std::sqrt(
+        screen_delta.x * screen_delta.x + screen_delta.y * screen_delta.y);
+    ASSERT_GT(screen_length, 1.0f);
+    const auto start = axis_screen_point(*axis, 0.65f);
+    press_update_release_gizmo(harness, start,
+                               start + screen_delta * (80.0f / screen_length));
+    const auto after_center = harness.editor.query().selection_center();
+    ASSERT_TRUE(after_center.has_value());
+    const auto displacement = *after_center - *before_center;
+    ASSERT_GT(quader::length(displacement), 0.01f);
+    EXPECT_GT(quader::dot(quader::normalize(displacement), expected.x_axis), 0.999f);
+    EXPECT_NEAR(quader::dot(displacement, expected.y_axis), 0.0f, 0.001f);
+    EXPECT_NEAR(quader::dot(displacement, expected.z_axis), 0.0f, 0.001f);
+
+    const auto expect_selection = [&]() {
+      const auto selection = harness.editor.selection().summary();
+      EXPECT_EQ(selection.mode, selection_before.mode);
+      EXPECT_EQ(selection.active_object_id, selection_before.active_object_id);
+      EXPECT_EQ(selection.active_kind, selection_before.active_kind);
+      EXPECT_EQ(selection.active_vertex_id, selection_before.active_vertex_id);
+      EXPECT_EQ(selection.active_edge_a, selection_before.active_edge_a);
+      EXPECT_EQ(selection.active_edge_b, selection_before.active_edge_b);
+      EXPECT_EQ(selection.active_face_id, selection_before.active_face_id);
+      EXPECT_EQ(selection.selected_vertex_count, selection_before.selected_vertex_count);
+      EXPECT_EQ(selection.selected_edge_count, selection_before.selected_edge_count);
+      EXPECT_EQ(selection.selected_face_count, selection_before.selected_face_count);
+    };
+    expect_selection();
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    const auto undone_center = harness.editor.query().selection_center();
+    ASSERT_TRUE(undone_center.has_value());
+    expect_vec3_near(*undone_center, *before_center);
+    expect_selection();
+    (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+    expect_drawn_axes();
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    const auto redone_center = harness.editor.query().selection_center();
+    ASSERT_TRUE(redone_center.has_value());
+    expect_vec3_near(*redone_center, *after_center);
+    expect_selection();
+  }
 }
 
 TEST(ViewportInteractionControllerTests,

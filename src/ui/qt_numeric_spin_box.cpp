@@ -17,6 +17,8 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QSpinBox>
+#include <QStyle>
+#include <QStyleOptionSpinBox>
 #include <QToolButton>
 #include <QWindow>
 
@@ -39,6 +41,45 @@ const QString &installer_name() {
 
 int arrow_extent(const QAbstractSpinBox &spin_box) {
   return std::max(14, spin_box.fontMetrics().height() + 2);
+}
+
+int framed_text_width(const QAbstractSpinBox &spin_box, int text_width) {
+  QStyleOptionSpinBox option;
+  option.initFrom(&spin_box);
+  option.frame = spin_box.hasFrame();
+  option.buttonSymbols = QAbstractSpinBox::NoButtons;
+  const QSize contents(text_width, spin_box.fontMetrics().height());
+  return spin_box.style()->sizeFromContents(QStyle::CT_SpinBox, &option,
+                                            contents, &spin_box).width();
+}
+
+int numeric_text_width(const QAbstractSpinBox &spin_box) {
+  const QFontMetrics metrics = spin_box.fontMetrics();
+  int width = metrics.horizontalAdvance(spin_box.specialValueText());
+  const auto measure = [&](const QString &text) {
+    // Match Qt's native allowance for the line editor's padding and cursor.
+    width = std::max(width, metrics.horizontalAdvance(text + QLatin1Char(' ')));
+  };
+  QLocale locale = spin_box.locale();
+  locale.setNumberOptions(spin_box.isGroupSeparatorShown()
+                              ? locale.numberOptions() & ~QLocale::OmitGroupSeparator
+                              : locale.numberOptions() | QLocale::OmitGroupSeparator);
+  if (const auto *floating = qobject_cast<const QDoubleSpinBox *>(&spin_box)) {
+    // Native size hints measure only formatted range endpoints. Compact whole
+    // endpoints omit the fractional places that interior values can require.
+    const int decimals = std::min(floating->decimals(), 4);
+    for (const double value : {floating->minimum(), floating->maximum()}) {
+      QString number = locale.toString(value, 'f', decimals);
+      // Preserve Qt's range-sample cap for practically unbounded controls.
+      number.truncate(18);
+      measure(floating->prefix() + number + floating->suffix());
+    }
+  } else if (const auto *integer = qobject_cast<const QSpinBox *>(&spin_box)) {
+    for (const int value : {integer->minimum(), integer->maximum()}) {
+      measure(integer->prefix() + locale.toString(value) + integer->suffix());
+    }
+  }
+  return width + 2;
 }
 
 bool is_numeric_spin_box(QObject *object) {
@@ -259,6 +300,8 @@ QtNumericSpinBoxController::QtNumericSpinBoxController(
       begin_editing(false);
     }
   });
+  connect(line_edit_, &QLineEdit::textChanged, this,
+          [this]() { schedule_geometry_refresh(); });
   refresh_geometry();
   refresh_presentation();
 }
@@ -766,28 +809,44 @@ void QtNumericSpinBoxController::synchronize_drag_value() {
   }
 }
 
-void QtNumericSpinBoxController::refresh_geometry() {
+void QtNumericSpinBoxController::refresh_geometry(bool refresh_minimum) {
   if (!decrease_button_ || refreshing_geometry_) {
     return;
   }
   refreshing_geometry_ = true;
-  if (!reserves_arrow_space_) {
+  const bool constrained_subclass = reserves_arrow_space_ &&
+      spin_box_.sizePolicy().horizontalPolicy() == QSizePolicy::Ignored;
+  if (refresh_minimum &&
+      (!reserves_arrow_space_ || (constrained_subclass && !editing_))) {
+    if (constrained_subclass &&
+        spin_box_.sizePolicy().horizontalStretch() == 0) {
+      // Qt box layouts give Ignored items a zero preferred width. A positive
+      // stretch makes their allocation honor the explicit readable minimum.
+      QSizePolicy policy = spin_box_.sizePolicy();
+      policy.setHorizontalStretch(1);
+      spin_box_.setSizePolicy(policy);
+    }
     const int current_minimum = spin_box_.minimumWidth();
     if (current_minimum != applied_minimum_width_) {
       authored_minimum_width_ = current_minimum;
     }
-    // Qt-created fields cannot override sizeHint. Reserve their arrow space
-    // through a minimum derived from current native metrics, never from the
-    // previously enlarged minimum, so live scaling returns without drift.
-    const int required_width =
-        spin_box_.sizeHint().width() + 2 * arrow_extent(spin_box_);
+    // Ignored size policies in compact rows bypass subclass size hints. Keep
+    // their visible value readable without reserving unbounded range endpoints.
+    // Qt-created fields still need their full native hint plus our arrow space.
+    const int required_width = constrained_subclass
+        ? framed_text_width(
+              spin_box_, line_edit_->fontMetrics().horizontalAdvance(
+                             line_edit_->text() + QLatin1Char(' ')) + 2) +
+              2 * arrow_extent(spin_box_)
+        : qt_numeric_spin_box_size_hint(spin_box_, spin_box_.sizeHint()).width();
     applied_minimum_width_ = std::max(authored_minimum_width_, required_width);
     if (current_minimum != applied_minimum_width_) {
       spin_box_.setMinimumWidth(applied_minimum_width_);
     }
   }
   const QRect contents = line_edit_->geometry();
-  const int extent = std::min(arrow_extent(spin_box_), contents.width() / 3);
+  const int extent = std::min(arrow_extent(spin_box_),
+                              std::max(0, (contents.width() - 1) / 2));
   decrease_button_->setGeometry(contents.x(), contents.y(), extent,
                                 contents.height());
   increase_button_->setGeometry(contents.right() - extent + 1, contents.y(),
@@ -805,11 +864,16 @@ void QtNumericSpinBoxController::schedule_geometry_refresh() {
   geometry_refresh_queued_ = true;
   QMetaObject::invokeMethod(this, [this]() {
     geometry_refresh_queued_ = false;
-    refresh_geometry();
+    // Measure after native text/font updates and outside the parent's geometry
+    // assignment. Synchronous Resize/Move only positions the arrow targets.
+    refresh_geometry(true);
   }, Qt::QueuedConnection);
 }
 
 void QtNumericSpinBoxController::refresh_presentation() {
+  if (!editing_) {
+    schedule_geometry_refresh();
+  }
   const bool interactive = can_interact();
   // Display mode keeps keyboard focus for enclosing shortcuts, but must not
   // leave the native text editor writable or paint its blinking caret.
@@ -897,6 +961,7 @@ bool QtNumericSpinBoxController::eventFilter(QObject *watched, QEvent *event) {
   case QEvent::Resize:
   case QEvent::Move:
     refresh_geometry();
+    schedule_geometry_refresh();
     break;
   case QEvent::StyleChange:
   case QEvent::FontChange:
@@ -1167,6 +1232,9 @@ bool qt_numeric_drag_active(const QApplication &application) {
 
 QSize qt_numeric_spin_box_size_hint(const QAbstractSpinBox &spin_box,
                                    QSize native_size) {
+  const int required_width = framed_text_width(
+      spin_box, numeric_text_width(spin_box));
+  native_size.setWidth(std::max(native_size.width(), required_width));
   native_size.rwidth() += 2 * arrow_extent(spin_box);
   return native_size;
 }

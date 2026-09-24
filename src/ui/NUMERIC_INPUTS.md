@@ -65,6 +65,10 @@ the range: 1 per pixel above 256, 0.5 above 32, otherwise 1 per 16 pixels.
 Shift alone preserves integer speed.
 Native keyboard and arrow increments remain owner-defined. Modifier changes retain
 a continuous drag baseline, and reaching a bound discards unreachable travel.
+Settings floating preferences consistently use 0.1 arrow increments and drag
+sensitivity, with 0.01 per pixel under Shift, including normalized ranges.
+Settings numeric fields snap to a fixed 1.0 with Ctrl independently of the
+viewport grid; integer preferences retain their whole-number domain and steps.
 
 Tool and face-texture drags publish their latest sample at a precise 16 ms
 cadence; new pointer samples do not postpone an active timer. Inspector transform

@@ -22,10 +22,15 @@ an interpolation mismatch alone must not reject valid geometry. Connectivity, ge
 invalid-data failures remain errors. Operations whose purpose is editing UVs still validate
 the requested UV result strictly.
 
-Combine Faces checks that the output triangulation covers the full 3D boundary,
-including folds that collapse in a planar projection. The operation and cached
-command availability share this geometry check; a nonempty triangle list alone
-does not establish a valid merge.
+Polygon triangulation prefers complete 3D boundary coverage over partial axis
+projections. Folds that collapse in those projections use an anchored,
+normalized Newell-plane projection; an unchecked triangle fan is not a fallback.
+Projected straight corners that bend in 3D are restored by splitting the exposed
+triangle boundary. Only straight 3D corners and exact retraced spurs may be skipped.
+An incomplete legacy axis result remains a final rendering fallback for existing
+malformed faces. Fill Hole and Combine Faces require the complete-boundary check,
+so that fallback cannot authorize a new cap or merge. Combine Faces command
+availability uses the same check.
 
 ## Internal Decomposition
 

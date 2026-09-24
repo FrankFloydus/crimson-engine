@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -232,7 +233,7 @@ TEST_F(UvNativeSamplingTests, CombineIdentityRetainsNonAffineAuthoredChartsAndUn
   expect_displayed_corners(displayed(survivor.entity), expected);
 }
 
-TEST_F(UvNativeSamplingTests, CombinePerpendicularCubeFacesRejectsInvalidGeometryWithoutMutation) {
+TEST_F(UvNativeSamplingTests, CombinePerpendicularCubeFacesKeepsCompleteBoundaryAndUndoRedo) {
   auto document = quader_poly::make_cube({});
   quader_poly::ElementId top = quader_poly::kInvalidElementId;
   quader_poly::ElementId side = quader_poly::kInvalidElementId;
@@ -263,30 +264,85 @@ TEST_F(UvNativeSamplingTests, CombinePerpendicularCubeFacesRejectsInvalidGeometr
     return modeling::serialize_qdr_authored_topology(sdk).or_throw();
   };
   const auto original = snapshot();
+  const auto original_displayed = displayed(object.entity);
   const auto selection = editor_.modeling().selection_summary();
   session_.history().clear();
   const auto descriptor = editor_.commands().descriptor(quader_command::kModelingCombineFaces);
   ASSERT_TRUE(descriptor.has_value());
-  EXPECT_FALSE(descriptor->enabled);
+  EXPECT_TRUE(descriptor->enabled);
   const auto context_actions = editor_.modeling().available_action_set({
       .surface = QuaderActionSurface::ViewportContextMenu,
       .include_disabled = false,
       .include_hidden = false});
-  for (const auto &panel : context_actions.panels) {
-    EXPECT_TRUE(std::ranges::none_of(panel.actions, [](const QuaderActionItem &action) {
+  EXPECT_TRUE(std::ranges::any_of(context_actions.panels, [](const auto &panel) {
+    return std::ranges::any_of(panel.actions, [](const QuaderActionItem &action) {
       return action.action_id == "combine_faces";
-    }));
-  }
+    });
+  }));
   const auto combined = editor_.commands().execute(quader_command::kModelingCombineFaces);
-  EXPECT_FALSE(combined.ok());
-  EXPECT_FALSE(combined.changed());
+  ASSERT_TRUE(combined.ok()) << combined.error_message();
+  ASSERT_TRUE(combined.changed());
+  const auto committed = snapshot();
+  EXPECT_NE(committed, original);
+  const auto committed_selection = editor_.modeling().selection_summary();
+  EXPECT_EQ(committed_selection.mode, QuaderSelectionMode::Face);
+  EXPECT_EQ(committed_selection.selected_face_count, 1U);
+  EXPECT_GT(committed_selection.selection_revision, selection.selection_revision);
+  EXPECT_GT(committed_selection.content_revision, selection.content_revision);
+  const auto mesh = session_.modeling().compile_object_mesh(object.modeling_object_id);
+  ASSERT_TRUE(mesh.has_value());
+  ASSERT_EQ(mesh->authored_polygon_document->faces.size(), 5U);
+  const auto *merged = quader_poly::find_face(
+      *mesh->authored_polygon_document,
+      static_cast<quader_poly::ElementId>(committed_selection.active_face_id));
+  ASSERT_NE(merged, nullptr);
+  ASSERT_EQ(merged->vertices.size(), 6U);
+  ASSERT_EQ(merged->uvs.size(), merged->vertices.size());
+  for (const auto uv : merged->uvs) {
+    EXPECT_TRUE(std::isfinite(uv.x));
+    EXPECT_TRUE(std::isfinite(uv.y));
+  }
+  const auto &geometry = mesh->geometry();
+  ASSERT_EQ(geometry.primitives.size(), 5U);
+  const auto primitive = std::ranges::find_if(geometry.primitives, [](const auto &span) {
+    return span.index_count == 12U;
+  });
+  ASSERT_NE(primitive, geometry.primitives.end());
+  std::map<std::pair<quader_poly::ElementId, quader_poly::ElementId>, int> edge_uses;
+  for (std::size_t triangle = primitive->index_offset;
+       triangle < primitive->index_offset + primitive->index_count; triangle += 3U) {
+    for (std::size_t corner = 0; corner < 3U; ++corner) {
+      const auto from = geometry.vertices[geometry.indices[triangle + corner]].source_vertex_id;
+      const auto to = geometry.vertices[geometry.indices[triangle + (corner + 1U) % 3U]].source_vertex_id;
+      ++edge_uses[std::minmax(from, to)];
+    }
+  }
+  for (std::size_t corner = 0; corner < merged->vertices.size(); ++corner) {
+    const auto from = merged->vertices[corner];
+    const auto to = merged->vertices[(corner + 1U) % merged->vertices.size()];
+    const auto key = std::minmax(from, to);
+    EXPECT_EQ(edge_uses[key], 1) << "Missing compiled boundary " << from << "," << to;
+    edge_uses.erase(key);
+  }
+  for (const auto &edge : edge_uses) EXPECT_EQ(edge.second, 2);
+  const auto committed_displayed = displayed(object.entity);
+  EXPECT_EQ(session_.history().undo_count(), 1U);
+
+  ASSERT_TRUE(editor_.history().undo().ok());
   EXPECT_EQ(snapshot(), original);
-  const auto unchanged_selection = editor_.modeling().selection_summary();
-  EXPECT_EQ(unchanged_selection.active_face_id, selection.active_face_id);
-  EXPECT_EQ(unchanged_selection.selected_face_count, selection.selected_face_count);
-  EXPECT_EQ(unchanged_selection.selection_revision, selection.selection_revision);
-  EXPECT_EQ(unchanged_selection.content_revision, selection.content_revision);
-  EXPECT_EQ(session_.history().undo_count(), 0U);
+  expect_displayed_corners(displayed(object.entity), original_displayed);
+  const auto restored_selection = editor_.modeling().selection_summary();
+  EXPECT_EQ(restored_selection.active_face_id, selection.active_face_id);
+  EXPECT_EQ(restored_selection.selected_face_count, selection.selected_face_count);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_EQ(snapshot(), committed);
+  expect_displayed_corners(displayed(object.entity), committed_displayed);
+  const auto redone_selection = editor_.modeling().selection_summary();
+  EXPECT_EQ(redone_selection.active_face_id, committed_selection.active_face_id);
+  EXPECT_EQ(redone_selection.selected_face_count, 1U);
+  const auto redone_mesh = session_.modeling().compile_object_mesh(object.modeling_object_id);
+  ASSERT_TRUE(redone_mesh.has_value());
+  EXPECT_TRUE(mesh_geometry_payload_equal(redone_mesh->geometry(), geometry));
 }
 
 TEST_F(UvNativeSamplingTests, CombineCoplanarFacesRemovesUvSeamAndPreservesUndoRedo) {

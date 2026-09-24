@@ -103,7 +103,7 @@ private:
   void finish_drag(bool notify = true);
   void finish_native_edit();
   void emit_commit();
-  void refresh_geometry();
+  void refresh_geometry(bool refresh_minimum = false);
   void schedule_geometry_refresh();
   void refresh_presentation();
   void watch_window();
