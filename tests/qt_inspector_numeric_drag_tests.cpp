@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
@@ -20,6 +21,11 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QHeaderView>
+#include <QHelpEvent>
+#include <QToolTip>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QEnterEvent>
@@ -41,6 +47,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -163,8 +170,9 @@ void settle_inspector_layout(InspectorPanel &panel) {
 }
 
 void export_inspector_image(InspectorPanel &panel, const QString &name) {
-  const QString directory =
-      qEnvironmentVariable("QUADER_INSPECTOR_SCREENSHOT_DIR");
+  const QString directory = qEnvironmentVariable(
+      "QUADER_INSPECTOR_SCREENSHOT_DIR",
+      qEnvironmentVariable("QUADER_UI_REVIEW_DIR"));
   if (directory.isEmpty()) {
     return;
   }
@@ -223,6 +231,142 @@ private:
 };
 
 TEST_F(QtInspectorNumericDragTests,
+       HiddenColumnHeaderKeepsVisibleDividerResizableWithoutChangingValues) {
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  QtUiScaleApplicationController scale_controller(application());
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  InspectorPanel panel;
+  scale_controller.add_change_listener(panel, [&](const QtUiScaleMetrics &metrics) {
+    panel.apply_ui_scale(metrics);
+  });
+  show(panel, runtime);
+  auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  ASSERT_NE(tree, nullptr);
+  EXPECT_TRUE(tree->isHeaderHidden());
+  const auto revision = runtime.session.scene().revision();
+  const auto undo_count = runtime.session.history().undo_count();
+  QPointer<QDoubleSpinBox> original_field(position_x(panel));
+  for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+    panel.setLayoutDirection(direction);
+    for (const float scale : {1.0F, 2.0F, 1.0F}) {
+      scale_controller.apply_factor(scale);
+      panel.resize(scale_controller.metrics().size(QSize(418, 900)));
+      settle_inspector_layout(panel);
+      tree->header()->resizeSection(0, scale_controller.metrics().px(140));
+      settle_inspector_layout(panel);
+      const auto *section = tree->topLevelItem(0);
+      ASSERT_GT(section->childCount(), 0);
+      const int before = tree->columnWidth(0);
+      const int x = tree->header()->sectionViewportPosition(0) +
+                    (direction == Qt::LeftToRight ? before - 1 : 1);
+      const QPoint origin(x, tree->visualItemRect(section->child(0)).center().y());
+      send_mouse(*tree->viewport(), QEvent::MouseMove, origin, Qt::NoButton,
+                 Qt::NoButton);
+      EXPECT_EQ(tree->viewport()->cursor().shape(), Qt::SizeHorCursor);
+      const int change = scale_controller.metrics().px(18);
+      const QPoint target = origin + QPoint(
+          direction == Qt::LeftToRight ? change : -change, 0);
+      send_mouse(*tree->viewport(), QEvent::MouseButtonPress, origin,
+                 Qt::LeftButton, Qt::LeftButton);
+      send_mouse(*tree->viewport(), QEvent::MouseMove, target,
+                 Qt::NoButton, Qt::LeftButton);
+      send_mouse(*tree->viewport(), QEvent::MouseButtonRelease, target,
+                 Qt::LeftButton, Qt::NoButton);
+      settle_inspector_layout(panel);
+      EXPECT_EQ(tree->columnWidth(0), before + change);
+      EXPECT_EQ(position_x(panel), original_field.data());
+      panel.refresh(runtime.context);
+      EXPECT_EQ(tree->columnWidth(0), before + change);
+    }
+  }
+  EXPECT_EQ(runtime.session.scene().revision(), revision);
+  EXPECT_EQ(runtime.session.history().undo_count(), undo_count);
+  runtime.expect_position_x(1.0);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       MeshPhysicsOnlyExposesSupportedTogglesAndPreservesSavedTypes) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  auto *mesh = runtime.session.scene().mesh(runtime.entity);
+  ASSERT_NE(mesh, nullptr);
+  EXPECT_EQ(mesh->collision_type, MeshCollisionType::Mesh);
+  EXPECT_EQ(mesh->body_type, MeshPhysicsBodyType::StaticBody);
+  InspectorPanel panel;
+  show(panel, runtime);
+  const auto expect_controls = [&]() {
+    EXPECT_EQ(panel.findChild<QComboBox *>(QStringLiteral("inspector.physics.collision_type")), nullptr);
+    EXPECT_EQ(panel.findChild<QComboBox *>(QStringLiteral("inspector.physics.body_type")), nullptr);
+    EXPECT_NE(panel.findChild<QCheckBox *>(QStringLiteral("inspector.physics.generate_collisions")), nullptr);
+    EXPECT_NE(panel.findChild<QCheckBox *>(QStringLiteral("inspector.physics.display_collision")), nullptr);
+  };
+  expect_controls();
+  auto saved = to_api_mesh_component(*mesh);
+  saved.collision_type = QuaderMeshCollisionType::Sphere;
+  saved.body_type = QuaderMeshPhysicsBodyType::RigidBody;
+  ASSERT_TRUE(runtime.editor.scene().set_mesh_component(runtime.entity, saved).ok());
+  panel.refresh(runtime.context);
+  settle_inspector_layout(panel);
+  expect_controls();
+  auto *generate = panel.findChild<QCheckBox *>(QStringLiteral("inspector.physics.generate_collisions"));
+  ASSERT_NE(generate, nullptr);
+  generate->setChecked(!saved.generate_collisions);
+  mesh = runtime.session.scene().mesh(runtime.entity);
+  ASSERT_NE(mesh, nullptr);
+  EXPECT_EQ(mesh->generate_collisions, !saved.generate_collisions);
+  EXPECT_EQ(mesh->collision_type, MeshCollisionType::Sphere);
+  EXPECT_EQ(mesh->body_type, MeshPhysicsBodyType::RigidBody);
+  EXPECT_NE(panel.findChild<QLabel *>(QStringLiteral("inspector.physics.collision_status")), nullptr);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       PropertyLabelsExposeLocalizedHelpThroughNativeDelayedTooltipEvents) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  ASSERT_TRUE(runtime.localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  InspectorPanel panel;
+  show(panel, runtime);
+  auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
+  ASSERT_NE(tree, nullptr);
+  const auto verify_help = [&]() {
+    for (int index = 0; index < tree->topLevelItemCount(); ++index) {
+      auto *section = tree->topLevelItem(index);
+      auto *header = tree->itemWidget(section, 0);
+      ASSERT_NE(header, nullptr);
+      EXPECT_FALSE(header->toolTip().isEmpty());
+      for (int row = 0; row < section->childCount(); ++row) {
+        const auto *item = section->child(row);
+        EXPECT_FALSE(item->toolTip(0).isEmpty()) << item->text(0).toStdString();
+        EXPECT_NE(item->toolTip(0), item->text(0));
+      }
+    }
+  };
+  verify_help();
+  const auto *name = tree->topLevelItem(0)->child(0);
+  const QString english_help = name->toolTip(0);
+  const QPoint position(24, tree->visualItemRect(name).center().y());
+  QToolTip::hideText();
+  send_mouse(*tree->viewport(), QEvent::MouseMove, position, Qt::NoButton,
+             Qt::NoButton);
+  EXPECT_FALSE(QToolTip::isVisible());
+  QHelpEvent help_event(QEvent::ToolTip, position,
+                        tree->viewport()->mapToGlobal(position));
+  QCoreApplication::sendEvent(tree->viewport(), &help_event);
+  EXPECT_EQ(QToolTip::text(), english_help);
+  QToolTip::hideText();
+  ASSERT_TRUE(runtime.localization.select_locale("it-IT"));
+  panel.refresh(runtime.context);
+  settle_inspector_layout(panel);
+  verify_help();
+  EXPECT_NE(tree->topLevelItem(0)->child(0)->toolTip(0), english_help);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
        TransformAxesStayStackedAlignedAndReadableInNarrowScaledPanels) {
   apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
   QtUiScaleApplicationController scale_controller(application());
@@ -246,7 +390,7 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_TRUE(name->hasFrame());
   EXPECT_FALSE(name->isReadOnly());
 
-  for (const float scale : {1.0F, 1.5F, 2.0F}) {
+  for (const float scale : {1.0F, 1.5F, 2.0F, 1.0F}) {
     scale_controller.apply_factor(scale);
     for (const int design_width : {418, 320}) {
       SCOPED_TRACE(::testing::Message()
@@ -277,6 +421,7 @@ TEST_F(QtInspectorNumericDragTests,
           EXPECT_TRUE(field->isEnabled());
           EXPECT_FALSE(field->isReadOnly());
           EXPECT_EQ(label->text(), QString::fromLatin1(axis).toUpper());
+          EXPECT_FALSE(label->toolTip().isEmpty());
 
           const QRect field_rect = relative_geometry(*field, *row);
           const QRect label_rect = relative_geometry(*label, *row);
@@ -420,6 +565,13 @@ TEST_F(QtInspectorNumericDragTests,
       const QRect surface =
           header->content_rect().translated(header_rect.topLeft());
       EXPECT_GE(surface.height(), scale_controller.metrics().px(30));
+      const QPoint header_sample(surface.right() - scale_controller.metrics().px(16),
+                                 surface.center().y());
+      if (tree->viewport()->rect().contains(header_sample)) {
+        EXPECT_NE(viewport_image.pixelColor(qRound(header_sample.x() * ratio),
+                                            qRound(header_sample.y() * ratio)),
+                  tree->palette().color(QPalette::AlternateBase));
+      }
       if (index > 0) {
         const int section_gap = surface.top() - previous_section_bottom - 1;
         EXPECT_GE(section_gap, scale_controller.metrics().px(8));
@@ -433,6 +585,16 @@ TEST_F(QtInspectorNumericDragTests,
       }
       if (item->childCount() > 0 && item->isExpanded()) {
         const QRect body_start = tree->visualItemRect(item->child(0));
+        auto *first_container = tree->itemWidget(item->child(0), 1);
+        auto *last_container = tree->itemWidget(item->child(item->childCount() - 1), 1);
+        if (first_container != nullptr && last_container != nullptr) {
+          ASSERT_NE(first_container->layout(), nullptr);
+          ASSERT_NE(last_container->layout(), nullptr);
+          EXPECT_EQ(first_container->layout()->contentsMargins().top(),
+                    scale_controller.metrics().px(8));
+          EXPECT_EQ(last_container->layout()->contentsMargins().bottom(),
+                    first_container->layout()->contentsMargins().top());
+        }
         previous_section_bottom =
             tree->visualItemRect(item->child(item->childCount() - 1)).bottom();
         const QPoint body_sample(scale_controller.metrics().px(8),

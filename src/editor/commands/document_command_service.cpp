@@ -308,7 +308,9 @@ DocumentCommandService::create_entity(std::string name, EntityKind kind,
   if ((kind == EntityKind::Light &&
        !release_has_feature(ReleaseFeature::Lights)) ||
       (kind == EntityKind::Curve &&
-       !release_has_feature(ReleaseFeature::Curves))) {
+       !release_has_feature(ReleaseFeature::Curves)) ||
+      (kind == EntityKind::Instance &&
+       !release_has_feature(ReleaseFeature::Instancing))) {
     return invalid_create_result(release_feature_unavailable_message());
   }
 

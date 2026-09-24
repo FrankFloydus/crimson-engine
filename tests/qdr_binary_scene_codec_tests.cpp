@@ -2707,6 +2707,23 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_NE(read.document.scene().texture_mapping(occurrence), nullptr);
   EXPECT_EQ(*read.document.scene().texture_mapping(occurrence),
             occurrence_mapping);
+
+  auto public_tagged_snapshot = required_write_snapshot(document);
+  public_tagged_snapshot.minimum_product_release = kPublicRelease01;
+  const auto public_tagged_bytes = QdrDocumentWriter::serialize_project_document_bytes(
+      public_tagged_snapshot, test_uuid());
+  const auto restricted = QdrDocumentReader::deserialize_project_document(
+      public_tagged_bytes, kPublicRelease01);
+  EXPECT_FALSE(restricted.ok);
+  ASSERT_FALSE(restricted.diagnostics.empty());
+  EXPECT_EQ(restricted.diagnostics.front().code, "qdr.binary.unavailable_feature");
+  EXPECT_TRUE(restricted.document.scene().entities().empty());
+  const auto retained = QdrDocumentReader::deserialize_project_document(
+      public_tagged_bytes, kInternalFullRelease);
+  ASSERT_TRUE(retained.ok) << retained.message;
+  ASSERT_NE(retained.document.scene().instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(retained.document.scene().instance_occurrence(occurrence)->definition,
+            definition);
 }
 
 TEST(QdrBinarySceneCodecTests, SchemaSixIgnoresAppendedTextureMapping) {

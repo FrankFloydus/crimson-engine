@@ -81,6 +81,26 @@ TEST_F(PublicReleaseModelingTests,
   ASSERT_TRUE(editor().modeling().cancel_transform_preview().ok());
 }
 
+TEST_F(PublicReleaseModelingTests, InstancingRejectionsPreservePendingToolAndPreview) {
+  auto &modeling = editor().modeling();
+  const auto expect_rejections = [&] {
+    EXPECT_FALSE(modeling.can_create_instance_from_selection());
+    EXPECT_FALSE(modeling.can_flatten_selected_instances());
+    EXPECT_FALSE(modeling.can_enter_instance_edit(first.id()));
+    EXPECT_FALSE(modeling.can_exit_instance_edit());
+    expect_release_rejection(editor(), [&] { return modeling.create_instance_from_selection(); });
+    expect_release_rejection(editor(), [&] { return modeling.flatten_selected_instances(); });
+    expect_release_rejection(editor(), [&] { return modeling.enter_instance_edit(first.id()); });
+    expect_release_rejection(editor(), [&] { return modeling.exit_instance_edit(); });
+  };
+  ASSERT_TRUE(modeling.begin_transform_preview().ok());
+  ASSERT_TRUE(modeling.update_transform_translate({0.5f, 0.0f, 0.0f}).ok());
+  expect_rejections();
+  ASSERT_TRUE(modeling.cancel_transform_preview().ok());
+  ASSERT_TRUE(editor().tools().activate(ViewportToolId::CreatePrimitive).ok());
+  expect_rejections();
+}
+
 TEST_F(PublicReleaseModelingTests, PlacementBakingAndPivotCannotMutateSelection) {
   auto &modeling = editor().modeling();
   EXPECT_FALSE(modeling.can_snap_selected_meshes_to_floor());

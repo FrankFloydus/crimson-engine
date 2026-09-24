@@ -35,7 +35,8 @@ using DocumentEntitySnapshot = SceneEntityStateTree;
   const bool lights_available = release_has_feature(ReleaseFeature::Lights);
   const bool curves_available = release_has_feature(ReleaseFeature::Curves);
   const bool layers_available = release_has_feature(ReleaseFeature::Layers);
-  if (lights_available && curves_available && layers_available) {
+  const bool instances_available = release_has_feature(ReleaseFeature::Instancing);
+  if (lights_available && curves_available && layers_available && instances_available) {
     return true;
   }
   for (const EntityId root : roots) {
@@ -47,7 +48,11 @@ using DocumentEntitySnapshot = SceneEntityStateTree;
            (scene.kind(entity) == EntityKind::Light || scene.light(entity))) ||
           (!curves_available &&
            (scene.kind(entity) == EntityKind::Curve || scene.curve(entity))) ||
-          (!layers_available && scene.entity_layer(entity) != kInvalidSceneLayerId)) {
+          (!layers_available && scene.entity_layer(entity) != kInvalidSceneLayerId) ||
+          (!instances_available &&
+           (scene.kind(entity) == EntityKind::Instance ||
+            scene.instance_definition(entity) != nullptr ||
+            scene.instance_occurrence(entity) != nullptr))) {
         return false;
       }
     }

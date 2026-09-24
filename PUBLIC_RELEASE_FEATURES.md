@@ -9,8 +9,9 @@ file except through prior written authorization from Francesco Di Blasi.
 # Features unavailable in public v0.1
 
 This is the reactivation checklist for **quader-0.1.exe**. The internal **quader.exe**
-retains the complete feature set. Public feature releases are independent of the
-internal application version in `VERSION`.
+retains the complete feature set except for temporary UI restrictions explicitly
+marked as applying to both executables below. Public feature releases are independent
+of the internal application version in `VERSION`.
 
 Unchecked items are intentionally unavailable in public 0.1. Unless explicitly
 marked **UI only**, they are hidden from the UI and rejected through commands,
@@ -50,8 +51,8 @@ Intrinsic/generated mesh UV data remains stored and exported. Disabling UV editi
 does not remove the UV data needed by existing geometry and the default material.
 
 **Settings > Viewport > Default Material remains available.** Its image preview and
-PNG/JPG chooser configure the shared default material for existing and future meshes,
-instances and tool previews. Apply/OK publishes the change; Cancel discards the draft.
+PNG/JPG chooser configure the shared default material for existing and future meshes
+and tool previews. Apply/OK publishes the change; Cancel discards the draft.
 The selected image is copied into the application's settings profile, so moving the
 original image does not break the preference. This does not enable authored materials
 or UV editing, and canonical scene material references and saved geometry stay unchanged.
@@ -82,6 +83,17 @@ Solid retains its existing flat-color appearance; Shaded displays the material t
 Wireframe, Solid and Shaded remain available. Ordinary construction grids, camera
 navigation and internal camera clipping remain available. Fixed internal lighting,
 environment resources and default-material shaders remain implementation support.
+
+## Mesh physics controls
+
+- [ ] **Collision Type and Body type (UI only, both executables)**
+  - Temporarily omit these unsupported selectors from the mesh Inspector's Physics section.
+  - New meshes retain the existing `MeshCollisionType::Mesh` and `MeshPhysicsBodyType::StaticBody`
+    defaults. Hiding the selectors does not rewrite saved physics properties or remove
+    programmatic access.
+  - Generate Collision and Display Collision remain available.
+  - Restore the selectors when the alternate collision/body modes are supported. This is
+    a shared Inspector restriction, not a separately scheduled `ReleaseFeature`.
 
 ## Primitives
 
@@ -159,6 +171,19 @@ workflows, not an equivalent geometric result produced through permitted tools.
 
 Normal move/rotate/scale, their internal transform centers and camera navigation
 pivots remain available. Box/click selection remains available.
+
+## Scene instances
+
+- [ ] **Scene instancing** — `ReleaseFeature::Instancing`
+  - Create Instance, Flatten Instance and instance-edit entry/exit controls.
+  - Linked instance creation, flattening and edit scopes through native APIs.
+  - Generic instance-object creation and duplication of hierarchies containing instances.
+  - Copying and pasting linked instances through the project clipboard.
+  - Opening instance-bearing scenes in the public workspace: rejected explicitly,
+    without flattening or silently removing their contents.
+
+Ordinary mesh and group duplicates retain independent geometry and remain available,
+along with their normal copy/paste workflows. Internal Full retains instancing support.
 
 ## Layers
 

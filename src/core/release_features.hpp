@@ -65,6 +65,7 @@ enum class ReleaseFeature {
   Layers,
   ExtrudeTool,
   AdvancedSelectionUi,
+  Instancing,
   Count,
 };
 

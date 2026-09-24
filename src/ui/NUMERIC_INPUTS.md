@@ -65,6 +65,11 @@ the range: 1 per pixel above 256, 0.5 above 32, otherwise 1 per 16 pixels.
 Shift alone preserves integer speed.
 Native keyboard and arrow increments remain owner-defined. Modifier changes retain
 a continuous drag baseline, and reaching a bound discards unreachable travel.
+Mouse-wheel and trackpad gestures never change a numeric field, including during
+text entry or with modifiers held. The controller ignores them on both the spin
+box and its text editor so Qt can scroll the enclosing panel without committing
+the current draft. Arrow buttons, keyboard stepping and horizontal scrubbing
+retain their existing behavior.
 Settings floating preferences consistently use 0.1 arrow increments and drag
 sensitivity, with 0.01 per pixel under Shift, including normalized ranges.
 Settings numeric fields snap to a fixed 1.0 with Ctrl independently of the

@@ -11,6 +11,7 @@
 
 #include <QEvent>
 #include <QKeyEvent>
+#include <QPainterPath>
 #include <QStyleOptionFocusRect>
 #include <QStyleOptionToolButton>
 #include <QStylePainter>
@@ -98,7 +99,7 @@ protected:
           isEnabled() ? (isActiveWindow() ? QPalette::Active
                                          : QPalette::Inactive)
                       : QPalette::Disabled;
-      QColor fill = palette().color(group, QPalette::AlternateBase);
+      QColor fill = palette().color(group, QPalette::Button);
       const QColor tint = palette().color(
           group, isDown() ? QPalette::Shadow : QPalette::WindowText);
       const qreal amount = isDown() ? 0.16 : (underMouse() ? 0.035 : 0.0);
@@ -114,7 +115,20 @@ protected:
       painter.setRenderHint(QPainter::Antialiasing);
       painter.setPen(Qt::NoPen);
       painter.setBrush(fill);
-      painter.drawRoundedRect(surface, metrics_.px(6.0), metrics_.px(6.0));
+      QPainterPath header_surface;
+      header_surface.setFillRule(Qt::WindingFill);
+      const qreal radius = metrics_.px(6.0);
+      header_surface.addRoundedRect(surface, radius, radius);
+      if (isChecked()) {
+        header_surface.addRect(QRectF(surface.left(), surface.bottom() - radius,
+                                     surface.width(), radius));
+      }
+      painter.drawPath(header_surface.simplified());
+      if (isChecked()) {
+        painter.setPen(QPen(palette().color(group, QPalette::Midlight), inset));
+        painter.drawLine(QPointF(surface.left(), surface.bottom()),
+                         QPointF(surface.right(), surface.bottom()));
+      }
       option.rect.adjust(metrics_.px(8), 0, -metrics_.px(8), 0);
       painter.drawControl(QStyle::CE_ToolButtonLabel, option);
     } else {

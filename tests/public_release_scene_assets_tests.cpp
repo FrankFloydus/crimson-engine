@@ -10,6 +10,9 @@
 #include "assets/default_material_catalog.hpp"
 #include "core/release_features.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/instances/project_clipboard_service.hpp"
+#include "editor/instances/scene_instance_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "support/command_observable_state.hpp"
 
@@ -77,7 +80,8 @@ TEST(PublicReleaseSceneAssetsTests, AuthoringDenialsPreserveModelingPreview) {
   });
   expect_scene_asset_denied(editor, [&] { return editor.scene().create_point_light(); });
   expect_scene_asset_denied(editor, [&] { return editor.scene().create_directional_light(); });
-  for (const auto kind : {QuaderEntityKind::Light, QuaderEntityKind::Curve}) {
+  for (const auto kind : {QuaderEntityKind::Light, QuaderEntityKind::Curve,
+                          QuaderEntityKind::Instance}) {
     expect_scene_asset_denied(editor, [&] {
       return editor.scene().create_entity({.name = "Excluded", .kind = kind});
     });
@@ -116,7 +120,7 @@ TEST(PublicReleaseSceneAssetsTests, MaterialImportAndEditorRejectBeforeWritingFi
   EXPECT_FALSE(std::filesystem::exists(sources.front()));
 }
 
-TEST(PublicReleaseSceneAssetsTests, DefaultMaterialInstancePasteAcrossScenesSupportsUndo) {
+TEST(PublicReleaseSceneAssetsTests, ExistingInstancesCannotBeEditedCopiedOrDuplicated) {
   PublicSceneAssetsDirectory temporary;
   ProjectSession project;
   const auto created = project.create(temporary.path());
@@ -125,41 +129,48 @@ TEST(PublicReleaseSceneAssetsTests, DefaultMaterialInstancePasteAcrossScenesSupp
   const auto mesh = editor.modeling().create_box(
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Instance Member");
   ASSERT_TRUE(mesh.ok()) << mesh.error_message();
-  ASSERT_TRUE(editor.modeling().create_instance().ok());
-  const auto source_id = project.active_scene()->session_id;
-  const auto source_roots = project.active_scene()->session->scene().selected_entities();
-  ASSERT_EQ(source_roots.size(), 1u);
-  ASSERT_TRUE(editor.modeling().copy_selection().ok());
-  const auto destination = editor.scene_documents().new_scene();
-  ASSERT_TRUE(destination.ok()) << destination.error_message();
-  ASSERT_NE(destination.value(), source_id);
   SceneSession &session = *project.active_scene()->session;
-  const auto material_ids = session.assets().material_ids();
-  const auto texture_ids = session.assets().texture_ids();
-  const auto pasted = editor.modeling().paste_selection();
-  ASSERT_TRUE(pasted.ok()) << pasted.error_message();
-  ASSERT_TRUE(pasted.changed());
-  const auto roots = session.scene().selected_entities();
-  ASSERT_EQ(roots.size(), 1u);
-  const auto *occurrence = session.scene().instance_occurrence(roots.front());
-  ASSERT_NE(occurrence, nullptr);
-  const auto definition = occurrence->definition;
-  const auto members = session.scene().children(definition);
-  ASSERT_EQ(members.size(), 1u);
-  const auto *material = session.scene().material(members.front());
-  ASSERT_NE(material, nullptr);
-  EXPECT_EQ(material->material,
-            MaterialReference::project(*ProjectAssetId::parse(kDefaultProjectMaterialId)));
-  EXPECT_TRUE(material->material_slots.empty());
-  EXPECT_EQ(session.assets().material_ids(), material_ids);
-  EXPECT_EQ(session.assets().texture_ids(), texture_ids);
-  EXPECT_EQ(editor.query().history().undo_label, "Paste Instances");
-  ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_FALSE(session.scene().exists(roots.front()));
-  EXPECT_FALSE(session.scene().exists(definition));
-  ASSERT_TRUE(editor.history().redo().ok());
-  EXPECT_TRUE(session.scene().exists(roots.front()));
-  EXPECT_TRUE(project.find(source_id)->session->scene().exists(source_roots.front()));
+  SceneDocument &scene = session.scene();
+  // Seed retained authored data directly: public authoring must not manufacture it.
+  const EntityId definition = scene.create_entity("Existing Definition");
+  ASSERT_TRUE(scene.set_parent(mesh.value().entity, definition, false));
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const EntityId occurrence = scene.create_entity("Existing Instance", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(occurrence, {.definition = definition}));
+  ASSERT_TRUE(editor.selection().select_object(occurrence).ok());
+
+  EXPECT_FALSE(editor.modeling().can_create_instance());
+  EXPECT_FALSE(editor.modeling().can_flatten_instance());
+  EXPECT_FALSE(editor.modeling().can_enter_instance_edit(occurrence));
+  EXPECT_FALSE(editor.modeling().can_execute_tool("copy_selection"));
+  EXPECT_FALSE(editor.modeling().can_duplicate_selected_entity_hierarchy());
+  expect_scene_asset_denied(editor, [&] { return editor.modeling().create_instance(); });
+  expect_scene_asset_denied(editor, [&] { return editor.modeling().flatten_instance(); });
+  expect_scene_asset_denied(editor, [&] { return editor.modeling().enter_instance_edit(occurrence); });
+  expect_scene_asset_denied(editor, [&] { return editor.modeling().copy_selection(); });
+  expect_scene_asset_denied(editor, [&] { return editor.modeling().duplicate_selected_entity_hierarchy(); });
+  expect_scene_asset_denied(editor, [&] { return editor.scene().duplicate(occurrence); });
+  expect_scene_asset_denied(editor, [&] { return editor.scene().duplicate(definition); });
+
+  const auto before = capture_command_observable_state(editor);
+  const std::array roots{occurrence};
+  const auto duplicated = session.modeling().duplicate_entity_hierarchy(
+      roots, session.document_commands(), ModelingSelectionMode::Object);
+  EXPECT_FALSE(duplicated.ok);
+  EXPECT_FALSE(duplicated.changed);
+  EXPECT_EQ(duplicated.message, release_feature_unavailable_message());
+  EXPECT_FALSE(project.clipboard().can_paste_instance_selection(project));
+  const auto pasted = project.clipboard().paste_instance_selection(project);
+  EXPECT_FALSE(pasted.ok);
+  EXPECT_FALSE(pasted.changed);
+  EXPECT_EQ(pasted.message, release_feature_unavailable_message());
+  EXPECT_FALSE(project.clipboard().has_instance_payload());
+  const auto difference = diff_command_observable_state(
+      before, capture_command_observable_state(editor));
+  EXPECT_TRUE(difference.empty()) << difference.summary;
+  ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(occurrence)->definition, definition);
+  EXPECT_EQ(scene.parent(mesh.value().entity), definition);
 }
 
 } // namespace

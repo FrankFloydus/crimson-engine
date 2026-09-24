@@ -94,6 +94,9 @@ void expect_unchanged(const QuaderEditorApi &editor,
 
 /// Independent expected public-release exclusions, including every command variant.
 constexpr auto kExcludedCommands = std::to_array<QuaderCommandId>({
+    quader_command::kEditCreateInstance,
+    quader_command::kEditFlattenInstance,
+    quader_command::kEditExitInstanceEdit,
     quader_command::kModelingBevelVertices,
     quader_command::kModelingBevelEdges,
     quader_command::kModelingSliceQuad,
@@ -412,6 +415,33 @@ TEST(PublicReleasePersistence, RejectedSceneRequirementsPreserveLiveStateAndFile
     EXPECT_EQ(rejected_read.stats.unique_geometry_decoded_count, 0u);
     EXPECT_TRUE(QdrDocumentReader::read_project_document(path, kInternalFullRelease).ok);
   }
+  // Earlier 0.1-tagged scenes may contain instances. Reject them without
+  // stripping roles, changing live state, or rewriting the authored file.
+  auto instanced = QdrDocumentReader::read_project_document(root / "Scenes/Existing.qdr");
+  ASSERT_TRUE(instanced.ok) << instanced.message;
+  auto &instance_scene = instanced.document.scene();
+  const EntityId definition = instance_scene.create_entity("Retained Definition");
+  ASSERT_TRUE(instance_scene.set_parent(box.value().entity, definition, false));
+  ASSERT_TRUE(instance_scene.set_instance_definition(definition));
+  const EntityId occurrence = instance_scene.create_entity("Retained Instance", EntityKind::Instance);
+  ASSERT_TRUE(instance_scene.set_instance_occurrence(occurrence, {.definition = definition}));
+  auto instance_snapshot = qdr_project_write_snapshot_from_document(instanced.document);
+  ASSERT_TRUE(instance_snapshot.ok()) << instance_snapshot.error().message;
+  instance_snapshot.value().minimum_product_release = kPublicRelease01;
+  const auto instance_path = root / "Scenes/ExistingInstances.qdr";
+  ASSERT_TRUE(QdrDocumentWriter::write_project_document_atomic(
+      instance_path, instance_snapshot.value()).ok);
+  const auto instance_files_before = directory_contents(directory.path());
+  const auto instance_open = editor.scene_documents().open_native_path(instance_path);
+  EXPECT_FALSE(instance_open.ok());
+  EXPECT_FALSE(instance_open.changed());
+  expect_unchanged(editor, before);
+  EXPECT_EQ(directory_contents(directory.path()), instance_files_before);
+  const auto retained = QdrDocumentReader::read_project_document(instance_path, kInternalFullRelease);
+  ASSERT_TRUE(retained.ok) << retained.message;
+  ASSERT_NE(retained.document.scene().instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(retained.document.scene().instance_occurrence(occurrence)->definition, definition);
+
   // A real historical file exercises the release-less compatibility path.
   const auto fixture = std::filesystem::path(__FILE__).parent_path() /
                        "fixtures/qdr/current_project_document_v4.qdr";

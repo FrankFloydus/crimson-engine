@@ -379,6 +379,9 @@ public:
 
   [[nodiscard]] bool
   can_copy_instance_selection(const ProjectSession &project) const {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return false;
+    }
     const OpenSceneSession *active = project.active_scene();
     if (active == nullptr || active->session == nullptr ||
         !destination_accepts_instance_paste(*active->session)) {
@@ -395,6 +398,9 @@ public:
   }
 
   CommandResult copy_instance_selection(ProjectSession &project) {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return clipboard_failure(release_feature_unavailable_message());
+    }
     OpenSceneSession *active = project.active_scene();
     if (active == nullptr || active->session == nullptr) {
       return clipboard_failure("No scene is active.");
@@ -488,6 +494,9 @@ public:
 
   [[nodiscard]] bool
   can_paste_instance_selection(const ProjectSession &project) const {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return false;
+    }
     const OpenSceneSession *active = project.active_scene();
     if (!has_instance_payload() || active == nullptr ||
         active->session == nullptr ||
@@ -509,6 +518,9 @@ public:
   }
 
   CommandResult paste_instance_selection(ProjectSession &project) {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return clipboard_failure(release_feature_unavailable_message());
+    }
     if (!release_has_feature(ReleaseFeature::Layers) && !payload_.layers.empty()) {
       return clipboard_failure(release_feature_unavailable_message());
     }

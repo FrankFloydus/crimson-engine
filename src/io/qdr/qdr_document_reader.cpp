@@ -63,6 +63,7 @@ copy_bytes(std::span<const std::byte> bytes) {
     const SceneContentDocument &document, ProductRelease release) {
   const bool allow_lights = product_release_has_feature(release, ReleaseFeature::Lights);
   const bool allow_curves = product_release_has_feature(release, ReleaseFeature::Curves);
+  const bool allow_instances = product_release_has_feature(release, ReleaseFeature::Instancing);
   const bool allow_materials = product_release_has_feature(release, ReleaseFeature::Materials);
   const auto &scene = document.scene();
   const auto &assets = document.assets();
@@ -119,7 +120,11 @@ copy_bytes(std::span<const std::byte> bytes) {
   };
   for (const auto entity : scene.entities()) {
     if ((!allow_lights && (scene.light(entity) != nullptr || scene.kind(entity) == EntityKind::Light)) ||
-        (!allow_curves && (scene.curve(entity) != nullptr || scene.kind(entity) == EntityKind::Curve))) {
+        (!allow_curves && (scene.curve(entity) != nullptr || scene.kind(entity) == EntityKind::Curve)) ||
+        (!allow_instances &&
+         (scene.kind(entity) == EntityKind::Instance ||
+          scene.instance_definition(entity) != nullptr ||
+          scene.instance_occurrence(entity) != nullptr))) {
       return true;
     }
     if (!allow_materials) {

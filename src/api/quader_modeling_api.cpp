@@ -2599,6 +2599,9 @@ bool QuaderModelingApi::can_duplicate_selected_entity_hierarchy() const {
     return false;
   }
 
+  if (!session.structural_lifecycle().can_duplicate_selected_hierarchy()) {
+    return false;
+  }
   const SceneDocument &scene = session.scene();
   for (const EntityId entity : scene.selected_entities()) {
     if (!scene.is_effectively_locked(entity)) {
@@ -2637,6 +2640,10 @@ bool QuaderModelingApi::can_create_instance_from_selection() const {
 
 QuaderApiResult<QuaderInstanceCreateResult>
 QuaderModelingApi::create_instance_from_selection() {
+  if (!release_has_feature(ReleaseFeature::Instancing)) {
+    return quader_api_result_from_status<QuaderInstanceCreateResult>(
+        invalid_api_status(session_, release_feature_unavailable_message()));
+  }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
     return quader_api_result_from_status<QuaderInstanceCreateResult>(
@@ -2682,6 +2689,10 @@ bool QuaderModelingApi::can_flatten_selected_instances() const {
 
 QuaderApiResult<QuaderInstanceFlattenResult>
 QuaderModelingApi::flatten_selected_instances() {
+  if (!release_has_feature(ReleaseFeature::Instancing)) {
+    return quader_api_result_from_status<QuaderInstanceFlattenResult>(
+        invalid_api_status(session_, release_feature_unavailable_message()));
+  }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
     return quader_api_result_from_status<QuaderInstanceFlattenResult>(
@@ -2714,6 +2725,9 @@ bool QuaderModelingApi::can_enter_instance_edit(EntityId occurrence) const {
 
 QuaderApiVoidResult
 QuaderModelingApi::enter_instance_edit(EntityId occurrence) {
+  if (!release_has_feature(ReleaseFeature::Instancing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
     return mutations_.run_document_command(
@@ -2732,6 +2746,9 @@ bool QuaderModelingApi::can_exit_instance_edit() const {
 }
 
 QuaderApiVoidResult QuaderModelingApi::exit_instance_edit() {
+  if (!release_has_feature(ReleaseFeature::Instancing)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
     const CommandResult canceled = session.native_tools().cancel_active();

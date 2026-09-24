@@ -263,6 +263,10 @@ QtNumericSpinBoxController::QtNumericSpinBoxController(
   Q_ASSERT(line_edit_);
   spin_box_.setButtonSymbols(QAbstractSpinBox::NoButtons);
   spin_box_.setAlignment(Qt::AlignCenter);
+  if (spin_box_.focusPolicy() == Qt::WheelFocus) {
+    // Scrolling must not steal focus and settle another field's numeric draft.
+    spin_box_.setFocusPolicy(Qt::StrongFocus);
+  }
   spin_box_.setMouseTracking(true);
   line_edit_->setMouseTracking(true);
   spin_box_.installEventFilter(this);
@@ -1076,23 +1080,11 @@ bool QtNumericSpinBoxController::eventFilter(QObject *watched, QEvent *event) {
     }
     break;
   case QEvent::Wheel:
-    if (dragging_) {
-      event->accept();
-      return true;
-    }
-    if (!editing_ && !dragging_ && can_interact()) {
-      const double previous = value();
-      forwarding_event_ = true;
-      QApplication::sendEvent(watched, event);
-      if (guard) {
-        forwarding_event_ = false;
-        if (value() != previous) {
-          emit_commit();
-        }
-      }
-      return true;
-    }
-    break;
+    // Prevent native stepping without accepting the wheel: QApplication keeps
+    // propagating the original gesture to the enclosing scrollable panel.
+    // This also leaves an active text draft and its edit lifecycle untouched.
+    event->ignore();
+    return true;
   case QEvent::InputMethod:
     if (!editing_) {
       begin_editing();

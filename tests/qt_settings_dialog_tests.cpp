@@ -3837,7 +3837,7 @@ TEST(QtSettingsDialogTests,
 }
 
 TEST(InspectorPanelTests,
-     CollisionOptionsPreserveLegacyMetadataUntilSupportedChoicesAreSelected) {
+     HiddenCollisionSelectorsPreserveLegacyMetadataThroughToggleEdits) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-inspector-collision-options-tests";
@@ -3895,69 +3895,17 @@ TEST(InspectorPanelTests,
     return panel.findChild<QLabel *>(
         QStringLiteral("inspector.physics.collision_status"));
   };
-  const auto activate = [](QComboBox &field, int value) {
-    const int index = field.findData(value);
-    ASSERT_GE(index, 0);
-    field.setCurrentIndex(index);
-    ASSERT_TRUE(QMetaObject::invokeMethod(&field, "activated", Qt::DirectConnection,
-                                         Q_ARG(int, index)));
-  };
-
   const auto scene_revision = session.scene().revision();
   const auto undo_label = editor.query().history().undo_label;
   refresh();
-  QComboBox *shape = combo("inspector.physics.collision_type");
-  QComboBox *body = combo("inspector.physics.body_type");
-  ASSERT_NE(shape, nullptr);
-  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(combo("inspector.physics.collision_type"), nullptr);
+  EXPECT_EQ(combo("inspector.physics.body_type"), nullptr);
   ASSERT_NE(status(), nullptr);
-  EXPECT_EQ(shape->currentText(), QStringLiteral("Box (unsupported)"));
-  EXPECT_EQ(body->currentText(), QStringLiteral("Rigid Body (unsupported)"));
-  EXPECT_EQ(status()->text(),
-            QStringLiteral("Select Mesh and Static Body to generate collisions."));
+  EXPECT_EQ(status()->text(), QString::fromStdString(std::string(localization.text(
+      "ui.inspector.collision_unsupported", ""))));
   EXPECT_EQ(*session.scene().mesh(entity), legacy);
   EXPECT_EQ(session.scene().revision(), scene_revision);
   EXPECT_EQ(editor.query().history().undo_label, undo_label);
-  for (int index = 0; index < shape->count(); ++index) {
-    const bool enabled = shape->model()->flags(
-                             shape->model()->index(index, 0)) & Qt::ItemIsEnabled;
-    EXPECT_EQ(enabled, shape->itemData(index).toInt() ==
-                           static_cast<int>(MeshCollisionType::Mesh));
-  }
-  const int rigid_index = body->findData(static_cast<int>(MeshPhysicsBodyType::RigidBody));
-  EXPECT_FALSE(body->model()->flags(body->model()->index(rigid_index, 0)) &
-               Qt::ItemIsEnabled);
-  const int sphere_index = shape->findData(static_cast<int>(MeshCollisionType::Sphere));
-  ASSERT_TRUE(QMetaObject::invokeMethod(shape, "activated", Qt::DirectConnection,
-                                       Q_ARG(int, sphere_index)));
-  EXPECT_EQ(*session.scene().mesh(entity), legacy);
-  for (int frame = 0; frame < 8; ++frame) {
-    refresh();
-    EXPECT_EQ(combo("inspector.physics.collision_type"), shape);
-    EXPECT_EQ(combo("inspector.physics.body_type"), body);
-    EXPECT_EQ(session.scene().revision(), scene_revision);
-  }
-
-  activate(*shape, static_cast<int>(MeshCollisionType::Mesh));
-  EXPECT_EQ(session.scene().mesh(entity)->collision_type, MeshCollisionType::Mesh);
-  EXPECT_EQ(session.scene().mesh(entity)->body_type, MeshPhysicsBodyType::RigidBody);
-  refresh();
-  ASSERT_NE(status(), nullptr);
-  body = combo("inspector.physics.body_type");
-  ASSERT_NE(body, nullptr);
-  activate(*body, static_cast<int>(MeshPhysicsBodyType::StaticBody));
-  EXPECT_TRUE(mesh_collision_supported(*session.scene().mesh(entity)));
-  refresh();
-  EXPECT_EQ(status(), nullptr);
-  ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(session.scene().mesh(entity)->body_type, MeshPhysicsBodyType::RigidBody);
-  ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(*session.scene().mesh(entity), legacy);
-  ASSERT_TRUE(editor.history().redo().ok());
-  ASSERT_TRUE(editor.history().redo().ok());
-  refresh();
-  EXPECT_EQ(status(), nullptr);
-
   auto *generate = panel.findChild<QCheckBox *>(
       QStringLiteral("inspector.physics.generate_collisions"));
   auto *display = panel.findChild<QCheckBox *>(
@@ -3966,16 +3914,60 @@ TEST(InspectorPanelTests,
   ASSERT_NE(display, nullptr);
   EXPECT_TRUE(generate->isChecked());
   EXPECT_TRUE(display->isChecked());
-  generate->setChecked(false);
-  EXPECT_FALSE(session.scene().mesh(entity)->generate_collisions);
-  EXPECT_TRUE(session.scene().mesh(entity)->display_collision);
+  for (int frame = 0; frame < 8; ++frame) {
+    refresh();
+    EXPECT_EQ(combo("inspector.physics.collision_type"), nullptr);
+    EXPECT_EQ(combo("inspector.physics.body_type"), nullptr);
+    EXPECT_EQ(panel.findChild<QCheckBox *>(
+                  QStringLiteral("inspector.physics.generate_collisions")), generate);
+    EXPECT_EQ(panel.findChild<QCheckBox *>(
+                  QStringLiteral("inspector.physics.display_collision")), display);
+    EXPECT_EQ(session.scene().revision(), scene_revision);
+    EXPECT_EQ(*session.scene().mesh(entity), legacy);
+  }
+
+  for (const char *field : {"generate_collisions", "display_collision"}) {
+    refresh();
+    auto *check = panel.findChild<QCheckBox *>(
+        QStringLiteral("inspector.physics.%1").arg(field));
+    ASSERT_NE(check, nullptr);
+    const auto undo_count = session.history().undo_count();
+    check->setChecked(false);
+    MeshComponent changed = legacy;
+    if (std::string_view(field) == "generate_collisions") {
+      changed.generate_collisions = false;
+    } else {
+      changed.display_collision = false;
+    }
+    EXPECT_EQ(*session.scene().mesh(entity), changed);
+    EXPECT_EQ(session.history().undo_count(), undo_count + 1);
+    refresh();
+    ASSERT_NE(status(), nullptr);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(*session.scene().mesh(entity), legacy);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(*session.scene().mesh(entity), changed);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(*session.scene().mesh(entity), legacy);
+  }
+
+  // Supported metadata arriving through the scene owner updates the retained UI
+  // without restoring the selectors or rewriting unrelated mesh properties.
+  MeshComponent supported = legacy;
+  supported.collision_type = MeshCollisionType::Mesh;
+  supported.body_type = MeshPhysicsBodyType::StaticBody;
+  ASSERT_TRUE(editor.scene()
+                  .set_mesh_component(entity, to_api_mesh_component(supported))
+                  .ok());
+  refresh();
+  EXPECT_EQ(status(), nullptr);
+  EXPECT_EQ(combo("inspector.physics.collision_type"), nullptr);
+  EXPECT_EQ(combo("inspector.physics.body_type"), nullptr);
+  EXPECT_EQ(*session.scene().mesh(entity), supported);
   ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_TRUE(session.scene().mesh(entity)->generate_collisions);
-  display->setChecked(false);
-  EXPECT_FALSE(session.scene().mesh(entity)->display_collision);
-  EXPECT_TRUE(session.scene().mesh(entity)->generate_collisions);
-  ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_TRUE(session.scene().mesh(entity)->display_collision);
+  refresh();
+  ASSERT_NE(status(), nullptr);
+  EXPECT_EQ(*session.scene().mesh(entity), legacy);
 }
 
 TEST(InspectorPanelTests,
@@ -3993,10 +3985,14 @@ TEST(InspectorPanelTests,
                             .max = {1.0f, 1.0f, 1.0f}};
   const auto first = editor.modeling().create_box(bounds, "First mesh");
   const auto second = editor.modeling().create_box(bounds, "Second mesh");
+  const auto unselected = editor.modeling().create_box(bounds, "Unselected mesh");
   const auto light = editor.scene().create_point_light();
   ASSERT_TRUE(first.ok());
   ASSERT_TRUE(second.ok());
   ASSERT_TRUE(light.ok());
+  ASSERT_TRUE(unselected.ok());
+  const MeshComponent original_unselected =
+      *session.scene().mesh(unselected.value().entity);
   const EntityId first_id = first.value().entity;
   const EntityId second_id = second.value().entity;
   MeshComponent first_mesh = *session.scene().mesh(first_id);
@@ -4042,56 +4038,31 @@ TEST(InspectorPanelTests,
   const auto combo = [&](const char *name) {
     return panel.findChild<QComboBox *>(QString::fromUtf8(name));
   };
-  const auto activate = [&](const char *name, int value) {
-    QComboBox *field = combo(name);
-    ASSERT_NE(field, nullptr);
-    const int index = field->findData(value);
-    ASSERT_GE(index, 0);
-    field->setCurrentIndex(index);
-    ASSERT_TRUE(QMetaObject::invokeMethod(field, "activated", Qt::DirectConnection,
-                                         Q_ARG(int, index)));
-  };
   refresh();
-  QComboBox *shape = combo("inspector.physics.collision_type");
-  QComboBox *body = combo("inspector.physics.body_type");
-  ASSERT_NE(shape, nullptr);
-  ASSERT_NE(body, nullptr);
-  EXPECT_EQ(shape->currentIndex(), -1);
-  EXPECT_EQ(body->currentIndex(), -1);
-  EXPECT_EQ(shape->placeholderText(), QStringLiteral("Mixed"));
-  EXPECT_EQ(body->placeholderText(), QStringLiteral("Mixed"));
+  EXPECT_EQ(combo("inspector.physics.collision_type"), nullptr);
+  EXPECT_EQ(combo("inspector.physics.body_type"), nullptr);
   for (const char *field : {"generate_collisions", "display_collision"}) {
     EXPECT_NE(panel.findChild<QLabel *>(
                   QStringLiteral("inspector.physics.%1.mixed").arg(field)),
               nullptr);
   }
   const auto before_revision = session.scene().revision();
+  const auto before_undo_count = session.history().undo_count();
+  auto *retained_generate = panel.findChild<QCheckBox *>(
+      QStringLiteral("inspector.physics.generate_collisions"));
+  auto *retained_display = panel.findChild<QCheckBox *>(
+      QStringLiteral("inspector.physics.display_collision"));
   for (int frame = 0; frame < 8; ++frame) {
     refresh();
-    EXPECT_EQ(combo("inspector.physics.collision_type"), shape);
+    EXPECT_EQ(combo("inspector.physics.collision_type"), nullptr);
+    EXPECT_EQ(combo("inspector.physics.body_type"), nullptr);
+    EXPECT_EQ(panel.findChild<QCheckBox *>(
+                  QStringLiteral("inspector.physics.generate_collisions")), retained_generate);
+    EXPECT_EQ(panel.findChild<QCheckBox *>(
+                  QStringLiteral("inspector.physics.display_collision")), retained_display);
     EXPECT_EQ(session.scene().revision(), before_revision);
+    EXPECT_EQ(session.history().undo_count(), before_undo_count);
   }
-  activate("inspector.physics.collision_type",
-           static_cast<int>(MeshCollisionType::Sphere));
-  EXPECT_EQ(*session.scene().mesh(first_id), first_mesh);
-  EXPECT_EQ(*session.scene().mesh(second_id), second_mesh);
-  activate("inspector.physics.collision_type",
-           static_cast<int>(MeshCollisionType::Mesh));
-  EXPECT_EQ(session.scene().mesh(first_id)->collision_type, MeshCollisionType::Mesh);
-  EXPECT_EQ(session.scene().mesh(second_id)->collision_type, MeshCollisionType::Mesh);
-  ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(*session.scene().mesh(first_id), first_mesh);
-  EXPECT_EQ(*session.scene().mesh(second_id), second_mesh);
-  ASSERT_TRUE(editor.history().redo().ok());
-  refresh();
-  activate("inspector.physics.body_type",
-           static_cast<int>(MeshPhysicsBodyType::StaticBody));
-  EXPECT_TRUE(mesh_collision_supported(*session.scene().mesh(first_id)));
-  EXPECT_TRUE(mesh_collision_supported(*session.scene().mesh(second_id)));
-  ASSERT_TRUE(editor.history().undo().ok());
-  EXPECT_EQ(session.scene().mesh(first_id)->body_type, first_mesh.body_type);
-  EXPECT_EQ(session.scene().mesh(second_id)->body_type, second_mesh.body_type);
-  ASSERT_TRUE(editor.history().redo().ok());
   for (const char *field : {"generate_collisions", "display_collision"}) {
     refresh();
     const MeshComponent before_first = *session.scene().mesh(first_id);
@@ -4100,7 +4071,9 @@ TEST(InspectorPanelTests,
         QStringLiteral("inspector.physics.%1").arg(field));
     ASSERT_NE(check, nullptr);
     EXPECT_FALSE(check->isChecked());
+    const auto undo_count = session.history().undo_count();
     check->setChecked(true);
+    EXPECT_EQ(session.history().undo_count(), undo_count + 1);
     if (std::string_view(field) == "generate_collisions") {
       EXPECT_TRUE(session.scene().mesh(first_id)->generate_collisions);
       EXPECT_TRUE(session.scene().mesh(second_id)->generate_collisions);
@@ -4108,6 +4081,19 @@ TEST(InspectorPanelTests,
       EXPECT_TRUE(session.scene().mesh(first_id)->display_collision);
       EXPECT_TRUE(session.scene().mesh(second_id)->display_collision);
     }
+    EXPECT_EQ(session.scene().mesh(first_id)->collision_type, first_mesh.collision_type);
+    EXPECT_EQ(session.scene().mesh(first_id)->body_type, first_mesh.body_type);
+    EXPECT_EQ(session.scene().mesh(second_id)->collision_type, second_mesh.collision_type);
+    EXPECT_EQ(session.scene().mesh(second_id)->body_type, second_mesh.body_type);
+    EXPECT_EQ(*session.scene().mesh(unselected.value().entity), original_unselected);
+    const MeshComponent changed_first = *session.scene().mesh(first_id);
+    const MeshComponent changed_second = *session.scene().mesh(second_id);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(*session.scene().mesh(first_id), before_first);
+    EXPECT_EQ(*session.scene().mesh(second_id), before_second);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(*session.scene().mesh(first_id), changed_first);
+    EXPECT_EQ(*session.scene().mesh(second_id), changed_second);
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_EQ(*session.scene().mesh(first_id), before_first);
     EXPECT_EQ(*session.scene().mesh(second_id), before_second);
@@ -4121,6 +4107,11 @@ TEST(InspectorPanelTests,
                   .ok());
   refresh();
   EXPECT_EQ(combo("inspector.physics.collision_type"), nullptr);
+  EXPECT_EQ(combo("inspector.physics.body_type"), nullptr);
+  EXPECT_EQ(panel.findChild<QCheckBox *>(
+                QStringLiteral("inspector.physics.generate_collisions")), nullptr);
+  EXPECT_EQ(panel.findChild<QCheckBox *>(
+                QStringLiteral("inspector.physics.display_collision")), nullptr);
 }
 
 TEST(InspectorPanelTests,

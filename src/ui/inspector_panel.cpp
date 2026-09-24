@@ -19,6 +19,7 @@
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
+#include "ui/qt_inspector_property_help.hpp"
 #include "ui/qt_panel_section_header.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -41,6 +42,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
@@ -90,6 +92,8 @@ constexpr int kInspectorMinimumValueColumnWidth = 96;
 constexpr int kInspectorAxisRowPaddingRole = Qt::UserRole + 1;
 constexpr int kInspectorPropertyInsetRole = Qt::UserRole + 2;
 constexpr int kInspectorAxisRowSpacingRole = Qt::UserRole + 3;
+constexpr int kInspectorPropertyTopPaddingRole = Qt::UserRole + 4;
+constexpr int kInspectorPropertyBottomPaddingRole = Qt::UserRole + 5;
 constexpr int kInspectorMaterialPreviewSize = 56;
 constexpr int kInspectorMaterialActionSize = 24;
 constexpr int kInspectorMaterialActionIconSize = 16;
@@ -275,8 +279,9 @@ protected:
 /// Retains the complete accessible name while painting a compact elided row.
 class InspectorElidedLabel final : public QLabel {
 public:
-  explicit InspectorElidedLabel(QString text, QWidget *parent = nullptr)
-      : QLabel(parent), full_text_(std::move(text)) {
+  explicit InspectorElidedLabel(QString text, QString help,
+                               QWidget *parent = nullptr)
+      : QLabel(parent), full_text_(std::move(text)), help_(std::move(help)) {
     setTextFormat(Qt::PlainText);
     setAccessibleName(full_text_);
     update_elided_text();
@@ -293,10 +298,12 @@ private:
     const QString elided =
         fontMetrics().elidedText(full_text_, Qt::ElideRight, width());
     QLabel::setText(elided);
-    setToolTip(elided == full_text_ ? QString{} : full_text_);
+    setToolTip(elided == full_text_ ? help_
+                                   : full_text_ + QStringLiteral("\n\n") + help_);
   }
 
   QString full_text_;
+  QString help_;
 };
 
 enum class InspectorMaterialActionIcon { Edit, Replace };
@@ -409,15 +416,14 @@ public:
             group, QPalette::Text,
             option.palette.color(group, QPalette::WindowText));
       }
+      styled.rect.adjust(0, index.data(kInspectorPropertyTopPaddingRole).toInt(),
+                         0, -index.data(kInspectorPropertyBottomPaddingRole).toInt());
       const int axis_row_padding =
           index.data(kInspectorAxisRowPaddingRole).toInt();
       if (axis_row_padding > 0) {
         const int axis_row_spacing =
             index.data(kInspectorAxisRowSpacingRole).toInt();
-        styled.rect.setTop(option.rect.top() + axis_row_padding);
-        styled.rect.setHeight((option.rect.height() - 2 * axis_row_padding -
-                               2 * axis_row_spacing) /
-                              3);
+        styled.rect.setHeight((styled.rect.height() - 2 * axis_row_spacing) / 3);
       }
     }
     QStyledItemDelegate::paint(painter, styled, index);
@@ -433,6 +439,54 @@ public:
   void apply_ui_scale(const QtUiScaleMetrics &metrics) { metrics_ = metrics; }
 
 protected:
+  void mousePressEvent(QMouseEvent *event) override {
+    if (event->button() == Qt::LeftButton &&
+        over_column_divider(event->position().toPoint())) {
+      resizing_column_ = true;
+      resize_origin_ = event->position().toPoint().x();
+      resize_width_ = header()->sectionSize(0);
+      set_divider_hovered(true);
+      event->accept();
+      return;
+    }
+    QTreeWidget::mousePressEvent(event);
+  }
+
+  void mouseMoveEvent(QMouseEvent *event) override {
+    if (resizing_column_) {
+      const int direction = layoutDirection() == Qt::RightToLeft ? -1 : 1;
+      const int requested = resize_width_ + direction *
+          (event->position().toPoint().x() - resize_origin_);
+      const int minimum = header()->minimumSectionSize();
+      const int maximum = std::max(minimum, viewport()->width() -
+          metrics_.px(kInspectorMinimumValueColumnWidth));
+      header()->resizeSection(0, std::clamp(requested, minimum, maximum));
+      viewport()->update();
+      event->accept();
+      return;
+    }
+    set_divider_hovered(over_column_divider(event->position().toPoint()));
+    QTreeWidget::mouseMoveEvent(event);
+  }
+
+  void mouseReleaseEvent(QMouseEvent *event) override {
+    if (resizing_column_ && event->button() == Qt::LeftButton) {
+      resizing_column_ = false;
+      set_divider_hovered(over_column_divider(event->position().toPoint()));
+      viewport()->update();
+      event->accept();
+      return;
+    }
+    QTreeWidget::mouseReleaseEvent(event);
+  }
+
+  bool viewportEvent(QEvent *event) override {
+    if (event->type() == QEvent::Leave && !resizing_column_) {
+      set_divider_hovered(false);
+    }
+    return QTreeWidget::viewportEvent(event);
+  }
+
   void paintEvent(QPaintEvent *event) override {
     QTreeWidget::paintEvent(event);
     QPainter painter(viewport());
@@ -480,11 +534,53 @@ protected:
       painter.fillPath(section_surface, palette().alternateBase());
       painter.restore();
       painter.drawRoundedRect(outline, radius, radius);
+      if (item->isExpanded() && item->childCount() > 0 &&
+          !item->child(0)->isFirstColumnSpanned()) {
+        const int body_top = visualItemRect(item->child(0)).top();
+        const qreal x = column_divider() - stroke * 0.5;
+        painter.save();
+        painter.setPen(QPen(palette().color(
+            divider_hovered_ || resizing_column_ ? QPalette::Accent
+                                                : QPalette::Mid), stroke));
+        painter.drawLine(QPointF(x, body_top + metrics_.px(8)),
+                         QPointF(x, bounds.bottom() - metrics_.px(8)));
+        painter.restore();
+      }
     }
   }
 
 private:
+  [[nodiscard]] int column_divider() const {
+    const int start = header()->sectionViewportPosition(0);
+    return layoutDirection() == Qt::RightToLeft
+               ? start : start + header()->sectionSize(0);
+  }
+
+  [[nodiscard]] bool over_column_divider(const QPoint &position) const {
+    const auto *item = itemAt(position);
+    return item != nullptr && item->parent() != nullptr &&
+           !item->isFirstColumnSpanned() &&
+           std::abs(position.x() - column_divider()) <= metrics_.px(4);
+  }
+
+  void set_divider_hovered(bool hovered) {
+    if (divider_hovered_ == hovered) {
+      return;
+    }
+    divider_hovered_ = hovered;
+    if (hovered) {
+      viewport()->setCursor(Qt::SizeHorCursor);
+    } else {
+      viewport()->unsetCursor();
+    }
+    viewport()->update();
+  }
+
   QtUiScaleMetrics metrics_;
+  bool divider_hovered_ = false;
+  bool resizing_column_ = false;
+  int resize_origin_ = 0;
+  int resize_width_ = 0;
 };
 
 /// Identifies which transform component an inspector preview edits.
@@ -584,7 +680,8 @@ struct InspectorPanel::Impl {
     tree_->setTextElideMode(Qt::ElideRight);
     tree_->setItemDelegate(new InspectorPropertyDelegate(tree_));
     panel_.setFocusProxy(tree_);
-    tree_->header()->setVisible(true);
+    tree_->header()->setVisible(false);
+    tree_->setMouseTracking(true);
     tree_->header()->setSectionsMovable(false);
     tree_->header()->setSectionsClickable(false);
     tree_->header()->setHighlightSections(false);
@@ -836,9 +933,14 @@ struct InspectorPanel::Impl {
     const QSize action_icon_size = metrics.size(QSize(
         kInspectorMaterialActionIconSize, kInspectorMaterialActionIconSize));
     for (MaterialRow &row : material_rows_) {
-      row.item->setSizeHint(
-          0, QSize(0, metrics.px(kInspectorMaterialPreviewSize + 8)));
-      row.layout->setContentsMargins(metrics.margins(QMargins(8, 4, 8, 4)));
+      const auto *section = row.item->parent();
+      const int top_padding = section->child(0) == row.item ? 8 : 4;
+      const int bottom_padding =
+          section->child(section->childCount() - 1) == row.item ? 8 : 4;
+      row.item->setSizeHint(0, QSize(0, metrics.px(
+          kInspectorMaterialPreviewSize + top_padding + bottom_padding)));
+      row.layout->setContentsMargins(metrics.margins(
+          QMargins(8, top_padding, 8, bottom_padding)));
       row.layout->setSpacing(metrics.px(6));
       row.preview->setFixedSize(preview_size);
       row.edit->setFixedSize(action_size);
@@ -927,8 +1029,16 @@ private:
     scaled_default_label_column_width_ = scaled_px(140);
     for (PropertyRow &row : property_rows_) {
       const int vertical_padding = scaled_px(row.axes != nullptr ? 5 : 4);
-      row.layout->setContentsMargins(scaled_px(8), vertical_padding,
-                                     scaled_px(8), vertical_padding);
+      const auto *section = row.item->parent();
+      const int top_padding = section->child(0) == row.item
+                                  ? scaled_px(8) : vertical_padding;
+      const int bottom_padding =
+          section->child(section->childCount() - 1) == row.item
+              ? scaled_px(8) : vertical_padding;
+      row.layout->setContentsMargins(scaled_px(8), top_padding,
+                                     scaled_px(8), bottom_padding);
+      row.item->setData(0, kInspectorPropertyTopPaddingRole, top_padding);
+      row.item->setData(0, kInspectorPropertyBottomPaddingRole, bottom_padding);
       scaled_default_label_column_width_ = std::max(
           scaled_default_label_column_width_,
           tree_->fontMetrics().horizontalAdvance(row.item->text(0)) +
@@ -941,6 +1051,16 @@ private:
         row.item->setData(0, kInspectorAxisRowSpacingRole, scaled_px(3));
       }
     }
+    for (MaterialRow &row : material_rows_) {
+      const auto *section = row.item->parent();
+      const int top_padding = section->child(0) == row.item ? 8 : 4;
+      const int bottom_padding =
+          section->child(section->childCount() - 1) == row.item ? 8 : 4;
+      row.layout->setContentsMargins(ui_scale_metrics_.margins(
+          QMargins(8, top_padding, 8, bottom_padding)));
+      row.item->setSizeHint(0, QSize(0, scaled_px(
+          kInspectorMaterialPreviewSize + top_padding + bottom_padding)));
+    }
     for (const SectionHeader &header : section_headers_) {
       header.button->apply_ui_scale(ui_scale_metrics_);
       header.item->setSizeHint(0, QSize(0, header.button->minimumHeight()));
@@ -952,6 +1072,11 @@ private:
     return localization_ != nullptr
                ? qt_text(localization_->text(key, fallback))
                : qt_text(fallback);
+  }
+
+  QString property_help(std::string_view stable_id) const {
+    const auto help = qt_inspector_property_help(stable_id);
+    return help.key.empty() ? QString{} : localized(help.key, help.fallback);
   }
 
   QString stable_name(std::string_view stable_id) const {
@@ -1129,6 +1254,7 @@ private:
                                      const QString &text) {
     auto *item = new QTreeWidgetItem(tree_);
     item->setText(0, text);
+    item->setToolTip(0, property_help(stable_id));
     item->setData(0, Qt::UserRole, stable_name(stable_id));
     item->setFlags(Qt::ItemIsEnabled);
     item->setFirstColumnSpanned(true);
@@ -1234,6 +1360,7 @@ private:
     header->setObjectName(stable_name(stable_id + ".header"));
     header->setText(title);
     header->setAccessibleName(title);
+    header->setToolTip(property_help(stable_id));
     header->setChecked(state->second);
     header->setArrowType(state->second ? Qt::DownArrow : Qt::RightArrow);
     header->set_leading_spacing(section_headers_.empty() ? 0 : 8);
@@ -1258,6 +1385,7 @@ private:
                QGridLayout *axes = nullptr) {
     auto *item = new QTreeWidgetItem(section.item);
     item->setText(0, label);
+    item->setToolTip(0, property_help(stable_id));
     item->setData(0, Qt::UserRole, stable_name(stable_id));
     item->setFlags(Qt::ItemIsEnabled);
     item->setTextAlignment(0, Qt::AlignLeft | Qt::AlignVCenter);
@@ -1333,6 +1461,7 @@ private:
       preview->setObjectName(stable_name(stable_id + ".preview"));
       preview->setFixedSize(material_preview_size, material_preview_size);
       preview->setAlignment(Qt::AlignCenter);
+      preview->setToolTip(property_help(stable_id));
       preview->setFrameShape(QFrame::StyledPanel);
       layout->addWidget(preview);
 
@@ -1340,7 +1469,7 @@ private:
           material.name.isEmpty()
               ? localized("ui.inspector.material.missing", "Missing material")
               : material.name;
-      auto *name = new InspectorElidedLabel(display_name, row);
+      auto *name = new InspectorElidedLabel(display_name, property_help(stable_id), row);
       name->setObjectName(stable_name(stable_id + ".name"));
       name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
       layout->addWidget(name, 1);
@@ -1976,6 +2105,7 @@ private:
       axis_label->setObjectName(
           stable_name(stable_id + "." + kAxes[axis] + ".label"));
       axis_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+      axis_label->setToolTip(property_help(stable_id + "." + kAxes[axis]));
       apply_qt_semantic_axis_label_color(*axis_label, kAxisKinds[axis]);
       layout->addWidget(axis_label, axis_row, 0);
 
@@ -2271,10 +2401,6 @@ private:
     meshes.reserve(selection_.size());
     BoolAggregate generate;
     BoolAggregate display;
-    std::optional<MeshCollisionType> collision_type;
-    std::optional<MeshPhysicsBodyType> body_type;
-    bool mixed_collision_type = false;
-    bool mixed_body_type = false;
     bool unsupported = false;
     for (const EntityId entity : selection_) {
       const MeshComponent *mesh = document_->mesh(entity);
@@ -2286,14 +2412,6 @@ private:
       generate.any_true = generate.any_true || mesh->generate_collisions;
       display.all_true = display.all_true && mesh->display_collision;
       display.any_true = display.any_true || mesh->display_collision;
-      if (collision_type.has_value()) {
-        mixed_collision_type = mixed_collision_type ||
-                               *collision_type != mesh->collision_type;
-        mixed_body_type = mixed_body_type || *body_type != mesh->body_type;
-      } else {
-        collision_type = mesh->collision_type;
-        body_type = mesh->body_type;
-      }
       unsupported = unsupported || !mesh_collision_supported(*mesh);
     }
     if (meshes.empty()) {
@@ -2310,28 +2428,6 @@ private:
             next.generate_collisions = enabled;
           });
         });
-    add_enum_combo<MeshCollisionType>(
-        physics, "physics.collision_type",
-        localized("ui.inspector.collision_type", "Collision Type"),
-        *collision_type,
-        {
-            {MeshCollisionType::Box,
-             localized("ui.inspector.collision_type.box", "Box")},
-            {MeshCollisionType::Sphere,
-             localized("ui.inspector.collision_type.sphere", "Sphere")},
-            {MeshCollisionType::Cylinder,
-             localized("ui.inspector.collision_type.cylinder", "Cylinder")},
-            {MeshCollisionType::ConvexHull,
-             localized("ui.inspector.collision_type.convex_hull",
-                       "Convex Hull")},
-            {MeshCollisionType::Mesh,
-             localized("ui.inspector.collision_type.mesh", "Mesh")},
-        },
-        [this, meshes](MeshCollisionType value) {
-          apply_mesh_components(meshes, [value](MeshComponent &next) {
-            next.collision_type = value;
-          });
-        }, MeshCollisionType::Mesh, mixed_collision_type);
     add_mixed_checkbox(
         physics, "physics.display_collision",
         localized("ui.inspector.display_collision", "Display Collision"),
@@ -2340,23 +2436,10 @@ private:
             next.display_collision = enabled;
           });
         });
-    add_enum_combo<MeshPhysicsBodyType>(
-        physics, "physics.body_type",
-        localized("ui.inspector.body_type", "Body type"), *body_type,
-        {
-            {MeshPhysicsBodyType::StaticBody,
-             localized("ui.inspector.body_type.static_body", "Static Body")},
-            {MeshPhysicsBodyType::RigidBody,
-             localized("ui.inspector.body_type.rigid_body", "Rigid Body")},
-        },
-        [this, meshes](MeshPhysicsBodyType value) {
-          apply_mesh_components(
-              meshes, [value](MeshComponent &next) { next.body_type = value; });
-        }, MeshPhysicsBodyType::StaticBody, mixed_body_type);
     if (unsupported) {
       auto *status = new QLabel(
           localized("ui.inspector.collision_unsupported",
-                    "Select Mesh and Static Body to generate collisions."),
+                    "Collision generation is unavailable for this mesh’s saved physics settings."),
           physics.editor_parent);
       status->setObjectName(stable_name("physics.collision_status"));
       status->setWordWrap(true);

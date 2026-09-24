@@ -296,6 +296,10 @@ TEST(InspectorMaterialTests, AllLightShapesUseUncappedNumericIntensityAndRetainC
     ASSERT_NE(tree, nullptr);
     QTreeWidgetItem *section = find_top_level_item(*tree, QStringLiteral("light"));
     ASSERT_NE(section, nullptr);
+    for (int index = 0; index < section->childCount(); ++index) {
+      EXPECT_FALSE(section->child(index)->toolTip(0).isEmpty())
+          << section->child(index)->text(0).toStdString();
+    }
     QTreeWidgetItem *intensity_row = nullptr;
     for (int index = 0; index < section->childCount(); ++index) {
       if (section->child(index)->data(0, Qt::UserRole).toString() ==
@@ -1361,6 +1365,11 @@ TEST(InspectorMaterialTests,
   ASSERT_NE(graph_edit, nullptr);
   ASSERT_NE(missing_edit, nullptr);
   ASSERT_NE(missing_replace, nullptr);
+  auto *name_label = panel.findChild<QLabel *>(
+      QStringLiteral("inspector.material.0.name"));
+  ASSERT_NE(name_label, nullptr);
+  EXPECT_FALSE(name_label->toolTip().isEmpty());
+  EXPECT_FALSE(preview_label->toolTip().isEmpty());
   EXPECT_EQ(preview_label->width(), 56);
   EXPECT_EQ(preview_label->height(), 56);
   EXPECT_FALSE(preview_label->pixmap().isNull());

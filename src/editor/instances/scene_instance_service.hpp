@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/release_features.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/commands/document/scene_command.hpp"
 #include "editor/commands/document_command_service.hpp"
@@ -490,18 +491,23 @@ public:
         scene_name_(scene_name) {}
 
   [[nodiscard]] bool can_create_instance() const {
-    return prepare_create().has_value();
+    return release_has_feature(ReleaseFeature::Instancing) &&
+           prepare_create().has_value();
   }
 
   /// Validates explicit roots without changing the editor selection.
   [[nodiscard]] bool can_create_instance_from_roots(
       std::span<const EntityId> roots) const {
-    return prepare_create(roots).has_value();
+    return release_has_feature(ReleaseFeature::Instancing) &&
+           prepare_create(roots).has_value();
   }
 
   /// Converts roots inside the caller's transaction; the caller owns rollback.
   SceneInstanceMutationResult create_instance_from_roots_in_transaction(
       EditorTransaction &transaction, std::span<const EntityId> roots) {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return invalid(release_feature_unavailable_message());
+    }
     if (!transaction.active()) {
       return invalid("Instance creation requires an active editor transaction.");
     }
@@ -533,6 +539,9 @@ public:
   }
 
   [[nodiscard]] bool can_flatten_selected_instances() const {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return false;
+    }
     sanitize_edit_context();
     if (edit_context_.active() ||
         modeling_.selection_mode() != ModelingSelectionMode::Object ||
@@ -565,7 +574,8 @@ public:
   }
 
   [[nodiscard]] bool can_enter_instance_edit(EntityId occurrence) const {
-    return !valid_edit_context() && valid_occurrence(occurrence) &&
+    return release_has_feature(ReleaseFeature::Instancing) &&
+           !valid_edit_context() && valid_occurrence(occurrence) &&
            scene_.is_effectively_visible(occurrence) &&
            scene_entity_selectable_for_user_selection(scene_, occurrence) &&
            modeling_.selection_mode() == ModelingSelectionMode::Object &&
@@ -573,10 +583,13 @@ public:
   }
 
   [[nodiscard]] bool can_exit_instance_edit() const {
-    return valid_edit_context();
+    return release_has_feature(ReleaseFeature::Instancing) && valid_edit_context();
   }
 
   SceneInstanceMutationResult create_instance() {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return invalid(release_feature_unavailable_message());
+    }
     const std::optional<CreatePlan> plan = prepare_create();
     if (!plan.has_value()) {
       return invalid("Select one or more visible, unlocked, unnested meshes "
@@ -610,6 +623,9 @@ public:
   }
 
   SceneInstanceMutationResult flatten_selected_instances() {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return invalid(release_feature_unavailable_message());
+    }
     const std::optional<std::vector<EntityId>> selected =
         selected_occurrences();
     if (!selected.has_value() || !can_flatten_selected_instances()) {
@@ -743,6 +759,9 @@ public:
   SceneInstanceMutationResult materialize_instance_copies_in_transaction(
       EditorTransaction &transaction,
       std::span<const SceneInstanceMaterializationRequest> requests) {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return invalid(release_feature_unavailable_message());
+    }
     if (!transaction.active() || !transaction.empty()) {
       return invalid("Instance copies require an empty active editor transaction.");
     }
@@ -773,6 +792,9 @@ private:
       EditorTransaction &transaction, std::span<const EntityId> occurrences,
       std::span<const QMat4> copy_worlds,
       std::span<const std::optional<QMat4>> copy_mappings) {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return invalid(release_feature_unavailable_message());
+    }
     sanitize_edit_context();
     if (!transaction.active() || edit_context_.active() || occurrences.empty() ||
         modeling_.selection_mode() != ModelingSelectionMode::Object ||
@@ -981,6 +1003,9 @@ private:
 
 public:
   SceneInstanceMutationResult enter_instance_edit(EntityId occurrence) {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return invalid(release_feature_unavailable_message());
+    }
     sanitize_edit_context();
     if (!can_enter_instance_edit(occurrence)) {
       return invalid("Instance edit requires one valid, unlocked occurrence "
@@ -1010,6 +1035,9 @@ public:
   }
 
   SceneInstanceMutationResult exit_instance_edit() {
+    if (!release_has_feature(ReleaseFeature::Instancing)) {
+      return invalid(release_feature_unavailable_message());
+    }
     sanitize_edit_context();
     if (!edit_context_.active()) {
       return invalid("No instance edit scope is active.");

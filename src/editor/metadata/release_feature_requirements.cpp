@@ -117,6 +117,10 @@ bool release_allows_command(std::string_view id) noexcept {
   if (id.starts_with(kModelingPrefix)) {
     return release_allows_action(id.substr(kModelingPrefix.size()));
   }
+  if (id == "edit.create_instance" || id == "edit.flatten_instance" ||
+      id == "edit.exit_instance_edit") {
+    return release_has_feature(ReleaseFeature::Instancing);
+  }
   if (id.starts_with("scene.layers.")) {
     return release_has_feature(ReleaseFeature::Layers);
   }

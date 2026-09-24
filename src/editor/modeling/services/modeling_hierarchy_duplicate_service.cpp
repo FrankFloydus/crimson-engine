@@ -101,6 +101,13 @@ ModelingHierarchyDuplicateService::duplicate_entity_hierarchy(
     ModelingHierarchyDuplicateRuntime runtime,
     std::span<const EntityId> explicit_roots,
     ModelingSelectionMode result_selection_mode) const {
+  if (!document_command_hierarchy_available_in_release(scene, explicit_roots)) {
+    return ModelingHierarchyDuplicateResult(ModelingCommandResult{
+        .ok = false,
+        .changed = false,
+        .message = release_feature_unavailable_message()});
+  }
+
   QDR_PROFILE_FUNCTION();
   std::vector<EntityId> roots(explicit_roots.begin(), explicit_roots.end());
   if (roots.empty()) {

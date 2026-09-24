@@ -30,6 +30,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLineEdit>
 #include <QLabel>
 #include <QImage>
@@ -322,6 +323,16 @@ TEST_F(PublicReleaseUiTests, MeshInspectorRetainsDoubleSidedWithoutCastShadows) 
   ASSERT_NE(double_sided, nullptr);
   const auto *mesh = session.scene().mesh(box.value().entity);
   ASSERT_NE(mesh, nullptr);
+  EXPECT_EQ(panel.findChild<QComboBox *>(
+                QStringLiteral("inspector.physics.collision_type")), nullptr);
+  EXPECT_EQ(panel.findChild<QComboBox *>(
+                QStringLiteral("inspector.physics.body_type")), nullptr);
+  EXPECT_NE(panel.findChild<QCheckBox *>(
+                QStringLiteral("inspector.physics.generate_collisions")), nullptr);
+  EXPECT_NE(panel.findChild<QCheckBox *>(
+                QStringLiteral("inspector.physics.display_collision")), nullptr);
+  EXPECT_EQ(mesh->collision_type, MeshCollisionType::Mesh);
+  EXPECT_EQ(mesh->body_type, MeshPhysicsBodyType::StaticBody);
   const bool before_shadows = mesh->cast_shadows;
   const bool next_double_sided = !mesh->double_sided;
   double_sided->setChecked(next_double_sided);
