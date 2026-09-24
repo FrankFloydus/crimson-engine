@@ -35,6 +35,7 @@
 #include <QScrollBar>
 #include <QSplitter>
 #include <QTimer>
+#include <QToolButton>
 #include <QWheelEvent>
 
 #include <array>
@@ -47,6 +48,13 @@
 
 namespace quader {
 namespace {
+
+QString face_texture_screenshot_directory() {
+  const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  return directory.isEmpty()
+             ? qEnvironmentVariable("QUADER_FACE_TEXTURE_SCREENSHOT_DIR")
+             : directory;
+}
 
 class QtFaceTexturePanelTests : public ::testing::Test {
 protected:
@@ -448,8 +456,8 @@ TEST_F(QtFaceTexturePanelTests,
 }
 
 TEST_F(QtFaceTexturePanelTests,
-       NumericAndActionRowsKeepMatchingCompactGapsAtEveryInterfaceScale) {
-  const QString screenshot_path = qEnvironmentVariable("QUADER_FACE_TEXTURE_SCREENSHOT_DIR");
+       NumericAndActionRowsAlignAtNarrowWidthsAndEveryInterfaceScale) {
+  const QString screenshot_path = face_texture_screenshot_directory();
   if (!screenshot_path.isEmpty()) {
     const QString build_root = QDir(QString::fromUtf8(QUADER_SOURCE_DIR))
                                    .absoluteFilePath(QStringLiteral("build"));
@@ -461,61 +469,157 @@ TEST_F(QtFaceTexturePanelTests,
   }
   QApplication::setPalette(qt_obsidian_application_palette(QApplication::palette()));
   QtUiScaleApplicationController scale_controller(*application_);
-  for (const float scale : {1.0f, 1.5f, 2.0f}) {
+  for (const float scale : {1.0f, 1.5f, 2.0f, 1.0f}) {
     SCOPED_TRACE(scale);
     scale_controller.apply_factor(scale);
     const QtUiScaleMetrics metrics(scale, static_cast<std::uint64_t>(scale * 10));
     panel_->apply_ui_scale(metrics);
-    panel_->resize(metrics.px(700), metrics.px(1000));
-    settle_layout();
-    auto *numeric_content = panel_->findChild<QWidget *>(
-        QStringLiteral("face_texture.section.texture.content"));
-    auto *actions_content = panel_->findChild<QWidget *>(
-        QStringLiteral("face_texture.section.edit_texture.content"));
-    ASSERT_NE(numeric_content, nullptr);
-    ASSERT_NE(actions_content, nullptr);
-    const auto *numeric_grid = qobject_cast<QGridLayout *>(numeric_content->layout());
-    const auto *action_grid = qobject_cast<QGridLayout *>(actions_content->layout());
-    ASSERT_NE(numeric_grid, nullptr);
-    ASSERT_NE(action_grid, nullptr);
-    EXPECT_EQ(numeric_grid->verticalSpacing(), metrics.px(4));
-    EXPECT_EQ(numeric_grid->verticalSpacing(), action_grid->verticalSpacing());
-    const auto *scale_x = number("scale_x");
-    const auto *shift_x = number("shift_x");
-    const auto *rotate = number("rotate");
-    ASSERT_NE(scale_x, nullptr);
-    ASSERT_NE(shift_x, nullptr);
-    ASSERT_NE(rotate, nullptr);
-    EXPECT_LE(shift_x->y() - scale_x->geometry().bottom() - 1, metrics.px(6));
-    EXPECT_LE(rotate->y() - shift_x->geometry().bottom() - 1, metrics.px(6));
-    const auto *rotation_label = panel_->findChild<QLabel *>(
-        QStringLiteral("face_texture.texture.rotate.label"));
-    ASSERT_NE(rotation_label, nullptr);
-    EXPECT_EQ(rotation_label->text(), QStringLiteral("Rotation (\u00b0)"));
-    auto *scroll = panel_->findChild<QScrollArea *>(
-        QStringLiteral("face_texture.controls_scroll"));
-    ASSERT_NE(scroll, nullptr);
-    EXPECT_EQ(scroll->verticalScrollBar()->maximum(), 0)
-        << "viewport=" << scroll->viewport()->height()
-        << " widget=" << scroll->widget()->height()
-        << " hint=" << scroll->widget()->sizeHint().height()
-        << " min_hint=" << scroll->widget()->minimumSizeHint().height()
-        << " hfw=" << scroll->widget()->heightForWidth(scroll->viewport()->width())
-        << " area_hint=" << scroll->sizeHint().height();
-    const int content_bottom = actions_content->mapTo(
-        scroll->viewport(), QPoint(0, actions_content->height())).y();
-    const int trailing_space = scroll->viewport()->height() - content_bottom;
-    EXPECT_GE(trailing_space, 0);
-    EXPECT_LE(trailing_space, metrics.px(12));
-    if (!screenshot_path.isEmpty()) {
-      QImage image(panel_->size(), QImage::Format_ARGB32_Premultiplied);
-      image.fill(Qt::transparent);
-      panel_->render(&image);
-      const QString filename = QStringLiteral("face-texture-panel-%1.png")
-                                   .arg(static_cast<int>(scale * 100));
-      EXPECT_TRUE(image.save(QDir(screenshot_path).filePath(filename)));
+    for (const int width : {320, 700}) {
+      SCOPED_TRACE(width);
+      panel_->resize(metrics.px(width), metrics.px(1000));
+      settle_layout();
+      auto *numeric_content = panel_->findChild<QWidget *>(
+          QStringLiteral("face_texture.section.texture.content"));
+      auto *actions_content = panel_->findChild<QWidget *>(
+          QStringLiteral("face_texture.section.edit_texture.content"));
+      ASSERT_NE(numeric_content, nullptr);
+      ASSERT_NE(actions_content, nullptr);
+      const auto *numeric_grid = qobject_cast<QGridLayout *>(numeric_content->layout());
+      const auto *action_grid = qobject_cast<QGridLayout *>(actions_content->layout());
+      ASSERT_NE(numeric_grid, nullptr);
+      ASSERT_NE(action_grid, nullptr);
+      EXPECT_EQ(numeric_grid->verticalSpacing(), metrics.px(4));
+      EXPECT_EQ(numeric_grid->verticalSpacing(), action_grid->verticalSpacing());
+      const auto *scale_x = number("scale_x");
+      const auto *scale_y = number("scale_y");
+      const auto *shift_x = number("shift_x");
+      const auto *shift_y = number("shift_y");
+      const auto *rotate = number("rotate");
+      ASSERT_NE(scale_x, nullptr);
+      ASSERT_NE(scale_y, nullptr);
+      ASSERT_NE(shift_x, nullptr);
+      ASSERT_NE(shift_y, nullptr);
+      ASSERT_NE(rotate, nullptr);
+      EXPECT_EQ(scale_x->y(), scale_y->y());
+      EXPECT_EQ(shift_x->y(), shift_y->y());
+      EXPECT_LT(scale_x->geometry().right(), scale_y->x());
+      EXPECT_LT(shift_x->geometry().right(), shift_y->x());
+      EXPECT_EQ(scale_x->x(), shift_x->x());
+      EXPECT_EQ(scale_x->width(), shift_x->width());
+      EXPECT_EQ(scale_y->x(), shift_y->x());
+      EXPECT_EQ(scale_y->width(), shift_y->width());
+      EXPECT_EQ(rotate->x(), scale_x->x());
+      EXPECT_EQ(rotate->geometry().right(), scale_y->geometry().right());
+      for (const auto &rows : {std::pair{scale_x, shift_x},
+                                std::pair{shift_x, rotate}}) {
+        const int gap = rows.second->y() - rows.first->geometry().bottom() - 1;
+        EXPECT_GE(gap, metrics.px(4));
+        EXPECT_LE(gap, metrics.px(6));
+      }
+      for (const char *id : {"scale_x", "scale_y", "shift_x", "shift_y", "rotate"}) {
+        const auto *spin = number(id);
+        ASSERT_NE(spin, nullptr);
+        EXPECT_GE(spin->width(), metrics.px(64));
+        EXPECT_TRUE(numeric_content->rect().contains(spin->geometry()));
+        const auto *line = spin->findChild<QLineEdit *>();
+        ASSERT_NE(line, nullptr);
+        const int text_width = line->contentsRect().width() -
+                               line->textMargins().left() -
+                               line->textMargins().right();
+        EXPECT_LE(line->fontMetrics().horizontalAdvance(line->displayText()),
+                  text_width);
+        const auto *label = panel_->findChild<QLabel *>(
+            spin->objectName() + QStringLiteral(".label"));
+        ASSERT_NE(label, nullptr);
+        EXPECT_LT(label->geometry().right(), spin->x());
+        EXPECT_LE(label->heightForWidth(label->width()), label->height());
+      }
+      const auto *align = panel_->findChild<QPushButton *>(
+          QStringLiteral("face_texture.edit_texture.align_to_grid"));
+      const auto *treat = panel_->findChild<QCheckBox *>(
+          QStringLiteral("face_texture.edit_texture.treat_as_one"));
+      ASSERT_NE(align, nullptr);
+      ASSERT_NE(treat, nullptr);
+      for (const char *id : {"rotate_clockwise", "flip_texture_horizontal",
+                               "flip_face_horizontal", "fit_both", "justify_left"}) {
+        const auto *action = panel_->findChild<QPushButton *>(
+            QStringLiteral("face_texture.edit_texture.%1")
+                .arg(QString::fromLatin1(id)));
+        ASSERT_NE(action, nullptr);
+        EXPECT_EQ(action->x(), align->x());
+      }
+      EXPECT_EQ(treat->x(), align->x());
+      const auto *rotation_label = panel_->findChild<QLabel *>(
+          QStringLiteral("face_texture.texture.rotate.label"));
+      ASSERT_NE(rotation_label, nullptr);
+      EXPECT_EQ(rotation_label->text(), QStringLiteral("Rotation (\u00b0)"));
+      auto *scroll = panel_->findChild<QScrollArea *>(
+          QStringLiteral("face_texture.controls_scroll"));
+      ASSERT_NE(scroll, nullptr);
+      EXPECT_EQ(scroll->horizontalScrollBar()->maximum(), 0);
+      EXPECT_EQ(scroll->verticalScrollBar()->maximum(), 0)
+          << "viewport=" << scroll->viewport()->height()
+          << " widget=" << scroll->widget()->height()
+          << " hint=" << scroll->widget()->sizeHint().height()
+          << " min_hint=" << scroll->widget()->minimumSizeHint().height()
+          << " hfw=" << scroll->widget()->heightForWidth(scroll->viewport()->width())
+          << " area_hint=" << scroll->sizeHint().height();
+      const int content_bottom = actions_content->mapTo(
+          scroll->viewport(), QPoint(0, actions_content->height())).y();
+      const int trailing_space = scroll->viewport()->height() - content_bottom;
+      EXPECT_GE(trailing_space, 0);
+      EXPECT_LE(trailing_space, metrics.px(12));
+      if (!screenshot_path.isEmpty()) {
+        QImage image(panel_->size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        panel_->render(&image);
+        const QString filename = QStringLiteral("face-texture-panel-%1-%2.png")
+                                     .arg(width).arg(static_cast<int>(scale * 100));
+        EXPECT_TRUE(image.save(QDir(screenshot_path).filePath(filename)));
+      }
     }
   }
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       SectionCollapseSettlesTheNumericDraftAndRetainsTheFaceAndControls) {
+  auto *header = panel_->findChild<QToolButton *>(
+      QStringLiteral("face_texture.section.texture.header"));
+  auto *spin = number("scale_x");
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(spin, nullptr);
+  const auto before = editor().modeling().face_texture_settings();
+  const auto previous_undo = editor().history().snapshot().undo_label;
+  const int canvas_height = panel_->canvas().height();
+  application_->setActiveWindow(panel_.get());
+  spin->setFocus(Qt::TabFocusReason);
+  spin->selectAll();
+  QKeyEvent draft(QEvent::KeyPress, 0, Qt::NoModifier,
+                  spin->locale().toString(2.5, 'f', 1));
+  QCoreApplication::sendEvent(spin, &draft);
+  ASSERT_TRUE(spin->hasFocus());
+  int edit_completions = 0;
+  QObject::connect(spin, &QDoubleSpinBox::editingFinished, panel_.get(),
+                   [&edit_completions]() { ++edit_completions; });
+  header->click();
+  settle_layout();
+  EXPECT_FALSE(header->isChecked());
+  EXPECT_EQ(header->arrowType(), Qt::RightArrow);
+  EXPECT_FALSE(spin->isVisible());
+  EXPECT_EQ(edit_completions, 1);
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  EXPECT_GE(panel_->canvas().height(), canvas_height);
+  const auto collapsed = editor().modeling().face_texture_settings();
+  EXPECT_EQ(collapsed.selection_token, before.selection_token);
+  EXPECT_NEAR(collapsed.scale_x.value_or(0.0), 2.5, 0.000001);
+  header->click();
+  settle_layout();
+  EXPECT_EQ(number("scale_x"), spin);
+  EXPECT_TRUE(spin->isVisible());
+  EXPECT_EQ(edit_completions, 1);
+  ASSERT_TRUE(editor().history().undo().ok());
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, before.scale_x);
+  EXPECT_EQ(editor().history().snapshot().undo_label, previous_undo);
 }
 
 TEST_F(QtFaceTexturePanelTests,
@@ -822,7 +926,7 @@ TEST_F(QtFaceTexturePanelTests,
   panel_->refresh();
   QApplication::setPalette(qt_obsidian_application_palette(QApplication::palette()));
   QtUiScaleApplicationController scale_controller(*application_);
-  const QString screenshot_path = qEnvironmentVariable("QUADER_FACE_TEXTURE_SCREENSHOT_DIR");
+  const QString screenshot_path = face_texture_screenshot_directory();
   for (const float factor : {1.0f, 1.5f, 2.0f}) {
     SCOPED_TRACE(factor);
     scale_controller.apply_factor(factor);

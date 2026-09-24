@@ -26,11 +26,13 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFrame>
+#include <QHeaderView>
 #include <QImage>
 #include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QListView>
 #include <QMainWindow>
@@ -309,6 +311,98 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_TRUE(has_transparent_pixel)
       << "the generated asset must keep a genuinely transparent background";
   EXPECT_TRUE(has_visible_pixel);
+}
+
+TEST(QtMaterialBrowserWindowTests,
+     CollectionChromeScalesAndRetainsSearchSelectionAndViewState) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-material-browser-layout-tests";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  QtUiScaleApplicationController scale_controller(application);
+  QApplication::setPalette(qt_obsidian_application_palette(
+      QApplication::style()->standardPalette()));
+  const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(directory));
+  }
+
+  for (auto host : {QtMaterialBrowserHost::Windowed,
+                    QtMaterialBrowserHost::Embedded}) {
+    SCOPED_TRACE(static_cast<int>(host));
+    QtMaterialBrowserWindow browser(nullptr, host);
+    browser.setAttribute(Qt::WA_DontShowOnScreen, true);
+    auto oak = folder_material("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                               QStringLiteral("Oak planks"),
+                               QStringLiteral("Materials/Wood/oak.qmat"));
+    oak.fallback_color = QColor(128, 87, 51);
+    auto steel = folder_material("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                                 QStringLiteral("Brushed steel"),
+                                 QStringLiteral("Materials/Metal/steel.qmat"));
+    steel.fallback_color = QColor(116, 134, 149);
+    browser.set_materials({oak, steel}, oak.reference);
+    browser.set_folders({QStringLiteral("Materials/Wood"),
+                         QStringLiteral("Materials/Metal")});
+    browser.restore_presentation_state(QtMaterialBrowserViewMode::Grid, 64,
+                                       true, 120);
+    browser.show();
+    auto *search = browser.findChild<QLineEdit *>(
+        QStringLiteral("materialBrowser.search"));
+    auto *grid = browser.findChild<QListView *>(
+        QStringLiteral("materialBrowser.gridView"));
+    auto *list = browser.findChild<QTableView *>(
+        QStringLiteral("materialBrowser.listView"));
+    auto *folders = browser.findChild<QTreeWidget *>(
+        QStringLiteral("materialBrowser.folderTree"));
+    auto *filter = browser.findChild<QToolButton *>(
+        QStringLiteral("materialBrowser.filter"));
+    ASSERT_NE(search, nullptr);
+    ASSERT_NE(grid, nullptr);
+    ASSERT_NE(list, nullptr);
+    ASSERT_NE(folders, nullptr);
+    ASSERT_NE(filter, nullptr);
+    auto *retained_model = grid->model();
+    auto *retained_selection = grid->selectionModel();
+    const QString host_name = host == QtMaterialBrowserHost::Windowed
+                                  ? QStringLiteral("window")
+                                  : QStringLiteral("embedded");
+
+    for (float factor : {1.0F, 2.0F, 1.0F}) {
+      SCOPED_TRACE(factor);
+      scale_controller.apply_factor(factor);
+      const auto metrics = scale_controller.metrics();
+      browser.apply_ui_scale(metrics);
+      browser.resize(metrics.size(host == QtMaterialBrowserHost::Windowed
+                                      ? QSize(760, 420) : QSize(418, 330)));
+      for (int turn = 0; turn < 3; ++turn) {
+        application.processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      }
+      EXPECT_EQ(browser.centralWidget()->layout()->contentsMargins(),
+                metrics.margins(QMargins(6, 6, 6, 6)));
+      EXPECT_GE(search->height(), metrics.px(28));
+      EXPECT_GE(folders->visualItemRect(folders->topLevelItem(0)).height(),
+                metrics.px(26));
+      EXPECT_EQ(list->verticalHeader()->defaultSectionSize(), metrics.px(26));
+      EXPECT_LE(std::abs(search->geometry().center().y() -
+                         filter->geometry().center().y()), 1);
+      EXPECT_FALSE(search->geometry().intersects(filter->geometry()));
+      EXPECT_EQ(browser.selected_material(), oak.reference);
+      EXPECT_EQ(grid->model(), retained_model);
+      EXPECT_EQ(grid->selectionModel(), retained_selection);
+      search->setText(QStringLiteral("Oak"));
+      browser.apply_ui_scale(metrics);
+      EXPECT_EQ(search->text(), QStringLiteral("Oak"));
+      EXPECT_EQ(grid->model()->rowCount(), 1);
+      search->clear();
+      if (!directory.isEmpty()) {
+        ASSERT_TRUE(browser.grab().save(QDir(directory).filePath(
+            QStringLiteral("materials-%1-%2.png")
+                .arg(host_name).arg(qRound(factor * 100)))));
+      }
+    }
+  }
 }
 
 TEST(QtMaterialBrowserWindowTests,

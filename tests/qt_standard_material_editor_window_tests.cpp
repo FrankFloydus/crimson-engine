@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "core/localization_service.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
@@ -18,9 +19,10 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QEvent>
-#include <QGroupBox>
+#include <QFormLayout>
 #include <QImage>
 #include <QKeySequence>
 #include <QLabel>
@@ -32,6 +34,8 @@
 #include <QPixmap>
 #include <QProxyStyle>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSlider>
 #include <QStatusBar>
 #include <QStyle>
@@ -426,7 +430,7 @@ TEST(QtStandardMaterialEditorWindowTests,
             QStringLiteral("Materials/Metals/bronze.qmat | "
                            "Normal preview fallback"));
 
-  auto *properties = window->findChild<QGroupBox *>(
+  auto *properties = window->findChild<QWidget *>(
       QStringLiteral("standardMaterialEditor.properties"));
   auto *name = window->findChild<QLineEdit *>(
       QStringLiteral("standardMaterialEditor.name"));
@@ -1296,7 +1300,7 @@ TEST(QtStandardMaterialEditorWindowTests,
       .name = QStringLiteral("UV Help"),
   };
   window.set_document(document);
-  auto *group = window.findChild<QGroupBox *>(
+  auto *group = window.findChild<QWidget *>(
       QStringLiteral("standardMaterialEditor.textureTransform"));
   ASSERT_NE(group, nullptr);
   constexpr std::array<const char *, 7> kNames{
@@ -1362,6 +1366,137 @@ TEST(QtStandardMaterialEditorWindowTests,
     EXPECT_EQ(events.changes, 0);
     EXPECT_EQ(edits, 0);
   }
+}
+
+TEST(QtStandardMaterialEditorWindowTests,
+     DisclosureSectionsKeepAlignedFieldsAndRetainedEditsAcrossUiScales) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-material-layout-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setPalette(
+      qt_obsidian_application_palette(application.palette()));
+  QtUiScaleApplicationController scale_controller(application);
+  QtStandardMaterialEditorWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  scale_controller.add_change_listener(
+      window, [&](const QtUiScaleMetrics &metrics) {
+        window.apply_ui_scale(metrics);
+      });
+  QtStandardMaterialEditorDocument document;
+  document.stable_id = QStringLiteral("material-layout-document");
+  document.name = QStringLiteral("Brushed Bronze");
+  document.roughness = 0.65;
+  document.metallic = 0.8;
+  document.textures[0].project_relative_path =
+      QStringLiteral("Textures/bronze_albedo.png");
+  window.set_document(document);
+  int edits = 0;
+  window.set_scalar_edited_callback(
+      [&](QtStandardMaterialScalar, double) { ++edits; });
+  window.set_texture_transform_edited_callback(
+      [&](QtStandardMaterialTextureTransformComponent, double) { ++edits; });
+  auto *properties = window.findChild<QWidget *>(
+      QStringLiteral("standardMaterialEditor.properties"));
+  auto *transform = window.findChild<QWidget *>(
+      QStringLiteral("standardMaterialEditor.textureTransform"));
+  auto *material_header = window.findChild<QToolButton *>(
+      QStringLiteral("standardMaterialEditor.properties.header"));
+  auto *transform_header = window.findChild<QToolButton *>(
+      QStringLiteral("standardMaterialEditor.textureTransform.header"));
+  auto *name = window.findChild<QLineEdit *>(
+      QStringLiteral("standardMaterialEditor.name"));
+  QPointer<QDoubleSpinBox> roughness = window.findChild<QDoubleSpinBox *>(
+      QStringLiteral("standardMaterialEditor.roughness"));
+  QPointer<QDoubleSpinBox> scale_u = window.findChild<QDoubleSpinBox *>(
+      QStringLiteral("standardMaterialEditor.textureTransform.scaleU"));
+  auto *direct_x = window.findChild<QCheckBox *>(
+      QStringLiteral("standardMaterialEditor.directXNormal"));
+  auto *scroll = window.findChild<QScrollArea *>(
+      QStringLiteral("standardMaterialEditor.propertiesScroll"));
+  ASSERT_NE(properties, nullptr);
+  ASSERT_NE(transform, nullptr);
+  ASSERT_NE(material_header, nullptr);
+  ASSERT_NE(transform_header, nullptr);
+  ASSERT_NE(name, nullptr);
+  ASSERT_NE(roughness, nullptr);
+  ASSERT_NE(scale_u, nullptr);
+  ASSERT_NE(direct_x, nullptr);
+  ASSERT_NE(scroll, nullptr);
+  const auto settle_layout = [&]() {
+    for (int pass = 0; pass < 4; ++pass) {
+      QCoreApplication::processEvents();
+    }
+  };
+  const auto capture = [&](const QString &filename) {
+    const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+    if (!directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(directory));
+      ASSERT_TRUE(window.grab().save(QDir(directory).filePath(filename)));
+    }
+  };
+  window.show();
+  for (const float scale : {1.0F, 2.0F, 1.0F}) {
+    SCOPED_TRACE(scale);
+    scale_controller.apply_factor(scale);
+    window.resize(scale_controller.metrics().size(QSize(1040, 820)));
+    settle_layout();
+    EXPECT_EQ(material_header->width(), properties->width());
+    EXPECT_EQ(transform_header->width(), transform->width());
+    EXPECT_EQ(material_header->mapTo(properties, QPoint()).x(), 0);
+    EXPECT_EQ(transform_header->mapTo(transform, QPoint()).x(), 0);
+    EXPECT_EQ(material_header->height(), transform_header->height());
+    EXPECT_GE(material_header->height(), scale_controller.metrics().px(26));
+    const int field_left = name->mapTo(scroll->widget(), QPoint()).x();
+    EXPECT_EQ(roughness->mapTo(scroll->widget(), QPoint()).x(), field_left);
+    EXPECT_EQ(scale_u->mapTo(scroll->widget(), QPoint()).x(), field_left);
+    EXPECT_EQ(direct_x->mapTo(scroll->widget(), QPoint()).x(), field_left);
+    EXPECT_EQ(name->width(), roughness->width());
+    EXPECT_EQ(name->width(), scale_u->width());
+    EXPECT_EQ(scroll->horizontalScrollBar()->maximum(), 0);
+    EXPECT_TRUE(name->hasFrame());
+    EXPECT_FALSE(name->isReadOnly());
+    capture(QStringLiteral("material-editor-%1.png").arg(qRound(scale * 100)));
+
+    material_header->click();
+    settle_layout();
+    EXPECT_FALSE(material_header->isChecked());
+    EXPECT_EQ(material_header->arrowType(), Qt::RightArrow);
+    EXPECT_FALSE(roughness->isVisible());
+    EXPECT_TRUE(scale_u->isVisible());
+    EXPECT_EQ(roughness->value(), 0.65);
+    for (int frame = 0; frame < 10; ++frame) {
+      window.set_document(document);
+    }
+    EXPECT_FALSE(material_header->isChecked());
+    EXPECT_EQ(window.findChild<QDoubleSpinBox *>(
+                  QStringLiteral("standardMaterialEditor.roughness")),
+              roughness.data());
+    EXPECT_EQ(window.findChild<QDoubleSpinBox *>(
+                  QStringLiteral("standardMaterialEditor.textureTransform.scaleU")),
+              scale_u.data());
+    EXPECT_EQ(edits, 0);
+    capture(QStringLiteral("material-editor-texture-transform-%1.png")
+                .arg(qRound(scale * 100)));
+    material_header->click();
+    settle_layout();
+    EXPECT_TRUE(roughness->isVisible());
+    EXPECT_TRUE(transform_header->isChecked());
+  }
+
+  QtStandardMaterialEditorLabels labels;
+  labels.properties_group = QStringLiteral("Materiale");
+  labels.texture_transform = QStringLiteral("Trasformazione texture");
+  labels.texture_center = QStringLiteral("Centro delle coordinate texture");
+  window.set_labels(labels);
+  settle_layout();
+  EXPECT_EQ(material_header->text(), labels.properties_group);
+  EXPECT_EQ(transform_header->text(), labels.texture_transform);
+  EXPECT_EQ(name->mapTo(scroll->widget(), QPoint()).x(),
+            scale_u->mapTo(scroll->widget(), QPoint()).x());
+  EXPECT_EQ(edits, 0);
 }
 
 } // namespace

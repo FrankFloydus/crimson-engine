@@ -12,17 +12,20 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/layer_panel.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <QAction>
+#include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QColorDialog>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
+#include <QDir>
 #include <QItemSelection>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
@@ -32,6 +35,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
+#include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
@@ -161,15 +165,93 @@ TEST(LayerPanelTests, AppliesInterfaceScaleFromDesignBaselines) {
   EXPECT_EQ(tree->iconSize(), QSize(36, 36));
   EXPECT_EQ(create->size(), QSize(56, 56));
   EXPECT_EQ(create->iconSize(), QSize(40, 40));
-  EXPECT_EQ(actions->layout()->contentsMargins(), QMargins(8, 8, 8, 8));
+  EXPECT_EQ(actions->layout()->contentsMargins(), QMargins(12, 12, 12, 12));
   EXPECT_EQ(actions->layout()->spacing(), 8);
 
   panel.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(tree->iconSize(), QSize(18, 18));
   EXPECT_EQ(create->size(), QSize(28, 28));
   EXPECT_EQ(create->iconSize(), QSize(20, 20));
-  EXPECT_EQ(actions->layout()->contentsMargins(), QMargins(4, 4, 4, 4));
+  EXPECT_EQ(actions->layout()->contentsMargins(), QMargins(6, 6, 6, 6));
   EXPECT_EQ(actions->layout()->spacing(), 4);
+}
+
+TEST(LayerPanelTests, ScaledRowsCenterAndRetainControlsAndSelection) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-layer-panel-layout-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtUiScaleApplicationController scale_controller(application);
+  QApplication::setPalette(quader::qt_obsidian_application_palette(
+      QApplication::style()->standardPalette()));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.layers().create("Architecture").ok());
+  const auto detail = editor.layers().create("Detail geometry");
+  ASSERT_TRUE(detail.ok());
+  ASSERT_TRUE(editor.layers().set_locked(detail.value().id, true).ok());
+  quader::UISettings ui_settings = quader::UISettings::defaults();
+  quader::ViewportSettings viewport_settings =
+      quader::ViewportSettings::defaults();
+  quader::LocalizationService localization = loaded_localization();
+  quader::UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  quader::LayerPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.refresh(context);
+  panel.show();
+  auto *tree = panel.findChild<QTreeView *>(QStringLiteral("layers.tree"));
+  ASSERT_NE(tree, nullptr);
+  const QModelIndex selected = tree->model()->index(0, 1);
+  tree->selectionModel()->setCurrentIndex(
+      selected, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  QWidget *retained_cell = tree->indexWidget(tree->model()->index(0, 2));
+  ASSERT_NE(retained_cell, nullptr);
+  const auto revision = editor.layers().revision();
+  const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(directory));
+  }
+
+  for (float factor : {1.0F, 2.0F, 1.0F}) {
+    SCOPED_TRACE(factor);
+    scale_controller.apply_factor(factor);
+    const auto metrics = scale_controller.metrics();
+    panel.apply_ui_scale(metrics);
+    panel.resize(metrics.size(QSize(418, 270)));
+    for (int turn = 0; turn < 3; ++turn) {
+      application.processEvents();
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    }
+    EXPECT_GE(tree->visualRect(selected).height(), metrics.px(26));
+    for (int column : {0, 2, 3}) {
+      QWidget *cell = tree->indexWidget(tree->model()->index(0, column));
+      ASSERT_NE(cell, nullptr);
+      auto *button = cell->findChild<QAbstractButton *>();
+      ASSERT_NE(button, nullptr);
+      EXPECT_TRUE(cell->rect().contains(button->geometry()));
+      EXPECT_LE((cell->rect().center() - button->geometry().center()).manhattanLength(), 2);
+    }
+    panel.refresh(context);
+    EXPECT_EQ(tree->indexWidget(tree->model()->index(0, 2)), retained_cell);
+    EXPECT_EQ(tree->currentIndex(), selected);
+    EXPECT_TRUE(tree->selectionModel()->isSelected(selected));
+    EXPECT_EQ(editor.layers().revision(), revision);
+    if (!directory.isEmpty()) {
+      ASSERT_TRUE(panel.grab().save(QDir(directory).filePath(
+          QStringLiteral("layers-%1.png").arg(qRound(factor * 100)))));
+    }
+  }
 }
 
 TEST(LayerPanelTests, RefreshesPaletteTintedRowIconsOnApplicationChange) {
@@ -342,7 +424,7 @@ TEST(LayerPanelTests,
             "Renamed With Double Click");
 
   auto *visibility_button = qobject_cast<QToolButton *>(
-      tree->indexWidget(tree->model()->index(0, 2)));
+      tree->indexWidget(tree->model()->index(0, 2))->findChild<QAbstractButton *>());
   ASSERT_NE(visibility_button, nullptr);
   panel.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
   EXPECT_EQ(visibility_button->size(), QSize(44, 44));
@@ -369,7 +451,7 @@ TEST(LayerPanelTests,
             QStringLiteral("Layer hidden"));
 
   visibility_button = qobject_cast<QToolButton *>(
-      tree->indexWidget(tree->model()->index(0, 2)));
+      tree->indexWidget(tree->model()->index(0, 2))->findChild<QAbstractButton *>());
   ASSERT_NE(visibility_button, nullptr);
   EXPECT_EQ(visibility_button->accessibleName(),
             QStringLiteral("Layer hidden"));
@@ -387,7 +469,7 @@ TEST(LayerPanelTests,
   EXPECT_EQ(tree->currentIndex().row(), 0);
 
   auto *lock_button = qobject_cast<QToolButton *>(
-      tree->indexWidget(tree->model()->index(0, 3)));
+      tree->indexWidget(tree->model()->index(0, 3))->findChild<QAbstractButton *>());
   ASSERT_NE(lock_button, nullptr);
   lock_button->click();
   QCoreApplication::processEvents();
@@ -403,7 +485,7 @@ TEST(LayerPanelTests,
             QStringLiteral("Layer locked"));
 
   lock_button = qobject_cast<QToolButton *>(
-      tree->indexWidget(tree->model()->index(0, 3)));
+      tree->indexWidget(tree->model()->index(0, 3))->findChild<QAbstractButton *>());
   ASSERT_NE(lock_button, nullptr);
   EXPECT_EQ(lock_button->accessibleName(), QStringLiteral("Layer locked"));
   tree->selectionModel()->select(
@@ -420,7 +502,7 @@ TEST(LayerPanelTests,
   EXPECT_EQ(tree->currentIndex().row(), 0);
 
   auto *swatch = dynamic_cast<quader::QtColorSwatchButton *>(
-      tree->indexWidget(tree->model()->index(0, 0)));
+      tree->indexWidget(tree->model()->index(0, 0))->findChild<QAbstractButton *>());
   ASSERT_NE(swatch, nullptr);
   tree->selectionModel()->select(
       tree->model()->index(0, 1),

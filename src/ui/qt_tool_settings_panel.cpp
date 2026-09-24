@@ -13,6 +13,7 @@
 #include "core/logger.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
+#include "ui/qt_panel_section_header.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_spin_box.hpp"
 #include "ui/qt_tool_settings_drag_spinner.hpp"
@@ -30,7 +31,6 @@
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFrame>
-#include <QFont>
 #include <QFontMetrics>
 #include <QFocusEvent>
 #include <QGridLayout>
@@ -409,16 +409,13 @@ struct QtToolSettingsPanel::Impl {
     auto *root_layout = new QVBoxLayout(&panel_);
     root_layout->setObjectName(QStringLiteral("tool_settings.layout"));
     root_layout->setSizeConstraint(QLayout::SetNoConstraint);
-    set_scalable_margins(*root_layout, QMargins(6, 4, 6, 4));
-    set_scalable_spacing(*root_layout, 6);
+    set_scalable_margins(*root_layout, QMargins(0, 0, 0, 0));
+    set_scalable_spacing(*root_layout, 4);
 
-    target_title_ = new QToolButton(&panel_);
+    target_title_ = new QtPanelSectionHeader(&panel_);
     target_title_->setObjectName(QStringLiteral("tool_settings.target_title"));
-    target_title_->setAutoRaise(true);
-    target_title_->setCheckable(true);
     target_title_->setChecked(expanded_);
     target_title_->setArrowType(Qt::DownArrow);
-    target_title_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     target_title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     // Mouse collapse settles drafts before focus-out can interpret them.
     target_title_->setFocusPolicy(Qt::TabFocus);
@@ -438,7 +435,7 @@ struct QtToolSettingsPanel::Impl {
     controls_container_ = new QWidget(scroll_area_);
     controls_container_->setObjectName(QStringLiteral("tool_settings.content"));
     controls_layout_ = new QVBoxLayout(controls_container_);
-    set_scalable_margins(*controls_layout_, QMargins(2, 2, 2, 2));
+    set_scalable_margins(*controls_layout_, QMargins(6, 2, 6, 6));
     set_scalable_spacing(*controls_layout_, 6);
     controls_layout_->setAlignment(Qt::AlignTop);
     scroll_area_->setWidget(controls_container_);
@@ -447,7 +444,7 @@ struct QtToolSettingsPanel::Impl {
     actions_container_ = new QWidget(&panel_);
     actions_container_->setObjectName(QStringLiteral("tool_settings.actions"));
     auto *actions_layout = new QVBoxLayout(actions_container_);
-    set_scalable_margins(*actions_layout, QMargins(0, 0, 0, 0));
+    set_scalable_margins(*actions_layout, QMargins(6, 0, 6, 6));
     set_scalable_spacing(*actions_layout, 6);
 
     preview_actions_container_ = new QWidget(actions_container_);
@@ -615,8 +612,9 @@ struct QtToolSettingsPanel::Impl {
                    controls_layout_->minimumSize().width() +
                        margins.left() + margins.right())
         : ui_scale_metrics_.px(160);
-    int height = target_title_->sizeHint().height() + margins.top() +
-                 margins.bottom();
+    int height = std::max(target_title_->minimumHeight(),
+                          target_title_->sizeHint().height()) +
+                 margins.top() + margins.bottom();
     if (expanded_ && !inactive_presented_) {
       const int controls_height = controls_layout_->hasHeightForWidth()
           ? controls_layout_->heightForWidth(
@@ -795,9 +793,6 @@ private:
     apply_scalable_widget_metrics(panel_, ui_scale_metrics_);
     control_label_width_dirty_ = true;
     synchronize_control_label_width();
-    QFont target_font = QApplication::font(target_title_);
-    target_font.setBold(true);
-    target_title_->setFont(target_font);
     panel_.updateGeometry();
     if (scroll_area_->widget() != nullptr) {
       scroll_area_->widget()->updateGeometry();
@@ -852,6 +847,16 @@ private:
     width = std::min(width,
         std::max(ui_scale_metrics_.px(kMinimumControlLabelWidth), width_limit));
     for (const ControlWidget &control : controls_) {
+      if (control.kind == QuaderToolSettingControlKind::Vector3Number &&
+          control.field_label != nullptr &&
+          control.vector3_components[0].spin != nullptr) {
+        // The group name follows the first axis, as in the Inspector. Measure
+        // after font propagation so scaling never pins a label to the old font.
+        const int top_inset = std::max(
+            0, (control.vector3_components[0].spin->sizeHint().height() -
+                control.field_label->fontMetrics().height()) / 2);
+        control.field_label->setContentsMargins(0, top_inset, 0, 0);
+      }
       if (auto *row_layout =
               dynamic_cast<QGridLayout *>(control.container->layout())) {
         QWidget *label_cell = row_layout->itemAtPosition(0, 0)->widget();
@@ -1486,7 +1491,7 @@ private:
       };
 
       auto *layout = new QVBoxLayout(section->content());
-      set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
+      set_scalable_margins(*layout, QMargins(6, 6, 6, 6));
       set_scalable_spacing(*layout, 6);
       controls_layout_->addWidget(section);
       control_groups_.push_back(ControlGroupWidget{
@@ -1812,7 +1817,10 @@ private:
       fields->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
       auto *fields_layout = new QGridLayout(fields);
       set_scalable_margins(*fields_layout, QMargins(0, 0, 0, 0));
-      set_scalable_grid_horizontal_spacing(*fields_layout, 4);
+      set_scalable_grid_spacing(*fields_layout, 6, 3);
+      fields_layout->setColumnStretch(1, 1);
+      field_label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+      row_layout->setAlignment(field_label, Qt::AlignLeft | Qt::AlignTop);
       constexpr std::array<const char *, 3> kAxisNames{{"X", "Y", "Z"}};
       constexpr std::array<quader_editor_core::ViewAxis, 3> kAxes{{
           quader_editor_core::ViewAxis::X,
@@ -1823,8 +1831,7 @@ private:
       for (std::size_t axis = 0; axis < 3U; ++axis) {
         const QuaderToolSettingNumberComponent &component =
             control.vector3_components[axis];
-        const int label_column = static_cast<int>(axis * 2U);
-        const int field_column = label_column + 1;
+        const int axis_row = static_cast<int>(axis);
         const QString component_name = control_object_name(
             component.id, control_index * 3U + axis);
         auto *axis_label =
@@ -1833,7 +1840,7 @@ private:
                                   QStringLiteral(".axis_label"));
         axis_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         apply_qt_semantic_axis_label_color(*axis_label, kAxes[axis]);
-        fields_layout->addWidget(axis_label, 0, label_column);
+        fields_layout->addWidget(axis_label, axis_row, 0);
 
         auto *spin = new QtDoubleSpinBox(fields);
         spin->setObjectName(component_name);
@@ -1849,12 +1856,11 @@ private:
                                 ? component.step
                                 : 0.001);
         spin->setKeyboardTracking(false);
-        set_scalable_minimum_width(*spin, 44);
+        set_scalable_minimum_width(*spin, 88);
         spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         spin->setValue(component.value);
         spin->setEnabled(component.enabled);
-        fields_layout->setColumnStretch(field_column, 1);
-        fields_layout->addWidget(spin, 0, field_column);
+        fields_layout->addWidget(spin, axis_row, 1);
         axis_label->setBuddy(spin);
 
         auto *dispatch_timer = new QTimer(spin);
@@ -2432,7 +2438,7 @@ private:
   std::uint64_t target_tool_revision_ = 0;
   std::uint64_t control_generation_ = 0;
   bool number_dispatch_failed_ = false;
-  QToolButton *target_title_ = nullptr;
+  QtPanelSectionHeader *target_title_ = nullptr;
   QScrollArea *scroll_area_ = nullptr;
 
   QWidget *controls_container_ = nullptr;

@@ -9,6 +9,7 @@
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
+#include "ui/qt_settings_control_widgets.hpp"
 #include "ui/qt_texture_info_window.hpp"
 
 #include <QAction>
@@ -23,7 +24,6 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QImage>
@@ -67,7 +67,6 @@ constexpr int kTexturePreviewIconExtent = 56;
 class ElidedPathLabel final : public QLabel {
 public:
   explicit ElidedPathLabel(QWidget *parent = nullptr) : QLabel(parent) {
-    setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
     setMargin(3);
     setMinimumWidth(48);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -347,12 +346,16 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   properties_scroll->setObjectName(
       QStringLiteral("standardMaterialEditor.propertiesScroll"));
   properties_scroll->setWidgetResizable(true);
+  properties_scroll->setFrameShape(QFrame::NoFrame);
   auto *properties_content = new QWidget(properties_scroll);
   auto *properties_layout = new QVBoxLayout(properties_content);
-  properties_group_ = new QGroupBox(properties_content);
-  properties_group_->setObjectName(
-      QStringLiteral("standardMaterialEditor.properties"));
-  auto *form = new QFormLayout(properties_group_);
+  qt_settings_detail::set_scalable_margins(*properties_layout,
+                                         QMargins(0, 0, 0, 0));
+  qt_settings_detail::set_scalable_spacing(*properties_layout, 6);
+  properties_group_ = new qt_settings_detail::QtSettingsSection(
+      QStringLiteral("standardMaterialEditor.properties"), properties_content);
+  auto *form = new QFormLayout(properties_group_->content());
+  properties_form_ = form;
 
   name_label_ = new QLabel(properties_group_);
   name_edit_ = new QLineEdit(properties_group_);
@@ -381,7 +384,8 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
     controls.label = new QLabel(properties_group_);
     auto *row = new QWidget(properties_group_);
     auto *row_layout = new QHBoxLayout(row);
-    row_layout->setContentsMargins(0, 0, 0, 0);
+    qt_settings_detail::set_scalable_margins(*row_layout, QMargins());
+    qt_settings_detail::set_scalable_spacing(*row_layout, 6);
     controls.preview = new QToolButton(row);
     controls.preview->setObjectName(
         QStringLiteral("standardMaterialEditor.%1.preview").arg(stable_name));
@@ -399,9 +403,16 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
     controls.clear->setObjectName(
         QStringLiteral("standardMaterialEditor.%1.clear").arg(stable_name));
     row_layout->addWidget(controls.preview);
-    row_layout->addWidget(controls.path, 1);
-    row_layout->addWidget(controls.browse);
-    row_layout->addWidget(controls.clear);
+    auto *details_layout = new QVBoxLayout();
+    qt_settings_detail::set_scalable_spacing(*details_layout, 4);
+    details_layout->addWidget(controls.path);
+    auto *actions_layout = new QHBoxLayout();
+    qt_settings_detail::set_scalable_spacing(*actions_layout, 4);
+    actions_layout->addWidget(controls.browse);
+    actions_layout->addWidget(controls.clear);
+    actions_layout->addStretch(1);
+    details_layout->addLayout(actions_layout);
+    row_layout->addLayout(details_layout, 1);
     controls.label->setBuddy(controls.browse);
     form->addRow(controls.label, row);
     QObject::connect(
@@ -461,13 +472,23 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   direct_x_normal_ = new QCheckBox(properties_group_);
   direct_x_normal_->setObjectName(
       QStringLiteral("standardMaterialEditor.directXNormal"));
-  form->addRow(direct_x_normal_);
+  form->addRow(QString(), direct_x_normal_);
   properties_layout->addWidget(properties_group_);
 
-  texture_transform_group_ = new QGroupBox(properties_content);
-  texture_transform_group_->setObjectName(
-      QStringLiteral("standardMaterialEditor.textureTransform"));
-  auto *transform_form = new QFormLayout(texture_transform_group_);
+  texture_transform_group_ = new qt_settings_detail::QtSettingsSection(
+      QStringLiteral("standardMaterialEditor.textureTransform"),
+      properties_content);
+  auto *transform_form = new QFormLayout(texture_transform_group_->content());
+  texture_transform_form_ = transform_form;
+  for (QFormLayout *section_form : {form, transform_form}) {
+    section_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    section_form->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    section_form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    qt_settings_detail::set_scalable_margins(*section_form,
+                                           QMargins(12, 8, 8, 10));
+    section_form->setHorizontalSpacing(12);
+    section_form->setVerticalSpacing(6);
+  }
   const auto create_transform_controls =
       [this, transform_form](
           QtStandardMaterialTextureTransformComponent component,
@@ -946,6 +967,9 @@ void QtStandardMaterialEditorWindow::apply_ui_scale(
     return;
   }
   ui_scale_metrics_ = metrics;
+  qt_settings_detail::apply_scalable_layout_metrics(*this, metrics);
+  qt_settings_detail::apply_scalable_widget_metrics(*this, metrics);
+  refresh_form_metrics();
   const QSize preview_extent =
       metrics.size(QSize(kTexturePreviewExtent, kTexturePreviewExtent));
   const QSize preview_icon_extent = metrics.size(
@@ -1005,6 +1029,14 @@ bool QtStandardMaterialEditorWindow::event(QEvent *event) {
     } else if (event->type() == QEvent::PaletteChange ||
                event->type() == QEvent::ApplicationPaletteChange) {
       refresh_texture_palette_icons();
+    } else if ((event->type() == QEvent::FontChange ||
+                event->type() == QEvent::ApplicationFontChange) &&
+               !form_metrics_refresh_pending_) {
+      form_metrics_refresh_pending_ = true;
+      QTimer::singleShot(0, this, [this]() {
+        form_metrics_refresh_pending_ = false;
+        refresh_form_metrics();
+      });
     }
   }
   return handled;
@@ -1301,7 +1333,7 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
     preview_widget_->setAccessibleDescription(labels_.preview_navigation);
   }
   preview_placeholder_->setText(labels_.preview_unavailable);
-  properties_group_->setTitle(labels_.properties_group);
+  properties_group_->set_title(labels_.properties_group);
   name_label_->setText(labels_.name);
   diffuse_model_label_->setText(labels_.diffuse_model);
   diffuse_model_combo_->setAccessibleName(labels_.diffuse_model);
@@ -1336,7 +1368,7 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
     controls.clear->setToolTip(labels_.clear_texture);
     controls.clear->setAccessibleName(labels_.clear_texture);
   }
-  texture_transform_group_->setTitle(labels_.texture_transform);
+  texture_transform_group_->set_title(labels_.texture_transform);
   if (texture_transform_group_->toolTip() != labels_.texture_transform_tooltip) {
     texture_transform_group_->setToolTip(labels_.texture_transform_tooltip);
   }
@@ -1366,9 +1398,50 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
       controls.spin->setToolTip(transform_tooltips[index]);
     }
   }
+  refresh_form_metrics();
   refresh_document_controls();
   refresh_texture_inspector();
   refresh_title_and_status();
+}
+
+void QtStandardMaterialEditorWindow::refresh_form_metrics() {
+  if (properties_form_ == nullptr || texture_transform_form_ == nullptr) {
+    return;
+  }
+  const std::array<QFormLayout *, 2> forms{properties_form_,
+                                         texture_transform_form_};
+  int label_width = ui_scale_metrics_.px(96);
+  for (QFormLayout *form : forms) {
+    for (int row = 0; row < form->rowCount(); ++row) {
+      QLayoutItem *item = form->itemAt(row, QFormLayout::LabelRole);
+      auto *label = item != nullptr
+                        ? qobject_cast<QLabel *>(item->widget())
+                        : nullptr;
+      if (label != nullptr) {
+        label_width = std::max(
+            label_width, label->fontMetrics().horizontalAdvance(label->text()));
+      }
+    }
+  }
+  label_width = std::min(label_width, ui_scale_metrics_.px(144));
+  for (QFormLayout *form : forms) {
+    form->setHorizontalSpacing(ui_scale_metrics_.px(12));
+    form->setVerticalSpacing(ui_scale_metrics_.px(6));
+    for (int row = 0; row < form->rowCount(); ++row) {
+      QLayoutItem *item = form->itemAt(row, QFormLayout::LabelRole);
+      auto *label = item != nullptr
+                        ? qobject_cast<QLabel *>(item->widget())
+                        : nullptr;
+      if (label != nullptr) {
+        label->setWordWrap(true);
+        label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        if (label->minimumWidth() != label_width ||
+            label->maximumWidth() != label_width) {
+          label->setFixedWidth(label_width);
+        }
+      }
+    }
+  }
 }
 
 void QtStandardMaterialEditorWindow::refresh_title_and_status() {

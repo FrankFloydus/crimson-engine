@@ -27,6 +27,8 @@
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_dialog.hpp"
+#include "ui/qt_settings_control_widgets.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
@@ -45,7 +47,7 @@
 #include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QFocusEvent>
-#include <QGroupBox>
+#include <QFormLayout>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QImage>
@@ -69,6 +71,7 @@
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeView>
 #include <QTreeWidget>
 #include <QVariant>
@@ -179,6 +182,24 @@ LocalizationService loaded_localization(std::string_view locale = "en-US") {
       std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
       std::string{locale}));
   return localization;
+}
+
+QString settings_section_title(const QWidget &section) {
+  const auto *header = section.findChild<QToolButton *>(
+      section.objectName() + QStringLiteral(".header"));
+  return header != nullptr ? header->text() : QString{};
+}
+
+std::vector<qt_settings_detail::QtSettingsSection *>
+settings_sections(QWidget &parent) {
+  std::vector<qt_settings_detail::QtSettingsSection *> sections;
+  for (QWidget *widget : parent.findChildren<QWidget *>()) {
+    if (auto *section =
+            dynamic_cast<qt_settings_detail::QtSettingsSection *>(widget)) {
+      sections.push_back(section);
+    }
+  }
+  return sections;
 }
 
 void process_animated_clicks() {
@@ -792,7 +813,9 @@ TEST(QtSettingsDialogTests,
       QStringLiteral("save_recovery"),
   };
   const QString capture_directory = QString::fromUtf8(
-      qgetenv("QUADER_SETTINGS_CAPTURE_DIR"));
+      qEnvironmentVariableIsSet("QUADER_UI_REVIEW_DIR")
+          ? qgetenv("QUADER_UI_REVIEW_DIR")
+          : qgetenv("QUADER_SETTINGS_CAPTURE_DIR"));
   const auto capture_pages = [&](const QString &locale) {
     if (capture_directory.isEmpty()) {
       return;
@@ -804,7 +827,7 @@ TEST(QtSettingsDialogTests,
       categories->setCurrentRow(index);
       QCoreApplication::processEvents();
       const QString path = output.filePath(
-          locale + QStringLiteral("_") + expected_ids[index] +
+          QStringLiteral("settings-") + locale + QStringLiteral("_") + expected_ids[index] +
           QStringLiteral(".png"));
       EXPECT_TRUE(dialog.grab().save(path)) << path.toStdString();
     }
@@ -823,7 +846,7 @@ TEST(QtSettingsDialogTests,
                                 const char *group_name,
                                 const char *page_name) {
     auto *control = dialog.findChild<QWidget *>(QString::fromUtf8(control_name));
-    auto *group = dialog.findChild<QGroupBox *>(QString::fromUtf8(group_name));
+    auto *group = dialog.findChild<QWidget *>(QString::fromUtf8(group_name));
     auto *page = dialog.findChild<QWidget *>(QString::fromUtf8(page_name));
     ASSERT_NE(control, nullptr) << control_name;
     ASSERT_NE(group, nullptr) << group_name;
@@ -855,40 +878,40 @@ TEST(QtSettingsDialogTests,
                 "settingsPage_interface");
   expect_group("settingsInterfaceScale", "settingsGroup_interface_scale",
                 "settingsPage_interface");
-  auto *language_group = dialog.findChild<QGroupBox *>(
+  auto *language_group = dialog.findChild<QWidget *>(
       QStringLiteral("settingsGroup_language"));
-  auto *scale_group = dialog.findChild<QGroupBox *>(
+  auto *scale_group = dialog.findChild<QWidget *>(
       QStringLiteral("settingsGroup_interface_scale"));
-  auto *picking_group = dialog.findChild<QGroupBox *>(
+  auto *picking_group = dialog.findChild<QWidget *>(
       QStringLiteral("settingsGroup_picking"));
-  auto *navigation_group = dialog.findChild<QGroupBox *>(
+  auto *navigation_group = dialog.findChild<QWidget *>(
       QStringLiteral("settingsGroup_navigation"));
-  auto *selection_group = dialog.findChild<QGroupBox *>(
+  auto *selection_group = dialog.findChild<QWidget *>(
       QStringLiteral("settingsGroup_selection"));
   ASSERT_NE(language_group, nullptr);
   ASSERT_NE(scale_group, nullptr);
   ASSERT_NE(picking_group, nullptr);
   ASSERT_NE(navigation_group, nullptr);
   ASSERT_NE(selection_group, nullptr);
-  EXPECT_EQ(language_group->title(), QStringLiteral("Language"));
-  EXPECT_EQ(scale_group->title(), QStringLiteral("Interface Scaling"));
-  EXPECT_EQ(picking_group->title(), QStringLiteral("Picking"));
-  EXPECT_EQ(navigation_group->title(), QStringLiteral("Fly Navigation"));
-  EXPECT_EQ(selection_group->title(), QStringLiteral("Selection Appearance"));
-  EXPECT_EQ(dialog.findChild<QGroupBox *>(
+  EXPECT_EQ(settings_section_title(*language_group), QStringLiteral("Language"));
+  EXPECT_EQ(settings_section_title(*scale_group), QStringLiteral("Interface Scaling"));
+  EXPECT_EQ(settings_section_title(*picking_group), QStringLiteral("Picking"));
+  EXPECT_EQ(settings_section_title(*navigation_group), QStringLiteral("Fly Navigation"));
+  EXPECT_EQ(settings_section_title(*selection_group), QStringLiteral("Selection Appearance"));
+  EXPECT_EQ(dialog.findChild<QWidget *>(
                 QStringLiteral("settingsGroup_snapping")),
             nullptr);
-  EXPECT_EQ(dialog.findChild<QGroupBox *>(
+  EXPECT_EQ(dialog.findChild<QWidget *>(
                 QStringLiteral("settingsGroup_texturing")),
             nullptr);
   auto *editing_page = dialog.findChild<QWidget *>(
       QStringLiteral("settingsPage_editing"));
   ASSERT_NE(editing_page, nullptr);
-  const auto editing_groups = editing_page->findChildren<QGroupBox *>();
+  const auto editing_groups = settings_sections(*editing_page);
   ASSERT_EQ(editing_groups.size(), 1);
   EXPECT_EQ(editing_groups.front()->objectName(),
             QStringLiteral("settingsGroup_undo"));
-  for (auto *group : dialog.findChildren<QGroupBox *>()) {
+  for (auto *group : settings_sections(dialog)) {
     EXPECT_TRUE(group->findChild<QCheckBox *>() != nullptr ||
                 group->findChild<QSpinBox *>() != nullptr ||
                 group->findChild<QDoubleSpinBox *>() != nullptr ||
@@ -923,20 +946,157 @@ TEST(QtSettingsDialogTests,
   capture_pages(QStringLiteral("en-US"));
 
   const auto original_pages = pages->findChildren<QWidget *>();
-  auto *undo_group = dialog.findChild<QGroupBox *>(
+  auto *undo_group = dialog.findChild<QWidget *>(
       QStringLiteral("settingsGroup_undo"));
   ASSERT_NE(undo_group, nullptr);
   ASSERT_TRUE(localization.select_locale("it-IT"));
   ui_settings.set_locale("it-IT");
   dialog.refresh();
   EXPECT_EQ(categories->item(5)->text(), QStringLiteral("Modifica"));
-  EXPECT_EQ(undo_group->title(), QStringLiteral("Cronologia annullamenti"));
-  EXPECT_EQ(selection_group->title(),
+  EXPECT_EQ(settings_section_title(*undo_group), QStringLiteral("Cronologia annullamenti"));
+  EXPECT_EQ(settings_section_title(*selection_group),
             QStringLiteral("Aspetto della selezione"));
   EXPECT_EQ(pages->findChildren<QWidget *>(), original_pages)
       << "localization must update the retained pages in place";
   capture_pages(QStringLiteral("it-IT"));
   dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
+     DisclosureRetainsDraftAndAlignedFieldsAcrossScaleAndLocale) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-section-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QtUiScaleApplicationController scale_controller(application);
+  application.setPalette(qt_obsidian_application_palette(application.palette()));
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings settings = UISettings::defaults();
+  ViewportSettings viewport = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  scale_controller.add_change_listener(
+      dialog, [&](const QtUiScaleMetrics &metrics) {
+        dialog.apply_ui_scale(metrics);
+      });
+  dialog.set_context(settings, viewport, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); },
+      []() { return true; });
+  auto *categories = dialog.findChild<QListWidget *>(
+      QStringLiteral("settingsCategories"));
+  auto *pages = dialog.findChild<QStackedWidget *>(
+      QStringLiteral("settingsPages"));
+  auto *undo = dialog.findChild<QSpinBox *>(
+      QStringLiteral("settingsUndoSteps"));
+  auto *header = dialog.findChild<QToolButton *>(
+      QStringLiteral("settingsGroup_undo.header"));
+  auto *apply = dialog.findChild<QPushButton *>(
+      QStringLiteral("settingsApply"));
+  ASSERT_NE(categories, nullptr);
+  ASSERT_NE(pages, nullptr);
+  ASSERT_NE(undo, nullptr);
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(apply, nullptr);
+  dialog.show();
+  const auto settle = [&]() {
+    for (int iteration = 0; iteration < 4; ++iteration) {
+      QCoreApplication::processEvents();
+      dialog.layout()->activate();
+    }
+  };
+  std::vector<QPointer<QWidget>> original_controls;
+  for (QWidget *control : pages->findChildren<QWidget *>()) {
+    original_controls.emplace_back(control);
+  }
+  for (const float scale : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(scale);
+    dialog.resize(scale_controller.metrics().size(QSize(720, 560)));
+    for (const char *locale : {"en-US", "it-IT"}) {
+      ASSERT_TRUE(localization.select_locale(locale));
+      dialog.refresh();
+      for (int category : {0, 3, 4, 6}) {
+        categories->setCurrentRow(category);
+        settle();
+        int field_left = -1;
+        for (auto *section : settings_sections(*pages->currentWidget())) {
+          auto *section_header = section->findChild<QToolButton *>(
+              section->objectName() + QStringLiteral(".header"));
+          ASSERT_NE(section_header, nullptr);
+          EXPECT_EQ(section_header->width(), section->width());
+          EXPECT_GE(section_header->height(),
+                    scale_controller.metrics().px(26));
+          auto *form = qobject_cast<QFormLayout *>(section->content()->layout());
+          ASSERT_NE(form, nullptr);
+          for (int row = 0; row < form->rowCount(); ++row) {
+            auto *label_item = form->itemAt(row, QFormLayout::LabelRole);
+            auto *field_item = form->itemAt(row, QFormLayout::FieldRole);
+            if (label_item == nullptr || field_item == nullptr ||
+                label_item->widget() == nullptr ||
+                field_item->widget() == nullptr) {
+              continue;
+            }
+            QWidget *label = label_item->widget();
+            QWidget *field = field_item->widget();
+            const int left = field->mapTo(pages->currentWidget(), QPoint()).x();
+            if (field_left < 0) {
+              field_left = left;
+            }
+            EXPECT_EQ(left, field_left);
+            EXPECT_LT(label->geometry().right(), field->geometry().left());
+            EXPECT_GE(field->width(), scale_controller.metrics().px(88));
+          }
+        }
+        const QString output = QString::fromUtf8(qgetenv("QUADER_UI_REVIEW_DIR"));
+        if (!output.isEmpty()) {
+          ASSERT_TRUE(QDir().mkpath(output));
+          const QString filename = QStringLiteral("settings-%1-%2-%3.png")
+              .arg(QString::fromUtf8(locale))
+              .arg(categories->currentItem()->data(Qt::UserRole).toString())
+              .arg(static_cast<int>(scale * 100.0F));
+          EXPECT_TRUE(dialog.grab().save(QDir(output).filePath(filename)));
+        }
+      }
+    }
+  }
+  const auto retained_controls = pages->findChildren<QWidget *>();
+  EXPECT_EQ(retained_controls.size(), original_controls.size());
+  // Raising the active stacked page changes QObject child traversal order.
+  // Every original control must still be alive in the retained page hierarchy.
+  for (const QPointer<QWidget> &control : original_controls) {
+    ASSERT_NE(control.data(), nullptr);
+    EXPECT_TRUE(retained_controls.contains(control.data()));
+  }
+  categories->setCurrentRow(5);
+  settle();
+  const int original_undo_steps = settings.session_settings().undo_steps;
+  undo->setValue(17);
+  header->click();
+  settle();
+  EXPECT_FALSE(header->isChecked());
+  EXPECT_FALSE(undo->isVisible());
+  EXPECT_EQ(settings.session_settings().undo_steps, original_undo_steps);
+  EXPECT_TRUE(changes.empty());
+  dialog.refresh();
+  EXPECT_FALSE(header->isChecked());
+  EXPECT_EQ(undo->value(), 17);
+  header->click();
+  settle();
+  EXPECT_TRUE(undo->isVisible());
+  EXPECT_EQ(dialog.findChild<QSpinBox *>(QStringLiteral("settingsUndoSteps")),
+            undo);
+  apply->click();
+  EXPECT_EQ(settings.session_settings().undo_steps, 17);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::SessionCommit), 1u);
+  undo->setValue(23);
+  header->click();
+  dialog.reject();
+  EXPECT_EQ(settings.session_settings().undo_steps, 17);
 }
 
 TEST(QtSettingsDialogTests,
@@ -1175,7 +1335,7 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(apply, nullptr);
   EXPECT_EQ(dialog.findChild<QPushButton *>(
                 QStringLiteral("settingsRecoverAutosave")), nullptr);
-  EXPECT_EQ(dialog.findChild<QGroupBox *>(
+  EXPECT_EQ(dialog.findChild<QWidget *>(
                 QStringLiteral("settingsGroup_recovery")), nullptr);
   EXPECT_EQ(undo->value(), 32);
   EXPECT_EQ(undo->minimum(), 0);
@@ -1336,9 +1496,10 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(swatch, nullptr);
   ASSERT_NE(apply, nullptr);
   ASSERT_NE(cancel, nullptr);
-  const auto *group = qobject_cast<QGroupBox *>(swatch->parentWidget());
+  const auto *group = dynamic_cast<qt_settings_detail::QtSettingsSection *>(
+      swatch->parentWidget()->parentWidget());
   ASSERT_NE(group, nullptr);
-  EXPECT_EQ(group->title(), QStringLiteral("Mesh Overlays"));
+  EXPECT_EQ(settings_section_title(*group), QStringLiteral("Mesh Overlays"));
 
   dialog.show();
   QCoreApplication::processEvents();
@@ -1418,9 +1579,10 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(swatch, nullptr);
   ASSERT_NE(apply, nullptr);
   ASSERT_NE(cancel, nullptr);
-  const auto *group = qobject_cast<QGroupBox *>(swatch->parentWidget());
+  const auto *group = dynamic_cast<qt_settings_detail::QtSettingsSection *>(
+      swatch->parentWidget()->parentWidget());
   ASSERT_NE(group, nullptr);
-  EXPECT_EQ(group->title(), QStringLiteral("Shading"));
+  EXPECT_EQ(settings_section_title(*group), QStringLiteral("Shading"));
 
   dialog.show();
   QCoreApplication::processEvents();

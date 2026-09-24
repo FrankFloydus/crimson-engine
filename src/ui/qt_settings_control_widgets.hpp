@@ -7,8 +7,10 @@
 #pragma once
 
 #include "ui/qt_double_spin_box.hpp"
+#include "ui/qt_panel_section_header.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
+#include <QApplication>
 #include <QDoubleSpinBox>
 #include <QFocusEvent>
 #include <QFrame>
@@ -102,6 +104,9 @@ inline void apply_scalable_layout_metrics(QObject &root,
 inline void apply_scalable_widget_metrics(QWidget &root,
                                           const QtUiScaleMetrics &metrics) {
   const auto apply_minimum_width = [&metrics](QWidget &widget) {
+    if (auto *header = dynamic_cast<QtPanelSectionHeader *>(&widget)) {
+      header->apply_ui_scale(metrics);
+    }
     const QVariant width = widget.property(kUiScaleMinimumWidthProperty);
     if (width.isValid()) {
       widget.setMinimumWidth(metrics.px(width.toInt()));
@@ -125,38 +130,58 @@ public:
     setObjectName(stable_name);
     auto *layout = new QVBoxLayout(this);
     set_scalable_margins(*layout, QMargins(0, 0, 0, 0));
-    set_scalable_spacing(*layout, 4);
+    set_scalable_spacing(*layout, 0);
 
-    header_ = new QToolButton(this);
+    header_ = new QtPanelSectionHeader(this);
     header_->setObjectName(stable_name + QStringLiteral(".header"));
-    header_->setAutoRaise(true);
-    header_->setCheckable(true);
     header_->setChecked(true);
     header_->setArrowType(Qt::DownArrow);
-    header_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    header_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     layout->addWidget(header_);
 
     content_ = new QFrame(this);
     content_->setObjectName(stable_name + QStringLiteral(".content"));
-    content_->setFrameShape(QFrame::StyledPanel);
-    content_->setFrameShadow(QFrame::Plain);
+    content_->setFrameShape(QFrame::NoFrame);
     layout->addWidget(content_);
 
     QObject::connect(header_, &QToolButton::toggled, this,
                      [this](bool expanded) {
+                       const QPointer<QtSettingsSection> guard(this);
+                       if (!expanded) {
+                         QWidget *focus = QApplication::focusWidget();
+                         if (focus != nullptr &&
+                             content_->isAncestorOf(focus)) {
+                           // Interpret the existing draft before hiding its editor.
+                           focus->clearFocus();
+                           if (!guard) {
+                             return;
+                           }
+                           header_->setFocus(Qt::OtherFocusReason);
+                           if (!guard) {
+                             return;
+                           }
+                         }
+                       }
+                       if (header_->isChecked() != expanded) {
+                         return;
+                       }
                        header_->setArrowType(expanded ? Qt::DownArrow
                                                        : Qt::RightArrow);
                        content_->setVisible(expanded);
-                       if (expansion_changed) {
-                         expansion_changed(expanded);
+                       if (!guard) {
+                         return;
+                       }
+                       const auto notify = expansion_changed;
+                       if (notify) {
+                         notify(expanded);
                        }
                      });
   }
 
   void set_title(const QString &title) {
-    if (header_->text() != title) {
-      header_->setText(title);
+    const QString display_title =
+        QString(title).replace(QLatin1Char('&'), QStringLiteral("&&"));
+    if (header_->text() != display_title) {
+      header_->setText(display_title);
     }
     if (header_->accessibleName() != title) {
       header_->setAccessibleName(title);
@@ -164,6 +189,10 @@ public:
   }
 
   [[nodiscard]] QWidget *content() const { return content_; }
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    header_->apply_ui_scale(metrics);
+  }
 
   [[nodiscard]] bool expanded() const { return header_->isChecked(); }
 
@@ -174,7 +203,7 @@ public:
   }
 
 private:
-  QToolButton *header_ = nullptr;
+  QtPanelSectionHeader *header_ = nullptr;
   QFrame *content_ = nullptr;
 };
 

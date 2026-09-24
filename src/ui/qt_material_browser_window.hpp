@@ -347,6 +347,7 @@ private:
   void set_view_mode(QtMaterialBrowserViewMode mode, bool notify);
   void set_tile_size(int tile_size);
   void apply_tile_metrics(int tile_size);
+  void queue_row_metrics_update();
   void refresh_preview_raster_context(bool force_refresh = false);
   void refresh_view_mode_icons();
   void update_tile_size_text();
@@ -432,6 +433,7 @@ private:
   double thumbnail_wheel_remainder_ = 0.0;
   bool thumbnail_wheel_uses_pixels_ = false;
   bool material_paste_available_ = false;
+  bool row_metrics_update_pending_ = false;
   PresentationStateChangedCallback presentation_state_changed_;
   LifecycleCommandsProvider lifecycle_commands_provider_;
   QtUiScaleMetrics ui_scale_metrics_;

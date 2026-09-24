@@ -70,6 +70,7 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_face_texture_controls.hpp",
       "src/ui/qt_face_texture_controls.cpp",
       "src/ui/qt_settings_control_widgets.hpp",
+      "src/ui/qt_panel_section_header.hpp",
       "src/ui/qt_viewport_context_menu.hpp",
       "src/ui/qt_viewport_context_menu.cpp",
       "src/ui/qt_navigation_gizmo.hpp",
@@ -770,11 +771,9 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/inspector_panel.cpp");
 
   expect_contains(inspector, "tree_->setColumnCount(2)");
-  expect_contains(inspector, "tree_->setAlternatingRowColors(true)");
   expect_contains(inspector, "tree_->setUniformRowHeights(false)");
   expect_contains(inspector, "tree_->header()->setVisible(true)");
   expect_contains(inspector, "tree_->header()->setSectionsMovable(false)");
-  expect_contains(inspector, "tree_->header()->setMinimumSectionSize(64)");
   expect_contains(
       inspector,
       "tree_->header()->setSectionResizeMode(0, QHeaderView::Interactive)");
@@ -783,15 +782,6 @@ TEST(UiLayoutGuardrailTests,
       "tree_->header()->setSectionResizeMode(1, QHeaderView::Stretch)");
   expect_contains(inspector, "item->setFirstColumnSpanned(true)");
   expect_contains(inspector, "new QTreeWidgetItem(section.item)");
-  expect_contains(inspector, "tree_->setItemWidget(item, 1, field)");
-  expect_contains(inspector, "new InspectorPropertyDelegate(tree_)");
-  expect_contains(inspector, "option.palette.mid().color()");
-  expect_contains(inspector,
-                  "painter->drawLine(option.rect.topRight(), "
-                  "option.rect.bottomRight())");
-  expect_contains(inspector, "field->setMinimumWidth(0)");
-  expect_contains(inspector,
-                  "policy.setHorizontalPolicy(QSizePolicy::Ignored)");
   expect_contains(inspector,
                   "tree_->setHorizontalScrollBarPolicy("
                   "Qt::ScrollBarAlwaysOff)");
@@ -820,10 +810,9 @@ TEST(UiLayoutGuardrailTests,
 
   expect_missing(inspector, "new QScrollArea");
   expect_missing(inspector, "new QFormLayout");
-  expect_missing(inspector, "new QToolButton");
   expect_missing(inspector, "setStyleSheet(");
   expect_missing(inspector, "setPalette(");
-  expect_missing(inspector, "setFont(");
+  expect_missing(inspector, "->setFont(");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -930,7 +919,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     InspectorTransformUsesCompactSemanticAxisRows) {
+     InspectorAndNavigationGizmoShareSemanticAxisColors) {
   const std::string inspector =
       read_source_file("src/ui/inspector_panel.cpp");
   const std::string axis_colors =
@@ -941,18 +930,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(inspector,
                   "#include \"ui/qt_semantic_axis_colors.hpp\"");
   expect_contains(inspector,
-                  "const int label_column = static_cast<int>(axis * 2u)");
-  expect_contains(inspector, "const int field_column = label_column + 1");
-  expect_contains(inspector,
-                  "layout->addWidget(axis_label, 0, label_column)");
-  expect_contains(inspector,
-                  "layout->addWidget(mixed_field, 0, field_column)");
-  expect_contains(inspector,
-                  "layout->addWidget(spin, 0, field_column)");
-  expect_contains(inspector,
                   "apply_qt_semantic_axis_label_color(*axis_label");
-  expect_missing(inspector,
-                 "layout->addWidget(spin, 1, static_cast<int>(axis))");
 
   expect_contains(axis_colors, "QPalette::WindowText");
   expect_contains(axis_colors, "QColor(235, 76, 82)");
@@ -1100,7 +1078,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "new QtSettingsSection(");
   expect_contains(control_widgets,
                   "class QtSettingsSection final : public QWidget");
-  expect_contains(control_widgets, "new QToolButton(this)");
+  expect_contains(control_widgets, "new QtPanelSectionHeader(this)");
   expect_missing(tool,
                   "QStringLiteral(\"tool_settings.section.description\")");
   expect_missing(tool,
@@ -1382,7 +1360,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(settings, "Qt::UserRole");
   expect_contains(settings, "create_options_page(stable_id)");
   expect_contains(settings, "create_viewport_section(*page, descriptor)");
-  expect_contains(settings, "new QGroupBox(page.content)");
+  expect_contains(settings, "new qt_settings_detail::QtSettingsSection(");
   expect_contains(settings, "QFormLayout::WrapLongRows");
 
   expect_contains(settings, "#include \"ui/qt_color_swatch_button.hpp\"");

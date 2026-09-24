@@ -30,7 +30,7 @@ class QColorDialog;
 class QComboBox;
 class QDoubleSpinBox;
 class QEvent;
-class QGroupBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QMenu;
@@ -44,6 +44,9 @@ namespace quader {
 
 class QtColorSwatchButton;
 class QtTextureInfoWindow;
+namespace qt_settings_detail {
+class QtSettingsSection;
+}
 
 /// Selects one native File-menu command in the Standard Material editor.
 enum class QtStandardMaterialEditorFileAction : std::uint8_t {
@@ -395,6 +398,7 @@ private:
   void set_preview_environment_background(bool visible, bool notify);
   void rebuild_environment_menu();
   void refresh_document_controls();
+  void refresh_form_metrics();
   void refresh_labels();
   void refresh_title_and_status();
   void choose_albedo_color();
@@ -434,7 +438,10 @@ private:
   QVBoxLayout *preview_surface_layout_ = nullptr;
   QLabel *preview_placeholder_ = nullptr;
   QWidget *preview_widget_ = nullptr;
-  QGroupBox *properties_group_ = nullptr;
+  qt_settings_detail::QtSettingsSection *properties_group_ = nullptr;
+  QFormLayout *properties_form_ = nullptr;
+  QFormLayout *texture_transform_form_ = nullptr;
+  bool form_metrics_refresh_pending_ = false;
   QLabel *name_label_ = nullptr;
   QLineEdit *name_edit_ = nullptr;
   QLabel *diffuse_model_label_ = nullptr;
@@ -452,7 +459,7 @@ private:
   std::array<LiveNumberDispatch, kScalarCount> scalar_live_dispatches_{};
   QCheckBox *direct_x_normal_ = nullptr;
   std::array<TextureControls, kTextureSlotCount> texture_controls_{};
-  QGroupBox *texture_transform_group_ = nullptr;
+  qt_settings_detail::QtSettingsSection *texture_transform_group_ = nullptr;
   std::array<TextureTransformControls, kTextureTransformCount>
       texture_transform_controls_{};
   QtTextureInfoWindow *texture_inspector_window_ = nullptr;

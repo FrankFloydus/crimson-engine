@@ -19,12 +19,14 @@
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
+#include "ui/qt_panel_section_header.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_continuous_edit_tracker.hpp"
 #include "ui/ui_panel.hpp"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QColor>
 #include <QColorDialog>
@@ -42,6 +44,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QPen>
+#include <QPersistentModelIndex>
 #include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
@@ -53,6 +56,7 @@
 #include <QStyleOptionViewItem>
 #include <QString>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -82,6 +86,8 @@ constexpr int kInspectorNumericDispatchIntervalMs = 16;
 constexpr float kInspectorLightRangeMin = 0.001f;
 constexpr float kInspectorLightRangeMax = 100.0f;
 constexpr int kInspectorMinimumValueColumnWidth = 96;
+constexpr int kInspectorAxisRowPaddingRole = Qt::UserRole + 1;
+constexpr int kInspectorPropertyInsetRole = Qt::UserRole + 2;
 constexpr int kInspectorMaterialPreviewSize = 56;
 constexpr int kInspectorMaterialActionSize = 24;
 constexpr int kInspectorMaterialActionIconSize = 16;
@@ -370,26 +376,35 @@ protected:
   }
 };
 
-/// Draws inspector property-cell separators from the active Fusion palette.
+/// Separates native editors from quiet, consistently inset property labels.
 class InspectorPropertyDelegate final : public QStyledItemDelegate {
 public:
   using QStyledItemDelegate::QStyledItemDelegate;
 
   void paint(QPainter *painter, const QStyleOptionViewItem &option,
              const QModelIndex &index) const override {
-    QStyledItemDelegate::paint(painter, option, index);
     if (painter == nullptr || !index.isValid()) {
       return;
     }
-
+    QStyleOptionViewItem styled(option);
+    styled.backgroundBrush = option.palette.window();
     painter->save();
-    QPen separator(option.palette.mid().color());
-    separator.setCosmetic(true);
-    painter->setPen(separator);
-    painter->drawLine(option.rect.bottomLeft(), option.rect.bottomRight());
-    if (index.parent().isValid() && index.column() == 0) {
-      painter->drawLine(option.rect.topRight(), option.rect.bottomRight());
+    painter->fillRect(option.rect, styled.backgroundBrush);
+    if (!index.parent().isValid() && index.model()->hasChildren(index)) {
+      // The retained native button owns the complete section-header surface.
+      painter->restore();
+      return;
     }
+    if (index.column() == 0) {
+      styled.rect.setLeft(option.rect.left() +
+                          index.data(kInspectorPropertyInsetRole).toInt());
+      const int axis_row_padding =
+          index.data(kInspectorAxisRowPaddingRole).toInt();
+      if (axis_row_padding > 0) {
+        styled.rect.setHeight((option.rect.height() + axis_row_padding) / 3);
+      }
+    }
+    QStyledItemDelegate::paint(painter, styled, index);
     painter->restore();
   }
 };
@@ -437,6 +452,19 @@ struct InspectorPanel::Impl {
     double numeric_maximum = 0.0;
   };
 
+  /// Retains disclosure controls while their tree items own expansion state.
+  struct SectionHeader {
+    QTreeWidgetItem *item = nullptr;
+    QtPanelSectionHeader *button = nullptr;
+  };
+
+  /// Retains layout metrics without replacing active property editors.
+  struct PropertyRow {
+    QTreeWidgetItem *item = nullptr;
+    QVBoxLayout *layout = nullptr;
+    QGridLayout *axes = nullptr;
+  };
+
   /// Retains the displayed axes and the values used by their edit callbacks.
   struct TransformRow {
     std::array<QPointer<QDoubleSpinBox>, 3> fields;
@@ -465,9 +493,11 @@ struct InspectorPanel::Impl {
     tree_ = new QTreeWidget(&panel_);
     tree_->setObjectName(QStringLiteral("inspector.tree"));
     tree_->setColumnCount(2);
-    tree_->setRootIsDecorated(true);
+    tree_->setRootIsDecorated(false);
     tree_->setItemsExpandable(true);
-    tree_->setAlternatingRowColors(true);
+    tree_->setAlternatingRowColors(false);
+    tree_->setIndentation(0);
+    tree_->viewport()->setBackgroundRole(QPalette::Window);
     tree_->setUniformRowHeights(false);
     tree_->setWordWrap(false);
     tree_->setSelectionMode(QAbstractItemView::NoSelection);
@@ -504,17 +534,35 @@ struct InspectorPanel::Impl {
       if (!stable_id.isEmpty()) {
         expanded_sections_[stable_id.toUtf8().toStdString()] = expanded;
       }
+      if (auto *header = dynamic_cast<QtPanelSectionHeader *>(
+              tree_->itemWidget(item, 0))) {
+        const QSignalBlocker blocker(header);
+        header->setChecked(expanded);
+        header->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+      }
     };
     QObject::connect(tree_, &QTreeWidget::itemExpanded, &panel_,
                      [remember_section_state](QTreeWidgetItem *item) {
                        remember_section_state(item, true);
                      });
     QObject::connect(tree_, &QTreeWidget::itemCollapsed, &panel_,
-                     [remember_section_state](QTreeWidgetItem *item) {
+                     [this, remember_section_state](QTreeWidgetItem *item) {
                        remember_section_state(item, false);
+                       if (!rebuilding_ && item != nullptr) {
+                         if (auto *header = dynamic_cast<QtPanelSectionHeader *>(
+                                 tree_->itemWidget(item, 0))) {
+                           focus_section_header(
+                               QPersistentModelIndex(tree_->indexFromItem(item)),
+                               *header);
+                         }
+                       }
                      });
     QObject::connect(tree_->header(), &QHeaderView::sectionResized, &panel_,
-                     [this](int, int, int) {
+                     [this](int section, int, int size) {
+                       if (section == 0 && !adjusting_label_column_width_ &&
+                           !rebuilding_) {
+                         preferred_label_column_width_ = size;
+                       }
                        clamp_label_column_width();
                      });
     QObject::connect(tree_->header(), &QHeaderView::geometriesChanged, &panel_,
@@ -686,13 +734,20 @@ struct InspectorPanel::Impl {
     }
 
     QHeaderView *header = tree_->header();
-    const bool label_column_uses_scaled_default =
-        header->sectionSize(0) == scaled_default_label_column_width_;
     ui_scale_metrics_ = metrics;
+    adjusting_label_column_width_ = true;
     header->setMinimumSectionSize(metrics.px(64));
-    scaled_default_label_column_width_ = metrics.px(140);
-    if (label_column_uses_scaled_default) {
-      header->resizeSection(0, scaled_default_label_column_width_);
+    adjusting_label_column_width_ = false;
+    update_property_layout_metrics();
+    if (!property_layout_refresh_pending_) {
+      property_layout_refresh_pending_ = true;
+      // Qt propagates the application font and polishes retained fields after
+      // scale listeners. Measure their final font once that work has settled.
+      QTimer::singleShot(0, &panel_, [this]() {
+        property_layout_refresh_pending_ = false;
+        update_property_layout_metrics();
+        tree_->doItemsLayout();
+      });
     }
 
     const QSize preview_size = metrics.size(
@@ -773,12 +828,40 @@ private:
         std::max(header->minimumSectionSize(),
                  tree_->viewport()->width() -
                      scaled_px(kInspectorMinimumValueColumnWidth));
-    if (header->sectionSize(0) <= maximum_label_width) {
+    const int desired_width = preferred_label_column_width_ > 0
+                                  ? preferred_label_column_width_
+                                  : scaled_default_label_column_width_;
+    const int width = std::clamp(desired_width, header->minimumSectionSize(),
+                                 maximum_label_width);
+    if (header->sectionSize(0) == width) {
       return;
     }
     adjusting_label_column_width_ = true;
-    header->resizeSection(0, maximum_label_width);
+    header->resizeSection(0, width);
     adjusting_label_column_width_ = false;
+  }
+
+  void update_property_layout_metrics() {
+    scaled_default_label_column_width_ = scaled_px(140);
+    for (PropertyRow &row : property_rows_) {
+      row.layout->setContentsMargins(scaled_px(6), scaled_px(3),
+                                     scaled_px(6), scaled_px(3));
+      scaled_default_label_column_width_ = std::max(
+          scaled_default_label_column_width_,
+          tree_->fontMetrics().horizontalAdvance(row.item->text(0)) +
+              scaled_px(36));
+      row.item->setData(0, kInspectorPropertyInsetRole, scaled_px(24));
+      if (row.axes != nullptr) {
+        row.axes->setHorizontalSpacing(scaled_px(6));
+        row.axes->setVerticalSpacing(scaled_px(3));
+        row.item->setData(0, kInspectorAxisRowPaddingRole, scaled_px(6));
+      }
+    }
+    for (const SectionHeader &header : section_headers_) {
+      header.button->apply_ui_scale(ui_scale_metrics_);
+      header.item->setSizeHint(0, QSize(0, header.button->minimumHeight()));
+    }
+    clamp_label_column_width();
   }
 
   QString localized(std::string_view key, std::string_view fallback) const {
@@ -795,6 +878,8 @@ private:
 
   void clear_content() {
     discard_pending_transform_preview();
+    section_headers_.clear();
+    property_rows_.clear();
     material_rows_.clear();
     transform_rows_.clear();
     light_range_field_ = nullptr;
@@ -947,6 +1032,7 @@ private:
     built_material_presentation_revision_ = material_presentation_.revision;
     built_locale_ = localization_->current_locale();
     force_rebuild_ = false;
+    update_property_layout_metrics();
     rebuilding_ = false;
 
     QTimer::singleShot(0, &panel_, [this, previous_scroll]() {
@@ -1025,6 +1111,31 @@ private:
     }
   }
 
+  bool focus_section_header(const QPersistentModelIndex &index,
+                              QtPanelSectionHeader &header) {
+    const auto generation = runtime_binding_generation_;
+    const QPointer<InspectorPanel> panel_guard(&panel_);
+    const QPointer<QtPanelSectionHeader> header_guard(&header);
+    const auto current = [&]() {
+      return panel_guard && header_guard && index.isValid() &&
+             generation == runtime_binding_generation_;
+    };
+    if (QWidget *focus = QApplication::focusWidget();
+        focus != nullptr && focus != &header && panel_.isAncestorOf(focus)) {
+      focus->clearFocus();
+    }
+    if (!current()) {
+      return false;
+    }
+    // A hidden current editor can make later synchronization reopen ancestors.
+    tree_->setCurrentItem(tree_->topLevelItem(index.row()));
+    if (!current()) {
+      return false;
+    }
+    header.setFocus(Qt::OtherFocusReason);
+    return current();
+  }
+
   Section add_section(std::string stable_id, const QString &title,
                       bool default_expanded = true) {
     const auto state =
@@ -1035,22 +1146,56 @@ private:
     item->setFlags(Qt::ItemIsEnabled);
     item->setFirstColumnSpanned(true);
     item->setExpanded(state->second);
+    auto *header = new QtPanelSectionHeader(tree_->viewport());
+    header->setObjectName(stable_name(stable_id + ".header"));
+    header->setText(title);
+    header->setAccessibleName(title);
+    header->setChecked(state->second);
+    header->setArrowType(state->second ? Qt::DownArrow : Qt::RightArrow);
+    tree_->setItemWidget(item, 0, header);
+    section_headers_.push_back({item, header});
+    const QPersistentModelIndex index(tree_->indexFromItem(item));
+    QObject::connect(header, &QToolButton::toggled, header,
+                     [this, index, header](bool expanded) {
+      if (rebuilding_ || !index.isValid()) {
+        return;
+      }
+      if (!focus_section_header(index, *header)) {
+        return;
+      }
+      tree_->topLevelItem(index.row())->setExpanded(expanded);
+    });
     return {.item = item, .editor_parent = tree_->viewport()};
   }
 
   void add_row(Section &section, std::string_view stable_id,
-               const QString &label, QWidget *field) {
+               const QString &label, QWidget *field,
+               QGridLayout *axes = nullptr) {
     auto *item = new QTreeWidgetItem(section.item);
     item->setText(0, label);
     item->setData(0, Qt::UserRole, stable_name(stable_id));
     item->setFlags(Qt::ItemIsEnabled);
+    item->setTextAlignment(0, Qt::AlignLeft | Qt::AlignVCenter);
 
+    auto *container = new QWidget(section.editor_parent);
+    container->setObjectName(stable_name(stable_id) + QStringLiteral(".container"));
+    container->setAutoFillBackground(true);
+    container->setBackgroundRole(QPalette::Window);
+    auto *layout = new QVBoxLayout(container);
+    layout->setSpacing(0);
+    layout->setContentsMargins(scaled_px(6), scaled_px(3),
+                               scaled_px(6), scaled_px(3));
     field->setMinimumWidth(0);
     QSizePolicy policy = field->sizePolicy();
     policy.setHorizontalPolicy(QSizePolicy::Ignored);
     policy.setHorizontalStretch(1);
     field->setSizePolicy(policy);
-    tree_->setItemWidget(item, 1, field);
+    layout->addWidget(field);
+    if (field->accessibleName().isEmpty()) {
+      field->setAccessibleName(label);
+    }
+    property_rows_.push_back({item, layout, axes});
+    tree_->setItemWidget(item, 1, container);
   }
 
   void build_material_section() {
@@ -1728,6 +1873,9 @@ private:
     field->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *layout = new QGridLayout(field);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setHorizontalSpacing(scaled_px(6));
+    layout->setVerticalSpacing(scaled_px(3));
+    layout->setColumnStretch(1, 1);
     constexpr std::array<const char *, 3> kAxes{{"x", "y", "z"}};
     constexpr std::array<const char *, 3> kAxisLabels{{"X", "Y", "Z"}};
     constexpr std::array<quader_editor_core::ViewAxis, 3> kAxisKinds{{
@@ -1737,16 +1885,14 @@ private:
     }};
 
     for (std::size_t axis = 0; axis < kAxes.size(); ++axis) {
-      const int label_column = static_cast<int>(axis * 2u);
-      const int field_column = label_column + 1;
+      const int axis_row = static_cast<int>(axis);
       auto *axis_label =
           new QLabel(QString::fromLatin1(kAxisLabels[axis]), field);
       axis_label->setObjectName(
           stable_name(stable_id + "." + kAxes[axis] + ".label"));
       axis_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
       apply_qt_semantic_axis_label_color(*axis_label, kAxisKinds[axis]);
-      layout->addWidget(axis_label, 0, label_column);
-      layout->setColumnStretch(field_column, 1);
+      layout->addWidget(axis_label, axis_row, 0);
 
       if (mixed[axis]) {
         auto *mixed_field =
@@ -1754,15 +1900,20 @@ private:
         mixed_field->setObjectName(stable_name(stable_id + "." + kAxes[axis]));
         mixed_field->setReadOnly(true);
         mixed_field->setEnabled(false);
+        mixed_field->setAccessibleName(label + QStringLiteral(" ") +
+                                      axis_label->text());
         mixed_field->setMinimumWidth(0);
         mixed_field->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        layout->addWidget(mixed_field, 0, field_column);
+        axis_label->setBuddy(mixed_field);
+        layout->addWidget(mixed_field, axis_row, 1);
         continue;
       }
 
       auto *spin = new InspectorDoubleSpinBox(field);
       row.fields[axis] = spin;
       spin->setObjectName(stable_name(stable_id + "." + kAxes[axis]));
+      spin->setAccessibleName(label + QStringLiteral(" ") + axis_label->text());
+      axis_label->setBuddy(spin);
       spin->setRange(minimum, maximum);
       spin->setSingleStep(step);
       spin->setDecimals(3);
@@ -1774,7 +1925,7 @@ private:
       spin->setValue((*values)[axis]);
       spin->setMinimumWidth(0);
       spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-      layout->addWidget(spin, 0, field_column);
+      layout->addWidget(spin, axis_row, 1);
 
       QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
                        [this, kind, axis, values,
@@ -1816,7 +1967,7 @@ private:
       };
     }
     transform_rows_.push_back(std::move(row));
-    add_row(section, stable_id, label, field);
+    add_row(section, stable_id, label, field, layout);
   }
 
   bool transform_edit_matches(TransformEditKind kind) const {
@@ -2282,6 +2433,8 @@ private:
   const AssetRegistry *preview_assets_ = nullptr;
   InspectorMaterialPresentationSnapshot material_presentation_;
   std::vector<MaterialRow> material_rows_;
+  std::vector<SectionHeader> section_headers_;
+  std::vector<PropertyRow> property_rows_;
   std::vector<TransformRow> transform_rows_;
   QPointer<QDoubleSpinBox> light_range_field_;
   NumberField light_intensity_field_;
@@ -2319,12 +2472,14 @@ private:
   std::uint64_t runtime_binding_generation_ = 0;
   QtUiScaleMetrics ui_scale_metrics_;
   int scaled_default_label_column_width_ = 140;
+  int preferred_label_column_width_ = 0;
   std::string built_locale_;
   std::string active_continuous_id_;
   bool continuous_edit_active_ = false;
   bool rebuilding_ = false;
   bool force_rebuild_ = true;
   bool adjusting_label_column_width_ = false;
+  bool property_layout_refresh_pending_ = false;
 };
 
 InspectorPanel::InspectorPanel(QWidget *parent)

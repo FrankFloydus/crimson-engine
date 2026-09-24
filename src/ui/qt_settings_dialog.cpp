@@ -18,6 +18,7 @@
 #include "ui/qt_material_presentation.hpp"
 #include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_controller.hpp"
+#include "ui/qt_settings_control_widgets.hpp"
 #include "ui/qt_spin_box.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_settings.hpp"
@@ -34,7 +35,6 @@
 #include <QFormLayout>
 #include <QFile>
 #include <QFileDialog>
-#include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
@@ -921,7 +921,9 @@ struct QtSettingsDialog::Impl {
   };
 
   struct GroupWidgets {
-    QGroupBox *box = nullptr;
+    qt_settings_detail::QtSettingsSection *section = nullptr;
+    QWidget *page = nullptr;
+    QFormLayout *form = nullptr;
     std::string localization_key;
     std::string label;
   };
@@ -1041,6 +1043,12 @@ struct QtSettingsDialog::Impl {
       320.0, 180.0, 180.0};
   float applied_ui_scale_factor = 1.0f;
   bool applying_ui_scale_to_keybinding_columns = false;
+  QtUiScaleMetrics layout_metrics;
+  const LocalizationService *measured_localization = nullptr;
+  std::uint64_t measured_localization_revision = 0u;
+  QFont measured_font;
+  float measured_scale = 0.0f;
+  bool layout_measurement_queued = false;
 
   [[nodiscard]] bool has_context() const {
     return target_ui_settings != nullptr &&
@@ -1514,7 +1522,11 @@ struct QtSettingsDialog::Impl {
     keybinding_message_box = new QtRetainedMessageBox(&owner);
 
     auto *dialog_layout = new QVBoxLayout(&owner);
+    qt_settings_detail::set_scalable_margins(
+        *dialog_layout, QMargins(12, 12, 12, 12));
+    qt_settings_detail::set_scalable_spacing(*dialog_layout, 10);
     auto *content_layout = new QHBoxLayout();
+    qt_settings_detail::set_scalable_spacing(*content_layout, 12);
     category_list = new QListWidget(&owner);
     category_list->setObjectName(QStringLiteral("settingsCategories"));
     category_list->setMinimumWidth(160);
@@ -1524,6 +1536,8 @@ struct QtSettingsDialog::Impl {
     auto *options_container = new QWidget(&owner);
     options_container->setObjectName(QStringLiteral("settingsOptions"));
     auto *options_layout = new QVBoxLayout(options_container);
+    qt_settings_detail::set_scalable_margins(
+        *options_layout, QMargins(0, 0, 0, 0));
     page_stack = new QStackedWidget(options_container);
     page_stack->setObjectName(QStringLiteral("settingsPages"));
     options_layout->addWidget(page_stack, 1);
@@ -1708,7 +1722,13 @@ struct QtSettingsDialog::Impl {
     auto *content = new QWidget(page);
     content->setObjectName(QStringLiteral("settingsPageContent_%1").arg(id));
     auto *content_layout = new QVBoxLayout(content);
+    qt_settings_detail::set_scalable_margins(
+        *content_layout, QMargins(0, 0, 0, 0));
+    qt_settings_detail::set_scalable_spacing(*content_layout, 0);
     auto *form = new QFormLayout();
+    qt_settings_detail::set_scalable_margins(
+        *form, QMargins(0, 0, 0, 0));
+    qt_settings_detail::set_scalable_spacing(*form, 6);
     form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     content_layout->addLayout(form);
@@ -1733,16 +1753,24 @@ struct QtSettingsDialog::Impl {
                            std::string_view stable_id,
                            std::string_view localization_key,
                            std::string_view label) {
-    auto *box = new QGroupBox(page.content);
-    box->setObjectName(QStringLiteral("settingsGroup_%1").arg(
-        QString::fromUtf8(stable_id.data(),
-                          static_cast<qsizetype>(stable_id.size()))));
-    auto *form = new QFormLayout(box);
-    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    auto *section = new qt_settings_detail::QtSettingsSection(
+        QStringLiteral("settingsGroup_%1").arg(
+            QString::fromUtf8(stable_id.data(),
+                              static_cast<qsizetype>(stable_id.size()))),
+        page.content);
+    auto *form = new QFormLayout(section->content());
+    qt_settings_detail::set_scalable_margins(
+        *form, QMargins(8, 8, 8, 10));
+    form->setHorizontalSpacing(10);
+    form->setVerticalSpacing(6);
+    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    page.form->addRow(box);
+    page.form->addRow(section);
     groups.push_back(
-        {box, std::string(localization_key), std::string(label)});
+        {section, page.content, form, std::string(localization_key),
+         std::string(label)});
     return form;
   }
 
@@ -2536,9 +2564,8 @@ struct QtSettingsDialog::Impl {
                                   category.label));
     }
     for (const GroupWidgets &group : groups) {
-      group.box->setTitle(qtext(localization, group.localization_key,
-                               group.label)
-                              .replace(QLatin1Char('&'), QStringLiteral("&&")));
+      group.section->set_title(qtext(localization, group.localization_key,
+                                    group.label));
     }
     const QString keybindings_text =
         qtext(localization, "ui.settings.keybindings", "Keybindings");
@@ -2679,6 +2706,52 @@ struct QtSettingsDialog::Impl {
     ok_button->setEnabled(has_context());
     cancel_button->setEnabled(has_context());
     refresh_action_state();
+    update_form_metrics();
+  }
+
+  /// Measures retained label columns only when localization or scale changes.
+  void update_form_metrics() {
+    const std::uint64_t locale_revision =
+        localization != nullptr ? localization->revision() : 0u;
+    const QFont font = owner.font();
+    if (measured_localization == localization &&
+        measured_localization_revision == locale_revision &&
+        measured_font == font && measured_scale == layout_metrics.factor()) {
+      return;
+    }
+    measured_localization = localization;
+    measured_localization_revision = locale_revision;
+    measured_font = font;
+    measured_scale = layout_metrics.factor();
+    for (const GroupWidgets &group : groups) {
+      int label_width = layout_metrics.px(140);
+      for (const GroupWidgets &peer : groups) {
+        if (peer.page != group.page) {
+          continue;
+        }
+        for (int row = 0; row < peer.form->rowCount(); ++row) {
+          QLayoutItem *item = peer.form->itemAt(row, QFormLayout::LabelRole);
+          auto *label = item != nullptr
+              ? qobject_cast<QLabel *>(item->widget()) : nullptr;
+          if (label != nullptr) {
+            label_width = std::max(label_width,
+                label->fontMetrics().horizontalAdvance(label->text()));
+          }
+        }
+      }
+      label_width = std::min(label_width, layout_metrics.px(200));
+      group.form->setHorizontalSpacing(layout_metrics.px(10));
+      group.form->setVerticalSpacing(layout_metrics.px(6));
+      for (int row = 0; row < group.form->rowCount(); ++row) {
+        QLayoutItem *item = group.form->itemAt(row, QFormLayout::LabelRole);
+        auto *label = item != nullptr
+            ? qobject_cast<QLabel *>(item->widget()) : nullptr;
+        if (label != nullptr) {
+          label->setWordWrap(true);
+          label->setFixedWidth(label_width);
+        }
+      }
+    }
   }
 
   void refresh_keybindings() {
@@ -2801,6 +2874,19 @@ struct QtSettingsDialog::Impl {
   }
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    layout_metrics = metrics;
+    qt_settings_detail::apply_scalable_layout_metrics(owner, metrics);
+    qt_settings_detail::apply_scalable_widget_metrics(owner, metrics);
+    update_form_metrics();
+    if (!layout_measurement_queued) {
+      layout_measurement_queued = true;
+      QTimer::singleShot(0, &owner, [this]() {
+        layout_measurement_queued = false;
+        // Application font propagation can finish after the scale callback.
+        measured_scale = 0.0f;
+        update_form_metrics();
+      });
+    }
     default_material_preview->setFixedSize(metrics.px(64), metrics.px(64));
     refresh_default_material(true);
     category_list->setMinimumWidth(metrics.px(160));

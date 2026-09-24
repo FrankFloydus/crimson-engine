@@ -56,6 +56,7 @@
 #include <QStyleOptionViewItem>
 #include <QStyledItemDelegate>
 #include <QTableView>
+#include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -82,6 +83,29 @@ constexpr auto kFolderDragMime = "application/x-quader-material-browser-folder";
 constexpr int kFolderPathRole = Qt::UserRole;
 constexpr std::uint64_t kPreviewIconCacheBudgetBytes =
     96ULL * 1024ULL * 1024ULL;
+
+/// Keeps folder rows comfortably aligned with the other native panel lists.
+class MaterialFolderDelegate final : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    row_height_ = metrics.px(26);
+    row_padding_ = metrics.px(8);
+  }
+
+  QSize sizeHint(const QStyleOptionViewItem &option,
+                  const QModelIndex &index) const override {
+    QSize size = QStyledItemDelegate::sizeHint(option, index);
+    size.setHeight(std::max({size.height(), row_height_,
+                             option.fontMetrics.height() + row_padding_}));
+    return size;
+  }
+
+private:
+  int row_height_ = 26;
+  int row_padding_ = 8;
+};
 
 /** Keeps the current material visible even while focus belongs to the viewport. */
 class MaterialGridDelegate final : public QStyledItemDelegate {
@@ -807,14 +831,18 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   auto *central_widget = new QWidget(this);
   setCentralWidget(central_widget);
   auto *root_layout = new QVBoxLayout(central_widget);
-  if (host_ == QtMaterialBrowserHost::Embedded) {
-    root_layout->setContentsMargins(6, 6, 6, 6);
-  }
+  root_layout->setContentsMargins(6, 6, 6, 6);
+  root_layout->setSpacing(6);
   auto *toolbar = new QHBoxLayout();
+  toolbar->setObjectName(QStringLiteral("materialBrowser.toolbarLayout"));
+  toolbar->setSpacing(4);
   auto *view_toolbar = toolbar;
   folders_button_ = new QToolButton(central_widget);
   folders_button_->setObjectName(QStringLiteral("materialBrowser.folders"));
   folders_button_->setCheckable(true);
+  folders_button_->setAutoRaise(true);
+  folders_button_->setMinimumHeight(28);
+  folders_button_->setIconSize(QSize(20, 20));
   folders_button_->setChecked(true);
   folders_button_->setToolButtonStyle(
       host_ == QtMaterialBrowserHost::Embedded ? Qt::ToolButtonIconOnly
@@ -825,6 +853,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   search_->setObjectName(QStringLiteral("materialBrowser.search"));
   search_->setClearButtonEnabled(true);
   search_->setMinimumWidth(0);
+  search_->setMinimumHeight(28);
   toolbar->addWidget(search_, 1);
 
   filter_button_ = new QToolButton(central_widget);
@@ -842,6 +871,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   grid_button_ = new QToolButton(central_widget);
   grid_button_->setObjectName(QStringLiteral("materialBrowser.grid"));
   grid_button_->setCheckable(true);
+  grid_button_->setAutoRaise(true);
+  grid_button_->setMinimumHeight(28);
+  grid_button_->setIconSize(QSize(20, 20));
   grid_button_->setToolButtonStyle(
       host_ == QtMaterialBrowserHost::Embedded ? Qt::ToolButtonIconOnly
                                               : Qt::ToolButtonTextBesideIcon);
@@ -853,6 +885,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   list_button_ = new QToolButton(central_widget);
   list_button_->setObjectName(QStringLiteral("materialBrowser.list"));
   list_button_->setCheckable(true);
+  list_button_->setAutoRaise(true);
+  list_button_->setMinimumHeight(28);
+  list_button_->setIconSize(QSize(20, 20));
   list_button_->setToolButtonStyle(
       host_ == QtMaterialBrowserHost::Embedded ? Qt::ToolButtonIconOnly
                                               : Qt::ToolButtonTextBesideIcon);
@@ -909,6 +944,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   tile_size_spin_->setKeyboardTracking(false);
   tile_size_spin_->setValue(kDefaultTileSize);
   tile_size_spin_->setFixedWidth(150);
+  tile_size_spin_->setMinimumHeight(28);
   if (host_ == QtMaterialBrowserHost::Windowed) {
     view_toolbar->addWidget(tile_size_spin_);
   }
@@ -965,6 +1001,8 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   folder_tree_->setObjectName(QStringLiteral("materialBrowser.folderTree"));
   folder_tree_->setHeaderHidden(true);
   folder_tree_->setRootIsDecorated(true);
+  folder_tree_->setUniformRowHeights(true);
+  folder_tree_->setItemDelegate(new MaterialFolderDelegate(folder_tree_));
   folder_tree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
   folder_tree_->setSelectionMode(QAbstractItemView::SingleSelection);
   folder_tree_->setDragDropMode(QAbstractItemView::DragDrop);
@@ -1017,6 +1055,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
   list_view_->sortByColumn(QtMaterialBrowserModel::NameColumn,
                            Qt::AscendingOrder);
   list_view_->verticalHeader()->hide();
+  list_view_->verticalHeader()->setDefaultSectionSize(26);
   list_view_->horizontalHeader()->setStretchLastSection(false);
   list_view_->horizontalHeader()->setSectionResizeMode(
       QtMaterialBrowserModel::NameColumn, QHeaderView::Stretch);
@@ -1046,6 +1085,8 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
 
   if (host_ == QtMaterialBrowserHost::Windowed) {
     auto *footer = new QHBoxLayout();
+    footer->setObjectName(QStringLiteral("materialBrowser.footerLayout"));
+    footer->setSpacing(6);
     footer->addStretch(1);
     import_button_ = new QPushButton(central_widget);
     import_button_->setObjectName(QStringLiteral("materialBrowser.import"));
@@ -1585,9 +1626,29 @@ void QtMaterialBrowserWindow::apply_ui_scale(
     return;
   }
   ui_scale_metrics_ = metrics;
+  centralWidget()->layout()->setContentsMargins(
+      metrics.margins(QMargins(6, 6, 6, 6)));
+  centralWidget()->layout()->setSpacing(metrics.px(6));
+  findChild<QHBoxLayout *>(QStringLiteral("materialBrowser.toolbarLayout"))
+      ->setSpacing(metrics.px(4));
+  if (auto *footer = findChild<QHBoxLayout *>(
+          QStringLiteral("materialBrowser.footerLayout"))) {
+    footer->setSpacing(metrics.px(6));
+  }
+  search_->setMinimumHeight(metrics.px(28));
+  tile_size_spin_->setMinimumHeight(metrics.px(28));
+  for (QToolButton *button : {folders_button_, grid_button_, list_button_}) {
+    button->setMinimumHeight(metrics.px(28));
+    button->setIconSize(metrics.size(QSize(20, 20)));
+  }
   static_cast<MaterialGridDelegate *>(grid_view_->itemDelegate())
       ->set_border_width(metrics.px(2));
   static_cast<MaterialFolderTree *>(folder_tree_)->apply_ui_scale(metrics);
+  static_cast<MaterialFolderDelegate *>(folder_tree_->itemDelegate())
+      ->apply_ui_scale(metrics);
+  folder_tree_->doItemsLayout();
+  list_view_->verticalHeader()->setDefaultSectionSize(metrics.px(26));
+  queue_row_metrics_update();
   filter_button_->setIconSize(metrics.size(QSize(20, 20)));
   filter_button_->setFixedSize(metrics.size(QSize(28, 28)));
   tile_size_spin_->setFixedWidth(metrics.px(150));
@@ -1601,6 +1662,20 @@ void QtMaterialBrowserWindow::apply_ui_scale(
   apply_tile_metrics(tile_size());
   grid_view_->doItemsLayout();
   grid_view_->viewport()->update();
+}
+
+void QtMaterialBrowserWindow::queue_row_metrics_update() {
+  if (list_view_ == nullptr || row_metrics_update_pending_) {
+    return;
+  }
+  row_metrics_update_pending_ = true;
+  // Qt can deliver inherited fonts after the scale listener. In particular,
+  // shrinking a row against the previous font clamps it to the old minimum.
+  QTimer::singleShot(0, this, [this]() {
+    row_metrics_update_pending_ = false;
+    list_view_->verticalHeader()->setDefaultSectionSize(ui_scale_metrics_.px(26));
+    folder_tree_->doItemsLayout();
+  });
 }
 
 void QtMaterialBrowserWindow::restore_presentation_state(
@@ -1652,6 +1727,10 @@ bool QtMaterialBrowserWindow::event(QEvent *event) {
       refresh_view_mode_icons();
     } else if (event->type() == QEvent::ActivationChange) {
       refresh_usage_badge_style();
+    } else if (event->type() == QEvent::FontChange ||
+               event->type() == QEvent::ApplicationFontChange ||
+               event->type() == QEvent::StyleChange) {
+      queue_row_metrics_update();
     } else if (event->type() == QEvent::Hide) {
       if (filter_popup_) {
         filter_popup_->close();

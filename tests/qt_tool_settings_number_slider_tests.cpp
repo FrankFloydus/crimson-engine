@@ -143,12 +143,18 @@ TEST(QtFaceTextureControlsTests,
   // user-resized dock wider when interface scale changes.
   EXPECT_EQ(panel.minimumWidth(), 240);
   EXPECT_EQ(texture_scale->minimumWidth(), 128);
-  EXPECT_EQ(panel.layout()->contentsMargins(), QMargins(16, 16, 16, 16));
+  EXPECT_EQ(panel.layout()->contentsMargins(), QMargins(8, 0, 8, 0));
+  const auto *content = panel.findChild<QWidget *>(
+      QStringLiteral("face_texture.section.texture.content"));
+  ASSERT_NE(content, nullptr);
+  ASSERT_NE(content->layout(), nullptr);
+  EXPECT_EQ(content->layout()->contentsMargins(), QMargins(12, 12, 12, 12));
 
   panel.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(panel.minimumWidth(), 240);
   EXPECT_EQ(texture_scale->minimumWidth(), 64);
-  EXPECT_EQ(panel.layout()->contentsMargins(), QMargins(8, 8, 8, 8));
+  EXPECT_EQ(panel.layout()->contentsMargins(), QMargins(4, 0, 4, 0));
+  EXPECT_EQ(content->layout()->contentsMargins(), QMargins(6, 6, 6, 6));
 }
 
 quader::ModelingBoxPreview tool_settings_primitive_preview() {
@@ -2148,7 +2154,9 @@ TEST(QtFaceTextureControlsTests,
   EXPECT_LT(scale_x->geometry().bottom(), shift_x->geometry().top());
   EXPECT_LT(shift_x->geometry().bottom(), rotate->geometry().top());
   EXPECT_EQ(scale_x->geometry().left(), shift_x->geometry().left());
+  EXPECT_EQ(scale_x->geometry().right(), shift_x->geometry().right());
   EXPECT_EQ(scale_y->geometry().left(), shift_y->geometry().left());
+  EXPECT_EQ(scale_y->geometry().right(), shift_y->geometry().right());
   EXPECT_EQ(rotate->geometry().left(), scale_x->geometry().left());
   EXPECT_EQ(rotate->geometry().right(), scale_y->geometry().right());
   for (QDoubleSpinBox *spin : {scale_x, scale_y, shift_x, shift_y, rotate}) {
@@ -5093,6 +5101,14 @@ TEST(QtToolSettingsPanelTests,
         std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
         "it-IT"));
     panel.set_localization(italian);
+    // Localization rebuilds descriptor editors. The retained pointer contract
+    // above applies to value refreshes, not this explicit presentation rebuild.
+    EXPECT_TRUE(retained_width.isNull());
+    width = panel.findChild<QDoubleSpinBox *>(QStringLiteral(
+        "tool_settings.control.operation.edge_bevel.width"));
+    ASSERT_NE(width, nullptr);
+    line = width->findChild<QLineEdit *>();
+    ASSERT_NE(line, nullptr);
     EXPECT_EQ(maximum_hint(), nullptr);
     EXPECT_TRUE(width->toolTip().isEmpty());
     EXPECT_NEAR(owner_width(), precise_owner, 1.0e-7);
@@ -5862,12 +5878,17 @@ TEST(QtToolSettingsPanelTests,
   char *argv[] = {executable, nullptr};
   QApplication application(argc, argv);
   QApplication::setStyle(QStringLiteral("Fusion"));
+  QApplication::setPalette(quader::qt_obsidian_application_palette(
+      QApplication::palette()));
   quader::QtUiScaleApplicationController scale_controller(application);
   quader::LocalizationService localization;
   ASSERT_TRUE(localization.load(
       std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
-  const QString screenshot_directory =
+  QString screenshot_directory =
       qEnvironmentVariable("QUADER_TOOL_SETTINGS_ROWS_SCREENSHOT_DIR");
+  if (screenshot_directory.isEmpty()) {
+    screenshot_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  }
   if (!screenshot_directory.isEmpty()) {
     ASSERT_TRUE(QDir().mkpath(screenshot_directory));
   }
@@ -5916,6 +5937,12 @@ TEST(QtToolSettingsPanelTests,
         panel.refresh();
         panel.resize(panel.sizeHint());
         process_events_for(20);
+        auto *operation_header = panel.findChild<QToolButton *>(
+            QStringLiteral("tool_settings.target_title"));
+        ASSERT_NE(operation_header, nullptr);
+        EXPECT_EQ(operation_header->geometry().left(), 0);
+        EXPECT_EQ(operation_header->width(), panel.width());
+        EXPECT_GE(operation_header->height(), scale_controller.metrics().px(26));
         EXPECT_EQ(panel.findChild<QWidget *>(
                       QStringLiteral("tool_settings.reset_defaults")), nullptr);
         EXPECT_TRUE(panel.findChildren<QSlider *>().isEmpty());
@@ -5951,8 +5978,11 @@ TEST(QtToolSettingsPanelTests,
             EXPECT_TRUE(label->isVisible());
             EXPECT_EQ(label->geometry().left(), row->contentsRect().left());
             EXPECT_GT(field->geometry().left(), label->geometry().right());
-            EXPECT_LE(std::abs(field->geometry().center().y() -
-                               label->geometry().center().y()), 1);
+            if (control.kind !=
+                quader::QuaderToolSettingControlKind::Vector3Number) {
+              EXPECT_LE(std::abs(field->geometry().center().y() -
+                                 label->geometry().center().y()), 1);
+            }
             if (label_width.has_value()) {
               EXPECT_EQ(label->width(), *label_width);
             } else {
@@ -5980,13 +6010,36 @@ TEST(QtToolSettingsPanelTests,
             }
           }
           if (control.kind == quader::QuaderToolSettingControlKind::Vector3Number) {
+            std::optional<QRect> previous_axis;
             for (const auto &component : control.vector3_components) {
-              auto *spin = panel.findChild<QDoubleSpinBox *>(
+              const QString component_name =
                   QStringLiteral("tool_settings.control.") +
-                  QString::fromStdString(component.id));
+                  QString::fromStdString(component.id);
+              auto *spin = panel.findChild<QDoubleSpinBox *>(component_name);
+              auto *axis_label = panel.findChild<QLabel *>(
+                  component_name + QStringLiteral(".axis_label"));
               ASSERT_NE(spin, nullptr);
+              ASSERT_NE(axis_label, nullptr);
               EXPECT_TRUE(field->rect().contains(spin->geometry()));
-              EXPECT_GE(spin->width(), scale_controller.metrics().px(44));
+              EXPECT_GE(spin->width(), scale_controller.metrics().px(88));
+              EXPECT_LT(axis_label->geometry().right(), spin->geometry().left());
+              EXPECT_LE(std::abs(axis_label->geometry().center().y() -
+                                 spin->geometry().center().y()), 1);
+              if (previous_axis.has_value()) {
+                EXPECT_EQ(spin->geometry().left(), previous_axis->left());
+                EXPECT_EQ(spin->geometry().width(), previous_axis->width());
+                EXPECT_GT(spin->geometry().top(), previous_axis->bottom());
+              } else {
+                auto *label = panel.findChild<QLabel *>(
+                    name + QStringLiteral(".label"));
+                ASSERT_NE(label, nullptr);
+                const int first_line_center = label->geometry().top() +
+                    label->contentsRect().top() + label->fontMetrics().height() / 2;
+                const int field_center = field->geometry().top() +
+                    spin->geometry().center().y();
+                EXPECT_LE(std::abs(first_line_center - field_center), 1);
+              }
+              previous_axis = spin->geometry();
               auto *editor = spin->findChild<QLineEdit *>();
               ASSERT_NE(editor, nullptr);
               const QMargins margins = editor->textMargins();
@@ -6002,7 +6055,7 @@ TEST(QtToolSettingsPanelTests,
           screenshot.fill(Qt::transparent);
           panel.render(&screenshot);
           EXPECT_TRUE(screenshot.save(QDir(screenshot_directory).filePath(
-              QStringLiteral("%1-%2-%3.png")
+              QStringLiteral("tool-options-%1-%2-%3.png")
                   .arg(QString::fromStdString(target.tool_id),
                        QString::fromLatin1(locale))
                   .arg(static_cast<int>(std::lround(scale * 100.0F))))));

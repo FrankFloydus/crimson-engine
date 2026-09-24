@@ -18,6 +18,7 @@
 #include "ui/ui_panel.hpp"
 
 #include <QAbstractItemView>
+#include <QAbstractButton>
 #include <QAction>
 #include <QColorDialog>
 #include <QContextMenuEvent>
@@ -120,6 +121,19 @@ public:
   explicit LayerNameDelegate(QObject *parent = nullptr)
       : QStyledItemDelegate(parent) {}
 
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    row_height_ = metrics.px(26);
+    row_padding_ = metrics.px(8);
+  }
+
+  QSize sizeHint(const QStyleOptionViewItem &option,
+                  const QModelIndex &index) const override {
+    QSize size = QStyledItemDelegate::sizeHint(option, index);
+    size.setHeight(std::max({size.height(), row_height_,
+                             option.fontMetrics.height() + row_padding_}));
+    return size;
+  }
+
   QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option,
                         const QModelIndex &index) const override {
     QWidget *editor = QStyledItemDelegate::createEditor(parent, option, index);
@@ -131,7 +145,25 @@ public:
     }
     return editor;
   }
+
+private:
+  int row_height_ = 26;
+  int row_padding_ = 8;
 };
+
+/// Centers native row controls without replacing the tree's selection paint.
+QWidget *layer_control_cell(QAbstractButton &button) {
+  auto *cell = new QWidget(button.parentWidget());
+  auto *layout = new QHBoxLayout(cell);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(0);
+  layout->addWidget(&button, 0, Qt::AlignCenter);
+  return cell;
+}
+
+QAbstractButton *layer_cell_button(QWidget *cell) {
+  return cell != nullptr ? cell->findChild<QAbstractButton *>() : nullptr;
+}
 
 /// Adds only keyboard context targeting.
 class LayerTreeView final : public QTreeView {
@@ -227,7 +259,7 @@ struct LayerPanel::Impl {
     auto *actions = new QWidget(&panel_);
     actions->setObjectName(QStringLiteral("layers.actions"));
     actions_layout_ = new QHBoxLayout(actions);
-    actions_layout_->setContentsMargins(4, 4, 4, 4);
+    actions_layout_->setContentsMargins(6, 6, 6, 6);
     actions_layout_->setSpacing(4);
 
     create_button_ = new QToolButton(actions);
@@ -237,7 +269,7 @@ struct LayerPanel::Impl {
     create_button_->setAccessibleName(QStringLiteral("Create Layer"));
     create_button_->setIconSize(QSize(20, 20));
     create_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    create_button_->setAutoRaise(false);
+    create_button_->setAutoRaise(true);
     create_button_->setFixedSize(28, 28);
     actions_layout_->addWidget(create_button_);
 
@@ -250,7 +282,7 @@ struct LayerPanel::Impl {
         QStringLiteral("Create Layer from Selection"));
     create_from_selection_button_->setIconSize(QSize(20, 20));
     create_from_selection_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    create_from_selection_button_->setAutoRaise(false);
+    create_from_selection_button_->setAutoRaise(true);
     create_from_selection_button_->setFixedSize(28, 28);
     create_from_selection_button_->setEnabled(false);
     actions_layout_->addWidget(create_from_selection_button_);
@@ -314,7 +346,8 @@ struct LayerPanel::Impl {
     ui_scale_metrics_ = metrics;
 
     tree_->setIconSize(metrics.size(QSize(18, 18)));
-    actions_layout_->setContentsMargins(metrics.margins(QMargins(4, 4, 4, 4)));
+    static_cast<LayerNameDelegate *>(tree_->itemDelegate())->apply_ui_scale(metrics);
+    actions_layout_->setContentsMargins(metrics.margins(QMargins(6, 6, 6, 6)));
     actions_layout_->setSpacing(metrics.px(4));
     create_button_->setIconSize(metrics.size(QSize(20, 20)));
     create_button_->setFixedSize(metrics.size(QSize(28, 28)));
@@ -325,23 +358,24 @@ struct LayerPanel::Impl {
 
     for (int row = 0; row < model_->rowCount(); ++row) {
       if (auto *swatch = dynamic_cast<QtColorSwatchButton *>(
-              tree_->indexWidget(
-                  model_->index(row, column_index(LayerColumn::Color))))) {
+              layer_cell_button(tree_->indexWidget(
+                  model_->index(row, column_index(LayerColumn::Color)))))) {
         swatch->setFixedSize(metrics.size(QSize(22, 22)));
       }
       if (auto *visibility = qobject_cast<QToolButton *>(
-              tree_->indexWidget(
-                  model_->index(row, column_index(LayerColumn::Visible))))) {
+              layer_cell_button(tree_->indexWidget(
+                  model_->index(row, column_index(LayerColumn::Visible)))))) {
         visibility->setIconSize(metrics.size(QSize(18, 18)));
         visibility->setFixedSize(metrics.size(QSize(22, 22)));
       }
       if (auto *lock = qobject_cast<QToolButton *>(
-              tree_->indexWidget(
-                  model_->index(row, column_index(LayerColumn::Locked))))) {
+              layer_cell_button(tree_->indexWidget(
+                  model_->index(row, column_index(LayerColumn::Locked)))))) {
         lock->setIconSize(metrics.size(QSize(18, 18)));
         lock->setFixedSize(metrics.size(QSize(22, 22)));
       }
     }
+    tree_->doItemsLayout();
     panel_.updateGeometry();
     tree_->viewport()->update();
   }
@@ -354,12 +388,12 @@ struct LayerPanel::Impl {
         continue;
       }
       const QModelIndex name_index = name_item->second->index();
-      if (auto *visibility = qobject_cast<QToolButton *>(tree_->indexWidget(
-              name_index.siblingAtColumn(column_index(LayerColumn::Visible))))) {
+      if (auto *visibility = qobject_cast<QToolButton *>(layer_cell_button(tree_->indexWidget(
+              name_index.siblingAtColumn(column_index(LayerColumn::Visible)))))) {
         visibility->setIcon(layer_visibility_icon(layer.visible, palette));
       }
-      if (auto *lock = qobject_cast<QToolButton *>(tree_->indexWidget(
-              name_index.siblingAtColumn(column_index(LayerColumn::Locked))))) {
+      if (auto *lock = qobject_cast<QToolButton *>(layer_cell_button(tree_->indexWidget(
+              name_index.siblingAtColumn(column_index(LayerColumn::Locked)))))) {
         lock->setIcon(layer_lock_icon(layer.locked, palette));
       }
     }
@@ -518,7 +552,7 @@ private:
       color_button->setAccessibleName(
           localized("ui.layers.color", "Color"));
       color_button->set_swatch_color(qt_color(layer.wireframe_color));
-      tree_->setIndexWidget(color_item->index(), color_button);
+      tree_->setIndexWidget(color_item->index(), layer_control_cell(*color_button));
       QObject::connect(color_button, &QPushButton::clicked, &panel_,
                        [this, id = layer.id, color_button]() {
                          choose_color(id, *color_button);
@@ -538,7 +572,7 @@ private:
       visibility_button->setToolTip(visibility_text);
       visibility_button->setAccessibleName(visibility_text);
       visibility_button->setAccessibleDescription(visibility_text);
-      tree_->setIndexWidget(visible_item->index(), visibility_button);
+      tree_->setIndexWidget(visible_item->index(), layer_control_cell(*visibility_button));
       QObject::connect(visibility_button, &QToolButton::clicked, &panel_,
                        [this, id = layer.id]() { toggle_visibility(id); });
 
@@ -555,7 +589,7 @@ private:
       lock_button->setToolTip(locked_text);
       lock_button->setAccessibleName(locked_text);
       lock_button->setAccessibleDescription(locked_text);
-      tree_->setIndexWidget(locked_item->index(), lock_button);
+      tree_->setIndexWidget(locked_item->index(), layer_control_cell(*lock_button));
       QObject::connect(lock_button, &QToolButton::clicked, &panel_,
                        [this, id = layer.id]() { toggle_lock(id); });
     }

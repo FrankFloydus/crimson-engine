@@ -236,8 +236,8 @@ struct QtFaceTextureControls::Impl {
     panel_.setMinimumWidth(240);
     auto *layout = new QVBoxLayout(&panel_);
     layout->setObjectName(QStringLiteral("face_texture.controls.layout"));
-    set_scalable_margins(*layout, QMargins(8, 8, 8, 8));
-    set_scalable_spacing(*layout, 8);
+    set_scalable_margins(*layout, QMargins(4, 0, 4, 0));
+    set_scalable_spacing(*layout, 4);
     layout->setAlignment(Qt::AlignTop);
     texture_section_ = new QtSettingsSection(
         QStringLiteral("face_texture.section.texture"), &panel_);
@@ -290,7 +290,8 @@ struct QtFaceTextureControls::Impl {
     ui_scale_metrics_ = metrics;
     apply_scalable_layout_metrics(panel_, metrics);
     apply_scalable_widget_metrics(panel_, metrics);
-    refresh_button_minimum_widths();
+    refresh_control_metrics();
+    schedule_control_metrics();
     panel_.updateGeometry();
   }
 
@@ -302,7 +303,33 @@ struct QtFaceTextureControls::Impl {
   }
 
 private:
-  void refresh_button_minimum_widths() {
+  void refresh_control_metrics() {
+    int numeric_label_width = 0;
+    for (const TextureControlWidget &binding : texture_controls_) {
+      numeric_label_width = std::max(numeric_label_width,
+          binding.label->fontMetrics().horizontalAdvance(binding.label->text()));
+    }
+    numeric_label_width =
+        std::min(numeric_label_width, ui_scale_metrics_.px(72));
+    int action_label_width = ui_scale_metrics_.px(96);
+    for (const QLabel *label : texture_action_group_labels_) {
+      action_label_width = std::max(action_label_width,
+          label->fontMetrics().horizontalAdvance(label->text()));
+    }
+    action_label_width =
+        std::min(action_label_width, ui_scale_metrics_.px(144));
+    const auto align_label = [](QLabel *label, int label_width) {
+      if (label->minimumWidth() != label_width ||
+          label->maximumWidth() != label_width) {
+        label->setFixedWidth(label_width);
+      }
+    };
+    for (const TextureControlWidget &binding : texture_controls_) {
+      align_label(binding.label, numeric_label_width);
+    }
+    for (QLabel *label : texture_action_group_labels_) {
+      align_label(label, action_label_width);
+    }
     for (QPushButton *button : texture_action_buttons_) {
       const int width = button->fontMetrics().horizontalAdvance(button->text()) +
                         ui_scale_metrics_.px(12);
@@ -310,6 +337,18 @@ private:
         button->setMinimumWidth(width);
       }
     }
+  }
+
+  void schedule_control_metrics() {
+    if (control_metrics_scheduled_) {
+      return;
+    }
+    control_metrics_scheduled_ = true;
+    // Application-font propagation completes after the scale listener returns.
+    QTimer::singleShot(0, &panel_, [this]() {
+      control_metrics_scheduled_ = false;
+      refresh_control_metrics();
+    });
   }
 
   [[nodiscard]] bool binding_is_current(QuaderEditorApi *editor,
@@ -442,7 +481,7 @@ private:
 
   void build_texture_actions() {
     auto *layout = new QGridLayout(edit_texture_section_->content());
-    set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
+    set_scalable_margins(*layout, QMargins(6, 6, 6, 6));
     set_scalable_grid_spacing(*layout, 6, 4);
     layout->setAlignment(Qt::AlignTop);
     layout->setColumnStretch(1, 1);
@@ -453,7 +492,8 @@ private:
       auto *label = new QLabel(edit_texture_section_->content());
       label->setObjectName(QStringLiteral("face_texture.edit_texture.group.%1")
                                .arg(qtext(group.id)));
-      label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+      label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+      label->setWordWrap(true);
       texture_action_group_labels_[group_index] = label;
       layout->addWidget(label, static_cast<int>(group_index), 0);
       auto *buttons = new QHBoxLayout;
@@ -486,7 +526,7 @@ private:
         QStringLiteral("face_texture.edit_texture.treat_as_one"));
     texture_treat_as_one_->setFocusPolicy(Qt::TabFocus);
     layout->addWidget(texture_treat_as_one_,
-                      static_cast<int>(kTextureActionGroups.size()), 0, 1, 2);
+                      static_cast<int>(kTextureActionGroups.size()), 1);
     QObject::connect(texture_treat_as_one_, &QCheckBox::toggled, &panel_,
                      [this](bool enabled) {
                        if (editor_ == nullptr || texture_synchronizing_) {
@@ -558,7 +598,7 @@ private:
 
   void build_texture_controls() {
     auto *layout = new QGridLayout(texture_section_->content());
-    set_scalable_margins(*layout, QMargins(8, 6, 8, 6));
+    set_scalable_margins(*layout, QMargins(6, 6, 6, 6));
     set_scalable_grid_spacing(*layout, 6, 4);
     layout->setAlignment(Qt::AlignTop);
     layout->setColumnStretch(1, 1);
@@ -571,7 +611,8 @@ private:
           QStringLiteral("face_texture.texture.%1").arg(qtext(description.id));
       binding.label = new QLabel(texture_section_->content());
       binding.label->setObjectName(name + QStringLiteral(".label"));
-      binding.label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+      binding.label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+      binding.label->setWordWrap(true);
       const bool scale = binding.field == QuaderFaceTextureField::ScaleX ||
                          binding.field == QuaderFaceTextureField::ScaleY;
       binding.spin = new QtMixedNumberSpinBox(
@@ -915,7 +956,6 @@ private:
         button->setAccessibleName(label);
       }
     }
-    refresh_button_minimum_widths();
     const QString treat_as_one = localized_text(
         localization_, "tool_settings.edit_texture.treat_as_one", "Treat as One");
     if (texture_treat_as_one_->text() != treat_as_one) {
@@ -950,6 +990,8 @@ private:
         binding.label->setToolTip(tooltip);
       }
     }
+    refresh_control_metrics();
+    schedule_control_metrics();
   }
 
   QtFaceTextureControls &panel_;
@@ -972,6 +1014,7 @@ private:
   bool texture_synchronizing_ = false;
   bool texture_refresh_scheduled_ = false;
   bool localized_text_dirty_ = true;
+  bool control_metrics_scheduled_ = false;
 };
 
 QtFaceTextureControls::QtFaceTextureControls(QWidget *parent)

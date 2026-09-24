@@ -30,6 +30,8 @@ file except through prior written authorization from Francesco Di Blasi.
   Ctrl+wheel within a focused browser adjusts its existing thumbnail-size setting;
   ordinary wheel scrolling and input outside that browser retain their ownership.
 - `QtFaceTexturePanel` owns the single-face canvas and retained texture controls.
+  Texture Settings keeps Scale U/V on one row, Shift U/V on the next, then Rotation,
+  leaving vertical space for the canvas and material browser.
   Both material-browser hosts reuse one implementation, but
   only the embedded browser assigns explicit materials to selected faces. Canvas gestures use
   the public modeling preview lifecycle; widget state never becomes UV or material truth.
@@ -66,6 +68,10 @@ file except through prior written authorization from Francesco Di Blasi.
 - `main.cpp` selects Fusion; `qt_application_theme.*` supplies the Obsidian palette and live system
   High Contrast fallback. Preserve native control behavior and accessible default, hover, selected,
   pressed, focused, inactive, and disabled states when styling.
+  Property sections share `QtPanelSectionHeader` for a full-width native disclosure surface;
+  `qt_settings_detail::QtSettingsSection` retains its body and settles focused drafts before collapse.
+  Keep labels aligned beside native editors, with stacked components where a narrow panel would
+  crowd numeric values. Collection panels retain their native tree/list interaction.
 - Reuse localization, settings descriptors, models, delegates, and signals. Call base event handlers
   on unhandled paths. Input follows [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md): Qt adaptation,
   canonical keybindings, then semantic viewport frames. Do not add a parallel `QAction` shortcut map.
