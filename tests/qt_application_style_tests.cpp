@@ -27,6 +27,7 @@
 #include <QPushButton>
 #include <QStyleFactory>
 #include <QStyleOption>
+#include <QTabBar>
 #include <QToolButton>
 
 #include <algorithm>
@@ -176,7 +177,8 @@ TEST_F(QtApplicationStyleTests,
   EXPECT_FALSE(quader::qt_application_style_active(&button));
   for (const auto element : {QStyle::PE_PanelButtonCommand,
                              QStyle::PE_IndicatorCheckBox,
-                             QStyle::PE_IndicatorRadioButton}) {
+                             QStyle::PE_IndicatorRadioButton,
+                             QStyle::PE_IndicatorTabClose}) {
     EXPECT_EQ(render_primitive(style, element, button),
                 render_primitive(*fusion, element, button));
   }
@@ -198,6 +200,121 @@ TEST_F(QtApplicationStyleTests,
   spin.stepEnabled = QAbstractSpinBox::StepUpEnabled;
   EXPECT_EQ(render_complex(style, QStyle::CC_SpinBox, spin),
               render_complex(*fusion, QStyle::CC_SpinBox, spin));
+}
+
+TEST_F(QtApplicationStyleTests,
+       NativeTabCloseButtonsKeepPaletteStatesDispatchAndScaledLayout) {
+  quader::apply_qt_obsidian_application_theme(
+      QApplication::style()->standardPalette());
+  quader::QtUiScaleApplicationController controller(*application_);
+  QTabBar tabs;
+  tabs.setAttribute(Qt::WA_DontShowOnScreen, true);
+  tabs.setDocumentMode(true);
+  tabs.setTabsClosable(true);
+  tabs.setExpanding(false);
+  tabs.setElideMode(Qt::ElideRight);
+  tabs.addTab(QStringLiteral("test_scene.qdr"));
+  tabs.addTab(QStringLiteral("Untitled*"));
+  tabs.setCurrentIndex(0);
+  std::vector<int> close_requests;
+  QObject::connect(&tabs, &QTabBar::tabCloseRequested, &tabs,
+                   [&close_requests](int index) { close_requests.push_back(index); });
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+  int scale_pass = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    controller.apply_factor(factor);
+    for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+      SCOPED_TRACE(::testing::Message() << factor << ' ' << direction);
+      tabs.setLayoutDirection(direction);
+      // Native tab-button placement refreshes on style changes, not direction
+      // changes. Settle the fixture before inspecting its mirrored layout.
+      QEvent style_change(QEvent::StyleChange);
+      QApplication::sendEvent(&tabs, &style_change);
+      tabs.resize(controller.metrics().px(300), tabs.sizeHint().height());
+      tabs.show();
+      QCoreApplication::processEvents();
+      auto *close = qobject_cast<QAbstractButton *>(
+          tabs.tabButton(1, QTabBar::RightSide));
+      if (close == nullptr) {
+        close = qobject_cast<QAbstractButton *>(
+            tabs.tabButton(1, QTabBar::LeftSide));
+      }
+      ASSERT_NE(close, nullptr);
+      EXPECT_TRUE(close->rect().isValid());
+      EXPECT_TRUE(tabs.rect().contains(close->geometry()));
+      EXPECT_TRUE(tabs.tabRect(1).contains(close->geometry()));
+
+      QStyleOption option;
+      option.initFrom(close);
+      option.rect = close->rect();
+      option.state = kEnabledState;
+      const QImage idle = render_primitive(*tabs.style(), QStyle::PE_IndicatorTabClose,
+                                            option);
+      EXPECT_EQ(idle.pixelColor(0, 0).alpha(), 0);
+      EXPECT_TRUE(contains_color(idle, option.palette.color(QPalette::Active,
+                                                            QPalette::WindowText)));
+      for (const auto state : {QStyle::State_MouseOver, QStyle::State_Sunken,
+                                QStyle::State_Selected}) {
+        option.state = kEnabledState | state;
+        const QImage active = render_primitive(*tabs.style(),
+                                               QStyle::PE_IndicatorTabClose, option);
+        EXPECT_NE(idle, active);
+        EXPECT_TRUE(contains_color(active, option.palette.color(QPalette::Active,
+                                                                QPalette::Text)));
+      }
+      option.state = QStyle::State_Active;
+      const QImage disabled = render_primitive(*tabs.style(),
+                                               QStyle::PE_IndicatorTabClose, option);
+      EXPECT_NE(idle, disabled);
+      EXPECT_TRUE(contains_color(disabled, option.palette.color(QPalette::Disabled,
+                                                                QPalette::WindowText)));
+
+      for (const QString &state : {QStringLiteral("idle"), QStringLiteral("hover"),
+                                   QStringLiteral("pressed")}) {
+        close->setAttribute(Qt::WA_UnderMouse, state != QStringLiteral("idle"));
+        close->setDown(state == QStringLiteral("pressed"));
+        if (!review_directory.isEmpty()) {
+          EXPECT_TRUE(tabs.grab().save(QDir(review_directory).filePath(
+              QStringLiteral("scene-tabs-%1-%2-%3-%4.png")
+                  .arg(scale_pass).arg(qRound(factor * 100.0F))
+                  .arg(direction == Qt::LeftToRight ? QStringLiteral("ltr")
+                                                    : QStringLiteral("rtl"))
+                  .arg(state))));
+        }
+      }
+      close->setDown(false);
+      close->setAttribute(Qt::WA_UnderMouse, false);
+      close_requests.clear();
+      close->setEnabled(false);
+      close->click();
+      EXPECT_TRUE(close_requests.empty());
+      close->setEnabled(true);
+      close->click();
+      EXPECT_EQ(close_requests, (std::vector<int>{1}));
+      EXPECT_EQ(tabs.currentIndex(), 0);
+      EXPECT_EQ(tabs.count(), 2);
+    }
+    ++scale_pass;
+  }
+
+  std::unique_ptr<QStyle> fusion(QStyleFactory::create(QStringLiteral("fusion")));
+  ASSERT_NE(fusion, nullptr);
+  QPalette light_palette = fusion->standardPalette();
+  light_palette.setColor(QPalette::Window, QColor(245, 245, 245));
+  light_palette.setColor(QPalette::WindowText, Qt::black);
+  light_palette.setColor(QPalette::Base, Qt::white);
+  light_palette.setColor(QPalette::Text, Qt::black);
+  tabs.setPalette(light_palette);
+  QStyleOption light;
+  light.initFrom(&tabs);
+  light.rect = QRect(0, 0, 20, 20);
+  light.state = kEnabledState | QStyle::State_MouseOver;
+  EXPECT_FALSE(quader::qt_application_style_active(&light));
+  EXPECT_EQ(render_primitive(controller.style(), QStyle::PE_IndicatorTabClose, light),
+            render_primitive(*fusion, QStyle::PE_IndicatorTabClose, light));
 }
 
 TEST_F(QtApplicationStyleTests,

@@ -261,6 +261,32 @@ bool qt_draw_application_primitive(
   case QStyle::PE_IndicatorRadioButton:
     draw_indicator(*painter, menu_glyph_option(*option, widget), metrics, true);
     return true;
+  case QStyle::PE_IndicatorTabClose: {
+    const bool pressed = enabled(*option) &&
+                         option->state.testFlag(QStyle::State_Sunken);
+    if (hovered(*option) || pressed || focused(*option)) {
+      draw_surface(*painter, *option, metrics, false);
+    }
+    const bool emphasized = enabled(*option) &&
+                            (hovered(*option) || pressed ||
+                             option->state.testFlag(QStyle::State_Selected));
+    const qreal extent = std::min<qreal>(
+        metrics.px(8.0),
+        std::min(option->rect.width(), option->rect.height()) * 0.5);
+    const QPointF center = QRectF(option->rect).center();
+    const QRectF glyph(center.x() - extent * 0.5,
+                       center.y() - extent * 0.5, extent, extent);
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    QPen pen(color(*option, emphasized ? QPalette::Text : QPalette::WindowText),
+             std::max<qreal>(hairline(*painter), metrics.px(1.4)));
+    pen.setCapStyle(Qt::RoundCap);
+    painter->setPen(pen);
+    painter->drawLine(glyph.topLeft(), glyph.bottomRight());
+    painter->drawLine(glyph.topRight(), glyph.bottomLeft());
+    painter->restore();
+    return true;
+  }
   case QStyle::PE_FrameFocusRect: {
     // Fusion skips idle flat/auto-raise panels entirely. Their focus primitive
     // remains the only keyboard cue. Default buttons also keep native focus

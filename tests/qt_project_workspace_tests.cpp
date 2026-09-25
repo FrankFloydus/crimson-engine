@@ -1305,6 +1305,47 @@ TEST(QtProjectWorkspaceTests,
     EXPECT_EQ(requested_commands[index], expected_commands[index].string());
   }
   std::filesystem::remove(keybindings);
+
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+    // Load the shipping artwork because this test host has no application QRC.
+    const QDir icon_directory(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
+    const std::array<const char *, 4> icon_names{
+        "viewport_grid.png", "viewport_gizmos.png", "viewport_mesh_grid.png",
+        "viewport_overlays.png"};
+    for (std::size_t index = 0; index < actions.size(); ++index) {
+      const QIcon icon = quader::qt_multiresolution_icon(
+          icon_directory.filePath(QString::fromUtf8(icon_names[index])));
+      ASSERT_FALSE(icon.isNull());
+      actions[index]->setIcon(icon);
+    }
+    quader::apply_qt_obsidian_application_theme(application.palette());
+    quader::QtUiScaleApplicationController scale_controller(application);
+    toolbar.show();
+    int cycle = 0;
+    for (const float factor : {1.0F, 2.0F, 1.0F}) {
+      scale_controller.apply_factor(factor);
+      toolbar.apply_ui_scale(scale_controller.metrics());
+      toolbar.resize(toolbar.sizeHint());
+      QEventLoop resize_events;
+      QTimer::singleShot(100, &resize_events, &QEventLoop::quit);
+      resize_events.exec();
+      for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+        application.processEvents();
+        toolbar.layout()->invalidate();
+        toolbar.layout()->activate();
+      }
+      QImage image(toolbar.size(), QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      toolbar.render(&image);
+      EXPECT_TRUE(image.save(QDir(review_directory).filePath(
+          QStringLiteral("viewport-display-toolbar-%1-%2.png")
+              .arg(qRound(factor * 100.0F))
+              .arg(cycle++))));
+    }
+  }
 }
 
 TEST(QtProjectWorkspaceTests,
