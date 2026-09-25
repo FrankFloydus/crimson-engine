@@ -144,7 +144,7 @@ struct DockTitleGlyphPolicy final {
 
 DockTitleGlyphPolicy dock_title_glyph_policy(const QPalette &palette) {
   const QColor inactive_surface =
-      palette.color(QPalette::Inactive, QPalette::AlternateBase);
+      palette.color(QPalette::Inactive, QPalette::Button);
   const QColor active_surface =
       palette.color(QPalette::Active, QPalette::Button);
   const QColor light_glyph = QColor::fromRgb(kLightDockGlyphRgb);
@@ -237,8 +237,6 @@ QString qt_dock_title_style_sheet(const QPalette &palette) {
 
 QString qt_dock_title_style_sheet(const QPalette &palette,
                                   const QtUiScaleMetrics &metrics) {
-  const QColor inactive_surface =
-      palette.color(QPalette::Inactive, QPalette::AlternateBase);
   const QColor active_surface =
       palette.color(QPalette::Active, QPalette::Button);
   const DockTitleGlyphPolicy glyph_policy =
@@ -251,14 +249,7 @@ QString qt_dock_title_style_sheet(const QPalette &palette,
   const auto qss_color = [](const QColor &color) {
     return color.name(QColor::HexRgb);
   };
-  const QString inactive_title_background = qss_color(inactive_surface);
-  const QString inactive_title_text =
-      qss_color(palette.color(QPalette::Inactive, QPalette::Text));
-  const QString inactive_title_border =
-      qss_color(palette.color(QPalette::Inactive, QPalette::Mid));
   const QString active_title_background = qss_color(active_surface);
-  const QString active_title_text =
-      qss_color(palette.color(QPalette::Active, QPalette::ButtonText));
   const QString active_title_border =
       qss_color(palette.color(QPalette::Active, QPalette::Mid));
   const QString accent =
@@ -268,52 +259,33 @@ QString qt_dock_title_style_sheet(const QPalette &palette,
                                        : active_title_background;
 
   return dock_palette_fingerprint(palette) + QStringLiteral(R"QUADER(
-QDockWidget::title {
-  background-color: %1;
-  color: %2;
-  border-bottom: 1px solid %3;
-  padding: %13px %10px;
-  text-align: left;
-}
-QDockWidget::title:active {
-  background-color: %4;
-  color: %5;
-  border-bottom: 1px solid %6;
-}
 QDockWidget::close-button,
 QDockWidget::float-button {
-  background-color: %7;
+  background-color: %1;
   border: 1px solid transparent;
-  border-radius: %14px;
+  border-radius: %7px;
   padding: 0;
-  width: %11px;
-  height: %11px;
-  icon-size: %12px;
+  width: %5px;
+  height: %5px;
+  icon-size: %6px;
 }
 QDockWidget::close-button:hover,
 QDockWidget::float-button:hover {
-  background-color: %9;
-  border-color: %6;
+  background-color: %2;
+  border-color: %3;
 }
 QDockWidget::close-button:pressed,
 QDockWidget::float-button:pressed {
-  background-color: %9;
-  border: 2px solid %8;
+  background-color: %2;
+  border: 2px solid %4;
 }
 )QUADER")
-      .arg(inactive_title_background)
-      .arg(inactive_title_text)
-      .arg(inactive_title_border)
-      .arg(active_title_background)
-      .arg(active_title_text)
-      .arg(active_title_border)
       .arg(button_background)
-      .arg(accent)
       .arg(pressed_background)
-      .arg(metrics.px(8))
+      .arg(active_title_border)
+      .arg(accent)
       .arg(metrics.px(22))
       .arg(metrics.px(18))
-      .arg(metrics.px(2))
       .arg(metrics.px(4));
 }
 

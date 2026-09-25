@@ -304,6 +304,49 @@ bool qt_draw_application_control(
     return false;
   }
   switch (element) {
+  case QStyle::CE_DockWidgetTitle: {
+    const auto *dock = qstyleoption_cast<const QStyleOptionDockWidget *>(option);
+    if (dock == nullptr) {
+      return false;
+    }
+    painter->save();
+    painter->fillRect(dock->rect, color(*dock, QPalette::Button));
+    const QRectF bounds(dock->rect);
+    const qreal edge = hairline(*painter);
+    const QRectF divider = dock->verticalTitleBar
+                              ? QRectF(bounds.right() - edge, bounds.top(),
+                                       edge, bounds.height())
+                              : QRectF(bounds.left(), bounds.bottom() - edge,
+                                       bounds.width(), edge);
+    painter->fillRect(divider, color(*dock, QPalette::Midlight));
+
+    // Keep Qt's title allocation, including button space and RTL placement.
+    // Styling the title subcontrol with QSS bypasses its foreground/font rules.
+    QRect text_rect = style.subElementRect(
+        QStyle::SE_DockWidgetTitleBarText, dock, widget);
+    if (dock->verticalTitleBar) {
+      painter->translate(text_rect.left(), text_rect.bottom() + 1);
+      painter->rotate(-90);
+      text_rect = QRect(0, 0, text_rect.height(), text_rect.width());
+    }
+    text_rect.adjust(metrics.px(2), 0, -metrics.px(2), 0);
+    // QDockWidget seeds its painter with a platform title font that does not
+    // follow our application scale controller. Use the scaled widget font.
+    QFont title_font = widget != nullptr ? widget->font() : painter->font();
+    title_font.setWeight(QFont::DemiBold);
+    painter->setFont(title_font);
+    painter->setPen(color(*dock, QPalette::Text));
+    painter->setClipRect(text_rect, Qt::IntersectClip);
+    const QString title = QFontMetrics(title_font).elidedText(
+        dock->title, Qt::ElideRight, std::max(0, text_rect.width()));
+    painter->drawText(text_rect,
+                     QStyle::visualAlignment(dock->direction,
+                                             Qt::AlignLeft | Qt::AlignVCenter) |
+                         Qt::TextHideMnemonic,
+                     title);
+    painter->restore();
+    return true;
+  }
   case QStyle::CE_MenuItem: {
     const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
     const auto *proxy = qobject_cast<const QProxyStyle *>(&style);

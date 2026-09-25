@@ -23,6 +23,7 @@
 #include "ui/qt_auxiliary_window_state.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_operation_input_hints.hpp"
@@ -49,6 +50,8 @@
 #include <QApplication>
 #include <QBuffer>
 #include <QByteArray>
+#include <QDir>
+#include <QEventLoop>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -321,6 +324,7 @@ TEST(QtProjectWorkspaceTests,
 
   quader::QtSelectionToolbar selection_toolbar;
   quader::QtToolToolbar tool_toolbar;
+  quader::QtSnappingToolbar snapping_toolbar;
   const QPalette theme =
       quader::qt_obsidian_application_palette(application.palette());
   selection_toolbar.setPalette(theme);
@@ -329,7 +333,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 19);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 18);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
        selection_toolbar.findChildren<QToolButton *>()) {
@@ -349,7 +353,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 19);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 18);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin * 2);
@@ -360,7 +364,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 19);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 18);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin);
@@ -448,13 +452,17 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
   quader::LocalizationService localization;
   tool_toolbar.set_localization(localization);
+  snapping_toolbar.set_localization(localization);
   const quader::QuaderSelectionSummary selection =
       editor.selection().summary();
   tool_toolbar.synchronize(editor, selection, true);
+  snapping_toolbar.synchronize(editor, true);
   auto *move = tool_toolbar.findChild<QAction *>(QStringLiteral("tool_move"));
   ASSERT_NE(move, nullptr);
   EXPECT_TRUE(move->toolTip().contains(QStringLiteral("[W]")));
-  auto *transform_space = tool_toolbar.findChild<QAction *>(
+  EXPECT_EQ(tool_toolbar.findChild<QAction *>(
+                QStringLiteral("toggle_transform_space")), nullptr);
+  auto *transform_space = snapping_toolbar.findChild<QAction *>(
       QStringLiteral("toggle_transform_space"));
   ASSERT_NE(transform_space, nullptr);
   EXPECT_EQ(transform_space->actionGroup(), nullptr);
@@ -464,14 +472,32 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(editor.viewports()
                   .set_transform_space(quader::QuaderTransformSpace::Local)
                   .ok());
-  tool_toolbar.synchronize(editor, selection);
+  snapping_toolbar.synchronize(editor);
   EXPECT_TRUE(transform_space->isChecked());
 
   int transform_space_toggle_requests = 0;
-  tool_toolbar.set_transform_space_toggle_requested_callback(
-      [&]() { ++transform_space_toggle_requests; });
+  snapping_toolbar.set_transform_space_toggle_requested_callback([&]() {
+    ++transform_space_toggle_requests;
+    EXPECT_TRUE(editor.commands().execute(
+        quader::quader_command::kViewportToggleTransformSpace).ok());
+  });
   transform_space->trigger();
   EXPECT_EQ(transform_space_toggle_requests, 1);
+  EXPECT_EQ(editor.viewports().transform_space(),
+            quader::QuaderTransformSpace::Global);
+  snapping_toolbar.synchronize(editor);
+  EXPECT_FALSE(transform_space->isChecked());
+
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+                  quader::quader_command::kViewportToggleTransformSpace,
+                  "Ctrl+Alt+T").ok());
+  snapping_toolbar.synchronize(editor);
+  EXPECT_TRUE(transform_space->toolTip().contains(QStringLiteral("[Ctrl+Alt+T]")));
+  int transform_presentation_changes = 0;
+  QObject::connect(transform_space, &QAction::changed, &snapping_toolbar,
+                   [&]() { ++transform_presentation_changes; });
+  snapping_toolbar.synchronize(editor);
+  EXPECT_EQ(transform_presentation_changes, 0);
 
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader::quader_command::kToolsActivateMove,
@@ -494,6 +520,7 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
 
   QMainWindow host;
+  host.setAnimated(false);
   quader::QtSnappingToolbar toolbar;
   quader::LocalizationService localization;
   toolbar.set_localization(localization);
@@ -509,7 +536,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(toolbar.isAreaAllowed(Qt::BottomToolBarArea));
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 4);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 5);
 
   host.addToolBar(Qt::TopToolBarArea, &toolbar);
   EXPECT_EQ(host.toolBarArea(&toolbar), Qt::TopToolBarArea);
@@ -532,14 +559,14 @@ TEST(QtProjectWorkspaceTests,
 
   toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
   EXPECT_EQ(toolbar.iconSize(), QSize(64, 64));
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 4);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 5);
   EXPECT_EQ(grid_combo->minimumHeight(), 60);
   EXPECT_EQ(grid_combo->maximumHeight(), 60);
   EXPECT_EQ(angle_combo->minimumHeight(), 60);
   EXPECT_EQ(angle_combo->maximumHeight(), 60);
   toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 4);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 5);
   EXPECT_EQ(grid_combo->minimumHeight(), 30);
   EXPECT_EQ(grid_combo->maximumHeight(), 30);
 
@@ -578,9 +605,12 @@ TEST(QtProjectWorkspaceTests,
                   QString::number(kExpectedAngles[index], 'g', 15)));
   }
 
+  auto *transform_space = toolbar.findChild<QAction *>(
+      QStringLiteral("toggle_transform_space"));
+  ASSERT_NE(transform_space, nullptr);
   std::vector<QAction *> toggle_actions;
   for (QAction *action : toolbar.actions()) {
-    if (action->isCheckable()) {
+    if (action->isCheckable() && action != transform_space) {
       toggle_actions.push_back(action);
     }
   }
@@ -604,9 +634,9 @@ TEST(QtProjectWorkspaceTests,
     EXPECT_EQ(toggle_actions[index]->toolTip(),
               expected_action_labels[index]);
   }
-  EXPECT_EQ(toggle_actions.front()->objectName(),
-            QStringLiteral("snappingEnabled"))
-      << "the global snapping master must be the first icon action";
+  EXPECT_EQ(toolbar.actions().indexOf(transform_space) + 1,
+            toolbar.actions().indexOf(toggle_actions.front()))
+      << "Local Transforms belongs immediately before the snapping icons";
 
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
@@ -637,7 +667,10 @@ TEST(QtProjectWorkspaceTests,
   host.resize(800, 600);
   host.move(40, 40);
   host.show();
+  // removeToolBar hides the toolbar; re-adding it does not clear that state.
+  toolbar.show();
   application.processEvents();
+  ASSERT_TRUE(toolbar.isVisible());
   expect_popup_restores_committed_combo_item(*grid_combo, application);
   expect_popup_restores_committed_combo_item(*angle_combo, application);
   ASSERT_EQ(angle_combo->height(), 30);
@@ -759,6 +792,54 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(grid_requests, 1);
   EXPECT_EQ(angle_requests, 1);
   EXPECT_EQ(toggle_requests, (std::array<int, 4>{1, 1, 1, 1}));
+
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+    // The app embeds these resources; the test host loads the same shipped
+    // artwork from source so the optional capture shows actual toolbar icons.
+    const QDir icon_directory(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
+    const std::array<const char *, 5> icon_names{
+        "tool_transform_local.png", "snapping_master.png", "snapping_grid.png",
+        "snapping_vertex.png", "snapping_rotation.png"};
+    const std::array<QAction *, 5> icon_actions{
+        transform_space, toggle_actions[0], toggle_actions[1], toggle_actions[2],
+        toggle_actions[3]};
+    for (std::size_t index = 0; index < icon_actions.size(); ++index) {
+      const QIcon icon = quader::qt_multiresolution_icon(
+          icon_directory.filePath(QString::fromUtf8(icon_names[index])));
+      ASSERT_FALSE(icon.isNull());
+      icon_actions[index]->setIcon(icon);
+    }
+    quader::apply_qt_obsidian_application_theme(application.palette());
+    quader::QtUiScaleApplicationController scale_controller(application);
+    for (const float factor : {1.0F, 2.0F, 1.0F}) {
+      scale_controller.apply_factor(factor);
+      const auto &metrics = scale_controller.metrics();
+      toolbar.apply_ui_scale(metrics);
+      host.resize(metrics.px(600), metrics.px(200));
+      // Native window resize delivery can finish after Qt's posted layout pass.
+      QEventLoop resize_events;
+      QTimer::singleShot(100, &resize_events, &QEventLoop::quit);
+      resize_events.exec();
+      for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+        application.processEvents();
+        host.layout()->invalidate();
+        host.layout()->activate();
+        toolbar.layout()->invalidate();
+        toolbar.layout()->activate();
+      }
+      EXPECT_GE(toolbar.width(), metrics.px(600));
+      EXPECT_GE(toolbar.height(), metrics.px(30));
+      QImage image(toolbar.size(), QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      toolbar.render(&image);
+      EXPECT_TRUE(image.save(QDir(review_directory).filePath(
+          QStringLiteral("transform-snapping-toolbar-%1.png")
+              .arg(qRound(factor * 100.0F)))));
+    }
+  }
 }
 
 TEST(QtProjectWorkspaceTests,

@@ -18,6 +18,7 @@
 #include "io/qdr/qdr_document_writer.hpp"
 #include "support/command_observable_state.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_snapping_toolbar.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -643,6 +644,19 @@ TEST(PublicReleasePresentation, MenusAndToolbarsContainOnlyPublishedControls) {
   }
   QtToolToolbar toolbar;
   toolbar.synchronize(editor, editor.selection().summary());
+  EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("toggle_transform_space")),
+            nullptr);
+  QtSnappingToolbar snapping_toolbar;
+  snapping_toolbar.synchronize(editor);
+  auto *transform_space = snapping_toolbar.findChild<QAction *>(
+      QStringLiteral("toggle_transform_space"));
+  auto *snapping = snapping_toolbar.findChild<QAction *>(
+      QStringLiteral("snappingEnabled"));
+  ASSERT_NE(transform_space, nullptr);
+  ASSERT_NE(snapping, nullptr);
+  EXPECT_TRUE(transform_space->isEnabled());
+  EXPECT_EQ(snapping_toolbar.actions().indexOf(transform_space) + 1,
+            snapping_toolbar.actions().indexOf(snapping));
   for (const auto tool : {"lasso_select", "mirror", "cut", "poly", "linear_array",
                           "radial_array", "path_array", "curve", "pivot"}) {
     EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("tool_%1").arg(tool)), nullptr)

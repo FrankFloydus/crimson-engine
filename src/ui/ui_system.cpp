@@ -1078,13 +1078,13 @@ void UISystem::install_runtime_hooks(
         tool_toolbar_->synchronize(*editor_, editor_->selection().summary(),
                                    true);
       });
-  tool_toolbar_->set_transform_space_toggle_requested_callback([this]() {
+  snapping_toolbar_->set_transform_space_toggle_requested_callback([this]() {
     if (editor_ == nullptr) {
       return;
     }
     present_lifecycle_result(editor_->commands().execute(
         quader_command::kViewportToggleTransformSpace));
-    tool_toolbar_->synchronize(*editor_, editor_->selection().summary(), true);
+    snapping_toolbar_->synchronize(*editor_, true);
   });
   snapping_toolbar_->set_grid_preset_requested_callback(
       [this](int preset) {

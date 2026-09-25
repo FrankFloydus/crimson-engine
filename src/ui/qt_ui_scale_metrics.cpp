@@ -7,9 +7,11 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include "ui/qt_application_style.hpp"
+#include "ui/qt_dock_title_presentation.hpp"
 #include "ui/ui_settings.hpp"
 
 #include <QApplication>
+#include <QDockWidget>
 #include <QEvent>
 #include <QMenu>
 #include <QPainter>
@@ -216,6 +218,20 @@ void QtUiScaleProxyStyle::set_metrics(
 int QtUiScaleProxyStyle::pixelMetric(PixelMetric metric,
                                      const QStyleOption *option,
                                      const QWidget *widget) const {
+  if (widget != nullptr &&
+      (qobject_cast<const QDockWidget *>(widget) != nullptr ||
+       qobject_cast<const QDockWidget *>(widget->parentWidget()) != nullptr)) {
+    QStyleOption dock_option;
+    dock_option.initFrom(widget);
+    if (qt_application_style_active(option != nullptr ? option : &dock_option)) {
+      if (metric == PM_DockWidgetTitleMargin) {
+        return metrics_.px(6);
+      }
+      if (metric == PM_DockWidgetTitleBarButtonMargin) {
+        return metrics_.px(3);
+      }
+    }
+  }
   if ((metric == PM_MenuHMargin || metric == PM_MenuVMargin) &&
       qobject_cast<const QMenu *>(widget) != nullptr) {
     // QMenu's layout supplies an option, but its scroller paint does not.
@@ -272,6 +288,25 @@ QSize QtUiScaleProxyStyle::sizeFromContents(
   return size;
 }
 
+QIcon QtUiScaleProxyStyle::standardIcon(StandardPixmap icon,
+                                        const QStyleOption *option,
+                                        const QWidget *widget) const {
+  if (qobject_cast<const QDockWidget *>(widget) != nullptr &&
+      (icon == SP_TitleBarCloseButton || icon == SP_TitleBarNormalButton)) {
+    QStyleOption dock_option;
+    dock_option.initFrom(widget);
+    const QStyleOption *effective = option != nullptr ? option : &dock_option;
+    if (qt_application_style_active(effective)) {
+      // Qt re-requests these icons after docking, feature and style changes.
+      return qt_dock_title_glyph_icon(icon == SP_TitleBarCloseButton
+                                         ? QtDockTitleGlyph::Close
+                                         : QtDockTitleGlyph::Float,
+                                     effective->palette);
+    }
+  }
+  return QProxyStyle::standardIcon(icon, option, widget);
+}
+
 void QtUiScaleProxyStyle::drawControl(ControlElement element,
                                       const QStyleOption *option,
                                       QPainter *painter,
@@ -304,6 +339,14 @@ void QtUiScaleProxyStyle::drawComplexControl(
 int QtUiScaleProxyStyle::styleHint(StyleHint hint, const QStyleOption *option,
                                    const QWidget *widget,
                                    QStyleHintReturn *return_data) const {
+  if (hint == SH_DockWidget_ButtonsHaveFrame && widget != nullptr) {
+    QStyleOption dock_option;
+    dock_option.initFrom(widget);
+    if (qt_application_style_active(option != nullptr ? option : &dock_option)) {
+      // Fusion's framed dock buttons shrink the icon from 16 to 10 pixels.
+      return 0;
+    }
+  }
   if (hint == SH_Menu_Mask && qobject_cast<const QMenu *>(widget) != nullptr &&
       qt_application_style_active(option)) {
     if (auto *mask = qstyleoption_cast<QStyleHintReturnMask *>(return_data)) {

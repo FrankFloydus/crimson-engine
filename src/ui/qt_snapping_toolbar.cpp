@@ -175,6 +175,21 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
   addWidget(angle_combo_);
   addSeparator();
 
+  transform_space_action_ = addAction(
+      qt_multiresolution_icon(
+          QStringLiteral(":/quader/icons/tool_transform_local.png")),
+      QStringLiteral("Local Transforms"));
+  transform_space_action_->setObjectName(
+      QStringLiteral("toggle_transform_space"));
+  transform_space_action_->setCheckable(true);
+  QObject::connect(transform_space_action_, &QAction::triggered, this,
+                   [this](bool) {
+                     transform_presentation_stamp_.reset();
+                     if (transform_space_toggle_requested_) {
+                       transform_space_toggle_requested_();
+                     }
+                   });
+
   QObject::connect(grid_size_combo_, &QComboBox::activated, this,
                    [this](int index) {
                      presented_state_.reset();
@@ -221,6 +236,12 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
 
   QStyle &button_presentation =
       install_native_toolbar_button_presentation(*this);
+  configure_native_toolbar_button_face(
+      *this, *transform_space_action_, button_presentation);
+  if (auto *button =
+          qobject_cast<QToolButton *>(widgetForAction(transform_space_action_))) {
+    button->setFixedHeight(kTopToolbarButtonHeight);
+  }
   for (const ToggleAction &entry : toggle_actions_) {
     configure_native_toolbar_button_face(*this, *entry.action,
                                          button_presentation);
@@ -246,6 +267,15 @@ void QtSnappingToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   if (angle_combo_->minimumHeight() != scaled_control_height ||
       angle_combo_->maximumHeight() != scaled_control_height) {
     angle_combo_->setFixedHeight(scaled_control_height);
+  }
+  apply_native_toolbar_button_face_ui_scale(
+      *this, *transform_space_action_, metrics);
+  if (auto *button =
+          qobject_cast<QToolButton *>(widgetForAction(transform_space_action_));
+      button != nullptr &&
+      (button->minimumHeight() != scaled_control_height ||
+       button->maximumHeight() != scaled_control_height)) {
+    button->setFixedHeight(scaled_control_height);
   }
   for (const ToggleAction &entry : toggle_actions_) {
     apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
@@ -283,6 +313,12 @@ void QtSnappingToolbar::set_localization(
   angle_combo_->setAccessibleDescription(angle_tooltip_base_);
   angle_combo_->setToolTip(angle_tooltip_base_);
 
+  const QString transform_space_text = localized_text(
+      localization, "ui.toolbar.tools.transform_space", "Local Transforms");
+  transform_space_action_->setText(transform_space_text);
+  transform_space_action_->setToolTip(transform_space_text);
+  transform_presentation_stamp_.reset();
+
   for (const ToggleAction &entry : toggle_actions_) {
     const QString text = localized_text(localization, entry.localization_key,
                                         entry.fallback);
@@ -294,6 +330,8 @@ void QtSnappingToolbar::set_localization(
 
 void QtSnappingToolbar::synchronize(const QuaderEditorApi &editor,
                                     bool force) {
+  synchronize_transform_space(editor, force);
+
   const auto &preferences = editor.preferences();
   const PresentedState state{
       .grid_preset = editor.viewports().grid_preset(),
@@ -366,6 +404,46 @@ void QtSnappingToolbar::synchronize(const QuaderEditorApi &editor,
   }
 
   presented_state_ = state;
+}
+
+void QtSnappingToolbar::synchronize_transform_space(
+    const QuaderEditorApi &editor, bool force) {
+  const TransformPresentationStamp stamp{
+      .editor = &editor,
+      .transform_space_revision = editor.viewports().transform_space_revision(),
+      .keybindings_revision = editor.commands().keybindings_revision(),
+  };
+  if (!force && transform_presentation_stamp_ == stamp) {
+    return;
+  }
+
+  const std::optional<QuaderCommandDescriptor> command =
+      editor.commands().descriptor(
+          quader_command::kViewportToggleTransformSpace);
+  const bool enabled = command.has_value() && command->enabled;
+  if (transform_space_action_->isEnabled() != enabled) {
+    transform_space_action_->setEnabled(enabled);
+  }
+  const bool local =
+      editor.viewports().transform_space() == QuaderTransformSpace::Local;
+  if (transform_space_action_->isChecked() != local) {
+    const QSignalBlocker blocker(transform_space_action_);
+    transform_space_action_->setChecked(local);
+  }
+  QString tooltip = transform_space_action_->text();
+  if (command.has_value() && !command->shortcut.empty()) {
+    tooltip.append(QStringLiteral(" [%1]")
+                       .arg(QString::fromStdString(command->shortcut)));
+  }
+  if (transform_space_action_->toolTip() != tooltip) {
+    transform_space_action_->setToolTip(tooltip);
+  }
+  transform_presentation_stamp_ = stamp;
+}
+
+void QtSnappingToolbar::set_transform_space_toggle_requested_callback(
+    std::function<void()> callback) {
+  transform_space_toggle_requested_ = std::move(callback);
 }
 
 void QtSnappingToolbar::set_grid_preset_requested_callback(

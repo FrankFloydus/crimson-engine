@@ -150,7 +150,7 @@ stylesheets. These are Quader's current **Active** design values, not published 
 | `Mid` / `Midlight` | `#2C2D30` / `#36373B` | Quiet section edges; field/checkbox/popup boundaries |
 | `Light` | `#414246` | Stronger interaction edge where the shared style uses it |
 | `Dark` / `Shadow` | `#252629` / `#08090A` | Recessed edges and pressed blends |
-| `Highlight` / `HighlightedText` | `#302738` / `#ECE5F5` | Restrained purple selection and its text |
+| `Highlight` / `HighlightedText` | `#493A55` / `#ECE5F5` | Readable purple selection and its text |
 | `Accent` | `#9A64D8` | Quader logo purple, focus and active indicators |
 | `Link` / `LinkVisited` | `#D6BDF3` / `#BEA5D8` | Links |
 

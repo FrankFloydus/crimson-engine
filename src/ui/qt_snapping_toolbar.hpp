@@ -10,6 +10,7 @@
 #include <QToolBar>
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string_view>
@@ -26,7 +27,7 @@ class QuaderEditorApi;
 class QtUiScaleMetrics;
 
 /**
- * Presents retained grid and snapping controls as one movable native toolbar.
+ * Presents retained transform-space, grid and snapping controls in one toolbar.
  * Preference, viewport, command, and keybinding truth remain public API owned.
  */
 class QtSnappingToolbar final : public QToolBar {
@@ -37,6 +38,8 @@ public:
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor, bool force = false);
 
+  void set_transform_space_toggle_requested_callback(
+      std::function<void()> callback);
   void set_grid_preset_requested_callback(std::function<void(int)> callback);
   void set_rotation_snap_degrees_requested_callback(
       std::function<void(double)> callback);
@@ -50,6 +53,8 @@ public:
       std::function<void(bool)> callback);
 
 private:
+  void synchronize_transform_space(const QuaderEditorApi &editor, bool force);
+
   /// Binds one stable snapping preference to its retained presentation action.
   struct ToggleAction {
     QAction *action = nullptr;
@@ -66,15 +71,27 @@ private:
     bool operator==(const PresentedState &) const = default;
   };
 
+  /// Gates command and shortcut queries independently of snapping preferences.
+  struct TransformPresentationStamp {
+    const QuaderEditorApi *editor = nullptr;
+    std::uint64_t transform_space_revision = 0;
+    std::uint64_t keybindings_revision = 0;
+
+    bool operator==(const TransformPresentationStamp &) const = default;
+  };
+
   QLabel *grid_label_ = nullptr;
   QComboBox *grid_size_combo_ = nullptr;
   QLabel *angle_label_ = nullptr;
   QComboBox *angle_combo_ = nullptr;
+  QAction *transform_space_action_ = nullptr;
   std::array<ToggleAction, 4> toggle_actions_{};
   std::array<std::function<void(bool)>, 4> toggle_requested_{};
   std::optional<PresentedState> presented_state_;
+  std::optional<TransformPresentationStamp> transform_presentation_stamp_;
   QString grid_tooltip_base_;
   QString angle_tooltip_base_;
+  std::function<void()> transform_space_toggle_requested_;
   std::function<void(int)> grid_preset_requested_;
   std::function<void(double)> rotation_snap_degrees_requested_;
 };

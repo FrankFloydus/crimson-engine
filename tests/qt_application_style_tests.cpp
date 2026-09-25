@@ -8,15 +8,20 @@
 
 #include "ui/qt_application_style.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAction>
+#include <QAbstractButton>
 #include <QApplication>
 #include <QDir>
+#include <QDockWidget>
+#include <QEvent>
 #include <QIcon>
 #include <QImage>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMainWindow>
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
@@ -84,6 +89,17 @@ QImage render_menu_item(const QStyle &style,
   QPainter painter(&image);
   painter.setFont(option.font);
   style.drawControl(QStyle::CE_MenuItem, &option, &painter, &menu);
+  return image;
+}
+
+QImage render_dock_title(const QStyle &style,
+                         const QStyleOptionDockWidget &option,
+                         const QDockWidget &dock) {
+  QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QPainter painter(&image);
+  painter.setFont(dock.font());
+  style.drawControl(QStyle::CE_DockWidgetTitle, &option, &painter, &dock);
   return image;
 }
 
@@ -631,4 +647,125 @@ TEST_F(QtApplicationStyleTests, HighContrastMenusKeepNativePaintAndSizing) {
     fusion->drawPrimitive(QStyle::PE_PanelMenu, &option, &painter, &menu);
   }
   EXPECT_EQ(themed_panel, native_panel);
+}
+
+TEST_F(QtApplicationStyleTests,
+       DockTitlesUsePrimaryTextAndASeparateSurfaceAcrossStateScaleAndDirection) {
+  for (const float factor : {1.0F, 2.0F}) {
+    const quader::QtUiScaleMetrics metrics(factor);
+    quader::QtUiScaleProxyStyle style(metrics);
+    QDockWidget dock;
+    QFont font = dock.font();
+    font.setPointSizeF(10.0);
+    dock.setFont(metrics.font(font));
+    for (const auto group : {QPalette::Active, QPalette::Inactive}) {
+      for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+        for (const bool vertical : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << factor << ' ' << group << ' ' << direction << ' '
+                       << vertical);
+          QStyleOptionDockWidget option;
+          option.rect = QRect(QPoint{}, metrics.size(vertical ? QSize(32, 320)
+                                                              : QSize(320, 32)));
+          option.palette = QApplication::palette();
+          option.palette.setCurrentColorGroup(group);
+          option.state = QStyle::State_Enabled |
+                         (group == QPalette::Active ? QStyle::State_Active
+                                                    : QStyle::State_None);
+          option.direction = direction;
+          option.title = QStringLiteral("Outliner");
+          option.closable = true;
+          option.floatable = true;
+          option.movable = true;
+          option.verticalTitleBar = vertical;
+          const QImage title = render_dock_title(style, option, dock);
+          const QColor surface = option.palette.color(group, QPalette::Button);
+          EXPECT_TRUE(contains_color(title, surface));
+          EXPECT_TRUE(contains_color(title,
+                                     option.palette.color(group, QPalette::Text)));
+          EXPECT_TRUE(contains_color(title,
+                                     option.palette.color(group, QPalette::Midlight)));
+          EXPECT_NE(surface, option.palette.color(group, QPalette::Base));
+          EXPECT_GE(contrast_ratio(option.palette.color(group, QPalette::Text),
+                                   surface), 4.5);
+          QStyleOptionDockWidget empty = option;
+          empty.title.clear();
+          EXPECT_NE(title, render_dock_title(style, empty, dock));
+        }
+      }
+    }
+  }
+}
+
+TEST_F(QtApplicationStyleTests,
+       DockGlyphsSurviveNativeFeatureDirectionStyleAndFloatingChanges) {
+  quader::QtUiScaleProxyStyle style;
+  QMainWindow window;
+  QDockWidget dock(QStringLiteral("Outliner"), &window);
+  dock.setStyle(&style);
+  dock.setWidget(new QWidget(&dock));
+  window.addDockWidget(Qt::LeftDockWidgetArea, &dock);
+  quader::install_palette_aware_dock_title_presentation(dock);
+  window.resize(360, 260);
+  window.show();
+  QCoreApplication::processEvents();
+
+  const auto expect_readable_buttons = [&dock, &style]() {
+    for (const auto glyph : {quader::QtDockTitleGlyph::Close,
+                             quader::QtDockTitleGlyph::Float}) {
+      QAbstractButton *button = dock.findChild<QAbstractButton *>(
+          glyph == quader::QtDockTitleGlyph::Close
+              ? QStringLiteral("qt_dockwidget_closebutton")
+              : QStringLiteral("qt_dockwidget_floatbutton"),
+          Qt::FindDirectChildrenOnly);
+      ASSERT_NE(button, nullptr);
+      const QIcon expected = quader::qt_dock_title_glyph_icon(glyph, dock.palette());
+      EXPECT_EQ(button->icon().pixmap(QSize(24, 24)).toImage(),
+                expected.pixmap(QSize(24, 24)).toImage());
+      EXPECT_FALSE(button->accessibleName().isEmpty());
+      EXPECT_EQ(style.styleHint(QStyle::SH_DockWidget_ButtonsHaveFrame,
+                                 nullptr, button), 0);
+    }
+  };
+  expect_readable_buttons();
+  dock.setFeatures(QDockWidget::DockWidgetClosable |
+                   QDockWidget::DockWidgetFloatable);
+  expect_readable_buttons();
+  dock.setLayoutDirection(Qt::RightToLeft);
+  expect_readable_buttons();
+  QEvent style_change(QEvent::StyleChange);
+  QApplication::sendEvent(&dock, &style_change);
+  expect_readable_buttons();
+  dock.setFloating(true);
+  dock.setFloating(false);
+  QCoreApplication::processEvents();
+  expect_readable_buttons();
+  window.close();
+}
+
+TEST_F(QtApplicationStyleTests, HighContrastDockTitlesAndIconsUseNativeStyle) {
+  QApplication::setPalette(QPalette{});
+  quader::QtUiScaleProxyStyle style;
+  std::unique_ptr<QStyle> fusion(QStyleFactory::create(QStringLiteral("fusion")));
+  ASSERT_NE(fusion, nullptr);
+  QDockWidget dock(QStringLiteral("Outliner"));
+  QStyleOptionDockWidget option;
+  option.rect = QRect(0, 0, 320, 32);
+  option.palette = QApplication::palette();
+  option.state = kEnabledState;
+  option.title = dock.windowTitle();
+  option.closable = true;
+  option.floatable = true;
+  for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+    option.direction = direction;
+    EXPECT_EQ(render_dock_title(style, option, dock),
+              render_dock_title(*fusion, option, dock));
+    for (const auto icon : {QStyle::SP_TitleBarCloseButton,
+                            QStyle::SP_TitleBarNormalButton}) {
+      EXPECT_EQ(style.standardIcon(icon, &option, &dock)
+                    .pixmap(QSize(24, 24)).toImage(),
+                fusion->standardIcon(icon, &option, &dock)
+                    .pixmap(QSize(24, 24)).toImage());
+    }
+  }
 }

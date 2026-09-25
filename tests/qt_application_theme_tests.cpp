@@ -739,7 +739,7 @@ TEST(QtApplicationThemeTests,
   expect_color(palette, QPalette::Active, QPalette::Mid, 0x2c2d30);
   expect_color(palette, QPalette::Active, QPalette::Dark, 0x252629);
   expect_color(palette, QPalette::Active, QPalette::Shadow, 0x08090a);
-  expect_color(palette, QPalette::Active, QPalette::Highlight, 0x302738);
+  expect_color(palette, QPalette::Active, QPalette::Highlight, 0x493a55);
   expect_color(palette, QPalette::Active, QPalette::HighlightedText, 0xece5f5);
   expect_color(palette, QPalette::Active, QPalette::Accent, 0x9a64d8);
   expect_color(palette, QPalette::Active, QPalette::Link, 0xd6bdf3);
@@ -749,7 +749,7 @@ TEST(QtApplicationThemeTests,
   expect_color(palette, QPalette::Inactive, QPalette::Text, 0xd4d6dc);
   expect_color(palette, QPalette::Inactive, QPalette::ButtonText, 0xcacdd4);
   expect_color(palette, QPalette::Inactive, QPalette::Button, 0x222326);
-  expect_color(palette, QPalette::Inactive, QPalette::Highlight, 0x2a2431);
+  expect_color(palette, QPalette::Inactive, QPalette::Highlight, 0x413947);
   expect_color(palette, QPalette::Inactive, QPalette::HighlightedText,
                0xd6d3dc);
   expect_color(palette, QPalette::Inactive, QPalette::Accent, 0xa084c2);
@@ -788,6 +788,23 @@ TEST(QtApplicationThemeTests,
                              alternate),
               contrast_ratio(base, alternate))
         << "tinted selection must remain clearer than row striping";
+  }
+}
+
+TEST(QtApplicationThemeTests,
+     SelectionRemainsDistinctFromRowsAndHeadersWhenFocusLeavesTheWindow) {
+  const QPalette palette =
+      quader::qt_obsidian_application_palette(QPalette{});
+  for (const QPalette::ColorGroup group :
+       {QPalette::Active, QPalette::Inactive}) {
+    // A readable text color alone does not make the selected surface visible.
+    // Keep a deliberate luminance step above both alternating row backgrounds.
+    expect_contrast(palette, group, QPalette::Highlight, QPalette::Base, 1.5);
+    expect_contrast(palette, group, QPalette::Highlight,
+                    QPalette::AlternateBase, 1.5);
+    expect_contrast(palette, group, QPalette::Highlight, QPalette::Button, 1.3);
+    expect_contrast(palette, group, QPalette::HighlightedText,
+                    QPalette::Highlight, 7.0);
   }
 }
 
@@ -1070,27 +1087,10 @@ TEST(QtApplicationThemeTests,
 
   const QString style_sheet =
       quader::qt_dock_title_style_sheet(palette, doubled);
-  EXPECT_TRUE(style_sheet.contains(QStringLiteral("padding: 4px 16px")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("width: 44px")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("height: 44px")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("icon-size: 36px")));
-  EXPECT_TRUE(style_sheet.contains(QStringLiteral("border-bottom: 1px")));
   EXPECT_TRUE(style_sheet.contains(QStringLiteral("border: 2px solid")));
-}
-
-TEST(QtApplicationThemeTests,
-     ResolvesInactiveDockTitleColorsFromTheInactivePaletteGroup) {
-  QPalette palette = dock_surface_palette(QColor(0, 0, 0),
-                                          QColor(173, 128, 244));
-  palette.setColor(QPalette::Active, QPalette::AlternateBase,
-                   QColor(255, 255, 255));
-  palette.setColor(QPalette::Inactive, QPalette::Text,
-                   QColor(230, 225, 235));
-
-  const QString style_sheet = quader::qt_dock_title_style_sheet(palette);
-  EXPECT_TRUE(style_sheet.contains(QStringLiteral("background-color: #000000")));
-  EXPECT_TRUE(style_sheet.contains(QStringLiteral("color: #e6e1eb")));
-  EXPECT_FALSE(style_sheet.contains(QStringLiteral("url(")));
 }
 
 TEST(QtApplicationThemeTests,

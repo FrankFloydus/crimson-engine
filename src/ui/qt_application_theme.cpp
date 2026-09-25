@@ -55,7 +55,7 @@ void apply_shared_obsidian_roles(QPalette &palette) {
 
   // Quader's logo supplies the purple accent (#9a64d8) and pale companion
   // (#d6bdf3). Selection uses a restrained tint rather than a solid brand fill.
-  palette.setColor(kAllGroups, QPalette::Highlight, QColor(48, 39, 56));
+  palette.setColor(kAllGroups, QPalette::Highlight, QColor(73, 58, 85));
   palette.setColor(kAllGroups, QPalette::HighlightedText,
                    QColor(236, 229, 245));
   palette.setColor(kAllGroups, QPalette::Accent, QColor(154, 100, 216));
@@ -70,7 +70,7 @@ void apply_inactive_obsidian_roles(QPalette &palette) {
   palette.setColor(kGroup, QPalette::ButtonText, QColor(202, 205, 212));
   palette.setColor(kGroup, QPalette::PlaceholderText, QColor(125, 129, 138));
   palette.setColor(kGroup, QPalette::Button, QColor(34, 35, 38));
-  palette.setColor(kGroup, QPalette::Highlight, QColor(42, 36, 49));
+  palette.setColor(kGroup, QPalette::Highlight, QColor(65, 57, 71));
   palette.setColor(kGroup, QPalette::HighlightedText, QColor(214, 211, 220));
   palette.setColor(kGroup, QPalette::Accent, QColor(160, 132, 194));
   palette.setColor(kGroup, QPalette::Link, QColor(194, 174, 219));

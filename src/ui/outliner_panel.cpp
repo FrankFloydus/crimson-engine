@@ -494,6 +494,7 @@ struct OutlinerPanel::Impl {
     model_->setColumnCount(column_index(OutlinerColumn::Count));
     tree_->setModel(model_);
     refresh_headers();
+    tree_->setHeaderHidden(true);
 
     QHeaderView *header = tree_->header();
     header->setSectionsMovable(false);

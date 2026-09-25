@@ -27,7 +27,7 @@ qt_dock_title_surface_uses_light_glyph(const QColor &surface);
 [[nodiscard]] QIcon qt_dock_title_glyph_icon(
     QtDockTitleGlyph glyph, const QPalette &palette);
 
-/** Builds the scoped, palette-role-based dock title presentation. */
+/** Styles dock buttons; the shared native style paints the title itself. */
 [[nodiscard]] QString
 qt_dock_title_style_sheet(const QPalette &palette);
 

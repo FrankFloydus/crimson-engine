@@ -14,6 +14,7 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
@@ -26,11 +27,14 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QContextMenuEvent>
+#include <QDir>
+#include <QDockWidget>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLayout>
 #include <QLineEdit>
+#include <QMainWindow>
 #include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
@@ -284,6 +288,91 @@ TEST_F(OutlinerPanelDropTests, EmptySceneHasNoRowAndObjectsAppearAsEditableRoots
 }
 
 TEST_F(OutlinerPanelDropTests,
+       HeaderlessTreeRetainsSelectionAndReadableRowsAcrossScaleAndFocus) {
+  quader::apply_qt_obsidian_application_theme(application_.palette());
+  quader::QtUiScaleApplicationController scale_controller(application_);
+  const auto group = create("Environment");
+  const auto box = create("Box", group);
+  create("Floor", group);
+  const auto hidden = create("Hidden reference");
+  ASSERT_TRUE(editor_.scene().set_visible(hidden, false).ok());
+  ASSERT_TRUE(editor_.scene().select(box).ok());
+
+  QMainWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto *dock = new QDockWidget(QStringLiteral("Outliner"), &window);
+  auto *panel = new quader::OutlinerPanel(dock);
+  dock->setWidget(panel);
+  window.addDockWidget(Qt::LeftDockWidgetArea, dock);
+  quader::install_palette_aware_dock_title_presentation(*dock);
+  panel->refresh(context_);
+  auto *tree = panel->findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  tree->expandAll();
+  const QPersistentModelIndex box_index(find_entity_index(*tree->model(), box));
+  ASSERT_TRUE(box_index.isValid());
+
+  int baseline_title_pixels = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    const auto &metrics = scale_controller.metrics();
+    panel->apply_ui_scale(metrics);
+    quader::apply_ui_scale_to_palette_aware_dock_title_presentation(*dock, metrics);
+    window.resize(320, metrics.px(240));
+    window.show();
+    panel->refresh(context_);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(tree->isHeaderHidden());
+    EXPECT_EQ(tree->model()->columnCount(), 1);
+    EXPECT_TRUE(box_index.isValid());
+    EXPECT_TRUE(tree->selectionModel()->isSelected(box_index));
+    EXPECT_GE(tree->visualRect(box_index).height(), tree->fontMetrics().height());
+    EXPECT_EQ(tree->visualRect(tree->model()->index(0, 0)).top(), 0)
+        << "the hidden table header must leave no blank strip above the tree";
+
+    for (const bool active : {true, false}) {
+      QApplication::setActiveWindow(active ? &window : nullptr);
+      if (active) {
+        tree->setFocus();
+      } else {
+        tree->clearFocus();
+      }
+      QCoreApplication::processEvents();
+      EXPECT_TRUE(tree->selectionModel()->isSelected(box_index));
+      QImage image(dock->size(), QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      dock->render(&image);
+      const auto color_group = active ? QPalette::Active : QPalette::Inactive;
+      if (active) {
+        const int title_pixels = count_pixels(
+            image.copy(0, 0, image.width(), panel->y()),
+            dock->palette().color(color_group, QPalette::Text));
+        EXPECT_GT(title_pixels, 0);
+        if (factor == 1.0F) {
+          baseline_title_pixels = title_pixels;
+        } else {
+          EXPECT_GT(title_pixels, baseline_title_pixels * 2)
+              << "the actual native dock title must scale with its content";
+        }
+      }
+      EXPECT_GT(count_pixels(image, tree->palette().color(
+                                        color_group, QPalette::Highlight)), 100)
+          << "selection must remain visibly painted after focus leaves";
+
+      const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+      if (!review_directory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(review_directory));
+        const QString filename = QStringLiteral("outliner-%1-%2.png")
+                                     .arg(active ? QStringLiteral("active")
+                                                 : QStringLiteral("inactive"))
+                                     .arg(qRound(factor * 100.0F));
+        EXPECT_TRUE(image.save(QDir(review_directory).filePath(filename)));
+      }
+    }
+  }
+}
+
+TEST_F(OutlinerPanelDropTests,
        MultiSelectionMovesIntoAndOutOfGroupsWithWorldPlacementAndSingleUndo) {
   const quader::EntityId first = create("First");
   const quader::EntityId second = create("Second");
@@ -462,6 +551,7 @@ TEST(OutlinerPanelTests, TreeFillsThePanelContentsRect) {
   EXPECT_TRUE(tree->dragEnabled());
   EXPECT_EQ(tree->dragDropMode(), QAbstractItemView::InternalMove);
   EXPECT_EQ(tree->model()->columnCount(), 1);
+  EXPECT_TRUE(tree->isHeaderHidden());
 
   EXPECT_EQ(tree->editTriggers(), QAbstractItemView::EditKeyPressed)
       << "double-click remains available for tree expansion; F2 and the "

@@ -70,6 +70,10 @@ public:
                    const QSize &contents_size,
                    const QWidget *widget = nullptr) const override;
 
+  [[nodiscard]] QIcon
+  standardIcon(StandardPixmap icon, const QStyleOption *option = nullptr,
+                const QWidget *widget = nullptr) const override;
+
   void drawControl(ControlElement element, const QStyleOption *option,
                    QPainter *painter,
                    const QWidget *widget = nullptr) const override;

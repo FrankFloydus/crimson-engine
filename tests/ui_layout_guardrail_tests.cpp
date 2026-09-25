@@ -315,19 +315,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(dock_source, "float_button->setIcon(");
   expect_contains(dock_source, "quader-dock-palette");
   expect_contains(dock_source, "QApplication::palette()");
-  expect_contains(dock_source, "QDockWidget::title");
-  expect_contains(dock_source, "QDockWidget::title:active");
-  expect_contains(dock_source,
-                  "palette.color(QPalette::Inactive, QPalette::AlternateBase)");
-  expect_contains(dock_source,
-                  "palette.color(QPalette::Inactive, QPalette::Text)");
+  // Native title rendering and lifecycle icon replacement are covered by
+  // QtApplicationStyleTests; title QSS would intercept that shared painter.
+  expect_missing(dock_source, "QDockWidget::title {");
   expect_contains(dock_source,
                   "palette.color(QPalette::Active, QPalette::Button)");
-  expect_contains(dock_source,
-                  "palette.color(QPalette::Active, QPalette::ButtonText)");
-  expect_contains(dock_source, "width: %11px");
-  expect_contains(dock_source, "height: %11px");
-  expect_contains(dock_source, "icon-size: %12px");
   expect_contains(dock_source, ".arg(metrics.px(18))");
   expect_contains(dock_source, ".arg(metrics.px(22))");
   expect_contains(dock_source, "QDockWidget::close-button:hover");
@@ -336,7 +328,6 @@ TEST(UiLayoutGuardrailTests,
                   "palette.color(QPalette::Active, QPalette::Accent)");
   expect_contains(dock_source, "QDockWidget::close-button:pressed");
   expect_contains(dock_source, "QDockWidget::float-button:pressed");
-  expect_contains(dock_source, "border: 2px solid %8");
   expect_contains(create_dock,
                   "install_palette_aware_dock_title_presentation(*dock)");
   expect_contains(dock_source, "QGuiApplication::paletteChanged");
@@ -772,7 +763,6 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(inspector, "tree_->setColumnCount(2)");
   expect_contains(inspector, "tree_->setUniformRowHeights(false)");
-  expect_contains(inspector, "tree_->header()->setVisible(true)");
   expect_contains(inspector, "tree_->header()->setSectionsMovable(false)");
   expect_contains(
       inspector,
@@ -1816,7 +1806,6 @@ TEST(UiLayoutGuardrailTests,
     EXPECT_NE(icon_position, std::string::npos) << icon;
     previous_icon = icon_position + icon.size();
   }
-  expect_contains(toolbar, "tool_transform_local.png");
 
   expect_contains(ui_system,
                   "addToolBar(Qt::LeftToolBarArea, tool_toolbar_)");
@@ -1834,17 +1823,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system,
                   "toolbar_owner_presenter_.needs_refresh(owner_stamp)");
   expect_contains(toolbar, "editor.tools().active_tool()");
-  expect_contains(toolbar, "editor.viewports().transform_space_revision()");
-  expect_contains(toolbar,
-                  "quader_command::kViewportToggleTransformSpace");
-  expect_contains(toolbar, "QSignalBlocker blocker(transform_space_action_)");
-  expect_contains(toolbar,
-                  "if (spec.tool == ViewportToolId::Pivot ||");
-  expect_contains(toolbar, "spec.tool == ViewportToolId::Scale &&");
-  expect_contains(toolbar,
-                  "!release_allows_tool(viewport_tool_catalog_id(ViewportToolId::Pivot))");
-  expect_missing(toolbar,
-                 "action_group->addAction(transform_space_action_)");
   expect_contains(toolbar,
                   "command_id_for_tool_activation(entry.tool_id)");
   expect_contains(toolbar,
@@ -1870,11 +1848,6 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(shortcut_lookup, std::string::npos);
   EXPECT_LT(unchanged_state_gate, command_lookup);
   EXPECT_LT(unchanged_state_gate, shortcut_lookup);
-  const std::size_t transform_command_lookup = toolbar.find(
-      "editor.commands().descriptor(\n"
-      "          quader_command::kViewportToggleTransformSpace)");
-  ASSERT_NE(transform_command_lookup, std::string::npos);
-  EXPECT_LT(unchanged_state_gate, transform_command_lookup);
   expect_contains(toolbar, "QStringLiteral(\" [%1]\")");
   expect_contains(menu_header, "tool_toolbar_visible");
   expect_contains(menu_header, "set_tool_toolbar_visible");
@@ -1968,6 +1941,14 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(unchanged_state_gate, std::string::npos);
   ASSERT_NE(shortcut_lookup, std::string::npos);
   EXPECT_LT(unchanged_state_gate, shortcut_lookup);
+  const std::size_t transform_gate = toolbar.find(
+      "if (!force && transform_presentation_stamp_ == stamp)");
+  const std::size_t transform_command_lookup = toolbar.find(
+      "editor.commands().descriptor(\n"
+      "          quader_command::kViewportToggleTransformSpace)");
+  ASSERT_NE(transform_gate, std::string::npos);
+  ASSERT_NE(transform_command_lookup, std::string::npos);
+  EXPECT_LT(transform_gate, transform_command_lookup);
   expect_contains(toolbar,
                   "grid_size_combo_->currentIndex() != selected_index");
   expect_contains(toolbar, "grid_size_combo_->toolTip() != tooltip");
