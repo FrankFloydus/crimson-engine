@@ -9,6 +9,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "core/localization_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
@@ -17,6 +18,7 @@
 #include "ui/qt_viewport_panel.hpp"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
 #include <QEvent>
@@ -36,6 +38,7 @@
 
 #include <memory>
 #include <array>
+#include <filesystem>
 #include <string_view>
 #include <utility>
 
@@ -136,6 +139,7 @@ protected:
   std::unique_ptr<quader::QuaderEditorApi> editor_;
   std::unique_ptr<quader::QtViewportPanel> host_;
   quader::QtToolSettingsPanel *settings_ = nullptr;
+  quader::LocalizationService localization_;
 };
 
 /// Counts presentation mutations independently of the host's retained-work counter.
@@ -177,7 +181,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   auto *header = settings_->findChild<QToolButton *>(
       QStringLiteral("tool_settings.target_title"));
   ASSERT_NE(header, nullptr);
-  EXPECT_EQ(header->text(), QStringLiteral("Create Primitive"));
+  EXPECT_EQ(header->text(), QStringLiteral("Create Box"));
   EXPECT_TRUE(header->isChecked());
   EXPECT_EQ(header->arrowType(), Qt::DownArrow);
   header->click();
@@ -213,6 +217,88 @@ TEST_F(QtViewportSettingsOverlayTests,
 }
 
 TEST_F(QtViewportSettingsOverlayTests,
+       PrimitiveVariantStartsANewLocalizedSettingsOperationWithoutATypePicker) {
+  ASSERT_TRUE(localization_.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "it-IT"));
+  settings_->set_localization(localization_);
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  ASSERT_TRUE(editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Box).ok());
+  refresh();
+  auto *header = settings_->findChild<QToolButton *>(QStringLiteral("tool_settings.target_title"));
+  ASSERT_NE(header, nullptr);
+  EXPECT_EQ(header->text(), QStringLiteral("Crea box"));
+  EXPECT_EQ(settings_->findChild<QComboBox *>(QStringLiteral("tool_settings.control.primitive.type")), nullptr);
+  settings_->set_expanded(false);
+  const auto first_origin = editor_->tools().active_settings_presentation_origin();
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
+  const auto repeated = editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Box);
+  ASSERT_TRUE(repeated.ok());
+  EXPECT_FALSE(repeated.changed());
+  refresh();
+  EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), first_origin);
+  EXPECT_FALSE(settings_->expanded());
+  EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Top));
+
+  ASSERT_TRUE(editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Sphere).ok());
+  refresh();
+  EXPECT_EQ(header->text(), QStringLiteral("Crea sfera"));
+  EXPECT_TRUE(settings_->expanded());
+  EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Side));
+  EXPECT_GT(editor_->tools().active_settings_presentation_origin().serial, first_origin.serial);
+  EXPECT_EQ(settings_->findChild<QComboBox *>(QStringLiteral("tool_settings.control.primitive.type")), nullptr);
+  auto *sphere_type = settings_->findChild<QComboBox *>(QStringLiteral("tool_settings.control.primitive.sphere.type"));
+  ASSERT_NE(sphere_type, nullptr);
+  EXPECT_EQ(sphere_type->count(), 2);
+  const auto sphere_origin = editor_->tools().active_settings_presentation_origin();
+  ASSERT_TRUE(editor_->tools().set_setting(quader::kCreatePrimitiveToolId,
+                                         quader::kSphereTypeSetting, "quad").ok());
+  refresh();
+  EXPECT_NE(settings_->findChild<QWidget *>(QStringLiteral("tool_settings.control.primitive.sphere.subdivision")), nullptr);
+  EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), sphere_origin);
+  EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Side));
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
+       PrimitiveSwitchRetiresHeldFootprintReleaseBeforeDrawingTheNextShape) {
+  auto *surface = host_->surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+  ASSERT_TRUE(session_->viewport_workspace().camera(quader::ViewportPaneId::Perspective)
+      .restore_perspective_pose({.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
+  ASSERT_TRUE(editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Box).ok());
+  process_input();
+  QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
+                   Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &press);
+  process_input();
+  QMouseEvent drag(QEvent::MouseMove, {500, 430}, {500, 430},
+                  Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &drag);
+  process_input();
+  ASSERT_EQ(session_->modeling().box_drag_state(), quader::ModelingBoxDragState::Footprint);
+  ASSERT_TRUE(editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Sphere).ok());
+  // Sample the held packet, then its release: neither belongs to the new tool.
+  process_input();
+  QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
+                     Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(surface, &release);
+  process_input();
+  EXPECT_TRUE(session_->modeling().objects().empty());
+  EXPECT_EQ(session_->primitive_creation().shape_count(), 0u);
+  EXPECT_EQ(session_->modeling().box_drag_state(), quader::ModelingBoxDragState::Idle);
+  EXPECT_FALSE(editor_->tools().live_primitive_creation().has_value());
+  QApplication::sendEvent(surface, &press);
+  process_input();
+  QApplication::sendEvent(surface, &release);
+  process_input();
+  ASSERT_EQ(session_->primitive_creation().shape_count(), 1u);
+  ASSERT_TRUE(editor_->tools().live_primitive_creation().has_value());
+  EXPECT_EQ(editor_->tools().live_primitive_creation()->shape, quader::QuaderPrimitiveCreationShape::Sphere);
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
        GeometryTracksPaneScaleAndLayoutWhileUnchangedFramesDoNoPresentationWork) {
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
@@ -227,7 +313,8 @@ TEST_F(QtViewportSettingsOverlayTests,
   ASSERT_NO_FATAL_FAILURE(expect_anchored(6));
   EXPECT_EQ(settings_->width(), 320);
 
-  host_->resize(700, 480);
+  // Four panes at this height cannot fit even the compact Box settings body.
+  host_->resize(700, 360);
   const quader::QtUiScaleMetrics scaled(1.5F, 1);
   settings_->apply_ui_scale(scaled);
   host_->apply_ui_scale(scaled);

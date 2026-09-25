@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "api/quader_editor_api.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
@@ -4287,26 +4288,20 @@ TEST(QtToolSettingsNumberSliderTests,
   ASSERT_TRUE(editor.tools().activate(active_tool).ok());
   window.refresh();
   QCoreApplication::processEvents();
-  auto *primitive_type = window.findChild<QComboBox *>(
-      QStringLiteral("tool_settings.control.primitive.type"));
-  ASSERT_NE(primitive_type, nullptr);
-  ASSERT_EQ(primitive_type->count(), 5);
-  EXPECT_EQ(primitive_type->currentData().toString(), QStringLiteral("box"));
-  const int cone_index = primitive_type->findData(QStringLiteral("cone"));
-  ASSERT_GE(cone_index, 0);
-  primitive_type->setCurrentIndex(cone_index);
+  EXPECT_EQ(window.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.type")), nullptr);
+  ASSERT_TRUE(editor.commands().execute(
+      quader::quader_command::kToolsActivateCreateCone).ok());
+  window.refresh();
   QCoreApplication::processEvents();
   EXPECT_EQ(editor.tools().active_primitive_type(), "cone");
   ASSERT_NE(window.findChild<QSpinBox *>(QStringLiteral(
                 "tool_settings.control.primitive.cone.side_count")),
             nullptr);
 
-  primitive_type = window.findChild<QComboBox *>(
-      QStringLiteral("tool_settings.control.primitive.type"));
-  ASSERT_NE(primitive_type, nullptr);
-  const int torus_index = primitive_type->findData(QStringLiteral("torus"));
-  ASSERT_GE(torus_index, 0);
-  primitive_type->setCurrentIndex(torus_index);
+  ASSERT_TRUE(editor.commands().execute(
+      quader::quader_command::kToolsActivateCreateTorus).ok());
+  window.refresh();
   QCoreApplication::processEvents();
   EXPECT_EQ(editor.tools().active_primitive_type(), "torus");
   ASSERT_NE(window.findChild<QSpinBox *>(QStringLiteral(
@@ -4319,13 +4314,9 @@ TEST(QtToolSettingsNumberSliderTests,
                 "tool_settings.control.primitive.torus.tube_radius_ratio")),
             nullptr);
 
-  primitive_type = window.findChild<QComboBox *>(
-      QStringLiteral("tool_settings.control.primitive.type"));
-  ASSERT_NE(primitive_type, nullptr);
-  const int cylinder_index =
-      primitive_type->findData(QStringLiteral("cylinder"));
-  ASSERT_GE(cylinder_index, 0);
-  primitive_type->setCurrentIndex(cylinder_index);
+  ASSERT_TRUE(editor.commands().execute(
+      quader::quader_command::kToolsActivateCreateCylinder).ok());
+  window.refresh();
   QCoreApplication::processEvents();
   EXPECT_EQ(editor.tools().active_primitive_type(), "cylinder");
 
@@ -4336,28 +4327,49 @@ TEST(QtToolSettingsNumberSliderTests,
                   .accept_preview(tool_settings_primitive_preview(),
                                   "Focused Settings Cylinder")
                   .ok);
-  primitive_type = window.findChild<QComboBox *>(
-      QStringLiteral("tool_settings.control.primitive.type"));
-  ASSERT_NE(primitive_type, nullptr);
-  primitive_type->setFocus(Qt::OtherFocusReason);
+  auto *sides_editor = sides->findChild<QLineEdit *>();
+  ASSERT_NE(sides_editor, nullptr);
+  sides_editor->setText(QStringLiteral("7"));
+  sides_editor->setFocus(Qt::OtherFocusReason);
   QCoreApplication::processEvents();
-  send_key_event(*primitive_type, Qt::Key_Return);
+  send_key_event(*sides_editor, Qt::Key_Return);
+  EXPECT_EQ(session.primitive_creation().cylinder_settings().side_count, 7);
+  EXPECT_EQ(editor.tools().active_primitive_type(), "cylinder");
+
+  // Sphere's topology choice remains a native combo after removing the shape
+  // picker. Its Return/Escape handling must keep the same editing semantics.
+  ASSERT_TRUE(editor.commands().execute(
+      quader::quader_command::kToolsActivateCreateSphere).ok());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(tool_settings_primitive_preview(),
+                                  "Focused Settings Sphere")
+                  .ok);
+  window.refresh();
+  QCoreApplication::processEvents();
+  auto *sphere_type = window.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.type"));
+  ASSERT_NE(sphere_type, nullptr);
+  ASSERT_EQ(sphere_type->count(), 2);
+  EXPECT_EQ(sphere_type->currentData().toString(), QStringLiteral("uv"));
+  sphere_type->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_event(*sphere_type, Qt::Key_Return);
 
   EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
   EXPECT_TRUE(editor.history().can_undo());
 
   active_tool = quader::ViewportToolId::CreatePrimitive;
-  ASSERT_TRUE(editor.tools().activate(active_tool).ok());
+  ASSERT_TRUE(editor.commands().execute(
+      quader::quader_command::kToolsActivateCreateSphere).ok());
   window.refresh();
   QCoreApplication::processEvents();
-  primitive_type = window.findChild<QComboBox *>(
-      QStringLiteral("tool_settings.control.primitive.type"));
-  ASSERT_NE(primitive_type, nullptr);
-  EXPECT_EQ(primitive_type->currentData().toString(),
-            QStringLiteral("cylinder"));
-  primitive_type->setFocus(Qt::OtherFocusReason);
+  sphere_type = window.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.type"));
+  ASSERT_NE(sphere_type, nullptr);
+  EXPECT_EQ(sphere_type->currentData().toString(), QStringLiteral("uv"));
+  sphere_type->setFocus(Qt::OtherFocusReason);
   QCoreApplication::processEvents();
-  send_key_event(*primitive_type, Qt::Key_Escape);
+  send_key_event(*sphere_type, Qt::Key_Escape);
 
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_TRUE(editor.history().can_undo());

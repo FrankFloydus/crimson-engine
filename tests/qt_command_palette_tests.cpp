@@ -110,6 +110,15 @@ TEST(QtCommandPaletteTests,
   EXPECT_TRUE(search->hasFocus());
   EXPECT_EQ(results->topLevelItemCount(), 0);
 
+  search->setText(QStringLiteral("tools.activate.create_primitive"));
+  EXPECT_EQ(find_command_item(*results,
+      quader_command::kToolsActivateCreatePrimitive.string()), nullptr);
+  search->setText(QStringLiteral("tools.activate.create_box"));
+  auto *create_box = find_command_item(*results,
+      quader_command::kToolsActivateCreateBox.string());
+  ASSERT_NE(create_box, nullptr);
+  EXPECT_EQ(create_box->text(2), QStringLiteral("Shift+B"));
+
   search->setText(QStringLiteral("select.all"));
   QTreeWidgetItem *select_all =
       find_command_item(*results, quader_command::kSelectAll.string());

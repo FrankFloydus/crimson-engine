@@ -1627,6 +1627,13 @@ TEST(QtCommandEventFilterTests,
         quader::quader_command::kToolsActivateSelect).ok());
     send_key_press(*view, Qt::Key_B, Qt::ShiftModifier, QStringLiteral("B"));
     EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+    EXPECT_EQ(editor.tools().active_primitive_type(), "box");
+    send_key_press(*view, Qt::Key_C, Qt::ShiftModifier, QStringLiteral("C"));
+    EXPECT_EQ(editor.tools().active_primitive_type(), "cylinder");
+    send_key_press(*view, Qt::Key_S, Qt::ShiftModifier, QStringLiteral("S"));
+    EXPECT_EQ(editor.tools().active_primitive_type(), "sphere");
+    send_key_press(*view, Qt::Key_B, Qt::ShiftModifier, QStringLiteral("B"));
+    EXPECT_EQ(editor.tools().active_primitive_type(), "box");
     EXPECT_EQ(view->currentIndex(), selected_before);
     EXPECT_EQ(browser->current_selected_material(), first);
     EXPECT_EQ(QApplication::focusWidget(), view);

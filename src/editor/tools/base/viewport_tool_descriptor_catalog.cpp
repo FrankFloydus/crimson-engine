@@ -87,7 +87,7 @@ constexpr std::array<ToolDescriptor, 18> kViewportToolDescriptors{{
         .modeling_tool = ModelingViewportTool::Box,
         .id = "create_primitive",
         .label = "Create Primitive",
-        .shortcut = "Shift+B",
+        .shortcut = "",
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,

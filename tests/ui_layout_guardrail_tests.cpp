@@ -1792,12 +1792,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "if (spec.separator_before)");
   expect_contains(toolbar, "addSeparator()");
   expect_contains(toolbar, "{ViewportToolId::CreatePrimitive,");
-  expect_contains(toolbar, "tool_create_primitive.png\", true");
+  expect_contains(toolbar, "tool_create_box.png\", true");
 
   std::size_t previous_icon = 0;
   for (std::string_view icon :
        {"tool_select.png", "tool_move.png", "tool_rotate.png",
-        "tool_scale.png", "tool_pivot.png", "tool_create_primitive.png",
+        "tool_scale.png", "tool_pivot.png", "tool_create_box.png",
         "tool_extrude.png",
         "tool_insert_edge_loop.png", "tool_knife.png", "tool_cut.png",
         "tool_poly.png", "tool_mirror.png", "tool_linear_array.png",
@@ -1834,6 +1834,11 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(button_presentation, "marker_rect");
   expect_missing(button_presentation, "setDown(");
   expect_contains(toolbar, "if (!force && synchronization_valid_");
+  expect_contains(toolbar, "QToolButton::DelayedPopup");
+  expect_contains(toolbar, "editor.tools().preferred_primitive_shape()");
+  expect_contains(toolbar, "synchronized_keybindings_revision_ == keybindings_revision");
+  expect_contains(toolbar, "synchronized_primitive_shape_ == primitive_shape");
+  expect_missing(toolbar, "setShortcut(");
   expect_contains(toolbar, "editor.commands().descriptor(command_id)");
   expect_contains(toolbar, "command.has_value() ? command->shortcut");
   expect_missing(toolbar, "editor.commands().available()");
@@ -2155,6 +2160,8 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(transform_space_revision, active_tool_revision_gate);
   expect_contains(refresh,
                   "toolbar_tool_presenter_.needs_refresh(tool_stamp)");
+  expect_contains(refresh, "editor_->tools().preferred_primitive_shape()");
+  expect_contains(refresh, "editor_->commands().keybindings_revision()");
   expect_contains(refresh,
                   "toolbar_transform_presenter_.needs_refresh(transform_stamp)");
   expect_missing(refresh, "editor_->tools().active_tool()");

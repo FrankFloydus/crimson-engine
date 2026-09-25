@@ -941,7 +941,7 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
       .active = true,
       .preview_active = primitive.shape_count() > 0U,
       .tool_id = std::string(kCreatePrimitiveToolId),
-      .title = "Create Primitive",
+      .title = "Create " + std::string(primitive_creation_default_name(*kind)),
       .description =
           "Draw a footprint, set its height, and refine the primitive before "
           "applying it.",
@@ -949,37 +949,9 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
       .apply_visible = true,
       .can_apply = primitive.can_apply(),
       .can_cancel = true,
+      .title_key = "keybindings.target.tools.activate.create_" +
+                   std::string(primitive_kind_setting_id(*kind)) + ".label",
   };
-  result.controls.push_back(choice_control(
-      std::string(kPrimitiveTypeSetting), "Primitive Type",
-      std::string(primitive_kind_setting_id(*kind)),
-      {
-          {.id = "box",
-           .label = "Box",
-           .value =
-               primitive_kind_setting_value(PrimitiveCreationKind::Box)},
-          {.id = "cylinder",
-           .label = "Cylinder",
-           .value = primitive_kind_setting_value(
-               PrimitiveCreationKind::Cylinder)},
-          {.id = "sphere",
-           .label = "Sphere",
-           .value =
-               primitive_kind_setting_value(PrimitiveCreationKind::Sphere)},
-          {.id = "cone",
-           .label = "Cone",
-           .value =
-               primitive_kind_setting_value(PrimitiveCreationKind::Cone)},
-          {.id = "torus",
-           .label = "Torus",
-           .value =
-               primitive_kind_setting_value(PrimitiveCreationKind::Torus)},
-      },
-      QuaderToolSettingChoicePresentation::Dropdown));
-  std::erase_if(result.controls.back().choices, [](const auto &choice) {
-    const auto candidate = primitive_kind_from_setting_id(choice.id);
-    return candidate && !primitive_creation_available_in_release(*candidate);
-  });
   switch (*kind) {
   case PrimitiveCreationKind::Box: {
     const BoxPrimitiveCreationSettings &settings = primitive.box_settings();
@@ -1606,7 +1578,7 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
     }
   }
   CommandResult activated = session.primitive_creation().activate(*kind);
-  if (activated.ok && activated.changed && !was_active) {
+  if (activated.ok && activated.changed) {
     origin.publish();
   }
   activated.changed = activated.changed || canceled.changed;
@@ -2430,6 +2402,12 @@ QuaderApiVoidResult QuaderToolsApi::accept_active_primitive(
 
 bool QuaderToolsApi::has_active_primitive_creation() const {
   return scene_session(session_).primitive_creation().active();
+}
+
+QuaderPrimitiveCreationShape QuaderToolsApi::preferred_primitive_shape() const {
+  return primitive_creation_shape(
+             scene_session(session_).primitive_creation().preferred_kind())
+      .value_or(QuaderPrimitiveCreationShape::Box);
 }
 
 std::string QuaderToolsApi::active_primitive_type() const {

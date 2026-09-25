@@ -316,6 +316,343 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
+     PrimitiveToolbarUsesDelayedPopupAndRemembersSuccessfulOwnerChoices) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_primitive_toolbar_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  QMainWindow host;
+  quader::QtToolToolbar toolbar;
+  quader::LocalizationService localization;
+  toolbar.set_localization(localization);
+  host.addToolBar(Qt::TopToolBarArea, &toolbar);
+  host.resize(1100, 180);
+  host.show();
+  application.processEvents();
+
+  auto *primitive = toolbar.findChild<QAction *>(
+      QStringLiteral("tool_create_primitive"));
+  ASSERT_NE(primitive, nullptr);
+  auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(primitive));
+  ASSERT_NE(button, nullptr);
+  auto *menu = primitive->menu();
+  ASSERT_NE(menu, nullptr);
+  ASSERT_EQ(menu->actions().size(), 5);
+  EXPECT_EQ(button->popupMode(), QToolButton::DelayedPopup);
+  EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
+  const std::array<quader::QuaderCommandId, 5> commands{
+      quader::quader_command::kToolsActivateCreateBox,
+      quader::quader_command::kToolsActivateCreateCylinder,
+      quader::quader_command::kToolsActivateCreateSphere,
+      quader::quader_command::kToolsActivateCreateCone,
+      quader::quader_command::kToolsActivateCreateTorus};
+  for (std::size_t index = 0; index < commands.size(); ++index) {
+    EXPECT_EQ(menu->actions()[index]->objectName(),
+              QStringLiteral("command_%1").arg(
+                  QString::fromUtf8(commands[index].string().data())));
+    EXPECT_TRUE(menu->actions()[index]->shortcut().isEmpty());
+  }
+  int requests = 0;
+  std::string last_command;
+  toolbar.set_command_requested_callback([&](quader::QuaderCommandId command) {
+    ++requests;
+    last_command = command.string();
+    EXPECT_TRUE(editor.commands().execute(command).ok());
+    toolbar.synchronize(editor, editor.selection().summary(), true);
+  });
+  toolbar.synchronize(editor, editor.selection().summary());
+  EXPECT_EQ(primitive->text(), QStringLiteral("Create Box"));
+  EXPECT_TRUE(primitive->toolTip().contains(QStringLiteral("[Shift+B]")));
+  EXPECT_FALSE(primitive->isChecked());
+
+  click_widget(*button, button->rect().center());
+  EXPECT_EQ(requests, 1);
+  EXPECT_EQ(last_command, commands[0].string());
+  EXPECT_TRUE(primitive->isChecked());
+  EXPECT_EQ(editor.tools().preferred_primitive_shape(),
+            quader::QuaderPrimitiveCreationShape::Box);
+  const auto initial_revision = editor.tools().active_tool_revision();
+  click_widget(*button, button->rect().center());
+  EXPECT_EQ(requests, 2);
+  EXPECT_EQ(editor.tools().active_tool_revision(), initial_revision)
+      << "clicking the active shape must retain its creation session";
+
+  bool held_popup_opened = false;
+  QEventLoop held_events;
+  const auto popup_connection = QObject::connect(
+      menu, &QMenu::aboutToShow, &held_events, [&]() {
+        QTimer::singleShot(0, &held_events, [&]() {
+          held_popup_opened = menu->isVisible();
+          EXPECT_EQ(requests, 2);
+          send_key(*menu, Qt::Key_Escape);
+          held_events.quit();
+        });
+      });
+  QTimer timeout;
+  timeout.setSingleShot(true);
+  QObject::connect(&timeout, &QTimer::timeout, &held_events, [&]() {
+    menu->close();
+    held_events.quit();
+  });
+  timeout.start(button->style()->styleHint(
+                    QStyle::SH_ToolButton_PopupDelay, nullptr, button) + 1500);
+  send_mouse_event(*button, QEvent::MouseButtonPress, button->rect().center(),
+                   Qt::LeftButton, Qt::LeftButton);
+  held_events.exec();
+  timeout.stop();
+  QObject::disconnect(popup_connection);
+  send_mouse_event(*button, QEvent::MouseButtonRelease, button->rect().center(),
+                   Qt::LeftButton, Qt::NoButton);
+  EXPECT_TRUE(held_popup_opened);
+  EXPECT_FALSE(menu->isVisible());
+  EXPECT_EQ(requests, 2) << "holding and dismissing must not activate anything";
+  EXPECT_EQ(editor.tools().active_tool_revision(), initial_revision);
+
+  // Holding Space uses Qt's native button-press delay, just like holding the
+  // mouse. Arrow keys navigate toolbar focus rather than opening this popup.
+  bool keyboard_popup_opened = false;
+  QEventLoop keyboard_events;
+  const auto keyboard_popup_connection = QObject::connect(
+      menu, &QMenu::aboutToShow, &keyboard_events, [&]() {
+        QTimer::singleShot(0, &keyboard_events, [&]() {
+          keyboard_popup_opened = menu->isVisible();
+          menu->setActiveAction(menu->actions()[1]);
+          send_key(*menu, Qt::Key_Return);
+          menu->close();
+          keyboard_events.quit();
+        });
+      });
+  QTimer keyboard_timeout;
+  keyboard_timeout.setSingleShot(true);
+  QObject::connect(&keyboard_timeout, &QTimer::timeout, &keyboard_events, [&]() {
+    menu->close();
+    keyboard_events.quit();
+  });
+  keyboard_timeout.start(button->style()->styleHint(
+      QStyle::SH_ToolButton_PopupDelay, nullptr, button) + 1500);
+  button->setFocus();
+  QKeyEvent space_press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+  QCoreApplication::sendEvent(button, &space_press);
+  keyboard_events.exec();
+  keyboard_timeout.stop();
+  QObject::disconnect(keyboard_popup_connection);
+  QKeyEvent space_release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+  QCoreApplication::sendEvent(button, &space_release);
+  EXPECT_TRUE(keyboard_popup_opened);
+  EXPECT_EQ(requests, 3);
+  EXPECT_EQ(last_command, commands[1].string());
+  EXPECT_EQ(primitive->text(), QStringLiteral("Create Cylinder"));
+  EXPECT_EQ(button->accessibleName(), primitive->text());
+  EXPECT_TRUE(primitive->toolTip().contains(QStringLiteral("[Shift+C]")));
+  EXPECT_EQ(primitive->icon().cacheKey(), menu->actions()[1]->icon().cacheKey());
+
+  ASSERT_TRUE(editor.commands().execute(
+      quader::quader_command::kToolsActivateSelect).ok());
+  toolbar.synchronize(editor, editor.selection().summary());
+  EXPECT_FALSE(primitive->isChecked());
+  EXPECT_EQ(primitive->text(), QStringLiteral("Create Cylinder"));
+  click_widget(*button, button->rect().center());
+  EXPECT_EQ(requests, 4);
+  EXPECT_EQ(last_command, commands[1].string());
+
+  ASSERT_TRUE(editor.commands().execute(commands[2]).ok());
+  toolbar.synchronize(editor, editor.selection().summary());
+  EXPECT_EQ(primitive->text(), QStringLiteral("Create Sphere"));
+  EXPECT_TRUE(menu->actions()[2]->isChecked());
+  EXPECT_TRUE(primitive->toolTip().contains(QStringLiteral("[Shift+S]")));
+  const auto rebind = editor.preferences().set_shortcut(commands[2], "Ctrl+Alt+F23");
+  ASSERT_TRUE(rebind.ok()) << rebind.error_message();
+  toolbar.synchronize(editor, editor.selection().summary());
+  EXPECT_TRUE(primitive->toolTip().contains(QStringLiteral("[Ctrl+Alt+F23]")));
+  EXPECT_TRUE(menu->actions()[2]->text().endsWith(QStringLiteral("\tCtrl+Alt+F23")));
+  EXPECT_TRUE(menu->actions()[2]->shortcut().isEmpty());
+
+  int presentation_changes = 0;
+  for (QAction *action : toolbar.findChildren<QAction *>()) {
+    QObject::connect(action, &QAction::changed, &toolbar,
+                     [&]() { ++presentation_changes; });
+  }
+  for (int frame = 0; frame < 5; ++frame) {
+    toolbar.synchronize(editor, editor.selection().summary());
+  }
+  EXPECT_EQ(presentation_changes, 0);
+
+  // A failed intent cannot become the remembered face merely because Qt
+  // checked its menu row before dispatching it.
+  toolbar.set_command_requested_callback([&](quader::QuaderCommandId) {
+    toolbar.synchronize(editor, editor.selection().summary(), true);
+  });
+  menu->actions()[0]->trigger();
+  EXPECT_EQ(primitive->text(), QStringLiteral("Create Sphere"));
+  EXPECT_TRUE(menu->actions()[2]->isChecked());
+  EXPECT_FALSE(menu->actions()[0]->isChecked());
+}
+
+TEST(QtProjectWorkspaceTests,
+     PrimitiveToolbarKeepsNativePopupPresentationAcrossScaleAndDockChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_primitive_toolbar_presentation_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+  const QPalette native_palette = application.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application);
+  QMainWindow host;
+  host.setAnimated(false);
+  quader::QtToolToolbar toolbar;
+  quader::LocalizationService localization;
+  toolbar.set_localization(localization);
+  host.addToolBar(Qt::TopToolBarArea, &toolbar);
+  host.resize(1000, 240);
+  host.show();
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().execute(
+      quader::quader_command::kToolsActivateCreateSphere).ok());
+  auto *primitive = toolbar.findChild<QAction *>(
+      QStringLiteral("tool_create_primitive"));
+  ASSERT_NE(primitive, nullptr);
+  auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(primitive));
+  ASSERT_NE(button, nullptr);
+  QMenu *menu = primitive->menu();
+  ASSERT_NE(menu, nullptr);
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+    // The test executable has no application QRC. Use the identical shipping
+    // assets for real native-widget captures, including each new primitive.
+    const QDir icons(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
+    for (QAction *action : toolbar.actions()) {
+      const QString name = action->objectName();
+      if (!name.startsWith(QStringLiteral("tool_")) || action == primitive ||
+          name == QStringLiteral("tool_curve")) {
+        continue;
+      }
+      const QString file_name =
+          name == QStringLiteral("tool_lasso_select")
+              ? QStringLiteral("tool_lasso.png")
+              : name + QStringLiteral(".png");
+      const QIcon icon = quader::qt_multiresolution_icon(
+          icons.filePath(file_name));
+      ASSERT_FALSE(icon.isNull()) << name.toStdString();
+      action->setIcon(icon);
+    }
+    const std::array<const char *, 5> names{
+        "box", "cylinder", "sphere", "cone", "torus"};
+    for (std::size_t index = 0; index < names.size(); ++index) {
+      const QIcon icon = quader::qt_multiresolution_icon(icons.filePath(
+          QStringLiteral("tool_create_%1.png").arg(QString::fromUtf8(names[index]))));
+      ASSERT_FALSE(icon.isNull()) << names[index];
+      menu->actions()[index]->setIcon(icon);
+    }
+    QToolBar icon_review;
+    icon_review.setMovable(false);
+    for (QAction *action : menu->actions()) {
+      icon_review.addAction(action->icon(), action->text());
+    }
+    for (const int logical_size : {32, 64}) {
+      icon_review.setIconSize(QSize(logical_size, logical_size));
+      icon_review.adjustSize();
+      icon_review.show();
+      application.processEvents();
+      EXPECT_TRUE(icon_review.grab().save(QDir(review_directory).filePath(
+          QStringLiteral("primitive-icons-%1.png").arg(logical_size))));
+    }
+  }
+  toolbar.synchronize(editor, editor.selection().summary(), true);
+  ASSERT_EQ(primitive->text(), QStringLiteral("Create Sphere"));
+
+  const auto settle_layout = [&]() {
+    QEventLoop events;
+    QTimer::singleShot(100, &events, &QEventLoop::quit);
+    events.exec();
+    for (int pass = 0; pass < 3; ++pass) {
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      application.processEvents();
+      host.layout()->invalidate();
+      host.layout()->activate();
+      toolbar.layout()->invalidate();
+      toolbar.layout()->activate();
+    }
+  };
+  const auto review = [&](const QString &suffix) {
+    menu->popup(button->mapToGlobal(QPoint(button->width(), button->height())));
+    application.processEvents();
+    EXPECT_TRUE(menu->isVisible());
+    EXPECT_EQ(button->accessibleName(), QStringLiteral("Create Sphere"));
+    EXPECT_EQ(button->accessibleDescription(), primitive->toolTip());
+    EXPECT_EQ(button->popupMode(), QToolButton::DelayedPopup);
+    for (QAction *action : menu->actions()) {
+      EXPECT_TRUE(menu->actionGeometry(action).isValid());
+      EXPECT_TRUE(menu->rect().contains(menu->actionGeometry(action)));
+      EXPECT_TRUE(action->shortcut().isEmpty());
+    }
+    EXPECT_TRUE(menu->actions()[2]->isChecked());
+    if (!review_directory.isEmpty()) {
+      EXPECT_TRUE(toolbar.grab().save(QDir(review_directory).filePath(
+          QStringLiteral("primitive-toolbar-%1.png").arg(suffix))));
+      EXPECT_TRUE(menu->grab().save(QDir(review_directory).filePath(
+          QStringLiteral("primitive-menu-%1.png").arg(suffix))));
+    }
+    send_key(*menu, Qt::Key_Escape);
+    EXPECT_FALSE(menu->isVisible());
+  };
+  int cycle = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    const auto &metrics = scale_controller.metrics();
+    toolbar.apply_ui_scale(metrics);
+    host.resize(metrics.px(1000), metrics.px(240));
+    settle_layout();
+    EXPECT_EQ(toolbar.iconSize(), metrics.size(QSize(32, 32)));
+    EXPECT_EQ(button->minimumSize(), metrics.size(QSize(40, 40)));
+    review(QStringLiteral("%1-%2").arg(qRound(factor * 100)).arg(cycle++));
+  }
+
+  host.removeToolBar(&toolbar);
+  host.addToolBar(Qt::LeftToolBarArea, &toolbar);
+  toolbar.show();
+  host.resize(360, 880);
+  settle_layout();
+  EXPECT_EQ(toolbar.orientation(), Qt::Vertical);
+  EXPECT_LE(toolbar.width(), 70);
+  EXPECT_TRUE(button->isVisible());
+  review(QStringLiteral("narrow-dock"));
+  toolbar.setLayoutDirection(Qt::RightToLeft);
+  review(QStringLiteral("rtl"));
+  EXPECT_EQ(menu->layoutDirection(), Qt::RightToLeft);
+
+  host.removeToolBar(&toolbar);
+  toolbar.setParent(nullptr);
+  toolbar.setWindowFlags(Qt::Tool);
+  toolbar.setOrientation(Qt::Horizontal);
+  toolbar.resize(toolbar.sizeHint());
+  toolbar.show();
+  application.processEvents();
+  EXPECT_TRUE(toolbar.isFloating());
+  review(QStringLiteral("floating-rtl"));
+
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  application.processEvents();
+  EXPECT_EQ(application.palette().resolveMask(), 0u);
+  review(QStringLiteral("native-high-contrast-fallback"));
+}
+
+TEST(QtProjectWorkspaceTests,
      EditorToolbarsKeepIdleFacesQuietAndInteractionStatesVisible) {
   int argc = 1;
   char application_name[] = "quader_toolbar_test";

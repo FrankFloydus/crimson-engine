@@ -412,16 +412,21 @@ PrimitiveCreationToolService::active_kind() const {
              : std::nullopt;
 }
 
+PrimitiveCreationKind PrimitiveCreationToolService::preferred_kind() const {
+  const auto kind = session_ ? session_->kind
+                   : session_defaults_ ? session_defaults_->preferred_kind
+                                       : preferred_kind_;
+  return primitive_creation_available_in_release(kind)
+             ? kind : PrimitiveCreationKind::Box;
+}
+
 std::string_view PrimitiveCreationToolService::active_tool_id() const {
   return session_.has_value() ? kCreatePrimitiveToolId : std::string_view{};
 }
 
 CommandResult
 PrimitiveCreationToolService::activate() {
-  const auto kind = !session_ && session_defaults_
-                        ? session_defaults_->preferred_kind : preferred_kind_;
-  return activate(primitive_creation_available_in_release(kind)
-                      ? kind : PrimitiveCreationKind::Box);
+  return activate(preferred_kind());
 }
 
 CommandResult
@@ -429,14 +434,30 @@ PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
   if (!primitive_creation_available_in_release(kind)) {
     return command_invalid_result(release_feature_unavailable_message());
   }
+  bool settled_previous_session = false;
   if (session_.has_value()) {
-    return set_kind(kind);
+    if (session_->kind == kind) {
+      return command_unchanged_result();
+    }
+    // A launcher starts a new creation session; it must never morph the last
+    // accepted object. Retire an unfinished resize before recording its shape.
+    const CommandResult resized = cancel_resize();
+    if (!resized.ok) {
+      return resized;
+    }
+    CommandResult settled = can_apply() ? apply() : cancel();
+    settled.changed = settled.changed || resized.changed;
+    if (!settled.ok) {
+      return settled;
+    }
+    settled_previous_session = settled.changed;
   }
 
   const ModelingSessionMemento before = modeling_.capture_history_memento();
   if (!before.valid()) {
-    return command_invalid_result(
-        "Primitive tool could not capture its rollback state.");
+    return {.ok = false,
+            .changed = settled_previous_session,
+            .message = "Primitive tool could not capture its rollback state."};
   }
   if (checkpoint_hooks_.begin) {
     checkpoint_hooks_.begin();
@@ -446,7 +467,7 @@ PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
     finish_checkpoint(true);
     return {
         .ok = false,
-        .changed = activated.changed,
+        .changed = settled_previous_session || activated.changed,
         .message = activated.message.empty()
                        ? "Primitive footprint tool could not activate."
                        : activated.message,

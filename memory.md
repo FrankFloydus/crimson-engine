@@ -249,6 +249,10 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
 - Apply validates every rebased memento before recording one editor-history item per accepted shape.
   Cancel/failure restores the session baseline and pre-existing document redo branch. Local restore
   observes the scene preview checkpoint; only Apply/Cancel finishes it.
+- Direct primitive launchers finish the previous shape session before starting a different kind:
+  reject unavailable kinds first, restore an unfinished resize, discard unfinished drawing and
+  Apply completed shapes (Cancel an empty session). Same-kind launch is unchanged. The explicit
+  legacy type setter still morphs the live shape; launchers must not route through that setter.
 - The modal history obeys the same retention limit. Keep its Cancel baseline and accepted object
   identities separately from bounded shape mementos. Applying after eviction makes the evicted
   prefix permanent and retires older generic history so undo cannot cross that baseline.

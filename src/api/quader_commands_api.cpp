@@ -739,19 +739,19 @@ std::string explicit_keybinding_label(std::string_view command_id,
     return "Reset Grid Size to 32";
   }
   if (is(quader_command::kToolsActivateCreateBox)) {
-    return "Activate Box Creation Tool";
+    return "Create Box";
   }
   if (is(quader_command::kToolsActivateCreateCylinder)) {
-    return "Activate Cylinder Creation Tool";
+    return "Create Cylinder";
   }
   if (is(quader_command::kToolsActivateCreateSphere)) {
-    return "Activate Sphere Creation Tool";
+    return "Create Sphere";
   }
   if (is(quader_command::kToolsActivateCreateTorus)) {
-    return "Activate Torus Creation Tool";
+    return "Create Torus";
   }
   if (is(quader_command::kToolsActivateCreateCone)) {
-    return "Activate Cone Creation Tool";
+    return "Create Cone";
   }
   if (is(quader_command::kToolsActivateCreateCurve)) {
     return "Activate New Curve Creation Tool";
@@ -2808,30 +2808,39 @@ void QuaderCommandsApi::Impl::register_commands() {
       {}, [this] { return scene_documents_.has_active_scene(); });
   const auto register_primitive_creation_command =
       [this](QuaderCommandId command_id, std::string label,
-             QuaderPrimitiveCreationShape shape) {
+             QuaderPrimitiveCreationShape shape, std::string shortcut = {}) {
         register_command(
             command_id, std::move(label),
             [this, shape] { return tools_.begin_primitive_creation(shape); },
-            {}, [this] {
+            std::move(shortcut), [this] {
               return scene_documents_.has_active_scene() &&
                      tools_.can_activate(ViewportToolId::CreatePrimitive);
             });
       };
   register_primitive_creation_command(
       quader_command::kToolsActivateCreateBox, "Create Box",
-      QuaderPrimitiveCreationShape::Box);
+      QuaderPrimitiveCreationShape::Box, "Shift+B");
   register_primitive_creation_command(
       quader_command::kToolsActivateCreateCylinder, "Create Cylinder",
-      QuaderPrimitiveCreationShape::Cylinder);
+      QuaderPrimitiveCreationShape::Cylinder, "Shift+C");
   register_primitive_creation_command(
       quader_command::kToolsActivateCreateSphere, "Create Sphere",
-      QuaderPrimitiveCreationShape::Sphere);
+      QuaderPrimitiveCreationShape::Sphere, "Shift+S");
+  // Cone and Torus stay bindable without claiming a default shortcut.
   register_primitive_creation_command(
       quader_command::kToolsActivateCreateTorus, "Create Torus",
       QuaderPrimitiveCreationShape::Torus);
   register_primitive_creation_command(
       quader_command::kToolsActivateCreateCone, "Create Cone",
       QuaderPrimitiveCreationShape::Cone);
+  // Preserve old assignments and deliberate removals as aliases of Create Box.
+  // The presentation catalog keeps this compatibility target out of menus.
+  register_primitive_creation_command(
+      quader_command::kToolsActivateCreatePrimitive, "Create Box",
+      QuaderPrimitiveCreationShape::Box);
+  set_keybinding_action_id(
+      quader_command::kToolsActivateCreatePrimitive.string(),
+      std::string(quader_command::kToolsActivateCreateBox.string()));
   register_command(
       quader_command::kToolsActivateCreateCurve, "Create Curve",
       [this] { return tools_.begin_new_curve_creation(); }, {},
@@ -3173,7 +3182,8 @@ void QuaderCommandsApi::Impl::register_commands() {
       quader_command::kModelingFlipHorizontal.string(),
       kSelectionModeObject | kSelectionModeGroup);
   for (const ViewportTool *tool : viewport_tool_catalog()) {
-    if (tool == nullptr) {
+    if (tool == nullptr ||
+        tool->viewport_tool() == ViewportToolId::CreatePrimitive) {
       continue;
     }
     const std::string activation_command =

@@ -101,8 +101,17 @@ environment resources and default-material shaders remain implementation support
 - [ ] **Cone** — `ReleaseFeature::ConePrimitive`.
 - [ ] **Quad Sphere** — `ReleaseFeature::QuadSpherePrimitive`.
 
-These exclusions cover primitive commands, picker/options and direct creation
-entry points. Other primitive types remain available.
+These exclusions cover the primitive toolbar popup, commands, shape options and
+direct creation entry points. The public popup exposes Create Box, Create Cylinder
+and Create Sphere, with default shortcuts Shift+B, Shift+C and Shift+S respectively.
+Sphere retains its Type setting with UV Sphere; Quad Sphere stays excluded.
+Cone and Torus remain unassigned by default in Internal Full.
+
+The toolbar button starts with Box and remembers the last successfully activated
+shape for the application session, including activation through shortcuts. Shape
+selection replaces the generic Primitive Type setting. Switching to a different
+shape applies completed primitives, discards an unfinished draw and starts a fresh
+creation session; reselecting the active shape leaves the current session unchanged.
 
 ## Modeling operations
 

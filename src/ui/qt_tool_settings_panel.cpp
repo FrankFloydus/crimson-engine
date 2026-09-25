@@ -110,6 +110,9 @@ QString localized_text(const LocalizationService *localization,
 
 QString localized_target_title(const LocalizationService *localization,
                                const QuaderToolSettingsTarget &target) {
+  if (!target.title_key.empty()) {
+    return localized_text(localization, target.title_key, target.title);
+  }
   if (localization != nullptr && !target.tool_id.empty()) {
     std::string key = "tool_settings.target.";
     key.append(target.tool_id);
@@ -254,7 +257,7 @@ bool same_control_structure(const QuaderToolSettingControl &left,
 bool same_target_structure(const QuaderToolSettingsTarget &left,
                            const QuaderToolSettingsTarget &right) {
   if (left.active != right.active || left.tool_id != right.tool_id ||
-      left.title != right.title ||
+      left.title != right.title || left.title_key != right.title_key ||
       left.controls.size() != right.controls.size() ||
       left.groups.size() != right.groups.size()) {
     return false;

@@ -449,7 +449,7 @@ TEST(PathArrayUiCatalogTests,
 }
 
 TEST(PathArrayUiCatalogTests,
-     PrimitiveChoiceUsesTheGenericDropdownAndToolbarOrderIsStable) {
+     DirectPrimitiveSettingsRetainSphereSubtypeAndToolbarOrder) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-path-array-ui-tests";
@@ -480,22 +480,33 @@ TEST(PathArrayUiCatalogTests,
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
-  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools()
+                  .begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere)
+                  .ok());
 
   const QuaderToolSettingsTarget target = editor.tools().active_settings();
   const auto primitive_type = std::ranges::find_if(
       target.controls, [](const QuaderToolSettingControl &control) {
         return control.id == "primitive.type";
       });
-  ASSERT_NE(primitive_type, target.controls.end());
-  EXPECT_EQ(primitive_type->choice_presentation,
+  EXPECT_EQ(primitive_type, target.controls.end());
+  EXPECT_EQ(target.title, "Create Sphere");
+  const auto sphere_type = std::ranges::find_if(
+      target.controls, [](const QuaderToolSettingControl &control) {
+        return control.id == "primitive.sphere.type";
+      });
+  ASSERT_NE(sphere_type, target.controls.end());
+  EXPECT_EQ(sphere_type->choice_presentation,
             QuaderToolSettingChoicePresentation::Dropdown);
 
   QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
-  EXPECT_NE(panel.findChild<QComboBox *>(
+  EXPECT_EQ(panel.findChild<QComboBox *>(
                 QStringLiteral("tool_settings.control.primitive.type")),
+            nullptr);
+  EXPECT_NE(panel.findChild<QComboBox *>(
+                QStringLiteral("tool_settings.control.primitive.sphere.type")),
             nullptr);
   EXPECT_EQ(panel.findChild<QRadioButton *>(
                 QStringLiteral("tool_settings.control.primitive.type")),

@@ -18,12 +18,14 @@
 #include <QActionGroup>
 #include <QEvent>
 #include <QIcon>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QSignalBlocker>
 #include <QSize>
 #include <QStyle>
+#include <QToolButton>
 
 #include <array>
 #include <cstddef>
@@ -48,7 +50,7 @@ constexpr std::array<ToolIconSpec, 18> kToolIconSpecs{{
     {ViewportToolId::Scale, ":/quader/icons/tool_scale.png"},
     {ViewportToolId::Pivot, ":/quader/icons/tool_pivot.png"},
     {ViewportToolId::CreatePrimitive,
-     ":/quader/icons/tool_create_primitive.png", true},
+     ":/quader/icons/tool_create_box.png", true},
     {ViewportToolId::Extrude, ":/quader/icons/tool_extrude.png"},
     {ViewportToolId::InsertEdgeLoop,
      ":/quader/icons/tool_insert_edge_loop.png"},
@@ -61,6 +63,30 @@ constexpr std::array<ToolIconSpec, 18> kToolIconSpecs{{
     {ViewportToolId::RadialArray, ":/quader/icons/tool_radial_array.png"},
     {ViewportToolId::PathArray, ":/quader/icons/tool_path_array.png"},
     {ViewportToolId::Curve, nullptr},
+}};
+
+/// Keeps menu ordering independent of the serialized primitive enum values.
+struct PrimitiveIconSpec {
+  QuaderPrimitiveCreationShape shape;
+  QuaderCommandId command_id;
+  const char *label;
+  const char *icon_path;
+};
+
+constexpr std::array<PrimitiveIconSpec, 5> kPrimitiveIconSpecs{{
+    {QuaderPrimitiveCreationShape::Box, quader_command::kToolsActivateCreateBox,
+     "Create Box", ":/quader/icons/tool_create_box.png"},
+    {QuaderPrimitiveCreationShape::Cylinder,
+     quader_command::kToolsActivateCreateCylinder, "Create Cylinder",
+     ":/quader/icons/tool_create_cylinder.png"},
+    {QuaderPrimitiveCreationShape::Sphere,
+     quader_command::kToolsActivateCreateSphere, "Create Sphere",
+     ":/quader/icons/tool_create_sphere.png"},
+    {QuaderPrimitiveCreationShape::Cone, quader_command::kToolsActivateCreateCone,
+     "Create Cone", ":/quader/icons/tool_create_cone.png"},
+    {QuaderPrimitiveCreationShape::Torus,
+     quader_command::kToolsActivateCreateTorus, "Create Torus",
+     ":/quader/icons/tool_create_torus.png"},
 }};
 
 // Keeps the small curve glyph scalable and palette-aware without a bitmap
@@ -144,12 +170,64 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
         QStringLiteral("tool_%1").arg(QString::fromUtf8(tool_id.data())));
     action->setCheckable(true);
     action_group->addAction(action);
-    QObject::connect(action, &QAction::triggered, this,
-                     [this, tool_id](bool checked) {
-                       if (checked && tool_requested_) {
-                         tool_requested_(tool_id);
-                       }
-                     });
+    if (spec.tool == ViewportToolId::CreatePrimitive) {
+      primitive_action_ = action;
+      action->setText(QStringLiteral("Create Box"));
+      action->setToolTip(action->text());
+      auto *menu = new QMenu(this);
+      menu->setObjectName(QStringLiteral("primitiveToolMenu"));
+      auto *primitive_group = new QActionGroup(menu);
+      primitive_group->setExclusive(true);
+      for (std::size_t primitive_index = 0;
+           primitive_index < kPrimitiveIconSpecs.size(); ++primitive_index) {
+        const PrimitiveIconSpec &primitive = kPrimitiveIconSpecs[primitive_index];
+        if (!release_presents_command(primitive.command_id)) {
+          continue;
+        }
+        QAction *choice = menu->addAction(
+            qt_multiresolution_icon(QString::fromUtf8(primitive.icon_path)),
+            QString::fromUtf8(primitive.label));
+        choice->setObjectName(QStringLiteral("command_%1").arg(
+            QString::fromUtf8(primitive.command_id.string().data())));
+        choice->setCheckable(true);
+        choice->setChecked(primitive.shape == QuaderPrimitiveCreationShape::Box);
+        primitive_group->addAction(choice);
+        primitive_actions_[primitive_index] = {
+            .action = choice,
+            .shape = primitive.shape,
+            .command_id = primitive.command_id,
+            .label = choice->text(),
+        };
+        QObject::connect(choice, &QAction::triggered, this,
+                         [this, command_id = primitive.command_id]() {
+                           if (command_requested_) {
+                             command_requested_(command_id);
+                           }
+                         });
+      }
+      action->setMenu(menu);
+      if (auto *button = qobject_cast<QToolButton *>(widgetForAction(action))) {
+        button->setPopupMode(QToolButton::DelayedPopup);
+      }
+      QObject::connect(action, &QAction::triggered, this, [this]() {
+        for (const PrimitiveAction &primitive : primitive_actions_) {
+          if (primitive.action != nullptr &&
+              primitive.shape == synchronized_primitive_shape_) {
+            if (command_requested_) {
+              command_requested_(primitive.command_id);
+            }
+            return;
+          }
+        }
+      });
+    } else {
+      QObject::connect(action, &QAction::triggered, this,
+                       [this, tool_id](bool checked) {
+                         if (checked && tool_requested_) {
+                           tool_requested_(tool_id);
+                         }
+                       });
+    }
     tool_actions_[index] = {
         .action = action,
         .tool = spec.tool,
@@ -206,13 +284,31 @@ void QtToolToolbar::set_localization(
   setWindowTitle(QString::fromStdString(
       localization.text("ui.toolbar.tools.title", "Tools")));
   for (const ToolAction &entry : tool_actions_) {
-    if (entry.action == nullptr) {
+    if (entry.action == nullptr || entry.action == primitive_action_) {
       continue;
     }
     const QString text = localized_tool_text(
         localization, entry.tool_id, viewport_tool_label(entry.tool));
     entry.action->setText(text);
     entry.action->setToolTip(text);
+  }
+  for (PrimitiveAction &entry : primitive_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
+    std::string key = "keybindings.target.";
+    key.append(entry.command_id.string());
+    key.append(".label");
+    const auto index = static_cast<std::size_t>(&entry - primitive_actions_.data());
+    entry.label = QString::fromStdString(
+        localization.text(key, kPrimitiveIconSpecs[index].label));
+    entry.action->setText(entry.label);
+    entry.action->setToolTip(entry.label);
+    if (entry.shape == synchronized_primitive_shape_ &&
+        primitive_action_ != nullptr) {
+      primitive_action_->setText(entry.label);
+      primitive_action_->setToolTip(entry.label);
+    }
   }
   synchronization_valid_ = false;
 }
@@ -221,16 +317,24 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
                                 const QuaderSelectionSummary &selection,
                                 bool force) {
   const std::string active_tool = editor.tools().active_tool();
+  const auto primitive_shape = editor.tools().preferred_primitive_shape();
+  const auto keybindings_revision = editor.commands().keybindings_revision();
   if (!force && synchronization_valid_ &&
+      synchronized_editor_ == &editor &&
       synchronized_active_tool_ == active_tool &&
       synchronized_selection_mode_ == selection.mode &&
-      synchronized_selection_revision_ == selection.selection_revision) {
+      synchronized_selection_revision_ == selection.selection_revision &&
+      synchronized_primitive_shape_ == primitive_shape &&
+      synchronized_keybindings_revision_ == keybindings_revision) {
     return;
   }
   synchronization_valid_ = true;
+  synchronized_editor_ = &editor;
   synchronized_active_tool_ = active_tool;
   synchronized_selection_mode_ = selection.mode;
   synchronized_selection_revision_ = selection.selection_revision;
+  synchronized_primitive_shape_ = primitive_shape;
+  synchronized_keybindings_revision_ = keybindings_revision;
 
   for (const ToolAction &entry : tool_actions_) {
     if (entry.action == nullptr) {
@@ -240,6 +344,9 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
     if (entry.action->isChecked() != checked) {
       const QSignalBlocker blocker(entry.action);
       entry.action->setChecked(checked);
+    }
+    if (entry.action == primitive_action_) {
+      continue;
     }
     const std::string command_id =
         editor.commands().command_id_for_tool_activation(entry.tool_id);
@@ -260,11 +367,61 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
       entry.action->setToolTip(tooltip);
     }
   }
+
+  for (const PrimitiveAction &entry : primitive_actions_) {
+    if (entry.action == nullptr) {
+      continue;
+    }
+    const auto command = editor.commands().descriptor(entry.command_id);
+    const bool enabled = command.has_value() && command->enabled;
+    const bool preferred = entry.shape == primitive_shape;
+    QString text = entry.label;
+    QString tooltip = entry.label;
+    if (command.has_value() && !command->shortcut.empty()) {
+      const QString shortcut = QString::fromStdString(command->shortcut);
+      // A tab gives QMenu its native shortcut column without installing a
+      // second shortcut route alongside the canonical viewport dispatcher.
+      text.append(QStringLiteral("\t%1").arg(shortcut));
+      tooltip.append(QStringLiteral(" [%1]").arg(shortcut));
+    }
+    if (entry.action->text() != text) {
+      entry.action->setText(text);
+    }
+    if (entry.action->toolTip() != tooltip) {
+      entry.action->setToolTip(tooltip);
+    }
+    if (entry.action->isEnabled() != enabled) {
+      entry.action->setEnabled(enabled);
+    }
+    if (entry.action->isChecked() != preferred) {
+      const QSignalBlocker blocker(entry.action);
+      entry.action->setChecked(preferred);
+    }
+    if (preferred && primitive_action_ != nullptr) {
+      if (primitive_action_->text() != entry.label) {
+        primitive_action_->setText(entry.label);
+      }
+      if (primitive_action_->icon().cacheKey() != entry.action->icon().cacheKey()) {
+        primitive_action_->setIcon(entry.action->icon());
+      }
+      if (primitive_action_->toolTip() != tooltip) {
+        primitive_action_->setToolTip(tooltip);
+      }
+      if (primitive_action_->isEnabled() != enabled) {
+        primitive_action_->setEnabled(enabled);
+      }
+    }
+  }
 }
 
 void QtToolToolbar::set_tool_requested_callback(
     std::function<void(std::string_view)> callback) {
   tool_requested_ = std::move(callback);
+}
+
+void QtToolToolbar::set_command_requested_callback(
+    std::function<void(QuaderCommandId)> callback) {
+  command_requested_ = std::move(callback);
 }
 
 } // namespace quader

@@ -5557,39 +5557,174 @@ TEST(EditorApiTests,
   quader::QuaderEditorApi &editor = harness.editor;
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
 
-  EXPECT_EQ(editor.commands().shortcut_for(
-                quader::quader_command::kToolsActivateCreatePrimitive),
-            "Shift+B");
-  const quader::QuaderViewportKeybindingDispatch dispatch =
-      editor.commands().dispatch_viewport_input_binding(
-          single_input_chord("Shift+B"), {}, true, false);
-  ASSERT_EQ(
-      dispatch.kind,
-      quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
-  EXPECT_EQ(dispatch.shortcut.kind,
-            quader::ViewportShortcutKind::ActivateTool);
-  EXPECT_EQ(dispatch.shortcut.tool,
-            quader::ViewportToolId::CreatePrimitive);
-
-  EXPECT_EQ(editor.commands()
-                .dispatch_viewport_input_binding(
-                    single_input_chord("Shift+C"), {}, true, false)
-                .kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
-  EXPECT_EQ(editor.commands()
-                .dispatch_viewport_input_binding(
-                    single_input_chord("Shift+S"), {}, true, false)
-                .kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  struct PrimitiveBinding {
+    quader::QuaderCommandId command;
+    std::string_view shortcut;
+    std::string_view kind;
+  };
+  constexpr std::array kBindings{
+      PrimitiveBinding{quader::quader_command::kToolsActivateCreateBox,
+                       "Shift+B", "box"},
+      PrimitiveBinding{quader::quader_command::kToolsActivateCreateCylinder,
+                       "Shift+C", "cylinder"},
+      PrimitiveBinding{quader::quader_command::kToolsActivateCreateSphere,
+                       "Shift+S", "sphere"},
+  };
+  const auto catalog = editor.commands().keybinding_catalog();
+  for (const PrimitiveBinding &binding : kBindings) {
+    SCOPED_TRACE(binding.kind);
+    EXPECT_EQ(editor.commands().shortcut_for(binding.command), binding.shortcut);
+    const auto *entry = find_keybinding_catalog_entry(catalog, binding.command.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->default_shortcut, binding.shortcut);
+    EXPECT_FALSE(entry->customized);
+    EXPECT_FALSE(entry->unassigned);
+    const auto analysis = editor.commands().analyze_shortcut_assignment(
+        entry->key, binding.shortcut);
+    EXPECT_TRUE(analysis.conflicts.empty());
+    for (int owner = 0; owner < 3; ++owner) {
+      const quader::QuaderViewportKeybindingContext context{
+          .outliner_focused = owner == 1, .editor_focused = owner == 2};
+      const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+          single_input_chord(binding.shortcut), {}, owner == 0, false, context);
+      ASSERT_EQ(dispatch.kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::Command);
+      EXPECT_NE(std::find(entry->target_ids.begin(), entry->target_ids.end(),
+                          dispatch.command_id), entry->target_ids.end());
+      ASSERT_TRUE(editor.commands().execute(dispatch.command_id).ok());
+      EXPECT_EQ(editor.tools().active_primitive_type(), binding.kind);
+      EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                    single_input_chord(binding.shortcut), {}, owner == 0, true,
+                    context).kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    }
+    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                  single_input_chord(binding.shortcut), {}, true, false,
+                  {.navigation_active = true}).kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
 
   EXPECT_TRUE(editor.commands()
                   .shortcut_for(quader::quader_command::kToolsActivateCut)
                   .empty());
-  const std::vector<quader::QuaderKeybindingConflict> cylinder_conflicts =
-      editor.commands().conflicts_for_shortcut(
-          "Shift+C",
-          "viewportFocus && !textInputActive && !navigation.active");
-  EXPECT_TRUE(cylinder_conflicts.empty());
+  EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kModelingBridge),
+            "B");
+}
+
+TEST(EditorApiTests, PrimitiveBoxCompatibilityAliasPreservesLegacyOverrides) {
+  constexpr auto kBox = quader::quader_command::kToolsActivateCreateBox;
+  constexpr auto kLegacy = quader::quader_command::kToolsActivateCreatePrimitive;
+  struct LegacyCase {
+    std::string_view entries;
+    std::string_view expected;
+  };
+  constexpr std::array kCases{
+      LegacyCase{R"([{"command":"tools.activate.create_primitive","key":"Ctrl+Alt+F21","when":"true"}])",
+                 "Ctrl+Alt+F21"},
+      LegacyCase{R"([{"command":"-tools.activate.create_primitive"}])", ""},
+      LegacyCase{R"([{"command":"tools.activate.create_primitive","key":"Ctrl+Alt+F21"},{"command":"tools.activate.create_box","key":"Ctrl+Alt+F22"}])",
+                 "Ctrl+Alt+F22"},
+      LegacyCase{R"([{"command":"tools.activate.create_box","key":"Ctrl+Alt+F22"},{"command":"-tools.activate.create_primitive"}])",
+                 ""},
+      LegacyCase{R"([{"command":"-tools.activate.create_box"},{"command":"tools.activate.create_primitive","key":"Ctrl+Alt+F21"}])",
+                 "Ctrl+Alt+F21"},
+      LegacyCase{R"([{"command":"tools.activate.create_primitive","key":"Ctrl+Alt+F21 B"}])",
+                 "Ctrl+Alt+F21 B"},
+  };
+  const auto path = keybinding_test_path("primitive-box-compatibility");
+  for (const LegacyCase &test : kCases) {
+    SCOPED_TRACE(test.entries);
+    {
+      std::ofstream file(path, std::ios::binary);
+      file << test.entries;
+    }
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    const auto catalog = editor.commands().keybinding_catalog();
+    const auto *box = find_keybinding_catalog_entry(catalog, kBox.string());
+    ASSERT_NE(box, nullptr);
+    EXPECT_EQ(find_keybinding_catalog_entry(catalog, kLegacy.string()), box);
+    EXPECT_EQ(box->action_id, kBox.string());
+    EXPECT_EQ(box->label, "Create Box");
+    EXPECT_EQ(box->target_ids.size(), 2u);
+    EXPECT_EQ(box->shortcut, test.expected);
+    EXPECT_EQ(box->default_shortcut, "Shift+B");
+    EXPECT_TRUE(box->customized);
+    EXPECT_EQ(editor.commands().shortcut_for(kLegacy), test.expected);
+    EXPECT_EQ(editor.commands().shortcut_for(kBox), test.expected);
+    EXPECT_EQ(read_text_file(path), test.entries);
+
+    ASSERT_TRUE(editor.commands().execute(
+        quader::quader_command::kToolsActivateCreateCylinder).ok());
+    ASSERT_EQ(editor.tools().active_primitive_type(), "cylinder");
+    if (!test.expected.empty()) {
+      const auto sequence = quader::quader_input_parse_shortcut(test.expected);
+      ASSERT_TRUE(sequence.has_value());
+      for (std::size_t index = 0; index < sequence->size(); ++index) {
+        const auto dispatched = editor.commands().dispatch_viewport_input_binding(
+            sequence->at(index),
+            {.active_tool = quader::ViewportToolId::CreatePrimitive}, true, false);
+        if (index + 1u < sequence->size()) {
+          EXPECT_EQ(dispatched.kind,
+                    quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+        } else {
+          ASSERT_EQ(dispatched.kind,
+                    quader::QuaderViewportKeybindingDispatch::Kind::Command);
+          ASSERT_TRUE(editor.commands().execute(dispatched.command_id).ok());
+          EXPECT_EQ(editor.tools().active_primitive_type(), "box");
+        }
+      }
+    } else {
+      EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                    single_input_chord("Shift+B"), {}, true, false).kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    }
+    ASSERT_TRUE(editor.commands().execute(
+        quader::quader_command::kToolsActivateCreateSphere).ok());
+    ASSERT_TRUE(editor.commands().execute(kLegacy).ok());
+    EXPECT_EQ(editor.tools().active_primitive_type(), "box");
+    EXPECT_EQ(read_text_file(path), test.entries);
+  }
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests, PrimitiveSpecificOverridesAndAliasEditsSurviveReload) {
+  constexpr auto kBox = quader::quader_command::kToolsActivateCreateBox;
+  constexpr auto kLegacy = quader::quader_command::kToolsActivateCreatePrimitive;
+  constexpr auto kCylinder = quader::quader_command::kToolsActivateCreateCylinder;
+  constexpr auto kSphere = quader::quader_command::kToolsActivateCreateSphere;
+  const auto path = keybinding_test_path("primitive-shape-overrides");
+  CommandTestHarness harness;
+  auto &commands = harness.editor.commands();
+  ASSERT_TRUE(commands.set_keybinding_storage_path(path).ok());
+  ASSERT_TRUE(commands.set_shortcut(kCylinder, "Ctrl+Alt+F22").ok());
+  ASSERT_TRUE(commands.remove_shortcut(kSphere).ok());
+  ASSERT_TRUE(commands.set_shortcut(kLegacy, "Ctrl+Alt+F23 B").ok());
+  CommandTestHarness reloaded_harness;
+  auto &reloaded = reloaded_harness.editor.commands();
+  ASSERT_TRUE(reloaded.set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.shortcut_for(kBox), "Ctrl+Alt+F23 B");
+  EXPECT_EQ(reloaded.shortcut_for(kLegacy), "Ctrl+Alt+F23 B");
+  EXPECT_EQ(reloaded.shortcut_for(kCylinder), "Ctrl+Alt+F22");
+  EXPECT_TRUE(reloaded.shortcut_for(kSphere).empty());
+  ASSERT_TRUE(reloaded.remove_shortcut(kLegacy).ok());
+  CommandTestHarness removed_harness;
+  auto &removed = removed_harness.editor.commands();
+  ASSERT_TRUE(removed.set_keybinding_storage_path(path).ok());
+  EXPECT_TRUE(removed.shortcut_for(kBox).empty());
+  EXPECT_TRUE(removed.shortcut_for(kLegacy).empty());
+  EXPECT_EQ(removed.shortcut_for(kCylinder), "Ctrl+Alt+F22");
+  EXPECT_TRUE(removed.shortcut_for(kSphere).empty());
+  const auto catalog = removed.keybinding_catalog();
+  const auto *box = find_keybinding_catalog_entry(catalog, kBox.string());
+  ASSERT_NE(box, nullptr);
+  ASSERT_TRUE(removed.reset_action_shortcut(box->key).ok());
+  EXPECT_EQ(removed.shortcut_for(kBox), "Shift+B");
+  EXPECT_EQ(removed.shortcut_for(kLegacy), "Shift+B");
+  EXPECT_EQ(removed.shortcut_for(kCylinder), "Ctrl+Alt+F22");
+  EXPECT_TRUE(removed.shortcut_for(kSphere).empty());
+  std::filesystem::remove(path);
 }
 
 TEST(EditorApiTests, PrimitiveHemisphereHasTypedLocalizedSphereBinding) {
@@ -6534,7 +6669,7 @@ TEST(EditorApiTests, SphereTypeSettingsRetainParametersAndPresentationOrigin) {
   const auto origin = editor.tools().active_settings_presentation_origin();
   auto settings = editor.tools().active_settings();
   ASSERT_GE(settings.controls.size(), 4u);
-  EXPECT_EQ(settings.controls[1].id, "primitive.sphere.type");
+  EXPECT_EQ(settings.controls.front().id, "primitive.sphere.type");
   const auto *type = find_tool_setting_control(settings, "primitive.sphere.type");
   ASSERT_NE(type, nullptr);
   EXPECT_EQ(type->choice_value, "uv");
@@ -6682,19 +6817,8 @@ TEST(EditorApiTests,
   EXPECT_TRUE(settings.apply_visible);
   EXPECT_FALSE(settings.can_apply);
   EXPECT_TRUE(settings.can_cancel);
-  const auto primitive_type = control(settings, "primitive.type");
-  ASSERT_NE(primitive_type, settings.controls.end());
-  ASSERT_EQ(primitive_type->choices.size(), 5U);
-  EXPECT_EQ(primitive_type->choices[0].id, "box");
-  EXPECT_EQ(primitive_type->choices[1].id, "cylinder");
-  EXPECT_EQ(primitive_type->choices[2].id, "sphere");
-  EXPECT_EQ(primitive_type->choices[3].id, "cone");
-  EXPECT_EQ(primitive_type->choices[4].id, "torus");
-  EXPECT_DOUBLE_EQ(primitive_type->choices[0].value, 0.0);
-  EXPECT_DOUBLE_EQ(primitive_type->choices[1].value, 1.0);
-  EXPECT_DOUBLE_EQ(primitive_type->choices[2].value, 2.0);
-  EXPECT_DOUBLE_EQ(primitive_type->choices[3].value, 3.0);
-  EXPECT_DOUBLE_EQ(primitive_type->choices[4].value, 4.0);
+  EXPECT_EQ(control(settings, "primitive.type"), settings.controls.end());
+  EXPECT_EQ(settings.title, "Create Box");
   EXPECT_EQ(editor.tools().active_primitive_default_name(), "Box");
   ASSERT_NE(control(settings, "primitive.box.subdivisions_x"),
             settings.controls.end());
@@ -6719,6 +6843,8 @@ TEST(EditorApiTests,
   settings = editor.tools().active_settings();
   ASSERT_NE(control(settings, "primitive.cylinder.side_count"),
             settings.controls.end());
+  EXPECT_EQ(settings.title, "Create Cylinder");
+  EXPECT_EQ(control(settings, "primitive.type"), settings.controls.end());
   ASSERT_NE(control(settings, "primitive.cylinder.caps"),
             settings.controls.end());
   ASSERT_NE(control(settings, "primitive.flip_faces"),
@@ -6741,6 +6867,8 @@ TEST(EditorApiTests,
   settings = editor.tools().active_settings();
   ASSERT_NE(control(settings, "primitive.sphere.radial_segments"),
             settings.controls.end());
+  EXPECT_EQ(settings.title, "Create Sphere");
+  EXPECT_EQ(control(settings, "primitive.type"), settings.controls.end());
   ASSERT_NE(control(settings, "primitive.sphere.rings"),
             settings.controls.end());
   ASSERT_NE(control(settings, "primitive.sphere.hemisphere"),
@@ -6951,12 +7079,18 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.tools().reset_active_settings().ok());
   ASSERT_TRUE(editor.tools().begin_primitive_creation(
       quader::QuaderPrimitiveCreationShape::Cylinder).ok());
-  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), footprint);
+  const auto cylinder = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(cylinder.serial, footprint.serial + 1u);
+  EXPECT_EQ(cylinder.target_id, "create_primitive");
+  EXPECT_EQ(cylinder.pane, quader::ViewportPaneId::Front);
+  EXPECT_FALSE(editor.tools().begin_primitive_creation(
+      quader::QuaderPrimitiveCreationShape::Cylinder).changed());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), cylinder);
 
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   ASSERT_TRUE(editor.tools().begin_new_curve_creation().ok());
   const auto curve = editor.tools().active_settings_presentation_origin();
-  EXPECT_EQ(curve.serial, footprint.serial + 1u);
+  EXPECT_EQ(curve.serial, cylinder.serial + 1u);
   EXPECT_EQ(curve.target_id, "curve");
   EXPECT_EQ(curve.pane, quader::ViewportPaneId::Front);
   EXPECT_FALSE(editor.tools().begin_new_curve_creation().changed());
@@ -11227,18 +11361,19 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     CursorMenuLeafCommandsAreTypedRegisteredAndDeliberatelyUnassigned) {
+     CursorMenuLeafCommandsAreTypedRegisteredWithExplicitDefaults) {
   struct ExpectedCommand {
     quader::QuaderCommandId id;
     std::string_view label;
+    std::string_view shortcut{};
   };
   constexpr std::array kExpected{
       ExpectedCommand{quader::quader_command::kToolsActivateCreateBox,
-                      "Create Box"},
+                      "Create Box", "Shift+B"},
       ExpectedCommand{quader::quader_command::kToolsActivateCreateCylinder,
-                      "Create Cylinder"},
+                      "Create Cylinder", "Shift+C"},
       ExpectedCommand{quader::quader_command::kToolsActivateCreateSphere,
-                      "Create Sphere"},
+                      "Create Sphere", "Shift+S"},
       ExpectedCommand{quader::quader_command::kToolsActivateCreateTorus,
                       "Create Torus"},
       ExpectedCommand{quader::quader_command::kToolsActivateCreateCone,
@@ -11270,19 +11405,20 @@ TEST(EditorApiTests,
         editor.commands().descriptor(expected.id);
     ASSERT_TRUE(descriptor.has_value());
     EXPECT_EQ(descriptor->label, expected.label);
-    EXPECT_TRUE(descriptor->shortcut.empty());
+    EXPECT_EQ(descriptor->shortcut, expected.shortcut);
 
     const quader::QuaderKeybindingCatalogEntry *entry =
         find_keybinding_catalog_entry(catalog, expected.id.string());
     ASSERT_NE(entry, nullptr);
-    EXPECT_TRUE(entry->shortcut.empty());
-    EXPECT_TRUE(entry->default_shortcut.empty());
-    EXPECT_TRUE(entry->unassigned);
+    EXPECT_EQ(entry->shortcut, expected.shortcut);
+    EXPECT_EQ(entry->default_shortcut, expected.shortcut);
+    EXPECT_EQ(entry->unassigned, expected.shortcut.empty());
     EXPECT_FALSE(entry->customized);
     EXPECT_EQ(entry->source, quader::QuaderKeybindingSourceKind::Default);
   }
 
   for (const quader::QuaderCommandId command : {
+           quader::quader_command::kToolsActivateCreatePrimitive,
            quader::quader_command::kToolsActivateCreateBox,
            quader::quader_command::kToolsActivateCreateCylinder,
            quader::quader_command::kToolsActivateCreateSphere,
@@ -11303,8 +11439,8 @@ TEST(EditorApiTests,
           single_input_chord("Ctrl+Alt+F22"), {}, true, false);
   ASSERT_EQ(rebound_box.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::Command);
-  EXPECT_EQ(rebound_box.command_id,
-            quader::quader_command::kToolsActivateCreateBox.string());
+  ASSERT_TRUE(editor.commands().execute(rebound_box.command_id).ok());
+  EXPECT_EQ(editor.tools().active_primitive_type(), "box");
   std::filesystem::remove(path);
 }
 

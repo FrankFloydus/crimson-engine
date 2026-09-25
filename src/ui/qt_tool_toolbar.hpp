@@ -7,6 +7,8 @@
 #pragma once
 
 #include "api/quader_api_types.hpp"
+#include "api/quader_command_ids.hpp"
+#include "api/quader_primitive_creation_types.hpp"
 #include "api/quader_viewport_input_types.hpp"
 
 #include <QToolBar>
@@ -42,6 +44,8 @@ public:
                    bool force = false);
   void set_tool_requested_callback(
       std::function<void(std::string_view)> callback);
+  void set_command_requested_callback(
+      std::function<void(QuaderCommandId)> callback);
 
 protected:
   bool event(QEvent *event) override;
@@ -56,14 +60,29 @@ private:
     std::string_view tool_id;
   };
 
+  /// Retains one concrete primitive command without owning creation settings.
+  struct PrimitiveAction {
+    QAction *action = nullptr;
+    QuaderPrimitiveCreationShape shape = QuaderPrimitiveCreationShape::Box;
+    QuaderCommandId command_id;
+    QString label;
+  };
+
   std::array<ToolAction, 18> tool_actions_{};
+  std::array<PrimitiveAction, 5> primitive_actions_{};
+  QAction *primitive_action_ = nullptr;
   QAction *curve_action_ = nullptr;
+  const QuaderEditorApi *synchronized_editor_ = nullptr;
   bool synchronization_valid_ = false;
   std::string synchronized_active_tool_;
   QuaderSelectionMode synchronized_selection_mode_ =
       QuaderSelectionMode::Object;
   std::uint64_t synchronized_selection_revision_ = 0;
+  std::uint64_t synchronized_keybindings_revision_ = 0;
+  QuaderPrimitiveCreationShape synchronized_primitive_shape_ =
+      QuaderPrimitiveCreationShape::Box;
   std::function<void(std::string_view)> tool_requested_;
+  std::function<void(QuaderCommandId)> command_requested_;
 };
 
 } // namespace quader

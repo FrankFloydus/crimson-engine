@@ -644,6 +644,26 @@ TEST(PublicReleasePresentation, MenusAndToolbarsContainOnlyPublishedControls) {
   }
   QtToolToolbar toolbar;
   toolbar.synchronize(editor, editor.selection().summary());
+  auto *primitive = toolbar.findChild<QAction *>(
+      QStringLiteral("tool_create_primitive"));
+  ASSERT_NE(primitive, nullptr);
+  ASSERT_NE(primitive->menu(), nullptr);
+  const auto primitive_choices = primitive->menu()->actions();
+  ASSERT_EQ(primitive_choices.size(), 3);
+  const std::array<const char *, 3> primitive_commands{
+      "command_tools.activate.create_box",
+      "command_tools.activate.create_cylinder",
+      "command_tools.activate.create_sphere"};
+  for (std::size_t index = 0; index < primitive_commands.size(); ++index) {
+    EXPECT_EQ(primitive_choices[index]->objectName(),
+              QString::fromUtf8(primitive_commands[index]));
+    EXPECT_TRUE(primitive_choices[index]->shortcut().isEmpty());
+  }
+  EXPECT_EQ(primitive->text(), QStringLiteral("Create Box"));
+  EXPECT_EQ(toolbar.findChild<QAction *>(
+                QStringLiteral("command_tools.activate.create_cone")), nullptr);
+  EXPECT_EQ(toolbar.findChild<QAction *>(
+                QStringLiteral("command_tools.activate.create_torus")), nullptr);
   EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("toggle_transform_space")),
             nullptr);
   QtSnappingToolbar snapping_toolbar;

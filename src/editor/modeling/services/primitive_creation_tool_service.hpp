@@ -223,6 +223,8 @@ public:
   [[nodiscard]] std::size_t shape_count() const;
   [[nodiscard]] bool owns_created_object(int modeling_object_id) const;
   [[nodiscard]] std::optional<PrimitiveCreationKind> active_kind() const;
+  /// Active shape, or the latest application-owned choice when idle.
+  [[nodiscard]] PrimitiveCreationKind preferred_kind() const;
   [[nodiscard]] std::string_view active_tool_id() const;
   [[nodiscard]] std::uint64_t tool_settings_revision() const {
     return tool_settings_revision_;
@@ -246,6 +248,7 @@ public:
   }
 
   CommandResult activate();
+  /// Finishes accepted shapes and discards unfinished gestures before switching.
   CommandResult activate(PrimitiveCreationKind kind);
   CommandResult set_kind(PrimitiveCreationKind kind);
   /// Accepts an explicit volume, preserving all supplied dimensions.

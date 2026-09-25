@@ -194,7 +194,7 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
 TEST(QdrEditorMetadataCommandPresentationCatalogTests,
      ExposesRepresentativeMenuContextAndSearchIntent) {
   const CommandPresentationDescriptor &primitive = require_presentation(
-      quader::quader_command::kToolsActivateCreatePrimitive);
+      quader::quader_command::kToolsActivateCreateBox);
   EXPECT_EQ(primitive.domain, CommandPresentationDomain::Create);
   EXPECT_EQ(primitive.group, CommandPresentationGroup::Creation);
   EXPECT_EQ(primitive.activation,
@@ -202,6 +202,23 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
   EXPECT_TRUE(quader::has_command_presentation_surface(
       primitive, CommandPresentationSurface::MainMenu));
   EXPECT_EQ(primitive.settings_route, "tool_settings");
+
+  const CommandPresentationDescriptor &legacy_primitive = require_presentation(
+      quader::quader_command::kToolsActivateCreatePrimitive);
+  EXPECT_EQ(legacy_primitive.surfaces, CommandPresentationSurface::None);
+  EXPECT_EQ(legacy_primitive.palette_policy, CommandPalettePolicy::Internal);
+  for (const auto shape : {quader::quader_command::kToolsActivateCreateCylinder,
+                           quader::quader_command::kToolsActivateCreateSphere,
+                           quader::quader_command::kToolsActivateCreateCone,
+                           quader::quader_command::kToolsActivateCreateTorus}) {
+    const auto &presentation = require_presentation(shape);
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        presentation, CommandPresentationSurface::MainMenu));
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        presentation, CommandPresentationSurface::CommandPalette));
+    EXPECT_FALSE(quader::has_command_presentation_surface(
+        presentation, CommandPresentationSurface::ViewportContextMenu));
+  }
 
   for (const quader::QuaderCommandId light_command : {
            quader::quader_command::kSceneCreatePointLight,

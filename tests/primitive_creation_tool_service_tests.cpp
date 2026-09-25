@@ -19,6 +19,7 @@
 #include "editor/projection/mesh_projection_service.hpp"
 #include "editor/projection/tool_preview_mesh_projection.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/session/tool_session_defaults.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_texture_mapping.hpp"
@@ -35,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -3540,7 +3542,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     PublicBeginPrimitiveCreationRejectsInvalidShapeAndPreservesActiveFootprint) {
+     PublicBeginPrimitiveCreationRejectsInvalidShapeAndRetainsRepeatedDrawing) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -3556,11 +3558,15 @@ TEST(PrimitiveCreationToolServiceTests,
                   .ok);
   const auto preview_before = session.modeling().box_preview(false);
 
+  const auto before_repeated = test::capture_command_observable_state(editor);
   const QuaderApiVoidResult during_footprint =
       editor.tools().begin_primitive_creation(
-          QuaderPrimitiveCreationShape::Cylinder);
-  EXPECT_FALSE(during_footprint.ok());
+          QuaderPrimitiveCreationShape::Box);
+  EXPECT_TRUE(during_footprint.ok());
   EXPECT_FALSE(during_footprint.changed());
+  const auto repeated_difference = test::diff_command_observable_state(
+      before_repeated, test::capture_command_observable_state(editor));
+  EXPECT_TRUE(repeated_difference.empty()) << repeated_difference.summary;
   ASSERT_TRUE(session.primitive_creation().active_kind().has_value());
   EXPECT_EQ(*session.primitive_creation().active_kind(),
             PrimitiveCreationKind::Box);
@@ -3581,6 +3587,180 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_TRUE(session.modeling().objects().empty());
   EXPECT_FALSE(session.history().can_undo());
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ShapeLaunchFinishesAcceptedShapesAndCancelOnlyRollsBackTheNewSession) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  auto &tool = session.primitive_creation();
+  ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Box).ok());
+  ASSERT_TRUE(tool.accept_preview(valid_primitive_preview(), "First Box").ok);
+  ASSERT_TRUE(tool.accept_preview(valid_primitive_preview(4.0f), "Second Box").ok);
+  ASSERT_TRUE(tool.accept_preview(valid_primitive_preview(8.0f), "Undone Box").ok);
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.history().can_redo());
+  const auto first_content = compiled_content_id(session.modeling(), "First Box");
+  const auto second_content = compiled_content_id(session.modeling(), "Second Box");
+  const auto selected_object = session.modeling().selection_summary().active_object_id;
+
+  ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Cylinder).ok());
+  EXPECT_EQ(tool.active_kind(), PrimitiveCreationKind::Cylinder);
+  EXPECT_EQ(tool.shape_count(), 0u);
+  EXPECT_FALSE(tool.can_undo());
+  EXPECT_FALSE(tool.can_redo());
+  EXPECT_TRUE(session.history().can_undo());
+  EXPECT_FALSE(session.history().can_redo());
+  EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+  ASSERT_EQ(session.modeling().objects().size(), 2u);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Box"), first_content);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Second Box"), second_content);
+  EXPECT_EQ(session.modeling().selection_summary().active_object_id, selected_object);
+  ASSERT_TRUE(tool.accept_preview(valid_primitive_preview(8.0f), "New Cylinder").ok);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 2u);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Box"), first_content);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Second Box"), second_content);
+  EXPECT_EQ(editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Cylinder);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 1u);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "First Box"), first_content);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.modeling().objects().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Second Box"), second_content);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ShapeSwitchDiscardsFootprintAndHeightWithoutDiscardingCompletedShapes) {
+  for (const bool accepted_shape : {false, true}) {
+    for (const bool height_stage : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << accepted_shape << ";" << height_stage);
+      SceneSession session;
+      QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Box).ok());
+      if (accepted_shape) {
+        ASSERT_TRUE(session.primitive_creation().accept_preview(
+            valid_primitive_preview(), "Completed Box").ok);
+      }
+      const ModelingBoxToolEvent start{
+          .ray = {.origin = {4.0f, 8.0f, 0.0f}, .direction = {0.0f, -1.0f, 0.0f}},
+          .grid_size = 1.0};
+      ASSERT_TRUE(session.modeling().begin_box_footprint(start).ok);
+      auto finish = start;
+      finish.ray.origin.x += 2.0f;
+      finish.ray.origin.z += 2.0f;
+      ASSERT_TRUE(session.modeling().update_box_footprint(finish).valid);
+      if (height_stage) {
+        ASSERT_TRUE(session.modeling().begin_box_height(finish).valid);
+      }
+      const auto before_repeated = test::capture_command_observable_state(editor);
+      const auto repeated = editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Box);
+      EXPECT_TRUE(repeated.ok());
+      EXPECT_FALSE(repeated.changed());
+      const auto difference = test::diff_command_observable_state(
+          before_repeated, test::capture_command_observable_state(editor));
+      EXPECT_TRUE(difference.empty()) << difference.summary;
+
+      ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere).ok());
+      EXPECT_EQ(session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+      EXPECT_FALSE(session.modeling().box_preview(false).valid);
+      EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+      EXPECT_EQ(session.modeling().objects().size(), accepted_shape ? 1u : 0u);
+      EXPECT_EQ(session.history().can_undo(), accepted_shape);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+      EXPECT_EQ(session.modeling().objects().size(), accepted_shape ? 1u : 0u);
+      if (accepted_shape) {
+        EXPECT_EQ(compiled_index_count(session.modeling(), "Completed Box"), 36u);
+      }
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ShapeSwitchDiscardsUnfinishedResizeBeforeCommittingTheCompletedObject) {
+  for (const auto shape : {QuaderPrimitiveCreationShape::Box, QuaderPrimitiveCreationShape::Torus}) {
+    SCOPED_TRACE(static_cast<int>(shape));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.tools().begin_primitive_creation(shape).ok());
+    ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Completed Shape").ok);
+    const auto original = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(original.has_value());
+    const auto control = shape == QuaderPrimitiveCreationShape::Box
+        ? QuaderPrimitiveResizeControl::PositiveX : QuaderPrimitiveResizeControl::InnerRadius;
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(control).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(0.2).ok());
+    const auto before_repeated = test::capture_command_observable_state(editor);
+    const auto repeated = editor.tools().begin_primitive_creation(shape);
+    EXPECT_TRUE(repeated.ok());
+    EXPECT_FALSE(repeated.changed());
+    const auto difference = test::diff_command_observable_state(
+        before_repeated, test::capture_command_observable_state(editor));
+    EXPECT_TRUE(difference.empty()) << difference.summary;
+    EXPECT_TRUE(editor.tools().live_primitive_creation()->resizing);
+
+    ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere).ok());
+    ASSERT_EQ(session.modeling().objects().size(), 1u);
+    const auto mesh = session.modeling().compile_object_mesh(original->object_id);
+    ASSERT_TRUE(mesh.has_value());
+    for (const auto &vertex : mesh->geometry().vertices) {
+      EXPECT_GE(vertex.position.x, original->local_min.x - 0.0001f);
+      EXPECT_LE(vertex.position.x, original->local_max.x + 0.0001f);
+    }
+    if (shape == QuaderPrimitiveCreationShape::Torus) {
+      EXPECT_DOUBLE_EQ(session.primitive_creation().torus_settings().tube_radius_ratio,
+                       original->tube_radius_ratio);
+    }
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(session.modeling().objects().empty());
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(session.modeling().objects().front().modeling_object_id, original->object_id);
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ShapeSwitchStopsWhenRetiringThePreviousResizeFails) {
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+                             ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
+    SCOPED_TRACE(static_cast<int>(failure));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Box).ok());
+    ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Failed Resize").ok);
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::PositiveX).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(0.5).ok());
+    session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
+    const auto switched = editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere);
+    EXPECT_FALSE(switched.ok());
+    EXPECT_FALSE(switched.error_message().empty());
+    EXPECT_FALSE(session.primitive_creation().active());
+    EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+    EXPECT_EQ(editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Box);
+    EXPECT_FALSE(session.history().can_undo());
+    EXPECT_TRUE(session.modeling().objects().empty());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     PreferredShapeReadsApplicationDefaultsWithoutReplacingActiveSceneChoices) {
+  auto defaults = std::make_shared<ToolSessionDefaults>();
+  SceneSession first({}, {}, defaults);
+  SceneSession second({}, {}, defaults);
+  QuaderEditorApi first_editor(QuaderApiSessionInternalAccess::from_scene_session(first));
+  QuaderEditorApi second_editor(QuaderApiSessionInternalAccess::from_scene_session(second));
+  EXPECT_EQ(first_editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Box);
+  ASSERT_TRUE(first_editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Cylinder).ok());
+  EXPECT_EQ(second_editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Cylinder);
+  ASSERT_TRUE(second_editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere).ok());
+  EXPECT_EQ(first_editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Cylinder);
+  ASSERT_TRUE(first_editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(first_editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Sphere);
+  ASSERT_TRUE(second_editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(second_editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Sphere);
 }
 
 void activate_public_cylinder(QuaderToolsApi &tools) {

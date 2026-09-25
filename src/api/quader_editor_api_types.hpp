@@ -252,6 +252,8 @@ struct QuaderToolSettingsTarget {
   bool can_cancel = false;
   // Dynamic owner feedback; rendered without replaying a notification sound.
   std::string status_message;
+  // Optional title localization identity for variants sharing one tool ID.
+  std::string title_key;
 };
 
 /**

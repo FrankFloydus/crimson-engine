@@ -742,7 +742,7 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Fixture::ObjectSelection, kToolDomains,
                Outcome::SuccessRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivateCreatePrimitive,
-               Fixture::Viewport, kToolDomains, Outcome::SuccessRequired,
+               Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,
                UndoRepeat::None),
       contract(quader_command::kToolsActivateCreateBox,
                Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,

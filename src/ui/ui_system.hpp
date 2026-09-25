@@ -9,6 +9,7 @@
 #include "api/quader_events_api.hpp"
 #include "api/quader_materials_api.hpp"
 #include "api/quader_modeling_api.hpp"
+#include "api/quader_primitive_creation_types.hpp"
 #include "api/quader_project_assets_api.hpp"
 #include "api/quader_standard_material_documents_api.hpp"
 #include "core/frame_timing.hpp"
@@ -361,9 +362,12 @@ private:
     friend bool operator==(const ToolbarOwnerPresentationStamp &,
                            const ToolbarOwnerPresentationStamp &) = default;
   };
-  /** Captures the active-tool revision presented by the toolbar. */
+  /** Captures the tool choice and effective bindings presented by the toolbar. */
   struct ToolbarToolPresentationStamp final {
     std::uint64_t active_tool_revision = 0u;
+    std::uint64_t keybindings_revision = 0u;
+    QuaderPrimitiveCreationShape preferred_primitive_shape =
+        QuaderPrimitiveCreationShape::Box;
     friend bool operator==(const ToolbarToolPresentationStamp &,
                            const ToolbarToolPresentationStamp &) = default;
   };

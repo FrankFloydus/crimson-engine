@@ -55,7 +55,7 @@ public:
     QuaderApiVoidResult activate_extrude(QuaderExtrudeMode mode);
     [[nodiscard]] bool can_activate(std::string_view tool_id) const;
     [[nodiscard]] bool can_activate(ViewportToolId tool) const;
-    /** Enters primitive placement with the requested shape selected atomically. */
+    /** Starts the requested shape, finishing accepted shapes on a kind switch. */
     QuaderApiVoidResult
     begin_primitive_creation(QuaderPrimitiveCreationShape shape);
     /** Enters Curve creation without attaching to an already selected Curve. */
@@ -102,6 +102,8 @@ public:
     accept_active_primitive(std::string name, QuaderMaterialReference material,
                             bool snap_enabled = true);
     [[nodiscard]] bool has_active_primitive_creation() const;
+    /// Active shape, or the remembered application choice; initially Box.
+    [[nodiscard]] QuaderPrimitiveCreationShape preferred_primitive_shape() const;
     [[nodiscard]] std::string active_primitive_type() const;
     [[nodiscard]] std::string active_primitive_default_name() const;
     [[nodiscard]] std::optional<QuaderPrimitiveCreationState>

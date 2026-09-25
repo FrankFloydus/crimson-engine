@@ -1009,6 +1009,11 @@ bool viewport_shortcut_for_command_target_id(std::string_view target_id,
 }
 
 bool viewport_target_requires_router_dispatch(std::string_view target_id) {
+  // This retained binding target is a Box command alias. Routing it through
+  // generic tool activation would ignore shape changes in an active session.
+  if (target_id == quader_command::kToolsActivateCreatePrimitive.string()) {
+    return false;
+  }
   const bool known_viewport_tool_target = [&]() {
     const std::optional<std::string_view> tool_id =
         quader_tool_id_from_activation_command_target(target_id);

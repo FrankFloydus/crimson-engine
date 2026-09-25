@@ -102,6 +102,12 @@ that capability rather than a tool-name list. Active transform drags, previews, 
 cancellation priority; a subsequent Escape clears selection. The existing selection owner handles
 object/group history and component selection. Clear Selection remains remappable through Settings.
 Tool IDs used by input contexts come from the same descriptor catalog as tool activation and presentation.
+Primitive activation uses the dedicated Create Box, Cylinder and Sphere commands with
+Shift+B, Shift+C and Shift+S defaults. Cone and Torus are deliberately unassigned where
+their release profile exposes them. The old `tools.activate.create_primitive` target is a
+presentation-hidden alias of Create Box in the same keybinding action group; preserve its
+stored assignments, removals and sequences. Both alias and canonical command dispatch to the
+shape-specific owner route, including when a different primitive is already active.
 `B` invokes the immediate Bridge action in Edge/Face mode, using one straight span regardless of
 remembered interpolated Bridge steps. The edge/face menus expose the interpolated Bridge preview;
 its remembered settings stay independent. Canonical quick-Bridge aliases share the remappable binding.

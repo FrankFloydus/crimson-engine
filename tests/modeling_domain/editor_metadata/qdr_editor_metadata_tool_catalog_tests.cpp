@@ -57,7 +57,7 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogExposesHostGlueHi
 	EXPECT_TRUE(same_text(require_tool("rotate").primary_shortcut, "R"));
 	EXPECT_TRUE(same_text(require_tool("scale").primary_shortcut, "S"));
 	EXPECT_TRUE(same_text(
-		require_tool("create_primitive").primary_shortcut, "Shift+B"));
+		require_tool("create_primitive").primary_shortcut, ""));
 	EXPECT_TRUE(same_text(require_tool("insert_edge_loop").primary_shortcut, "Shift+R"));
 	EXPECT_TRUE(same_text(require_tool("knife").primary_shortcut, "C"));
 	EXPECT_TRUE(same_text(require_tool("cut").primary_shortcut, ""));

@@ -11,12 +11,15 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/release_features.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/session/scene_session.hpp"
+#include "editor/session/tool_session_defaults.hpp"
 #include "support/command_observable_state.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -237,10 +240,6 @@ TEST_F(PublicReleaseModelingTests, PrimitiveChoicesAndEditsRespectTheRelease) {
   for (const auto &control : settings.controls) {
     if (control.id == "primitive.type") {
       found_primitive_type = true;
-      ASSERT_EQ(control.choices.size(), 3u);
-      EXPECT_EQ(control.choices[0].id, "box");
-      EXPECT_EQ(control.choices[1].id, "cylinder");
-      EXPECT_EQ(control.choices[2].id, "sphere");
     }
     if (control.id == "primitive.sphere.type") {
       found_sphere_type = true;
@@ -248,9 +247,34 @@ TEST_F(PublicReleaseModelingTests, PrimitiveChoicesAndEditsRespectTheRelease) {
       EXPECT_EQ(control.choices.front().id, "uv");
     }
   }
-  EXPECT_TRUE(found_primitive_type);
+  EXPECT_FALSE(found_primitive_type);
+  EXPECT_EQ(settings.title, "Create Sphere");
+  EXPECT_EQ(tools.preferred_primitive_shape(), QuaderPrimitiveCreationShape::Sphere);
   EXPECT_TRUE(found_sphere_type);
   EXPECT_TRUE(tools.cancel_active_tool_preview().ok());
+  EXPECT_EQ(tools.preferred_primitive_shape(), QuaderPrimitiveCreationShape::Sphere);
+}
+
+TEST_F(PublicReleaseModelingTests,
+       UnavailablePrimitiveLaunchesPreserveDrawingAndRememberedShape) {
+  for (const auto unavailable : {PrimitiveCreationKind::Cone, PrimitiveCreationKind::Torus}) {
+    auto defaults = std::make_shared<ToolSessionDefaults>();
+    defaults->primitive.preferred_kind = unavailable;
+    SceneSession session({}, {}, defaults);
+    QuaderEditorApi drawing_editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    EXPECT_EQ(drawing_editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Box);
+    ASSERT_TRUE(drawing_editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Cylinder).ok());
+    ASSERT_TRUE(session.modeling().begin_box_footprint({
+        .ray = {.origin = {0.0f, 8.0f, 0.0f}, .direction = {0.0f, -1.0f, 0.0f}},
+        .grid_size = 1.0}).ok);
+    for (const auto shape : {QuaderPrimitiveCreationShape::Cone, QuaderPrimitiveCreationShape::Torus}) {
+      expect_release_rejection(drawing_editor, [&] {
+        return drawing_editor.tools().begin_primitive_creation(shape);
+      });
+    }
+    EXPECT_EQ(drawing_editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Cylinder);
+    EXPECT_EQ(session.modeling().box_drag_state(), ModelingBoxDragState::Footprint);
+  }
 }
 
 TEST_F(PublicReleaseModelingTests, PersistentExtrusionCannotReplaceQuickDragState) {

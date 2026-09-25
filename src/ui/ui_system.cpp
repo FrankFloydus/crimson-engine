@@ -1078,6 +1078,17 @@ void UISystem::install_runtime_hooks(
         tool_toolbar_->synchronize(*editor_, editor_->selection().summary(),
                                    true);
       });
+  tool_toolbar_->set_command_requested_callback(
+      [this](QuaderCommandId command_id) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        present_lifecycle_result(editor_->commands().execute(command_id));
+        if (editor_ != nullptr && tool_toolbar_ != nullptr) {
+          tool_toolbar_->synchronize(*editor_, editor_->selection().summary(),
+                                     true);
+        }
+      });
   snapping_toolbar_->set_transform_space_toggle_requested_callback([this]() {
     if (editor_ == nullptr) {
       return;
@@ -3144,6 +3155,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       }();
       const ToolbarToolPresentationStamp tool_stamp{
           .active_tool_revision = frame_active_tool_revision,
+          .keybindings_revision = editor_->commands().keybindings_revision(),
+          .preferred_primitive_shape =
+              editor_->tools().preferred_primitive_shape(),
       };
       const ToolbarTransformPresentationStamp transform_stamp{
           .transform_space_revision = frame_transform_space_revision,

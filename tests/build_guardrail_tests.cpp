@@ -2980,11 +2980,11 @@ TEST(BuildGuardrailTests, SelectionToolbarIconsAreEmbeddedQtResources) {
 }
 
 TEST(BuildGuardrailTests,
-     MaterialBrowserFilterIconIsEmbeddedAndMatchesGenerationEvidence) {
+     RetainedMaterialFilterAssetIsEmbeddedAndMatchesGenerationEvidence) {
+  // Browser chrome now draws palette-aware glyphs. Preserve the generated
+  // resource's embedding and provenance independently of its former UI use.
   constexpr std::string_view kIconRelativePath =
       "resources/icons/material_filter.png";
-  constexpr std::string_view kResourcePath =
-      ":/quader/icons/material_filter.png";
   constexpr std::string_view kSourceIdentity =
       "exec-964af5e5-a267-4b3f-a271-8c31876e0d97.png";
   constexpr std::string_view kSha256 =
@@ -3030,8 +3030,6 @@ TEST(BuildGuardrailTests,
   expect_contains(digest.output, std::string(kSha256));
 
   const std::string root_c_make = read_source_file("CMakeLists.txt");
-  const std::string browser_source =
-      read_source_file("src/ui/qt_material_browser_window.cpp");
   const std::string provenance = read_source_file(
       "resources/icons/material_filter_icon.provenance.md");
   expect_contains(root_c_make,
@@ -3039,7 +3037,6 @@ TEST(BuildGuardrailTests,
   expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
   expect_contains(root_c_make, "BASE \"${CMAKE_CURRENT_SOURCE_DIR}/resources/icons\"");
   expect_contains(root_c_make, std::string(kIconRelativePath));
-  expect_contains(browser_source, std::string(kResourcePath));
   expect_contains(provenance, std::string(kSourceIdentity));
   expect_contains(provenance, std::string(kSha256));
 

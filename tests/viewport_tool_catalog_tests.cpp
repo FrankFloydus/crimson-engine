@@ -505,7 +505,7 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
   EXPECT_EQ(primitive->modeling_tool(), ModelingViewportTool::Box);
   EXPECT_EQ(primitive->kind(), ToolKind::Modal);
   EXPECT_EQ(primitive->label(), "Create Primitive");
-  EXPECT_EQ(primitive->shortcut(), "Shift+B");
+  EXPECT_TRUE(primitive->shortcut().empty());
   EXPECT_TRUE(primitive->owns_viewport());
   EXPECT_FALSE(primitive->blocks_viewport_focus_shortcuts());
   EXPECT_EQ(find_viewport_tool("box"), nullptr);

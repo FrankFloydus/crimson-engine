@@ -96,7 +96,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_TRUE(shortcuts.size() == 41U);
+	EXPECT_TRUE(shortcuts.size() == 40U);
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
 		EXPECT_FALSE(shortcut.id.empty());
@@ -279,11 +279,8 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogKeepsOver
                     qhc::HostShortcutTargetKind::Action);
         EXPECT_TRUE(same_text(insert_edge_loop.target_id, "insert_edge_loop_tool"));
 
-	const qhc::HostShortcutDescriptor& create_primitive =
-		require_shortcut("create_primitive_tool");
-	EXPECT_TRUE(same_text(create_primitive.key, "B"));
-	EXPECT_TRUE(create_primitive.shift);
-	EXPECT_TRUE(same_text(create_primitive.target_id, "create_primitive"));
+	// Shape commands own the defaults; generic native tool activation is unbound.
+	EXPECT_FALSE(has_shortcut("create_primitive_tool"));
 
 	EXPECT_FALSE(has_shortcut("cut_tool"));
 
