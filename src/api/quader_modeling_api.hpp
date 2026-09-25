@@ -215,6 +215,8 @@ struct QuaderFaceTextureEdit final {
   double value = 1.0;
   std::uint64_t selection_token = 0;
   std::string merge_key;
+  /// Scale each selected face's other axis by the same factor as the edited axis.
+  bool preserve_scale_ratio = false;
 };
 
 /**

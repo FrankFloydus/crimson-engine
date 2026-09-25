@@ -20,6 +20,8 @@ enum class QtScalableGlyph {
   MaterialLock,
   MaterialLockOpen,
   Close,
+  ScaleLinked,
+  ScaleUnlinked,
 };
 
 // The current authored toolbar and layer raster sources are 96 pixels. This

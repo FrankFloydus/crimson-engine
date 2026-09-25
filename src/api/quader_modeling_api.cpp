@@ -3182,7 +3182,8 @@ QuaderApiVoidResult QuaderModelingApi::set_face_texture_setting(
           scene_session(session_).modeling(),
           ModelingFaceTextureEdit{.field = field,
                                    .value = edit.value,
-                                   .selection_token = edit.selection_token}),
+                                   .selection_token = edit.selection_token,
+                                   .preserve_scale_ratio = edit.preserve_scale_ratio}),
       "Edit Texture Settings", {.merge_key = edit.merge_key});
 }
 

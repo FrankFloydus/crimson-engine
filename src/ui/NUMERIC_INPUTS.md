@@ -41,7 +41,16 @@ Release emits `editingFinished`, allowing each host to settle its existing
 preview or coalesced edit. Cancellation restores the starting scalar and calls
 the cancellation hook. Hosts abandon interaction state before replacing runtime
 bindings. Mixed face-texture scrubs defer publication until release because a
-single scalar cannot restore distinct original face values.
+single scalar cannot restore distinct original face values. Linked mixed-scale
+text drafts likewise defer publication until accepted.
+
+The Inspector and Face Texture retain separate, initially unchecked Link Scale
+toggles for the application session. They couple numeric scale edits only.
+Inspector XYZ edits derive one vector from the exact captured baseline and bound
+the shared factor before using the existing transform preview. Face Texture
+passes `preserve_scale_ratio` through its existing atomic texture edit, retaining
+each face's U/V ratio even when selected faces differ. Peer fields must not
+publish independent edits. Settle the focused draft before changing the link.
 
 Ordinary floating fields change by 0.1 per logical pixel; Inspector position and
 scale use 0.01. Bevel Width uses 0.01 for arrows and ordinary scrubbing, 0.001

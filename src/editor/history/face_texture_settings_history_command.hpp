@@ -55,6 +55,7 @@ public:
     if (merge_key.empty() || newer == nullptr || !executed_ ||
         !newer->executed_ || &modeling_ != &newer->modeling_ ||
         edit_.field != newer->edit_.field ||
+        edit_.preserve_scale_ratio != newer->edit_.preserve_scale_ratio ||
         edit_.selection_token != newer->edit_.selection_token) {
       return false;
     }

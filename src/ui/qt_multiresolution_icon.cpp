@@ -400,6 +400,33 @@ QPainterPath scalable_glyph_path(QtScalableGlyph glyph) {
     return material_lock_path(false);
   case QtScalableGlyph::MaterialLockOpen:
     return material_lock_path(true);
+  case QtScalableGlyph::ScaleLinked:
+  case QtScalableGlyph::ScaleUnlinked: {
+    QPainterPath links;
+    links.moveTo(9.5, 8.0);
+    links.lineTo(7.0, 8.0);
+    links.cubicTo(4.8, 8.0, 3.0, 9.8, 3.0, 12.0);
+    links.cubicTo(3.0, 14.2, 4.8, 16.0, 7.0, 16.0);
+    links.lineTo(9.5, 16.0);
+    links.moveTo(14.5, 8.0);
+    links.lineTo(17.0, 8.0);
+    links.cubicTo(19.2, 8.0, 21.0, 9.8, 21.0, 12.0);
+    links.cubicTo(21.0, 14.2, 19.2, 16.0, 17.0, 16.0);
+    links.lineTo(14.5, 16.0);
+    if (glyph == QtScalableGlyph::ScaleLinked) {
+      links.moveTo(8.0, 12.0);
+      links.lineTo(16.0, 12.0);
+    }
+    QPainterPathStroker stroke;
+    stroke.setWidth(2.2);
+    stroke.setCapStyle(Qt::RoundCap);
+    stroke.setJoinStyle(Qt::RoundJoin);
+    QTransform diagonal;
+    diagonal.translate(12.0, 12.0);
+    diagonal.rotate(-35.0);
+    diagonal.translate(-12.0, -12.0);
+    return diagonal.map(stroke.createStroke(links));
+  }
   case QtScalableGlyph::Close: {
     QPainterPath diagonals;
     diagonals.moveTo(4.0, 4.0);

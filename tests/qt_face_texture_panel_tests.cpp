@@ -116,6 +116,39 @@ protected:
         QStringLiteral("face_texture.texture.%1").arg(QString::fromLatin1(name)));
   }
 
+  QToolButton *scale_link() const {
+    return panel_->findChild<QToolButton *>(
+        QStringLiteral("face_texture.texture.scale_link"));
+  }
+
+  void set_face_scales(int face, double u, double v) {
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    for (const auto [field, value] :
+         {std::pair{QuaderFaceTextureField::ScaleX, u},
+          std::pair{QuaderFaceTextureField::ScaleY, v}}) {
+      ASSERT_TRUE(editor().modeling().set_face_texture_setting({
+          .field = field, .value = value,
+          .selection_token =
+              editor().modeling().face_texture_settings().selection_token,
+      }).ok());
+    }
+    panel_->refresh();
+  }
+
+  void enter_numeric_draft(QDoubleSpinBox &spin, double value) {
+    application_->setActiveWindow(panel_.get());
+    spin.setFocus(Qt::TabFocusReason);
+    spin.selectAll();
+    QKeyEvent draft(QEvent::KeyPress, 0, Qt::NoModifier,
+                    spin.locale().toString(value, 'f', 4));
+    QCoreApplication::sendEvent(&spin, &draft);
+  }
+
+  void accept_numeric_draft(QDoubleSpinBox &spin) {
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(&spin, &enter);
+  }
+
   void send_numeric_mouse(QLineEdit &line, QEvent::Type type,
                           const QPoint &position,
                           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
@@ -218,6 +251,8 @@ protected:
     const auto settings = editor().modeling().face_texture_settings();
     ASSERT_TRUE(settings.scale_x.has_value());
     ASSERT_TRUE(settings.scale_y.has_value());
+    ASSERT_NE(scale_link(), nullptr);
+    EXPECT_EQ(scale_link()->isEnabled(), editable);
     const std::array values{*settings.scale_x, *settings.scale_y,
                              settings.shift_x, settings.shift_y,
                              settings.rotation_degrees};
@@ -242,6 +277,205 @@ protected:
   QuaderModelingObjectRef object_;
   std::unique_ptr<QtFaceTexturePanel> panel_;
 };
+
+TEST_F(QtFaceTexturePanelTests,
+       LinkedScaleTextPreservesProportionsAndCancelUndoAndUnlink) {
+  set_face_scales(1, 2.0, -3.0);
+  auto *link = scale_link();
+  ASSERT_NE(link, nullptr);
+  EXPECT_FALSE(link->isChecked());
+  EXPECT_EQ(link->accessibleName(), QStringLiteral("Link Scale"));
+  EXPECT_TRUE(link->toolTip().contains(QStringLiteral("proportions")));
+  const auto revision = editor().revisions().modeling_content_revision;
+  const auto undo_label = editor().history().snapshot().undo_label;
+  link->click();
+  ASSERT_TRUE(link->isChecked());
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  EXPECT_EQ(editor().history().snapshot().undo_label, undo_label);
+
+  auto *u = number("scale_x");
+  auto *v = number("scale_y");
+  ASSERT_NE(u, nullptr);
+  ASSERT_NE(v, nullptr);
+  enter_numeric_draft(*u, -4.0);
+  flush_numeric_timer(*u);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, -4.0);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_y, 6.0);
+  QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(u, &cancel);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, 2.0);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_y, -3.0);
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+
+  enter_numeric_draft(*u, 4.0);
+  accept_numeric_draft(*u);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, 4.0);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_y, -6.0);
+  ASSERT_TRUE(editor().history().undo().ok());
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, 2.0);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_y, -3.0);
+  ASSERT_TRUE(editor().history().redo().ok());
+  panel_->refresh();
+  EXPECT_DOUBLE_EQ(v->value(), -6.0);
+  link->click();
+  ASSERT_FALSE(link->isChecked());
+  enter_numeric_draft(*v, -9.0);
+  accept_numeric_draft(*v);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, 4.0);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_y, -9.0);
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       LinkedScaleScrubPublishesBothAxesAndEscapeRestoresMixedCompanions) {
+  set_face_scales(1, 2.0, 6.0);
+  set_face_scales(2, 2.0, -8.0);
+  ASSERT_TRUE(editor().selection().select_faces(object_, {1, 2}).ok());
+  panel_->refresh();
+  auto *link = scale_link();
+  ASSERT_NE(link, nullptr);
+  link->click();
+  auto *spin = number("scale_x");
+  ASSERT_NE(spin, nullptr);
+  auto *line = spin->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const auto revision = editor().revisions().modeling_content_revision;
+  const QPoint anchor = begin_numeric_drag(*line);
+  send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(100, 0));
+  flush_numeric_timer(*spin);
+  EXPECT_GT(editor().revisions().modeling_content_revision, revision);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, 3.0);
+  QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(line, &cancel);
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  for (const auto [face, expected_v] :
+       {std::pair{1, 6.0}, std::pair{2, -8.0}}) {
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    const auto settings = editor().modeling().face_texture_settings();
+    EXPECT_EQ(settings.scale_x, 2.0);
+    EXPECT_EQ(settings.scale_y, expected_v);
+  }
+  ASSERT_TRUE(editor().selection().select_faces(object_, {1, 2}).ok());
+  panel_->refresh();
+  const QPoint accepted_anchor = begin_numeric_drag(*line);
+  send_numeric_mouse(*line, QEvent::MouseMove, accepted_anchor + QPoint(100, 0));
+  flush_numeric_timer(*spin);
+  send_numeric_mouse(*line, QEvent::MouseMove, accepted_anchor + QPoint(200, 0));
+  send_numeric_mouse(*line, QEvent::MouseButtonRelease,
+                      accepted_anchor + QPoint(200, 0));
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, 4.0);
+  for (const auto [face, expected_v] :
+       {std::pair{1, 12.0}, std::pair{2, -16.0}}) {
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    EXPECT_EQ(editor().modeling().face_texture_settings().scale_y, expected_v);
+  }
+  ASSERT_TRUE(editor().history().undo().ok());
+  for (const auto [face, expected_v] :
+       {std::pair{1, 6.0}, std::pair{2, -8.0}}) {
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    const auto settings = editor().modeling().face_texture_settings();
+    EXPECT_EQ(settings.scale_x, 2.0);
+    EXPECT_EQ(settings.scale_y, expected_v);
+  }
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       LinkedMixedScaleTextAndScrubDeferUntilAcceptedAndPreserveEachFaceRatio) {
+  set_face_scales(1, 2.0, 6.0);
+  set_face_scales(2, 4.0, -8.0);
+  ASSERT_TRUE(editor().selection().select_faces(object_, {1, 2}).ok());
+  panel_->refresh();
+  auto *link = scale_link();
+  ASSERT_NE(link, nullptr);
+  link->click();
+  auto *spin = number("scale_x");
+  ASSERT_NE(spin, nullptr);
+  auto *line = spin->findChild<QLineEdit *>();
+  ASSERT_NE(line, nullptr);
+  const auto revision = editor().revisions().modeling_content_revision;
+  enter_numeric_draft(*spin, 8.0);
+  flush_numeric_timer(*spin);
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(spin, &cancel);
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  EXPECT_EQ(spin->text(), QStringLiteral("--"));
+  const QPoint anchor = begin_numeric_drag(*line);
+  send_numeric_mouse(*line, QEvent::MouseMove, anchor + QPoint(16, 0));
+  flush_numeric_timer(*spin);
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  QKeyEvent cancel_drag(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(line, &cancel_drag);
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  EXPECT_EQ(spin->text(), QStringLiteral("--"));
+  enter_numeric_draft(*spin, 8.0);
+  accept_numeric_draft(*spin);
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  for (const auto [face, expected_v] :
+       {std::pair{1, 24.0}, std::pair{2, -16.0}}) {
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    const auto settings = editor().modeling().face_texture_settings();
+    EXPECT_EQ(settings.scale_x, 8.0);
+    EXPECT_EQ(settings.scale_y, expected_v);
+  }
+  ASSERT_TRUE(editor().history().undo().ok());
+  for (const auto &[face, scales] :
+       {std::pair{1, std::pair{2.0, 6.0}},
+        std::pair{2, std::pair{4.0, -8.0}}}) {
+    ASSERT_TRUE(editor().selection().select_face(object_, face).ok());
+    const auto settings = editor().modeling().face_texture_settings();
+    EXPECT_EQ(settings.scale_x, scales.first);
+    EXPECT_EQ(settings.scale_y, scales.second);
+  }
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       ScaleLinkSettlesExistingDraftAndRetainsItsStateAcrossSelectionAndRebind) {
+  set_face_scales(1, 2.0, 6.0);
+  auto *link = scale_link();
+  auto *spin = number("scale_x");
+  ASSERT_NE(link, nullptr);
+  ASSERT_NE(spin, nullptr);
+  enter_numeric_draft(*spin, 4.0);
+  link->click();
+  ASSERT_TRUE(link->isChecked());
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, 4.0);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_y, 6.0);
+  EXPECT_FALSE(panel_->numeric_interaction_active());
+  enter_numeric_draft(*spin, 8.0);
+  link->click();
+  ASSERT_FALSE(link->isChecked());
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_x, 8.0);
+  EXPECT_EQ(editor().modeling().face_texture_settings().scale_y, 12.0);
+  enter_numeric_draft(*spin, 0.0);
+  const auto revision = editor().revisions().modeling_content_revision;
+  link->click();
+  EXPECT_FALSE(link->isChecked());
+  EXPECT_EQ(editor().revisions().modeling_content_revision, revision);
+  QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QCoreApplication::sendEvent(spin, &cancel);
+  link->click();
+  ASSERT_TRUE(link->isChecked());
+  ASSERT_TRUE(editor().selection().clear().ok());
+  panel_->refresh();
+  EXPECT_FALSE(link->isEnabled());
+  EXPECT_TRUE(link->isChecked());
+  link->click();
+  EXPECT_TRUE(link->isChecked());
+  ASSERT_TRUE(editor().selection().select_face(object_, 2).ok());
+  panel_->refresh();
+  EXPECT_TRUE(link->isEnabled());
+  EXPECT_TRUE(link->isChecked());
+  auto rebound = create_standalone_editor();
+  panel_->abandon();
+  panel_->bind(rebound.editor());
+  EXPECT_EQ(scale_link(), link);
+  EXPECT_TRUE(link->isChecked());
+  EXPECT_FALSE(link->isEnabled());
+  panel_->abandon();
+  panel_->bind(editor());
+  EXPECT_TRUE(link->isEnabled());
+  EXPECT_TRUE(link->isChecked());
+}
 
 TEST_F(QtFaceTexturePanelTests,
        ScaleScrubUsesHundredthsAndPublishesOneUndoableGestureOnRelease) {
@@ -494,6 +728,9 @@ TEST_F(QtFaceTexturePanelTests,
           QStringLiteral("face_texture.section.edit_texture.content"));
       ASSERT_NE(numeric_content, nullptr);
       ASSERT_NE(actions_content, nullptr);
+      const auto numeric_bounds = [numeric_content](const QWidget *widget) {
+        return QRect(widget->mapTo(numeric_content, QPoint()), widget->size());
+      };
       const auto *numeric_grid = qobject_cast<QGridLayout *>(numeric_content->layout());
       const auto *action_grid = qobject_cast<QGridLayout *>(actions_content->layout());
       ASSERT_NE(numeric_grid, nullptr);
@@ -505,11 +742,25 @@ TEST_F(QtFaceTexturePanelTests,
       const auto *shift_x = number("shift_x");
       const auto *shift_y = number("shift_y");
       const auto *rotate = number("rotate");
+      auto *link = scale_link();
       ASSERT_NE(scale_x, nullptr);
       ASSERT_NE(scale_y, nullptr);
       ASSERT_NE(shift_x, nullptr);
       ASSERT_NE(shift_y, nullptr);
       ASSERT_NE(rotate, nullptr);
+      ASSERT_NE(link, nullptr);
+      const auto *scale_y_label = panel_->findChild<QLabel *>(
+          QStringLiteral("face_texture.texture.scale_y.label"));
+      ASSERT_NE(scale_y_label, nullptr);
+      EXPECT_LT(scale_x->geometry().right(), link->x());
+      EXPECT_LT(link->geometry().right(), scale_y_label->x());
+      EXPECT_EQ(link->x() - scale_x->geometry().right() - 1,
+                numeric_grid->horizontalSpacing());
+      EXPECT_EQ(scale_y_label->x() - link->geometry().right() - 1,
+                numeric_grid->horizontalSpacing());
+      EXPECT_TRUE(numeric_content->rect().contains(link->geometry()));
+      EXPECT_GE(link->width(), metrics.px(24));
+      EXPECT_EQ(link->iconSize(), metrics.size(QSize(16, 16)));
       EXPECT_EQ(scale_x->y(), scale_y->y());
       EXPECT_EQ(shift_x->y(), shift_y->y());
       EXPECT_LT(scale_x->geometry().right(), scale_y->x());
@@ -518,11 +769,12 @@ TEST_F(QtFaceTexturePanelTests,
       EXPECT_EQ(scale_x->width(), shift_x->width());
       EXPECT_EQ(scale_y->x(), shift_y->x());
       EXPECT_EQ(scale_y->width(), shift_y->width());
-      EXPECT_EQ(rotate->x(), scale_x->x());
-      EXPECT_EQ(rotate->geometry().right(), scale_y->geometry().right());
+      EXPECT_GE(numeric_bounds(rotate).left(), scale_x->x());
+      EXPECT_EQ(numeric_bounds(rotate).right(), scale_y->geometry().right());
       for (const auto &rows : {std::pair{scale_x, shift_x},
                                 std::pair{shift_x, rotate}}) {
-        const int gap = rows.second->y() - rows.first->geometry().bottom() - 1;
+        const int gap = numeric_bounds(rows.second).top() -
+                        numeric_bounds(rows.first).bottom() - 1;
         EXPECT_GE(gap, metrics.px(4));
       }
       std::array<QRect, 3> numeric_row_bounds;
@@ -531,7 +783,7 @@ TEST_F(QtFaceTexturePanelTests,
         const auto *spin = number(id);
         ASSERT_NE(spin, nullptr);
         EXPECT_GE(spin->width(), metrics.px(64));
-        EXPECT_TRUE(numeric_content->rect().contains(spin->geometry()));
+        EXPECT_TRUE(numeric_content->rect().contains(numeric_bounds(spin)));
         const auto *line = spin->findChild<QLineEdit *>();
         ASSERT_NE(line, nullptr);
         const int text_width = line->contentsRect().width() -
@@ -546,10 +798,11 @@ TEST_F(QtFaceTexturePanelTests,
         EXPECT_LE(label->heightForWidth(label->width()), label->height());
         numeric_row_bounds[numeric_index / 2] =
             numeric_row_bounds[numeric_index / 2]
-                .united(spin->geometry())
-                .united(label->geometry());
+                .united(numeric_bounds(spin))
+                .united(numeric_bounds(label));
         ++numeric_index;
       }
+      numeric_row_bounds[0] = numeric_row_bounds[0].united(link->geometry());
       for (std::size_t row = 0; row < 2; ++row) {
         const int gap = numeric_row_bounds[row + 1].top() -
                         numeric_row_bounds[row].bottom() - 1;
@@ -575,6 +828,9 @@ TEST_F(QtFaceTexturePanelTests,
           QStringLiteral("face_texture.texture.rotate.label"));
       ASSERT_NE(rotation_label, nullptr);
       EXPECT_EQ(rotation_label->text(), QStringLiteral("Rotation (\u00b0)"));
+      EXPECT_GE(rotation_label->contentsRect().width(),
+                rotation_label->fontMetrics().horizontalAdvance(
+                    rotation_label->text()));
       auto *scroll = panel_->findChild<QScrollArea *>(
           QStringLiteral("face_texture.controls_scroll"));
       ASSERT_NE(scroll, nullptr);
@@ -592,13 +848,82 @@ TEST_F(QtFaceTexturePanelTests,
       EXPECT_GE(trailing_space, 0);
       EXPECT_LE(trailing_space, metrics.px(12));
       if (!screenshot_path.isEmpty()) {
-        QImage image(panel_->size(), QImage::Format_ARGB32_Premultiplied);
-        image.fill(Qt::transparent);
-        panel_->render(&image);
-        const QString filename = QStringLiteral("face-texture-panel-%1-%2.png")
-                                     .arg(width).arg(static_cast<int>(scale * 100));
-        EXPECT_TRUE(image.save(QDir(screenshot_path).filePath(filename)));
+        for (const bool linked : {false, true}) {
+          if (link->isChecked() != linked) {
+            link->click();
+          }
+          QImage image(panel_->size(), QImage::Format_ARGB32_Premultiplied);
+          image.fill(Qt::transparent);
+          panel_->render(&image);
+          const QString filename =
+              QStringLiteral("face-texture-panel-%1-%2-cycle%3-%4.png")
+                  .arg(width).arg(static_cast<int>(scale * 100))
+                  .arg(scale_iteration)
+                  .arg(linked ? QStringLiteral("linked")
+                              : QStringLiteral("unlinked"));
+          EXPECT_TRUE(image.save(QDir(screenshot_path).filePath(filename)));
+        }
       }
+    }
+  }
+}
+
+TEST_F(QtFaceTexturePanelTests,
+       ScaleLinkCentralGutterKeepsPairedFieldsAlignedInRtlAfterScalingDown) {
+  apply_qt_obsidian_application_theme(QApplication::palette());
+  QtUiScaleApplicationController scale_controller(*application_);
+  panel_->setLayoutDirection(Qt::RightToLeft);
+  std::uint64_t revision = 1;
+  for (const float factor : {1.0f, 2.0f, 1.0f}) {
+    SCOPED_TRACE(factor);
+    scale_controller.apply_factor(factor);
+    const QtUiScaleMetrics metrics(factor, revision++);
+    panel_->apply_ui_scale(metrics);
+    panel_->resize(metrics.px(320), metrics.px(1000));
+    settle_layout();
+    const auto *u = number("scale_x");
+    const auto *v = number("scale_y");
+    const auto *shift_u = number("shift_x");
+    const auto *shift_v = number("shift_y");
+    const auto *rotation = number("rotate");
+    const auto *link = scale_link();
+    const auto *v_label = panel_->findChild<QLabel *>(
+        QStringLiteral("face_texture.texture.scale_y.label"));
+    const auto *rotation_label = panel_->findChild<QLabel *>(
+        QStringLiteral("face_texture.texture.rotate.label"));
+    const auto *numeric_content = panel_->findChild<QWidget *>(
+        QStringLiteral("face_texture.section.texture.content"));
+    ASSERT_NE(u, nullptr);
+    ASSERT_NE(v, nullptr);
+    ASSERT_NE(shift_u, nullptr);
+    ASSERT_NE(shift_v, nullptr);
+    ASSERT_NE(rotation, nullptr);
+    ASSERT_NE(link, nullptr);
+    ASSERT_NE(v_label, nullptr);
+    ASSERT_NE(rotation_label, nullptr);
+    ASSERT_NE(numeric_content, nullptr);
+    EXPECT_LT(v_label->geometry().right(), link->x());
+    EXPECT_LT(link->geometry().right(), u->x());
+    EXPECT_EQ(u->x(), shift_u->x());
+    EXPECT_EQ(u->width(), shift_u->width());
+    EXPECT_EQ(v->x(), shift_v->x());
+    EXPECT_EQ(v->width(), shift_v->width());
+    const QRect rotation_bounds(rotation->mapTo(numeric_content, QPoint()),
+                                 rotation->size());
+    EXPECT_EQ(rotation_bounds.left(), v->x());
+    EXPECT_LE(rotation_bounds.right(), u->geometry().right());
+    EXPECT_GE(rotation_label->contentsRect().width(),
+              rotation_label->fontMetrics().horizontalAdvance(
+                  rotation_label->text()));
+    for (const auto *spin : {u, v, shift_u, shift_v, rotation}) {
+      EXPECT_GE(spin->width(), metrics.px(64));
+      const auto *line = spin->findChild<QLineEdit *>();
+      ASSERT_NE(line, nullptr);
+      const int text_width = line->contentsRect().width() -
+                             line->textMargins().left() -
+                             line->textMargins().right();
+      EXPECT_LE(line->fontMetrics().horizontalAdvance(line->displayText()),
+                text_width);
     }
   }
 }
@@ -1059,10 +1384,17 @@ TEST_F(QtFaceTexturePanelTests,
   ASSERT_NE(rotate, nullptr);
   const auto sizes = canvas_splitter()->sizes();
   rotate->setToolTip(QStringLiteral("retained presentation sentinel"));
+  auto *link = scale_link();
+  ASSERT_NE(link, nullptr);
+  link->click();
+  link->setToolTip(QStringLiteral("retained link sentinel"));
   for (int frame = 0; frame < 30; ++frame) {
     panel_->refresh();
   }
   EXPECT_EQ(rotate->toolTip(), QStringLiteral("retained presentation sentinel"));
+  EXPECT_EQ(scale_link(), link);
+  EXPECT_TRUE(link->isChecked());
+  EXPECT_EQ(link->toolTip(), QStringLiteral("retained link sentinel"));
   EXPECT_EQ(canvas_splitter()->sizes(), sizes);
 }
 

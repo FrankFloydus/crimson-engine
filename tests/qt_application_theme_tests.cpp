@@ -10,6 +10,7 @@
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
+#include "ui/qt_scale_link_button.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -23,6 +24,7 @@
 #include <QEvent>
 #include <QFont>
 #include <QImage>
+#include <QKeyEvent>
 #include <QMainWindow>
 #include <QMargins>
 #include <QObject>
@@ -658,7 +660,9 @@ TEST(QtUiScaleMetricsTests,
            quader::QtScalableGlyph::MaterialVisibilityOff,
            quader::QtScalableGlyph::MaterialLock,
            quader::QtScalableGlyph::MaterialLockOpen,
-           quader::QtScalableGlyph::Close}) {
+           quader::QtScalableGlyph::Close,
+           quader::QtScalableGlyph::ScaleLinked,
+           quader::QtScalableGlyph::ScaleUnlinked}) {
     const QIcon icon =
         quader::qt_scalable_glyph_icon(glyph, QColor(0xad, 0x80, 0xf4));
     ASSERT_FALSE(icon.isNull());
@@ -717,6 +721,92 @@ TEST(QtUiScaleMetricsTests, CloseGlyphRetainsItsRequestedColorAtSmallSizes) {
       }
     }
   }
+}
+
+TEST(QtUiScaleMetricsTests,
+     ScaleLinkButtonPreservesKeyboardPaletteAndScaleDownBehavior) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_scale_link_button_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtUiScaleApplicationController scale(application);
+  application.setPalette(quader::qt_obsidian_application_palette(
+      application.style()->standardPalette()));
+  QWidget host;
+  host.setAttribute(Qt::WA_DontShowOnScreen, true);
+  quader::QtScaleLinkButton button(&host);
+  button.setAccessibleName(QStringLiteral("Link Scale"));
+  scale.add_change_listener(button, [&](const quader::QtUiScaleMetrics &metrics) {
+    button.apply_ui_scale(metrics);
+  });
+  host.show();
+  application.processEvents();
+  const QSize baseline = button.size();
+  EXPECT_GE(baseline.width(), 24);
+  EXPECT_FALSE(button.isChecked());
+  EXPECT_EQ(button.focusPolicy(), Qt::StrongFocus);
+  const auto render = [&]() {
+    QImage image(button.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    button.render(&image);
+    return image;
+  };
+  const QImage unlinked = render();
+  int toggles = 0;
+  QObject::connect(&button, &QToolButton::toggled, &button,
+                   [&]() { ++toggles; });
+  button.setFocus(Qt::TabFocusReason);
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+  QApplication::sendEvent(&button, &press);
+  QApplication::sendEvent(&button, &release);
+  EXPECT_TRUE(button.isChecked());
+  EXPECT_EQ(toggles, 1);
+  EXPECT_NE(render(), unlinked);
+
+  scale.apply_factor(2.0F);
+  application.processEvents();
+  EXPECT_EQ(button.iconSize(), QSize(32, 32));
+  EXPECT_GE(button.width(), baseline.width() * 2);
+  scale.apply_factor(1.0F);
+  application.processEvents();
+  EXPECT_EQ(button.iconSize(), QSize(16, 16));
+  EXPECT_EQ(button.size(), baseline);
+  EXPECT_TRUE(button.isChecked());
+  EXPECT_EQ(toggles, 1);
+
+  // Explicit light and High Contrast palettes keep their authored glyph color,
+  // including disabled color, instead of inheriting a dark-theme tint or fade.
+  for (const QColor foreground : {QColor(15, 20, 25), QColor(255, 255, 0)}) {
+    QPalette palette = application.style()->standardPalette();
+    const QColor background = foreground == QColor(255, 255, 0)
+                                 ? QColor(0, 0, 0) : QColor(245, 245, 245);
+    palette.setColor(QPalette::Window, background);
+    palette.setColor(QPalette::Button, background);
+    palette.setColor(QPalette::ButtonText, foreground);
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText,
+                     QColor(105, 135, 165));
+    button.setPalette(palette);
+    for (const bool enabled : {true, false}) {
+      button.setEnabled(enabled);
+      const QImage image = render();
+      const QColor expected = enabled ? foreground : QColor(105, 135, 165);
+      int exact_pixels = 0;
+      for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+          exact_pixels += image.pixelColor(x, y) == expected ? 1 : 0;
+        }
+      }
+      EXPECT_GT(exact_pixels, 0);
+    }
+  }
+  button.setEnabled(true);
+  button.setLayoutDirection(Qt::RightToLeft);
+  button.click();
+  EXPECT_FALSE(button.isChecked());
+  EXPECT_EQ(toggles, 2);
+  EXPECT_EQ(button.size(), baseline);
 }
 
 TEST(QtApplicationThemeTests,

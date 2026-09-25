@@ -216,6 +216,26 @@ protected:
         QStringLiteral("inspector.transform.position.x"));
   }
 
+  QDoubleSpinBox *scale_axis(InspectorPanel &panel, const char *axis) {
+    return panel.findChild<QDoubleSpinBox *>(
+        QStringLiteral("inspector.transform.scale.%1")
+            .arg(QString::fromLatin1(axis)));
+  }
+
+  QToolButton *scale_link(InspectorPanel &panel) {
+    return panel.findChild<QToolButton *>(
+        QStringLiteral("inspector.transform.scale.link"));
+  }
+
+  void expect_scale(InspectorTransformRuntime &runtime, EntityId entity,
+                     const std::array<double, 3> &expected) {
+    const auto snapshot = runtime.editor.query().entity(entity);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_NEAR(snapshot->transform.scale.x, expected[0], 0.0001);
+    EXPECT_NEAR(snapshot->transform.scale.y, expected[1], 0.0001);
+    EXPECT_NEAR(snapshot->transform.scale.z, expected[2], 0.0001);
+  }
+
   QTimer *dispatch_timer(InspectorPanel &panel) {
     return panel.findChild<QTimer *>(
         QStringLiteral("inspector.transform.dispatchTimer"));
@@ -465,7 +485,45 @@ TEST_F(QtInspectorNumericDragTests,
           panel, QStringLiteral("inspector-box-%1-%2.png")
                      .arg(design_width)
                      .arg(qRound(scale * 100.0F)));
+      auto *link = scale_link(panel);
+      auto *scale_label = panel.findChild<QLabel *>(
+          QStringLiteral("inspector.transform.scale.label"));
+      auto *scale_x = scale_axis(panel, "x");
+      ASSERT_NE(link, nullptr);
+      ASSERT_NE(scale_label, nullptr);
+      ASSERT_NE(scale_x, nullptr);
+      const QRect link_rect = relative_geometry(*link, *tree->viewport());
+      const QRect scale_label_rect =
+          relative_geometry(*scale_label, *tree->viewport());
+      const QRect scale_x_rect = relative_geometry(*scale_x, *tree->viewport());
+      EXPECT_LT(scale_label_rect.right(), link_rect.left());
+      EXPECT_LT(link_rect.right(), tree->columnWidth(0));
+      EXPECT_NEAR(link_rect.center().y(), scale_x_rect.center().y(), 2);
+      EXPECT_NEAR(scale_label_rect.center().y(), scale_x_rect.center().y(), 2);
+      EXPECT_EQ(scale_x_rect.left(),
+                relative_geometry(*position_x(panel), *tree->viewport()).left());
+      EXPECT_FALSE(link->toolTip().isEmpty());
+      EXPECT_FALSE(link->accessibleName().isEmpty());
+      link->click();
+      export_inspector_image(
+          panel, QStringLiteral("inspector-scale-linked-%1-%2.png")
+                     .arg(design_width)
+                     .arg(qRound(scale * 100.0F)));
+      link->click();
       if (design_width == 418) {
+        panel.setLayoutDirection(Qt::RightToLeft);
+        settle_inspector_layout(panel);
+        EXPECT_TRUE(scale_label->alignment().testFlag(Qt::AlignRight));
+        EXPECT_LT(relative_geometry(*link, panel).right(),
+                  relative_geometry(*scale_label, panel).left());
+        EXPECT_NEAR(relative_geometry(*link, panel).center().y(),
+                    relative_geometry(*scale_x, panel).center().y(), 2);
+        export_inspector_image(
+            panel, QStringLiteral("inspector-scale-link-rtl-%1.png")
+                       .arg(qRound(scale * 100.0F)));
+        panel.setLayoutDirection(Qt::LeftToRight);
+        settle_inspector_layout(panel);
+        EXPECT_TRUE(scale_label->alignment().testFlag(Qt::AlignLeft));
         auto *header = panel.findChild<QToolButton *>(
             QStringLiteral("inspector.transform.header"));
         ASSERT_NE(header, nullptr);
@@ -639,6 +697,9 @@ TEST_F(QtInspectorNumericDragTests,
   ASSERT_NE(section, nullptr);
   QPointer<QToolButton> header(panel.findChild<QToolButton *>(
       QStringLiteral("inspector.transform.header")));
+  QPointer<QToolButton> retained_link(scale_link(panel));
+  ASSERT_NE(retained_link.data(), nullptr);
+  retained_link->click();
   ASSERT_NE(header.data(), nullptr);
   ASSERT_TRUE(section->isExpanded());
   const int initial_label_width = tree->columnWidth(0);
@@ -673,6 +734,8 @@ TEST_F(QtInspectorNumericDragTests,
       EXPECT_EQ(panel.findChild<QToolButton *>(header->objectName()),
                 header.data());
       EXPECT_FALSE(header->isChecked());
+      EXPECT_EQ(scale_link(panel), retained_link.data());
+      EXPECT_TRUE(retained_link->isChecked());
       EXPECT_EQ(header->arrowType(), Qt::RightArrow);
       for (const auto &field : fields) {
         ASSERT_NE(field.data(), nullptr);
@@ -948,6 +1011,283 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(mixed_rect.left(), editable_rect.left());
   EXPECT_EQ(mixed_rect.right(), editable_rect.right());
   export_inspector_image(panel, QStringLiteral("inspector-mixed-320-100.png"));
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       ScaleLinkPreservesEveryAxisRatioAndCreatesOneUndoPerEdit) {
+  constexpr std::array<const char *, 3> kAxes{"x", "y", "z"};
+  for (std::size_t axis = 0; axis < kAxes.size(); ++axis) {
+    SCOPED_TRACE(kAxes[axis]);
+    InspectorTransformRuntime runtime;
+    runtime.initialize();
+    ASSERT_TRUE(runtime.editor.scene().set_transform(
+        runtime.entity, {.scale = {1.0F, 2.0F, 3.0F}}).ok());
+    InspectorPanel panel;
+    show(panel, runtime);
+    auto *link = scale_link(panel);
+    auto *spin = scale_axis(panel, kAxes[axis]);
+    ASSERT_NE(link, nullptr);
+    ASSERT_NE(spin, nullptr);
+    EXPECT_FALSE(link->isChecked());
+    const auto undo_before = runtime.session.history().undo_count();
+    const auto revision_before = runtime.session.scene().transform_revision();
+    link->click();
+    EXPECT_TRUE(link->isChecked());
+    EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
+    EXPECT_EQ(runtime.session.scene().transform_revision(), revision_before);
+    spin->setValue(static_cast<double>(axis + 1) * 2.0);
+    expect_scale(runtime, runtime.entity, {2.0, 4.0, 6.0});
+    EXPECT_DOUBLE_EQ(scale_axis(panel, "x")->value(), 2.0);
+    EXPECT_DOUBLE_EQ(scale_axis(panel, "y")->value(), 4.0);
+    EXPECT_DOUBLE_EQ(scale_axis(panel, "z")->value(), 6.0);
+    EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
+    ASSERT_TRUE(QMetaObject::invokeMethod(spin, "editingFinished",
+                                         Qt::DirectConnection));
+    EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
+    ASSERT_TRUE(runtime.editor.history().undo().ok());
+    expect_scale(runtime, runtime.entity, {1.0, 2.0, 3.0});
+    ASSERT_TRUE(runtime.editor.history().redo().ok());
+    expect_scale(runtime, runtime.entity, {2.0, 4.0, 6.0});
+    panel.abandon_runtime();
+  }
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       LinkedScaleUsesExactGestureBaselineAndBoundsOneSharedFactor) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize();
+  constexpr float kPrecise = 0.33333334F;
+  ASSERT_TRUE(runtime.editor.scene().set_transform(
+      runtime.entity, {.scale = {kPrecise, 2.0F, 5.0F}}).ok());
+  InspectorPanel panel;
+  show(panel, runtime);
+  auto *link = scale_link(panel);
+  auto *spin = scale_axis(panel, "x");
+  ASSERT_NE(link, nullptr);
+  ASSERT_NE(spin, nullptr);
+  link->click();
+  for (const double value : {0.451, 0.789, 0.501, 0.667}) {
+    spin->setValue(value);
+    const double factor = value / static_cast<double>(kPrecise);
+    expect_scale(runtime, runtime.entity, {value, 2.0 * factor, 5.0 * factor});
+  }
+  // Editing another axis in the same session still uses the exact baseline,
+  // never the rounded values displayed in peer fields.
+  scale_axis(panel, "y")->setValue(3.0);
+  expect_scale(runtime, runtime.entity, {kPrecise * 1.5, 3.0, 7.5});
+  spin->setValue(1000.0);
+  expect_scale(runtime, runtime.entity, {kPrecise * 200.0, 400.0, 1000.0});
+  EXPECT_NEAR(spin->value(), kPrecise * 200.0, 0.001);
+  ASSERT_TRUE(QMetaObject::invokeMethod(spin, "editingFinished",
+                                       Qt::DirectConnection));
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       LinkedScaleIncludesMixedSelectedPeersWhenLimitingTheFactor) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize();
+  const auto second = runtime.editor.scene().create_empty();
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(runtime.editor.scene().set_transform(
+      runtime.entity, {.scale = {1.0F, 2.0F, 3.0F}}).ok());
+  ASSERT_TRUE(runtime.editor.scene().set_transform(
+      second.value().id, {.scale = {1.0F, 0.002F, 500.0F}}).ok());
+  ASSERT_TRUE(runtime.editor.scene().select(
+      {runtime.entity, second.value().id}, runtime.entity).ok());
+  InspectorPanel panel;
+  show(panel, runtime);
+  auto *link = scale_link(panel);
+  auto *spin = scale_axis(panel, "x");
+  ASSERT_NE(link, nullptr);
+  ASSERT_NE(spin, nullptr);
+  EXPECT_EQ(scale_axis(panel, "y"), nullptr);
+  auto *mixed = panel.findChild<QLineEdit *>(
+      QStringLiteral("inspector.transform.scale.y"));
+  ASSERT_NE(mixed, nullptr);
+  EXPECT_FALSE(mixed->isEnabled());
+  const auto undo_before = runtime.session.history().undo_count();
+  link->click();
+  spin->setValue(4.0);
+  expect_scale(runtime, runtime.entity, {2.0, 4.0, 6.0});
+  expect_scale(runtime, second.value().id, {2.0, 0.004, 1000.0});
+  spin->setValue(0.001);
+  expect_scale(runtime, runtime.entity, {0.5, 1.0, 1.5});
+  expect_scale(runtime, second.value().id, {0.5, 0.001, 250.0});
+  ASSERT_TRUE(QMetaObject::invokeMethod(spin, "editingFinished",
+                                       Qt::DirectConnection));
+  EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  expect_scale(runtime, runtime.entity, {1.0, 2.0, 3.0});
+  expect_scale(runtime, second.value().id, {1.0, 0.002, 500.0});
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       LinkedScaleScrubsCoalesceAndEscapeRestoresAllAxes) {
+  for (const bool publish_before_cancel : {false, true}) {
+    InspectorTransformRuntime runtime;
+    runtime.initialize();
+    ASSERT_TRUE(runtime.editor.scene().set_transform(
+        runtime.entity, {.scale = {1.0F, 2.0F, 3.0F}}).ok());
+    InspectorPanel panel;
+    show(panel, runtime);
+    auto *link = scale_link(panel);
+    auto *spin = scale_axis(panel, "x");
+    auto *timer = dispatch_timer(panel);
+    ASSERT_NE(link, nullptr);
+    ASSERT_NE(spin, nullptr);
+    ASSERT_NE(timer, nullptr);
+    link->click();
+    auto *editor = spin->findChild<QLineEdit *>();
+    ASSERT_NE(editor, nullptr);
+    const auto undo_before = runtime.session.history().undo_count();
+    const auto revision_before = runtime.session.scene().transform_revision();
+    const QPoint origin = begin_drag(*editor);
+    for (const int pixels : {10, 20, 30}) {
+      move_drag(*editor, origin, pixels);
+    }
+    EXPECT_EQ(runtime.session.scene().transform_revision(), revision_before);
+    EXPECT_NEAR(scale_axis(panel, "y")->value(), 2.6, 0.0001);
+    EXPECT_NEAR(scale_axis(panel, "z")->value(), 3.9, 0.0001);
+    if (publish_before_cancel) {
+      deliver_timeout(*timer);
+      expect_scale(runtime, runtime.entity, {1.3, 2.6, 3.9});
+    }
+    send_key(*editor, Qt::Key_Escape);
+    EXPECT_FALSE(timer->isActive());
+    release_drag(*editor, origin, 30);
+    deliver_timeout(*timer);
+    expect_scale(runtime, runtime.entity, {1.0, 2.0, 3.0});
+    EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    EXPECT_TRUE(scale_link(panel)->isChecked());
+    EXPECT_DOUBLE_EQ(scale_axis(panel, "y")->value(), 2.0);
+    panel.abandon_runtime();
+  }
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       LinkedScaleBoundOvershootReversesImmediatelyAndKeepsEscapeOrigin) {
+  for (const bool upper_bound : {false, true}) {
+    SCOPED_TRACE(upper_bound);
+    InspectorTransformRuntime runtime;
+    runtime.initialize();
+    const float baseline_y = upper_bound ? 2.0F : 0.002F;
+    const float baseline_z = upper_bound ? 500.0F : 3.0F;
+    ASSERT_TRUE(runtime.editor.scene().set_transform(
+        runtime.entity, {.scale = {1.0F, baseline_y, baseline_z}}).ok());
+    InspectorPanel panel;
+    show(panel, runtime);
+    auto *link = scale_link(panel);
+    auto *spin = scale_axis(panel, "x");
+    auto *timer = dispatch_timer(panel);
+    ASSERT_NE(link, nullptr);
+    ASSERT_NE(spin, nullptr);
+    ASSERT_NE(timer, nullptr);
+    link->click();
+    auto *editor = spin->findChild<QLineEdit *>();
+    ASSERT_NE(editor, nullptr);
+    const auto undo_before = runtime.session.history().undo_count();
+    const QPoint origin = begin_drag(*editor);
+    const int overshoot = upper_bound ? 300 : -300;
+    const double bounded_value = upper_bound ? 2.0 : 0.5;
+    move_drag(*editor, origin, overshoot);
+    EXPECT_NEAR(spin->value(), bounded_value, 0.0001);
+    deliver_timeout(*timer);
+    expect_scale(runtime, runtime.entity,
+                 {bounded_value, baseline_y * bounded_value,
+                  baseline_z * bounded_value});
+
+    // Only one pixel of reverse travel should change the value; the discarded
+    // overshoot must not remain in the numeric controller's accumulator.
+    const int reverse = overshoot + (upper_bound ? -1 : 1);
+    const double reversed_value = bounded_value + (upper_bound ? -0.01 : 0.01);
+    move_drag(*editor, origin, reverse);
+    EXPECT_NEAR(spin->value(), reversed_value, 0.0001);
+    deliver_timeout(*timer);
+    expect_scale(runtime, runtime.entity,
+                 {reversed_value, baseline_y * reversed_value,
+                  baseline_z * reversed_value});
+    send_key(*editor, Qt::Key_Escape);
+    release_drag(*editor, origin, reverse);
+    deliver_timeout(*timer);
+    expect_scale(runtime, runtime.entity, {1.0, baseline_y, baseline_z});
+    EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
+    panel.abandon_runtime();
+  }
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       ScaleLinkSettlesTheFocusedDraftAndPersistsAcrossRuntimeReplacement) {
+  InspectorTransformRuntime outgoing;
+  InspectorTransformRuntime incoming;
+  outgoing.initialize();
+  incoming.initialize();
+  InspectorPanel panel;
+  show(panel, outgoing);
+  application().setActiveWindow(&panel);
+  auto *link = scale_link(panel);
+  auto *spin = scale_axis(panel, "x");
+  ASSERT_NE(link, nullptr);
+  ASSERT_NE(spin, nullptr);
+  auto *editor = spin->findChild<QLineEdit *>();
+  ASSERT_NE(editor, nullptr);
+  const auto undo_before = outgoing.session.history().undo_count();
+  click(*editor, editor->rect().center());
+  type_text(*editor, QStringLiteral("2"));
+  expect_scale(outgoing, outgoing.entity, {2.0, 1.0, 1.0});
+  EXPECT_EQ(outgoing.session.history().undo_count(), undo_before);
+  link->click();
+  EXPECT_TRUE(link->isChecked());
+  EXPECT_FALSE(qt_install_numeric_spin_box(*spin).is_editing());
+  EXPECT_EQ(outgoing.session.history().undo_count(), undo_before + 1u);
+  expect_scale(outgoing, outgoing.entity, {2.0, 1.0, 1.0});
+  const auto incoming_undo = incoming.session.history().undo_count();
+  panel.abandon_runtime();
+  panel.refresh(incoming.context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  link = scale_link(panel);
+  spin = scale_axis(panel, "z");
+  ASSERT_NE(link, nullptr);
+  ASSERT_NE(spin, nullptr);
+  EXPECT_TRUE(link->isChecked());
+  EXPECT_EQ(incoming.session.history().undo_count(), incoming_undo);
+  spin->setValue(3.0);
+  expect_scale(incoming, incoming.entity, {3.0, 3.0, 3.0});
+  ASSERT_TRUE(QMetaObject::invokeMethod(spin, "editingFinished",
+                                       Qt::DirectConnection));
+  link->click();
+  EXPECT_FALSE(link->isChecked());
+  EXPECT_EQ(incoming.session.history().undo_count(), incoming_undo + 1u);
+  spin->setValue(4.0);
+  expect_scale(incoming, incoming.entity, {3.0, 3.0, 4.0});
+  ASSERT_TRUE(QMetaObject::invokeMethod(spin, "editingFinished",
+                                       Qt::DirectConnection));
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       LinkedScaleRejectsUnsupportedBaselinesWithoutDistortingTheSelection) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize();
+  ASSERT_TRUE(runtime.editor.scene().set_transform(
+      runtime.entity, {.scale = {1.0F, -2.0F, 3.0F}}).ok());
+  InspectorPanel panel;
+  show(panel, runtime);
+  auto *link = scale_link(panel);
+  auto *spin = scale_axis(panel, "x");
+  ASSERT_NE(link, nullptr);
+  ASSERT_NE(spin, nullptr);
+  const auto undo_before = runtime.session.history().undo_count();
+  link->click();
+  spin->setValue(2.0);
+  ASSERT_TRUE(QMetaObject::invokeMethod(spin, "editingFinished",
+                                       Qt::DirectConnection));
+  expect_scale(runtime, runtime.entity, {1.0, -2.0, 3.0});
+  EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
   panel.abandon_runtime();
 }
 

@@ -1004,6 +1004,7 @@ add_library(quader_ui STATIC
     src/ui/qt_semantic_axis_colors.hpp
     src/ui/qt_inspector_property_help.hpp
     src/ui/qt_panel_section_header.hpp
+    src/ui/qt_scale_link_button.hpp
     src/ui/qt_auxiliary_window_state.cpp
     src/ui/qt_settings_dialog.cpp
     src/ui/qt_settings_controller.cpp

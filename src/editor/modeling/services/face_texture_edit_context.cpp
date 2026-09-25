@@ -183,6 +183,29 @@ ModelingCommandResult FaceTextureEditContext::prepare_edit(
       default:
         return rejected("Unknown face texture setting.");
       }
+      if (edit.preserve_scale_ratio &&
+          (edit.field == ModelingFaceTextureField::ScaleX ||
+           edit.field == ModelingFaceTextureField::ScaleY)) {
+        const auto scale = face.texture_transform.scale;
+        const bool scale_x = edit.field == ModelingFaceTextureField::ScaleX;
+        const double source = scale_x ? scale.x : scale.y;
+        const double companion = scale_x ? scale.y : scale.x;
+        if (!std::isfinite(source) || source == 0.0 ||
+            !std::isfinite(companion) || companion == 0.0) {
+          return rejected("Linked texture scaling requires finite, nonzero scales.");
+        }
+        const double scaled_companion = companion * (static_cast<double>(value) / source);
+        if (!std::isfinite(scaled_companion) ||
+            std::abs(scaled_companion) > std::numeric_limits<float>::max() ||
+            static_cast<float>(scaled_companion) == 0.0f) {
+          return rejected("Linked texture scale is outside the supported range.");
+        }
+        if (scale_x) {
+          update.scale_y = static_cast<float>(scaled_companion);
+        } else {
+          update.scale_x = static_cast<float>(scaled_companion);
+        }
+      }
       batch.updates.push_back(std::move(update));
     }
     batches.push_back(std::move(batch));

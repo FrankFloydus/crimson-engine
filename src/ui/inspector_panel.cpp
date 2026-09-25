@@ -21,6 +21,7 @@
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_inspector_property_help.hpp"
 #include "ui/qt_panel_section_header.hpp"
+#include "ui/qt_scale_link_button.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
@@ -94,6 +95,7 @@ constexpr int kInspectorPropertyInsetRole = Qt::UserRole + 2;
 constexpr int kInspectorAxisRowSpacingRole = Qt::UserRole + 3;
 constexpr int kInspectorPropertyTopPaddingRole = Qt::UserRole + 4;
 constexpr int kInspectorPropertyBottomPaddingRole = Qt::UserRole + 5;
+constexpr int kInspectorRetainedLabelRole = Qt::UserRole + 6;
 constexpr int kInspectorMaterialPreviewSize = 56;
 constexpr int kInspectorMaterialActionSize = 24;
 constexpr int kInspectorMaterialActionIconSize = 16;
@@ -280,20 +282,38 @@ protected:
 class InspectorElidedLabel final : public QLabel {
 public:
   explicit InspectorElidedLabel(QString text, QString help,
-                               QWidget *parent = nullptr)
-      : QLabel(parent), full_text_(std::move(text)), help_(std::move(help)) {
+                               QWidget *parent = nullptr,
+                               bool follow_layout_direction = false)
+      : QLabel(parent), full_text_(std::move(text)), help_(std::move(help)),
+        follow_layout_direction_(follow_layout_direction) {
     setTextFormat(Qt::PlainText);
     setAccessibleName(full_text_);
+    update_directional_alignment();
     update_elided_text();
   }
 
 protected:
+  void changeEvent(QEvent *event) override {
+    QLabel::changeEvent(event);
+    if (event->type() == QEvent::LayoutDirectionChange) {
+      update_directional_alignment();
+    }
+  }
+
   void resizeEvent(QResizeEvent *event) override {
     QLabel::resizeEvent(event);
     update_elided_text();
   }
 
 private:
+  void update_directional_alignment() {
+    if (follow_layout_direction_) {
+      setAlignment(Qt::AlignAbsolute | Qt::AlignVCenter |
+                   (layoutDirection() == Qt::RightToLeft ? Qt::AlignRight
+                                                         : Qt::AlignLeft));
+    }
+  }
+
   void update_elided_text() {
     const QString elided =
         fontMetrics().elidedText(full_text_, Qt::ElideRight, width());
@@ -304,6 +324,7 @@ private:
 
   QString full_text_;
   QString help_;
+  bool follow_layout_direction_ = false;
 };
 
 enum class InspectorMaterialActionIcon { Edit, Replace };
@@ -407,6 +428,10 @@ public:
                                  ? option.palette.alternateBase()
                                  : option.palette.window();
     painter->fillRect(option.rect, styled.backgroundBrush);
+    if (index.column() == 0 && index.data(kInspectorRetainedLabelRole).toBool()) {
+      painter->restore();
+      return;
+    }
     if (index.column() == 0) {
       styled.rect.setLeft(option.rect.left() +
                           index.data(kInspectorPropertyInsetRole).toInt());
@@ -596,6 +621,9 @@ struct TransformEditState {
   EntityId primary = kInvalidEntityId;
   std::vector<EntityId> selection;
   std::array<float, 3> values{};
+  std::array<double, 3> scale_baseline{};
+  double scale_factor_minimum = 0.0;
+  double scale_factor_maximum = 0.0;
 };
 
 } // namespace
@@ -637,6 +665,9 @@ struct InspectorPanel::Impl {
     QTreeWidgetItem *item = nullptr;
     QVBoxLayout *layout = nullptr;
     QGridLayout *axes = nullptr;
+    QGridLayout *label_axes = nullptr;
+    QHBoxLayout *label_header = nullptr;
+    QtScaleLinkButton *scale_link = nullptr;
   };
 
   /// Retains the displayed axes and the values used by their edit callbacks.
@@ -1049,6 +1080,17 @@ private:
         row.axes->setVerticalSpacing(scaled_px(3));
         row.item->setData(0, kInspectorAxisRowPaddingRole, vertical_padding);
         row.item->setData(0, kInspectorAxisRowSpacingRole, scaled_px(3));
+      }
+      if (row.scale_link != nullptr) {
+        row.scale_link->apply_ui_scale(ui_scale_metrics_);
+        row.label_axes->setContentsMargins(scaled_px(16), top_padding,
+                                          scaled_px(8), bottom_padding);
+        row.label_axes->setVerticalSpacing(scaled_px(3));
+        row.label_header->setSpacing(scaled_px(4));
+        scaled_default_label_column_width_ = std::max(
+            scaled_default_label_column_width_,
+            tree_->fontMetrics().horizontalAdvance(row.item->text(0)) +
+                scaled_px(28) + row.scale_link->sizeHint().width());
       }
     }
     for (MaterialRow &row : material_rows_) {
@@ -2151,7 +2193,20 @@ private:
                          (*values)[axis] = next;
                          if (controller->is_canceling()) {
                            discard_pending_transform_preview();
-                         } else if (controller->is_dragging()) {
+                           return;
+                         }
+                         if (kind == TransformEditKind::Scale && scale_linked_) {
+                           bool constrained = false;
+                           if (!prepare_linked_scale(axis, next, *values,
+                                                      constrained)) {
+                             force_rebuild_ = true;
+                             return;
+                           }
+                           if (constrained) {
+                             controller->synchronize_drag_value();
+                           }
+                         }
+                         if (controller->is_dragging()) {
                            queue_transform_preview(kind, *values);
                          } else {
                            preview_transform_edit(kind, *values);
@@ -2183,6 +2238,91 @@ private:
     }
     transform_rows_.push_back(std::move(row));
     add_row(section, stable_id, label, field, layout);
+    if (kind == TransformEditKind::Scale) {
+      add_scale_link_label(property_rows_.back(), label, stable_id);
+    }
+  }
+
+  void add_scale_link_label(PropertyRow &row, const QString &label,
+                            std::string_view stable_id) {
+    auto *container = new QWidget(tree_->viewport());
+    container->setObjectName(stable_name(stable_id) + QStringLiteral(".labelRow"));
+    container->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    auto *axes = new QGridLayout(container);
+    axes->setHorizontalSpacing(0);
+    auto *header = new QHBoxLayout;
+    auto *text = new InspectorElidedLabel(label, property_help(stable_id),
+                                         container, true);
+    text->setObjectName(stable_name(stable_id) + QStringLiteral(".label"));
+    text->setMinimumWidth(0);
+    text->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    header->addWidget(text, 1);
+    auto *button = new QtScaleLinkButton(container);
+    button->setObjectName(stable_name(stable_id) + QStringLiteral(".link"));
+    button->setAccessibleName(localized("ui.scale_link.title", "Link Scale"));
+    button->setToolTip(localized(
+        "ui.scale_link.tooltip", "Preserve proportions when editing any scale value."));
+    button->setChecked(scale_linked_);
+    header->addWidget(button, 0, Qt::AlignVCenter);
+    axes->addLayout(header, 0, 0);
+    for (int axis = 0; axis < 3; ++axis) {
+      axes->setRowStretch(axis, 1);
+    }
+    row.label_axes = axes;
+    row.label_header = header;
+    row.scale_link = button;
+    row.item->setData(0, kInspectorRetainedLabelRole, true);
+    tree_->setItemWidget(row.item, 0, container);
+    const auto generation = runtime_binding_generation_;
+    QObject::connect(button, &QToolButton::pressed, &panel_,
+                     [this, generation,
+                      guard = QPointer<QtScaleLinkButton>(button)]() {
+      const QPointer<InspectorPanel> panel_guard(&panel_);
+      if (QWidget *focus = QApplication::focusWidget();
+          focus != nullptr && focus != guard && panel_.isAncestorOf(focus)) {
+        focus->clearFocus();
+      }
+      if (panel_guard == nullptr || guard == nullptr ||
+          generation != runtime_binding_generation_) {
+        return;
+      }
+      if (active_transform_edit_) {
+        finish_transform_edit(active_transform_edit_->kind);
+      }
+    });
+    QObject::connect(button, &QToolButton::toggled, &panel_,
+                     [this, generation](bool checked) {
+      if (generation == runtime_binding_generation_) {
+        scale_linked_ = checked;
+      }
+    });
+  }
+
+  bool prepare_linked_scale(std::size_t axis, double next,
+                            std::array<double, 3> &values, bool &constrained) {
+    if (!begin_transform_edit(TransformEditKind::Scale, values)) {
+      return false;
+    }
+    const auto &edit = *active_transform_edit_;
+    if (!std::isfinite(next) || edit.scale_factor_minimum <= 0.0 ||
+        edit.scale_factor_maximum < edit.scale_factor_minimum) {
+      cancel_active_transform_edit();
+      return false;
+    }
+    const double requested_factor = next / edit.scale_baseline[axis];
+    const double factor = std::clamp(requested_factor,
+                                     edit.scale_factor_minimum,
+                                     edit.scale_factor_maximum);
+    constrained = factor != requested_factor;
+    TransformRow &row = transform_rows_[2];
+    for (std::size_t component = 0; component < values.size(); ++component) {
+      values[component] = edit.scale_baseline[component] * factor;
+      if (row.fields[component] != nullptr) {
+        const QSignalBlocker blocker(row.fields[component].data());
+        row.fields[component]->setValue(values[component]);
+      }
+    }
+    return true;
   }
 
   bool transform_edit_matches(TransformEditKind kind) const {
@@ -2245,6 +2385,47 @@ private:
         .values = {static_cast<float>(values[0]), static_cast<float>(values[1]),
                    static_cast<float>(values[2])},
     };
+    if (kind == TransformEditKind::Scale && scale_linked_) {
+      auto &edit = *active_transform_edit_;
+      const TransformComponent *primary_transform = document_->transform(primary_);
+      if (primary_transform == nullptr) {
+        cancel_active_transform_edit();
+        return false;
+      }
+      edit.scale_baseline = {primary_transform->scale.x,
+                             primary_transform->scale.y,
+                             primary_transform->scale.z};
+      edit.scale_factor_minimum = std::numeric_limits<double>::min();
+      edit.scale_factor_maximum = std::numeric_limits<double>::max();
+      const auto constrain = [&](QVec3 baseline) {
+        for (const double component : {baseline.x, baseline.y, baseline.z}) {
+          // The existing numeric transform owner clamps non-positive scales;
+          // refuse those baselines instead of silently changing their ratios.
+          if (!std::isfinite(component) || component <= 0.0) {
+            return false;
+          }
+          edit.scale_factor_minimum = std::max(
+              edit.scale_factor_minimum, 0.001 / component);
+          edit.scale_factor_maximum = std::min(
+              edit.scale_factor_maximum, 1000.0 / component);
+        }
+        return edit.scale_factor_minimum <= edit.scale_factor_maximum;
+      };
+      // The primary ratio denominator uses a fallback below this threshold.
+      // Such a channel cannot represent an exact proportional numeric edit.
+      if (std::any_of(edit.scale_baseline.begin(), edit.scale_baseline.end(),
+                      [](double value) { return value <= 0.000001F; }) ||
+          !constrain(primary_transform->scale)) {
+        cancel_active_transform_edit();
+        return false;
+      }
+      for (const auto &target : active_transform_preview_.targets()) {
+        if (!constrain(target.transform.scale)) {
+          cancel_active_transform_edit();
+          return false;
+        }
+      }
+    }
     return true;
   }
 
@@ -2648,6 +2829,7 @@ private:
   bool force_rebuild_ = true;
   bool adjusting_label_column_width_ = false;
   bool property_layout_refresh_pending_ = false;
+  bool scale_linked_ = false;
 };
 
 InspectorPanel::InspectorPanel(QWidget *parent)

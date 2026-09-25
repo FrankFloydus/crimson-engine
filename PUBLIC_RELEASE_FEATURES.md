@@ -40,7 +40,7 @@ Keep this checklist aligned when scheduling a feature for a later public release
   - UV Peel tool and UV/face-texture previews.
   - Align texture to grid, face or view.
   - Cube, cylinder and sphere texture projection.
-  - Texture scaling on U/V, shifting and rotation.
+  - Texture scaling on U/V, including proportional Link Scale, shifting and rotation.
   - Horizontal/vertical texture flips and face-texture flips.
   - Fit texture on both axes, U only or V only.
   - Justify texture left, right, top, bottom or center.
@@ -179,7 +179,9 @@ workflows, not an equivalent geometric result produced through permitted tools.
   - The native selection APIs remain available.
 
 Normal move/rotate/scale, their internal transform centers and camera navigation
-pivots remain available. Box/click selection remains available.
+pivots remain available. The Inspector's Link Scale control for proportional X/Y/Z
+numeric edits remains available; it does not enable UV editing. Box/click selection
+remains available.
 
 ## Scene instances
 

@@ -1694,3 +1694,5 @@ ui.material_browser.filter.active_tooltip=%1 (1 attivo)
 ui.material_browser.filter.remove_predicate=Rimuovi filtro %1
 tool_settings.edit_texture.group.flip_texture=Ribalta texture
 tool_settings.edit_texture.group.flip_face_uvs=Ribalta UV faccia
+ui.scale_link.title=Collega scala
+ui.scale_link.tooltip=Mantieni le proporzioni quando modifichi un valore di scala.

@@ -1694,3 +1694,5 @@ ui.material_browser.filter.active_tooltip=%1 (1 active)
 ui.material_browser.filter.remove_predicate=Remove %1 filter
 tool_settings.edit_texture.group.flip_texture=Flip Texture
 tool_settings.edit_texture.group.flip_face_uvs=Flip Face UVs
+ui.scale_link.title=Link Scale
+ui.scale_link.tooltip=Preserve proportions when editing any scale value.

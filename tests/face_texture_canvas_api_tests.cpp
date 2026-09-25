@@ -12,8 +12,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace quader {
@@ -70,6 +72,26 @@ QVec2 texture_axis_point(const QuaderFaceTextureCanvas &canvas, double u, double
   const double determinant = m[0] * m[3] - m[1] * m[2];
   return {static_cast<float>((m[3] * u - m[1] * v) / determinant),
           static_cast<float>((-m[2] * u + m[0] * v) / determinant)};
+}
+
+QuaderApiVoidResult set_texture_scale(QuaderEditorApi &editor,
+                                     QuaderFaceTextureField field, double value,
+                                     bool linked = false, std::string merge_key = {}) {
+  return editor.modeling().set_face_texture_setting({
+      .field = field, .value = value,
+      .selection_token = editor.modeling().face_texture_settings().selection_token,
+      .merge_key = std::move(merge_key), .preserve_scale_ratio = linked});
+}
+
+void expect_face_scale(QuaderEditorApi &editor, QuaderModelingObjectRef object,
+                       QuaderElementId face_id, QVec2 expected) {
+  const auto mesh = editor.query().compiled_object_mesh(object);
+  ASSERT_TRUE(mesh.has_value());
+  const auto face = std::ranges::find(mesh->face_textures, face_id,
+                                     &QuaderMeshFaceTexture::face);
+  ASSERT_NE(face, mesh->face_textures.end());
+  EXPECT_FLOAT_EQ(face->scale.x, expected.x);
+  EXPECT_FLOAT_EQ(face->scale.y, expected.y);
 }
 
 TEST(FaceTextureCanvasApiTests, OnlyOneFaceEnablesCanvasAndMissingImageKeepsOutline) {
@@ -569,6 +591,175 @@ TEST(FaceTextureCanvasApiTests, AbsoluteMultiObjectRotationUsesEachFaceChartAndO
   EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, 31.0, 1.0e-4);
   ASSERT_TRUE(editor.selection().select_face(second, 2).ok());
   EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, -42.0, 1.0e-4);
+}
+
+TEST(FaceTextureCanvasApiTests, LinkedScalePreservesEachSelectedFaceRatioAndUndoesAtomically) {
+  FaceTextureCanvasHarness harness;
+  const auto first = harness.create_box();
+  const auto second = harness.create_box();
+  auto &editor = harness.editor;
+  const auto prepare = [&](QuaderModelingObjectRef object, QuaderElementId face,
+                           QVec2 scale) {
+    EXPECT_TRUE(editor.selection().select_face(object, face).ok());
+    EXPECT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleX, scale.x).ok());
+    EXPECT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleY, scale.y).ok());
+  };
+  prepare(first, 1, {2, 3});
+  prepare(first, 2, {-4, 2});
+  prepare(second, 1, {8, -2});
+  ASSERT_TRUE(editor.selection().select_faces(first, {1, 2}).ok());
+  ASSERT_TRUE(editor.selection().select_face(second, 1, QuaderSelectionEdit::Add).ok());
+  const auto settings = editor.modeling().face_texture_settings();
+  ASSERT_EQ(settings.selected_face_count, 3u);
+  ASSERT_FALSE(settings.scale_x.has_value());
+  ASSERT_FALSE(settings.scale_y.has_value());
+  const auto before_revision = editor.revisions().modeling_content_revision;
+  const auto result = set_texture_scale(editor, QuaderFaceTextureField::ScaleX, 6, true);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_TRUE(result.changed());
+  EXPECT_EQ(editor.revisions().modeling_content_revision, before_revision + 1);
+  expect_face_scale(editor, first, 1, {6, 9});
+  expect_face_scale(editor, first, 2, {6, -3});
+  expect_face_scale(editor, second, 1, {6, -1.5f});
+  expect_face_scale(editor, first, 3, {1, 1});
+  EXPECT_EQ(editor.modeling().face_texture_settings().selection_token,
+            settings.selection_token);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_face_scale(editor, first, 1, {2, 3});
+  expect_face_scale(editor, first, 2, {-4, 2});
+  expect_face_scale(editor, second, 1, {8, -2});
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_face_scale(editor, first, 1, {6, 9});
+  expect_face_scale(editor, first, 2, {6, -3});
+  expect_face_scale(editor, second, 1, {6, -1.5f});
+}
+
+TEST(FaceTextureCanvasApiTests, LinkedNumericGesturesMergeBothAxesAndRetainSigns) {
+  FaceTextureCanvasHarness harness;
+  const auto object = harness.create_box();
+  auto &editor = harness.editor;
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleX, 2).ok());
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleY, 3).ok());
+  const auto original = editor.modeling().face_texture_canvas();
+  for (const double value : {4.0, 6.0, -8.0, 3.0}) {
+    const auto result = set_texture_scale(editor, QuaderFaceTextureField::ScaleX,
+                                          value, true, "linked-scale-gesture");
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    expect_face_scale(editor, object, 1,
+                      {static_cast<float>(value), static_cast<float>(value * 1.5)});
+  }
+  const auto after = editor.modeling().face_texture_canvas();
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_face_scale(editor, object, 1, {2, 3});
+  expect_same_mapping(editor.modeling().face_texture_canvas(), original);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_same_mapping(editor.modeling().face_texture_canvas(), after);
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleY, -9, true).ok());
+  expect_face_scale(editor, object, 1, {-6, -9});
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_face_scale(editor, object, 1, {3, 4.5f});
+
+  const auto unchanged_revision = editor.revisions().modeling_content_revision;
+  const auto unchanged_history = editor.history().snapshot();
+  const auto unchanged = set_texture_scale(editor, QuaderFaceTextureField::ScaleY, 4.5, true);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(editor.revisions().modeling_content_revision, unchanged_revision);
+  expect_same_history(editor.history().snapshot(), unchanged_history);
+}
+
+TEST(FaceTextureCanvasApiTests, LinkedScaleRejectsInvalidMixedRequestBeforeAnyPublication) {
+  FaceTextureCanvasHarness harness;
+  const auto first = harness.create_box();
+  const auto second = harness.create_box();
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.selection().select_face(second, 1).ok());
+  const float large_scale = std::numeric_limits<float>::max() * 0.5f;
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleY, large_scale).ok());
+  ASSERT_TRUE(editor.selection().select_face(first, 1, QuaderSelectionEdit::Add).ok());
+  const auto before = editor.revisions();
+  const auto history = editor.history().snapshot();
+  const auto settings = editor.modeling().face_texture_settings();
+  for (const double value : {0.0, std::numeric_limits<double>::quiet_NaN(),
+                             std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::max(),
+                             std::numeric_limits<double>::denorm_min(), 4.0}) {
+    SCOPED_TRACE(value);
+    const auto result = set_texture_scale(editor, QuaderFaceTextureField::ScaleX, value, true);
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+    expect_face_scale(editor, first, 1, {1, 1});
+    expect_face_scale(editor, second, 1, {1, large_scale});
+    EXPECT_EQ(editor.revisions().scene_revision, before.scene_revision);
+    EXPECT_EQ(editor.revisions().asset_revision, before.asset_revision);
+    EXPECT_EQ(editor.revisions().modeling_content_revision, before.modeling_content_revision);
+    EXPECT_EQ(editor.revisions().modeling_selection_revision, before.modeling_selection_revision);
+    expect_same_history(editor.history().snapshot(), history);
+    EXPECT_EQ(editor.modeling().face_texture_settings().selection_token,
+              settings.selection_token);
+  }
+}
+
+TEST(FaceTextureCanvasApiTests, LinkedScaleRejectsCompanionUnderflowAndStaleSelection) {
+  FaceTextureCanvasHarness harness;
+  const auto object = harness.create_box();
+  auto &editor = harness.editor;
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleX, 1.0e30).ok());
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleY, 1.0e-10).ok());
+  const auto original = editor.modeling().face_texture_settings();
+  const auto before = editor.revisions().modeling_content_revision;
+  const auto underflow = set_texture_scale(editor, QuaderFaceTextureField::ScaleX, 1.0e-10, true);
+  EXPECT_FALSE(underflow.ok());
+  EXPECT_FALSE(underflow.changed());
+  EXPECT_EQ(editor.revisions().modeling_content_revision, before);
+  expect_face_scale(editor, object, 1, {1.0e30f, 1.0e-10f});
+  ASSERT_TRUE(editor.selection().select_face(object, 2).ok());
+  const auto stale = editor.modeling().set_face_texture_setting({
+      .field = QuaderFaceTextureField::ScaleY, .value = 2,
+      .selection_token = original.selection_token, .preserve_scale_ratio = true});
+  EXPECT_FALSE(stale.ok());
+  EXPECT_FALSE(stale.changed());
+  expect_face_scale(editor, object, 1, {1.0e30f, 1.0e-10f});
+  expect_face_scale(editor, object, 2, {1, 1});
+}
+
+TEST(FaceTextureCanvasApiTests, LinkedScalePublicationFailureRestoresBothAxesAndHistory) {
+  FaceTextureCanvasHarness harness;
+  const auto first = harness.create_box();
+  const auto second = harness.create_box();
+  auto &editor = harness.editor;
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleY, -3).ok());
+  ASSERT_TRUE(editor.selection().select_face(first, 1, QuaderSelectionEdit::Add).ok());
+  const auto before = editor.revisions();
+  const auto history = editor.history().snapshot();
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+  const auto result = set_texture_scale(editor, QuaderFaceTextureField::ScaleX, 2, true);
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.changed());
+  expect_face_scale(editor, first, 1, {1, 1});
+  expect_face_scale(editor, second, 1, {1, -3});
+  EXPECT_EQ(editor.revisions().scene_revision, before.scene_revision);
+  EXPECT_EQ(editor.revisions().asset_revision, before.asset_revision);
+  EXPECT_EQ(editor.revisions().modeling_content_revision, before.modeling_content_revision);
+  expect_same_history(editor.history().snapshot(), history);
+  harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+}
+
+TEST(FaceTextureCanvasApiTests, ChangingScaleLinkModeStartsSeparateHistoryEvenWithReusedKey) {
+  FaceTextureCanvasHarness harness;
+  const auto object = harness.create_box();
+  auto &editor = harness.editor;
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleX, 2,
+                                 true, "reused-scale-key").ok());
+  ASSERT_TRUE(set_texture_scale(editor, QuaderFaceTextureField::ScaleX, 3,
+                                 false, "reused-scale-key").ok());
+  expect_face_scale(editor, object, 1, {3, 2});
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_face_scale(editor, object, 1, {2, 2});
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_face_scale(editor, object, 1, {1, 1});
 }
 
 } // namespace

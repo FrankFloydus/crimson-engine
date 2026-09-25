@@ -147,6 +147,7 @@ struct ModelingFaceTextureEdit final {
   ModelingFaceTextureField field = ModelingFaceTextureField::ScaleX;
   double value = 1.0;
   std::uint64_t selection_token = 0;
+  bool preserve_scale_ratio = false;
 };
 
 /// The minimal retained rotation baseline; it is not another UV source of truth.
