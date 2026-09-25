@@ -217,6 +217,12 @@ std::string menu_command_localization_key(QuaderCommandId command_id) {
   if (is(quader_command::kUngroupSelection)) {
     return "ui.menu.edit.ungroup";
   }
+  if (is(quader_command::kParentToActive)) {
+    return "ui.menu.edit.parent_to_active";
+  }
+  if (is(quader_command::kUnparentSelection)) {
+    return "ui.menu.edit.unparent";
+  }
   if (is(quader_command::kSelectAll)) {
     return "ui.menu.select.all";
   }

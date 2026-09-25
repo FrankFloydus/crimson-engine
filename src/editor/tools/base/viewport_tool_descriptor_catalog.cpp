@@ -160,7 +160,7 @@ constexpr std::array<ToolDescriptor, 18> kViewportToolDescriptors{{
         .modeling_tool = ModelingViewportTool::Select,
         .id = "pivot",
         .label = "Pivot",
-        .shortcut = "P",
+        // Deliberately unassigned: P belongs to Parent to Active.
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Navigation,
         .owns_viewport = true,

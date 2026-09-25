@@ -260,8 +260,13 @@ translated_edit(const SceneDocument &scene, const ArrangementTarget &target,
   const QMat4 parent_world = parent == kInvalidEntityId
                                  ? scene_transform_identity_matrix()
                                  : scene.world_transform_matrix(parent);
+  const std::optional<QMat4> channel_from_world = try_scene_matrix_inverse(
+      scene_compensated_parent_matrix(parent_world, target.transform));
+  if (!channel_from_world.has_value()) {
+    return std::nullopt;
+  }
   const QVec3 local_delta =
-      transform_vector(inverse(parent_world), world_delta);
+      transform_vector(*channel_from_world, world_delta);
   if (!finite_vector(local_delta)) {
     return std::nullopt;
   }

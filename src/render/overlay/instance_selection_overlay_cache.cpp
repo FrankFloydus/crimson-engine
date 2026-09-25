@@ -60,7 +60,9 @@ RenderInstancePrimitiveKey fill_key(
   return {
       .geometry_payload = static_cast<std::uint64_t>(reinterpret_cast<
           std::uintptr_t>(record.geometry_payload.get())),
-      .material_payload = kFillMaterialPayload,
+      // Active and ordinary occurrences share immutable mesh buffers but need
+      // separate material uniforms for the established instance-fill tint.
+      .material_payload = kFillMaterialPayload + (record.active_selected ? 1u : 0u),
       .index_count = static_cast<std::uint32_t>(record.indices.size()),
       .layer_mask = kViewportOverlayLayerMask,
       .channel = kViewportDefaultRenderableChannel,
@@ -81,7 +83,8 @@ RenderInstancePrimitiveKey wire_key(
       // logical width keeps independently authored widths in separate batches
       // while allowing a global raster-scale change to patch the uniform.
       .material_payload =
-          std::bit_cast<std::uint32_t>(record.logical_wire_width_pixels),
+          static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(record.logical_wire_width_pixels)) |
+          (static_cast<std::uint64_t>(record.active_selected) << 32u),
       .index_offset = record.wire_color,
       .index_count = static_cast<std::uint32_t>(record.wire_segments.size()),
       .layer_mask = kViewportOverlayLayerMask,
@@ -529,7 +532,9 @@ bool InstanceSelectionOverlayCache::rebuild(
     }
     MeshRenderableProxy proxy = mesh_factory_->create_instance_selection_fill(
         fill_mesh_snapshot(*record), *fill_material_, chunk.world_transforms,
-        chunk.world_bounds, kOverlayInstanceSelectionFillColor,
+        chunk.world_bounds, record->active_selected
+            ? viewport_active_selection_color(kOverlayInstanceSelectionFillColor)
+            : kOverlayInstanceSelectionFillColor,
         static_cast<std::uint16_t>(viewport_overlay_draw_order(
             ViewportOverlayLayer::SelectedVisibleFace) * 64));
     if (!proxy.entity || proxy.instance_buffer == nullptr) {

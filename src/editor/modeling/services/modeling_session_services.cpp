@@ -3559,6 +3559,8 @@ ModelingOverlayService::selection_overlay_base_frame(
       const bool tool_source_wire_object =
           object.id > 0 &&
           object.id == options.persistent_source_wire_object_id;
+      const bool active_component_object =
+          object.id > 0 && object.id == active_object_id;
 
       OverlayBaseObjectCacheEntry entry;
       if (reusable != previous_entry_by_object_id.end() &&
@@ -3569,6 +3571,8 @@ ModelingOverlayService::selection_overlay_base_frame(
               object.component_edit_target &&
           previous_entries[reusable->second].active_source_wire_object ==
               active_source_wire_object &&
+          previous_entries[reusable->second].active_component_object ==
+              active_component_object &&
           previous_entries[reusable->second].tool_source_wire_object ==
               tool_source_wire_object &&
           previous_suppressed_persistent_object_selection ==
@@ -3595,6 +3599,8 @@ ModelingOverlayService::selection_overlay_base_frame(
                   object.component_edit_target &&
               candidate_entry.active_source_wire_object ==
                   active_source_wire_object &&
+              candidate_entry.active_component_object ==
+                  active_component_object &&
               candidate_entry.tool_source_wire_object ==
                   tool_source_wire_object &&
               ModelingSelectionService::selection_matches(
@@ -3620,6 +3626,7 @@ ModelingOverlayService::selection_overlay_base_frame(
           entry.selected = object.selected;
           entry.component_edit_target = object.component_edit_target;
           entry.active_source_wire_object = active_source_wire_object;
+          entry.active_component_object = active_component_object;
           entry.tool_source_wire_object = tool_source_wire_object;
           entry.selection = object.selection;
           if (options.suppress_persistent_selection) {
@@ -3634,7 +3641,7 @@ ModelingOverlayService::selection_overlay_base_frame(
           } else {
             entry.frame = quader_editor_core::build_selection_overlay_frame(
                 std::span<const quader_editor_core::PolygonObject>(&object, 1U),
-                selection_mode, active_source_wire_object ? object.id : -1,
+                selection_mode, active_component_object ? object.id : -1,
                 empty_hover, {});
           }
         }
@@ -3760,6 +3767,7 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
   const std::uint64_t object_map_revision = object_registry.revision();
   std::uint64_t overlay_signature =
       selection_overlay_signature(runtime, options);
+  mix_overlay_signature_hash(overlay_signature, session.active_object_id());
   mix_overlay_signature_hash(overlay_signature, object_map_revision);
   mix_overlay_signature_hash(
       overlay_signature,
@@ -3785,6 +3793,7 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
     return selection_overlay_base_frame(session, options);
   }();
   if (!projected_overlay_base_cache_.valid ||
+      projected_overlay_base_cache_.active_object_id != session.active_object_id() ||
       projected_overlay_base_cache_.content_revision != content_revision ||
       projected_overlay_base_cache_.selection_revision != selection_revision ||
       projected_overlay_base_cache_.scene_revision != scene_revision ||
@@ -3807,6 +3816,7 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
             base_frame, object_registry, scene, selection_mode,
             instance_edit_scope, entity_visible);
     projected_overlay_base_cache_.content_revision = content_revision;
+    projected_overlay_base_cache_.active_object_id = session.active_object_id();
     projected_overlay_base_cache_.selection_revision = selection_revision;
     projected_overlay_base_cache_.scene_revision = scene_revision;
     projected_overlay_base_cache_.local_visibility_revision =

@@ -36,6 +36,8 @@ constexpr CommandScope kCommandScopes[]{
     {quader_command::kEditExitInstanceEdit, kObject | kGroup, Operand::Selection},
     {quader_command::kGroupSelection, kObject | kGroup, Operand::Groupable},
     {quader_command::kUngroupSelection, kObject | kGroup, Operand::Group},
+    {quader_command::kParentToActive, kObject | kGroup, Operand::Selection},
+    {quader_command::kUnparentSelection, kObject | kGroup, Operand::Selection},
     {quader_command::kCutSelection, kObject, Operand::Clipboard},
     {quader_command::kCopySelection, kObject, Operand::Clipboard},
     {quader_command::kPasteSelection, kObject, Operand::Clipboard},

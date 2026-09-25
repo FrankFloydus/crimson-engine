@@ -793,6 +793,16 @@ SelectionOverlayFrame build_selection_overlay_frame(
 									 const std::unordered_set<quader_poly::ElementId>* hidden_triangle_faces = nullptr,
                                                                          std::optional<SelectionOverlayLayer> secondary_triangle_layer = std::nullopt) {
 		QDR_PROFILE_SCOPE("qdr_editor_core.build_selection_overlay_frame.append_face_selection");
+		const bool has_active_face =
+			mode == SelectionMode::Face && object_id == active_object_id &&
+			selection.has_active &&
+			selection.active_kind == quader_poly::ElementKind::Face &&
+			quader_poly::selection_contains_face(selection, selection.active_face);
+		const auto selected_face_color = [&](quader_poly::ElementId face_id) {
+			return has_active_face && selection.active_face == face_id
+				? style.active_selection_face_color_abgr
+				: style.selection_face_color_abgr;
+		};
 		if (triangles != nullptr) {
 			std::vector<SelectionOverlayTriangle> secondary_records;
 			if (secondary_triangle_layer.has_value()) {
@@ -836,7 +846,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 								   : (frame.hover_target_selected
 										  ? style.hover_selected_face_color_abgr
 										  : style.hover_face_color_abgr))
-							: style.selection_face_color_abgr,
+							: selected_face_color(face_id),
 						object_id,
 						face_id,
 						a->id,
@@ -846,7 +856,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 					triangles->push_back(record);
 					if (secondary_triangle_layer.has_value()) {
 						record.layer = *secondary_triangle_layer;
-						record.color_abgr = style.selection_face_color_abgr;
+						record.color_abgr = selected_face_color(face_id);
 						secondary_records.push_back(record);
 					}
 				}
@@ -858,6 +868,11 @@ SelectionOverlayFrame build_selection_overlay_frame(
 
 		if (lines == nullptr) {
 			return;
+		}
+		std::unordered_set<std::uint64_t> active_face_edges;
+		if (has_active_face) {
+			overlay_append_face_edges_to_set(lookup, selection.active_face,
+				active_face_edges);
 		}
 		std::unordered_set<std::uint64_t> emitted_edges;
 		emitted_edges.reserve(selection.faces.size() * 4U);
@@ -895,10 +910,13 @@ SelectionOverlayFrame build_selection_overlay_frame(
                                                             .hover_selected_line_color_abgr
                                                       : style
                                                             .hover_face_edge_color_abgr))
-                                        : style.selected_edge_color_abgr,
+										: (active_face_edges.contains(edge_key)
+											   ? style.active_selected_edge_color_abgr
+											   : style.selected_edge_color_abgr),
                                     style.edge_line_width_pixels,
                                     object_id,
-                                    face_id,
+                                    active_face_edges.contains(edge_key)
+                                        ? selection.active_face : face_id,
                                     quader_poly::make_edge(a_id, b_id),
                                 });
                         }
@@ -1018,8 +1036,17 @@ SelectionOverlayFrame build_selection_overlay_frame(
                 const quader_poly::Vertex *b =
                     lookup.vertex(edge.b);
                 if (a != nullptr && b != nullptr) {
+                  const bool active_edge =
+                      object.id == active_object_id &&
+                      object.selection.has_active &&
+                      object.selection.active_kind == quader_poly::ElementKind::Edge &&
+                      quader_poly::make_edge(edge.a, edge.b) ==
+                          quader_poly::make_edge(object.selection.active_edge.a,
+                                                object.selection.active_edge.b);
                   append_line(SelectionOverlayLayer::SelectedEdge, a->position,
-                              b->position, style.selected_edge_color_abgr,
+                              b->position,
+                              active_edge ? style.active_selected_edge_color_abgr
+                                          : style.selected_edge_color_abgr,
                               style.single_edge_line_width_pixels, object.id,
                               quader_poly::kInvalidElementId, edge);
                 }
@@ -1088,9 +1115,16 @@ SelectionOverlayFrame build_selection_overlay_frame(
                                vertex.id);
                 } else if (vertex_selected) {
                   if (!suppress_hover_vertex || vertex.id != hover.vertex_id) {
+                    const bool active_vertex =
+                        object.id == active_object_id &&
+                        object.selection.has_active &&
+                        object.selection.active_kind == quader_poly::ElementKind::Vertex &&
+                        object.selection.active_vertex == vertex.id;
                     append_point(SelectionOverlayLayer::SelectedVertex,
                                  vertex.position,
-                                 style.selected_handle_color_abgr,
+                                 active_vertex
+                                     ? style.active_selected_handle_color_abgr
+                                     : style.selected_handle_color_abgr,
                                  style.vertex_point_size_pixels +
                                      style.selected_hover_point_growth_pixels,
                                  object.id, vertex.id);

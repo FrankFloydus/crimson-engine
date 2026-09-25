@@ -324,6 +324,8 @@ public:
     bool replace_selection(std::span<const EntityId> selected,
                            EntityId active = kInvalidEntityId);
     void clear_selection();
+    /** Validates a parent relationship without changing hierarchy or transforms. */
+    [[nodiscard]] bool can_set_parent(EntityId child, EntityId parent) const;
     bool set_parent(EntityId child, EntityId parent,
                     bool preserve_world_transform = true);
     /**

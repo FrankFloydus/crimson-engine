@@ -42,7 +42,7 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 
 ## Compatibility that must survive
 
-Current scene metadata schema is 16; schema versions and defaults are enforced in the codec.
+Current scene metadata schema is 17; schema versions and defaults are enforced in the codec.
 
 Container 1.2 stores a nonzero minimum product release in the 64-bit header word at byte 56.
 Container 1.0/1.1 retain a zero reserved word and are treated as Internal Full releases.
@@ -68,6 +68,7 @@ the session stamps the writer's release without lowering an existing requirement
 | 14 | Embedded material diffuse model (Burley or Lambert); missing fields use Burley |
 | 15 | Scene fog settings; older schemas and an absent fog table default to disabled fog |
 | 16 | Document-owned scene settings and an explicit ordered forest of parentless entities |
+| 17 | Affine parenting offset before editable TRS; older or absent fields use identity |
 
 The FlatBuffers defaults remain intensity 1 and ACES tone mapping, even when new native
 objects use different creation defaults. Saved camera values also remain unchanged. Obsolete
@@ -90,13 +91,22 @@ empty scenes. Every parentless entity appears exactly once; nested or missing ID
 New writers omit the historical entity root/settings fields. Schemas 1-15 extract settings
 from the sole legacy wrapper and remove it, promoting children in order while preserving world
 placement and inherited visibility/selectability/locking. Roots carrying other authored components, malformed
-hierarchies, and transforms that cannot retain their world matrix as TRS are rejected before
-publication. Older scenes without a wrapper retain their existing forest and receive defaults.
+hierarchies, and nonfinite transforms are rejected before publication. Affine compensation
+preserves inherited shear when a legacy wrapper is removed. Older scenes without a wrapper
+retain their existing forest and receive defaults.
 Full and dependency-only readers share this conversion and root-order validation.
+
+Schema 17 appends `TransformComponent.parenting_offset` as 16 column-major floats. Placement is
+`parent_world * parenting_offset * editable_TRS`; the offset remains valid on parentless entities.
+The matrix must be finite and affine with homogeneous row `(0, 0, 0, 1)`. Singular affine offsets
+are valid stored placements; inversion is an editing-operation concern. Missing offsets and all
+schemas before 17 use identity. Both full hydration and dependency/material-usage projections
+validate the field before publishing results. Earlier readers reject schema 17 before hydration,
+so they cannot silently load compensated children in the wrong location or discard the offset.
 
 The native `qdr_migrate` tool validates a complete batch without writing by default:
 `qdr_migrate <scene.qdr> [...]`. Add `--apply --backup-directory <new-directory>`
-to retain verified originals and publish validated schema-16 files with per-file atomic writes
+to retain verified originals and publish validated schema-17 files with per-file atomic writes
 and rollback on ordinary failures. Its isolated converter also handles the retired
 metadata-10/geometry-2 dialect; that dialect is not accepted by the normal scene reader.
 Persistent backups provide recovery after interruption; the batch is not crash-atomic.

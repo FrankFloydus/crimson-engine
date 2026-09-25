@@ -105,18 +105,37 @@ inline QMat4 scene_transform_multiply(const QMat4 &left, const QMat4 &right) {
   return from_glm(to_glm(left) * to_glm(right));
 }
 
+inline bool scene_matrix_is_finite(const QMat4 &matrix) {
+  return std::all_of(matrix.values.begin(), matrix.values.end(),
+                     [](float value) { return std::isfinite(value); });
+}
+
+/// Accepts finite affine matrices, including singular scales and shear.
+inline bool scene_matrix_is_affine(const QMat4 &matrix) {
+  return scene_matrix_is_finite(matrix) && matrix.values[3] == 0.0f &&
+         matrix.values[7] == 0.0f && matrix.values[11] == 0.0f &&
+         matrix.values[15] == 1.0f;
+}
+
+/// Returns the complete authored local placement, including compensation.
+inline QMat4 scene_local_transform_matrix(const TransformComponent &transform) {
+  return scene_transform_multiply(
+      transform.parenting_offset, compose_transform(transform.spatial_transform()));
+}
+
+/// Returns the world frame in which the editable TRS channels operate.
+inline QMat4 scene_compensated_parent_matrix(
+    const QMat4 &parent_world_matrix, const TransformComponent &transform) {
+  return scene_transform_multiply(parent_world_matrix, transform.parenting_offset);
+}
+
 inline bool scene_transform_is_finite(const TransformComponent &transform) {
   const auto finite = [](QVec3 value) {
     return std::isfinite(value.x) && std::isfinite(value.y) &&
            std::isfinite(value.z);
   };
   return finite(transform.position) && finite(transform.rotation_euler) &&
-         finite(transform.scale);
-}
-
-inline bool scene_matrix_is_finite(const QMat4 &matrix) {
-  return std::all_of(matrix.values.begin(), matrix.values.end(),
-                     [](float value) { return std::isfinite(value); });
+         finite(transform.scale) && scene_matrix_is_affine(transform.parenting_offset);
 }
 
 /// Checks whether a decomposed placement still represents its requested world matrix.
@@ -131,6 +150,31 @@ inline bool scene_matrix_near_equal(const QMat4 &left, const QMat4 &right) {
         kAbsoluteTolerance + kRelativeTolerance * magnitude) return false;
   }
   return true;
+}
+
+/**
+ * Compares an edited TRS matrix at each requested basis scale, so tiny objects
+ * cannot conceal a lossy shear decomposition beneath absolute tolerances.
+ */
+inline bool scene_matrix_near_equal_normalized_basis(
+    QMat4 represented, QMat4 requested) {
+  for (std::size_t column = 0; column < 3; ++column) {
+    const std::size_t offset = 4u * column;
+    const double magnitude = std::hypot(
+        static_cast<double>(requested.values[offset]),
+        static_cast<double>(requested.values[offset + 1u]),
+        static_cast<double>(requested.values[offset + 2u]));
+    if (!std::isfinite(magnitude) || magnitude <= 0.0) {
+      return false;
+    }
+    for (std::size_t row = 0; row < 3; ++row) {
+      requested.values[offset + row] =
+          static_cast<float>(requested.values[offset + row] / magnitude);
+      represented.values[offset + row] =
+          static_cast<float>(represented.values[offset + row] / magnitude);
+    }
+  }
+  return scene_matrix_near_equal(represented, requested);
 }
 
 /**
@@ -214,13 +258,18 @@ try_scene_matrix_inverse(const QMat4 &matrix) {
           static_cast<float>(value);
     }
   }
+  if (scene_matrix_is_affine(matrix)) {
+    // Preserve the exact affine storage invariant after numerical inversion.
+    result.values[3] = result.values[7] = result.values[11] = 0.0f;
+    result.values[15] = 1.0f;
+  }
   return scene_matrix_is_finite(result) ? std::optional<QMat4>(result)
                                         : std::nullopt;
 }
 
 inline std::optional<TransformComponent> try_transform_component_from_matrix(
     const QMat4 &matrix, QVec3 reference_euler_radians = {}) {
-  if (!scene_matrix_is_finite(matrix)) {
+  if (!scene_matrix_is_affine(matrix)) {
     return std::nullopt;
   }
 
@@ -296,23 +345,61 @@ try_scene_local_transform_preserving_world(
     const QMat4 &parent_world_matrix, const QMat4 &child_world_matrix,
     const TransformComponent &current_local_transform) {
   if (!scene_transform_is_finite(current_local_transform) ||
-      !scene_matrix_is_finite(child_world_matrix)) {
+      !scene_matrix_is_affine(parent_world_matrix) ||
+      !scene_matrix_is_affine(child_world_matrix)) {
     return std::nullopt;
   }
   const std::optional<QMat4> parent_inverse =
-      try_scene_matrix_inverse(parent_world_matrix);
+      try_scene_matrix_inverse(scene_compensated_parent_matrix(
+          parent_world_matrix, current_local_transform));
   if (!parent_inverse.has_value()) {
     return std::nullopt;
   }
 
-  std::optional<TransformComponent> result =
-      try_transform_component_from_matrix(
-          scene_transform_multiply(*parent_inverse, child_world_matrix),
-          current_local_transform.rotation_euler);
+  const QMat4 requested_channels =
+      scene_transform_multiply(*parent_inverse, child_world_matrix);
+  std::optional<TransformComponent> result = try_transform_component_from_matrix(
+      requested_channels, current_local_transform.rotation_euler);
   if (result.has_value()) {
+    if (!scene_matrix_near_equal_normalized_basis(
+            compose_transform(result->spatial_transform()), requested_channels)) {
+      return std::nullopt;
+    }
     result->custom_pivot = current_local_transform.custom_pivot;
+    result->parenting_offset = current_local_transform.parenting_offset;
   }
   return result;
+}
+
+/**
+ * Changes the parent frame without decomposing the visible affine transform.
+ * Both parent matrices must describe the original state before hierarchy edits.
+ */
+inline std::optional<TransformComponent>
+try_scene_reparented_transform_preserving_world(
+    const QMat4 &new_parent_world_matrix, const QMat4 &old_parent_world_matrix,
+    const TransformComponent &current_local_transform) {
+  if (!scene_transform_is_finite(current_local_transform) ||
+      !scene_matrix_is_affine(new_parent_world_matrix) ||
+      !scene_matrix_is_affine(old_parent_world_matrix) ||
+      !scene_matrix_is_affine(scene_transform_multiply(
+          old_parent_world_matrix,
+          scene_local_transform_matrix(current_local_transform)))) {
+    return std::nullopt;
+  }
+  const auto parent_inverse = try_scene_matrix_inverse(new_parent_world_matrix);
+  if (!parent_inverse.has_value()) {
+    return std::nullopt;
+  }
+  TransformComponent result = current_local_transform;
+  result.parenting_offset = scene_transform_multiply(
+      *parent_inverse, scene_compensated_parent_matrix(
+                           old_parent_world_matrix, current_local_transform));
+  return scene_transform_is_finite(result) &&
+                 scene_matrix_is_affine(scene_transform_multiply(
+                     new_parent_world_matrix, scene_local_transform_matrix(result)))
+             ? std::optional<TransformComponent>(result)
+             : std::nullopt;
 }
 
 } // namespace quader

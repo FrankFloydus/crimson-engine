@@ -10022,6 +10022,10 @@ private:
     }
     for (std::size_t index = 0; index < pasted.value().objects.size(); ++index) {
       ModelingObjectSceneIdentity identity = source_identities[index];
+      // Clipboard IDs belong to the source scene. Restore relationships only
+      // after every destination entity has been allocated.
+      identity.parent = kInvalidEntityId;
+      identity.sibling_ordinal.reset();
       const auto summary =
           summary_by_object.find(sdk_object_key(pasted.value().objects[index]));
       if (summary == summary_by_object.end()) {
@@ -10054,6 +10058,37 @@ private:
       }
       result.duplicates.push_back(std::move(record));
       active_native_object_id_ = native_id;
+    }
+
+    std::unordered_map<EntityId, EntityId> pasted_entities;
+    for (std::size_t index = 0; index < source_identities.size(); ++index) {
+      pasted_entities.emplace(source_identities[index].id,
+                              result.duplicates[index].entity);
+    }
+    std::vector<SceneParentAssignment> parents;
+    for (std::size_t index = 0; index < source_identities.size(); ++index) {
+      const auto &identity = source_identities[index];
+      if (identity.parent == kInvalidEntityId) {
+        continue;
+      }
+      const auto parent = pasted_entities.find(identity.parent);
+      if (parent == pasted_entities.end()) {
+        return rollback("Clipboard parent identity is unavailable.");
+      }
+      parents.push_back({.child = result.duplicates[index].entity,
+                         .parent = parent->second});
+    }
+    for (const SceneParentAssignment &parent : parents) {
+      ModelingObjectSceneIdentity placement;
+      placement.parent = parent.parent;
+      if (!mesh_sync_.apply_scene_identity_parent(scene_, parent.child,
+                                                  placement)) {
+        return rollback("Clipboard hierarchy could not be restored.");
+      }
+    }
+    for (const ModelingObjectRecord &record : result.duplicates) {
+      object_map_.remember_scene_entity(record.modeling_object_id, scene_,
+                                         record.entity);
     }
 
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||

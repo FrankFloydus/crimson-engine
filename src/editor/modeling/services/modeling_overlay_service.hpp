@@ -141,6 +141,7 @@ private:
       bool selected = false;
       bool component_edit_target = false;
       bool active_source_wire_object = false;
+      bool active_component_object = false;
       bool tool_source_wire_object = false;
       quader_poly::Selection selection;
       quader_editor_core::SelectionOverlayFrame frame;
@@ -166,6 +167,7 @@ private:
     /// Retains the expensive world projection of the semantic selection base.
     struct ProjectedOverlayBaseCache {
       bool valid = false;
+      int active_object_id = -1;
       std::uint64_t content_revision = 0;
       std::uint64_t selection_revision = 0;
       std::uint64_t scene_revision = 0;

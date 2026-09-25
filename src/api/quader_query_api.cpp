@@ -125,6 +125,7 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
   }
   if (const TransformComponent *transform = scene.transform(entity)) {
     snapshot.transform = to_api_transform(*transform);
+    snapshot.parenting_offset = transform->parenting_offset;
   }
   if (const VisibilityComponent *visibility = scene.visibility(entity)) {
     snapshot.visible = visibility->visible;

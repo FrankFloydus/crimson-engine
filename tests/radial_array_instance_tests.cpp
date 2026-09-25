@@ -577,7 +577,7 @@ TEST(RadialArrayInstanceTests, FailedSamplingBakeRemovesAllocatedCopiesAndAllows
   EXPECT_EQ(h.session.scene().selected_entities().size(), 3u);
 }
 
-TEST(RadialArrayInstanceTests, IndependentShearRejectionPreservesOccurrenceAndCanRetryLinked) {
+TEST(RadialArrayInstanceTests, IndependentShearedCopiesPreservePreviewAndOccurrence) {
   RadialArrayInstanceHarness h;
   const auto member = h.box("Sheared Instance Member");
   ASSERT_TRUE(h.editor.scene().set_transform(member.entity,
@@ -588,19 +588,46 @@ TEST(RadialArrayInstanceTests, IndependentShearRejectionPreservesOccurrenceAndCa
   h.begin({source}, false);
   const auto entities = h.session.scene().entities();
   const auto meshes = h.session.assets().mesh_ids();
-  const auto rejected = h.session.radial_array().apply();
-  EXPECT_FALSE(rejected.ok) << rejected.message;
-  EXPECT_FALSE(rejected.changed) << rejected.message;
-  EXPECT_EQ(h.session.scene().entities(), entities);
-  EXPECT_EQ(h.session.assets().mesh_ids(), meshes);
-  EXPECT_EQ(h.session.scene().selected_entities(), std::vector<EntityId>{source});
-  EXPECT_EQ(h.session.history().undo_count(), 0u);
-  EXPECT_TRUE(h.session.radial_array().active());
-  EXPECT_TRUE(h.session.radial_array().has_valid_center());
-  EXPECT_TRUE(h.session.radial_array().preview_state().active);
-  ASSERT_TRUE(h.session.radial_array().set_create_instances(true).ok);
+  const auto source_world = radial_member_world(h.session.scene(), source, member.entity);
+  const AssetId source_mesh = h.session.scene().mesh(member.entity)->mesh;
+  const auto preview = h.session.radial_array().preview_state();
+  ASSERT_EQ(preview.sources.size(), 1u);
+  ASSERT_EQ(preview.sources.front().generated_world_transforms.size(), 2u);
   h.commit();
-  EXPECT_EQ(h.session.scene().selected_entities().size(), 3u);
+  const auto committed_meshes = h.session.assets().mesh_ids();
+  EXPECT_EQ(committed_meshes.size(), meshes.size() + 2u);
+  const auto selected = h.session.scene().selected_entities();
+  ASSERT_EQ(selected.size(), 3u);
+  std::size_t copy = 0u;
+  for (const EntityId entity : selected) {
+    if (entity == source) continue;
+    EXPECT_EQ(h.session.scene().instance_occurrence(entity), nullptr);
+    ASSERT_NE(h.session.scene().mesh(entity), nullptr);
+    expect_radial_instance_matrix(h.session.scene().world_transform_matrix(entity),
+        preview.sources.front().generated_world_transforms[copy++]);
+  }
+  EXPECT_EQ(copy, 2u);
+  expect_radial_instance_matrix(radial_member_world(h.session.scene(), source, member.entity),
+                                source_world);
+  ASSERT_TRUE(h.editor.history().undo().ok());
+  EXPECT_EQ(h.session.scene().entities(), entities);
+  // Structural history retains independent assets referenced by its redo
+  // snapshots; restoring the hierarchy must reuse those exact allocations.
+  EXPECT_EQ(h.session.assets().mesh_ids(), committed_meshes);
+  EXPECT_EQ(h.session.scene().mesh(member.entity)->mesh, source_mesh);
+  EXPECT_EQ(h.session.scene().selected_entities(), std::vector<EntityId>{source});
+  expect_radial_instance_matrix(radial_member_world(h.session.scene(), source, member.entity),
+                                source_world);
+  ASSERT_TRUE(h.editor.history().redo().ok());
+  EXPECT_EQ(h.session.scene().selected_entities(), selected);
+  EXPECT_EQ(h.session.assets().mesh_ids(), committed_meshes);
+  EXPECT_EQ(h.session.scene().mesh(member.entity)->mesh, source_mesh);
+  copy = 0u;
+  for (const EntityId entity : selected) {
+    if (entity == source) continue;
+    expect_radial_instance_matrix(h.session.scene().world_transform_matrix(entity),
+        preview.sources.front().generated_world_transforms[copy++]);
+  }
 }
 
 TEST(RadialArrayInstanceTests, ExplicitConversionUsesRequestedRootsAndRejectsInstanceEditScope) {

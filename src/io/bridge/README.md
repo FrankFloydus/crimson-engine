@@ -104,6 +104,11 @@ storage geometry. Each mesh retains effective saved visibility, an affine
 column-major world transform and local positions, normals and UVs. Singular
 instance definitions that would omit placements fail explicitly.
 
+QDR schema 17 stores affine parenting compensation separately from editable TRS. The reader's
+existing mesh and light affine matrices include the complete compensated hierarchy, including
+shear and reflections, without baking geometry or changing the ABI. Rebuild the reader with the
+native codec when shipping schema 17 support; older reader builds reject the newer scene schema.
+
 The mesh projection owner applies authored face and occurrence texture mapping on
 a detached payload. Source triangles retain counter-clockwise winding; consumers
 adapt winding and tangent generation to their target engine. Surfaces are grouped

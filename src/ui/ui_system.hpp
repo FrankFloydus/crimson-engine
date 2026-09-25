@@ -564,6 +564,7 @@ private:
   std::uint64_t status_notification_command_revision_ = 0u;
   std::uint64_t status_notification_generation_ = 0u;
   bool home_visible_ = false;
+  bool main_window_close_in_progress_ = false;
   bool viewport_initialized_ = false;
   bool selection_toolbar_workspace_visible_ = true;
   bool snapping_toolbar_workspace_visible_ = true;

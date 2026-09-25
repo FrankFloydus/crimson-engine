@@ -835,6 +835,10 @@ std::string capture_scene(const CaptureData &data) {
     writer.line(prefix + ".kind", enum_text(entity->kind));
     writer.line(prefix + ".parent", data.entity_label(entity->parent));
     writer.line(prefix + ".transform", transform_text(entity->transform));
+    writer.line(prefix + ".parenting_offset",
+                entity->parenting_offset.has_value()
+                    ? matrix_text(*entity->parenting_offset)
+                    : "identity");
     writer.line(prefix + ".texture_sampling_from_local",
                 entity->texture_sampling_from_local.has_value()
                     ? matrix_text(*entity->texture_sampling_from_local)

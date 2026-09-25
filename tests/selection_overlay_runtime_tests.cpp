@@ -14,6 +14,7 @@
 #include "editor/tools/extrude_tool_service.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
+#include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/render_layers.hpp"
 #include "render/scene_render_bridge.hpp"
@@ -364,6 +365,57 @@ public:
     return true;
   }
 
+  bool create_active_selection_sample(bool groups) {
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    for (std::size_t index = 0; index < active_entities_.size(); ++index) {
+      const float center = index == 0 ? -1.25f : 1.25f;
+      const auto object = editor.modeling().create_box(
+          {.min = {center - 0.65f, -0.65f, -0.4f},
+           .max = {center + 0.65f, 0.65f, 0.4f}}, "Active selection sample");
+      if (!object.ok()) return false;
+      active_entities_[index] = object.value().entity;
+      if (groups) {
+        const auto group = editor.scene().create_empty();
+        if (!group.ok() || !editor.scene().reparent(object.value().entity, group.value().id).ok()) return false;
+        active_entities_[index] = group.value().id;
+      }
+    }
+    if (!editor.selection().set_mode(groups ? QuaderSelectionMode::Group : QuaderSelectionMode::Object).ok()) return false;
+    camera_.view_axis(ViewportViewAxis::Z, 1);
+    camera_.focus_bounds({-2, -1, -0.5f}, {2, 1, 0.5f}, 1.5f);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  bool present_active_selection_sample(bool groups, std::size_t active, float scale) {
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    if (!editor.selection().select_objects(active_entities_, active_entities_[active]).ok() ||
+        !QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok()) return false;
+    const auto settings = ViewportSettings::defaults();
+    const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings, scale);
+    // Use the viewport's runtime adapters so scene and overlay publications share
+    // the live editor binding and unchanged snapshots remain retained.
+    if (!QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
+            editor.render(), bridge_, active_snapshots_,
+            {.selected_object_overlay_visible = true,
+             .selected_mesh_outline_only = true, .style = style}).ok()) return false;
+    const auto &scene = QuaderRenderApiRuntimeAccess::build_scene_overlay_snapshot(
+        editor.render(), active_snapshots_);
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u),
+         .raster_scale = scale,
+         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .scene_overlay_snapshot = &scene,
+         .selected_mesh_outline_snapshot = active_snapshots_.selected_object_snapshot(),
+         .scene_selection_mode = groups ? RenderOverlaySelectionMode::Group : RenderOverlaySelectionMode::Object,
+         .style_selection_context = groups ? ViewportOverlaySelectionContext::Group : ViewportOverlaySelectionContext::Object,
+         .overlays_visible = true,
+         .scene_overlay_requested = true,
+         .selection_dimensions_visible = groups}, settings);
+    return true;
+  }
+
   const ViewportOverlaySubmissionResult &last_submission() const {
     return last_submission_;
   }
@@ -483,6 +535,8 @@ private:
   }
 
   SceneSession session_;
+  std::array<EntityId, 2> active_entities_{};
+  RenderOverlaySnapshotCache active_snapshots_;
   filament::Engine *engine_ = nullptr;
   filament::Scene *scene_ = nullptr;
   filament::Renderer *renderer_ = nullptr;
@@ -856,6 +910,62 @@ TEST(SelectionOverlayRuntimeTests,
               << ": changed=" << changed_pixels << ", axis_rgb="
               << axis_pixels[0] << ',' << axis_pixels[1] << ',' << axis_pixels[2]
               << ", frame=" << frame_pixels << '\n';
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsAndGroupsSwitchBrightnessAt100And200Percent) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-active-selection-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (directory.isEmpty()) directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+      QStringLiteral("../active_selection_visual"));
+  ASSERT_TRUE(QDir().mkpath(directory));
+  for (const bool groups : {false, true}) {
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_active_selection_sample(groups));
+    for (const float scale : {1.0f, 2.0f}) {
+      const QString stem = QStringLiteral("active-%1-%2")
+          .arg(groups ? QStringLiteral("groups") : QStringLiteral("objects")).arg(int(scale * 100));
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 0u, scale));
+      const QImage left_active = harness.capture();
+      ASSERT_FALSE(left_active.isNull());
+      ASSERT_TRUE(left_active.save(QDir(directory).filePath(stem + QStringLiteral("-left.png"))));
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 1u, scale));
+      const QImage right_active = harness.capture();
+      ASSERT_FALSE(right_active.isNull());
+      ASSERT_TRUE(right_active.save(QDir(directory).filePath(stem + QStringLiteral("-right.png"))));
+      std::array<long long, 2> brightness_delta{};
+      std::array<int, 2> changed{};
+      for (int y = 0; y < left_active.height(); ++y) {
+        for (int x = 0; x < left_active.width(); ++x) {
+          const QColor before = left_active.pixelColor(x, y);
+          const QColor after = right_active.pixelColor(x, y);
+          const std::size_t side = x < left_active.width() / 2 ? 0u : 1u;
+          if (before != after) ++changed[side];
+          brightness_delta[side] += after.red() + after.green() + after.blue() -
+                                    before.red() - before.green() - before.blue();
+        }
+      }
+      EXPECT_GT(changed[0], 8);
+      EXPECT_GT(changed[1], 8);
+      EXPECT_LT(brightness_delta[0], 0) << "The previous active boundary must dim.";
+      EXPECT_GT(brightness_delta[1], 0) << "The new active boundary must brighten.";
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 1u, scale));
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      EXPECT_EQ(harness.capture(), right_active);
+      std::cout << "Active selection GPU " << stem.toStdString() << " changed="
+                << changed[0] << ',' << changed[1] << " brightness="
+                << brightness_delta[0] << ',' << brightness_delta[1] << '\n';
+    }
   }
 }
 

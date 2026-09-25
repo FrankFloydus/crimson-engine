@@ -27,6 +27,8 @@ struct QuaderEntitySnapshot {
   QuaderEntityKind kind = QuaderEntityKind::Generic;
   EntityId parent = kInvalidEntityId;
   QuaderTransform transform;
+  /// Affine prefix before the editable channels; absence denotes identity.
+  std::optional<QMat4> parenting_offset;
   bool visible = true;
   bool selectable = true;
   bool locked = false;

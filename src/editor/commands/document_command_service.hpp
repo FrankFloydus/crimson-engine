@@ -68,6 +68,10 @@ public:
     DocumentCommandResult move_entities(
         std::span<const EntityId> entities, EntityId parent,
         EntityId before_sibling = kInvalidEntityId);
+    DocumentCommandResult parent_selection_to_active();
+    DocumentCommandResult unparent_selection();
+    [[nodiscard]] bool can_parent_selection_to_active() const;
+    [[nodiscard]] bool can_unparent_selection() const;
     DocumentGroupSelectionResult
     group_selection(std::string group_name = {},
                     TransformComponent group_transform = TransformComponent{});
@@ -174,6 +178,10 @@ public:
                       std::vector<DocumentSceneBatchOperation> operations);
 
   private:
+    DocumentCommandResult move_entities_impl(
+        std::span<const EntityId> entities, EntityId parent,
+        EntityId before_sibling, bool retain_subtrees,
+        bool leave_direct_children, std::string label);
     [[nodiscard]] bool mutation_blocked(EntityId entity) const;
     [[nodiscard]] bool selected_mutation_blocked() const;
     [[nodiscard]] bool

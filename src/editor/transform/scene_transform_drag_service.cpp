@@ -23,7 +23,6 @@
 #include <cmath>
 #include <optional>
 #include <span>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -92,7 +91,7 @@ QVec3 selected_transform_pivot(const SceneDocument &document,
   return primary_transform.position;
 }
 
-/// Converts a world-space move delta into one selected entity's parent space.
+/// Converts a world-space move delta into one entity's compensated channel frame.
 struct ParentTranslationBasis {
   QMat4 parent_from_world;
   QVec3 world_x = {1.0f, 0.0f, 0.0f};
@@ -154,7 +153,8 @@ std::optional<TransformComponent> transformed_target_from_world_delta(
       try_scene_local_transform_preserving_world(
           parent_world_transform, preview_scene_transform, target.transform);
   const std::optional<QMat4> parent_from_world =
-      try_scene_matrix_inverse(parent_world_transform);
+      try_scene_matrix_inverse(scene_compensated_parent_matrix(
+          parent_world_transform, target.transform));
   if (!transformed.has_value() || !parent_from_world.has_value()) {
     return std::nullopt;
   }
@@ -184,30 +184,12 @@ std::optional<TransformComponent> transformed_target_from_world_delta(
   }
   // A TRS decomposition can discard shear. Never publish that lossy result as
   // though it were the requested gizmo transform.
-  QMat4 requested_local_transform = scene_transform_multiply(
+  const QMat4 requested_local_transform = scene_transform_multiply(
       *parent_from_world, preview_scene_transform);
-  QMat4 represented_local_transform =
+  const QMat4 represented_local_transform =
       compose_transform(transformed->spatial_transform());
-  // Compare each basis at the requested scale so small objects cannot hide
-  // large relative deformation beneath the matrix's absolute tolerance.
-  for (std::size_t column = 0; column < 3; ++column) {
-    const std::size_t offset = 4 * column;
-    const double magnitude = std::hypot(
-        static_cast<double>(requested_local_transform.values[offset]),
-        static_cast<double>(requested_local_transform.values[offset + 1]),
-        static_cast<double>(requested_local_transform.values[offset + 2]));
-    if (!std::isfinite(magnitude) || magnitude <= 0.0) {
-      return std::nullopt;
-    }
-    for (std::size_t row = 0; row < 3; ++row) {
-      requested_local_transform.values[offset + row] = static_cast<float>(
-          requested_local_transform.values[offset + row] / magnitude);
-      represented_local_transform.values[offset + row] = static_cast<float>(
-          represented_local_transform.values[offset + row] / magnitude);
-    }
-  }
-  if (!scene_matrix_near_equal(represented_local_transform,
-                               requested_local_transform)) {
+  if (!scene_matrix_near_equal_normalized_basis(represented_local_transform,
+                                                requested_local_transform)) {
     return std::nullopt;
   }
   return transformed;
@@ -225,7 +207,9 @@ void pin_target_local_pivot_to_world_point(
   const QVec3 scene_pivot =
       transform_point(target.scene_from_display, world_pivot);
   const QVec3 parent_space_pivot =
-      transform_point(inverse(parent_world), scene_pivot);
+      transform_point(inverse(scene_compensated_parent_matrix(parent_world,
+                                                              transform)),
+                      scene_pivot);
   transform.position =
       parent_space_pivot -
       transform_point(compose_transform(spatial), local_pivot);
@@ -719,8 +703,6 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
   }
   const std::vector<EntityId> selected = document.selected_entities();
   targets_.reserve(selected.size());
-  std::unordered_map<EntityId, ParentTranslationBasis> basis_by_parent;
-  basis_by_parent.reserve(selected.size());
   const std::optional<QMat4> scene_from_display =
       try_scene_matrix_inverse(display_from_scene);
   if (!scene_from_display.has_value()) {
@@ -736,24 +718,21 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
     if (const TransformComponent *selected_transform =
             document.transform(entity)) {
       const EntityId parent = document.parent(entity);
-      const auto [basis_it, inserted] = basis_by_parent.try_emplace(parent);
-      if (inserted) {
-        const QMat4 scene_parent_world =
-            parent == kInvalidEntityId
-                ? scene_transform_identity_matrix()
-                : document.world_transform_matrix(parent);
-        basis_it->second = parent_translation_basis(scene_transform_multiply(
-            display_from_scene, scene_parent_world));
-      }
-      const ParentTranslationBasis &basis = basis_it->second;
-      const QMat4 scene_world_transform =
-          document.world_transform_matrix(entity);
-      const QMat4 world_transform = scene_transform_multiply(
-          display_from_scene, scene_world_transform);
       const QMat4 parent_world =
           parent == kInvalidEntityId
               ? scene_transform_identity_matrix()
               : document.world_transform_matrix(parent);
+      // Siblings can have distinct stored compensation. Capture the inverse
+      // once per target, never share it merely because parent IDs match.
+      const ParentTranslationBasis basis = parent_translation_basis(
+          scene_transform_multiply(
+              display_from_scene,
+              scene_compensated_parent_matrix(parent_world,
+                                               *selected_transform)));
+      const QMat4 scene_world_transform =
+          document.world_transform_matrix(entity);
+      const QMat4 world_transform = scene_transform_multiply(
+          display_from_scene, scene_world_transform);
       const std::optional<TransformComponent> validated_local_transform =
           try_scene_local_transform_preserving_world(
               parent_world, scene_world_transform, *selected_transform);

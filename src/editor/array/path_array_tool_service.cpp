@@ -70,7 +70,8 @@ bool same_transform(const TransformComponent &left,
   return same_vector(left.position, right.position) &&
          same_vector(left.rotation_euler, right.rotation_euler) &&
          same_vector(left.scale, right.scale) &&
-         left.custom_pivot == right.custom_pivot;
+         left.custom_pivot == right.custom_pivot &&
+         left.parenting_offset.values == right.parenting_offset.values;
 }
 
 bool finite_vector(QVec3 value) {
@@ -99,7 +100,8 @@ std::optional<QMat4> source_local_variation_frame(
       !scene_transform_is_finite(local_transform)) {
     return std::nullopt;
   }
-  const glm::mat3 parent_linear{to_glm(parent_world)};
+  const glm::mat3 parent_linear{to_glm(
+      scene_compensated_parent_matrix(parent_world, local_transform))};
   const glm::mat3 local_rotation = glm::mat3_cast(
       to_glm(quat_from_euler_radians(local_transform.rotation_euler)));
   const QMat4 frame = from_glm(glm::mat4{parent_linear * local_rotation});
@@ -1547,7 +1549,7 @@ PathArrayToolService::build_layout(const Session &session) const {
     if (!local.has_value() ||
         !near_matrix(scene_transform_multiply(
                          parent_world,
-                         compose_transform(local->spatial_transform())),
+                         scene_local_transform_matrix(*local)),
                      world)) {
       return std::nullopt;
     }
@@ -1613,7 +1615,7 @@ PathArrayToolService::build_preview_mesh_mappings(
     if (!root_after.has_value() ||
         !near_matrix(scene_transform_multiply(
                          parent_world,
-                         compose_transform(root_after->spatial_transform())),
+                         scene_local_transform_matrix(*root_after)),
                      root_world)) {
       return std::nullopt;
     }
@@ -2018,7 +2020,7 @@ CommandResult PathArrayToolService::apply() {
     if (!after.has_value() ||
         !near_matrix(scene_transform_multiply(
                          parent_world,
-                         compose_transform(after->spatial_transform())),
+                         scene_local_transform_matrix(*after)),
                      layout->world_transforms[index])) {
       return rollback(command_invalid_result(
           "Path Array root transform could not be represented."));

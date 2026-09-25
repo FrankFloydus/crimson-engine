@@ -97,7 +97,7 @@ public:
       if (!local.has_value() ||
           !scene_matrix_near_equal(
               scene_transform_multiply(parent_world_,
-                                       compose_transform(local->spatial_transform())),
+                                       scene_local_transform_matrix(*local)),
               world)) return std::nullopt;
       const DocumentTransformEdit edit{.entity = source_, .before = before_,
                                        .after = *local};

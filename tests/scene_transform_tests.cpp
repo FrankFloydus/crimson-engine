@@ -10,6 +10,7 @@
 #include "editor/session/scene_session.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "scene/scene_bounds.hpp"
+#include "scene/document/scene_entity_state.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <gtest/gtest.h>
@@ -17,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -87,6 +89,188 @@ TEST(SceneTransformTests, FailedReparentPreservesRootOrderAndLocalTransform) {
   EXPECT_EQ(scene.root_entities(), roots);
   expect_matrix_near(scene.world_transform_matrix(first), before);
   EXPECT_EQ(scene.revision(), revision);
+}
+
+TEST(SceneTransformTests,
+     ParentingRetainsEditableChannelsAndExactAffinePlacementAcrossParents) {
+  using namespace quader;
+  SceneDocument scene;
+  const EntityId first_parent = scene.create_empty("First parent");
+  const EntityId second_parent = scene.create_empty("Second parent");
+  const EntityId child = scene.create_entity("Mesh", EntityKind::Mesh);
+  const EntityId grandchild = scene.create_empty("Grandchild");
+  ASSERT_TRUE(scene.set_transform(first_parent, {
+      .position = {3.0f, -2.0f, 1.0f},
+      .rotation_euler = {0.7f, -0.3f, 0.2f},
+      .scale = {-2.0f, 0.5f, 3.0f},
+  }));
+  ASSERT_TRUE(scene.set_transform(second_parent, {
+      .position = {-1.0f, 4.0f, 2.0f},
+      .rotation_euler = {-0.4f, 0.8f, 0.1f},
+      .scale = {0.5f, 1.5f, -2.0f},
+  }));
+  TransformComponent authored{
+      .position = {1.0f, 2.0f, -3.0f},
+      .rotation_euler = {0.6f, 0.3f, -0.9f},
+      .scale = {0.75f, 2.0f, 1.0f},
+      .custom_pivot = true,
+  };
+  authored.parenting_offset.values[4] = 0.35f;
+  ASSERT_TRUE(scene.set_transform(child, authored));
+  ASSERT_TRUE(scene.set_parent(child, first_parent, false));
+  ASSERT_TRUE(scene.set_parent(grandchild, child, false));
+  ASSERT_TRUE(scene.set_transform(grandchild, {.position = {2.0f, 1.0f, -1.0f}}));
+  const QMat4 child_world = scene.world_transform_matrix(child);
+  const QMat4 grandchild_world = scene.world_transform_matrix(grandchild);
+
+  for (const EntityId destination :
+       {second_parent, kInvalidEntityId, first_parent}) {
+    ASSERT_TRUE(scene.set_parent(child, destination, true));
+    const auto *actual = scene.transform(child);
+    ASSERT_NE(actual, nullptr);
+    expect_vector_near(actual->position, authored.position);
+    expect_vector_near(actual->rotation_euler, authored.rotation_euler);
+    expect_vector_near(actual->scale, authored.scale);
+    EXPECT_TRUE(actual->custom_pivot);
+    expect_matrix_near(scene.world_transform_matrix(child), child_world);
+    expect_matrix_near(scene.world_transform_matrix(grandchild), grandchild_world);
+    const auto projection = scene.hierarchy_projection_snapshot();
+    ASSERT_NE(projection.find(child), nullptr);
+    expect_matrix_near(projection.find(child)->world_transform, child_world);
+  }
+}
+
+TEST(SceneTransformTests, ReparentWithoutPreservationRetainsCompleteLocalMatrix) {
+  using namespace quader;
+  SceneDocument scene;
+  const EntityId parent = scene.create_empty("Parent");
+  const EntityId child = scene.create_empty("Child");
+  ASSERT_TRUE(scene.set_transform(parent, {.position = {8.0f, -3.0f, 2.0f}}));
+  TransformComponent authored{.position = {1.0f, 2.0f, 3.0f}};
+  authored.parenting_offset.values[4] = 0.5f;
+  authored.parenting_offset.values[12] = -4.0f;
+  ASSERT_TRUE(scene.set_transform(child, authored));
+  const QMat4 local = scene.local_transform_matrix(child);
+  ASSERT_TRUE(scene.set_parent(child, parent, false));
+  EXPECT_EQ(scene.transform(child)->parenting_offset.values,
+            authored.parenting_offset.values);
+  expect_matrix_near(scene.local_transform_matrix(child), local);
+  expect_matrix_near(scene.world_transform_matrix(child),
+                     scene_transform_multiply(scene.world_transform_matrix(parent),
+                                              local));
+}
+
+TEST(SceneTransformTests, SingularChildAndOldParentRemainPreservable) {
+  using namespace quader;
+  SceneDocument scene;
+  const EntityId parent = scene.create_empty("Collapsed parent");
+  const EntityId destination = scene.create_empty("Destination");
+  const EntityId child = scene.create_empty("Collapsed child");
+  ASSERT_TRUE(scene.set_transform(parent, {.scale = {0.0f, 2.0f, 1.0f}}));
+  ASSERT_TRUE(scene.set_transform(destination, {
+      .position = {5.0f, -1.0f, 3.0f},
+      .rotation_euler = {0.3f, -0.8f, 0.2f},
+  }));
+  ASSERT_TRUE(scene.set_transform(child, {
+      .position = {3.0f, 1.0f, 2.0f}, .scale = {1.0f, 0.0f, -2.0f}}));
+  ASSERT_TRUE(scene.set_parent(child, parent, false));
+  const QMat4 world = scene.world_transform_matrix(child);
+  ASSERT_TRUE(scene.set_parent(child, kInvalidEntityId, true));
+  expect_matrix_near(scene.world_transform_matrix(child), world);
+  ASSERT_TRUE(scene.set_parent(child, destination, true));
+  expect_matrix_near(scene.world_transform_matrix(child), world);
+  EXPECT_FLOAT_EQ(scene.transform(child)->scale.y, 0.0f);
+  EXPECT_TRUE(scene_matrix_is_affine(scene.transform(child)->parenting_offset));
+}
+
+TEST(SceneTransformTests, CompensationOnlyEditsInvalidateAndRollbackProjection) {
+  using namespace quader;
+  SceneDocument scene;
+  const EntityId child = scene.create_empty("Child");
+  TransformComponent authored{.position = {1.0f, 2.0f, 3.0f}};
+  authored.parenting_offset.values[4] = 0.4f;
+  ASSERT_TRUE(scene.set_transform(child, authored));
+  const auto captured = capture_scene_entity_state(scene, child);
+  ASSERT_TRUE(captured.has_value());
+  EXPECT_EQ(captured->transform.parenting_offset.values,
+            authored.parenting_offset.values);
+  const std::array participants{child};
+  const auto checkpoint = scene.capture_modeling_projection_checkpoint(
+      participants, SceneModelingProjectionDomain::Structure);
+  const auto old_projection = scene.hierarchy_projection_snapshot();
+  const auto old_revision = scene.transform_revision();
+  TransformComponent changed = authored;
+  changed.parenting_offset.values[12] = 7.0f;
+  ASSERT_TRUE(scene.set_transform(child, changed));
+  EXPECT_GT(scene.transform_revision(), old_revision);
+  const auto changed_projection = scene.hierarchy_projection_snapshot();
+  ASSERT_NE(changed_projection.find(child), nullptr);
+  EXPECT_NE(changed_projection.find(child)->world_transform.values,
+            old_projection.find(child)->world_transform.values);
+  const auto changed_revision = scene.transform_revision();
+  ASSERT_TRUE(scene.set_transform(child, changed));
+  EXPECT_EQ(scene.transform_revision(), changed_revision);
+  ASSERT_TRUE(scene.restore_modeling_projection_checkpoint(checkpoint));
+  EXPECT_EQ(scene.transform(child)->parenting_offset.values,
+            authored.parenting_offset.values);
+  expect_matrix_near(scene.world_transform_matrix(child),
+                     old_projection.find(child)->world_transform);
+}
+
+TEST(SceneTransformTests, InvalidCompensationIsRejectedBeforePublication) {
+  using namespace quader;
+  SceneDocument scene;
+  const EntityId child = scene.create_empty("Child");
+  for (const auto [index, value] :
+       {std::pair{3u, 0.01f}, std::pair{15u, 0.5f},
+        std::pair{5u, std::numeric_limits<float>::infinity()}}) {
+    TransformComponent invalid;
+    invalid.parenting_offset.values[index] = value;
+    const auto revision = scene.revision();
+    EXPECT_FALSE(scene.set_transform(child, invalid));
+    EXPECT_EQ(scene.revision(), revision);
+    SceneEntityState state;
+    state.transform = invalid;
+    EXPECT_FALSE(apply_scene_entity_common_state(scene, child, state, "Invalid"));
+    EXPECT_EQ(scene.name(child)->name, "Child");
+    EXPECT_EQ(scene.revision(), revision);
+  }
+}
+
+TEST(SceneTransformTests, ChannelWorldSolveRetainsCompensationAndRejectsShear) {
+  using namespace quader;
+  const QMat4 parent = compose_transform(QTransform{
+      .position = {2.0f, -3.0f, 1.0f},
+      .rotation = quat_from_euler_radians({0.2f, 0.5f, -0.7f}),
+      .scale = {2.0f, 0.5f, -1.0f},
+  });
+  TransformComponent original{.custom_pivot = true};
+  original.parenting_offset.values[4] = 0.25f;
+  original.parenting_offset.values[12] = 3.0f;
+  TransformComponent desired = original;
+  desired.position = {4.0f, -1.0f, 2.0f};
+  desired.rotation_euler = {0.3f, 0.6f, 0.2f};
+  desired.scale = {2.0f, 3.0f, 4.0f};
+  const QMat4 desired_world = scene_transform_multiply(
+      parent, scene_local_transform_matrix(desired));
+  const auto solved = try_scene_local_transform_preserving_world(
+      parent, desired_world, original);
+  ASSERT_TRUE(solved.has_value());
+  EXPECT_EQ(solved->parenting_offset.values, original.parenting_offset.values);
+  EXPECT_TRUE(solved->custom_pivot);
+  expect_vector_near(solved->position, desired.position);
+  expect_matrix_near(scene_transform_multiply(parent,
+                                              scene_local_transform_matrix(*solved)),
+                     desired_world);
+
+  QMat4 requested_channels = compose_transform(
+      QTransform{.scale = {0.001f, 0.001f, 0.001f}});
+  requested_channels.values[4] = 0.0004f;
+  const QMat4 sheared_world = scene_transform_multiply(
+      scene_compensated_parent_matrix(parent, original), requested_channels);
+  EXPECT_FALSE(try_scene_local_transform_preserving_world(
+                   parent, sheared_world, original)
+                   .has_value());
 }
 
 TEST(SceneTransformTests,

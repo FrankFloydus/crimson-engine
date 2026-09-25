@@ -261,6 +261,7 @@ texture_color_space_name(TextureColorSpace color_space) {
       {"rotationEuler", vec3_json(transform.rotation_euler)},
       {"scale", vec3_json(transform.scale)},
       {"customPivot", transform.custom_pivot},
+      {"parentingOffset", transform.parenting_offset.values},
   };
 }
 

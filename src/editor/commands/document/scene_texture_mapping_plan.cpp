@@ -47,8 +47,8 @@ std::optional<QMat4> locked_local_delta(
   if (document_command_same_transform(before, after)) {
     return QMat4{};
   }
-  const QMat4 before_matrix = compose_transform(before.spatial_transform());
-  const QMat4 after_matrix = compose_transform(after.spatial_transform());
+  const QMat4 before_matrix = scene_local_transform_matrix(before);
+  const QMat4 after_matrix = scene_local_transform_matrix(after);
   const std::optional<QMat4> before_inverse = try_scene_matrix_inverse(before_matrix);
   if (!before_inverse.has_value()) {
     return std::nullopt;
@@ -61,14 +61,14 @@ std::optional<QMat4> locked_local_delta(
     return QMat4{};
   }
 
-  // Absolute TRS edits have one deterministic order in their authored parent
+  // Absolute TRS edits have one deterministic order in their compensated channel
   // frame: scale, then rotation, then translation. Never decompose world TRS.
   TransformComponent scaled = before;
   scaled.scale = after.scale;
   TransformComponent rotated = scaled;
   rotated.rotation_euler = after.rotation_euler;
-  const QMat4 scaled_matrix = compose_transform(scaled.spatial_transform());
-  const QMat4 rotated_matrix = compose_transform(rotated.spatial_transform());
+  const QMat4 scaled_matrix = scene_local_transform_matrix(scaled);
+  const QMat4 rotated_matrix = scene_local_transform_matrix(rotated);
   const std::optional<QMat4> scaled_inverse = try_scene_matrix_inverse(scaled_matrix);
   const std::optional<QMat4> rotated_inverse = try_scene_matrix_inverse(rotated_matrix);
   if (!scaled_inverse.has_value() || !rotated_inverse.has_value()) {
@@ -153,7 +153,7 @@ SceneTextureMappingPlan::evaluate(
   for (const DocumentTransformEdit &edit : transforms) {
     const auto found = node_by_entity_.find(edit.entity);
     if (found == node_by_entity_.end() || !scene_transform_is_finite(edit.after) ||
-        !try_scene_matrix_inverse(compose_transform(edit.after.spatial_transform())).has_value()) {
+        !try_scene_matrix_inverse(scene_local_transform_matrix(edit.after)).has_value()) {
       return std::nullopt;
     }
     after_by_node[found->second] = &edit.after;
@@ -180,7 +180,7 @@ SceneTextureMappingPlan::evaluate(
     const QMat4 parent_after = node.parent_index.has_value()
                                   ? after_world[*node.parent_index] : node.before_parent_world;
     after_world[index] = scene_transform_multiply(
-        parent_after, compose_transform(after.spatial_transform()));
+        parent_after, scene_local_transform_matrix(after));
     if (!try_scene_matrix_inverse(after_world[index]).has_value()) {
       return std::nullopt;
     }

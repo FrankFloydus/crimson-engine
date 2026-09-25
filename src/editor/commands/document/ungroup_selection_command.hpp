@@ -243,8 +243,8 @@ private:
           const std::optional<TransformComponent> local =
               transform == nullptr
                   ? std::nullopt
-                  : try_scene_local_transform_preserving_world(
-                        parent_world, scene().world_transform_matrix(child),
+                  : try_scene_reparented_transform_preserving_world(
+                        parent_world, scene().world_transform_matrix(group),
                         *transform);
           if (!local.has_value()) {
             return std::nullopt;

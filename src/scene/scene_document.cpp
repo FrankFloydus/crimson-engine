@@ -1198,6 +1198,9 @@ bool SceneDocument::preflight_modeling_projection_restore(
       continue;
     }
     const SceneEntityState &structure = *record.structure;
+    if (!scene_transform_is_finite(structure.transform)) {
+      return report(false);
+    }
     restored_structures.emplace(record.entity, &structure);
     if (instance_definition(record.entity) != nullptr &&
         !structure.instance_definition.has_value()) {
@@ -1787,7 +1790,8 @@ bool same_transform(const TransformComponent &left,
          left.rotation_euler.z == right.rotation_euler.z &&
          left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
          left.scale.z == right.scale.z &&
-         left.custom_pivot == right.custom_pivot;
+         left.custom_pivot == right.custom_pivot &&
+         left.parenting_offset.values == right.parenting_offset.values;
 }
 
 bool same_modeling_object(const ModelingObjectComponent &left,
@@ -2447,8 +2451,7 @@ void SceneDocument::clear_selection() {
   (void)replace_selection({}, kInvalidEntityId);
 }
 
-bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
-                               bool preserve_world_transform) {
+bool SceneDocument::can_set_parent(EntityId child, EntityId new_parent) const {
   if (child == kInvalidEntityId || require_entity(child) == entt::null) {
     return false;
   }
@@ -2489,6 +2492,16 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
       !is_supported_instance_member_subtree(*this, child)) {
     return false;
   }
+  return hierarchy(child) != nullptr;
+}
+
+bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
+                               bool preserve_world_transform) {
+  if (!can_set_parent(child, new_parent)) {
+    return false;
+  }
+  const EntityId old_definition = containing_instance_definition(child);
+  const EntityId new_definition = containing_instance_definition(new_parent);
 
   HierarchyComponent *child_hierarchy = mutable_hierarchy(child);
   if (!child_hierarchy) {
@@ -2500,9 +2513,6 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
     return true;
   }
 
-  const QMat4 child_world = preserve_world_transform
-                                ? world_transform_matrix(child)
-                                : local_transform_matrix(child);
   std::optional<TransformComponent> preserved_local_transform;
   if (preserve_world_transform) {
     const TransformComponent *current_transform = transform(child);
@@ -2512,8 +2522,9 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
     if (current_transform == nullptr) {
       return false;
     }
-    preserved_local_transform = try_scene_local_transform_preserving_world(
-        parent_world, child_world, *current_transform);
+    const QMat4 old_parent_world = world_transform_matrix(old_parent);
+    preserved_local_transform = try_scene_reparented_transform_preserving_world(
+        parent_world, old_parent_world, *current_transform);
     if (!preserved_local_transform.has_value()) {
       return false;
     }
@@ -4286,7 +4297,7 @@ bool SceneDocument::is_effectively_locked(EntityId id) const {
 
 QMat4 SceneDocument::local_transform_matrix(EntityId id) const {
   if (const TransformComponent *component = transform(id)) {
-    return compose_transform(component->spatial_transform());
+    return scene_local_transform_matrix(*component);
   }
   return scene_transform_identity_matrix();
 }
@@ -4301,7 +4312,7 @@ QMat4 SceneDocument::world_transform_matrix(EntityId id) const {
       registry_.try_get<TransformComponent>(entity);
   const QMat4 local_matrix =
       local_transform != nullptr
-          ? compose_transform(local_transform->spatial_transform())
+          ? scene_local_transform_matrix(*local_transform)
           : scene_transform_identity_matrix();
   const HierarchyComponent *hierarchy =
       registry_.try_get<HierarchyComponent>(entity);

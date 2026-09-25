@@ -13,8 +13,11 @@ namespace quader {
 
 inline QVec3 local_pivot_for_world_point(const TransformComponent &transform,
                                          QVec3 world_pivot) {
+  // Standalone transforms are rooted in the supplied frame. Scene hierarchy
+  // consumers additionally account for parent placement through their owner.
   return transform_point(
-      inverse(compose_transform(transform.spatial_transform())), world_pivot);
+      inverse(compose_transform(transform.spatial_transform())),
+      transform_point(inverse(transform.parenting_offset), world_pivot));
 }
 
 inline void pin_local_pivot_to_world_point(TransformComponent &transform,
@@ -23,7 +26,8 @@ inline void pin_local_pivot_to_world_point(TransformComponent &transform,
   QTransform spatial = transform.spatial_transform();
   spatial.position = {};
   transform.position =
-      world_pivot - transform_point(compose_transform(spatial), local_pivot);
+      transform_point(inverse(transform.parenting_offset), world_pivot) -
+      transform_point(compose_transform(spatial), local_pivot);
 }
 
 inline float radians_near_reference(float radians, float reference) {
@@ -142,6 +146,9 @@ inline void
 apply_world_rotation_delta_around_pivot(TransformComponent &transform,
                                         QVec3 world_rotation_delta_radians,
                                         QVec3 local_pivot, QVec3 world_pivot) {
+  // This legacy standalone helper rotates the editable channel frame. Scene
+  // world-space rotation is owned by SceneTransformDragService, which validates
+  // representability against the complete compensated parent matrix.
   transform.rotation_euler = euler_radians_after_world_rotation_delta(
       transform.rotation_euler, world_rotation_delta_radians);
   pin_local_pivot_to_world_point(transform, local_pivot, world_pivot);

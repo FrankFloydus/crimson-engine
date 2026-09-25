@@ -1750,6 +1750,105 @@ TEST(QdrModelingRuntimeOverlayTests,
 	component_source_wire_does_not_stick_without_mode_selection();
 }
 
+TEST(QdrModelingRuntimeOverlayTests, OnlyGlobalActiveObjectHighlightsItsVertexAndEdge) {
+  using namespace quader_editor_core;
+  PolygonObject first;
+  first.id = 1;
+  first.selected = true;
+  first.document = make_open_quad_document();
+  first.selection.mode = quader_poly::SelectionMode::Vertex;
+  first.selection.vertices = {1, 2};
+  first.selection.has_active = true;
+  first.selection.active_kind = quader_poly::ElementKind::Vertex;
+  first.selection.active_vertex = 2;
+  PolygonObject second = first;
+  second.id = 2;
+  std::vector<PolygonObject> objects{first, second};
+  const SelectionOverlayStyle style;
+  const SelectionOverlayFrame vertices = build_selection_overlay_frame(
+      objects, SelectionMode::Vertex, second.id, {}, style);
+  std::size_t active_vertex_count = 0;
+  for (const SelectionOverlayPoint &point : vertices.points) {
+    if (point.color_abgr == style.active_selected_handle_color_abgr) {
+      ++active_vertex_count;
+      EXPECT_EQ(point.object_id, second.id);
+      EXPECT_EQ(point.vertex_id, 2);
+      EXPECT_FLOAT_EQ(point.size_pixels, style.vertex_point_size_pixels +
+                                            style.selected_hover_point_growth_pixels);
+    }
+  }
+  EXPECT_EQ(active_vertex_count, 1U);
+  for (PolygonObject &object : objects) {
+    object.selection.mode = quader_poly::SelectionMode::Edge;
+    object.selection.edges = {quader_poly::make_edge(1, 2), quader_poly::make_edge(2, 3)};
+    object.selection.active_kind = quader_poly::ElementKind::Edge;
+    object.selection.active_edge = quader_poly::make_edge(2, 3);
+  }
+  const SelectionOverlayFrame edges = build_selection_overlay_frame(
+      objects, SelectionMode::Edge, first.id, {}, style);
+  std::size_t active_edge_count = 0;
+  for (const SelectionOverlayLine &line : edges.lines) {
+    if (line.color_abgr == style.active_selected_edge_color_abgr) {
+      ++active_edge_count;
+      EXPECT_EQ(line.object_id, first.id);
+      EXPECT_EQ(line.edge, quader_poly::make_edge(2, 3));
+      EXPECT_FLOAT_EQ(line.width_pixels, style.single_edge_line_width_pixels);
+    }
+  }
+  EXPECT_EQ(active_edge_count, 1U);
+}
+
+TEST(QdrModelingRuntimeOverlayTests, ActiveFaceOwnsSharedBoundaryRegardlessOfFaceOrder) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 1;
+  object.selected = true;
+  object.document = make_open_quad_document();
+  const auto right_bottom = quader_poly::add_vertex(object.document, {3.0F, 0.0F, -1.0F});
+  const auto right_top = quader_poly::add_vertex(object.document, {3.0F, 0.0F, 1.0F});
+  const auto active_face = quader_poly::add_face(
+      object.document, std::array<quader_poly::ElementId, 4>{2, right_bottom, right_top, 3});
+  object.selection.mode = quader_poly::SelectionMode::Face;
+  object.selection.faces = {object.document.faces.front().id, active_face};
+  object.selection.has_active = true;
+  object.selection.active_kind = quader_poly::ElementKind::Face;
+  object.selection.active_face = active_face;
+  const SelectionOverlayStyle style;
+  for (int order = 0; order < 2; ++order) {
+    const std::array objects{object};
+    const auto frame = build_selection_overlay_frame(
+        std::span<const PolygonObject>(objects), SelectionMode::Face, object.id, {}, style);
+    EXPECT_EQ(line_count_for_layer_and_color(frame, SelectionOverlayLayer::SelectedFaceEdge,
+                                            style.active_selected_edge_color_abgr), 4U);
+    EXPECT_EQ(line_count_for_layer(frame, SelectionOverlayLayer::SelectedFaceEdge), 7U);
+    EXPECT_EQ(triangle_count_for_layer_and_color(frame, SelectionOverlayLayer::SelectedVisibleFace,
+                                                style.active_selection_face_color_abgr), 2U);
+    EXPECT_EQ(triangle_count_for_layer_and_color(frame, SelectionOverlayLayer::SelectedFaceMask,
+                                                style.active_selection_face_color_abgr), 2U);
+    for (const auto &line : frame.lines) {
+      if (line.layer == SelectionOverlayLayer::SelectedFaceEdge &&
+          line.edge == quader_poly::make_edge(2, 3)) {
+        EXPECT_EQ(line.color_abgr, style.active_selected_edge_color_abgr);
+        EXPECT_EQ(line.face_id, active_face);
+      }
+    }
+    const SelectionHoverState removal_hover{
+        .object_id = object.id,
+        .kind = SelectionHoverKind::Face,
+        .face_id = active_face,
+        .selected_modifier_pressed = true,
+    };
+    const auto hover_frame = build_selection_overlay_frame(
+        std::span<const PolygonObject>(objects), SelectionMode::Face, object.id,
+        removal_hover, style);
+    EXPECT_EQ(line_count_for_layer_and_color(hover_frame, SelectionOverlayLayer::SelectedFaceEdge,
+                                            style.active_selected_edge_color_abgr), 0U);
+    EXPECT_EQ(triangle_count_for_layer_and_color(hover_frame, SelectionOverlayLayer::HoverFace,
+                                                style.hover_selected_face_color_abgr), 2U);
+    std::reverse(object.selection.faces.begin(), object.selection.faces.end());
+  }
+}
+
 TEST(QdrModelingRuntimeOverlayTests,
 	ComponentSourceWireSticksToComponentEditTargets) {
 	component_source_wire_sticks_to_component_edit_targets();

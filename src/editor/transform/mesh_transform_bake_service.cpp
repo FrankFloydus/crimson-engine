@@ -100,26 +100,6 @@ TransformComponent reset_channels(TransformComponent transform,
   return transform;
 }
 
-bool same_affine_without_scale_bias(QMat4 actual, QMat4 expected) {
-  for (std::size_t column = 0; column < 3u; ++column) {
-    const std::size_t offset = column * 4u;
-    const double length = std::hypot(
-        static_cast<double>(expected.values[offset]),
-        static_cast<double>(expected.values[offset + 1u]),
-        static_cast<double>(expected.values[offset + 2u]));
-    if (!std::isfinite(length) || length == 0.0) {
-      return false;
-    }
-    for (std::size_t row = 0; row < 3u; ++row) {
-      actual.values[offset + row] =
-          static_cast<float>(actual.values[offset + row] / length);
-      expected.values[offset + row] =
-          static_cast<float>(expected.values[offset + row] / length);
-    }
-  }
-  return scene_matrix_near_equal(actual, expected);
-}
-
 std::optional<QMat4> relative_affine(const QMat4 &new_frame,
                                     const QMat4 &old_frame) {
   if (!scene_matrix_is_finite(new_frame) || !scene_matrix_is_finite(old_frame)) {
@@ -436,28 +416,22 @@ private:
     } else if (selected_.contains(scene_.parent(entity)) &&
                parent_world->values !=
                    scene_.world_transform_matrix(scene_.parent(entity)).values) {
-      const QMat4 original_world = scene_.world_transform_matrix(entity);
-      const auto requested = relative_affine(*parent_world, original_world);
-      auto compensated = requested.has_value()
-          ? try_transform_component_from_matrix(*requested, after.rotation_euler)
-          : std::nullopt;
-      if (!requested.has_value() || !compensated.has_value() ||
-          !same_affine_without_scale_bias(
-              compose_transform(compensated->spatial_transform()),
-              *requested)) {
-        error = "Baking would require an unsupported sheared child transform.";
-        return std::nullopt;
-      }
       if (before == nullptr) {
         error = "Baking cannot compensate a child without an authored transform.";
         return std::nullopt;
       }
-      compensated->custom_pivot = after.custom_pivot;
+      const auto compensated = try_scene_reparented_transform_preserving_world(
+          *parent_world,
+          scene_.world_transform_matrix(scene_.parent(entity)), after);
+      if (!compensated.has_value()) {
+        error = "Baking cannot preserve the child transform.";
+        return std::nullopt;
+      }
       after = *compensated;
       changed_locals_[entity] = after;
     }
     const QMat4 world = scene_transform_multiply(
-        *parent_world, compose_transform(after.spatial_transform()));
+        *parent_world, scene_local_transform_matrix(after));
     if (!scene_matrix_is_finite(world) || !scene_transform_is_finite(after)) {
       error = "Baked hierarchy transform is invalid.";
       return std::nullopt;

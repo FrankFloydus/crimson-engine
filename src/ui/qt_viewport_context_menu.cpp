@@ -259,7 +259,9 @@ QString localized_command_label(const QuaderCommandDescriptor &command,
   for (const auto &[id, key, label] : {
            std::tuple{quader_command::kDuplicateSelection, "ui.menu.edit.duplicate", "Duplicate"},
            std::tuple{quader_command::kGroupSelection, "ui.menu.edit.group", "Group"},
-           std::tuple{quader_command::kUngroupSelection, "ui.menu.edit.ungroup", "Ungroup"}}) {
+           std::tuple{quader_command::kUngroupSelection, "ui.menu.edit.ungroup", "Ungroup"},
+           std::tuple{quader_command::kParentToActive, "ui.menu.edit.parent_to_active", "Parent to Active"},
+           std::tuple{quader_command::kUnparentSelection, "ui.menu.edit.unparent", "Unparent"}}) {
     if (command.id == id.string()) {
       return QString::fromStdString(localization.text(key, label));
     }
@@ -562,6 +564,12 @@ void QtViewportContextMenuPresenter::show(
                                    quader_command::kGroupSelection,
                                    "edit.group", true);
         }
+        (void)add_command_action(menu, "ui.menu.edit.parent_to_active",
+                                 "Parent to Active", quader_command::kParentToActive,
+                                 "edit.parent_to_active", true);
+        (void)add_command_action(menu, "ui.menu.edit.unparent", "Unparent",
+                                 quader_command::kUnparentSelection,
+                                 "edit.unparent", true);
         (void)add_command_action(menu, "ui.menu.edit.flatten_instance",
                                  "Flatten Instance",
                                  quader_command::kEditFlattenInstance,

@@ -364,12 +364,12 @@ std::optional<TransformComponent>
 representable_transform(const QMat4 &matrix,
                         const TransformComponent &reference) {
   std::optional<TransformComponent> result =
-      try_transform_component_from_matrix(matrix, reference.rotation_euler);
+      try_scene_local_transform_preserving_world(QMat4{}, matrix, reference);
   if (!result.has_value()) {
     return std::nullopt;
   }
   result->custom_pivot = reference.custom_pivot;
-  if (!near_matrix(compose_transform(result->spatial_transform()), matrix)) {
+  if (!near_matrix(scene_local_transform_matrix(*result), matrix)) {
     return std::nullopt;
   }
   return result;
@@ -462,7 +462,7 @@ LegacyUpgradePlan make_upgrade_plan(
                                  ? scene_transform_identity_matrix()
                                  : scene.world_transform_matrix(parent);
   const QMat4 target_world_after = scene_transform_multiply(
-      parent_world, compose_transform(target_after->spatial_transform()));
+      parent_world, scene_local_transform_matrix(*target_after));
   for (std::size_t index = 0u; index < frame->canonical_positions.size();
        ++index) {
     const QVec3 world_before = transform_point(
@@ -487,14 +487,15 @@ LegacyUpgradePlan make_upgrade_plan(
     const QMat4 child_local_after =
         scene_transform_multiply(*inverse_basis, child_local_before);
     const std::optional<TransformComponent> child_after =
-        representable_transform(child_local_after, *child_before);
+        try_scene_reparented_transform_preserving_world(
+            target_world_after, target_world_before, *child_before);
     if (!child_after.has_value()) {
       plan.status = LegacyPlanStatus::Unrepresentable;
       return plan;
     }
     const QMat4 child_world_before = scene.world_transform_matrix(child);
     const QMat4 child_world_after = scene_transform_multiply(
-        target_world_after, compose_transform(child_after->spatial_transform()));
+        target_world_after, scene_local_transform_matrix(*child_after));
     if (!near_matrix(child_world_before, child_world_after)) {
       plan.status = LegacyPlanStatus::Unrepresentable;
       return plan;

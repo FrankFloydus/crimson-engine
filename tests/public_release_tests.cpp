@@ -16,6 +16,7 @@
 #include "io/project/project_manifest.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
+#include "scene/scene_transform.hpp"
 #include "support/command_observable_state.hpp"
 #include "ui/qt_main_menu.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
@@ -247,6 +248,124 @@ TEST(PublicReleaseCommands, DisabledToolActivationPreservesActivePrimitivePrevie
     EXPECT_FALSE(result.changed());
     expect_unchanged(editor, before);
   }
+}
+
+TEST(PublicReleaseCommands, ParentingCommandsArePublicAndSupportMeshesAndGroups) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto catalog = editor.commands().keybinding_catalog();
+  for (const auto command : {quader_command::kParentToActive,
+                             quader_command::kUnparentSelection}) {
+    EXPECT_TRUE(editor.commands().descriptor(command).has_value());
+    EXPECT_TRUE(std::any_of(catalog.begin(), catalog.end(), [&](const auto &entry) {
+      return std::find(entry.target_ids.begin(), entry.target_ids.end(), command.string()) !=
+             entry.target_ids.end();
+    }));
+  }
+  EXPECT_EQ(editor.commands().shortcut_for(quader_command::kParentToActive), "P");
+  EXPECT_EQ(editor.commands().shortcut_for(quader_command::kUnparentSelection), "Ctrl+P");
+  const auto child = editor.modeling().create_box(
+      {.min = {-1.f, -1.f, -1.f}, .max = {1.f, 1.f, 1.f}}, "Child");
+  const auto parent = editor.modeling().create_box(
+      {.min = {3.f, 0.f, 0.f}, .max = {5.f, 2.f, 2.f}}, "Parent");
+  const auto first_group = editor.scene().create_empty();
+  const auto second_group = editor.scene().create_empty();
+  ASSERT_TRUE(child.ok());
+  ASSERT_TRUE(parent.ok());
+  ASSERT_TRUE(first_group.ok());
+  ASSERT_TRUE(second_group.ok());
+  ASSERT_TRUE(editor.scene().set_transform(parent.value().entity, {
+      .position = {3.f, -2.f, 1.f}, .rotation_euler = {0.3f, 0.5f, -0.4f},
+      .scale = {2.f, 0.5f, -1.f}}).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {child.value().entity, first_group.value().id, parent.value().entity},
+      parent.value().entity).ok());
+  const auto child_world = session.scene().world_transform_matrix(child.value().entity);
+  const auto parented = editor.commands().execute(quader_command::kParentToActive);
+  ASSERT_TRUE(parented.ok()) << parented.error_message();
+  EXPECT_TRUE(parented.changed());
+  EXPECT_EQ(session.scene().parent(child.value().entity), parent.value().entity);
+  EXPECT_EQ(session.scene().parent(first_group.value().id), parent.value().entity);
+  EXPECT_EQ(session.scene().primary_selection(), parent.value().entity);
+  EXPECT_TRUE(scene_matrix_near_equal(
+      session.scene().world_transform_matrix(child.value().entity), child_world));
+  ASSERT_TRUE(editor.commands().execute(quader_command::kUnparentSelection).ok());
+  EXPECT_EQ(session.scene().parent(child.value().entity), kInvalidEntityId);
+  EXPECT_EQ(session.scene().parent(first_group.value().id), kInvalidEntityId);
+  EXPECT_TRUE(scene_matrix_near_equal(
+      session.scene().world_transform_matrix(child.value().entity), child_world));
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first_group.value().id, second_group.value().id}, second_group.value().id).ok());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kParentToActive).ok());
+  EXPECT_EQ(session.scene().parent(first_group.value().id), second_group.value().id);
+  ASSERT_TRUE(editor.commands().execute(quader_command::kUnparentSelection).ok());
+  EXPECT_EQ(session.scene().parent(first_group.value().id), kInvalidEntityId);
+}
+
+TEST(PublicReleaseCommands, ParentingRejectsRestrictedParticipantsAtomically) {
+  for (const EntityKind restricted :
+       {EntityKind::Curve, EntityKind::Light, EntityKind::Instance}) {
+    SCOPED_TRACE(static_cast<int>(restricted));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto box = editor.modeling().create_box(
+        {.min = {-1.f, -1.f, -1.f}, .max = {1.f, 1.f, 1.f}}, "Allowed Mesh");
+    const auto parent = editor.scene().create_empty();
+    ASSERT_TRUE(box.ok());
+    ASSERT_TRUE(parent.ok());
+    // Seed retained unsupported scene data below the release-facing creation API.
+    const EntityId hidden = session.scene().create_entity("Unavailable", restricted);
+    ASSERT_NE(hidden, kInvalidEntityId);
+    ASSERT_TRUE(editor.selection().select_objects_for_inspection(
+        {box.value().entity, hidden, parent.value().id}, parent.value().id).ok());
+    const auto before_parent = capture_command_observable_state(editor);
+    const auto rejected_parent = editor.scene().parent_selection_to_active();
+    EXPECT_FALSE(rejected_parent.ok());
+    EXPECT_FALSE(rejected_parent.changed());
+    expect_unchanged(editor, before_parent);
+    const std::array moved{box.value().entity, hidden};
+    EXPECT_FALSE(editor.scene().move_entities(moved, parent.value().id).ok());
+    expect_unchanged(editor, before_parent);
+
+    ASSERT_TRUE(session.scene().set_parent(box.value().entity, parent.value().id, false));
+    ASSERT_TRUE(session.scene().set_parent(hidden, parent.value().id, false));
+    ASSERT_TRUE(editor.selection().select_objects_for_inspection(
+        {box.value().entity, hidden}, box.value().entity).ok());
+    const auto before_unparent = capture_command_observable_state(editor);
+    const auto rejected_unparent = editor.scene().unparent_selection();
+    EXPECT_FALSE(rejected_unparent.ok());
+    EXPECT_FALSE(rejected_unparent.changed());
+    expect_unchanged(editor, before_unparent);
+    EXPECT_EQ(session.scene().parent(box.value().entity), parent.value().id);
+    EXPECT_EQ(session.scene().parent(hidden), parent.value().id);
+  }
+}
+
+TEST(PublicReleaseCommands, ParentingOverridesAndExplicitUnassignmentSurviveReload) {
+  PublicReleaseDirectory directory;
+  const auto path = directory.path() / "parenting-keybindings.json";
+  write_text(path, R"([
+    {"command":"edit.parent_to_active","key":"Ctrl+Alt+F24"},
+    {"command":"-edit.unparent","key":""}
+  ])");
+  {
+    auto standalone = create_standalone_editor();
+    auto &commands = standalone.editor().commands();
+    const auto loaded = commands.set_keybinding_storage_path(path);
+    ASSERT_TRUE(loaded.ok()) << loaded.error_message();
+    EXPECT_EQ(commands.shortcut_for(quader_command::kParentToActive), "Ctrl+Alt+F24");
+    EXPECT_TRUE(commands.shortcut_for(quader_command::kUnparentSelection).empty());
+    ASSERT_TRUE(commands.set_shortcut(quader_command::kToolsActivateMove,
+                                      "Ctrl+Alt+F23").ok());
+  }
+  auto reloaded = create_standalone_editor();
+  auto &commands = reloaded.editor().commands();
+  const auto loaded = commands.set_keybinding_storage_path(path);
+  ASSERT_TRUE(loaded.ok()) << loaded.error_message();
+  EXPECT_EQ(commands.shortcut_for(quader_command::kParentToActive), "Ctrl+Alt+F24");
+  EXPECT_TRUE(commands.shortcut_for(quader_command::kUnparentSelection).empty());
 }
 
 TEST(PublicReleaseCommands, DisabledHeldInputDoesNotConsumeQuickPivotOrMaterialTransfer) {

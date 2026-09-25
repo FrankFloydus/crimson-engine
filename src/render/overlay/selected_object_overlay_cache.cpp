@@ -358,8 +358,7 @@ void SelectedObjectOverlayCache::sync(
         const bool rebuild =
             existing == entries_.end() ||
             existing->second.mesh_id != state.mesh_id ||
-            existing->second.mesh_revision != state.mesh_revision ||
-            face_style_changed;
+            existing->second.mesh_revision != state.mesh_revision;
         if (rebuild) {
           if (existing != entries_.end()) {
             destroy_entry(existing->second);
@@ -376,6 +375,7 @@ void SelectedObjectOverlayCache::sync(
         const RenderOverlayMeshSnapshot *mesh =
             find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
         if (mesh != nullptr) {
+          update_entry_face_color(existing->second, *mesh, snapshot.style);
           update_entry_transform(existing->second, mesh->world_transform);
         }
       }
@@ -405,6 +405,7 @@ SelectedObjectOverlayCache::selected_entity_states(
         .entity = mesh.entity,
         .mesh_id = mesh.mesh_id,
         .mesh_revision = mesh.mesh_revision,
+        .active_selected = mesh.active_selected,
     });
   }
   return states;
@@ -421,6 +422,8 @@ SelectedObjectOverlayCache::create_entry(
     return entry;
   }
   entry.mesh_revision = mesh.mesh_revision;
+  entry.face_color = mesh.active_selected ? style.active_selection_face_color
+                                          : style.selection_face_color;
   entry.transform_root = utils::EntityManager::get().create();
   filament::TransformManager &transforms = engine_->getTransformManager();
   transforms.create(entry.transform_root);
@@ -429,7 +432,7 @@ SelectedObjectOverlayCache::create_entry(
 
   const std::uint8_t layer_mask = visible_ ? kViewportOverlayLayerMask : 0u;
   std::vector<OverlayFaceFillVertex> face_vertices =
-      selected_face_vertices(mesh.vertices, style.selection_face_color);
+      selected_face_vertices(mesh.vertices, entry.face_color);
   std::vector<std::uint32_t> face_indices =
       valid_triangle_indices(mesh.vertices, mesh.indices);
   if (!face_vertices.empty() && !face_indices.empty()) {
@@ -498,6 +501,22 @@ SelectedObjectOverlayCache::create_entry(
 
   update_entry_transform(entry, mesh.world_transform);
   return entry;
+}
+
+void SelectedObjectOverlayCache::update_entry_face_color(
+    Entry &entry, const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
+  const auto color = mesh.active_selected ? style.active_selection_face_color
+                                          : style.selection_face_color;
+  if (entry.face_color == color) return;
+  const auto vertices = selected_face_vertices(mesh.vertices, color);
+  for (const auto &proxy : entry.face_proxies) {
+    if (proxy.vertex_buffer != nullptr) {
+      proxy.vertex_buffer->setBufferAt(
+          *engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
+    }
+  }
+  entry.face_color = color;
 }
 
 void SelectedObjectOverlayCache::destroy_entry(Entry &entry) {

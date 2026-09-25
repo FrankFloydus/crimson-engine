@@ -809,7 +809,7 @@ private:
           name_item->setEditable(true);
           name_item->setDragEnabled(!entity_record->effectively_locked);
           name_item->setDropEnabled(!entity_record->effectively_locked &&
-                                    entity_record->kind == EntityKind::Empty);
+                                    !entity_record->has_instance_occurrence);
           name_item->setData(static_cast<qulonglong>(entity_record->id),
                              kEntityIdRole);
           name_item->setData(!entity_record->effectively_visible ||
@@ -1107,12 +1107,24 @@ private:
          destination != instance_scope_definition_) ||
         (destination_record != nullptr &&
          (destination_record->effectively_locked ||
-          (row == -1 && destination_record->kind != EntityKind::Empty)))) {
+          destination_record->has_instance_occurrence))) {
       return false;
     }
+    const std::unordered_set<EntityId> dragged(drag.entities.begin(),
+                                              drag.entities.end());
     for (const EntityId entity : drag.entities) {
-      if (destination == entity ||
-          document_->is_descendant_of(destination, entity)) {
+      bool dragged_ancestor = false;
+      for (EntityId ancestor = document_->parent(entity);
+           ancestor != kInvalidEntityId; ancestor = document_->parent(ancestor)) {
+        if (dragged.contains(ancestor)) {
+          dragged_ancestor = true;
+          break;
+        }
+      }
+      if (dragged_ancestor) {
+        continue;
+      }
+      if (!document_->can_set_parent(entity, destination)) {
         return false;
       }
     }
@@ -1265,6 +1277,8 @@ private:
     QAction *duplicate_action = nullptr;
     QAction *group_action = nullptr;
     QAction *ungroup_action = nullptr;
+    QAction *parent_action = nullptr;
+    QAction *unparent_action = nullptr;
     {
       QDR_PROFILE_SCOPE("Qt outliner context menu build");
       menu.setObjectName(QStringLiteral("outliner.context_menu"));
@@ -1339,6 +1353,14 @@ private:
           "ui.outliner.ungroup", "Ungroup Groups",
           quader_command::kUngroupSelection, "outliner.action.ungroup",
           can_ungroup);
+      parent_action = add_command_action(
+          "ui.menu.edit.parent_to_active", "Parent to Active",
+          quader_command::kParentToActive, "outliner.action.parent_to_active",
+          has_mutable_roots && selected_objects.size() > 1u);
+      unparent_action = add_command_action(
+          "ui.menu.edit.unparent", "Unparent",
+          quader_command::kUnparentSelection, "outliner.action.unparent",
+          has_mutable_roots);
       menu.addSeparator();
 
       delete_action = add_command_action(
@@ -1416,6 +1438,10 @@ private:
         group_selection(*editor_, *document_, binding);
       } else if (chosen == ungroup_action) {
         ungroup_selection(*editor_, *document_, binding);
+      } else if (chosen == parent_action) {
+        (void)editor_->commands().execute(quader_command::kParentToActive);
+      } else if (chosen == unparent_action) {
+        (void)editor_->commands().execute(quader_command::kUnparentSelection);
       }
     }
 

@@ -121,6 +121,9 @@ struct TransformComponent {
     QVec3 rotation_euler = {};
     QVec3 scale = {1.0f, 1.0f, 1.0f};
     bool custom_pivot = false;
+    // Affine compensation preserves placement across hierarchy changes while
+    // leaving the editable position, rotation and scale channels untouched.
+    QMat4 parenting_offset;
 
     QTransform spatial_transform() const {
       return QTransform{

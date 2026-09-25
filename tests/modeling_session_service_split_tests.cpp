@@ -107,6 +107,59 @@ quader_poly::Document service_uv_peel_strip_document() {
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     ActiveComponentChangesInvalidateOnlyRelevantSemanticObjectFrames) {
+  using namespace quader_editor_core;
+  PolygonObject first;
+  first.id = 1;
+  first.selected = true;
+  first.component_edit_target = true;
+  first.document = service_uv_peel_strip_document();
+  first.selection.mode = quader_poly::SelectionMode::Vertex;
+  first.selection.vertices = {1, 2};
+  first.selection.has_active = true;
+  first.selection.active_kind = quader_poly::ElementKind::Vertex;
+  first.selection.active_vertex = 2;
+  PolygonObject second = first;
+  second.id = 2;
+  ModelingOverlayService overlay;
+  const SelectionOverlayStyle style;
+  const auto expect_active = [&](int active_id) {
+    // Identical geometry and local selections deliberately exercise template
+    // reuse as well as reusing the previous per-object entries.
+    const ModelingSelectionProjectionSnapshot snapshot(
+        {first, second}, SelectionMode::Vertex, active_id, 7, 10);
+    const auto &frame = overlay.selection_overlay_base_frame(snapshot);
+    std::size_t active_count = 0;
+    std::size_t selected_count = 0;
+    for (const auto &point : frame.points) {
+      if (point.layer == SelectionOverlayLayer::SelectedVertex) {
+        ++selected_count;
+      }
+      if (point.color_abgr == style.active_selected_handle_color_abgr) {
+        ++active_count;
+        EXPECT_EQ(point.object_id, active_id);
+        EXPECT_EQ(point.vertex_id, 2);
+      }
+    }
+    EXPECT_EQ(selected_count, 4U);
+    EXPECT_EQ(active_count, 1U);
+    for (int object_id : {first.id, second.id}) {
+      EXPECT_TRUE(std::ranges::any_of(frame.lines, [object_id](const auto &line) {
+        return line.object_id == object_id && line.layer == SelectionOverlayLayer::SourceWire;
+      }));
+    }
+    const auto *retained_points = frame.points.data();
+    const auto *retained_lines = frame.lines.data();
+    const auto &unchanged = overlay.selection_overlay_base_frame(snapshot);
+    EXPECT_EQ(unchanged.points.data(), retained_points);
+    EXPECT_EQ(unchanged.lines.data(), retained_lines);
+  };
+  expect_active(first.id);
+  expect_active(second.id);
+  expect_active(first.id);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      RuntimeToolCommandServiceBuildsTypedToolCommands) {
   ModelingToolRayEvent ray_event;
   ray_event.ray.origin = {1.0f, 2.0f, 3.0f};

@@ -241,7 +241,9 @@ struct ExtrudeOutlineHarness {
         ++cap_wires;
         EXPECT_NEAR(line.start.z, height, 1.0e-7F);
         EXPECT_NEAR(line.end.z, height, 1.0e-7F);
-        EXPECT_EQ(line.color & 0x00ffffffu, rgba8(255, 255, 0) & 0x00ffffffu);
+        const auto expected = line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire
+            ? viewport_active_selection_color(rgba8(255, 255, 0)) : rgba8(255, 255, 0);
+        EXPECT_EQ(line.color & 0x00ffffffu, expected & 0x00ffffffu);
       } else {
         ++source_wires;
         EXPECT_EQ(line.color & 0x00ffffffu, rgba8(0, 255, 255) & 0x00ffffffu);
@@ -948,6 +950,110 @@ TEST(SelectedMeshOutlinePresentationTests,
   hierarchy = build_render_overlay_selection_snapshot(document, harness.assets);
   EXPECT_TRUE(cache.frame(deselected.selected_object, camera, 0, &hierarchy).lines.empty());
   EXPECT_EQ(deselected.scene_wireframe->meshes.size(), 3u);
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
+     ActiveOnlyComponentChangesReachRetainedSubmissionWithoutRebuildingTopology) {
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+    const auto first = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "First active candidate");
+    const auto second = editor.modeling().create_box(
+        {.min = {2, -1, -1}, .max = {4, 1, 1}}, "Second active candidate");
+    ASSERT_TRUE(first.ok());
+    ASSERT_TRUE(second.ok());
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    const auto select = [&](QuaderModelingObjectRef object) {
+      switch (mode) {
+      case QuaderSelectionMode::Vertex:
+        return editor.selection().select_vertices(object, {1, 2}, QuaderSelectionEdit::Add);
+      case QuaderSelectionMode::Edge:
+        return editor.selection().select_edge(object, 1, 2, QuaderSelectionEdit::Add);
+      default:
+        return editor.selection().select_faces(object, {1, 2}, QuaderSelectionEdit::Add);
+      }
+    };
+    ASSERT_TRUE(select(first.value()).ok());
+    ASSERT_TRUE(select(second.value()).ok());
+    auto &modeling = session.modeling();
+    ExtrudeOutlineProvider provider{session};
+    ExtrudeOutlineTarget target;
+    ViewportOverlaySubmissionCoordinator coordinator;
+    auto settings = ViewportSettings::defaults();
+    (void)settings.set_color(ViewportColorSettingId::SelectionWire, {0.3f, 0.5f, 0.7f, 0.65f});
+    const auto context = mode == QuaderSelectionMode::Vertex
+        ? ViewportOverlaySelectionContext::Vertex
+        : mode == QuaderSelectionMode::Edge ? ViewportOverlaySelectionContext::Edge
+                                           : ViewportOverlaySelectionContext::Face;
+    const auto submit = [&] {
+      return coordinator.submit({
+          .viewport_index = 0u,
+          .layer_mask = 1u,
+          .selection_source = {
+              .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+              .content_revision = modeling.content_revision(),
+              .selection_revision = modeling.selection_revision(),
+              .scene_revision = session.scene().revision(),
+              .asset_revision = session.assets().revision(),
+              .overlay_signature = modeling.selection_overlay_signature(),
+              .selection_context = context,
+          },
+          .selection_frame_provider = &provider,
+          .scene_selection_mode = RenderOverlaySelectionMode::Component,
+          .style_selection_context = context,
+          .overlays_visible = true,
+      }, settings, target);
+    };
+    const auto expect_active = [&](int active_id) {
+      std::size_t active_count = 0;
+      for (const auto &point : target.persistent.points) {
+        if (point.style_role == ViewportOverlayStyleRole::ActiveSelectedVertex) {
+          ++active_count;
+          EXPECT_EQ(point.element.object_id, active_id);
+        }
+      }
+      for (const auto &line : target.persistent.lines) {
+        if (line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire) {
+          ++active_count;
+          EXPECT_EQ(line.element.object_id, active_id);
+        }
+      }
+      if (mode == QuaderSelectionMode::Face) {
+        EXPECT_TRUE(std::ranges::any_of(target.persistent.triangles, [active_id](const auto &triangle) {
+          return triangle.style_role == ViewportOverlayStyleRole::ActiveSelectionFace &&
+                 triangle.element.object_id == active_id;
+        }));
+        for (const auto &triangle : target.persistent.triangles) {
+          if (triangle.style_role == ViewportOverlayStyleRole::ActiveSelectionFace)
+            EXPECT_EQ(triangle.element.object_id, active_id);
+        }
+      }
+      EXPECT_GT(active_count, 0u);
+    };
+    ASSERT_TRUE(submit().persistent_submitted);
+    expect_active(second.value().modeling_object_id);
+    const auto before = modeling.modeling_sdk_projection_stats_for_tests();
+    const auto content_revision = modeling.content_revision();
+    ASSERT_TRUE(select(first.value()).ok());
+    EXPECT_EQ(modeling.content_revision(), content_revision);
+    ASSERT_TRUE(submit().persistent_submitted);
+    expect_active(first.value().modeling_object_id);
+    const auto after = modeling.modeling_sdk_projection_stats_for_tests();
+    EXPECT_EQ(after.selection_topology_build_count, before.selection_topology_build_count);
+    EXPECT_EQ(after.mesh_compile_count, before.mesh_compile_count);
+    const auto builds = provider.builds;
+    const auto submissions = target.submissions;
+    for (int frame = 0; frame < 4; ++frame) {
+      const auto unchanged = submit();
+      EXPECT_FALSE(unchanged.selection_source_refreshed);
+      EXPECT_FALSE(unchanged.persistent_submitted);
+    }
+    EXPECT_EQ(provider.builds, builds);
+    EXPECT_EQ(target.submissions, submissions);
+  }
 }
 
 } // namespace

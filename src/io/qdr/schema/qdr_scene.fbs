@@ -247,6 +247,8 @@ table TransformComponent {
   rotation_euler:Vec3;
   scale:Vec3;
   custom_pivot:bool = false;
+  // Schema 17: affine column-major prefix; absent means identity.
+  parenting_offset:[float];
 }
 
 table TextureMappingComponent {

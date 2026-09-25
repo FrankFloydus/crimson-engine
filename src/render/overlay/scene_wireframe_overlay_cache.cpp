@@ -28,7 +28,8 @@ std::uint32_t wire_color(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style) {
   if (mesh.selected) {
-    return style.selection_wire_color;
+    return mesh.active_selected ? style.active_selection_wire_color
+                                : style.selection_wire_color;
   }
   constexpr std::uint8_t kWireframeAlpha = static_cast<std::uint8_t>(
       (kOverlayWireframeXrayColor >> 24u) & 0xffu);
@@ -368,6 +369,7 @@ bool scene_wireframe_overlay_mesh_inputs_match(
         before.wire_geometry_payload != after.wire_geometry_payload ||
         before.world_transform.values != after.world_transform.values ||
         before.selected != after.selected ||
+        before.active_selected != after.active_selected ||
         before.wireframe_tint.x != after.wireframe_tint.x ||
         before.wireframe_tint.y != after.wireframe_tint.y ||
         before.wireframe_tint.z != after.wireframe_tint.z ||
@@ -468,7 +470,9 @@ void SceneWireframeOverlayCache::sync(
       synced_wire_style_signature_ != snapshot.style.wire_signature;
   const bool wire_color_changed =
       !has_synced_ || synced_wire_style_.selection_wire_color !=
-                          snapshot.style.selection_wire_color;
+                          snapshot.style.selection_wire_color ||
+      synced_wire_style_.active_selection_wire_color !=
+          snapshot.style.active_selection_wire_color;
   const bool line_width_changed =
       !has_synced_ || synced_wire_style_.raster_scale !=
                           snapshot.style.raster_scale ||

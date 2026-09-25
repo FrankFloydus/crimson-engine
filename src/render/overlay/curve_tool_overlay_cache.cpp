@@ -127,7 +127,8 @@ const ViewportOverlayFrame &CurveToolOverlayCache::frame(
             .color = anchor_selected ? kOverlaySelectedVertexColor
                                      : kOverlayToolPlaneLineColor,
             .width_pixels = kOverlayToolPlaneLineWidthPixels,
-            .style_role = ViewportOverlayStyleRole::ExplicitColor,
+            .style_role = anchor_selected ? ViewportOverlayStyleRole::SelectedVertex
+                                          : ViewportOverlayStyleRole::ExplicitColor,
             .source = ViewportOverlaySource::Tool,
         });
       }
@@ -140,7 +141,11 @@ const ViewportOverlayFrame &CurveToolOverlayCache::frame(
                               ? kOverlayVertexColor
                               : kOverlayToolHandleColor),
           .size_pixels = kOverlayDrawnPlanePointSizePixels,
-          .style_role = ViewportOverlayStyleRole::ExplicitColor,
+          .style_role = selected
+              ? (preview.control_selection.active == CurveControlTarget{point.id, kind}
+                     ? ViewportOverlayStyleRole::ActiveSelectedVertex
+                     : ViewportOverlayStyleRole::SelectedVertex)
+              : ViewportOverlayStyleRole::ExplicitColor,
           .source = ViewportOverlaySource::Tool,
       });
     }

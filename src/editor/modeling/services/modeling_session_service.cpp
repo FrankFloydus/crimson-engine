@@ -4368,6 +4368,19 @@ public:
       clipboard_scene_identities_ =
           object_registry_.capture_scene_identities_for_modeling_objects(
               scene_, copied.source_modeling_object_ids);
+      std::unordered_set<EntityId> copied_entities;
+      for (const auto &identity : clipboard_scene_identities_) {
+        copied_entities.insert(identity.id);
+      }
+      for (auto &identity : clipboard_scene_identities_) {
+        if (!copied_entities.contains(identity.parent)) {
+          identity.transform.parenting_offset = scene_compensated_parent_matrix(
+              scene_.world_transform_matrix(identity.parent),
+              identity.transform);
+          identity.parent = kInvalidEntityId;
+          identity.sibling_ordinal.reset();
+        }
+      }
       if (!release_has_feature(ReleaseFeature::Materials)) {
         for (auto &identity : clipboard_scene_identities_) {
           identity.material = MaterialComponent{};
@@ -8627,15 +8640,14 @@ public:
       }
       const QMat4 definition_world =
           scene_.world_transform_matrix(edit_scope.definition);
-      const QMat4 definition_local_world = scene_transform_multiply(
-          *occurrence_inverse,
-          scene_.world_transform_matrix(created.entity));
+      const QMat4 creation_parent_world =
+          scene_.world_transform_matrix(scene_.parent(created.entity));
+      const QMat4 displayed_parent_in_definition = scene_transform_multiply(
+          definition_world,
+          scene_transform_multiply(*occurrence_inverse, creation_parent_world));
       const std::optional<TransformComponent> member_local =
-          try_scene_local_transform_preserving_world(
-              definition_world,
-              scene_transform_multiply(definition_world,
-                                       definition_local_world),
-              *created_transform);
+          try_scene_reparented_transform_preserving_world(
+              definition_world, displayed_parent_in_definition, *created_transform);
       if (!member_local.has_value() ||
           !mesh_sync_service_.place_created_scene_object(
               scene_, created.entity, edit_scope.definition, *member_local)) {
@@ -9528,7 +9540,7 @@ public:
         }
         const QMat4 recomposed_world = scene_transform_multiply(
             parent_world,
-            compose_transform(local_transform->spatial_transform()));
+            scene_local_transform_matrix(*local_transform));
         if (!scene_matrix_near_equal(recomposed_world,
                                                  desired_world)) {
           return failure(
@@ -9724,7 +9736,7 @@ public:
         }
         const QMat4 recomposed_world = scene_transform_multiply(
             parent_world,
-            compose_transform(local_transform->spatial_transform()));
+            scene_local_transform_matrix(*local_transform));
         if (!scene_matrix_near_equal(recomposed_world,
                                                  desired_world)) {
           return failure(

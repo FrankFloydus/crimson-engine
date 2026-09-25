@@ -7660,7 +7660,9 @@ TEST(SceneDocumentTests, ReparentCanPreserveWorldTransformAndDestroyChildren) {
   EXPECT_FLOAT_EQ(before.x, after.x);
   EXPECT_FLOAT_EQ(before.y, after.y);
   ASSERT_NE(scene.transform(child), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 12.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->parenting_offset.values[12], 10.0f);
+  EXPECT_FLOAT_EQ(after.z, before.z);
 
   ASSERT_TRUE(scene.set_parent(leaf, group, false));
   scene.set_selected(leaf, true);
@@ -7699,9 +7701,13 @@ TEST(SceneDocumentTests,
                 0.00002f);
   }
   ASSERT_NE(scene.transform(child), nullptr);
-  EXPECT_NEAR(scene.transform(child)->scale.x, 3.0f, 0.0001f);
-  EXPECT_NEAR(scene.transform(child)->scale.y, 5.0f, 0.0001f);
-  EXPECT_NEAR(scene.transform(child)->scale.z, 7.0f, 0.0001f);
+  expect_vec3_near(scene.transform(child)->position, child_transform.position);
+  expect_vec3_near(scene.transform(child)->rotation_euler, child_transform.rotation_euler);
+  expect_vec3_near(scene.transform(child)->scale, child_transform.scale);
+  const auto inverse_parent = try_scene_matrix_inverse(scene.world_transform_matrix(parent));
+  ASSERT_TRUE(inverse_parent.has_value());
+  EXPECT_TRUE(scene_matrix_near_equal(scene.transform(child)->parenting_offset,
+                                      *inverse_parent));
   EXPECT_TRUE(scene.transform(child)->custom_pivot);
 
   ASSERT_TRUE(scene.set_parent(child, kInvalidEntityId, true));
@@ -7712,6 +7718,8 @@ TEST(SceneDocumentTests,
   }
   ASSERT_NE(scene.transform(child), nullptr);
   EXPECT_TRUE(scene.transform(child)->custom_pivot);
+  expect_vec3_near(scene.transform(child)->scale, child_transform.scale);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.transform(child)->parenting_offset, QMat4{}));
 }
 
 TEST(SceneDocumentTests,
@@ -16433,6 +16441,7 @@ TEST(DocumentCommandTests,
   child_transform.position = {1.0f, 0.0f, 0.0f};
   scene.set_transform(child, child_transform);
   ASSERT_TRUE(scene.set_parent(child, parent, false));
+  const QMat4 world_before = scene.world_transform_matrix(child);
 
   UndoRedoManager undo_redo;
   UndoRedoResult result =
@@ -16441,15 +16450,21 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_EQ(scene.parent(child), kInvalidEntityId);
   ASSERT_NE(scene.transform(child), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 11.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->parenting_offset.values[12], 10.0f);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(child), world_before));
 
   ASSERT_TRUE(undo_redo.undo().ok);
   EXPECT_EQ(scene.parent(child), parent);
   ASSERT_NE(scene.transform(child), nullptr);
   EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+  EXPECT_EQ(scene.transform(child)->parenting_offset.values, QMat4{}.values);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(child), world_before));
   ASSERT_TRUE(undo_redo.redo().ok);
   EXPECT_EQ(scene.parent(child), kInvalidEntityId);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 11.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->parenting_offset.values[12], 10.0f);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(child), world_before));
 
   TransformComponent moved = *scene.transform(child);
   moved.position.y = 4.0f;
@@ -16457,8 +16472,12 @@ TEST(DocumentCommandTests,
       scene, child, *scene.transform(child), moved));
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_FLOAT_EQ(scene.transform(child)->position.y, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->parenting_offset.values[12], 10.0f);
+  expect_vec3_near(transform_point(scene.world_transform_matrix(child), {}),
+                   {11.0f, 4.0f, 0.0f});
   ASSERT_TRUE(undo_redo.undo().ok);
   EXPECT_FLOAT_EQ(scene.transform(child)->position.y, 0.0f);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(child), world_before));
 
   result = undo_redo.execute(std::make_unique<SelectEntitiesCommand>(
       scene, std::vector<EntityId>{parent, child}, parent));
@@ -17187,7 +17206,7 @@ TEST(DocumentCommandServiceTests,
 }
 
 TEST(DocumentCommandServiceTests,
-     GroupSelectionPreflightsLaterSingularRootWithoutPartialMutation) {
+     GroupSelectionPreservesSingularRootChannelsWorldAndHistory) {
   SceneDocument scene;
   EditorHistoryService history;
   DocumentCommandService commands(scene, history);
@@ -17220,15 +17239,35 @@ TEST(DocumentCommandServiceTests,
   const std::vector<EntityId> selection_before = scene.selected_entities();
   const EntityId active_before = scene.primary_selection();
   const std::size_t entity_count_before = scene.entities().size();
-  const std::uint64_t revision_before = scene.revision();
-  const std::uint64_t transform_revision_before = scene.transform_revision();
-
   const DocumentGroupSelectionResult result =
-      commands.group_selection("Rejected Group", group_transform);
+      commands.group_selection("Affine Group", group_transform);
 
-  EXPECT_FALSE(result.ok);
-  EXPECT_FALSE(result.changed);
-  EXPECT_EQ(result.group_entity, kInvalidEntityId);
+  ASSERT_TRUE(result.ok) << result.message;
+  ASSERT_TRUE(result.changed);
+  ASSERT_NE(result.group_entity, kInvalidEntityId);
+  EXPECT_EQ(scene.entities().size(), entity_count_before + 1u);
+  EXPECT_EQ(scene.parent(representable), result.group_entity);
+  EXPECT_EQ(scene.parent(sheared), result.group_entity);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(representable),
+                                      representable_world_before));
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(sheared),
+                                      sheared_world_before));
+  expect_vec3_near(scene.transform(representable)->position, representable_transform.position);
+  expect_vec3_near(scene.transform(representable)->rotation_euler,
+                   representable_transform.rotation_euler);
+  expect_vec3_near(scene.transform(representable)->scale, representable_transform.scale);
+  expect_vec3_near(scene.transform(sheared)->position, sheared_transform.position);
+  expect_vec3_near(scene.transform(sheared)->rotation_euler, sheared_transform.rotation_euler);
+  expect_vec3_near(scene.transform(sheared)->scale, sheared_transform.scale);
+  const QMat4 grouped_offset = scene.transform(sheared)->parenting_offset;
+  EXPECT_TRUE(scene_matrix_is_affine(grouped_offset));
+  EXPECT_EQ(scene.selected_entities(), (std::vector<EntityId>{result.group_entity}));
+  EXPECT_EQ(scene.primary_selection(), result.group_entity);
+  EXPECT_EQ(history.undo_count(), 1u);
+  EXPECT_FALSE(history.can_redo());
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FALSE(scene.exists(result.group_entity));
   EXPECT_EQ(scene.entities().size(), entity_count_before);
   EXPECT_EQ(scene.parent(representable), kInvalidEntityId);
   EXPECT_EQ(scene.parent(sheared), kInvalidEntityId);
@@ -17238,14 +17277,26 @@ TEST(DocumentCommandServiceTests,
             sheared_world_before.values);
   EXPECT_EQ(scene.selected_entities(), selection_before);
   EXPECT_EQ(scene.primary_selection(), active_before);
-  EXPECT_EQ(scene.revision(), revision_before);
-  EXPECT_EQ(scene.transform_revision(), transform_revision_before);
+  EXPECT_EQ(scene.transform(representable)->parenting_offset.values,
+            representable_transform.parenting_offset.values);
+  EXPECT_EQ(scene.transform(sheared)->parenting_offset.values,
+            sheared_transform.parenting_offset.values);
   EXPECT_FALSE(history.can_undo());
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_EQ(scene.parent(representable), result.group_entity);
+  EXPECT_EQ(scene.parent(sheared), result.group_entity);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(representable),
+                                      representable_world_before));
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(sheared),
+                                      sheared_world_before));
+  EXPECT_EQ(scene.transform(sheared)->parenting_offset.values, grouped_offset.values);
+  EXPECT_EQ(scene.primary_selection(), result.group_entity);
+  EXPECT_EQ(history.undo_count(), 1u);
   EXPECT_FALSE(history.can_redo());
 }
 
 TEST(DocumentCommandServiceTests,
-     UngroupSelectionPreflightsLaterSingularChildWithoutPartialMutation) {
+     UngroupSelectionPreservesSingularChildChannelsWorldAndHistory) {
   SceneDocument scene;
   EditorHistoryService history;
   DocumentCommandService commands(scene, history);
@@ -17291,22 +17342,19 @@ TEST(DocumentCommandServiceTests,
   const std::vector<EntityId> selection_before = scene.selected_entities();
   const EntityId active_before = scene.primary_selection();
   const std::size_t entity_count_before = scene.entities().size();
-  const std::uint64_t revision_before = scene.revision();
-  const std::uint64_t transform_revision_before = scene.transform_revision();
-
   const DocumentCommandResult result = commands.ungroup_selection();
 
-  EXPECT_FALSE(result.ok);
-  EXPECT_FALSE(result.changed);
-  EXPECT_TRUE(scene.exists(valid_group));
-  EXPECT_TRUE(scene.exists(sheared_group));
-  EXPECT_EQ(scene.entities().size(), entity_count_before);
-  EXPECT_EQ(scene.parent(valid_child), valid_group);
-  EXPECT_EQ(scene.parent(sheared_child), sheared_group);
-  EXPECT_EQ(scene.world_transform_matrix(valid_child).values,
-            valid_child_world_before.values);
-  EXPECT_EQ(scene.world_transform_matrix(sheared_child).values,
-            sheared_child_world_before.values);
+  ASSERT_TRUE(result.ok) << result.message;
+  ASSERT_TRUE(result.changed);
+  EXPECT_FALSE(scene.exists(valid_group));
+  EXPECT_FALSE(scene.exists(sheared_group));
+  EXPECT_EQ(scene.entities().size(), entity_count_before - 2u);
+  EXPECT_EQ(scene.parent(valid_child), kInvalidEntityId);
+  EXPECT_EQ(scene.parent(sheared_child), kInvalidEntityId);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(valid_child),
+                                      valid_child_world_before));
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(sheared_child),
+                                      sheared_child_world_before));
   expect_vec3_near(scene.transform(valid_child)->position,
                    valid_child_local_before.position);
   expect_vec3_near(scene.transform(valid_child)->rotation_euler,
@@ -17319,11 +17367,40 @@ TEST(DocumentCommandServiceTests,
                    sheared_child_local_before.rotation_euler);
   expect_vec3_near(scene.transform(sheared_child)->scale,
                    sheared_child_local_before.scale);
+  const QMat4 ungrouped_offset = scene.transform(sheared_child)->parenting_offset;
+  EXPECT_TRUE(scene_matrix_is_affine(ungrouped_offset));
+  EXPECT_EQ(scene.selected_entities(), (std::vector<EntityId>{valid_child, sheared_child}));
+  EXPECT_EQ(scene.primary_selection(), sheared_child);
+  EXPECT_EQ(history.undo_count(), 1u);
+  EXPECT_FALSE(history.can_redo());
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_TRUE(scene.exists(valid_group));
+  EXPECT_TRUE(scene.exists(sheared_group));
+  EXPECT_EQ(scene.entities().size(), entity_count_before);
+  EXPECT_EQ(scene.parent(valid_child), valid_group);
+  EXPECT_EQ(scene.parent(sheared_child), sheared_group);
+  EXPECT_EQ(scene.world_transform_matrix(valid_child).values, valid_child_world_before.values);
+  EXPECT_EQ(scene.world_transform_matrix(sheared_child).values, sheared_child_world_before.values);
+  EXPECT_EQ(scene.transform(valid_child)->parenting_offset.values,
+            valid_child_local_before.parenting_offset.values);
+  EXPECT_EQ(scene.transform(sheared_child)->parenting_offset.values,
+            sheared_child_local_before.parenting_offset.values);
   EXPECT_EQ(scene.selected_entities(), selection_before);
   EXPECT_EQ(scene.primary_selection(), active_before);
-  EXPECT_EQ(scene.revision(), revision_before);
-  EXPECT_EQ(scene.transform_revision(), transform_revision_before);
   EXPECT_FALSE(history.can_undo());
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_FALSE(scene.exists(valid_group));
+  EXPECT_FALSE(scene.exists(sheared_group));
+  EXPECT_EQ(scene.parent(valid_child), kInvalidEntityId);
+  EXPECT_EQ(scene.parent(sheared_child), kInvalidEntityId);
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(valid_child),
+                                      valid_child_world_before));
+  EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(sheared_child),
+                                      sheared_child_world_before));
+  EXPECT_EQ(scene.transform(sheared_child)->parenting_offset.values, ungrouped_offset.values);
+  EXPECT_EQ(scene.primary_selection(), sheared_child);
+  EXPECT_EQ(history.undo_count(), 1u);
   EXPECT_FALSE(history.can_redo());
 }
 

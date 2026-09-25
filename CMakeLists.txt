@@ -1720,6 +1720,9 @@ if(QUADER_BUILD_TESTS)
         tests/programmatic_api_tests.cpp
         tests/programmatic_behavior_scenario_tests.cpp
         tests/grouping_public_api_tests.cpp
+        tests/parenting_command_tests.cpp
+        tests/parenting_structural_transform_tests.cpp
+        tests/compensated_transform_consumer_tests.cpp
         tests/io_qdr_tests.cpp
         tests/inspector_material_tests.cpp
         tests/project_material_behavior_tests.cpp

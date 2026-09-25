@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -21,8 +22,9 @@ namespace quader {
 class MoveEntitiesCommand final : public SceneCommand {
 public:
   MoveEntitiesCommand(SceneDocument &scene, std::vector<EntityId> roots,
-                      EntityId parent, EntityId before_sibling)
-      : SceneCommand(scene, "Move Entities"), roots_(std::move(roots)),
+                      EntityId parent, EntityId before_sibling,
+                      std::string label = "Move Entities")
+      : SceneCommand(scene, std::move(label)), roots_(std::move(roots)),
         parent_(parent), before_sibling_(before_sibling) {}
 
   DocumentCommandResult undo() override {
@@ -40,6 +42,16 @@ public:
     return apply(after_, after_layers_);
   }
 
+  /** Validates every placement before the history owner publishes a mutation. */
+  DocumentCommandResult preflight() {
+    if (prepared_) {
+      return document_command_changed_result();
+    }
+    const DocumentCommandResult result = prepare();
+    prepared_ = result.ok && result.changed;
+    return result;
+  }
+
 private:
   /** Retains only placement and local transform for a moved root. */
   struct Placement {
@@ -50,6 +62,11 @@ private:
   };
 
   DocumentCommandResult prepare() {
+    before_.clear();
+    after_.clear();
+    participants_.clear();
+    before_layers_.clear();
+    after_layers_.clear();
     const std::unordered_set<EntityId> moved(roots_.begin(), roots_.end());
     const std::vector<EntityId> siblings = scene().children(parent_);
     std::size_t insertion = 0u;
@@ -78,6 +95,14 @@ private:
             "Moved entity has no authored hierarchy placement");
       }
       const EntityId previous_parent = scene().parent(entity);
+      if (!scene().can_set_parent(entity, parent_)) {
+        return document_command_invalid_request_result(
+            "Entities cannot be moved to the requested hierarchy");
+      }
+      if (!scene_transform_is_finite(*transform)) {
+        return document_command_invalid_request_result(
+            "Moved entity has an invalid transform");
+      }
       const EntityId previous_definition =
           scene().containing_instance_definition(entity);
       // The scene owner permits extracting live-definition members only from
@@ -93,8 +118,11 @@ private:
       const std::optional<TransformComponent> local =
           previous_parent == parent_
               ? std::optional<TransformComponent>(*transform)
-              : try_scene_local_transform_preserving_world(
-                    parent_world, scene().world_transform_matrix(entity),
+              : try_scene_reparented_transform_preserving_world(
+                    parent_world,
+                    previous_parent == kInvalidEntityId
+                        ? scene_transform_identity_matrix()
+                        : scene().world_transform_matrix(previous_parent),
                     *transform);
       if (!local.has_value()) {
         return document_command_invalid_request_result(
@@ -116,6 +144,34 @@ private:
             {descendant, removes_layer ? kInvalidSceneLayerId : layer});
       }
     }
+    // A live definition must retain at least one top-level member. Individual
+    // valid extractions can otherwise invalidate one another in a batch.
+    for (const Placement &placement : before_) {
+      if (placement.parent == parent_ ||
+          !scene().is_instance_definition_entity(placement.parent) ||
+          scene().instance_occurrences_for_definition(placement.parent).empty()) {
+        continue;
+      }
+      const auto children = scene().children(placement.parent);
+      if (std::ranges::all_of(children, [&moved](EntityId child) {
+            return moved.contains(child);
+          })) {
+        return document_command_invalid_request_result(
+            "A live instance definition must retain a member");
+      }
+    }
+    std::ranges::sort(participants_);
+    participants_.erase(std::unique(participants_.begin(), participants_.end()),
+                        participants_.end());
+    const auto unique_layers = [](auto &layers) {
+      std::ranges::sort(layers, {}, &SceneLayerAssignment::entity);
+      layers.erase(std::unique(layers.begin(), layers.end(),
+                               [](const auto &a, const auto &b) {
+                                 return a.entity == b.entity;
+                               }), layers.end());
+    };
+    unique_layers(before_layers_);
+    unique_layers(after_layers_);
     return changed ? document_command_changed_result()
                    : document_command_unchanged_result();
   }

@@ -23,6 +23,10 @@ bool selection_context_matches(ViewportOverlaySelectionContext override_mode,
 
 } // namespace
 
+std::uint32_t ViewportOverlayStyleResolver::active_selection_color(std::uint32_t color) {
+  return viewport_active_selection_color(color);
+}
+
 ViewportPersistentOverlayStyleSnapshot
 ViewportOverlayStyleResolver::persistent_style_snapshot(
     const ViewportSettings &settings, float raster_scale) {
@@ -45,12 +49,16 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
           resolved_raster_scale,
       .instance_edit_style = InstanceEditStyle::from_settings(settings),
   };
+  snapshot.active_selection_face_color = active_selection_color(snapshot.selection_face_color);
+  snapshot.active_selection_wire_color = active_selection_color(snapshot.selection_wire_color);
   RenderSignatureBuilder face_signature;
-  face_signature.add_value(snapshot.selection_face_color);
+  face_signature.add_value(snapshot.selection_face_color)
+      .add_value(snapshot.active_selection_face_color);
   snapshot.face_signature = face_signature.value();
 
   RenderSignatureBuilder wire_signature;
   wire_signature.add_value(snapshot.selection_wire_color)
+      .add_value(snapshot.active_selection_wire_color)
       .add_float(snapshot.selection_edge_logical_width_pixels)
       .add_float(snapshot.selection_edge_line_width_pixels)
       .add_float(snapshot.raster_scale);
@@ -132,6 +140,7 @@ void ViewportOverlayStyleResolver::apply_from(
                            return triangle.element.object_id ==
                                       context.construction_object_id &&
                                   (role == ViewportOverlayStyleRole::SelectionFace ||
+                                   role == ViewportOverlayStyleRole::ActiveSelectionFace ||
                                    role == ViewportOverlayStyleRole::HoverFace ||
                                    role == ViewportOverlayStyleRole::RemoveSelectionFace);
                          }),
@@ -194,6 +203,7 @@ void ViewportOverlayStyleResolver::apply_from(
       if (context.construction_object_id >= 0 &&
           line.element.object_id == context.construction_object_id &&
           (role == ViewportOverlayStyleRole::SelectionWire ||
+           role == ViewportOverlayStyleRole::ActiveSelectionWire ||
            role == ViewportOverlayStyleRole::SelectedSourceWire ||
            role == ViewportOverlayStyleRole::SourceWire ||
            role == ViewportOverlayStyleRole::HoverWire ||
@@ -210,10 +220,11 @@ void ViewportOverlayStyleResolver::apply_from(
       ViewportOverlayPoint &point = *it;
       const ViewportOverlayStyleRole role = role_for(point);
       point.color = color_for(role, point.color, settings);
-      float resolved_size_pixels =
-          point_size_for(role, point.size_pixels, settings);
+      float resolved_size_pixels = point.layer == ViewportOverlayLayer::ToolHandle
+          ? point.size_pixels : point_size_for(role, point.size_pixels, settings);
       std::optional<float> resolved_outline_growth_pixels =
-          point_outline_growth_for(role, point.outline_growth_pixels, settings);
+          point.layer == ViewportOverlayLayer::ToolHandle ? point.outline_growth_pixels
+          : point_outline_growth_for(role, point.outline_growth_pixels, settings);
       if (const ViewportOverlayStyleOverride *override =
               override_for(role, context);
           override != nullptr) {
@@ -245,6 +256,7 @@ void ViewportOverlayStyleResolver::apply_from(
                    static_cast<std::ptrdiff_t>(range.icon_begin);
          it != frame.icons.end(); ++it) {
       ViewportOverlayIcon &icon = *it;
+      icon.color = color_for(icon.style_role, icon.color, settings);
       icon.size_pixels =
           viewport_overlay_point_size_pixels(icon.layer, icon.size_pixels) *
           raster_scale;
@@ -353,6 +365,14 @@ ViewportOverlayStyleResolver::color_for(ViewportOverlayStyleRole role,
                                         std::uint32_t authored_color,
                                         const ViewportSettings &settings) {
   switch (role) {
+  case ViewportOverlayStyleRole::ActiveSelectionFace:
+    return active_selection_color(setting_color(settings, ViewportColorSettingId::SelectionFace));
+  case ViewportOverlayStyleRole::ActiveSelectionWire:
+    return active_selection_color(setting_color(settings, ViewportColorSettingId::SelectionWire));
+  case ViewportOverlayStyleRole::ActiveSelectedVertex:
+    return active_selection_color(setting_color(settings, ViewportColorSettingId::SelectedVertex));
+  case ViewportOverlayStyleRole::ActiveGroupBounds:
+    return active_selection_color(setting_color(settings, ViewportColorSettingId::BoundingBoxWire));
   case ViewportOverlayStyleRole::SelectionFace:
     return setting_color(settings, ViewportColorSettingId::SelectionFace);
   case ViewportOverlayStyleRole::SelectionWire:
@@ -426,6 +446,7 @@ float ViewportOverlayStyleResolver::line_width_for(
   case ViewportOverlayStyleRole::SelectedSourceWire:
     return settings.float_value(
         ViewportFloatSettingId::SelectionFaceWireLineSize);
+  case ViewportOverlayStyleRole::ActiveSelectionWire:
   case ViewportOverlayStyleRole::SelectionWire:
     return layer == ViewportOverlayLayer::SelectedFaceEdge
                ? settings.float_value(
@@ -440,6 +461,7 @@ float ViewportOverlayStyleResolver::line_width_for(
     return settings.float_value(ViewportFloatSettingId::OpenEdgeLineSize);
   case ViewportOverlayStyleRole::DiagnosticEdge:
     return settings.float_value(ViewportFloatSettingId::DiagnosticEdgeLineSize);
+  case ViewportOverlayStyleRole::ActiveGroupBounds:
   case ViewportOverlayStyleRole::GroupBounds:
     return settings.float_value(
         ViewportFloatSettingId::BoundingBoxWireThickness);
@@ -456,6 +478,7 @@ float ViewportOverlayStyleResolver::point_size_for(
   switch (role) {
   case ViewportOverlayStyleRole::Vertex:
     return vertex_size;
+  case ViewportOverlayStyleRole::ActiveSelectedVertex:
   case ViewportOverlayStyleRole::SelectedVertex:
     return vertex_size +
            settings.float_value(ViewportFloatSettingId::SelectedVertexGrowth);
@@ -473,6 +496,7 @@ std::optional<float> ViewportOverlayStyleResolver::point_outline_growth_for(
     std::optional<float> authored_outline_growth_pixels,
     const ViewportSettings &settings) {
   switch (role) {
+  case ViewportOverlayStyleRole::ActiveSelectedVertex:
   case ViewportOverlayStyleRole::SelectedVertex:
   case ViewportOverlayStyleRole::HoverVertex:
   case ViewportOverlayStyleRole::RemoveSelectionVertex:

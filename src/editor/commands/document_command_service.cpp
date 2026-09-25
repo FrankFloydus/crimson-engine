@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -397,6 +398,83 @@ DocumentCommandService::reparent_entity(EntityId entity, EntityId parent,
 DocumentCommandResult DocumentCommandService::move_entities(
     std::span<const EntityId> entities, EntityId parent,
     EntityId before_sibling) {
+  return move_entities_impl(entities, parent, before_sibling, true, false,
+                            "Move Entities");
+}
+
+DocumentCommandResult DocumentCommandService::parent_selection_to_active() {
+  const EntityId active = scene_.primary_selection();
+  const std::vector<EntityId> selected = scene_.selected_entities();
+  if (active == kInvalidEntityId ||
+      std::ranges::find(selected, active) == selected.end()) {
+    return document_command_invalid_request_result(
+        "Select an active parent before parenting entities");
+  }
+  if (scene_.is_effectively_locked(active)) {
+    return document_command_invalid_request_result("Parent entity is locked");
+  }
+  if (mutation_blocked(active)) {
+    return document_command_active_tool_entity_result();
+  }
+  std::vector<EntityId> children;
+  std::ranges::copy_if(selected, std::back_inserter(children),
+                       [active](EntityId entity) { return entity != active; });
+  return move_entities_impl(children, active, kInvalidEntityId, false, true,
+                            "Parent to Active");
+}
+
+bool DocumentCommandService::can_parent_selection_to_active() const {
+  const EntityId active = scene_.primary_selection();
+  const SelectionComponent *selection = scene_.selection(active);
+  if (selection == nullptr || !selection->selected ||
+      scene_.is_effectively_locked(active) || mutation_blocked(active) ||
+      scene_.instance_occurrence(active) != nullptr) {
+    return false;
+  }
+  bool changes_parent = false;
+  for (const EntityId entity : scene_.selected_entities()) {
+    if (entity == active) {
+      continue;
+    }
+    if (scene_.is_effectively_locked(entity) || mutation_blocked(entity) ||
+        !scene_.can_set_parent(entity, active)) {
+      return false;
+    }
+    changes_parent = changes_parent || scene_.parent(entity) != active;
+  }
+  return changes_parent;
+}
+
+bool DocumentCommandService::can_unparent_selection() const {
+  bool changes_parent = false;
+  for (const EntityId entity : scene_.selected_entities()) {
+    if (scene_.parent(entity) == kInvalidEntityId) {
+      continue;
+    }
+    if (scene_.is_effectively_locked(entity) || mutation_blocked(entity) ||
+        !scene_.can_set_parent(entity, kInvalidEntityId)) {
+      return false;
+    }
+    changes_parent = true;
+  }
+  return changes_parent;
+}
+
+DocumentCommandResult DocumentCommandService::unparent_selection() {
+  std::vector<EntityId> children;
+  for (const EntityId entity : scene_.selected_entities()) {
+    if (scene_.parent(entity) != kInvalidEntityId) {
+      children.push_back(entity);
+    }
+  }
+  return move_entities_impl(children, kInvalidEntityId, kInvalidEntityId,
+                            false, true, "Unparent");
+}
+
+DocumentCommandResult DocumentCommandService::move_entities_impl(
+    std::span<const EntityId> entities, EntityId parent,
+    EntityId before_sibling, bool retain_subtrees,
+    bool leave_direct_children, std::string label) {
   if (entities.empty()) {
     return document_command_unchanged_result();
   }
@@ -409,6 +487,13 @@ DocumentCommandResult DocumentCommandService::move_entities(
   }
   if (mutation_blocked(parent)) {
     return document_command_active_tool_entity_result();
+  }
+  if (!document_command_hierarchy_available_in_release(scene_, entities) ||
+      (parent != kInvalidEntityId &&
+       !document_command_hierarchy_available_in_release(
+           scene_, std::span<const EntityId>(&parent, 1u)))) {
+    return document_command_invalid_request_result(
+        release_feature_unavailable_message());
   }
   if (before_sibling != kInvalidEntityId &&
       (!scene_.exists(before_sibling) ||
@@ -446,16 +531,32 @@ DocumentCommandResult DocumentCommandService::move_entities(
         break;
       }
     }
-    if (!selected_ancestor) {
-      if (entities_mutation_blocked(scene_.descendants(entity, true))) {
+    if (!retain_subtrees || !selected_ancestor) {
+      const auto descendants = scene_.descendants(entity, true);
+      if (std::ranges::any_of(descendants, [this](EntityId descendant) {
+            return scene_.is_effectively_locked(descendant);
+          })) {
+        return document_command_invalid_request_result(
+            "Moved hierarchy contains a locked entity");
+      }
+      if (entities_mutation_blocked(descendants)) {
         return document_command_active_tool_entity_result();
       }
-      roots.push_back(entity);
+      if (!leave_direct_children || scene_.parent(entity) != parent) {
+        roots.push_back(entity);
+      }
     }
   }
-  return execute_document_command(
-      history_, std::make_unique<MoveEntitiesCommand>(
-                    scene_, std::move(roots), parent, before_sibling));
+  if (roots.empty()) {
+    return document_command_unchanged_result();
+  }
+  auto command = std::make_unique<MoveEntitiesCommand>(
+      scene_, std::move(roots), parent, before_sibling, std::move(label));
+  const DocumentCommandResult preflight = command->preflight();
+  if (!preflight.ok || !preflight.changed) {
+    return preflight;
+  }
+  return execute_document_command(history_, std::move(command));
 }
 
 DocumentGroupSelectionResult

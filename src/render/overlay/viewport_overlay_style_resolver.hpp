@@ -70,6 +70,8 @@ struct ViewportOverlayStyleRange {
  */
 class ViewportOverlayStyleResolver {
 public:
+    /// Lightens RGB toward white by 25 percent without changing alpha.
+    [[nodiscard]] static std::uint32_t active_selection_color(std::uint32_t color);
     [[nodiscard]] static ViewportPersistentOverlayStyleSnapshot
     persistent_style_snapshot(const ViewportSettings &settings,
                               float raster_scale = 1.0f);

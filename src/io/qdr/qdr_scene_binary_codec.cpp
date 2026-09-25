@@ -55,7 +55,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 16u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 17u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 /**
@@ -1027,9 +1027,15 @@ void validate_write_snapshot_roots(const QdrProjectWriteSnapshot &snapshot) {
     const fb::Vec3 position = to_fb(entity.transform.position);
     const fb::Vec3 rotation = to_fb(entity.transform.rotation_euler);
     const fb::Vec3 scale = to_fb(entity.transform.scale);
+    if (!scene_matrix_is_affine(entity.transform.parenting_offset)) {
+      throw std::runtime_error("QDR entity parenting offset is not finite affine data.");
+    }
+    const auto &offset_values = entity.transform.parenting_offset.values;
     const flatbuffers::Offset<fb::TransformComponent> transform =
         fb::CreateTransformComponent(builder, &position, &rotation, &scale,
-                                     entity.transform.custom_pivot);
+                                     entity.transform.custom_pivot,
+                                     builder.CreateVector(offset_values.data(),
+                                                          offset_values.size()));
     const flatbuffers::Offset<fb::VisibilityComponent> visibility =
         fb::CreateVisibilityComponent(builder, entity.visibility.visible,
                                       entity.visibility.selectable);
@@ -2313,6 +2319,30 @@ decode_viewport_camera_pose(const fb::ScenePayload &payload,
   return pose;
 }
 
+[[nodiscard]] TransformComponent
+decode_transform_component(const fb::TransformComponent &stored,
+                           std::uint16_t schema_version) {
+  TransformComponent transform{
+      .position = from_fb(stored.position()),
+      .rotation_euler = from_fb(stored.rotation_euler()),
+      .scale = from_fb(stored.scale(), {1.0f, 1.0f, 1.0f}),
+      .custom_pivot = stored.custom_pivot(),
+  };
+  if (schema_version >= 17u) {
+    if (const auto *values = stored.parenting_offset()) {
+      if (values->size() != transform.parenting_offset.values.size()) {
+        throw std::runtime_error("QDR entity parenting offset has an invalid size.");
+      }
+      std::copy(values->begin(), values->end(),
+                transform.parenting_offset.values.begin());
+      if (!scene_matrix_is_affine(transform.parenting_offset)) {
+        throw std::runtime_error("QDR entity parenting offset is not finite affine data.");
+      }
+    }
+  }
+  return transform;
+}
+
 [[nodiscard]] SceneEntityState
 decode_entity_state(const SceneContentDocument &document,
                     const fb::Entity &stored,
@@ -2337,12 +2367,7 @@ decode_entity_state(const SceneContentDocument &document,
   state.kind = from_fb(stored.kind());
   state.parent = stored.parent();
   if (const fb::TransformComponent *value = stored.transform()) {
-    state.transform = {
-        .position = from_fb(value->position()),
-        .rotation_euler = from_fb(value->rotation_euler()),
-        .scale = from_fb(value->scale(), {1.0f, 1.0f, 1.0f}),
-        .custom_pivot = value->custom_pivot(),
-    };
+    state.transform = decode_transform_component(*value, schema_version);
   }
   if (const fb::VisibilityComponent *value = stored.visibility()) {
     state.visibility = {
@@ -3324,12 +3349,8 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
           .kind = from_fb(stored->kind()),
       };
       if (const auto *transform = stored->transform()) {
-        metadata_state.transform = {
-            .position = from_fb(transform->position()),
-            .rotation_euler = from_fb(transform->rotation_euler()),
-            .scale = from_fb(transform->scale(), {1.0f, 1.0f, 1.0f}),
-            .custom_pivot = transform->custom_pivot(),
-        };
+        metadata_state.transform =
+            decode_transform_component(*transform, metadata.schema_version);
       }
       if (const auto *visibility = stored->visibility()) {
         metadata_state.visibility = {

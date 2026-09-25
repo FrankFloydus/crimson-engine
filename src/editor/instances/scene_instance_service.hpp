@@ -1298,7 +1298,7 @@ private:
         *inverse_parent, bounds_center(*selected_bounds));
     const QMat4 occurrence_world = scene_transform_multiply(
         parent_world,
-        compose_transform(plan.occurrence_transform.spatial_transform()));
+        scene_local_transform_matrix(plan.occurrence_transform));
     if (selected.size() == 1u) {
       if (const NameComponent *source_name = scene_.name(selected.front())) {
         plan.occurrence_name = source_name->name;
@@ -1320,9 +1320,8 @@ private:
         return std::nullopt;
       }
       const std::optional<TransformComponent> definition_local =
-          try_scene_local_transform_preserving_world(
-              occurrence_world, scene_.world_transform_matrix(entity),
-              *transform);
+          try_scene_reparented_transform_preserving_world(
+              occurrence_world, parent_world, *transform);
       if (!definition_local.has_value()) {
         return std::nullopt;
       }
@@ -1567,10 +1566,14 @@ private:
                     const QMat4 *occurrence_world = nullptr) const {
     const EntityId output_parent = scene_.parent(occurrence);
     const TransformComponent *current = scene_.transform(output_entity);
+    const TransformComponent *source = scene_.transform(member);
     const EntityId definition = scene_.containing_instance_definition(member);
     const std::optional<QMat4> relative =
         member_relative_transform(definition, member);
-    if (current == nullptr || !relative.has_value()) {
+    const std::optional<QMat4> inverse_definition =
+        try_scene_matrix_inverse(scene_.world_transform_matrix(definition));
+    if (current == nullptr || source == nullptr || !relative.has_value() ||
+        !inverse_definition.has_value()) {
       return std::nullopt;
     }
     const QMat4 desired_world = scene_transform_multiply(
@@ -1581,13 +1584,21 @@ private:
         output_parent == kInvalidEntityId
             ? scene_transform_identity_matrix()
             : scene_.world_transform_matrix(output_parent);
+    // A member's displayed parent includes its occurrence and definition
+    // frame. Keep its channels while transferring that full affine frame.
+    const QMat4 member_parent_world = scene_transform_multiply(
+        occurrence_world != nullptr ? *occurrence_world
+                                    : scene_.world_transform_matrix(occurrence),
+        scene_transform_multiply(
+            *inverse_definition,
+            scene_.world_transform_matrix(scene_.parent(member))));
     const std::optional<TransformComponent> output_local =
-        try_scene_local_transform_preserving_world(parent_world, desired_world,
-                                                   *current);
+        try_scene_reparented_transform_preserving_world(
+            parent_world, member_parent_world, *source);
     if (!output_local.has_value() ||
         !scene_matrix_near_equal(
             scene_transform_multiply(
-                parent_world, compose_transform(output_local->spatial_transform())),
+                parent_world, scene_local_transform_matrix(*output_local)),
             desired_world)) {
       return std::nullopt;
     }

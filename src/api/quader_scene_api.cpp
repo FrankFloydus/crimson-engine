@@ -65,6 +65,7 @@ TransformComponent scene_transform_preserving_pivot_marker(
   TransformComponent scene_transform = to_scene_transform(transform);
   if (const TransformComponent *current = session.scene().transform(entity)) {
     scene_transform.custom_pivot = current->custom_pivot;
+    scene_transform.parenting_offset = current->parenting_offset;
   }
   return scene_transform;
 }
@@ -301,6 +302,34 @@ QuaderApiVoidResult QuaderSceneApi::move_entities(
       scene_session(session_).document_commands().move_entities(
           entities, parent, before_sibling),
       "Move Entities");
+}
+
+QuaderApiVoidResult QuaderSceneApi::parent_selection_to_active() {
+  return mutations_.run_document_result(
+      scene_session(session_).document_commands().parent_selection_to_active(),
+      "Parent to Active");
+}
+
+QuaderApiVoidResult QuaderSceneApi::unparent_selection() {
+  return mutations_.run_document_result(
+      scene_session(session_).document_commands().unparent_selection(),
+      "Unparent");
+}
+
+bool QuaderSceneApi::can_parent_selection_to_active() const {
+  const SceneSession &session = scene_session(session_);
+  const ModelingSelectionMode mode = session.modeling().selection_mode();
+  return (mode == ModelingSelectionMode::Object ||
+          mode == ModelingSelectionMode::Group) &&
+         session.document_commands().can_parent_selection_to_active();
+}
+
+bool QuaderSceneApi::can_unparent_selection() const {
+  const SceneSession &session = scene_session(session_);
+  const ModelingSelectionMode mode = session.modeling().selection_mode();
+  return (mode == ModelingSelectionMode::Object ||
+          mode == ModelingSelectionMode::Group) &&
+         session.document_commands().can_unparent_selection();
 }
 
 QuaderApiVoidResult QuaderSceneApi::set_transform(EntityId entity,

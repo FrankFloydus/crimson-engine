@@ -50,6 +50,7 @@ void strip_mesh_selection_wires(ViewportOverlayFrame &frame) {
          line.source != ViewportOverlaySource::ComponentSelection)) return false;
     const auto role = line.style_role;
     return role == ViewportOverlayStyleRole::SelectionWire ||
+           role == ViewportOverlayStyleRole::ActiveSelectionWire ||
            role == ViewportOverlayStyleRole::SelectedSourceWire ||
            role == ViewportOverlayStyleRole::SourceWire ||
            (role == ViewportOverlayStyleRole::LayerDefault &&
@@ -292,9 +293,10 @@ ViewportOverlayFrame build_selection_dimension_frame(
   return frame;
 }
 
-void strip_replaced_selection_cages(ViewportOverlayFrame &frame) {
-  std::erase_if(frame.lines, [](const ViewportOverlayLine &line) {
-    return line.source == ViewportOverlaySource::GroupBounds ||
+void strip_replaced_selection_cages(ViewportOverlayFrame &frame,
+                                    bool keep_scene_group_cages) {
+  std::erase_if(frame.lines, [keep_scene_group_cages](const ViewportOverlayLine &line) {
+    return (!keep_scene_group_cages && line.source == ViewportOverlaySource::GroupBounds) ||
            (line.source == ViewportOverlaySource::Tool &&
             line.layer == ViewportOverlayLayer::GroupBounds &&
             line.style_role == ViewportOverlayStyleRole::GroupBounds);
@@ -613,7 +615,8 @@ ViewportOverlayFrame build_persistent_frame(
   if (uses_mesh_outlines(request)) strip_mesh_selection_wires(frame);
   if (request.wireframe_pane) strip_wireframe_point_occluders(frame);
   strip_component_source_wires_under_selection(frame);
-  if (dimension_box_visible) strip_replaced_selection_cages(frame);
+  if (dimension_box_visible)
+    strip_replaced_selection_cages(frame, request.scene_selection_mode == RenderOverlaySelectionMode::Group);
   return frame;
 }
 
@@ -904,7 +907,8 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     const ViewportOverlayFrame &curve_overlay_frame =
         curve_overlay_source_.frame(curve_preview);
     append_overlay_frame(dynamic_frame, curve_overlay_frame);
-    if (dimension_box_visible) strip_replaced_selection_cages(dynamic_frame);
+    if (dimension_box_visible)
+      strip_replaced_selection_cages(dynamic_frame, request.scene_selection_mode == RenderOverlaySelectionMode::Group);
     append_overlay_frame(dynamic_frame, pane.selection_dimension_frame);
     ViewportOverlayStyleResolver::apply(
         dynamic_frame, settings,

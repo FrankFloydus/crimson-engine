@@ -241,7 +241,8 @@ struct ObjectSnapSelection final {
       parent == kInvalidEntityId ? QMat4{}
                                  : scene.world_transform_matrix(parent);
   const QMat4 display_parent_world = scene_transform_multiply(
-      target.display_from_scene, scene_parent_world);
+      target.display_from_scene,
+      scene_compensated_parent_matrix(scene_parent_world, target.before));
   const std::optional<QMat4> parent_from_display =
       try_scene_matrix_inverse(display_parent_world);
   if (!parent_from_display.has_value()) {

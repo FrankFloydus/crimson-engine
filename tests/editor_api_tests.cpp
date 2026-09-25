@@ -372,6 +372,32 @@ entity_world_origin_translation_only(const quader::QuaderEditorApi &editor,
                                              : std::nullopt;
 }
 
+std::optional<quader::QMat4>
+entity_world_transform(const quader::QuaderEditorApi &editor,
+                       quader::EntityId entity) {
+  glm::mat4 world{1.0f};
+  quader::EntityId current = entity;
+  int guard = 0;
+  while (current != quader::kInvalidEntityId && guard < 128) {
+    const auto snapshot = editor.query().entity(current);
+    if (!snapshot.has_value()) {
+      return std::nullopt;
+    }
+    const auto channels = quader::compose_transform(quader::QTransform{
+        .position = snapshot->transform.position,
+        .rotation = quader::quat_from_euler_radians(
+            snapshot->transform.rotation_euler),
+        .scale = snapshot->transform.scale});
+    world = quader::to_glm(snapshot->parenting_offset.value_or(quader::QMat4{})) *
+            quader::to_glm(channels) * world;
+    current = snapshot->parent;
+    ++guard;
+  }
+  return current == quader::kInvalidEntityId
+             ? std::optional<quader::QMat4>{quader::from_glm(world)}
+             : std::nullopt;
+}
+
 /**
  * Stores translation-only world bounds for API-level pivot rebase assertions.
  */
@@ -998,7 +1024,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
               "F4");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kToolsActivatePivot),
-              "P");
+              "");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kToolsActivateMirror),
               "M");
@@ -4498,6 +4524,80 @@ TEST(EditorApiTests, OutlinerContextResolvesSceneCommandsAndScopedModeling) {
   ASSERT_TRUE(editor.commands().execute(unhide.command_id).ok());
 }
 
+TEST(EditorApiTests, ParentingShortcutsRespectSelectionModesTextAndOverrides) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto child = create_selected_box(editor, "Parenting Child");
+  const auto parent = create_selected_box(editor, "Parenting Active");
+  ASSERT_TRUE(editor.selection().select_objects(
+      {child.entity, parent.entity}, parent.entity).ok());
+  const quader::ViewportToolState state;
+  const auto resolve = [&](std::string_view chord, bool text = false) {
+    return editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(chord), state, false, text,
+        {.outliner_focused = true});
+  };
+  using Kind = quader::QuaderViewportKeybindingDispatch::Kind;
+  EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kParentToActive), "P");
+  EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kUnparentSelection), "Ctrl+P");
+  EXPECT_TRUE(editor.commands().shortcut_for(
+      quader::quader_command::kToolsActivatePivot).empty());
+  EXPECT_EQ(resolve("P", true).kind, Kind::NoMatch);
+  EXPECT_EQ(resolve("Ctrl+P", true).kind, Kind::NoMatch);
+  EXPECT_EQ(resolve("Alt+P").kind, Kind::NoMatch);
+  const auto parent_dispatch = resolve("P");
+  ASSERT_EQ(parent_dispatch.kind, Kind::Command);
+  ASSERT_EQ(parent_dispatch.command_id, quader::quader_command::kParentToActive.string());
+  ASSERT_TRUE(editor.commands().execute(parent_dispatch.command_id).ok());
+  EXPECT_EQ(editor.query().entity(child.entity)->parent, parent.entity);
+  const auto unparent_dispatch = resolve("Ctrl+P");
+  ASSERT_EQ(unparent_dispatch.kind, Kind::Command);
+  ASSERT_EQ(unparent_dispatch.command_id, quader::quader_command::kUnparentSelection.string());
+  ASSERT_TRUE(editor.commands().execute(unparent_dispatch.command_id).ok());
+  EXPECT_EQ(editor.query().entity(child.entity)->parent, quader::kInvalidEntityId);
+  for (auto mode : {quader::QuaderSelectionMode::Vertex,
+                    quader::QuaderSelectionMode::Edge,
+                    quader::QuaderSelectionMode::Face}) {
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    EXPECT_EQ(resolve("P").kind, Kind::NoMatch);
+    EXPECT_EQ(resolve("Ctrl+P").kind, Kind::NoMatch);
+  }
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {child.entity, parent.entity}, parent.entity).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kParentToActive, "Ctrl+Alt+F24").ok());
+  EXPECT_EQ(resolve("P").kind, Kind::NoMatch);
+  EXPECT_EQ(resolve("Ctrl+Alt+F24").command_id,
+            quader::quader_command::kParentToActive.string());
+  ASSERT_TRUE(editor.commands().remove_shortcut(
+      quader::quader_command::kParentToActive).ok());
+  EXPECT_EQ(resolve("Ctrl+Alt+F24").kind, Kind::NoMatch);
+}
+
+TEST(EditorApiTests, ParentingShortcutDefaultPreservesStoredPivotOverride) {
+  const auto path = keybinding_test_path("parenting-pivot-override");
+  {
+    std::ofstream stored(path);
+    ASSERT_TRUE(stored.is_open());
+    stored << R"([{"command":"tools.activate.pivot","key":"P"}])";
+  }
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto loaded = editor.commands().set_keybinding_storage_path(path);
+  ASSERT_TRUE(loaded.ok()) << loaded.error_message();
+  const auto child = create_selected_box(editor, "Override Child");
+  const auto parent = create_selected_box(editor, "Override Parent");
+  ASSERT_TRUE(editor.selection().select_objects(
+      {child.entity, parent.entity}, parent.entity).ok());
+  EXPECT_EQ(editor.commands().shortcut_for(
+      quader::quader_command::kToolsActivatePivot), "P");
+  const auto resolved = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("P"), {}, false, false, {.outliner_focused = true});
+  EXPECT_EQ(resolved.command_id, quader::quader_command::kToolsActivatePivot.string());
+}
+
 TEST(EditorApiTests, EditorPanelsResolveCommandsAndToolsWithCanonicalOverrides) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
@@ -5547,6 +5647,10 @@ TEST(EditorApiTests, GlobalCommandKeybindingsDoNotStealTextInputOrViewportOnlySh
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 
   create_selected_box(editor, "Pivot Shortcut Box");
+  ASSERT_TRUE(editor.commands().remove_shortcut(
+      quader::quader_command::kParentToActive).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kToolsActivatePivot, "P").ok());
 
   const quader::QuaderViewportKeybindingDispatch pivot_without_viewport_focus =
           editor.commands().dispatch_viewport_input_binding(
@@ -7868,6 +7972,12 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
 
     EXPECT_GT(checked, 0);
 
+    EXPECT_TRUE(editor.commands().shortcut_for(
+        quader::quader_command::kToolsActivatePivot).empty());
+    ASSERT_TRUE(editor.commands().remove_shortcut(
+        quader::quader_command::kParentToActive).ok());
+    ASSERT_TRUE(editor.commands().set_shortcut(
+        quader::quader_command::kToolsActivatePivot, "P").ok());
     const std::optional<std::vector<quader::QuaderInputChord>> pivot =
         quader::quader_input_parse_shortcut("P");
     ASSERT_TRUE(pivot.has_value());
@@ -17584,7 +17694,12 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
     ASSERT_TRUE(child_snapshot.has_value());
     EXPECT_EQ(child_snapshot->parent, parent.value().id);
     EXPECT_NEAR(parent_snapshot->transform.position.x, 10.0f, 0.001f);
-    EXPECT_NEAR(child_snapshot->transform.position.x, -8.0f, 0.001f);
+    EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
+    ASSERT_TRUE(child_snapshot->parenting_offset.has_value());
+    EXPECT_NEAR(child_snapshot->parenting_offset->values[12], -10.0f, 0.001f);
+    ASSERT_TRUE(entity_world_transform(editor, child.value().id).has_value());
+    EXPECT_NEAR(entity_world_transform(editor, child.value().id)->values[12],
+                2.0f, 0.001f);
 
     ASSERT_TRUE(editor.history().undo().ok());
     parent_snapshot = entity_by_id(editor, parent.value().id);
@@ -17602,7 +17717,12 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
     ASSERT_TRUE(child_snapshot.has_value());
     EXPECT_EQ(child_snapshot->parent, parent.value().id);
     EXPECT_NEAR(parent_snapshot->transform.position.x, 10.0f, 0.001f);
-    EXPECT_NEAR(child_snapshot->transform.position.x, -8.0f, 0.001f);
+    EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
+    ASSERT_TRUE(child_snapshot->parenting_offset.has_value());
+    EXPECT_NEAR(child_snapshot->parenting_offset->values[12], -10.0f, 0.001f);
+    ASSERT_TRUE(entity_world_transform(editor, child.value().id).has_value());
+    EXPECT_NEAR(entity_world_transform(editor, child.value().id)->values[12],
+                2.0f, 0.001f);
 }
 
 TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParentTransform) {
@@ -20151,12 +20271,32 @@ TEST(EditorApiTests, PivotToolAppliesGroupPivotWithoutMovingChildren) {
       editor.scene().group_selection("Pivot Group");
   ASSERT_TRUE(group.ok()) << group.error_message();
 
-  const std::optional<quader::QVec3> left_before =
-      entity_world_origin_translation_only(editor, left.entity);
-  const std::optional<quader::QVec3> right_before =
-      entity_world_origin_translation_only(editor, right.entity);
+  const auto left_before = entity_world_transform(editor, left.entity);
+  const auto right_before = entity_world_transform(editor, right.entity);
   ASSERT_TRUE(left_before.has_value());
   ASSERT_TRUE(right_before.has_value());
+  const auto left_mesh_before = editor.query().compiled_object_mesh(left);
+  const auto right_mesh_before = editor.query().compiled_object_mesh(right);
+  ASSERT_TRUE(left_mesh_before.has_value());
+  ASSERT_TRUE(right_mesh_before.has_value());
+  const auto expect_preserved_child = [&](quader::QuaderModelingObjectRef child,
+                                          const quader::QMat4 &world_before,
+                                          const quader::QuaderMeshAsset &mesh_before) {
+    const auto world_after = entity_world_transform(editor, child.entity);
+    ASSERT_TRUE(world_after.has_value());
+    for (std::size_t index = 0; index < world_before.values.size(); ++index) {
+      EXPECT_NEAR(world_after->values[index], world_before.values[index],
+                  kTestPositionEpsilon) << index;
+    }
+    const auto mesh_after = editor.query().compiled_object_mesh(child);
+    ASSERT_TRUE(mesh_after.has_value());
+    ASSERT_EQ(mesh_after->vertices.size(), mesh_before.vertices.size());
+    for (std::size_t index = 0; index < mesh_before.vertices.size(); ++index) {
+      expect_vec3_near(
+          quader::transform_point(*world_after, mesh_after->vertices[index].position),
+          quader::transform_point(world_before, mesh_before.vertices[index].position));
+    }
+  };
 
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
   ASSERT_TRUE(
@@ -20174,30 +20314,24 @@ TEST(EditorApiTests, PivotToolAppliesGroupPivotWithoutMovingChildren) {
       editor.query().selection_transform_pivot();
   ASSERT_TRUE(group_transform_pivot.has_value());
   expect_vec3_near(*group_transform_pivot, {0.0f, 1.0f, 0.0f});
-  expect_vec3_near(*entity_world_origin_translation_only(editor, left.entity),
-                   *left_before);
-  expect_vec3_near(*entity_world_origin_translation_only(editor, right.entity),
-                   *right_before);
+  expect_preserved_child(left, *left_before, *left_mesh_before);
+  expect_preserved_child(right, *right_before, *right_mesh_before);
 
   ASSERT_TRUE(editor.history().undo().ok());
   const std::optional<quader::QuaderEntitySnapshot> group_undone =
       editor.query().entity(group.value().id);
   ASSERT_TRUE(group_undone.has_value());
   expect_vec3_near(group_undone->transform.position, {});
-  expect_vec3_near(*entity_world_origin_translation_only(editor, left.entity),
-                   *left_before);
-  expect_vec3_near(*entity_world_origin_translation_only(editor, right.entity),
-                   *right_before);
+  expect_preserved_child(left, *left_before, *left_mesh_before);
+  expect_preserved_child(right, *right_before, *right_mesh_before);
 
   ASSERT_TRUE(editor.history().redo().ok());
   const std::optional<quader::QuaderEntitySnapshot> group_redone =
       editor.query().entity(group.value().id);
   ASSERT_TRUE(group_redone.has_value());
   expect_vec3_near(group_redone->transform.position, {0.0f, 1.0f, 0.0f});
-  expect_vec3_near(*entity_world_origin_translation_only(editor, left.entity),
-                   *left_before);
-  expect_vec3_near(*entity_world_origin_translation_only(editor, right.entity),
-                   *right_before);
+  expect_preserved_child(left, *left_before, *left_mesh_before);
+  expect_preserved_child(right, *right_before, *right_mesh_before);
 }
 
 TEST(EditorApiTests, PivotToolCancelDiscardsGroupPreview) {
@@ -20865,10 +20999,9 @@ TEST(EditorApiTests,
     EXPECT_EQ(snapshot->kind, quader::QuaderEntityKind::Mesh);
     EXPECT_TRUE(snapshot->has_modeling_object);
     partial_assets.insert(snapshot->mesh);
-    const std::optional<quader::QVec3> world =
-        entity_world_origin_translation_only(editor, output);
+    const auto world = entity_world_transform(editor, output);
     ASSERT_TRUE(world.has_value());
-    partial_world_x.push_back(world->x);
+    partial_world_x.push_back(world->values[12]);
   }
   EXPECT_EQ(partial_assets.size(), 2u);
   std::sort(partial_world_x.begin(), partial_world_x.end());
@@ -20916,10 +21049,9 @@ TEST(EditorApiTests,
         editor.query().entity(output);
     ASSERT_TRUE(snapshot.has_value());
     all_assets.insert(snapshot->mesh);
-    const std::optional<quader::QVec3> world =
-        entity_world_origin_translation_only(editor, output);
+    const auto world = entity_world_transform(editor, output);
     ASSERT_TRUE(world.has_value());
-    all_world_x.push_back(world->x);
+    all_world_x.push_back(world->values[12]);
   }
   EXPECT_EQ(all_assets.size(), 3u);
   std::sort(all_world_x.begin(), all_world_x.end());
@@ -21607,19 +21739,17 @@ TEST(EditorApiTests,
   quader::EntityId sibling_added = quader::kInvalidEntityId;
   for (const quader::QuaderEntityRef &root :
        flattened_sibling.value().root_entities) {
-    const std::optional<quader::QVec3> root_world =
-        entity_world_origin_translation_only(editor, root.id);
+    const auto root_world = entity_world_transform(editor, root.id);
     ASSERT_TRUE(root_world.has_value());
-    if (std::abs(root_world->x - 12.0f) <= kTestPositionEpsilon) {
+    if (std::abs(root_world->values[12] - 12.0f) <= kTestPositionEpsilon) {
       sibling_added = root.id;
     }
   }
   ASSERT_NE(sibling_added, quader::kInvalidEntityId)
       << "the sibling flatten must include the member added during edit mode";
-  const std::optional<quader::QVec3> sibling_added_world =
-      entity_world_origin_translation_only(editor, sibling_added);
+  const auto sibling_added_world = entity_world_transform(editor, sibling_added);
   ASSERT_TRUE(sibling_added_world.has_value());
-  EXPECT_NEAR(sibling_added_world->x, 12.0f, kTestPositionEpsilon);
+  EXPECT_NEAR(sibling_added_world->values[12], 12.0f, kTestPositionEpsilon);
 
   ASSERT_TRUE(editor.modeling().enter_instance_edit(first_occurrence).ok());
 
@@ -22085,9 +22215,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 222u);
+  EXPECT_EQ(commands.size(), 224u);
 #else
-  EXPECT_EQ(commands.size(), 221u);
+  EXPECT_EQ(commands.size(), 223u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

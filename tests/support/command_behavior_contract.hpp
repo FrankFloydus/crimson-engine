@@ -87,6 +87,8 @@ enum class CanonicalCommandFixture : std::uint8_t {
   CurveSelection,
   /// One explicitly Hard manifold edge selected between Smooth faces.
   AuthoredHardEdgeSelection,
+  /// One visible, unlocked selected mesh parented beneath another mesh.
+  ParentedObjectSelection,
 };
 
 /**

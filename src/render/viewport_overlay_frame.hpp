@@ -93,6 +93,10 @@ enum class ViewportOverlayStyleRole {
     CutPreviewSeam,
     FacePlaneHoverFace,
     FacePlaneHoverWire,
+    ActiveSelectionFace,
+    ActiveSelectionWire,
+    ActiveSelectedVertex,
+    ActiveGroupBounds,
 };
 
 /**
@@ -149,6 +153,14 @@ constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, st
             (static_cast<std::uint32_t>(a) << 24u);
 }
 
+/// Blends display RGB 25 percent toward white while retaining the original alpha.
+[[nodiscard]] constexpr std::uint32_t viewport_active_selection_color(std::uint32_t color) {
+    const auto brighten = [](std::uint32_t channel) { return (3u * channel + 257u) / 4u; };
+    return (color & 0xff000000u) | brighten(color & 0xffu) |
+           (brighten((color >> 8u) & 0xffu) << 8u) |
+           (brighten((color >> 16u) & 0xffu) << 16u);
+}
+
 /**
  * Represents a Viewport Overlay Line value used by the render extraction and Filament resource layer.
  */
@@ -203,6 +215,7 @@ struct ViewportOverlayIcon {
     QVec3 position;
     std::uint32_t color = rgba8(255, 255, 255);
     float size_pixels = 28.0f;
+    ViewportOverlayStyleRole style_role = ViewportOverlayStyleRole::ExplicitColor;
     ViewportOverlaySource source = ViewportOverlaySource::Gizmo;
     ViewportOverlayElementRef element;
 };

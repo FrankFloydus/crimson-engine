@@ -109,7 +109,8 @@ bool same_transform(const TransformComponent &left,
          left.rotation_euler.z == right.rotation_euler.z &&
          left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
          left.scale.z == right.scale.z &&
-         left.custom_pivot == right.custom_pivot;
+         left.custom_pivot == right.custom_pivot &&
+         left.parenting_offset.values == right.parenting_offset.values;
 }
 
 /**
@@ -360,12 +361,14 @@ make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
   const QMat4 parent_world = parent == kInvalidEntityId
                                  ? scene_transform_identity_matrix()
                                  : scene.world_transform_matrix(parent);
-  if (!invertible_world_matrix(parent_world)) {
+  const QMat4 channel_world =
+      scene_compensated_parent_matrix(parent_world, *target_before);
+  if (!invertible_world_matrix(channel_world)) {
     error_message = "Pivot target parent transform is not invertible.";
     return std::nullopt;
   }
   const QVec3 parent_local_delta =
-      transform_vector(inverse(parent_world), world_delta);
+      transform_vector(inverse(channel_world), world_delta);
   if (!finite_vector(parent_local_delta)) {
     error_message = "Pivot target parent transform is not invertible.";
     return std::nullopt;
@@ -374,7 +377,7 @@ make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
   target_after_transform.position += parent_local_delta;
   target_after_transform.custom_pivot = true;
   const QMat4 target_world_after = scene_transform_multiply(
-      parent_world, compose_transform(target_after_transform.spatial_transform()));
+      parent_world, scene_local_transform_matrix(target_after_transform));
   if (!scene_transform_is_finite(target_after_transform) ||
       !scene_matrix_is_finite(target_world_after)) {
     error_message = "Pivot target transform would become invalid.";
@@ -393,20 +396,25 @@ make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
     if (child_before == nullptr) {
       continue;
     }
-    TransformComponent compensated = *child_before;
-    compensated.position = compensated.position - target_local_delta;
+    const std::optional<TransformComponent> compensated =
+        try_scene_reparented_transform_preserving_world(
+            target_world_after, target_world_before, *child_before);
+    if (!compensated.has_value()) {
+      error_message = "Pivot child transform could not be compensated.";
+      return std::nullopt;
+    }
     const QMat4 child_world_after = scene_transform_multiply(
-        target_world_after, compose_transform(compensated.spatial_transform()));
-    if (!scene_transform_is_finite(compensated) ||
+        target_world_after, scene_local_transform_matrix(*compensated));
+    if (!scene_transform_is_finite(*compensated) ||
         !scene_matrix_is_finite(child_world_after)) {
       error_message = "Pivot child transform could not be compensated.";
       return std::nullopt;
     }
-    if (!same_transform(*child_before, compensated)) {
+    if (!same_transform(*child_before, *compensated)) {
       plan.transforms.push_back(PivotTransformEdit{
           .entity = child,
           .before = *child_before,
-          .after = compensated,
+          .after = *compensated,
       });
     }
   }

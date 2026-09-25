@@ -80,6 +80,7 @@
 #include <QPainter>
 #include <QPointer>
 #include <QRect>
+#include <QScopedValueRollback>
 #include <QSize>
 #include <QStatusBar>
 #include <QStackedWidget>
@@ -994,6 +995,14 @@ void UISystem::install_runtime_hooks(
     // Project rebinding can release the previous SceneSession before this
     // callback. Drop only Qt-owned state; the stored runtime pair may dangle.
     viewport_panel_->abandon_interactions();
+  }
+  if (main_window_close_in_progress_ && !editor.project().has_project() &&
+      main_window_ != nullptr) {
+    // Close preflight succeeded. Retire the top-level presentation before
+    // fallback rebinding hides/resizes native viewport children: otherwise
+    // their Qt backing store can expose old dimension glyphs for one frame.
+    capture_workspace_window_state();
+    main_window_->hide();
   }
   editor_ = &editor;
   if (auto *application =
@@ -2697,7 +2706,7 @@ void UISystem::show_home() {
     return;
   }
   const bool presentation_changed = !home_visible_;
-  if (presentation_changed) {
+  if (presentation_changed && !main_window_close_in_progress_) {
     capture_workspace_window_state();
   }
   home_visible_ = true;
@@ -2922,6 +2931,7 @@ bool UISystem::allow_main_window_close() {
   if (!resolve_standard_material_document(true)) {
     return false;
   }
+  const QScopedValueRollback closing(main_window_close_in_progress_, true);
   const QuaderApiVoidResult closed = editor_->project().close();
   return closed.ok() && !editor_->project().has_project();
 }
@@ -2977,6 +2987,9 @@ void UISystem::shutdown() {
   (void)save_settings();
   (void)save_viewport_settings();
   save_window_state();
+  if (main_window_ != nullptr) {
+    main_window_->hide();
+  }
   clear_project_workspace_events();
   if (command_event_filter_ != nullptr) {
     if (QCoreApplication *application = QApplication::instance()) {

@@ -5,6 +5,8 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/selected_mesh_outline_cache.hpp"
+#include "render/overlay/instance_selection_overlay_cache.hpp"
+#include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "assets/asset_registry.hpp"
@@ -327,6 +329,227 @@ TEST(SelectedMeshOutlineCacheTests, OpenMeshWeldsSplitCornersAndSharesTopologyAc
   EXPECT_TRUE(cache.frame(nullptr, camera, 0).lines.empty());
 }
 
+std::shared_ptr<MeshGeometryPayload> outline_quad() {
+  auto payload = std::make_shared<MeshGeometryPayload>();
+  payload->vertices = {{{-1, -1, 0}}, {{1, -1, 0}}, {{1, 1, 0}}, {{-1, 1, 0}}};
+  payload->indices = {0, 1, 2, 0, 2, 3};
+  return payload;
+}
+
+ViewportOverlayCamera front_orthographic() {
+  auto camera = perspective();
+  camera.projection = ViewportOverlayProjection::Orthographic;
+  camera.eye = {0, 0, 10};
+  camera.forward = {0, 0, -1};
+  camera.right = {1, 0, 0};
+  camera.up = {0, 1, 0};
+  return camera;
+}
+
+TEST(SelectedMeshOutlineCacheTests, ActiveObjectKeepsSilhouetteInsideOtherSelectedCoverage) {
+  const auto payload = outline_quad();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  snapshot.meshes.push_back({.geometry_payload = payload,
+      .world_transform = compose_transform({.scale = {3, 3, 1}}), .selected = true,
+      .vertices = payload->vertices, .indices = payload->indices});
+  snapshot.meshes.push_back({.geometry_payload = payload,
+      .world_transform = compose_transform({.position = {0, 0, 1}}),
+      .selected = true, .active_selected = true,
+      .vertices = payload->vertices, .indices = payload->indices});
+  SelectedMeshOutlineCache cache;
+  const auto &frame = cache.frame(&snapshot, front_orthographic(), 0);
+  ASSERT_EQ(frame.lines.size(), 8u);
+  std::size_t active_edges = 0;
+  for (const auto &line : frame.lines) {
+    EXPECT_EQ(viewport_overlay_depth_mode(line), ViewportOverlayDepthMode::DepthTested);
+    if (line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire) {
+      ++active_edges;
+      EXPECT_FLOAT_EQ(line.start.z, 1);
+      EXPECT_FLOAT_EQ(line.end.z, 1);
+    } else {
+      EXPECT_EQ(line.style_role, ViewportOverlayStyleRole::SelectionWire);
+      EXPECT_FLOAT_EQ(line.start.z, 0);
+      EXPECT_FLOAT_EQ(line.end.z, 0);
+    }
+  }
+  EXPECT_EQ(active_edges, 4u);
+  EXPECT_EQ(cache.work_stats().topology_builds, 1u);
+}
+
+TEST(SelectedMeshOutlineCacheTests, ActiveCoincidentOutlineWinsIndependentlyOfSourceOrder) {
+  const auto payload = outline_quad();
+  for (const bool active_first : {false, true}) {
+    SCOPED_TRACE(active_first);
+    RenderOverlaySelectedObjectSnapshot snapshot;
+    snapshot.meshes.push_back({.geometry_payload = payload, .selected = true,
+        .active_selected = active_first, .vertices = payload->vertices, .indices = payload->indices});
+    snapshot.meshes.push_back({.geometry_payload = payload, .selected = true,
+        .active_selected = !active_first, .vertices = payload->vertices, .indices = payload->indices});
+    SelectedMeshOutlineCache cache;
+    const auto &frame = cache.frame(&snapshot, front_orthographic(), 0);
+    ASSERT_EQ(frame.lines.size(), 4u);
+    for (const auto &line : frame.lines) {
+      EXPECT_EQ(line.style_role, ViewportOverlayStyleRole::ActiveSelectionWire);
+    }
+    EXPECT_EQ(cache.work_stats().topology_builds, 1u);
+  }
+}
+
+TEST(SelectedMeshOutlineCacheTests, ActivePartialOverlapSplitsOrdinaryBoundary) {
+  const auto payload = outline_quad();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  snapshot.meshes.push_back({.geometry_payload = payload,
+      .world_transform = compose_transform({.scale = {2, 2, 1}}), .selected = true,
+      .vertices = payload->vertices, .indices = payload->indices});
+  snapshot.meshes.push_back({.geometry_payload = payload,
+      .world_transform = compose_transform({.position = {0, 1, 0}}),
+      .selected = true, .active_selected = true,
+      .vertices = payload->vertices, .indices = payload->indices});
+  SelectedMeshOutlineCache cache;
+  const auto &frame = cache.frame(&snapshot, front_orthographic(), 0);
+  ASSERT_EQ(frame.lines.size(), 9u);
+  float ordinary_length = 0, active_length = 0;
+  std::size_t ordinary_top_fragments = 0;
+  for (const auto &line : frame.lines) {
+    if (line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire) {
+      active_length += length(line.end - line.start);
+    } else {
+      ordinary_length += length(line.end - line.start);
+      if (line.start.y == 2 && line.end.y == 2) {
+        ++ordinary_top_fragments;
+        EXPECT_TRUE(line.end.x <= -1 || line.start.x >= 1);
+      }
+    }
+  }
+  EXPECT_EQ(ordinary_top_fragments, 2u);
+  EXPECT_NEAR(ordinary_length, 14, 0.0001f);
+  EXPECT_NEAR(active_length, 8, 0.0001f);
+}
+
+TEST(SelectedMeshOutlineCacheTests, ActiveOnlySwapPublishesStyleWithoutRebuildingTopology) {
+  const auto payload = outline_quad();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  for (const float x : {-3.0f, 3.0f}) {
+    snapshot.meshes.push_back({.geometry_payload = payload,
+        .world_transform = compose_transform({.position = {x, 0, 0}}), .selected = true,
+        .active_selected = x < 0, .vertices = payload->vertices, .indices = payload->indices});
+  }
+  SelectedMeshOutlineCache cache;
+  const auto camera = front_orthographic();
+  ASSERT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 8u);
+  const auto revision = cache.revision(0);
+  const auto before = cache.work_stats();
+  snapshot.meshes[0].active_selected = false;
+  snapshot.meshes[1].active_selected = true;
+  ++snapshot.selection_revision;
+  const auto &frame = cache.frame(&snapshot, camera, 0);
+  ASSERT_EQ(frame.lines.size(), 8u);
+  EXPECT_GT(cache.revision(0), revision);
+  for (const auto &line : frame.lines) {
+    EXPECT_EQ(line.style_role, line.start.x > 0
+        ? ViewportOverlayStyleRole::ActiveSelectionWire : ViewportOverlayStyleRole::SelectionWire);
+  }
+  EXPECT_EQ(cache.work_stats().topology_builds, before.topology_builds);
+  EXPECT_EQ(cache.work_stats().source_refreshes, before.source_refreshes + 1);
+  EXPECT_EQ(cache.work_stats().camera_classifications, before.camera_classifications + 1);
+  const auto after = cache.work_stats();
+  const auto active_revision = cache.revision(0);
+  for (int i = 0; i < 20; ++i) (void)cache.frame(&snapshot, camera, 0);
+  EXPECT_EQ(cache.work_stats().topology_builds, after.topology_builds);
+  EXPECT_EQ(cache.work_stats().source_refreshes, after.source_refreshes);
+  EXPECT_EQ(cache.work_stats().camera_classifications, after.camera_classifications);
+  EXPECT_EQ(cache.revision(0), active_revision);
+}
+
+std::shared_ptr<MeshWireGeometryPayload> outline_quad_wires() {
+  auto wires = std::make_shared<MeshWireGeometryPayload>();
+  wires->content_id = 77;
+  wires->segments = {{{-1, -1, 0}, {1, -1, 0}}, {{1, -1, 0}, {1, 1, 0}},
+                    {{1, 1, 0}, {-1, 1, 0}}, {{-1, 1, 0}, {-1, -1, 0}}};
+  return wires;
+}
+
+TEST(SelectedMeshOutlineCacheTests, PersistentSceneWiresPartitionActiveColorAndInvalidateActiveOnlyInputs) {
+  const auto payload = outline_quad();
+  const auto wires = outline_quad_wires();
+  RenderOverlaySceneWireframeSnapshot snapshot;
+  snapshot.style.selection_wire_color = rgba8(64, 96, 128, 91);
+  snapshot.style.active_selection_wire_color =
+      viewport_active_selection_color(snapshot.style.selection_wire_color);
+  for (const EntityId id : {EntityId{1}, EntityId{2}}) {
+    snapshot.meshes.push_back({.entity = id, .geometry_payload = payload,
+        .wire_geometry_payload = wires, .selected = true, .active_selected = id == 1,
+        .vertices = payload->vertices, .indices = payload->indices, .wire_segments = wires->segments});
+  }
+  ASSERT_TRUE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, snapshot.meshes));
+  const auto before = plan_scene_wireframe_overlay_batches(snapshot, 64);
+  ASSERT_EQ(before.batches.chunks.size(), 2u);
+  for (const auto &chunk : before.batches.chunks) {
+    ASSERT_EQ(chunk.occurrences.size(), 1u);
+    EXPECT_EQ(chunk.key.index_offset, chunk.occurrences.front() == 1
+        ? snapshot.style.active_selection_wire_color : snapshot.style.selection_wire_color);
+    EXPECT_EQ(chunk.key.geometry_payload, wires->content_id);
+    EXPECT_EQ(chunk.key.index_offset >> 24u, 91u);
+  }
+  auto swapped = snapshot;
+  swapped.meshes[0].active_selected = false;
+  swapped.meshes[1].active_selected = true;
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, swapped.meshes));
+  const auto after = plan_scene_wireframe_overlay_batches(swapped, 64, &before.batches);
+  EXPECT_EQ(classify_instance_batch_update(before.batches, after.batches),
+            RenderInstanceBatchUpdateKind::Rebuild);
+  for (const auto &chunk : after.batches.chunks) {
+    ASSERT_EQ(chunk.occurrences.size(), 1u);
+    EXPECT_EQ(chunk.key.index_offset, chunk.occurrences.front() == 2
+        ? snapshot.style.active_selection_wire_color : snapshot.style.selection_wire_color);
+    EXPECT_EQ(chunk.key.geometry_payload, wires->content_id);
+  }
+  const auto repeated = plan_scene_wireframe_overlay_batches(swapped, 64, &after.batches);
+  EXPECT_EQ(classify_instance_batch_update(after.batches, repeated.batches),
+            RenderInstanceBatchUpdateKind::Unchanged);
+}
+
+TEST(SelectedMeshOutlineCacheTests, PersistentInstanceActiveBatchesShareTheOriginalMeshGeometry) {
+  const auto payload = outline_quad();
+  const auto wires = outline_quad_wires();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  for (const EntityId id : {EntityId{1}, EntityId{2}}) {
+    snapshot.instance_selection_fills.push_back({.occurrence = id, .member = 3,
+        .geometry_payload = payload, .geometry_content_id = {1},
+        .vertices = payload->vertices, .indices = payload->indices});
+    snapshot.instance_selection_wires.push_back({.occurrence = id, .member = 3,
+        .geometry_payload = payload, .geometry_content_id = {1}, .wire_geometry_payload = wires,
+        .vertices = payload->vertices, .indices = payload->indices, .wire_segments = wires->segments});
+  }
+  const auto ordinary = plan_instance_selection_overlay_batches(snapshot, 64);
+  ASSERT_EQ(ordinary.fills.chunks.size(), 1u);
+  ASSERT_EQ(ordinary.wires.chunks.size(), 1u);
+  snapshot.instance_selection_fills[1].active_selected = true;
+  snapshot.instance_selection_wires[1].active_selected = true;
+  snapshot.instance_selection_wires[1].wire_color = snapshot.style.active_selection_wire_color;
+  const auto active = plan_instance_selection_overlay_batches(snapshot, 64);
+  ASSERT_EQ(active.fills.chunks.size(), 2u);
+  ASSERT_EQ(active.wires.chunks.size(), 2u);
+  EXPECT_EQ(classify_instance_batch_update(ordinary.fills, active.fills),
+            RenderInstanceBatchUpdateKind::Rebuild);
+  EXPECT_EQ(classify_instance_batch_update(ordinary.wires, active.wires),
+            RenderInstanceBatchUpdateKind::Rebuild);
+  for (const auto &chunk : active.fills.chunks) {
+    EXPECT_EQ(chunk.key.geometry_payload, ordinary.fills.chunks.front().key.geometry_payload);
+    EXPECT_EQ(chunk.occurrences.size(), 1u);
+  }
+  for (const auto &chunk : active.wires.chunks) {
+    EXPECT_EQ(chunk.key.geometry_payload, wires->content_id);
+    EXPECT_EQ(chunk.occurrences.size(), 1u);
+  }
+  const auto repeated = plan_instance_selection_overlay_batches(snapshot, 64);
+  EXPECT_EQ(classify_instance_batch_update(active.fills, repeated.fills),
+            RenderInstanceBatchUpdateKind::Unchanged);
+  EXPECT_EQ(classify_instance_batch_update(active.wires, repeated.wires),
+            RenderInstanceBatchUpdateKind::Unchanged);
+  EXPECT_EQ(active.work.local_bounds_vertex_visit_count, payload->vertices.size());
+}
+
 TEST(SelectedMeshOutlineCacheTests, StackedAndIntersectingMeshesOnlyOutlineCombinedProjectedCoverage) {
   const std::array<std::vector<OutlineBox>, 3> assemblies{{
       // A pillar touches a wider base and roof: their contact contours are interior.
@@ -503,6 +726,8 @@ TEST(SelectedMeshOutlineCacheTests, SubmissionRetainsFillAndControlsWithNoIntern
   ViewportOverlaySubmissionRequest request;
   request.camera = perspective();
   request.overlays_visible = true;
+  // Isolate silhouette submission from the independent dimension-box stream.
+  request.selection_dimensions_visible = false;
   request.selection_frame_provider = &provider;
   request.selected_mesh_outline_snapshot = &snapshot;
   request.selection_source.selection_context = ViewportOverlaySelectionContext::Object;
@@ -512,6 +737,9 @@ TEST(SelectedMeshOutlineCacheTests, SubmissionRetainsFillAndControlsWithNoIntern
   EXPECT_TRUE(target.persistent.lines.empty());
   EXPECT_FALSE(target.persistent.triangles.empty());
   EXPECT_FALSE(target.dynamic.lines.empty());
+  for (const auto &line : target.dynamic.lines) {
+    EXPECT_EQ(line.source, ViewportOverlaySource::MeshOutline);
+  }
   const auto work = coordinator.work_counters();
   for (int i = 0; i < 30; ++i) EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
   EXPECT_EQ(provider.builds, 1);
@@ -586,6 +814,9 @@ TEST(SelectedMeshOutlineCacheTests, GroupMembersUseOutlinesAndKeepBoundsWithStab
   ViewportOverlaySubmissionRequest request;
   request.camera = camera;
   request.overlays_visible = request.scene_overlay_requested = true;
+  // Dimension boxes intentionally replace ordinary object-mode group cages;
+  // this fixture verifies the underlying group cage and silhouette streams.
+  request.selection_dimensions_visible = false;
   request.selected_mesh_outline_snapshot = &selected;
   request.scene_overlay_snapshot = &hierarchy;
   request.scene_selection_mode = RenderOverlaySelectionMode::Group;

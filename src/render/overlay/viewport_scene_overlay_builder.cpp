@@ -223,19 +223,21 @@ void append_semantic_wireframe(
 
 void append_hierarchy_selection_wires(ViewportOverlayFrame &frame,
                                       const RenderOverlaySelectionSnapshot
-                                          &snapshot) {
+                                          &snapshot, bool active_feedback) {
   for (const RenderOverlayMeshSnapshot &mesh :
        snapshot.hierarchy_selection_wires) {
     append_mesh_selection_wire(
         frame, mesh, kOverlaySelectionWireColor,
         ViewportOverlayLayer::SelectedEdge,
-        ViewportOverlayStyleRole::SelectionWire,
+        active_feedback && mesh.active_selected
+            ? ViewportOverlayStyleRole::ActiveSelectionWire
+            : ViewportOverlayStyleRole::SelectionWire,
         ViewportOverlaySource::HierarchySelection);
   }
 }
 
 void append_bounds_cage(ViewportOverlayFrame &frame,
-                        const RenderOverlayBoundsSnapshot &bounds) {
+                        const RenderOverlayBoundsSnapshot &bounds, bool active_feedback) {
   const std::array<QVec3, 8> corners{{
       {bounds.min.x, bounds.min.y, bounds.min.z},
       {bounds.max.x, bounds.min.y, bounds.min.z},
@@ -267,7 +269,8 @@ void append_bounds_cage(ViewportOverlayFrame &frame,
         .end = corners[static_cast<std::size_t>(edge[1])],
         .color = kOverlayGroupBoundsColor,
         .width_pixels = kOverlayGroupBoundsLineWidthPixels,
-        .style_role = ViewportOverlayStyleRole::GroupBounds,
+        .style_role = active_feedback && bounds.active_selected
+            ? ViewportOverlayStyleRole::ActiveGroupBounds : ViewportOverlayStyleRole::GroupBounds,
         .source = ViewportOverlaySource::GroupBounds,
     });
   }
@@ -287,6 +290,7 @@ std::optional<RenderOverlayBoundsSnapshot> combined_selected_mesh_bounds(
   }
 
   RenderOverlayBoundsSnapshot combined = snapshot.selected_mesh_bounds.front();
+  combined.active_selected = false;
   for (std::size_t index = 1u; index < snapshot.selected_mesh_bounds.size();
        ++index) {
     const RenderOverlayBoundsSnapshot &bounds =
@@ -321,16 +325,16 @@ void append_group_selection_cages(
         same_bounds(group_bounds, *selected_mesh_bounds)) {
       selected_mesh_bounds_merged = true;
     }
-    append_bounds_cage(frame, group_bounds);
+    append_bounds_cage(frame, group_bounds, selection_mode_uses_selected_mesh_bounds(selection_mode));
   }
   if (selected_mesh_bounds.has_value() && !selected_mesh_bounds_merged) {
-    append_bounds_cage(frame, *selected_mesh_bounds);
+    append_bounds_cage(frame, *selected_mesh_bounds, false);
   }
 }
 
 void append_selected_light_markers(ViewportOverlayFrame &frame,
                                    const RenderOverlaySelectionSnapshot
-                                       &snapshot) {
+                                       &snapshot, bool active_feedback) {
   constexpr float kLightMarkerRadius = 0.28f;
   constexpr float kDirectionalLightLength = 0.85f;
   const std::array<QVec3, 3> axes{{
@@ -348,7 +352,8 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
         .position = position,
         .color = kOverlaySelectedVertexColor,
         .size_pixels = kOverlayLightMarkerPointSizePixels,
-        .style_role = ViewportOverlayStyleRole::SelectedVertex,
+        .style_role = active_feedback && light.active_selected
+            ? ViewportOverlayStyleRole::ActiveSelectedVertex : ViewportOverlayStyleRole::SelectedVertex,
         .source = ViewportOverlaySource::Selection,
         .outline_growth_pixels = kOverlayLightMarkerOutlineGrowthPixels,
     });
@@ -365,7 +370,8 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
           .end = tip,
           .color = kOverlaySelectionWireColor,
           .width_pixels = 0.0f,
-          .style_role = ViewportOverlayStyleRole::SelectionWire,
+          .style_role = active_feedback && light.active_selected
+              ? ViewportOverlayStyleRole::ActiveSelectionWire : ViewportOverlayStyleRole::SelectionWire,
           .source = ViewportOverlaySource::Selection,
       });
       const QVec3 right = normalize(cross(direction, {0.0f, 1.0f, 0.0f}));
@@ -378,7 +384,8 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
           .end = tip + tick,
           .color = kOverlaySelectionWireColor,
           .width_pixels = 0.0f,
-          .style_role = ViewportOverlayStyleRole::SelectionWire,
+          .style_role = active_feedback && light.active_selected
+              ? ViewportOverlayStyleRole::ActiveSelectionWire : ViewportOverlayStyleRole::SelectionWire,
           .source = ViewportOverlaySource::Selection,
       });
       continue;
@@ -391,7 +398,8 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
           .end = position + axis,
           .color = kOverlaySelectionWireColor,
           .width_pixels = 0.0f,
-          .style_role = ViewportOverlayStyleRole::SelectionWire,
+          .style_role = active_feedback && light.active_selected
+              ? ViewportOverlayStyleRole::ActiveSelectionWire : ViewportOverlayStyleRole::SelectionWire,
           .source = ViewportOverlaySource::Selection,
       });
     }
@@ -446,7 +454,7 @@ void append_selected_light_radius_circles(
 
 void append_point_light_gizmos(ViewportOverlayFrame &frame,
                                const RenderOverlaySelectionSnapshot
-                                   &snapshot) {
+                                   &snapshot, bool active_feedback, bool selection_visible) {
   for (const RenderOverlayLightMarkerSnapshot &light :
        snapshot.point_light_gizmos) {
     const QVec3 position = transform_point(light.world_transform, {});
@@ -456,6 +464,10 @@ void append_point_light_gizmos(ViewportOverlayFrame &frame,
         .position = position,
         .color = rgba8(255, 255, 255, 255),
         .size_pixels = kOverlayPointLightGizmoSizePixels,
+        .style_role = selection_visible && (light.selected || light.hierarchy_selected)
+            ? (active_feedback && light.active_selected ? ViewportOverlayStyleRole::ActiveSelectionWire
+                                                       : ViewportOverlayStyleRole::SelectionWire)
+            : ViewportOverlayStyleRole::ExplicitColor,
         .source = ViewportOverlaySource::Gizmo,
         .element = {.object_id = static_cast<int>(light.entity)},
     });
@@ -474,7 +486,8 @@ void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
     constexpr std::uint8_t kWireframeAlpha = static_cast<std::uint8_t>(
         (kOverlayWireframeXrayColor >> 24u) & 0xffu);
     std::uint32_t color =
-        mesh.selected ? snapshot.style.selection_wire_color
+        mesh.selected ? (mesh.active_selected ? snapshot.style.active_selection_wire_color
+                                            : snapshot.style.selection_wire_color)
                       : rgba8(normalized_to_byte(mesh.wireframe_tint.x),
                               normalized_to_byte(mesh.wireframe_tint.y),
                               normalized_to_byte(mesh.wireframe_tint.z),
@@ -495,7 +508,8 @@ void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
     const float width_pixels =
         mesh.selected ? snapshot.style.selection_edge_line_width_pixels : 0.0f;
     const ViewportOverlayStyleRole style_role =
-        mesh.selected ? ViewportOverlayStyleRole::SelectionWire
+        mesh.selected ? (mesh.active_selected ? ViewportOverlayStyleRole::ActiveSelectionWire
+                                            : ViewportOverlayStyleRole::SelectionWire)
                       : ViewportOverlayStyleRole::WireframeBase;
     append_semantic_wireframe(frame, mesh, layer, color, width_pixels,
                               style_role);
@@ -550,6 +564,7 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
     bool include_tool_overlays,
     bool selection_overlays_visible) {
   QDR_PROFILE_FUNCTION();
+  const bool active_feedback = selection_mode_uses_selected_mesh_bounds(selection_mode);
   for (const RenderOverlayCurveSnapshot &curve : snapshot.curves) {
     if (curve.sample_payload == nullptr) {
       continue;
@@ -561,7 +576,8 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
             .color = selected ? kOverlaySelectionWireColor : kOverlayCurveColor,
             .width_pixels = selected ? kOverlaySelectionWireLineWidthPixels
                                      : kOverlayCurveLineWidthPixels,
-            .style_role = selected ? ViewportOverlayStyleRole::SelectionWire
+            .style_role = selected ? (active_feedback && curve.active_selected
+                ? ViewportOverlayStyleRole::ActiveSelectionWire : ViewportOverlayStyleRole::SelectionWire)
                                   : ViewportOverlayStyleRole::ExplicitColor,
             .source = ViewportOverlaySource::SceneCurve,
             .element = {.object_id = curve.modeling_object_id},
@@ -573,12 +589,12 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
       base_frame = strip_persistent_object_selection_fills(
           std::move(base_frame), selection_mode);
     }
-    append_hierarchy_selection_wires(base_frame, snapshot);
+    append_hierarchy_selection_wires(base_frame, snapshot, active_feedback);
     append_group_selection_cages(base_frame, snapshot, selection_mode);
-    append_selected_light_markers(base_frame, snapshot);
+    append_selected_light_markers(base_frame, snapshot, active_feedback);
   }
   if (point_light_gizmos_visible) {
-    append_point_light_gizmos(base_frame, snapshot);
+    append_point_light_gizmos(base_frame, snapshot, active_feedback, selection_overlays_visible);
     if (selection_overlays_visible) {
       append_selected_light_radius_circles(base_frame, snapshot);
     }

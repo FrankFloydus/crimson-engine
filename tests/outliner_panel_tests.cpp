@@ -721,6 +721,72 @@ TEST(OutlinerPanelTests, TreeFillsThePanelContentsRect) {
          "context menu own rename";
 }
 
+TEST_F(OutlinerPanelDropTests,
+       MeshCurveAndLightTargetsAcceptSelectedSubtreesWithNativeModelUndo) {
+  const QPalette native_palette = application_.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application_);
+  const auto targets = create_icon_examples();
+  const quader::EntityId source = create("Dragged Empty");
+  const quader::EntityId child = create("Dragged Child", source);
+  ASSERT_TRUE(editor_.selection()
+                  .select_objects_for_inspection({source, child}, child).ok());
+  for (const quader::EntityId target : targets) {
+    refresh();
+    ASSERT_TRUE(index(target).flags() & Qt::ItemIsDropEnabled);
+    const auto data = mime({child, source});
+    ASSERT_NE(data, nullptr);
+    EXPECT_TRUE(tree_->model()->canDropMimeData(
+        data.get(), Qt::MoveAction, -1, 0, index(target)));
+    ASSERT_TRUE(drop(*data, index(target)));
+    refresh();
+    EXPECT_EQ(session_.scene().parent(source), target);
+    EXPECT_EQ(session_.scene().parent(child), source);
+    expect_selection(*tree_, session_.scene(), {source, child}, child);
+    ASSERT_TRUE(editor_.history().undo().ok());
+    refresh();
+    EXPECT_EQ(session_.scene().parent(source), quader::kInvalidEntityId);
+    EXPECT_EQ(session_.scene().parent(child), source);
+  }
+
+  const auto nested_mesh = editor_.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
+  ASSERT_TRUE(nested_mesh.ok()) << nested_mesh.error_message();
+  ASSERT_TRUE(editor_.scene().rename(nested_mesh.value().entity, "Nested Mesh").ok());
+  ASSERT_TRUE(editor_.selection().select_objects_for_inspection(
+      {source, child, nested_mesh.value().entity, targets[1], targets[2], targets[3]},
+      targets[2]).ok());
+  refresh();
+  const auto multiple = mime(
+      {source, child, nested_mesh.value().entity, targets[1], targets[2], targets[3]});
+  ASSERT_NE(multiple, nullptr);
+  ASSERT_TRUE(drop(*multiple, index(targets[0])));
+  refresh();
+  EXPECT_EQ(session_.scene().parent(child), source);
+  EXPECT_EQ(session_.scene().parent(nested_mesh.value().entity), targets[0]);
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  int step = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    const auto &metrics = scale_controller.metrics();
+    panel_.apply_ui_scale(metrics);
+    panel_.resize(metrics.px(320), metrics.px(340));
+    tree_->expandAll();
+    refresh();
+    expect_selection(*tree_, session_.scene(),
+        {source, child, nested_mesh.value().entity, targets[1], targets[2], targets[3]},
+        targets[2]);
+    EXPECT_GE(tree_->visualRect(index(targets[2])).height(), metrics.px(16));
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(review_directory));
+      EXPECT_TRUE(panel_.grab().save(QDir(review_directory).filePath(
+          QStringLiteral("outliner-mesh-parenting-%1-%2.png")
+              .arg(qRound(factor * 100.0F)).arg(step))));
+    }
+    ++step;
+  }
+}
+
 TEST(OutlinerPanelTests,
      RelationshipStyleRetainsFusionArrowsDirectionScaleAndPlatformPalette) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
@@ -1121,7 +1187,7 @@ TEST(OutlinerPanelTests,
     if (menu != nullptr) {
       keyboard_menu_opened = true;
       const QList<QAction *> actions = menu->actions();
-      if (actions.size() != 11) {
+      if (actions.size() != 13) {
         ADD_FAILURE() << "Unexpected outliner context-menu action count: "
                       << actions.size();
         menu->close();
@@ -1131,7 +1197,7 @@ TEST(OutlinerPanelTests,
                 QStringLiteral("outliner.action.delete"));
       EXPECT_TRUE(actions[2]->isSeparator());
       EXPECT_TRUE(actions[5]->isSeparator());
-      EXPECT_TRUE(actions[9]->isSeparator());
+      EXPECT_TRUE(actions[11]->isSeparator());
 
       auto *hide_action = menu->findChild<QAction *>(
           QStringLiteral("outliner.action.hide_selected"));
@@ -1139,9 +1205,15 @@ TEST(OutlinerPanelTests,
           QStringLiteral("outliner.action.duplicate"));
       auto *group_action = menu->findChild<QAction *>(
           QStringLiteral("outliner.action.group"));
+      auto *parent_action = menu->findChild<QAction *>(
+          QStringLiteral("outliner.action.parent_to_active"));
+      auto *unparent_action = menu->findChild<QAction *>(
+          QStringLiteral("outliner.action.unparent"));
       EXPECT_NE(hide_action, nullptr);
       EXPECT_NE(duplicate_action, nullptr);
       EXPECT_NE(group_action, nullptr);
+      EXPECT_NE(parent_action, nullptr);
+      EXPECT_NE(unparent_action, nullptr);
       if (hide_action != nullptr) {
         EXPECT_TRUE(hide_action->text().endsWith(
             QStringLiteral("\t") + QString::fromStdString(
@@ -1162,6 +1234,25 @@ TEST(OutlinerPanelTests,
                                        editor.commands().shortcut_for(
                                            quader::quader_command::
                                                kGroupSelection))));
+      }
+      if (parent_action != nullptr) {
+        EXPECT_EQ(actions[9], parent_action);
+        EXPECT_TRUE(parent_action->isEnabled());
+        EXPECT_TRUE(parent_action->isVisible());
+        EXPECT_TRUE(parent_action->text().endsWith(
+            QStringLiteral("\t") + QString::fromStdString(
+                editor.commands().shortcut_for(
+                    quader::quader_command::kParentToActive))));
+      }
+      if (unparent_action != nullptr) {
+        EXPECT_EQ(actions[10], unparent_action);
+        EXPECT_FALSE(unparent_action->isEnabled());
+        EXPECT_FALSE(unparent_action->isVisible())
+            << "The selected root entities have no parent to detach";
+        EXPECT_TRUE(unparent_action->text().endsWith(
+            QStringLiteral("\t") + QString::fromStdString(
+                editor.commands().shortcut_for(
+                    quader::quader_command::kUnparentSelection))));
       }
       menu->close();
     }

@@ -102,7 +102,8 @@ bool same_lines(const ViewportOverlayFrame &a, const ViewportOverlayFrame &b) {
   return a.lines.size() == b.lines.size() && std::equal(a.lines.begin(), a.lines.end(),
       b.lines.begin(), [](const auto &left, const auto &right) {
         return position_key(left.start) == position_key(right.start) &&
-               position_key(left.end) == position_key(right.end);
+               position_key(left.end) == position_key(right.end) &&
+               left.style_role == right.style_role;
       });
 }
 
@@ -237,7 +238,8 @@ struct OutlineCoverage {
 
 void append_union_outline(ViewportOverlayFrame &frame, OutlineCoverage &coverage,
                           const OutlineProjection &projection,
-                          QVec3 start, QVec3 end, const std::array<QVec3, 2> &inside) {
+                          QVec3 start, QVec3 end, const std::array<QVec3, 2> &inside,
+                          ViewportOverlayStyleRole style_role) {
   glm::dvec3 view_start = projection.view(start), view_end = projection.view(end);
   if (projection.perspective) {
     const bool start_inside = view_start.z >= projection.near_plane;
@@ -275,7 +277,7 @@ void append_union_outline(ViewportOverlayFrame &frame, OutlineCoverage &coverage
     if (finish <= begin + 1e-9) return;
     frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedEdge,
         .start = world_point(begin), .end = world_point(finish), .color = kOverlaySelectionWireColor,
-        .width_pixels = 0, .style_role = ViewportOverlayStyleRole::SelectionWire,
+        .width_pixels = 0, .style_role = style_role,
         .source = ViewportOverlaySource::MeshOutline});
   };
   double begin = 0;
@@ -286,6 +288,86 @@ void append_union_outline(ViewportOverlayFrame &frame, OutlineCoverage &coverage
   append(begin, 1);
 }
 
+/// Removes ordinary fragments coincident with active edges, including partial overlaps.
+/// World-space tests preserve the existing depth relationship of projected overlaps.
+struct ActiveOutlineMerge {
+  std::vector<quader_geometry::QAabb3<double>> bounds;
+  std::vector<quader_geometry::QVec3d> centers;
+  std::vector<std::size_t> indices;
+  quader_geometry::QBoundsBvh<double> bvh;
+  quader_geometry::QBvhTraversalScratch scratch;
+  std::vector<OutlineCoverage::Interval> covered;
+  std::vector<ViewportOverlayLine> merged;
+
+  void merge(std::vector<ViewportOverlayLine> &lines) {
+    bounds.clear();
+    centers.clear();
+    indices.clear();
+    const auto is_active = [](const auto &line) {
+      return line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire;
+    };
+    const auto active_count = std::count_if(lines.begin(), lines.end(), is_active);
+    if (active_count == 0 || static_cast<std::size_t>(active_count) == lines.size()) return;
+    // The BVH keeps the caller's source-line index alongside each compact bound.
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+      const auto &line = lines[i];
+      if (!is_active(line)) continue;
+      const glm::dvec3 a(to_glm(line.start)), b(to_glm(line.end));
+      const double tolerance = std::max(1.0, glm::length(b - a)) * 1e-7;
+      const auto low = glm::min(a, b) - tolerance, high = glm::max(a, b) + tolerance;
+      const auto center = (a + b) * 0.5;
+      bounds.push_back({{low.x, low.y, low.z}, {high.x, high.y, high.z}});
+      centers.push_back({center.x, center.y, center.z});
+      indices.push_back(i);
+    }
+    (void)bvh.build(bounds, centers, indices);
+    merged.clear();
+    for (const auto &line : lines) {
+      if (is_active(line)) { merged.push_back(line); continue; }
+      const glm::dvec3 start(to_glm(line.start)), end(to_glm(line.end));
+      const auto direction = end - start;
+      const double squared_length = glm::dot(direction, direction);
+      if (squared_length <= 0) continue;
+      const double tolerance = std::max(1.0, std::sqrt(squared_length)) * 1e-7;
+      covered.clear();
+      (void)bvh.for_each_ray_candidate(
+          {{start.x, start.y, start.z}, {direction.x, direction.y, direction.z}},
+          {.min_distance = 0, .max_distance = 1, .intersection_epsilon = 1e-14}, scratch,
+          [&](std::size_t index, std::size_t, const auto &, double &) {
+            const auto &active = lines[index];
+            const glm::dvec3 a = glm::dvec3(to_glm(active.start)) - start;
+            const glm::dvec3 b = glm::dvec3(to_glm(active.end)) - start;
+            const double from = glm::dot(a, direction) / squared_length;
+            const double to = glm::dot(b, direction) / squared_length;
+            if (glm::length(a - from * direction) > tolerance ||
+                glm::length(b - to * direction) > tolerance) return true;
+            const double begin = std::max(0.0, std::min(from, to));
+            const double finish = std::min(1.0, std::max(from, to));
+            if (finish > begin + 1e-9) covered.push_back({begin, finish});
+            return true;
+          });
+      std::sort(covered.begin(), covered.end(), [](const auto &a, const auto &b) {
+        return a.begin < b.begin;
+      });
+      const auto append = [&](double begin, double finish) {
+        if (finish <= begin + 1e-9) return;
+        auto fragment = line;
+        const QVec3 delta = line.end - line.start;
+        fragment.start = line.start + delta * static_cast<float>(begin);
+        fragment.end = line.start + delta * static_cast<float>(finish);
+        merged.push_back(fragment);
+      };
+      double begin = 0;
+      for (const auto interval : covered) {
+        append(begin, interval.begin);
+        begin = std::max(begin, interval.end);
+      }
+      append(begin, 1);
+    }
+    lines.swap(merged);
+  }
+};
+
 } // namespace
 
 /// Pins selected occurrences and their shared topology, with an independent view gate per pane.
@@ -294,6 +376,7 @@ struct SelectedMeshOutlineCache::Impl {
   struct Occurrence {
     std::shared_ptr<OutlineTopology> topology;
     QMat4 world, local;
+    bool active_selected = false;
   };
   /// Excludes FOV, viewport dimensions and orthographic panning from silhouette classification.
   struct View {
@@ -310,7 +393,8 @@ struct SelectedMeshOutlineCache::Impl {
     bool valid = false;
     ViewportOverlayFrame frame, next;
     std::vector<std::uint8_t> facing;
-    OutlineCoverage coverage;
+    std::array<OutlineCoverage, 2> coverage;
+    ActiveOutlineMerge active_merge;
   };
   const RenderOverlaySelectedObjectSnapshot *source = nullptr;
   const RenderOverlaySelectionSnapshot *hierarchy_source = nullptr;
@@ -349,7 +433,8 @@ struct SelectedMeshOutlineCache::Impl {
           ++stats.topology_builds;
         }
       }
-      occurrences.push_back({topology, mesh.world_transform, inverse(mesh.world_transform)});
+      occurrences.push_back({topology, mesh.world_transform, inverse(mesh.world_transform),
+                             mesh.active_selected});
     };
     if (next_visible) {
       for (const auto &mesh : snapshot->meshes) append(mesh);
@@ -388,17 +473,18 @@ const ViewportOverlayFrame &SelectedMeshOutlineCache::frame(
   if (pane.valid && pane.source_revision == impl_->source_revision && pane.view == view) return pane.frame;
   pane.next.lines.clear();
   const OutlineProjection projection(camera);
-  pane.coverage.clear();
+  for (auto &coverage : pane.coverage) coverage.clear();
   for (const auto &occurrence : impl_->occurrences) {
+    auto &coverage = pane.coverage[occurrence.active_selected ? 1 : 0];
     for (const auto &face : occurrence.topology->faces) {
       std::array<glm::dvec3, 3> points;
       for (std::size_t i = 0; i < points.size(); ++i) {
         points[i] = projection.view(transform_point(occurrence.world, face.points[i]));
       }
-      pane.coverage.append_triangle(points, projection);
+      coverage.append_triangle(points, projection);
     }
   }
-  pane.coverage.build();
+  for (auto &coverage : pane.coverage) coverage.build();
   for (const auto &occurrence : impl_->occurrences) {
     const QVec3 local_view = camera.projection == ViewportOverlayProjection::Orthographic
         ? transform_vector(occurrence.local, camera.forward * -1.0f)
@@ -424,9 +510,13 @@ const ViewportOverlayFrame &SelectedMeshOutlineCache::frame(
       const std::array<QVec3, 2> inside{
           transform_point(occurrence.world, edge.inside[0]),
           transform_point(occurrence.world, edge.inside[edge.count > 1 ? 1 : 0])};
-      append_union_outline(pane.next, pane.coverage, projection, start, end, inside);
+      append_union_outline(pane.next, pane.coverage[occurrence.active_selected ? 1 : 0],
+          projection, start, end, inside, occurrence.active_selected
+              ? ViewportOverlayStyleRole::ActiveSelectionWire
+              : ViewportOverlayStyleRole::SelectionWire);
     }
   }
+  pane.active_merge.merge(pane.next.lines);
   for (auto &line : pane.next.lines) {
     if (position_key(line.end) < position_key(line.start)) std::swap(line.start, line.end);
   }
@@ -435,6 +525,10 @@ const ViewportOverlayFrame &SelectedMeshOutlineCache::frame(
                                line.end.x, line.end.y, line.end.z};
   };
   std::sort(pane.next.lines.begin(), pane.next.lines.end(), [&](const auto &a, const auto &b) {
+    if (line_key(a) == line_key(b)) {
+      return a.style_role == ViewportOverlayStyleRole::ActiveSelectionWire &&
+             b.style_role != ViewportOverlayStyleRole::ActiveSelectionWire;
+    }
     return line_key(a) < line_key(b);
   });
   const auto duplicate_begin = std::unique(pane.next.lines.begin(), pane.next.lines.end(),

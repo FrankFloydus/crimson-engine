@@ -73,6 +73,8 @@ triangle_style_role(quader_editor_core::SelectionOverlayLayer layer,
     switch (*role) {
     case quader_editor_core::SelectionOverlayStyleRole::SelectionFace:
       return ViewportOverlayStyleRole::SelectionFace;
+    case quader_editor_core::SelectionOverlayStyleRole::ActiveSelectionFace:
+      return ViewportOverlayStyleRole::ActiveSelectionFace;
     case quader_editor_core::SelectionOverlayStyleRole::HoverFace:
       return ViewportOverlayStyleRole::HoverFace;
     case quader_editor_core::SelectionOverlayStyleRole::FacePlaneHoverFace:
@@ -106,6 +108,8 @@ line_style_role(quader_editor_core::SelectionOverlayLayer layer,
     switch (*role) {
     case quader_editor_core::SelectionOverlayStyleRole::SourceWire:
       return ViewportOverlayStyleRole::SourceWire;
+    case quader_editor_core::SelectionOverlayStyleRole::ActiveSelectionWire:
+      return ViewportOverlayStyleRole::ActiveSelectionWire;
     case quader_editor_core::SelectionOverlayStyleRole::SelectionWire:
       return layer == quader_editor_core::SelectionOverlayLayer::SourceWire
                  ? ViewportOverlayStyleRole::SelectedSourceWire
@@ -153,6 +157,8 @@ point_style_role(quader_editor_core::SelectionOverlayLayer layer,
       return ViewportOverlayStyleRole::Vertex;
     case quader_editor_core::SelectionOverlayStyleRole::SelectedVertex:
       return ViewportOverlayStyleRole::SelectedVertex;
+    case quader_editor_core::SelectionOverlayStyleRole::ActiveSelectedVertex:
+      return ViewportOverlayStyleRole::ActiveSelectedVertex;
     case quader_editor_core::SelectionOverlayStyleRole::HoverVertex:
       return ViewportOverlayStyleRole::HoverVertex;
     case quader_editor_core::SelectionOverlayStyleRole::RemoveSelectionWire:
@@ -207,13 +213,17 @@ ViewportOverlaySource overlay_source_for_role(ViewportOverlayStyleRole role) {
   case ViewportOverlayStyleRole::LayerDefault:
   case ViewportOverlayStyleRole::ExplicitColor:
   case ViewportOverlayStyleRole::SelectionFace:
+  case ViewportOverlayStyleRole::ActiveSelectionFace:
   case ViewportOverlayStyleRole::SelectionWire:
+  case ViewportOverlayStyleRole::ActiveSelectionWire:
   case ViewportOverlayStyleRole::SelectedSourceWire:
   case ViewportOverlayStyleRole::SourceWire:
   case ViewportOverlayStyleRole::Vertex:
   case ViewportOverlayStyleRole::SelectedVertex:
+  case ViewportOverlayStyleRole::ActiveSelectedVertex:
   case ViewportOverlayStyleRole::SnapTargetVertex:
   case ViewportOverlayStyleRole::GroupBounds:
+  case ViewportOverlayStyleRole::ActiveGroupBounds:
   case ViewportOverlayStyleRole::WireframeBase:
     return ViewportOverlaySource::Selection;
   }
@@ -269,15 +279,21 @@ std::uint32_t projected_color_for(ViewportOverlayLayer layer,
   switch (role) {
   case ViewportOverlayStyleRole::SelectionFace:
     return kOverlaySelectionFaceColor;
+  case ViewportOverlayStyleRole::ActiveSelectionFace:
+    return viewport_active_selection_color(kOverlaySelectionFaceColor);
   case ViewportOverlayStyleRole::SelectionWire:
   case ViewportOverlayStyleRole::SelectedSourceWire:
     return kOverlaySelectionWireColor;
+  case ViewportOverlayStyleRole::ActiveSelectionWire:
+    return viewport_active_selection_color(kOverlaySelectionWireColor);
   case ViewportOverlayStyleRole::SourceWire:
     return kOverlaySourceWireColor;
   case ViewportOverlayStyleRole::Vertex:
     return kOverlayVertexColor;
   case ViewportOverlayStyleRole::SelectedVertex:
     return kOverlaySelectedVertexColor;
+  case ViewportOverlayStyleRole::ActiveSelectedVertex:
+    return viewport_active_selection_color(kOverlaySelectedVertexColor);
   case ViewportOverlayStyleRole::HoverFace:
     return kOverlayHoverFaceColor;
   case ViewportOverlayStyleRole::HoverWire:

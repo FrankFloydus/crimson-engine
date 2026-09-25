@@ -75,6 +75,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QMimeData>
 #include <QModelIndex>
@@ -266,6 +267,22 @@ private:
   std::filesystem::path profile_;
   std::optional<std::string> previous_;
   bool active_ = false;
+};
+
+class RuntimeRebindWindowHideProbe final : public QObject {
+public:
+  bool fallback_rebind_in_progress = false;
+  bool hidden_during_fallback_rebind = false;
+  int hide_count = 0;
+
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (event->type() == QEvent::Hide) {
+      ++hide_count;
+      hidden_during_fallback_rebind = fallback_rebind_in_progress;
+    }
+    return QObject::eventFilter(watched, event);
+  }
 };
 
 std::optional<std::string>
@@ -536,34 +553,34 @@ TEST(QtProjectWorkspaceTests,
   QMenu *menu = primitive->menu();
   ASSERT_NE(menu, nullptr);
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  // The test executable has no application QRC. Use the identical shipping
+  // assets for native-widget geometry and optional captures.
+  const QDir icons(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
+  for (QAction *action : toolbar.actions()) {
+    const QString name = action->objectName();
+    if (!name.startsWith(QStringLiteral("tool_")) || action == primitive ||
+        name == QStringLiteral("tool_curve")) {
+      continue;
+    }
+    const QString file_name =
+        name == QStringLiteral("tool_lasso_select")
+            ? QStringLiteral("tool_lasso.png")
+            : name + QStringLiteral(".png");
+    const QIcon icon = quader::qt_multiresolution_icon(
+        icons.filePath(file_name));
+    ASSERT_FALSE(icon.isNull()) << name.toStdString();
+    action->setIcon(icon);
+  }
+  const std::array<const char *, 5> names{
+      "box", "cylinder", "sphere", "cone", "torus"};
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    const QIcon icon = quader::qt_multiresolution_icon(icons.filePath(
+        QStringLiteral("tool_create_%1.png").arg(QString::fromUtf8(names[index]))));
+    ASSERT_FALSE(icon.isNull()) << names[index];
+    menu->actions()[index]->setIcon(icon);
+  }
   if (!review_directory.isEmpty()) {
     ASSERT_TRUE(QDir().mkpath(review_directory));
-    // The test executable has no application QRC. Use the identical shipping
-    // assets for real native-widget captures, including each new primitive.
-    const QDir icons(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
-    for (QAction *action : toolbar.actions()) {
-      const QString name = action->objectName();
-      if (!name.startsWith(QStringLiteral("tool_")) || action == primitive ||
-          name == QStringLiteral("tool_curve")) {
-        continue;
-      }
-      const QString file_name =
-          name == QStringLiteral("tool_lasso_select")
-              ? QStringLiteral("tool_lasso.png")
-              : name + QStringLiteral(".png");
-      const QIcon icon = quader::qt_multiresolution_icon(
-          icons.filePath(file_name));
-      ASSERT_FALSE(icon.isNull()) << name.toStdString();
-      action->setIcon(icon);
-    }
-    const std::array<const char *, 5> names{
-        "box", "cylinder", "sphere", "cone", "torus"};
-    for (std::size_t index = 0; index < names.size(); ++index) {
-      const QIcon icon = quader::qt_multiresolution_icon(icons.filePath(
-          QStringLiteral("tool_create_%1.png").arg(QString::fromUtf8(names[index]))));
-      ASSERT_FALSE(icon.isNull()) << names[index];
-      menu->actions()[index]->setIcon(icon);
-    }
     QToolBar icon_review;
     icon_review.setMovable(false);
     for (QAction *action : menu->actions()) {
@@ -2531,6 +2548,9 @@ TEST(QtProjectWorkspaceTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
+  int last_window_closed_count = 0;
+  QObject::connect(&application, &QGuiApplication::lastWindowClosed,
+                   &application, [&] { ++last_window_closed_count; });
 
   const char *local_app_data = std::getenv("LOCALAPPDATA");
   ASSERT_NE(local_app_data, nullptr);
@@ -2565,6 +2585,8 @@ TEST(QtProjectWorkspaceTests,
   int scene_bind_count = 0;
   bool project_scene_was_bound = false;
   bool fallback_bound_after_project_release = false;
+  RuntimeRebindWindowHideProbe hide_probe;
+  ui.main_window()->installEventFilter(&hide_probe);
   const auto bind_scene = [&](quader::SceneSession &scene) {
     ++scene_bind_count;
     bound_scene = &scene;
@@ -2574,10 +2596,13 @@ TEST(QtProjectWorkspaceTests,
         (project_scene_was_bound && !project.has_project() &&
          project.active_scene() == nullptr &&
          bound_scene == &project.fallback_scene());
+    hide_probe.fallback_rebind_in_progress =
+        project_scene_was_bound && !project.has_project();
     ui.install_runtime_hooks(
         editor, scene.scene(), scene.assets(), scene.modeling(),
         scene.selection(), scene.native_tools(), scene.point_placement(),
         quader::kInvalidAssetId);
+    hide_probe.fallback_rebind_in_progress = false;
   };
   quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
       editor, bind_scene);
@@ -2604,7 +2629,19 @@ TEST(QtProjectWorkspaceTests,
       bound_scene->native_tools(), &bound_scene->point_placement(), 1.0 / 60.0);
 
   quader::SceneSession *const outgoing_scene = bound_scene;
-  EXPECT_TRUE(ui.main_window()->close());
+  QTimer close_timeout;
+  close_timeout.setSingleShot(true);
+  QObject::connect(&close_timeout, &QTimer::timeout, &application, [&] {
+    ADD_FAILURE() << "main-window close did not finish";
+    application.quit();
+  });
+  close_timeout.start(1000);
+  QTimer::singleShot(0, ui.main_window(), [&] {
+    EXPECT_TRUE(ui.main_window()->close());
+    close_timeout.stop();
+    application.quit();
+  });
+  EXPECT_EQ(application.exec(), 0);
   EXPECT_FALSE(ui.main_window()->isVisible());
   EXPECT_FALSE(editor.project().has_project());
   EXPECT_EQ(project.active_scene(), nullptr);
@@ -2612,6 +2649,10 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_NE(bound_scene, outgoing_scene);
   EXPECT_EQ(scene_bind_count, 3);
   EXPECT_TRUE(fallback_bound_after_project_release);
+  EXPECT_EQ(hide_probe.hide_count, 1);
+  EXPECT_TRUE(hide_probe.hidden_during_fallback_rebind)
+      << "the window must hide before the synchronous fallback rebind returns";
+  EXPECT_EQ(last_window_closed_count, 1);
   // Consume the rebound owners once: merely storing the fallback pointers does
   // not prove that the panel dropped every non-owning pointer to the released
   // project scene.
@@ -2619,6 +2660,173 @@ TEST(QtProjectWorkspaceTests,
       editor, bound_scene->scene(), bound_scene->assets(),
       bound_scene->modeling(), quader::kInvalidAssetId,
       bound_scene->native_tools(), &bound_scene->point_placement(), 1.0 / 60.0);
+
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     QuitKeepsDirtyProjectVisibleUntilAcceptedAndProjectCloseKeepsLauncherVisible) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const std::filesystem::path isolated_profile =
+      std::filesystem::temp_directory_path() /
+      ("quader-ui-quit-visibility-" +
+       std::to_string(std::chrono::steady_clock::now()
+                          .time_since_epoch()
+                          .count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+
+  int argc = 1;
+  char application_name[] = "quader-quit-visibility-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  int last_window_closed_count = 0;
+  QObject::connect(&application, &QGuiApplication::lastWindowClosed,
+                   &application, [&] { ++last_window_closed_count; });
+
+  const std::filesystem::path resource_root =
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const std::filesystem::path project_root =
+      scoped_profile.profile() / "Quit Visibility Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  for (QMessageBox *dialog : ui.main_window()->findChildren<QMessageBox *>()) {
+    dialog->setAttribute(Qt::WA_DontShowOnScreen, true);
+  }
+  RuntimeRebindWindowHideProbe hide_probe;
+  ui.main_window()->installEventFilter(&hide_probe);
+  int fallback_bind_count = 0;
+  const auto bind_scene = [&](quader::SceneSession &scene) {
+    hide_probe.fallback_rebind_in_progress = !project.has_project();
+    if (hide_probe.fallback_rebind_in_progress) {
+      ++fallback_bind_count;
+    }
+    ui.install_runtime_hooks(
+        editor, scene.scene(), scene.assets(), scene.modeling(),
+        scene.selection(), scene.native_tools(), scene.point_placement(),
+        quader::kInvalidAssetId);
+    hide_probe.fallback_rebind_in_progress = false;
+  };
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, bind_scene);
+  bind_scene(project.fallback_scene());
+  ui.show();
+  ASSERT_TRUE(ui.main_window()->isVisible());
+
+  const auto created = editor.project().create(project_root);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.scene().create_point_light().ok());
+  ASSERT_TRUE(editor.scene_documents().has_dirty_scenes());
+  const auto active_scene = editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(active_scene.has_value());
+  const std::filesystem::path manifest_path = editor.project().manifest_path();
+
+  int confirmation_count = 0;
+  editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene =
+          [&](const quader::QuaderSceneDocumentInfo &scene,
+              std::string_view action_id) {
+            ++confirmation_count;
+            EXPECT_TRUE(ui.main_window()->isVisible());
+            EXPECT_TRUE(editor.project().has_project());
+            QTimer::singleShot(0, ui.main_window(), [&] {
+              auto *dialog =
+                  qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+              EXPECT_NE(dialog, nullptr);
+              if (dialog == nullptr) {
+                return;
+              }
+              EXPECT_EQ(dialog->objectName(),
+                        QStringLiteral("scene_unsaved_confirmation"));
+              EXPECT_TRUE(dialog->isVisible());
+              EXPECT_TRUE(ui.main_window()->isVisible());
+              auto *cancel_button = dialog->findChild<QPushButton *>(
+                  QStringLiteral("unsavedConfirmation.cancel"));
+              EXPECT_NE(cancel_button, nullptr);
+              if (cancel_button != nullptr) {
+                cancel_button->click();
+              } else {
+                dialog->reject();
+              }
+            });
+            return ui.confirm_dirty_scene(scene, action_id);
+          },
+  });
+  EXPECT_FALSE(ui.main_window()->close());
+  EXPECT_EQ(confirmation_count, 1);
+  EXPECT_TRUE(ui.main_window()->isVisible());
+  EXPECT_TRUE(editor.project().has_project());
+  EXPECT_EQ(editor.scene_documents().active_scene_id(), active_scene);
+  EXPECT_TRUE(editor.scene_documents().has_dirty_scenes());
+  EXPECT_EQ(fallback_bind_count, 1);
+  EXPECT_EQ(hide_probe.hide_count, 0);
+  EXPECT_EQ(last_window_closed_count, 0);
+
+  // An unavailable confirmation hook fails the project-close preflight.
+  editor.scene_documents().set_runtime_hooks({});
+  EXPECT_FALSE(ui.main_window()->close());
+  EXPECT_TRUE(ui.main_window()->isVisible());
+  EXPECT_TRUE(editor.project().has_project());
+  EXPECT_EQ(editor.scene_documents().active_scene_id(), active_scene);
+  EXPECT_TRUE(editor.scene_documents().has_dirty_scenes());
+  EXPECT_EQ(fallback_bind_count, 1);
+  EXPECT_EQ(hide_probe.hide_count, 0);
+  EXPECT_EQ(last_window_closed_count, 0);
+
+  editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene = [](const quader::QuaderSceneDocumentInfo &,
+                                std::string_view) {
+        return quader::QuaderDirtySceneDecision::Discard;
+      },
+  });
+  const auto closed = editor.project().close();
+  ASSERT_TRUE(closed.ok()) << closed.error_message();
+  EXPECT_FALSE(editor.project().has_project());
+  EXPECT_TRUE(ui.main_window()->isVisible());
+  EXPECT_EQ(fallback_bind_count, 2);
+  EXPECT_EQ(hide_probe.hide_count, 0);
+  EXPECT_EQ(last_window_closed_count, 0);
+  auto *central_stack = ui.main_window()->findChild<QStackedWidget *>(
+      QStringLiteral("mainCentralStack"));
+  ASSERT_NE(central_stack, nullptr);
+  EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(
+                central_stack->currentWidget()),
+            nullptr);
+
+  const auto reopened = editor.project().open(manifest_path);
+  ASSERT_TRUE(reopened.ok()) << reopened.error_message();
+  ASSERT_TRUE(editor.project().has_project());
+  auto *exit_action = ui.main_window()->findChild<QAction *>(
+      QStringLiteral("action_exit"));
+  ASSERT_NE(exit_action, nullptr);
+  ASSERT_TRUE(exit_action->isEnabled());
+  QTimer close_timeout;
+  close_timeout.setSingleShot(true);
+  QObject::connect(&close_timeout, &QTimer::timeout, &application, [&] {
+    ADD_FAILURE() << "File > Exit did not finish";
+    application.quit();
+  });
+  close_timeout.start(1000);
+  QTimer::singleShot(0, ui.main_window(), [&] {
+    exit_action->trigger();
+    close_timeout.stop();
+    application.quit();
+  });
+  EXPECT_EQ(application.exec(), 0);
+  EXPECT_FALSE(ui.main_window()->isVisible());
+  EXPECT_FALSE(editor.project().has_project());
+  EXPECT_EQ(fallback_bind_count, 3);
+  EXPECT_EQ(hide_probe.hide_count, 1);
+  EXPECT_TRUE(hide_probe.hidden_during_fallback_rebind);
+  EXPECT_EQ(last_window_closed_count, 1);
 
   ui.shutdown();
 }

@@ -217,7 +217,7 @@ private:
       return std::nullopt;
     }
     const QMat4 requested_group_world =
-        compose_transform(group_transform_.spatial_transform());
+        scene_local_transform_matrix(group_transform_);
     if (!scene_matrix_is_finite(requested_group_world)) {
       return std::nullopt;
     }
@@ -227,13 +227,13 @@ private:
 
     const QMat4 parent_world = scene().world_transform_matrix(common_parent);
     const std::optional<TransformComponent> group_local =
-        try_scene_local_transform_preserving_world(
-            parent_world, requested_group_world, group_transform_);
+        try_scene_reparented_transform_preserving_world(
+            parent_world, QMat4{}, group_transform_);
     if (!group_local.has_value()) {
       return std::nullopt;
     }
     return scene_transform_multiply(
-        parent_world, compose_transform(group_local->spatial_transform()));
+        parent_world, scene_local_transform_matrix(*group_local));
   }
 
   std::optional<std::vector<SceneTransformAssignment>>
@@ -246,8 +246,9 @@ private:
       const std::optional<TransformComponent> local =
           transform == nullptr
               ? std::nullopt
-              : try_scene_local_transform_preserving_world(
-                    group_world, scene().world_transform_matrix(root),
+              : try_scene_reparented_transform_preserving_world(
+                    group_world,
+                    scene().world_transform_matrix(scene().parent(root)),
                     *transform);
       if (!local.has_value()) {
         return std::nullopt;

@@ -167,6 +167,12 @@ public:
     QuaderApiVoidResult move_entities(
         std::span<const EntityId> entities, EntityId parent,
         EntityId before_sibling = kInvalidEntityId);
+    /// Makes every other selected entity a direct child of the active entity.
+    QuaderApiVoidResult parent_selection_to_active();
+    /// Detaches each selected child individually, retaining its world placement.
+    QuaderApiVoidResult unparent_selection();
+    [[nodiscard]] bool can_parent_selection_to_active() const;
+    [[nodiscard]] bool can_unparent_selection() const;
     QuaderApiVoidResult set_transform(EntityId entity,
                                       QuaderTransform transform);
     QuaderApiVoidResult

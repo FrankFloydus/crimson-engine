@@ -53,7 +53,7 @@ struct ClipboardDefinition final {
 /// Captures one occurrence root and its definition index in the payload.
 struct ClipboardOccurrence final {
   DocumentEntitySnapshot snapshot;
-  QMat4 world_transform;
+  QMat4 parent_world_transform;
   std::size_t definition_index = 0u;
 };
 
@@ -468,7 +468,8 @@ public:
       }
       captured.occurrences.push_back(ClipboardOccurrence{
           .snapshot = std::move(*occurrence_snapshot),
-          .world_transform = scene.world_transform_matrix(occurrence_entity),
+          .parent_world_transform =
+              scene.world_transform_matrix(scene.parent(occurrence_entity)),
           .definition_index = definition_index,
       });
     }
@@ -964,8 +965,9 @@ private:
           .definition = imported_definitions[source.definition_index],
       };
       const std::optional<TransformComponent> local =
-          try_scene_local_transform_preserving_world(
-              parent_world, source.world_transform, occurrence.transform);
+          try_scene_reparented_transform_preserving_world(
+              parent_world, source.parent_world_transform,
+              occurrence.transform);
       if (!local.has_value()) {
         return rollback(clipboard_failure(
             "Occurrence world transform could not be preserved."));

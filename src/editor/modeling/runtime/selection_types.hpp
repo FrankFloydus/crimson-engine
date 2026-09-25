@@ -99,6 +99,9 @@ enum class SelectionOverlayStyleRole : std::uint32_t {
   DiagnosticEdge = 13,
   FacePlaneHoverFace = 14,
   FacePlaneHoverWire = 15,
+  ActiveSelectionFace = 16,
+  ActiveSelectionWire = 17,
+  ActiveSelectedVertex = 18,
 };
 
 inline constexpr std::uint32_t kSelectionOverlayStyleRoleTokenMask =
@@ -140,6 +143,9 @@ selection_overlay_style_role_from_token(std::uint32_t token) {
   case SelectionOverlayStyleRole::DiagnosticEdge:
   case SelectionOverlayStyleRole::FacePlaneHoverFace:
   case SelectionOverlayStyleRole::FacePlaneHoverWire:
+  case SelectionOverlayStyleRole::ActiveSelectionFace:
+  case SelectionOverlayStyleRole::ActiveSelectionWire:
+  case SelectionOverlayStyleRole::ActiveSelectedVertex:
     return static_cast<SelectionOverlayStyleRole>(
         token & kSelectionOverlayStyleRoleTokenValueMask);
   }
@@ -254,6 +260,12 @@ struct SelectionOverlayStyle {
       selection_overlay_style_token(SelectionOverlayStyleRole::Vertex);
   std::uint32_t selected_handle_color_abgr =
       selection_overlay_style_token(SelectionOverlayStyleRole::SelectedVertex);
+  std::uint32_t active_selection_face_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::ActiveSelectionFace);
+  std::uint32_t active_selected_edge_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::ActiveSelectionWire);
+  std::uint32_t active_selected_handle_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::ActiveSelectedVertex);
   std::uint32_t hover_face_color_abgr =
       selection_overlay_style_token(SelectionOverlayStyleRole::HoverFace);
   std::uint32_t hover_face_edge_color_abgr =

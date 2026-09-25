@@ -155,7 +155,7 @@ private:
               "Instance array transform could not be represented.");
         }
         const QMat4 recomposed = scene_transform_multiply(
-            parent_world, compose_transform(local->spatial_transform()));
+            parent_world, scene_local_transform_matrix(*local));
         if (!scene_matrix_near_equal(recomposed, generated_world)) {
           return command_invalid_result(
               "Instance array transform cannot be represented under its "

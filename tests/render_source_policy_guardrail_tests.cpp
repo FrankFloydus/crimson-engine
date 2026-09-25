@@ -1474,8 +1474,8 @@ TEST(ViewportOverlayPolicyTests,
                                       "ViewportOverlayLayer::SelectedEdge : "
                                       "ViewportOverlayLayer::WireframeXray"));
   EXPECT_TRUE(source_contains_compact(
-      cache_source, "if (mesh.selected) { return "
-                    "style.selection_wire_color; }"));
+      cache_source, "if (mesh.selected) { return mesh.active_selected ? "
+                    "style.active_selection_wire_color : style.selection_wire_color; }"));
   EXPECT_NE(cache_source.find("mesh.wireframe_tint"), std::string::npos);
   EXPECT_NE(cache_source.find("style.selection_edge_line_width_pixels"),
             std::string::npos);
@@ -1554,8 +1554,9 @@ TEST(ViewportOverlayPolicyTests,
       "resource->color == input.color"));
   EXPECT_TRUE(source_contains_compact(
       selection_cache,
-      ".material_payload = std::bit_cast<std::uint32_t>("
-      "record.logical_wire_width_pixels)"));
+      ".material_payload = static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>("
+      "record.logical_wire_width_pixels)) | "
+      "(static_cast<std::uint64_t>(record.active_selected) << 32u)"));
   EXPECT_NE(selection_cache.find(".index_offset = record.wire_color"),
             std::string::npos);
   EXPECT_NE(overlay_snapshot_header.find("float logical_wire_width_pixels"),

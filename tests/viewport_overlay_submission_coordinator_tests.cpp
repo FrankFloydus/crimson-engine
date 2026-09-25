@@ -17,6 +17,8 @@
 #include "editor/session/scene_session.hpp"
 
 #include "viewport/viewport_settings.hpp"
+#include "assets/asset_registry.hpp"
+#include "scene/scene_document.hpp"
 
 #include <gtest/gtest.h>
 
@@ -1809,6 +1811,78 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   request.selection_dimension_preview_curves = curve_previews;
   ++request.tool_preview_overlay_revision;
   expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 1, 0}, {7, 3, 1});
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     GroupActiveOnlyAndColorOnlyChangesPublishWhileUnchangedFramesReuseSources) {
+  SceneDocument document;
+  AssetRegistry assets;
+  MeshAsset mesh;
+  mesh.edit_geometry().vertices = {MeshVertex{.position = {0, 0, 0}},
+      MeshVertex{.position = {1, 0, 0}}, MeshVertex{.position = {0, 1, 0}}};
+  mesh.edit_geometry().indices = {0, 1, 2};
+  const auto mesh_id = assets.add_mesh(std::move(mesh));
+  const auto first = document.create_empty("First");
+  const auto second = document.create_empty("Second");
+  for (const auto group : {first, second}) {
+    const auto child = document.create_entity("Child", EntityKind::Mesh);
+    ASSERT_TRUE(document.set_mesh(child, {.mesh = mesh_id}));
+    ASSERT_TRUE(document.set_parent(child, group));
+    ASSERT_TRUE(document.set_selected(group, true));
+  }
+  ASSERT_TRUE(document.set_transform(second, TransformComponent{.position = {4, 0, 0}}));
+  RenderOverlaySnapshotCache snapshots;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  StaticSelectionFrameProvider provider({});
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::BoundingBoxWire,
+      {0.2f, 0.4f, 0.6f, 0.4f}));
+  const auto submit = [&](float scale) {
+    const auto &scene = snapshots.selection_snapshot(document, assets);
+    auto request = submission_request(provider, scene, volatile_frame, curve);
+    request.scene_selection_mode = RenderOverlaySelectionMode::Group;
+    request.style_selection_context = ViewportOverlaySelectionContext::Group;
+    request.selection_dimensions_visible = true;
+    request.raster_scale = scale;
+    return coordinator.submit(request, settings, target);
+  };
+  const auto expect_active_side = [&](bool right, std::uint32_t color) {
+    std::size_t active = 0u;
+    std::size_t ordinary = 0u;
+    for (const auto &line : target.persistent_frame.lines) {
+      if (line.source != ViewportOverlaySource::GroupBounds) continue;
+      if (line.style_role == ViewportOverlayStyleRole::ActiveGroupBounds) {
+        ++active;
+        EXPECT_EQ(line.color, color);
+        EXPECT_EQ(line.start.x >= 4.0f, right);
+      } else {
+        ++ordinary;
+        EXPECT_EQ(line.style_role, ViewportOverlayStyleRole::GroupBounds);
+      }
+    }
+    EXPECT_EQ(active, 12u);
+    EXPECT_EQ(ordinary, 12u);
+  };
+  ASSERT_TRUE(submit(1.0f).persistent_submitted);
+  expect_active_side(true, rgba8(102, 140, 179, 102));
+  const auto builds = snapshots.stats().selection_build_count;
+  EXPECT_FALSE(submit(1.0f).persistent_submitted);
+  EXPECT_EQ(snapshots.stats().selection_build_count, builds);
+  ASSERT_TRUE(document.set_active_selection(first));
+  ASSERT_TRUE(submit(1.0f).persistent_submitted);
+  expect_active_side(false, rgba8(102, 140, 179, 102));
+  EXPECT_EQ(document.selected_entities().size(), 2u);
+  const auto active_builds = snapshots.stats().selection_build_count;
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::BoundingBoxWire,
+      {1, 1, 1, 0.4f}));
+  ASSERT_TRUE(submit(2.0f).persistent_submitted);
+  expect_active_side(false, rgba8(255, 255, 255, 102));
+  EXPECT_EQ(snapshots.stats().selection_build_count, active_builds);
+  EXPECT_FALSE(submit(2.0f).persistent_submitted);
+  EXPECT_EQ(snapshots.stats().selection_build_count, active_builds);
 }
 
 } // namespace

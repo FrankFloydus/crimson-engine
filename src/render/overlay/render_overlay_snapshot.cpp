@@ -33,16 +33,29 @@ bool local_visibility_allows(
   return local_visibility == nullptr || local_visibility->allows(entity);
 }
 
-bool selected_in_hierarchy(
+EntityId selection_owner(
     const SceneDocument &document, EntityId entity,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
   for (EntityId ancestor = entity; ancestor != kInvalidEntityId;
        ancestor = document.parent(ancestor)) {
     const SelectionComponent *selection = document.selection(ancestor);
     if (selection != nullptr && selection->selected &&
-        local_visibility_allows(local_visibility, ancestor)) return true;
+        local_visibility_allows(local_visibility, ancestor)) return ancestor;
   }
-  return false;
+  return kInvalidEntityId;
+}
+
+bool selected_in_hierarchy(
+    const SceneDocument &document, EntityId entity,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  return selection_owner(document, entity, local_visibility) != kInvalidEntityId;
+}
+
+bool active_selection_owner(
+    const SceneDocument &document, EntityId entity,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  const EntityId owner = selection_owner(document, entity, local_visibility);
+  return owner != kInvalidEntityId && owner == document.primary_selection();
 }
 
 const ViewportPersistentOverlayStyleSnapshot &
@@ -130,6 +143,7 @@ mesh_snapshot_for_placement(
       .world_transform = placement.world_from_geometry,
       .selected = selected_override.value_or(
           selection != nullptr && selection->selected),
+      .active_selected = active_selection_owner(document, placement.display_entity, local_visibility),
       .wireframe_tint = resolved_scene_wireframe_tint(
           document, placement.display_entity),
       .vertices = mesh_vertices(*asset),
@@ -277,6 +291,7 @@ void append_instance_selection_fills(
         .geometry_payload = geometry_payload,
         .geometry_content_id = mesh->geometry_content_id(),
         .world_transform = placement.world_from_geometry,
+        .active_selected = active_selection_owner(document, occurrence, local_visibility),
         .vertices = mesh_vertices(*mesh),
         .indices = mesh_indices(*mesh),
     });
@@ -290,7 +305,9 @@ void append_instance_selection_fills(
         .geometry_content_id = mesh->geometry_content_id(),
         .wire_geometry_payload = wire_geometry_payload,
         .world_transform = placement.world_from_geometry,
-        .wire_color = snapshot.style.selection_wire_color,
+        .active_selected = active_selection_owner(document, occurrence, local_visibility),
+        .wire_color = active_selection_owner(document, occurrence, local_visibility)
+            ? snapshot.style.active_selection_wire_color : snapshot.style.selection_wire_color,
         .logical_wire_width_pixels =
             snapshot.style.selection_edge_logical_width_pixels,
         .wire_width_pixels =
@@ -421,6 +438,7 @@ build_render_overlay_scene_wireframe_snapshot(
   if (!selected_mesh_wire_visible) {
     for (RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
       mesh.selected = false;
+      mesh.active_selected = false;
     }
   }
   return snapshot;
@@ -442,18 +460,8 @@ std::optional<RenderOverlayCurveSnapshot> curve_snapshot_for_entity(
     return std::nullopt;
   }
 
-  EntityId selection_root = kInvalidEntityId;
-  bool selected = false;
-  for (EntityId ancestor = entity; ancestor != kInvalidEntityId;
-       ancestor = document.parent(ancestor)) {
-    if (const SelectionComponent *selection = document.selection(ancestor);
-        selection != nullptr && selection->selected) {
-      selected = true;
-      if (local_visibility_allows(local_visibility, ancestor)) {
-        selection_root = ancestor;
-      }
-    }
-  }
+  const EntityId selection_root = selection_owner(document, entity, local_visibility);
+  const bool selected = selection_root != kInvalidEntityId;
   const QMat4 world_transform = document.world_transform_matrix(entity);
   std::optional<ViewportSelectionDimensionBounds> dimension_bounds;
   if (selection_root != kInvalidEntityId) {
@@ -473,6 +481,7 @@ std::optional<RenderOverlayCurveSnapshot> curve_snapshot_for_entity(
       .sample_payload = curve_sample_payload(*curve),
       .world_transform = world_transform,
       .selected = selected,
+      .active_selected = active_selection_owner(document, entity, local_visibility),
       .selection_dimension_bounds = dimension_bounds,
   };
 }
@@ -529,6 +538,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
         .world_transform = document.world_transform_matrix(entity),
         .radius = std::max(scene_light->range, 0.001f),
         .selected = selection != nullptr && selection->selected,
+        .active_selected = active_selection_owner(document, entity, local_visibility),
+        .hierarchy_selected = selected_in_hierarchy(document, entity, local_visibility),
         .radius_editable =
             !document.is_effectively_locked(entity) &&
             scene_hierarchy_segment_is_selectable_ignoring_visibility(
@@ -565,7 +576,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
                                    document, assets, *mesh_projection,
                                    descendant, local_visibility, false);
         for (std::size_t index = wire_begin; index < snapshot.hierarchy_selection_wires.size(); ++index) {
-          snapshot.hierarchy_selection_wires[index].selection_root = entity;
+          snapshot.hierarchy_selection_wires[index].selection_root =
+              selection_owner(document, descendant, local_visibility);
         }
       }
     }
@@ -576,6 +588,7 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
               entity_hierarchy_world_bounds(document, assets, entity)) {
         RenderOverlayBoundsSnapshot identified = bounds_snapshot(*bounds);
         identified.entity = entity;
+        identified.active_selected = entity == document.primary_selection();
         snapshot.group_bounds.push_back(identified);
         if (group_entities != nullptr) {
           group_entities->push_back(entity);
@@ -592,6 +605,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
         .entity = entity,
         .type = scene_light->type,
         .world_transform = document.world_transform_matrix(entity),
+        .selected = true,
+        .active_selected = active_selection_owner(document, entity, local_visibility),
     });
   }
   return snapshot;
@@ -1137,6 +1152,7 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
     }
     RenderOverlayBoundsSnapshot identified = bounds_snapshot(*bounds);
     identified.entity = entity;
+    identified.active_selected = entity == document.primary_selection();
     group_bounds.push_back(identified);
   }
 

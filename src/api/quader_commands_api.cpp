@@ -367,6 +367,8 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
          command_id == quader_command::kDuplicateSelection.string() ||
          command_id == quader_command::kGroupSelection.string() ||
          command_id == quader_command::kUngroupSelection.string() ||
+         command_id == quader_command::kParentToActive.string() ||
+         command_id == quader_command::kUnparentSelection.string() ||
          command_id == quader_command::kSceneHideSelection.string() ||
          command_id ==
              quader_command::kSceneUnhideHiddenObjects.string();
@@ -386,6 +388,10 @@ default_keybinding_context_for_command(std::string_view command_id) {
            "!activeTool.nativeLifecycle && selection.allowedByTool";
   }
   if (command_id == quader_command::kViewportFrameSelection.string()) {
+    return unobstructed_editor_command_keybinding_context();
+  }
+  if (command_id == quader_command::kParentToActive.string() ||
+      command_id == quader_command::kUnparentSelection.string()) {
     return unobstructed_editor_command_keybinding_context();
   }
   if (command_id == quader_command::kToolsFlipPrimitiveFaces.string()) {
@@ -639,6 +645,12 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kUngroupSelection)) {
     return "Ungroup Selection";
   }
+  if (is(quader_command::kParentToActive)) {
+    return "Parent to Active";
+  }
+  if (is(quader_command::kUnparentSelection)) {
+    return "Unparent";
+  }
   if (is(quader_command::kModelingCopyPivotFromActive)) {
     return "Copy Pivot from Active Object";
   }
@@ -831,6 +843,10 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kUngroupSelection.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kParentToActive.string() ||
+      command_id == quader_command::kUnparentSelection.string()) {
     return stable();
   }
 
@@ -2580,6 +2596,18 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_command(
       quader_command::kUngroupSelection, "Ungroup Selection",
       [this] { return api_.scene().ungroup_selection(); }, "Shift+Ctrl+G");
+  register_command(
+      quader_command::kParentToActive, "Parent to Active",
+      [this] { return api_.scene().parent_selection_to_active(); }, "P",
+      [this] { return api_.scene().can_parent_selection_to_active(); });
+  register_command(
+      quader_command::kUnparentSelection, "Unparent",
+      [this] { return api_.scene().unparent_selection(); }, "Ctrl+P",
+      [this] { return api_.scene().can_unparent_selection(); });
+  set_keybinding_selection_modes(quader_command::kParentToActive.string(),
+                                 kSelectionModeObject | kSelectionModeGroup);
+  set_keybinding_selection_modes(quader_command::kUnparentSelection.string(),
+                                 kSelectionModeObject | kSelectionModeGroup);
   register_command(
       quader_command::kModelingSnapMeshesToFloor,
       "Snap Meshes to Floor",

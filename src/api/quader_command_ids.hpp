@@ -42,6 +42,8 @@ inline constexpr QuaderCommandId kEditExitInstanceEdit{
     "edit.exit_instance_edit"};
 inline constexpr QuaderCommandId kGroupSelection{"edit.group"};
 inline constexpr QuaderCommandId kUngroupSelection{"edit.ungroup"};
+inline constexpr QuaderCommandId kParentToActive{"edit.parent_to_active"};
+inline constexpr QuaderCommandId kUnparentSelection{"edit.unparent"};
 
 inline constexpr QuaderCommandId kUiSearchCommands{"ui.search_commands"};
 
@@ -449,6 +451,8 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kEditExitInstanceEdit,
     kGroupSelection,
     kUngroupSelection,
+    kParentToActive,
+    kUnparentSelection,
     kUiSearchCommands,
 #ifndef NDEBUG
     kDevCopySelectionJson,

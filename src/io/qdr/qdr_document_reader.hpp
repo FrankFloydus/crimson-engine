@@ -131,7 +131,7 @@ public:
   read_project_material_usage(const std::filesystem::path &path);
   [[nodiscard]] static QdrMeshMaterialSlotsReadResult
   deserialize_mesh_material_slots(std::span<const std::byte> bytes,
-                                  std::uint16_t scene_schema_version = 16u);
+                                  std::uint16_t scene_schema_version = 17u);
 };
 
 } // namespace quader

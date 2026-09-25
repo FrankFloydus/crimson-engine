@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "scene/document/scene_entity_state.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <utility>
 
@@ -92,6 +93,7 @@ bool apply_scene_entity_common_state(SceneDocument &scene, EntityId entity,
                                      const SceneEntityState &state,
                                      std::string name) {
   if (!scene.exists(entity) ||
+      !scene_transform_is_finite(state.transform) ||
       !scene.rename_entity(entity, std::move(name)) ||
       !scene.set_transform(entity, state.transform) ||
       !scene.set_visible(entity, state.visibility.visible) ||
@@ -239,6 +241,9 @@ EntityId create_scene_entity_from_state(
     SceneDocument &scene, const SceneEntityState &state, EntityId parent,
     std::string name, SceneEntityStateIdentityMode identity_mode,
     SceneEntityStateApplyOptions options) {
+  if (!scene_transform_is_finite(state.transform)) {
+    return kInvalidEntityId;
+  }
   const bool preserve_identity =
       identity_mode == SceneEntityStateIdentityMode::Preserve;
   EntityId entity = preserve_identity

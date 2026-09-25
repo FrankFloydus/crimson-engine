@@ -87,7 +87,8 @@ inline bool document_command_same_transform(const TransformComponent &left,
          left.rotation_euler.z == right.rotation_euler.z &&
          left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
          left.scale.z == right.scale.z &&
-         left.custom_pivot == right.custom_pivot;
+         left.custom_pivot == right.custom_pivot &&
+         left.parenting_offset.values == right.parenting_offset.values;
 }
 
 inline bool document_command_same_mesh_component(const MeshComponent &left,

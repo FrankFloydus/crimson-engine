@@ -22,7 +22,8 @@ struct SelectedMeshOutlineWorkStats {
   std::uint64_t camera_classifications = 0;
 };
 
-/// Retains welded triangle adjacency across panes and projects only silhouette/open edges.
+/// Retains welded adjacency across panes and projects separate ordinary/active silhouettes.
+/// Active boundaries remain visible within the ordinary selection's projected coverage.
 class SelectedMeshOutlineCache final {
 public:
   SelectedMeshOutlineCache();

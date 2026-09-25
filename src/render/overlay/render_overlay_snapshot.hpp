@@ -35,7 +35,7 @@ struct RenderToolPreviewSuppressionSnapshot;
 /// Pins one visible authored curve and its derived local samples for rendering.
 struct RenderOverlayCurveSnapshot {
   EntityId entity = kInvalidEntityId;
-  /// Outermost selected hierarchy root whose dimensions include this curve.
+  /// Nearest selected hierarchy root whose dimensions include this curve.
   EntityId selection_root = kInvalidEntityId;
   AssetId curve_id = kInvalidAssetId;
   std::uint64_t curve_revision = 0;
@@ -43,6 +43,7 @@ struct RenderOverlayCurveSnapshot {
   std::shared_ptr<const CurveSamplePayload> sample_payload;
   QMat4 world_transform;
   bool selected = false;
+  bool active_selected = false;
   std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds;
 };
 
@@ -68,6 +69,7 @@ struct RenderOverlayMeshSnapshot {
   std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload;
   QMat4 world_transform;
   bool selected = false;
+  bool active_selected = false;
   /** Scene-owned layer tint; render policy resolves alpha and packing. */
   QVec3 wireframe_tint = kDefaultSceneLayerWireframeColor;
   std::span<const MeshVertex> vertices;
@@ -105,6 +107,7 @@ struct RenderOverlayInstanceSelectionFillRecord final {
   std::shared_ptr<const MeshGeometryPayload> geometry_payload;
   MeshGeometryContentId geometry_content_id;
   QMat4 world_transform;
+  bool active_selected = false;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
 };
@@ -122,6 +125,7 @@ struct RenderOverlayInstanceSelectionWireRecord final {
   MeshGeometryContentId geometry_content_id;
   std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload;
   QMat4 world_transform;
+  bool active_selected = false;
   std::uint32_t wire_color = kOverlaySelectionWireColor;
   /** Exact logical width used for stable batch identity across raster scale. */
   float logical_wire_width_pixels = kOverlaySelectionWireLineWidthPixels;
@@ -146,6 +150,7 @@ struct RenderOverlayBoundsSnapshot {
   EntityId entity = kInvalidEntityId;
   QVec3 min;
   QVec3 max;
+  bool active_selected = false;
 };
 
 /**
@@ -158,6 +163,8 @@ struct RenderOverlayLightMarkerSnapshot {
   /// Filament falloff is a world-space radius, independent of entity scale.
   float radius = 0.001f;
   bool selected = false;
+  bool active_selected = false;
+  bool hierarchy_selected = false;
   bool radius_editable = false;
 };
 
@@ -205,6 +212,7 @@ struct RenderOverlayCollisionMeshSnapshot final {
   std::shared_ptr<const MeshCollisionGeometryPayload> collision_payload;
   QMat4 world_transform;
   bool selected = false;
+  bool active_selected = false;
 };
 
 /** Selection-independent retained collision fill inputs. */

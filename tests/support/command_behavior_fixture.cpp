@@ -725,6 +725,17 @@ private:
     case CanonicalCommandFixture::ObjectPairSelection:
       configure_object_pair();
       break;
+    case CanonicalCommandFixture::ParentedObjectSelection: {
+      const auto parent = create_box("Parent Mesh");
+      const auto child = create_box("Child Mesh");
+      require_ok(editor().scene().reparent(child.entity, parent.entity, true),
+                 "Parent canonical child mesh");
+      require_ok(editor().selection().set_mode(QuaderSelectionMode::Object),
+                 "Enter Object mode for parented mesh");
+      require_ok(editor().selection().select_objects({child.entity}),
+                 "Select canonical child mesh");
+      break;
+    }
     case CanonicalCommandFixture::ObjectSetSelection:
       configure_object_set();
       break;

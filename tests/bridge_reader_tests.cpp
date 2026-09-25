@@ -16,6 +16,7 @@
 #include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "scene/document/scene_content_document.hpp"
 #include "scene/light_properties.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -422,6 +423,49 @@ TEST_F(BridgeReaderTests, RejectsUnsupportedAbiAndInvalidArguments) {
   api_->release_project(nullptr);
   api_->release_scene(nullptr);
   api_->release_blob(nullptr);
+}
+
+TEST_F(BridgeReaderTests, ParentingCompensationExportsCompleteAffineMeshAndLightTransforms) {
+  auto document = make_document();
+  auto &scene = document.scene();
+  const auto parent = scene.create_entity_with_id(200u, "Mesh parent", EntityKind::Empty);
+  const auto light = scene.create_entity_with_id(300u, "Compensated light", EntityKind::Light);
+  ASSERT_EQ(parent, 200u);
+  ASSERT_EQ(light, 300u);
+  ASSERT_TRUE(scene.set_light(light, {.type = LightType::Directional}));
+  TransformComponent parent_transform{.position = {5.0f, -2.0f, 7.0f},
+      .rotation_euler = {0.2f, -0.6f, 0.4f}, .scale = {-2.0f, 3.0f, 0.5f}};
+  parent_transform.parenting_offset.values[8] = 0.375f;
+  TransformComponent child_transform{.position = {-1.0f, 2.0f, 3.0f},
+      .rotation_euler = {0.1f, 0.7f, -0.2f}, .scale = {0.75f, -1.0f, 2.0f}};
+  child_transform.parenting_offset.values[4] = -0.25f;
+  child_transform.parenting_offset.values[12] = 4.0f;
+  ASSERT_TRUE(scene.set_transform(parent, parent_transform));
+  for (const EntityId entity : std::array<EntityId, 2>{100u, light}) {
+    ASSERT_TRUE(scene.set_transform(entity, child_transform));
+    ASSERT_TRUE(scene.set_parent(entity, parent, false));
+  }
+  const auto expected = scene_transform_multiply(
+      scene_transform_multiply(parent_transform.parenting_offset,
+                               compose_transform(parent_transform.spatial_transform())),
+      scene_transform_multiply(child_transform.parenting_offset,
+                               compose_transform(child_transform.spatial_transform())));
+  add_scene(kFirstScene, "Scenes/compensated.qdr", document);
+  open_project();
+  open_scene();
+  QuaderBridgeMeshView mesh_view{};
+  ASSERT_EQ(api_->mesh_view(scene_, 0u, &mesh_view, &error_), 1) << error_.message;
+  QuaderBridgeLightView light_view{};
+  ASSERT_EQ(api_->light_view(scene_, 0u, &light_view, &error_), 1) << error_.message;
+  for (std::size_t index = 0u; index < expected.values.size(); ++index) {
+    EXPECT_NEAR(mesh_view.transform[index], expected.values[index], 0.00001f);
+    EXPECT_NEAR(light_view.transform[index], expected.values[index], 0.00001f);
+  }
+  ASSERT_GT(mesh_view.vertex_count, 0u);
+  // The affine placement travels in the ABI matrix, without baking mesh points.
+  EXPECT_FLOAT_EQ(mesh_view.vertices[0].position[0], 0.0f);
+  EXPECT_FLOAT_EQ(mesh_view.vertices[0].position[1], 0.0f);
+  EXPECT_FLOAT_EQ(mesh_view.vertices[0].position[2], 0.0f);
 }
 
 TEST_F(BridgeReaderTests, FingerprintsIdentifyDecodedBytesAcrossSourceReplacement) {

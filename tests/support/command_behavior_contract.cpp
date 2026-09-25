@@ -162,6 +162,12 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kUngroupSelection, Fixture::GroupSelection,
                kSceneMutationDomains, Outcome::ChangeRequired,
                UndoRepeat::Undoable),
+      contract(quader_command::kParentToActive, Fixture::ObjectPairSelection,
+               kSceneMutationDomains, Outcome::ChangeRequired,
+               UndoRepeat::Undoable),
+      contract(quader_command::kUnparentSelection, Fixture::ParentedObjectSelection,
+               kSceneMutationDomains, Outcome::ChangeRequired,
+               UndoRepeat::Undoable),
       contract(quader_command::kUiSearchCommands, Fixture::ExternalRuntime,
                Domain::ExternalRuntime, Outcome::MayReject, UndoRepeat::None,
                kExternal),
@@ -807,9 +813,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 222U);
+  static_assert(std::size(kContracts) == 224U);
 #else
-  static_assert(std::size(kContracts) == 221U);
+  static_assert(std::size(kContracts) == 223U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

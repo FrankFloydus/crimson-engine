@@ -341,7 +341,7 @@ TEST_F(MeshTransformBakeTests, SelectedChildBeforeParentUsesOriginalWorldFrames)
   expect_matrix(session_.scene().world_transform_matrix(unselected.value().id), unselected_before);
 }
 
-TEST_F(MeshTransformBakeTests, UnrepresentableUnselectedChildRejectsWholeSelection) {
+TEST_F(MeshTransformBakeTests, ShearedUnselectedChildRetainsChannelsAndWorldPlacement) {
   const auto valid = mesh("Valid Independent Bake");
   const auto parent = mesh("Nonuniform Parent");
   const auto child = editor_.scene().create_entity(
@@ -352,11 +352,60 @@ TEST_F(MeshTransformBakeTests, UnrepresentableUnselectedChildRejectsWholeSelecti
   ASSERT_TRUE(editor_.scene().set_transform(parent.entity, {.scale = {2.0f, 1.0f, 1.0f}}).ok());
   ASSERT_TRUE(editor_.scene().reparent(child.value().id, parent.entity, false).ok());
   ASSERT_TRUE(editor_.selection().select_objects({valid.entity, parent.entity}, parent.entity).ok());
-  const auto before = test::capture_command_observable_state(editor_);
-  const auto failed = editor_.modeling().bake_transforms(QuaderTransformBakeMode::Transforms);
-  EXPECT_FALSE(failed.ok());
-  EXPECT_FALSE(failed.changed());
-  expect_no_change(before);
+  const auto before = *session_.scene().transform(child.value().id);
+  const auto world_before = session_.scene().world_transform_matrix(child.value().id);
+  const auto parent_before = vertices(parent.entity);
+  const auto baked = editor_.modeling().bake_transforms(QuaderTransformBakeMode::Transforms);
+  ASSERT_TRUE(baked.ok()) << baked.error_message();
+  EXPECT_TRUE(baked.changed());
+  const auto after = *session_.scene().transform(child.value().id);
+  expect_exact_vector(after.position, before.position);
+  expect_exact_vector(after.rotation_euler, before.rotation_euler);
+  expect_exact_vector(after.scale, before.scale);
+  EXPECT_NE(after.parenting_offset.values, before.parenting_offset.values);
+  expect_matrix(session_.scene().world_transform_matrix(child.value().id), world_before);
+  expect_vertices(parent.entity, parent_before);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_EQ(session_.scene().transform(child.value().id)->parenting_offset.values,
+            before.parenting_offset.values);
+  expect_matrix(session_.scene().world_transform_matrix(child.value().id), world_before);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_EQ(session_.scene().transform(child.value().id)->parenting_offset.values,
+            after.parenting_offset.values);
+  expect_matrix(session_.scene().world_transform_matrix(child.value().id), world_before);
+}
+
+TEST_F(MeshTransformBakeTests, BakingRetainsShearedParentingCompensation) {
+  constexpr std::array modes{QuaderTransformBakeMode::Transforms,
+                             QuaderTransformBakeMode::Location,
+                             QuaderTransformBakeMode::Rotation,
+                             QuaderTransformBakeMode::Scale};
+  for (const auto mode : modes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    const auto target = mesh("Compensated Bake", true);
+    TransformComponent transform{
+        .position = {2.0f, -3.0f, 1.0f},
+        .rotation_euler = {0.2f, -0.4f, 0.7f},
+        .scale = {-1.5f, 0.75f, 2.0f}};
+    transform.parenting_offset.values[4] = 0.35f;
+    transform.parenting_offset.values[9] = -0.2f;
+    transform.parenting_offset.values[12] = 4.0f;
+    ASSERT_TRUE(session_.scene().set_transform(target.entity, transform));
+    ASSERT_TRUE(editor_.selection().select_object(target).ok());
+    const auto world_before = corners(target.entity);
+    const auto baked = editor_.modeling().bake_transforms(mode);
+    ASSERT_TRUE(baked.ok()) << baked.error_message();
+    EXPECT_TRUE(baked.changed());
+    EXPECT_EQ(session_.scene().transform(target.entity)->parenting_offset.values,
+              transform.parenting_offset.values);
+    expect_corners(corners(target.entity), world_before);
+    ASSERT_TRUE(editor_.history().undo().ok());
+    EXPECT_EQ(session_.scene().transform(target.entity)->parenting_offset.values,
+              transform.parenting_offset.values);
+    expect_corners(corners(target.entity), world_before);
+    ASSERT_TRUE(editor_.history().redo().ok());
+    expect_corners(corners(target.entity), world_before);
+  }
 }
 
 TEST_F(MeshTransformBakeTests, MirroredBakePreservesEffectiveUvsNormalsAndFaceSettings) {

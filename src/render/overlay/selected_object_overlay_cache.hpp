@@ -89,6 +89,7 @@ public:
         utils::Entity transform_root;
         AssetId mesh_id = kInvalidAssetId;
         std::uint64_t mesh_revision = 0;
+        std::uint32_t face_color = 0;
         std::vector<Proxy> face_proxies;
     };
 
@@ -100,6 +101,7 @@ private:
       EntityId entity = kInvalidEntityId;
       AssetId mesh_id = kInvalidAssetId;
       std::uint64_t mesh_revision = 0;
+      bool active_selected = false;
 
       bool operator==(const SelectedEntityState &) const = default;
     };
@@ -117,6 +119,9 @@ private:
                               std::uint8_t layer_mask) const;
     void update_entry_transform(const Entry &entry,
                                 const QMat4 &world_transform) const;
+    void update_entry_face_color(Entry &entry,
+                                 const RenderOverlayMeshSnapshot &mesh,
+                                 const ViewportPersistentOverlayStyleSnapshot &style);
     void update_entry_transforms(
         const RenderOverlaySelectedObjectSnapshot &snapshot);
     void set_visible(bool visible);

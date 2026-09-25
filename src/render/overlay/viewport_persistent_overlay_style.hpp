@@ -27,6 +27,8 @@ struct ViewportPersistentOverlayStyleSnapshot {
   float raster_scale = 1.0f;
   std::uint32_t selection_face_color = kOverlaySelectionFaceColor;
   std::uint32_t selection_wire_color = kOverlaySelectionWireColor;
+  std::uint32_t active_selection_face_color = viewport_active_selection_color(kOverlaySelectionFaceColor);
+  std::uint32_t active_selection_wire_color = viewport_active_selection_color(kOverlaySelectionWireColor);
   /** Resolved logical width before interface scale and monitor DPR. */
   float selection_edge_logical_width_pixels =
       kOverlaySelectionWireLineWidthPixels;
@@ -52,6 +54,7 @@ struct ViewportPersistentOverlayRasterGroup final {
     const ViewportPersistentOverlayStyleSnapshot &right) noexcept {
   return left.raster_scale == right.raster_scale &&
          left.selection_wire_color == right.selection_wire_color &&
+         left.active_selection_wire_color == right.active_selection_wire_color &&
          left.selection_edge_logical_width_pixels ==
              right.selection_edge_logical_width_pixels &&
          left.selection_edge_line_width_pixels ==

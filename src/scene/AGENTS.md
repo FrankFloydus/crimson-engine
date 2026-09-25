@@ -17,6 +17,11 @@ file except through prior written authorization from Francesco Di Blasi.
   and project workspace lifetime belong to `src/editor/session`.
 - `document/scene_entity_state.*` is the shared component inventory for persistence, history,
   clipboard, and rollback. Do not add a second live object-record store or allocator.
+- Authored placement is `parent_world * parenting_offset * editable_TRS`. Use the complete-local
+  and compensated-parent helpers in `scene_transform.hpp`; `spatial_transform()` exposes editable
+  TRS only. Structural keep-world edits change the affine offset without decomposing or baking it.
+  Root entities may retain compensation, including shear or singular axes. World-space channel
+  edits retain compensation and reject transforms that their editable TRS cannot represent.
 - Keep naming in `SceneEntityNaming`; retain scene-owned hierarchy/occurrence projections and their
   revision gates. Render and UI caches derive from this state.
 - [Light authoring](light_properties.md) owns units, temperature conversion, preset defaults,
