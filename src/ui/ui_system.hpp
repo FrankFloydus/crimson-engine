@@ -328,6 +328,7 @@ private:
   /** Captures revisions that determine whether the retained outliner must refresh. */
   struct OutlinerPresentationStamp final {
     std::uint64_t hierarchy_revision = 0u;
+    std::uint64_t light_property_revision = 0u;
     std::uint64_t selection_revision = 0u;
     std::uint64_t instance_edit_revision = 0u;
     std::uint64_t localization_revision = 0u;

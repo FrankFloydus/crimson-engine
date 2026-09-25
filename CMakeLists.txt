@@ -1046,6 +1046,16 @@ qt_add_resources(quader_ui "quader_material_browser_icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_MATERIAL_BROWSER_ICON_FILES})
 
+qt_add_resources(quader_ui "quader_outliner_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_box.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_curve.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_point_light.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_directional_light.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_group.png")
+
 quader_enable_common_pch(quader_ui)
 target_include_directories(quader_ui
     PUBLIC src
@@ -1174,7 +1184,6 @@ set(QUADER_TOOL_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_pivot.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_transform_local.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_primitive.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_box.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_cylinder.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_sphere.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_cone.png"

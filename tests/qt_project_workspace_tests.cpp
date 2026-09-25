@@ -96,6 +96,7 @@
 #include <QToolButton>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QTreeView>
 #include <QTreeWidgetItemIterator>
 
 #include <array>
@@ -2609,6 +2610,86 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(message->text().isEmpty());
   EXPECT_FALSE(hints->isHidden());
   EXPECT_EQ(announcements, 6);
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     OutlinerLightIconsFollowSubtypeChangesThroughRetainedFrameRefresh) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-outliner-icon-refresh-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-outliner-icon-refresh-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto project_root = scoped_profile.profile() / "Outliner Icon Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  ASSERT_TRUE(editor.project().create(project_root).ok());
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+  ui.show_workspace();
+  ui.main_window()->show();
+  ASSERT_TRUE(editor.ui().show_panel("outliner").ok());
+  const auto light = editor.scene().create_point_light();
+  ASSERT_TRUE(light.ok()) << light.error_message();
+  QCoreApplication::processEvents();
+  ui.refresh({}, {});
+  auto *tree = ui.main_window()->findChild<QTreeView *>(
+      QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_TRUE(tree->isVisible());
+  ASSERT_EQ(tree->model()->rowCount(), 1);
+  const QPersistentModelIndex row(tree->model()->index(0, 0));
+  const auto point_icon = row.data(Qt::DecorationRole).value<QIcon>();
+  ASSERT_FALSE(point_icon.pixmap(16, 16).isNull());
+
+  int model_resets = 0;
+  int decoration_changes = 0;
+  QObject::connect(tree->model(), &QAbstractItemModel::modelReset, &application,
+                   [&]() { ++model_resets; });
+  QObject::connect(tree->model(), &QAbstractItemModel::dataChanged, &application,
+      [&](const QModelIndex &, const QModelIndex &, const QList<int> &roles) {
+        if (roles.isEmpty() || roles.contains(Qt::DecorationRole)) {
+          ++decoration_changes;
+        }
+      });
+  const auto hierarchy_revision = scene.scene().hierarchy_presentation_revision();
+  ASSERT_TRUE(editor.scene().set_light_component(light.value().id,
+      quader::default_quader_directional_light_component()).ok());
+  EXPECT_EQ(scene.scene().hierarchy_presentation_revision(), hierarchy_revision);
+  ui.refresh({}, {});
+  ASSERT_TRUE(row.isValid());
+  const auto sun_icon = row.data(Qt::DecorationRole).value<QIcon>();
+  EXPECT_NE(sun_icon.cacheKey(), point_icon.cacheKey());
+  EXPECT_EQ(decoration_changes, 1);
+  EXPECT_EQ(model_resets, 0);
+  for (int frame = 0; frame < 3; ++frame) {
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(decoration_changes, 1);
+  EXPECT_EQ(row.data(Qt::DecorationRole).value<QIcon>().cacheKey(),
+            sun_icon.cacheKey());
+  ASSERT_TRUE(editor.history().undo().ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(row.data(Qt::DecorationRole).value<QIcon>().cacheKey(),
+            point_icon.cacheKey());
+  EXPECT_EQ(decoration_changes, 2);
+  EXPECT_EQ(model_resets, 0);
   ui.shutdown();
 }
 

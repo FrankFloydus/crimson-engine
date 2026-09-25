@@ -30,6 +30,7 @@
 #include <QDir>
 #include <QDockWidget>
 #include <QImage>
+#include <QIcon>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLayout>
@@ -229,6 +230,30 @@ protected:
     QCoreApplication::processEvents();
   }
 
+  std::array<quader::EntityId, 5> create_icon_examples() {
+    const quader::EntityId group = create("Group");
+    const auto mesh = editor_.modeling().create_box(
+        {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
+    EXPECT_TRUE(mesh.ok()) << mesh.error_message();
+    const auto curve = editor_.modeling().create_curve({
+        .points = {{.position = {-2.0F, 0.0F, 0.0F}},
+                   {.position = {2.0F, 0.0F, 0.0F}}},
+        .name = "Curve",
+    });
+    EXPECT_TRUE(curve.ok()) << curve.error_message();
+    const auto point = editor_.scene().create_point_light({.name = "Point Light"});
+    EXPECT_TRUE(point.ok()) << point.error_message();
+    const auto directional =
+        editor_.scene().create_directional_light({.name = "Directional Light"});
+    EXPECT_TRUE(directional.ok()) << directional.error_message();
+    if (!mesh.ok() || !curve.ok() || !point.ok() || !directional.ok()) {
+      return {};
+    }
+    EXPECT_TRUE(editor_.scene().reparent(mesh.value().entity, group).ok());
+    return {mesh.value().entity, curve.value().entity, point.value().id,
+            directional.value().id, group};
+  }
+
   QModelIndex index(quader::EntityId entity) const {
     return find_entity_index(*tree_->model(), entity);
   }
@@ -269,6 +294,144 @@ protected:
   quader::OutlinerPanel panel_;
   QTreeView *tree_ = nullptr;
 };
+
+TEST_F(OutlinerPanelDropTests,
+       TypeIconsShareRetainedArtworkAndLightEditsUpdateOnlyTheirDecoration) {
+  const auto entities = create_icon_examples();
+  ASSERT_NE(entities.front(), quader::kInvalidEntityId);
+  const auto second_mesh = editor_.modeling().create_box(
+      {.min = {2.0F, 0.0F, 0.0F}, .max = {3.0F, 1.0F, 1.0F}});
+  ASSERT_TRUE(second_mesh.ok()) << second_mesh.error_message();
+  const auto generic = editor_.scene().create_entity({.name = "Generic"});
+  ASSERT_TRUE(generic.ok()) << generic.error_message();
+  ASSERT_TRUE(editor_.scene().select(entities.front()).ok());
+  refresh();
+
+  std::array<QIcon, 5> icons;
+  std::array<QPersistentModelIndex, 5> stable_rows;
+  for (std::size_t item = 0; item < entities.size(); ++item) {
+    const QModelIndex row = index(entities[item]);
+    ASSERT_TRUE(row.isValid());
+    stable_rows[item] = row;
+    icons[item] = qvariant_cast<QIcon>(row.data(Qt::DecorationRole));
+    EXPECT_FALSE(icons[item].isNull());
+    EXPECT_EQ(icons[item].actualSize(QSize(16, 16)), QSize(16, 16));
+    EXPECT_EQ(icons[item].actualSize(QSize(32, 32)), QSize(32, 32));
+    EXPECT_TRUE(row.flags().testFlag(Qt::ItemIsEditable));
+    for (std::size_t previous = 0; previous < item; ++previous) {
+      EXPECT_NE(icons[item].pixmap(16, 16).toImage(),
+                icons[previous].pixmap(16, 16).toImage());
+    }
+  }
+  EXPECT_EQ(qvariant_cast<QIcon>(index(second_mesh.value().entity)
+                                    .data(Qt::DecorationRole)).cacheKey(),
+            icons[0].cacheKey());
+  EXPECT_TRUE(qvariant_cast<QIcon>(index(generic.value().id)
+                                      .data(Qt::DecorationRole)).isNull());
+  EXPECT_EQ(tree_->iconSize(), QSize(16, 16));
+
+  int removed_rows = 0;
+  int changed_rows = 0;
+  QObject::connect(tree_->model(), &QAbstractItemModel::rowsRemoved, &panel_,
+                   [&](const QModelIndex &, int, int) { ++removed_rows; });
+  QObject::connect(tree_->model(), &QAbstractItemModel::dataChanged, &panel_,
+                   [&](const QModelIndex &, const QModelIndex &,
+                       const QList<int> &) { ++changed_rows; });
+  for (int frame = 0; frame < 16; ++frame) {
+    refresh();
+  }
+  EXPECT_EQ(removed_rows, 0);
+  EXPECT_EQ(changed_rows, 0);
+  for (std::size_t item = 0; item < stable_rows.size(); ++item) {
+    ASSERT_TRUE(stable_rows[item].isValid());
+    EXPECT_EQ(qvariant_cast<QIcon>(stable_rows[item].data(Qt::DecorationRole))
+                  .cacheKey(), icons[item].cacheKey());
+  }
+  expect_selection(*tree_, session_.scene(), {entities.front()}, entities.front());
+
+  auto light = quader::default_quader_point_light_component();
+  light.intensity *= 2.0F;
+  ASSERT_TRUE(editor_.scene().set_light_component(entities[2], light).ok());
+  refresh();
+  EXPECT_EQ(removed_rows, 0);
+  EXPECT_EQ(changed_rows, 0)
+      << "light property changes must not rewrite unchanged icon roles";
+  const auto hierarchy_revision = session_.scene().hierarchy_presentation_revision();
+  light.type = quader::QuaderLightType::Directional;
+  ASSERT_TRUE(editor_.scene().set_light_component(entities[2], light).ok());
+  ASSERT_EQ(session_.scene().hierarchy_presentation_revision(), hierarchy_revision);
+  refresh();
+  EXPECT_EQ(removed_rows, 0);
+  EXPECT_EQ(changed_rows, 1);
+  EXPECT_EQ(qvariant_cast<QIcon>(stable_rows[2].data(Qt::DecorationRole)).cacheKey(),
+            icons[3].cacheKey());
+  EXPECT_EQ(stable_rows[2].data().toString(), QStringLiteral("Point Light"));
+  expect_selection(*tree_, session_.scene(), {entities.front()}, entities.front());
+  ASSERT_TRUE(editor_.history().undo().ok());
+  refresh();
+  EXPECT_EQ(qvariant_cast<QIcon>(index(entities[2]).data(Qt::DecorationRole)).cacheKey(),
+            icons[2].cacheKey());
+}
+
+TEST_F(OutlinerPanelDropTests,
+       TypeIconsScaleDownAndRemainNativeInSelectedSubduedAndRtlRows) {
+  const QPalette native_palette = application_.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application_);
+  const auto entities = create_icon_examples();
+  ASSERT_NE(entities.front(), quader::kInvalidEntityId);
+  const auto hidden = create("Hidden group");
+  const auto locked = create("Locked group");
+  ASSERT_TRUE(editor_.scene().set_visible(hidden, false).ok());
+  ASSERT_TRUE(editor_.scene().set_locked(locked, true).ok());
+  ASSERT_TRUE(editor_.scene().select(entities.front()).ok());
+  refresh();
+  tree_->expandAll();
+  const QPersistentModelIndex stable_mesh(index(entities.front()));
+  const auto group_icon = qvariant_cast<QIcon>(index(entities.back()).data(Qt::DecorationRole));
+  EXPECT_EQ(qvariant_cast<QIcon>(index(hidden).data(Qt::DecorationRole)).cacheKey(),
+            group_icon.cacheKey());
+  EXPECT_NE(group_icon.pixmap(QSize(16, 16), QIcon::Normal).toImage(),
+            group_icon.pixmap(QSize(16, 16), QIcon::Disabled).toImage());
+
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  const auto capture = [&](const QString &filename) {
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(review_directory));
+      EXPECT_TRUE(panel_.grab().save(QDir(review_directory).filePath(filename)));
+    }
+  };
+  int step = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    const auto &metrics = scale_controller.metrics();
+    panel_.apply_ui_scale(metrics);
+    panel_.resize(metrics.px(280), metrics.px(250));
+    refresh();
+    EXPECT_EQ(tree_->iconSize(), metrics.size(QSize(16, 16)));
+    ASSERT_TRUE(stable_mesh.isValid());
+    EXPECT_TRUE(tree_->selectionModel()->isSelected(stable_mesh));
+    EXPECT_GE(tree_->visualRect(stable_mesh).height(), metrics.px(16));
+    EXPECT_EQ(tree_->model()->columnCount(), 1);
+    capture(QStringLiteral("outliner-type-icons-%1-%2.png")
+                .arg(qRound(factor * 100.0F)).arg(step++));
+  }
+
+  panel_.setLayoutDirection(Qt::RightToLeft);
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(tree_->selectionModel()->isSelected(stable_mesh));
+  capture(QStringLiteral("outliner-type-icons-rtl.png"));
+  panel_.setLayoutDirection(Qt::LeftToRight);
+  panel_.setPalette(scale_controller.style().standardPalette());
+  QCoreApplication::processEvents();
+  capture(QStringLiteral("outliner-type-icons-light.png"));
+  panel_.setPalette(QPalette{});
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(tree_->selectionModel()->isSelected(stable_mesh));
+  capture(QStringLiteral("outliner-type-icons-native-contrast.png"));
+}
 
 TEST_F(OutlinerPanelDropTests, EmptySceneHasNoRowAndObjectsAppearAsEditableRoots) {
   EXPECT_EQ(tree_->model()->rowCount(), 0);

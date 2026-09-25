@@ -3243,6 +3243,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       const OutlinerPresentationStamp stamp{
           .hierarchy_revision =
               document_->hierarchy_presentation_revision(),
+          .light_property_revision = document_->light_property_revision(),
           .selection_revision = document_->selection_revision(),
           .instance_edit_revision =
               editor_->modeling().instance_edit_revision(),

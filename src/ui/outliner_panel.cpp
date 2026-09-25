@@ -12,7 +12,9 @@
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "scene/scene_document.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_tree_relationship_presentation.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_context_menu_visibility.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_panel.hpp"
@@ -34,6 +36,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
+#include <QResource>
 #include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QStandardItem>
@@ -47,6 +50,7 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -58,6 +62,10 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+static void initialize_quader_outliner_icon_resources() {
+  Q_INIT_RESOURCE(quader_outliner_icons);
+}
 
 namespace quader {
 
@@ -73,6 +81,34 @@ namespace {
 
 constexpr int kEntityIdRole = Qt::UserRole + 1;
 constexpr int kSubduedRole = Qt::UserRole + 2;
+
+/// Keeps the five authored entity symbols shared across retained tree rows.
+enum class OutlinerIcon : std::size_t {
+  Mesh,
+  Curve,
+  PointLight,
+  DirectionalLight,
+  Group,
+  Count,
+};
+
+using OutlinerIconCache =
+    std::array<QIcon, static_cast<std::size_t>(OutlinerIcon::Count)>;
+
+OutlinerIconCache load_outliner_icons() {
+  static const bool kResourcesInitialized = [] {
+    initialize_quader_outliner_icon_resources();
+    return true;
+  }();
+  (void)kResourcesInitialized;
+  return {
+      qt_multiresolution_icon(QStringLiteral(":/quader/icons/tool_create_box.png")),
+      qt_multiresolution_icon(QStringLiteral(":/quader/icons/outliner_curve.png")),
+      qt_multiresolution_icon(QStringLiteral(":/quader/icons/outliner_point_light.png")),
+      qt_multiresolution_icon(QStringLiteral(":/quader/icons/outliner_directional_light.png")),
+      qt_multiresolution_icon(QStringLiteral(":/quader/icons/outliner_group.png")),
+  };
+}
 
 /// Identifies the resizable scene-tree columns owned by the Qt outliner model.
 enum class OutlinerColumn : int {
@@ -481,6 +517,7 @@ struct OutlinerPanel::Impl {
     tree_->setEditTriggers(QAbstractItemView::EditKeyPressed);
     tree_->setAlternatingRowColors(true);
     tree_->setUniformRowHeights(true);
+    tree_->setIconSize(QSize(16, 16));
     tree_->setDragDropMode(QAbstractItemView::InternalMove);
     tree_->setDefaultDropAction(Qt::MoveAction);
     tree_->setDragDropOverwriteMode(false);
@@ -553,6 +590,10 @@ struct OutlinerPanel::Impl {
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
     apply_ui_scale_to_qt_tree_relationship_presentation(*tree_, metrics);
+    const QSize icon_size = metrics.size(QSize(16, 16));
+    if (tree_->iconSize() != icon_size) {
+      tree_->setIconSize(icon_size);
+    }
   }
 
   void abandon_runtime() noexcept {
@@ -563,6 +604,7 @@ struct OutlinerPanel::Impl {
     instance_scope_definition_ = kInvalidEntityId;
     cache_ = {};
     item_by_entity_.clear();
+    light_items_.clear();
     collapsed_entities_.clear();
     synced_selection_revision_ = 0;
     syncing_expansion_ = false;
@@ -601,10 +643,51 @@ struct OutlinerPanel::Impl {
       refresh_headers();
     }
     refresh_model_if_needed();
+    refresh_light_icons_if_needed();
     sync_selection();
   }
 
 private:
+  const QIcon &light_icon(EntityId entity) const {
+    const LightComponent *light = document_->light(entity);
+    const OutlinerIcon type =
+        light != nullptr && light->type == LightType::Directional
+            ? OutlinerIcon::DirectionalLight
+            : OutlinerIcon::PointLight;
+    return icons_[static_cast<std::size_t>(type)];
+  }
+
+  const QIcon &entity_icon(const EntityRecord &entity) const {
+    switch (entity.kind) {
+    case EntityKind::Mesh:
+    case EntityKind::Instance:
+      return icons_[static_cast<std::size_t>(OutlinerIcon::Mesh)];
+    case EntityKind::Curve:
+      return icons_[static_cast<std::size_t>(OutlinerIcon::Curve)];
+    case EntityKind::Light:
+      return light_icon(entity.id);
+    case EntityKind::Empty:
+      return icons_[static_cast<std::size_t>(OutlinerIcon::Group)];
+    case EntityKind::Generic:
+      return empty_icon_;
+    }
+    return empty_icon_;
+  }
+
+  void refresh_light_icons_if_needed() {
+    if (document_ == nullptr ||
+        light_property_revision_ == document_->light_property_revision()) {
+      return;
+    }
+    for (QStandardItem *item : light_items_) {
+      const QIcon &icon = light_icon(entity_id(item->index()));
+      if (item->icon().cacheKey() != icon.cacheKey()) {
+        item->setIcon(icon);
+      }
+    }
+    light_property_revision_ = document_->light_property_revision();
+  }
+
   const EntityRecord *record(EntityId entity) const {
     const auto found = cache_.record_index_by_entity.find(entity);
     if (found == cache_.record_index_by_entity.end() ||
@@ -703,6 +786,7 @@ private:
       syncing_model_ = true;
       model_->clear_projection();
       item_by_entity_.clear();
+      light_items_.clear();
       item_by_entity_.reserve(cache_.records.size());
 
     std::unordered_set<EntityId> appended;
@@ -718,6 +802,10 @@ private:
           }
 
           auto *name_item = new QStandardItem(qt_text(entity_record->name));
+          name_item->setIcon(entity_icon(*entity_record));
+          if (entity_record->kind == EntityKind::Light) {
+            light_items_.push_back(name_item);
+          }
           name_item->setEditable(true);
           name_item->setDragEnabled(!entity_record->effectively_locked);
           name_item->setDropEnabled(!entity_record->effectively_locked &&
@@ -759,6 +847,7 @@ private:
       }
     }
       selection_sync_after_model_rebuild_ = true;
+      light_property_revision_ = document_->light_property_revision();
       syncing_model_ = false;
       syncing_expansion_ = false;
       tree_->setUpdatesEnabled(true);
@@ -1342,6 +1431,8 @@ private:
   }
 
   OutlinerPanel &panel_;
+  const OutlinerIconCache icons_ = load_outliner_icons();
+  const QIcon empty_icon_;
   OutlinerTreeView *tree_ = nullptr;
   OutlinerItemModel *model_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
@@ -1351,9 +1442,11 @@ private:
   std::uint64_t localized_revision_ = 0u;
   TreeCache cache_;
   std::unordered_map<EntityId, QStandardItem *> item_by_entity_;
+  std::vector<QStandardItem *> light_items_;
   std::unordered_set<EntityId> collapsed_entities_;
   EntityId instance_scope_definition_ = kInvalidEntityId;
   std::uint64_t synced_selection_revision_ = 0;
+  std::uint64_t light_property_revision_ = 0;
   std::uint64_t runtime_binding_generation_ = 0;
   bool syncing_expansion_ = false;
   bool syncing_model_ = false;
