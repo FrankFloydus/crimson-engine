@@ -113,6 +113,7 @@ enum class ViewportOverlaySource {
     External,
     SceneCurve,
     MeshOutline,
+    SelectionDimensions,
 };
 
 /**
@@ -133,6 +134,12 @@ struct ViewportOverlayElementRef {
 struct ViewportHoverEdgeDimensionContext {
     QVec3 inside_reference;
     ViewportOverlayElementRef element;
+};
+
+/** World-axis extents of the geometry participating in selection dimensions. */
+struct ViewportSelectionDimensionBounds {
+    QVec3 min;
+    QVec3 max;
 };
 
 constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255u) {

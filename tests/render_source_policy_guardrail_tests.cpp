@@ -1391,12 +1391,13 @@ TEST(ViewportOverlayPolicyTests,
       "if (!dynamic_changed && !camera_update.dynamic_available)"));
 
   // The shared render-owned selection publication remains camera-independent.
-  // Only pane-specific scene and dynamic records receive projection policy.
+  // Pane-specific dimension dashes and other dynamic records use the camera
+  // only after the shared selection and dimension bounds publications.
   const std::size_t cache_begin = coordinator_source.find(
       "if (selection_overlay_visible) {");
   ASSERT_NE(cache_begin, std::string::npos);
   const std::size_t cache_end = coordinator_source.find(
-      "const ViewportOverlayPersistentSubmissionStamp", cache_begin);
+      "const bool dimension_box_visible", cache_begin);
   ASSERT_NE(cache_end, std::string::npos);
   const std::string cache = coordinator_source.substr(
       cache_begin, cache_end - cache_begin);

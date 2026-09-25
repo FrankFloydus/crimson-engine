@@ -286,6 +286,9 @@ std::string menu_command_localization_key(QuaderCommandId command_id) {
   if (is(quader_command::kViewportToggleOverlays)) {
     return "ui.menu.view.overlays";
   }
+  if (is(quader_command::kViewportToggleDimensions)) {
+    return "ui.menu.view.dimensions";
+  }
   if (is(quader_command::kViewportToggleCollisions)) {
     return "ui.menu.view.collisions";
   }
@@ -628,6 +631,11 @@ struct QtMainMenu::Impl {
     if (same_command(command_id, quader_command::kViewportToggleOverlays)) {
       return [this] {
         return context.editor.get().preferences().overlays_visible();
+      };
+    }
+    if (same_command(command_id, quader_command::kViewportToggleDimensions)) {
+      return [this] {
+        return context.editor.get().preferences().dimensions_visible();
       };
     }
     if (same_command(command_id, quader_command::kViewportToggleCollisions)) {

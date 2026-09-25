@@ -19,6 +19,7 @@
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "render/viewport_renderer.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -301,7 +302,41 @@ public:
   ExtrudeToolService &extrusion() { return session_.extrude(); }
   std::size_t undo_count() const { return session_.history().undo_count(); }
 
-  bool present_extrusion_sample() {
+  bool create_dimension_sample(bool tilted) {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    quader_poly::Document document;
+    if (tilted) {
+      const std::array vertices{
+          quader_poly::add_vertex(document, {-1.0f, -0.6f, -0.4f}),
+          quader_poly::add_vertex(document, {1.0f, -0.6f, -0.4f}),
+          quader_poly::add_vertex(document, {1.0f, 0.6f, 0.4f}),
+          quader_poly::add_vertex(document, {-1.0f, 0.6f, 0.4f})};
+      (void)quader_poly::add_face(document, vertices);
+    } else {
+      const std::array vertices{
+          quader_poly::add_vertex(document, {-1.0f, 0.0f, -0.6f}),
+          quader_poly::add_vertex(document, {1.0f, 0.0f, -0.6f}),
+          quader_poly::add_vertex(document, {1.0f, 0.0f, 0.6f})};
+      (void)quader_poly::add_face(document, vertices);
+    }
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Dimension frame pixel regression"});
+    if (!object.ok() || !editor.selection().set_mode(QuaderSelectionMode::Face).ok() ||
+        !editor.selection().clear().ok() ||
+        !editor.selection().select_face(object.value(), 1).ok()) return false;
+    if (!camera_.restore_perspective_pose(
+            {.eye = {2.8f, -4.0f, 2.6f}, .target = {}, .up = {0.0f, 0.0f, 1.0f}})) {
+      return false;
+    }
+    camera_.focus_bounds({-1.0f, -0.6f, -0.6f}, {1.0f, 0.6f, 0.6f}, 1.6f);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  bool present_face_sample(bool dimensions_visible = false) {
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session_));
     if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok() ||
@@ -309,7 +344,7 @@ public:
       return false;
     }
     const auto &modeling = session_.modeling();
-    (void)bridge_.submit_viewport_overlay(
+    last_submission_ = bridge_.submit_viewport_overlay(
         {.layer_mask = viewport_grid_layer_mask(0u),
          .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
          .selection_source = {
@@ -323,9 +358,14 @@ public:
          .selection_frame_provider = this,
          .scene_selection_mode = RenderOverlaySelectionMode::Component,
          .style_selection_context = ViewportOverlaySelectionContext::Face,
-         .overlays_visible = true},
+         .overlays_visible = true,
+         .selection_dimensions_visible = dimensions_visible},
         ViewportSettings::defaults());
     return true;
+  }
+
+  const ViewportOverlaySubmissionResult &last_submission() const {
+    return last_submission_;
   }
 
   ViewportOverlayFrame build_selection_overlay_frame() const override {
@@ -454,6 +494,7 @@ private:
   ViewportRenderer view_;
   ViewportCameraController camera_;
   SelectionRuntimeFrame selected_vertex_frame_;
+  ViewportOverlaySubmissionResult last_submission_;
   std::uint64_t revision_ = 0;
   mutable std::uint64_t selection_frame_builds_ = 0;
 };
@@ -638,7 +679,7 @@ TEST(SelectionOverlayRuntimeTests,
     ASSERT_TRUE(harness.extrusion().preview_active());
     ASSERT_DOUBLE_EQ(harness.extrusion().amount(), 0.0);
     const auto initial_undo = harness.undo_count();
-    ASSERT_TRUE(harness.present_extrusion_sample());
+    ASSERT_TRUE(harness.present_face_sample());
     const auto source_pixel = harness.front_cap_edge_pixel();
     ASSERT_TRUE(source_pixel.has_value());
     const QImage source = harness.capture();
@@ -660,7 +701,7 @@ TEST(SelectionOverlayRuntimeTests,
              {0.25, "preview_first"}, {0.6, "preview_moved"}}}) {
       SCOPED_TRACE(phase);
       ASSERT_TRUE(harness.extrusion().update_drag_world_amount(amount).ok);
-      ASSERT_TRUE(harness.present_extrusion_sample());
+      ASSERT_TRUE(harness.present_face_sample());
       const auto cap_pixel = harness.front_cap_edge_pixel();
       ASSERT_TRUE(cap_pixel.has_value());
       ASSERT_GT(std::abs(cap_pixel->y - previous_pixel.y), 15.0f);
@@ -674,7 +715,7 @@ TEST(SelectionOverlayRuntimeTests,
       EXPECT_EQ(yellow_pixels(preview, *source_pixel), 0)
           << "Stationary base wires may remain cyan, but must not remain selected.";
       const auto builds = harness.selection_frame_builds();
-      ASSERT_TRUE(harness.present_extrusion_sample());
+      ASSERT_TRUE(harness.present_face_sample());
       EXPECT_EQ(harness.selection_frame_builds(), builds)
           << "An unchanged preview must reuse the retained selection frame.";
       previous_pixel = *cap_pixel;
@@ -683,7 +724,7 @@ TEST(SelectionOverlayRuntimeTests,
     ASSERT_TRUE(harness.extrusion().release_drag().ok);
     EXPECT_TRUE(harness.extrusion().preview_active());
     EXPECT_EQ(harness.undo_count(), initial_undo);
-    ASSERT_TRUE(harness.present_extrusion_sample());
+    ASSERT_TRUE(harness.present_face_sample());
     const QImage released = harness.capture();
     ASSERT_FALSE(released.isNull());
     EXPECT_GE(yellow_pixels(released, previous_pixel), 3);
@@ -691,9 +732,10 @@ TEST(SelectionOverlayRuntimeTests,
 
     ASSERT_TRUE(harness.extrusion().commit_preview().ok);
     EXPECT_FALSE(harness.extrusion().preview_active());
-    EXPECT_DOUBLE_EQ(harness.extrusion().amount(), 0.0);
+    EXPECT_DOUBLE_EQ(harness.extrusion().amount(),
+                     0.6 * viewport_host_defaults().map_units_per_world_unit);
     EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
-    ASSERT_TRUE(harness.present_extrusion_sample());
+    ASSERT_TRUE(harness.present_face_sample());
     const QImage committed = harness.capture();
     ASSERT_FALSE(committed.isNull());
     EXPECT_GE(yellow_pixels(committed, previous_pixel), 3);
@@ -701,7 +743,7 @@ TEST(SelectionOverlayRuntimeTests,
 
     ASSERT_TRUE(harness.extrusion().begin_drag().ok);
     ASSERT_TRUE(harness.extrusion().update_drag_world_amount(0.35).ok);
-    ASSERT_TRUE(harness.present_extrusion_sample());
+    ASSERT_TRUE(harness.present_face_sample());
     const auto adjusted_pixel = harness.front_cap_edge_pixel();
     ASSERT_TRUE(adjusted_pixel.has_value());
     ASSERT_GT(std::abs(adjusted_pixel->y - previous_pixel.y), 15.0f);
@@ -714,12 +756,106 @@ TEST(SelectionOverlayRuntimeTests,
 
     ASSERT_TRUE(harness.extrusion().cancel_drag().ok);
     EXPECT_EQ(harness.undo_count(), initial_undo + 1u);
-    ASSERT_TRUE(harness.present_extrusion_sample());
+    ASSERT_TRUE(harness.present_face_sample());
     const QImage restored = harness.capture();
     ASSERT_FALSE(restored.isNull());
     EXPECT_GE(yellow_pixels(restored, previous_pixel), 3);
     EXPECT_EQ(yellow_pixels(restored, *adjusted_pixel), 0);
     save(restored, "restored");
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanSelectionDimensionsDrawBoxOrRectangleAndToggleWithoutStaleLines) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 to read "
+                    "and capture production offscreen Vulkan selection overlays.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-dimension-frame-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString output_directory =
+      qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (output_directory.isEmpty()) {
+    output_directory = QDir(QCoreApplication::applicationDirPath())
+                           .absoluteFilePath(QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(output_directory));
+
+  for (const bool tilted : {true, false}) {
+    const QString sample = tilted ? QStringLiteral("dimensions_tilted_box")
+                                  : QStringLiteral("dimensions_planar_rectangle");
+    SCOPED_TRACE(sample.toStdString());
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_dimension_sample(tilted));
+    ASSERT_TRUE(harness.present_face_sample(false));
+    const QImage disabled = harness.capture();
+    ASSERT_FALSE(disabled.isNull());
+    const auto selection_builds = harness.selection_frame_builds();
+    ASSERT_TRUE(harness.present_face_sample(true));
+    EXPECT_EQ(harness.selection_frame_builds(), selection_builds);
+    ASSERT_TRUE(harness.last_submission().selection_dimension_bounds.has_value());
+    const auto bounds = *harness.last_submission().selection_dimension_bounds;
+    EXPECT_FLOAT_EQ(bounds.min.x, -1.0f);
+    EXPECT_FLOAT_EQ(bounds.max.x, 1.0f);
+    EXPECT_FLOAT_EQ(bounds.min.y, tilted ? -0.6f : 0.0f);
+    EXPECT_FLOAT_EQ(bounds.max.y, tilted ? 0.6f : 0.0f);
+    EXPECT_FLOAT_EQ(bounds.min.z, tilted ? -0.4f : -0.6f);
+    EXPECT_FLOAT_EQ(bounds.max.z, tilted ? 0.4f : 0.6f);
+    const QImage enabled = harness.capture();
+    ASSERT_FALSE(enabled.isNull());
+
+    // Count only pixels changed by the display toggle. This excludes selected
+    // face wires/fill and proves both colored spans and the yellow frame reach
+    // the production Vulkan surface. Qt text is verified by the HUD suite.
+    std::array<int, 3> axis_pixels{};
+    int frame_pixels = 0;
+    int changed_pixels = 0;
+    for (int y = 0; y < enabled.height(); ++y) {
+      for (int x = 0; x < enabled.width(); ++x) {
+        if (enabled.pixel(x, y) == disabled.pixel(x, y)) continue;
+        ++changed_pixels;
+        const QColor pixel = enabled.pixelColor(x, y);
+        const int r = pixel.red();
+        const int g = pixel.green();
+        const int b = pixel.blue();
+        if (r > 100 && r > g * 1.5f && r > b * 1.25f) ++axis_pixels[0];
+        if (g > 100 && g > r * 1.25f && g > b * 1.25f) ++axis_pixels[1];
+        if (b > 100 && b > r * 1.4f && b > g * 1.15f) ++axis_pixels[2];
+        if (r > 110 && g > 100 && r > b + 50 && g > b + 35) ++frame_pixels;
+      }
+    }
+    EXPECT_GE(changed_pixels, 50);
+    EXPECT_GE(axis_pixels[0], 8);
+    EXPECT_GE(axis_pixels[2], 8);
+    if (tilted) {
+      EXPECT_GE(axis_pixels[1], 8);
+    } else {
+      EXPECT_EQ(axis_pixels[1], 0) << "A zero Y extent must not acquire a depth axis.";
+    }
+    EXPECT_GE(frame_pixels, 12) << "The bounds beyond the selected face must be visible.";
+    ASSERT_TRUE(harness.present_face_sample(false));
+    EXPECT_EQ(harness.selection_frame_builds(), selection_builds);
+    const QImage restored = harness.capture();
+    ASSERT_FALSE(restored.isNull());
+    EXPECT_EQ(restored, disabled) << "Disabling dimensions must leave no retained frame.";
+    for (const auto &[suffix, image] :
+         std::array<std::pair<const char *, const QImage *>, 3>{{
+             {"_off.png", &disabled}, {"_on.png", &enabled},
+             {"_off_restored.png", &restored}}}) {
+      const QString path = QDir(output_directory).filePath(
+          sample + QString::fromLatin1(suffix));
+      EXPECT_TRUE(image->save(path));
+      std::cout << "Dimension frame GPU png=" << path.toStdString() << '\n';
+    }
+    std::cout << "Dimension frame GPU " << sample.toStdString()
+              << ": changed=" << changed_pixels << ", axis_rgb="
+              << axis_pixels[0] << ',' << axis_pixels[1] << ',' << axis_pixels[2]
+              << ", frame=" << frame_pixels << '\n';
   }
 }
 

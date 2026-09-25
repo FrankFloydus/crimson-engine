@@ -1642,11 +1642,12 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
   ASSERT_EQ(viewport_color_settings().size(), 25u);
   ASSERT_EQ(viewport_float_settings().size(), 32u);
-  ASSERT_EQ(viewport_bool_settings().size(), 14u);
+  ASSERT_EQ(viewport_bool_settings().size(), 15u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowDimensions));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowCollisions));
   EXPECT_TRUE(
       settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
@@ -1695,6 +1696,9 @@ TEST(ViewportSettingsTests,
       ViewportFloatSettingId::DimensionFontSize, 12.5f));
   ASSERT_TRUE(settings.set_bool_value(
       ViewportBoolSettingId::ShowHoverDimensions, false));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowDimensions));
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowDimensions,
+                                      false));
   ASSERT_TRUE(settings.save(path));
 
   ViewportSettings loaded = ViewportSettings::load(path);
@@ -1702,6 +1706,7 @@ TEST(ViewportSettingsTests,
       loaded.float_value(ViewportFloatSettingId::DimensionFontSize), 12.5f);
   EXPECT_FALSE(
       loaded.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
+  EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::ShowDimensions));
   {
     std::ifstream file(path);
     const std::string text{std::istreambuf_iterator<char>(file),
@@ -1711,6 +1716,8 @@ TEST(ViewportSettingsTests,
     EXPECT_NE(
         text.find("QVertexWorks.Quader.Viewport.ShowHoverDimensions=false"),
         std::string::npos);
+    EXPECT_NE(text.find("QVertexWorks.Quader.Viewport.ShowDimensions=false"),
+              std::string::npos);
   }
 
   {
@@ -1723,6 +1730,7 @@ TEST(ViewportSettingsTests,
   EXPECT_FLOAT_EQ(
       loaded.float_value(ViewportFloatSettingId::DimensionFontSize), 24.0f);
   EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
+  EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowDimensions));
 
   std::filesystem::remove(path);
 }

@@ -8,7 +8,9 @@
 
 #include "editor/modeling/modeling_types.hpp"
 #include "platform/native_window_input.hpp"
+#include "render/overlay/viewport_selection_dimension_geometry.hpp"
 #include "render/render_signature_builder.hpp"
+#include "render/viewport_overlay_policy.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
@@ -40,6 +42,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <limits>
+#include <span>
 #include <string_view>
 
 // Q_INIT_RESOURCE must remain in the global namespace so its generated symbol
@@ -201,12 +205,13 @@ protected:
 
 private:
   void rebuild_layout_if_needed() {
+    const QColor glyph_color = palette().color(foregroundRole());
     const qreal raster_device_pixel_ratio =
         std::isfinite(devicePixelRatioF()) && devicePixelRatioF() > 0.0
             ? devicePixelRatioF()
             : 1.0;
     if (shape_valid_ && shape_size_ == size() && shape_text_ == text() &&
-        shape_font_ == font() &&
+        shape_font_ == font() && shape_color_ == glyph_color &&
         shape_device_pixel_ratio_ == raster_device_pixel_ratio) {
       return;
     }
@@ -279,8 +284,7 @@ private:
     raster_.fill(Qt::transparent);
     fill_dimension_region(raster_, physical_outline_region,
                           qRgba(0, 0, 0, 255));
-    fill_dimension_region(raster_, physical_glyph_region,
-                          qRgba(255, 255, 255, 255));
+    fill_dimension_region(raster_, physical_glyph_region, glyph_color.rgba());
     raster_.setDevicePixelRatio(raster_device_pixel_ratio);
     setProperty("quaderDimensionRasterPixelSize", physical_size);
     setProperty("quaderDimensionRasterDevicePixelRatio",
@@ -288,6 +292,7 @@ private:
     shape_size_ = size();
     shape_text_ = text();
     shape_font_ = font();
+    shape_color_ = glyph_color;
     shape_device_pixel_ratio_ = raster_device_pixel_ratio;
     shape_valid_ = true;
     ++shape_revision_;
@@ -300,6 +305,7 @@ private:
   QSize shape_size_;
   QString shape_text_;
   QFont shape_font_;
+  QColor shape_color_;
   qreal shape_device_pixel_ratio_ = 0.0;
   std::uint64_t shape_revision_ = 0;
   std::uint64_t mask_shape_revision_ = 0;
@@ -346,6 +352,34 @@ QString dimension_length_text(QVec3 start, QVec3 end) {
   return QString::number(map_length, 'f', 2);
 }
 
+QString selection_length_text(double map_length) {
+  if (!std::isfinite(map_length) ||
+      map_length < kViewportSelectionDimensionMinimumMapLength) {
+    return {};
+  }
+  const double rounded = std::round(map_length);
+  return std::abs(map_length - rounded) < 0.01
+             ? QString::number(rounded, 'f', 0)
+             : QString::number(map_length, 'f', 2);
+}
+
+bool visible_in_viewport(const ViewportScreenPoint &point, QVec2 viewport_size) {
+  return point.visible && std::isfinite(point.position.x) &&
+         std::isfinite(point.position.y) && point.position.x >= 0.0F &&
+         point.position.y >= 0.0F && point.position.x <= viewport_size.x &&
+         point.position.y <= viewport_size.y;
+}
+
+QColor dimension_axis_color(std::size_t axis) {
+  constexpr std::array kColors{kOverlayToolAxisXColor, kOverlayToolAxisYColor,
+                              kOverlayToolAxisZColor};
+  const std::uint32_t color = kColors[axis];
+  return QColor(static_cast<int>(color & 0xffU),
+                static_cast<int>((color >> 8U) & 0xffU),
+                static_cast<int>((color >> 16U) & 0xffU),
+                static_cast<int>((color >> 24U) & 0xffU));
+}
+
 QPoint logical_point(QVec2 render_point, QVec2 render_size,
                      const QRect &logical_bounds) {
   return {
@@ -373,6 +407,72 @@ QRect clamped_label_geometry(QRect geometry, const QRect &bounds) {
   return geometry;
 }
 
+std::optional<QRect> selection_label_geometry(
+    const QRect &nominal, const QRect &bounds,
+    std::span<const QRect> placed, int gap) {
+  const auto fits = [&](const QRect &candidate) {
+    return bounds.contains(candidate) &&
+           std::none_of(placed.begin(), placed.end(),
+                        [&](const QRect &other) {
+                          return other.adjusted(-gap, -gap, gap, gap)
+                              .intersects(candidate);
+                        });
+  };
+  if (fits(nominal)) {
+    return nominal;
+  }
+
+  // Three selection labels need at most five candidates per coordinate.
+  // Include the nominal coordinate and either side of each preceding label;
+  // their bounded Cartesian product also handles two nearby occupied labels.
+  std::array<int, 5> horizontal{nominal.left()};
+  std::array<int, 5> vertical{nominal.top()};
+  std::size_t coordinate_count = 1U;
+  for (const QRect &other : placed) {
+    horizontal[coordinate_count] = other.left() - gap - nominal.width();
+    vertical[coordinate_count] = other.top() - gap - nominal.height();
+    ++coordinate_count;
+    horizontal[coordinate_count] = other.right() + gap + 1;
+    vertical[coordinate_count] = other.bottom() + gap + 1;
+    ++coordinate_count;
+  }
+  std::optional<QRect> nearest;
+  double nearest_distance_squared = std::numeric_limits<double>::infinity();
+  for (std::size_t x = 0U; x < coordinate_count; ++x) {
+    for (std::size_t y = 0U; y < coordinate_count; ++y) {
+      const QRect candidate = clamped_label_geometry(
+          QRect{QPoint{horizontal[x], vertical[y]}, nominal.size()}, bounds);
+      if (!fits(candidate)) {
+        continue;
+      }
+      const double dx = static_cast<double>(candidate.left()) - nominal.left();
+      const double dy = static_cast<double>(candidate.top()) - nominal.top();
+      const double distance_squared = dx * dx + dy * dy;
+      if (distance_squared < nearest_distance_squared) {
+        nearest = candidate;
+        nearest_distance_squared = distance_squared;
+      }
+    }
+  }
+  return nearest;
+}
+
+void present_label_geometry(QLabel &label, const QRect &geometry) {
+  auto &dimension_label = static_cast<QtViewportEdgeLengthLabel &>(label);
+  if (label.size() != geometry.size()) {
+    label.resize(geometry.size());
+    dimension_label.invalidate_shape();
+  }
+  if (label.pos() != geometry.topLeft()) {
+    label.move(geometry.topLeft());
+  }
+  dimension_label.refresh_native_mask_if_needed();
+  if (label.isHidden()) {
+    label.show();
+    label.raise();
+  }
+}
+
 } // namespace
 
 QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
@@ -381,10 +481,13 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
   const std::string_view pane_name = viewport_pane_stable_id(pane_id);
   const QString pane = QString::fromUtf8(
       pane_name.data(), static_cast<qsizetype>(pane_name.size()));
-  const std::array<QString, 3> object_names{
+  const std::array<QString, 6> object_names{
       QStringLiteral("viewportEdgeLength_%1").arg(pane),
       QStringLiteral("viewportFootprintDimension0_%1").arg(pane),
       QStringLiteral("viewportFootprintDimension1_%1").arg(pane),
+      QStringLiteral("viewportSelectionDimensionX_%1").arg(pane),
+      QStringLiteral("viewportSelectionDimensionY_%1").arg(pane),
+      QStringLiteral("viewportSelectionDimensionZ_%1").arg(pane),
   };
   for (std::size_t index = 0; index < labels_.size(); ++index) {
     QLabel *label = new QtViewportEdgeLengthLabel(&parent);
@@ -399,7 +502,9 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
     label->setAttribute(Qt::WA_NoSystemBackground);
     label->setFont(dimension_font(kDefaultDimensionFontSizePoints));
     QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText, QColor(255, 255, 255, 255));
+    palette.setColor(QPalette::WindowText,
+                     index < 3U ? QColor(255, 255, 255, 255)
+                                : dimension_axis_color(index - 3U));
     label->setPalette(palette);
     label->setForegroundRole(QPalette::WindowText);
     label->setFocusPolicy(Qt::NoFocus);
@@ -442,7 +547,9 @@ void QtViewportEdgeLengthHud::present(
     const ViewportCameraController &camera,
     const QRect &logical_viewport_bounds, bool edge_enabled,
     double font_size_points,
-    const ModelingBoxPreview *footprint_preview, bool footprint_enabled) {
+    const ModelingBoxPreview *footprint_preview, bool footprint_enabled,
+    const ViewportSelectionDimensionBounds *selection_bounds,
+    std::uint64_t selection_signature, bool selection_enabled) {
   const double effective_font_size =
       std::isfinite(font_size_points)
           ? std::clamp(font_size_points, kMinimumDimensionFontSizePoints,
@@ -466,7 +573,7 @@ void QtViewportEdgeLengthHud::present(
     font_size_valid_ = true;
     view_valid_ = false;
   }
-  std::array<std::optional<Dimension>, 3> requested_dimensions;
+  std::array<std::optional<Dimension>, 6> requested_dimensions;
   if (edge_enabled) {
     requested_dimensions[0] = dimensions_[0];
   } else {
@@ -538,6 +645,60 @@ void QtViewportEdgeLengthHud::present(
     }
   }
 
+  const ViewportOverlayCamera overlay_camera =
+      ViewportCameraAdapter::overlay_camera(camera, camera.viewport_size());
+  const std::uint64_t camera_signature =
+      RenderSignatureBuilder::overlay_camera_signature(overlay_camera);
+  const bool selection_source_changed =
+      !selection_signature_valid_ || selection_signature_ != selection_signature;
+  if (!selection_enabled || selection_source_changed) {
+    selection_bounds_ =
+        selection_enabled && selection_bounds != nullptr &&
+                viewport_selection_dimension_bounds_valid(*selection_bounds)
+            ? std::optional<ViewportSelectionDimensionBounds>{*selection_bounds}
+            : std::nullopt;
+    selection_signature_ = selection_signature;
+    selection_signature_valid_ = selection_enabled;
+    selection_projection_valid_ = false;
+    std::array<double, 3> lengths{};
+    if (selection_bounds_.has_value()) {
+      const auto &bounds = *selection_bounds_;
+      const double map_units = viewport_host_defaults().map_units_per_world_unit;
+      lengths = {(static_cast<double>(bounds.max.x) - bounds.min.x) * map_units,
+                 (static_cast<double>(bounds.max.y) - bounds.min.y) * map_units,
+                 (static_cast<double>(bounds.max.z) - bounds.min.z) * map_units};
+    }
+    for (std::size_t axis = 0U; axis < lengths.size(); ++axis) {
+      if (selection_lengths_[axis] != lengths[axis]) {
+        selection_lengths_[axis] = lengths[axis];
+        dimension_texts_[axis + 3U] = selection_length_text(lengths[axis]);
+        view_valid_ = false;
+      }
+    }
+  }
+  if (selection_bounds_.has_value()) {
+    if (!selection_projection_valid_ ||
+        selection_camera_signature_ != camera_signature) {
+      const ViewportSelectionDimensionSpans spans =
+          viewport_selection_dimension_spans(
+              *selection_bounds_, overlay_camera,
+              viewport_host_defaults().map_units_per_world_unit);
+      for (std::size_t axis = 0U; axis < 3U; ++axis) {
+        if (spans[axis].has_value()) {
+          requested_dimensions[axis + 3U] = Dimension{
+              .start = spans[axis]->start,
+              .end = spans[axis]->end,
+          };
+        }
+      }
+      selection_camera_signature_ = camera_signature;
+      selection_projection_valid_ = true;
+    } else {
+      std::copy(dimensions_.begin() + 3, dimensions_.end(),
+                requested_dimensions.begin() + 3);
+    }
+  }
+
   bool dimensions_changed = false;
   for (std::size_t index = 0; index < dimensions_.size(); ++index) {
     if (same_dimension_geometry(dimensions_[index],
@@ -545,11 +706,13 @@ void QtViewportEdgeLengthHud::present(
       continue;
     }
     dimensions_[index] = requested_dimensions[index];
-    dimension_texts_[index] =
-        dimensions_[index].has_value()
-            ? dimension_length_text(dimensions_[index]->start,
-                                    dimensions_[index]->end)
-            : QString{};
+    if (index < 3U) {
+      dimension_texts_[index] =
+          dimensions_[index].has_value()
+              ? dimension_length_text(dimensions_[index]->start,
+                                      dimensions_[index]->end)
+              : QString{};
+    }
     dimensions_changed = true;
   }
   if (dimensions_changed) {
@@ -563,10 +726,6 @@ void QtViewportEdgeLengthHud::present(
     return;
   }
 
-  const std::uint64_t camera_signature =
-      RenderSignatureBuilder::overlay_camera_signature(
-          ViewportCameraAdapter::overlay_camera(camera,
-                                                 camera.viewport_size()));
   if (view_valid_ && camera_signature_ == camera_signature &&
       logical_viewport_bounds_ == logical_viewport_bounds) {
     return;
@@ -582,6 +741,8 @@ void QtViewportEdgeLengthHud::present(
     return;
   }
 
+  std::array<QRect, 3> selection_label_geometries;
+  std::size_t selection_label_count = 0U;
   for (std::size_t index = 0; index < labels_.size(); ++index) {
     QLabel *label = labels_[index];
     const std::optional<Dimension> &dimension = dimensions_[index];
@@ -591,9 +752,20 @@ void QtViewportEdgeLengthHud::present(
       }
       continue;
     }
+    const bool selection_dimension = index >= 3U;
+    const ViewportScreenPoint selection_midpoint =
+        selection_dimension
+            ? camera.project_world_point((dimension->start + dimension->end) *
+                                          0.5F)
+            : ViewportScreenPoint{};
     const std::optional<ViewportScreenSegment> visible_segment =
-        camera.project_visible_world_segment(dimension->start, dimension->end);
-    if (!visible_segment.has_value()) {
+        selection_dimension
+            ? std::nullopt
+            : camera.project_visible_world_segment(dimension->start,
+                                                    dimension->end);
+    if ((selection_dimension &&
+         !visible_in_viewport(selection_midpoint, render_size)) ||
+        (!selection_dimension && !visible_segment.has_value())) {
       if (!label->isHidden()) {
         label->hide();
       }
@@ -609,6 +781,27 @@ void QtViewportEdgeLengthHud::present(
       if (!label->isHidden()) {
         label->hide();
       }
+      continue;
+    }
+
+    if (selection_dimension) {
+      const QPoint midpoint = logical_point(
+          selection_midpoint.position, render_size, logical_viewport_bounds);
+      const std::optional<QRect> geometry = selection_label_geometry(
+          clamped_label_geometry(centered_label_geometry(midpoint, size),
+                                  logical_viewport_bounds),
+          logical_viewport_bounds,
+          std::span<const QRect>{selection_label_geometries.data(),
+                                 selection_label_count},
+          ui_scale_metrics_.px(kDimensionLabelGapPixels));
+      if (!geometry.has_value()) {
+        if (!label->isHidden()) {
+          label->hide();
+        }
+        continue;
+      }
+      selection_label_geometries[selection_label_count++] = *geometry;
+      present_label_geometry(*label, *geometry);
       continue;
     }
 
@@ -690,20 +883,7 @@ void QtViewportEdgeLengthHud::present(
         continue;
       }
     }
-    const bool resized = label->size() != geometry.size();
-    if (resized) {
-      label->resize(geometry.size());
-      static_cast<QtViewportEdgeLengthLabel *>(label)->invalidate_shape();
-    }
-    if (label->pos() != geometry.topLeft()) {
-      label->move(geometry.topLeft());
-    }
-    static_cast<QtViewportEdgeLengthLabel *>(label)
-        ->refresh_native_mask_if_needed();
-    if (label->isHidden()) {
-      label->show();
-      label->raise();
-    }
+    present_label_geometry(*label, geometry);
   }
 }
 
@@ -729,6 +909,7 @@ bool QtViewportEdgeLengthHud::eventFilter(QObject *watched, QEvent *event) {
       std::find(labels_.begin(), labels_.end(), watched) != labels_.end();
   if (watches_dimension_label && event != nullptr &&
       (event->type() == QEvent::FontChange ||
+       event->type() == QEvent::PaletteChange ||
        event->type() == QEvent::StyleChange ||
        event->type() == QEvent::DevicePixelRatioChange ||
        event->type() == QEvent::ScreenChangeInternal)) {

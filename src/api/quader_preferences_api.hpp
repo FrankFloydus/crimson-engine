@@ -74,6 +74,9 @@ public:
     [[nodiscard]] bool mesh_grid_visible() const;
     QuaderApiVoidResult set_overlays_visible(bool visible);
     [[nodiscard]] bool overlays_visible() const;
+    /// Controls selection dimension labels independently of hover measurements.
+    QuaderApiVoidResult set_dimensions_visible(bool visible);
+    [[nodiscard]] bool dimensions_visible() const;
     QuaderApiVoidResult set_collisions_visible(bool visible);
     [[nodiscard]] bool collisions_visible() const;
     QuaderApiVoidResult set_texture_lock_enabled(bool enabled);

@@ -1701,10 +1701,13 @@ TEST(ProgrammaticApiGuardrailTests,
   const auto projection =
       presentation.find("camera.project_visible_world_segment(");
   const auto text_setter = presentation.find("label->setText(");
-  const auto resize_gate = presentation.find("const bool resized =");
-  const auto move_gate = presentation.find("label->move(", resize_gate);
+  const auto geometry_update = presentation.find("present_label_geometry(");
+  const std::string geometry = source_slice(
+      hud, "void present_label_geometry(", "} // namespace");
+  const auto resize_gate = geometry.find("if (label.size() != geometry.size())");
+  const auto move_gate = geometry.find("if (label.pos() != geometry.topLeft())");
   const auto mask_refresh =
-      presentation.find("refresh_native_mask_if_needed()", move_gate);
+      geometry.find("refresh_native_mask_if_needed()", move_gate);
   ASSERT_NE(signature_gate, std::string::npos);
   ASSERT_NE(scan, std::string::npos);
   ASSERT_NE(geometry_gate, std::string::npos);
@@ -1712,6 +1715,7 @@ TEST(ProgrammaticApiGuardrailTests,
   ASSERT_NE(view_gate, std::string::npos);
   ASSERT_NE(projection, std::string::npos);
   ASSERT_NE(text_setter, std::string::npos);
+  ASSERT_NE(geometry_update, std::string::npos);
   ASSERT_NE(resize_gate, std::string::npos);
   ASSERT_NE(move_gate, std::string::npos);
   ASSERT_NE(mask_refresh, std::string::npos);
@@ -1719,7 +1723,7 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_LT(geometry_gate, formatting);
   EXPECT_LT(view_gate, projection);
   EXPECT_LT(view_gate, text_setter);
-  EXPECT_LT(text_setter, resize_gate);
+  EXPECT_LT(text_setter, geometry_update);
   EXPECT_LT(resize_gate, move_gate);
   EXPECT_LT(move_gate, mask_refresh);
   EXPECT_EQ(presentation.find("label->setGeometry(geometry)"),
@@ -1765,7 +1769,8 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_NE(hud.find("QRegion{glyph_mask}"), std::string::npos);
   EXPECT_NE(hud.find("QImage::Format_ARGB32"), std::string::npos);
   EXPECT_NE(hud.find("qRgba(0, 0, 0, 255)"), std::string::npos);
-  EXPECT_NE(hud.find("qRgba(255, 255, 255, 255)"), std::string::npos);
+  EXPECT_NE(hud.find("palette().color(foregroundRole())"), std::string::npos);
+  EXPECT_NE(hud.find("glyph_color.rgba()"), std::string::npos);
   EXPECT_NE(hud.find("QPainter::CompositionMode_Source"),
             std::string::npos);
   EXPECT_NE(hud.find("QPainter::SmoothPixmapTransform, false"),

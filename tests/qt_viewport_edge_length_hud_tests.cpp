@@ -14,6 +14,7 @@
 #include "editor/session/scene_session.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/render_signature_builder.hpp"
+#include "render/viewport_overlay_policy.hpp"
 #include "ui/qt_viewport_edge_length_hud.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -23,6 +24,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
+#include <QDir>
 #include <QEnterEvent>
 #include <QEvent>
 #include <QFile>
@@ -36,6 +38,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QPoint>
+#include <QPixmap>
 #include <QRegion>
 #include <QString>
 #include <QWidget>
@@ -155,6 +158,14 @@ protected:
         QStringLiteral("viewportFootprintDimension1_perspective"));
     ASSERT_NE(footprint_labels_[0], nullptr);
     ASSERT_NE(footprint_labels_[1], nullptr);
+    const std::array selection_names{
+        QStringLiteral("viewportSelectionDimensionX_perspective"),
+        QStringLiteral("viewportSelectionDimensionY_perspective"),
+        QStringLiteral("viewportSelectionDimensionZ_perspective")};
+    for (std::size_t axis = 0U; axis < selection_labels_.size(); ++axis) {
+      selection_labels_[axis] = parent_->findChild<QLabel *>(selection_names[axis]);
+      ASSERT_NE(selection_labels_[axis], nullptr);
+    }
     camera_.focus_origin(64.0f);
     camera_.view_axis(quader::ViewportViewAxis::Z, 1);
     camera_.set_viewport_size(800.0f, 600.0f);
@@ -173,6 +184,24 @@ protected:
   void present_footprint(const quader::ModelingBoxPreview &preview,
                          bool enabled = true) {
     present({}, false, &preview, enabled);
+  }
+
+  void present_selection(const quader::ViewportSelectionDimensionBounds &bounds,
+                         std::uint64_t signature = 1U, bool enabled = true) {
+    hud_->present({}, 1U, camera_, parent_->rect(), false, 12.0, nullptr, false,
+                   &bounds, signature, enabled);
+  }
+
+  void expect_selection_anchor(std::size_t axis, quader::QVec3 midpoint) const {
+    ASSERT_FALSE(selection_labels_[axis]->isHidden());
+    const auto projected = camera_.project_world_point(midpoint);
+    ASSERT_TRUE(projected.visible);
+    const QPoint expected{
+        qRound(projected.position.x * parent_->width() / camera_.viewport_size().x),
+        qRound(projected.position.y * parent_->height() / camera_.viewport_size().y)};
+    EXPECT_LE((selection_labels_[axis]->geometry().center() - expected).manhattanLength(),
+              2);
+    EXPECT_TRUE(parent_->rect().contains(selection_labels_[axis]->geometry()));
   }
 
   quader::QVec3 point_at_screen(quader::QVec2 screen, float depth = 64.0f) const {
@@ -244,6 +273,7 @@ protected:
   quader::QtViewportEdgeLengthHud *hud_ = nullptr;
   QLabel *label_ = nullptr;
   std::array<QLabel *, 2> footprint_labels_ = {};
+  std::array<QLabel *, 3> selection_labels_ = {};
   quader::ViewportCameraController camera_;
 };
 
@@ -957,6 +987,297 @@ TEST_F(QtViewportEdgeLengthHudTests,
   EXPECT_EQ(events.counts(), hidden);
   present(frame);
   EXPECT_FALSE(label_->isHidden());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SelectionDimensionsUseAxisColorsAndClosestVisibleCornerInPerspective) {
+  ASSERT_TRUE(camera_.restore_perspective_pose(
+      {.eye = {8, 6, 10}, .target = {}, .up = {0, 1, 0}}));
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, -3}, .max = {2, 3, 1}};
+  present_selection(bounds);
+  expect_selection_anchor(0U, {0, 3, 1});
+  expect_selection_anchor(1U, {2, 1, 1});
+  expect_selection_anchor(2U, {2, 3, -1});
+
+  constexpr std::array kColors{quader::kOverlayToolAxisXColor,
+                              quader::kOverlayToolAxisYColor,
+                              quader::kOverlayToolAxisZColor};
+  for (std::size_t axis = 0U; axis < selection_labels_.size(); ++axis) {
+    QLabel &label = *selection_labels_[axis];
+    EXPECT_EQ(label.text(), QStringLiteral("128"));
+    const auto packed = kColors[axis];
+    const QColor expected{static_cast<int>(packed & 0xffU),
+                          static_cast<int>((packed >> 8U) & 0xffU),
+                          static_cast<int>((packed >> 16U) & 0xffU),
+                          static_cast<int>((packed >> 24U) & 0xffU)};
+    EXPECT_EQ(label.palette().color(label.foregroundRole()), expected);
+    QImage painted(label.size(), QImage::Format_ARGB32);
+    painted.fill(Qt::transparent);
+    label.render(&painted);
+    int colored_pixels = 0;
+    int outline_pixels = 0;
+    for (int y = 0; y < painted.height(); ++y) {
+      for (int x = 0; x < painted.width(); ++x) {
+        const QColor pixel = painted.pixelColor(x, y);
+        colored_pixels +=
+            pixel.alpha() == expected.alpha() &&
+                    std::abs(pixel.red() - expected.red()) <= 1 &&
+                    std::abs(pixel.green() - expected.green()) <= 1 &&
+                    std::abs(pixel.blue() - expected.blue()) <= 1
+                ? 1
+                : 0;
+        outline_pixels += pixel == QColor(0, 0, 0, 255) ? 1 : 0;
+      }
+    }
+    EXPECT_GT(colored_pixels, 8);
+    EXPECT_GT(outline_pixels, 20);
+  }
+
+  // Camera-only motion selects a new corner without needing a geometry revision.
+  ASSERT_TRUE(camera_.restore_perspective_pose(
+      {.eye = {-8, -6, -10}, .target = {}, .up = {0, 1, 0}}));
+  present_selection(bounds);
+  expect_selection_anchor(0U, {0, -1, -3});
+  expect_selection_anchor(1U, {-2, 1, -3});
+  expect_selection_anchor(2U, {-2, -1, -1});
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       PerspectiveSelectionFallsBackToMinimumCornerWhenAllCornersAreOffscreen) {
+  ASSERT_TRUE(camera_.restore_perspective_pose(
+      {.eye = {0, 0, 10}, .target = {}, .up = {0, 1, 0}}));
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-100, -1, 0}, .max = {100, 1, 2}};
+  present_selection(bounds);
+  expect_selection_anchor(0U, {0, -1, 0});
+  EXPECT_EQ(selection_labels_[0]->text(), QStringLiteral("6400"));
+  EXPECT_TRUE(selection_labels_[1]->isHidden());
+  EXPECT_TRUE(selection_labels_[2]->isHidden());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       OrthographicSelectionDimensionsOmitDepthAxisAndKeepMinimumCorner) {
+  camera_.focus_origin(16.0F);
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, -3}, .max = {2, 3, 1}};
+  const std::array view_axes{quader::ViewportViewAxis::X,
+                             quader::ViewportViewAxis::Y,
+                             quader::ViewportViewAxis::Z};
+  const std::array midpoints{quader::QVec3{0, -1, -3},
+                             quader::QVec3{-2, 1, -3},
+                             quader::QVec3{-2, -1, -1}};
+  for (std::size_t depth_axis = 0U; depth_axis < 3U; ++depth_axis) {
+    for (const int sign : {-1, 1}) {
+      camera_.view_axis(view_axes[depth_axis], sign);
+      present_selection(bounds);
+      for (std::size_t axis = 0U; axis < 3U; ++axis) {
+        if (axis == depth_axis) {
+          EXPECT_TRUE(selection_labels_[axis]->isHidden());
+        } else {
+          expect_selection_anchor(axis, midpoints[axis]);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SelectionFormattingSuppressesTinySpansAndUsesIntegerTolerance) {
+  const float world_per_map = static_cast<float>(
+      1.0 / quader::viewport_host_defaults().map_units_per_world_unit);
+  quader::ViewportSelectionDimensionBounds bounds{
+      .min = {}, .max = {64.005F * world_per_map, 23.126F * world_per_map, 0}};
+  present_selection(bounds);
+  ASSERT_FALSE(selection_labels_[0]->isHidden());
+  ASSERT_FALSE(selection_labels_[1]->isHidden());
+  EXPECT_EQ(selection_labels_[0]->text(), QStringLiteral("64"));
+  EXPECT_EQ(selection_labels_[1]->text(), QStringLiteral("23.13"));
+
+  bounds.max.x = 0.009F * world_per_map;
+  bounds.max.y = 64.02F * world_per_map;
+  present_selection(bounds, 2U);
+  EXPECT_TRUE(selection_labels_[0]->isHidden());
+  ASSERT_FALSE(selection_labels_[1]->isHidden());
+  EXPECT_EQ(selection_labels_[1]->text(), QStringLiteral("64.02"));
+  bounds.max.x = 0.02F * world_per_map;
+  present_selection(bounds, 3U);
+  ASSERT_FALSE(selection_labels_[0]->isHidden());
+  EXPECT_EQ(selection_labels_[0]->text(), QStringLiteral("0.02"));
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SelectionToggleAndResetRemainIndependentOfHoverAndFootprint) {
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, 0}, .max = {2, 3, 0}};
+  const auto frame = hover_edge_frame({-4, 0, 0}, {4, 0, 0});
+  const quader::ModelingBoxPreview footprint{
+      .drag_state = quader::ModelingBoxDragState::Footprint,
+      .footprint = {quader::QVec3{-2, -3, 0}, quader::QVec3{2, -3, 0}},
+      .footprint_count = 2U};
+  const auto present_all = [&](bool selection_enabled) {
+    hud_->present(frame, 1U, camera_, parent_->rect(), true, 12.0, &footprint,
+                   true, &bounds, 1U, selection_enabled);
+  };
+  present_all(true);
+  ASSERT_FALSE(label_->isHidden());
+  ASSERT_FALSE(footprint_labels_[0]->isHidden());
+  ASSERT_FALSE(selection_labels_[0]->isHidden());
+  ASSERT_FALSE(selection_labels_[1]->isHidden());
+  present_all(false);
+  EXPECT_FALSE(label_->isHidden());
+  EXPECT_FALSE(footprint_labels_[0]->isHidden());
+  for (const QLabel *label : selection_labels_) EXPECT_TRUE(label->isHidden());
+  present_all(true);
+  EXPECT_FALSE(selection_labels_[0]->isHidden());
+  hud_->hide();
+  for (const QLabel *label : selection_labels_) EXPECT_TRUE(label->isHidden());
+  present_selection(bounds);
+  EXPECT_FALSE(selection_labels_[0]->isHidden());
+  EXPECT_TRUE(label_->isHidden());
+  EXPECT_TRUE(footprint_labels_[0]->isHidden());
+  hud_->present({}, 1U, camera_, parent_->rect(), false, 12.0, nullptr, false,
+                 nullptr, 2U, true);
+  for (const QLabel *label : selection_labels_) EXPECT_TRUE(label->isHidden());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SelectionLabelsUseTrueMidpointsAndHideOffscreenOrClippedSpans) {
+  // The X edge crosses the viewport but its true midpoint lies outside it.
+  quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-10, -1, 0}, .max = {1000, 1, 0}};
+  ASSERT_TRUE(camera_.project_visible_world_segment(bounds.min,
+                                                    {1000, -1, 0}).has_value());
+  const auto midpoint = camera_.project_world_point({495, -1, 0});
+  ASSERT_TRUE(midpoint.visible);
+  ASSERT_TRUE(midpoint.position.x < 0.0F ||
+              midpoint.position.x > camera_.viewport_size().x);
+  present_selection(bounds);
+  EXPECT_TRUE(selection_labels_[0]->isHidden());
+  EXPECT_FALSE(selection_labels_[1]->isHidden());
+
+  bounds = {.min = {-2, -1, 0}, .max = {2, 3, 0}};
+  present_selection(bounds, 2U);
+  ASSERT_FALSE(selection_labels_[0]->isHidden());
+  camera_.set_clip_planes(0.05F, 10.0F);
+  present_selection(bounds, 2U);
+  for (const QLabel *label : selection_labels_) EXPECT_TRUE(label->isHidden());
+
+  bounds.max.x = std::numeric_limits<float>::quiet_NaN();
+  present_selection(bounds, 3U);
+  for (const QLabel *label : selection_labels_) EXPECT_TRUE(label->isHidden());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SelectionSignatureGatesBoundsFormattingAndNativeWidgetWork) {
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, 0}, .max = {2, 3, 0}};
+  std::array<EdgeHudWidgetEventCounter, 3> events;
+  for (std::size_t axis = 0U; axis < events.size(); ++axis) {
+    selection_labels_[axis]->installEventFilter(&events[axis]);
+  }
+  present_selection(bounds);
+  QCoreApplication::processEvents();
+  const std::array initial{events[0].counts(), events[1].counts(),
+                           events[2].counts()};
+  const int mask_revision =
+      selection_labels_[0]->property("quaderDimensionMaskRevision").toInt();
+  const quader::ViewportSelectionDimensionBounds stale_input{
+      .min = {1000, 1000, 1000}, .max = {2000, 2000, 2000}};
+  for (int repetition = 0; repetition < 64; ++repetition) {
+    present_selection(stale_input);
+  }
+  QCoreApplication::processEvents();
+  for (std::size_t axis = 0U; axis < events.size(); ++axis) {
+    EXPECT_EQ(events[axis].counts(), initial[axis]);
+  }
+  EXPECT_EQ(selection_labels_[0]->text(), QStringLiteral("128"));
+  EXPECT_EQ(selection_labels_[0]->property("quaderDimensionMaskRevision").toInt(),
+            mask_revision);
+
+  camera_.view_axis(quader::ViewportViewAxis::X, 1);
+  present_selection(stale_input);
+  EXPECT_TRUE(selection_labels_[0]->isHidden());
+  EXPECT_FALSE(selection_labels_[1]->isHidden());
+  EXPECT_EQ(selection_labels_[1]->text(), QStringLiteral("128"));
+  present_selection(stale_input, 2U);
+  for (const QLabel *label : selection_labels_) EXPECT_TRUE(label->isHidden());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SelectionLabelsScaleWithinNarrowPanesAndCanCaptureNativePresentation) {
+  ASSERT_TRUE(camera_.restore_perspective_pose(
+      {.eye = {8, 6, 10}, .target = {}, .up = {0, 1, 0}}));
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, -3}, .max = {2, 3, 1}};
+  QPalette palette = parent_->palette();
+  palette.setColor(QPalette::Window, QColor(23, 24, 25));
+  parent_->setPalette(palette);
+  parent_->setAutoFillBackground(true);
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  const auto capture = [&](const QString &name) {
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(QDir{}.mkpath(review_directory));
+      ASSERT_TRUE(parent_->grab().save(QDir(review_directory).filePath(name)));
+    }
+  };
+  present_selection(bounds);
+  const QSize baseline = selection_labels_[0]->size();
+  const std::array baseline_geometry{selection_labels_[0]->geometry(),
+                                     selection_labels_[1]->geometry(),
+                                     selection_labels_[2]->geometry()};
+  capture(QStringLiteral("selection-dimensions-100.png"));
+  hud_->apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1U});
+  present_selection(bounds);
+  EXPECT_GT(selection_labels_[0]->width(), baseline.width());
+  EXPECT_DOUBLE_EQ(selection_labels_[0]->font().pointSizeF(), 24.0);
+  capture(QStringLiteral("selection-dimensions-200.png"));
+  parent_->resize(180, 220);
+  camera_.set_viewport_size(360, 440);
+  present_selection(bounds);
+  for (const QLabel *label : selection_labels_) {
+    ASSERT_FALSE(label->isHidden());
+    EXPECT_TRUE(parent_->rect().contains(label->geometry()));
+  }
+  for (std::size_t axis = 0U; axis < selection_labels_.size(); ++axis) {
+    for (std::size_t other = axis + 1U; other < selection_labels_.size(); ++other) {
+      EXPECT_FALSE(selection_labels_[axis]->geometry().intersects(
+          selection_labels_[other]->geometry()));
+    }
+  }
+  capture(QStringLiteral("selection-dimensions-narrow-200.png"));
+  hud_->apply_ui_scale(quader::QtUiScaleMetrics{1.0F, 2U});
+  present_selection(bounds);
+  EXPECT_EQ(selection_labels_[0]->size(), baseline);
+  capture(QStringLiteral("selection-dimensions-narrow-100.png"));
+  parent_->resize(400, 300);
+  camera_.set_viewport_size(800, 600);
+  present_selection(bounds);
+  for (std::size_t axis = 0U; axis < selection_labels_.size(); ++axis) {
+    EXPECT_EQ(selection_labels_[axis]->geometry(), baseline_geometry[axis]);
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SelectionLabelsHideWhenNoNonOverlappingPositionFits) {
+  ASSERT_TRUE(camera_.restore_perspective_pose(
+      {.eye = {8, 6, 10}, .target = {}, .up = {0, 1, 0}}));
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, -3}, .max = {2, 3, 1}};
+  hud_->apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1U});
+  present_selection(bounds);
+  const QSize label_size = selection_labels_[0]->size();
+  parent_->resize(label_size + QSize{2, 2});
+  camera_.set_viewport_size(static_cast<float>(parent_->width() * 2),
+                             static_cast<float>(parent_->height() * 2));
+  present_selection(bounds);
+  EXPECT_EQ(std::count_if(selection_labels_.begin(), selection_labels_.end(),
+                          [](const QLabel *label) { return !label->isHidden(); }),
+            1);
+  parent_->resize(400, 300);
+  camera_.set_viewport_size(800, 600);
+  present_selection(bounds);
+  for (const QLabel *label : selection_labels_) EXPECT_FALSE(label->isHidden());
 }
 
 } // namespace

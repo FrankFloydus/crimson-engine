@@ -8,7 +8,9 @@
 #include "core/localization_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 
 #include <gtest/gtest.h>
 
@@ -17,10 +19,13 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFontMetrics>
+#include <QImage>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaObject>
 #include <QPointer>
+#include <QStyle>
 #include <QTemporaryDir>
 
 #include <filesystem>
@@ -217,6 +222,121 @@ TEST_F(QtFileMenuTests, ComponentMenusPresentOnlyTheInterpolatedBridge) {
     }
     EXPECT_EQ(bridge_entries, 1);
   }
+}
+
+TEST_F(QtFileMenuTests,
+       DisplayDimensionsToggleTracksPreferencesAndLocalizesInPlace) {
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  QtUiScaleApplicationController scale_controller(*application_);
+  const auto preferences_path = root_ / "viewport.ini";
+  editor_->preferences().set_runtime_hooks({
+      .dimensions_visible = [this] {
+        return viewport_settings_.bool_value(ViewportBoolSettingId::ShowDimensions);
+      },
+      .set_dimensions_visible = [this, &preferences_path](bool visible) {
+        const bool changed = viewport_settings_.set_bool_value(
+            ViewportBoolSettingId::ShowDimensions, visible);
+        if (changed) {
+          EXPECT_TRUE(viewport_settings_.save(preferences_path));
+        }
+        return QuaderApiVoidResult{
+            .ok = true,
+            .changed = changed,
+            .mutation_kind = QuaderMutationKind::Runtime,
+        };
+      },
+  });
+  auto *display =
+      menu_bar_->findChild<QMenu *>(QStringLiteral("menu_view_display"));
+  auto *action = menu_bar_->findChild<QAction *>(
+      QStringLiteral("command_viewport_toggle_dimensions"));
+  ASSERT_NE(display, nullptr);
+  ASSERT_NE(action, nullptr);
+  EXPECT_TRUE(display->actions().contains(action));
+  menu_->refresh();
+  EXPECT_EQ(action->text(), QStringLiteral("Toggle Dimensions"));
+  EXPECT_TRUE(action->isCheckable());
+  EXPECT_TRUE(action->isChecked());
+  EXPECT_TRUE(action->shortcut().isEmpty());
+
+  const auto review_display = [&](const QString &filename, QRect &row_bounds) {
+    display->setAttribute(Qt::WA_DontShowOnScreen, true);
+    display->popup(QPoint(20, 20));
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(display->isVisible());
+    display->setActiveAction(action);
+    EXPECT_TRUE(action->isCheckable());
+    EXPECT_TRUE(action->isChecked());
+    row_bounds = display->actionGeometry(action);
+    EXPECT_TRUE(display->rect().contains(row_bounds));
+    EXPECT_GE(row_bounds.height(), scale_controller.metrics().px(28));
+    EXPECT_GT(row_bounds.height(), display->fontMetrics().height());
+    const int indicator_width = display->style()->pixelMetric(
+        QStyle::PM_IndicatorWidth, nullptr, display);
+    EXPECT_GE(row_bounds.width(),
+              display->fontMetrics().horizontalAdvance(action->text()) +
+                  indicator_width + scale_controller.metrics().px(12));
+    const QString review_directory =
+        qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(review_directory));
+      QImage image(display->size(), QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      display->render(&image);
+      EXPECT_TRUE(image.save(QDir(review_directory).filePath(filename)));
+    }
+    display->close();
+    QCoreApplication::processEvents();
+  };
+  QRect english_100;
+  review_display(QStringLiteral("dimensions-display-menu-en-100.png"),
+                 english_100);
+  ASSERT_TRUE(scale_controller.apply_factor(2.0F));
+  QRect english_200;
+  review_display(QStringLiteral("dimensions-display-menu-en-200.png"),
+                 english_200);
+  EXPECT_GT(english_200.height(), english_100.height());
+  EXPECT_GT(english_200.width(), english_100.width());
+
+  action->trigger();
+  menu_->refresh();
+  EXPECT_FALSE(action->isChecked());
+  EXPECT_FALSE(editor_->preferences().dimensions_visible());
+  EXPECT_FALSE(ViewportSettings::load(preferences_path)
+                   .bool_value(ViewportBoolSettingId::ShowDimensions));
+  EXPECT_TRUE(viewport_settings_.bool_value(ViewportBoolSettingId::ShowOverlays));
+  EXPECT_TRUE(
+      viewport_settings_.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
+
+  ASSERT_TRUE(editor_->commands()
+                  .execute(quader_command::kViewportToggleDimensions)
+                  .changed());
+  menu_->refresh();
+  EXPECT_TRUE(action->isChecked());
+  EXPECT_TRUE(ViewportSettings::load(preferences_path)
+                  .bool_value(ViewportBoolSettingId::ShowDimensions));
+  EXPECT_FALSE(editor_->preferences().set_dimensions_visible(true).changed());
+
+  ASSERT_TRUE(localization_.select_locale("it-IT"));
+  menu_->rebuild();
+  display = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_view_display"));
+  action = menu_bar_->findChild<QAction *>(
+      QStringLiteral("command_viewport_toggle_dimensions"));
+  ASSERT_NE(display, nullptr);
+  ASSERT_NE(action, nullptr);
+  menu_->refresh();
+  EXPECT_EQ(action->text(), QStringLiteral("Attiva o disattiva quote"));
+  EXPECT_TRUE(action->isChecked());
+  QRect italian_200;
+  review_display(QStringLiteral("dimensions-display-menu-it-200.png"),
+                 italian_200);
+  ASSERT_TRUE(scale_controller.apply_factor(1.0F));
+  QRect italian_restored;
+  review_display(QStringLiteral("dimensions-display-menu-it-restored-100.png"),
+                 italian_restored);
+  EXPECT_EQ(italian_restored.height(), english_100.height());
+  EXPECT_LT(italian_restored.width(), italian_200.width());
 }
 
 TEST_F(QtFileMenuTests, RecentScenesRefreshOnlyWhenOpenedAndKeepFiveEntries) {

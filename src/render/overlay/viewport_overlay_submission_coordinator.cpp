@@ -7,11 +7,19 @@
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "math/glm_bridge.hpp"
 #include "render/render_signature_builder.hpp"
+#include "render/render_scene_snapshot.hpp"
+#include "render/overlay/overlay_camera_projector.hpp"
+#include "render/overlay/viewport_overlay_dash.hpp"
+#include "render/overlay/viewport_selection_dimension_geometry.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -136,6 +144,396 @@ std::uint64_t overlay_record_count(const ViewportOverlayFrame &frame) {
          static_cast<std::uint64_t>(frame.icons.size());
 }
 
+void include_dimension_point(std::optional<ViewportSelectionDimensionBounds> &bounds,
+                             QVec3 point) {
+  if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) return;
+  if (!bounds) {
+    bounds = ViewportSelectionDimensionBounds{point, point};
+    return;
+  }
+  bounds->min = {std::min(bounds->min.x, point.x),
+                 std::min(bounds->min.y, point.y),
+                 std::min(bounds->min.z, point.z)};
+  bounds->max = {std::max(bounds->max.x, point.x),
+                 std::max(bounds->max.y, point.y),
+                 std::max(bounds->max.z, point.z)};
+}
+
+bool same_dimension_bounds(const std::optional<ViewportSelectionDimensionBounds> &a,
+                           const std::optional<ViewportSelectionDimensionBounds> &b) {
+  if (a.has_value() != b.has_value()) return false;
+  return !a || (a->min.x == b->min.x && a->min.y == b->min.y && a->min.z == b->min.z &&
+                a->max.x == b->max.x && a->max.y == b->max.y && a->max.z == b->max.z);
+}
+
+// Clip before dash subdivision so near-plane and offscreen edges cannot create
+// unbounded dash geometry. Parameters returned here remain screen-linear.
+bool clip_dimension_screen_edge(QVec2 start, QVec2 end, QVec2 viewport,
+                                float &start_t, float &end_t) {
+  const QVec2 delta = end - start;
+  start_t = 0.0f;
+  end_t = 1.0f;
+  const auto clip = [&](float denominator, float numerator) {
+    if (denominator == 0.0f) return numerator >= 0.0f;
+    const float t = numerator / denominator;
+    if (denominator < 0.0f) start_t = std::max(start_t, t);
+    else end_t = std::min(end_t, t);
+    return start_t <= end_t;
+  };
+  return clip(-delta.x, start.x) && clip(delta.x, viewport.x - start.x) &&
+         clip(-delta.y, start.y) && clip(delta.y, viewport.y - start.y);
+}
+
+void append_dimension_dashes(ViewportOverlayFrame &frame,
+                             const OverlayCameraProjector &projector,
+                             QVec3 start, QVec3 end, float raster_scale) {
+  const auto &camera = projector.camera();
+  const float start_depth = -projector.view_point_for(start).z;
+  const float end_depth = -projector.view_point_for(end).z;
+  const float depth_delta = end_depth - start_depth;
+  float start_t = 0.0f;
+  float end_t = 1.0f;
+  if (depth_delta == 0.0f) {
+    if (start_depth < camera.near_plane || start_depth > camera.far_plane) return;
+  } else {
+    const float near_t = (camera.near_plane - start_depth) / depth_delta;
+    const float far_t = (camera.far_plane - start_depth) / depth_delta;
+    start_t = std::max(start_t, std::min(near_t, far_t));
+    end_t = std::min(end_t, std::max(near_t, far_t));
+    if (start_t >= end_t) return;
+  }
+  const QVec3 delta = end - start;
+  const QVec3 clipped_start = start + delta * start_t;
+  const QVec3 clipped_end = start + delta * end_t;
+  const auto view_start = projector.view_point_for(clipped_start);
+  const auto view_end = projector.view_point_for(clipped_end);
+  const auto screen_start = projector.project(view_start);
+  const auto screen_end = projector.project(view_end);
+  if (!screen_start.valid || !screen_end.valid ||
+      !std::isfinite(screen_start.pixel.x) || !std::isfinite(screen_start.pixel.y) ||
+      !std::isfinite(screen_end.pixel.x) || !std::isfinite(screen_end.pixel.y)) return;
+  if (!clip_dimension_screen_edge(screen_start.pixel, screen_end.pixel,
+                                  camera.viewport_size, start_t, end_t)) return;
+  const QVec2 screen_delta = screen_end.pixel - screen_start.pixel;
+  const QVec3 clipped_delta = clipped_end - clipped_start;
+  const auto world_point = [&](float screen_t) {
+    // Perspective projection is linear in reciprocal depth, not world distance.
+    const float world_t = camera.projection == ViewportOverlayProjection::Perspective
+        ? screen_t * view_start.z /
+              ((1.0f - screen_t) * view_end.z + screen_t * view_start.z)
+        : screen_t;
+    return clipped_start + clipped_delta * world_t;
+  };
+  append_viewport_overlay_dashed_edge(
+      screen_start.pixel + screen_delta * start_t,
+      screen_start.pixel + screen_delta * end_t, true,
+      [&](QVec2, QVec2, float dash_start, float dash_end) {
+        frame.lines.push_back({
+            .layer = ViewportOverlayLayer::GroupBounds,
+            .start = world_point(start_t + (end_t - start_t) * dash_start),
+            .end = world_point(start_t + (end_t - start_t) * dash_end),
+            .style_role = ViewportOverlayStyleRole::GroupBounds,
+            .source = ViewportOverlaySource::SelectionDimensions,
+        });
+      }, raster_scale);
+}
+
+ViewportOverlayFrame build_selection_dimension_frame(
+    const ViewportSelectionDimensionBounds &bounds,
+    const ViewportOverlayCamera &camera, float raster_scale) {
+  ViewportOverlayFrame frame;
+  const OverlayCameraProjector projector(camera);
+  const auto spans = viewport_selection_dimension_spans(
+      bounds, camera, viewport_host_defaults().map_units_per_world_unit);
+  const std::array<float, 3u> minimum{bounds.min.x, bounds.min.y, bounds.min.z};
+  const std::array<float, 3u> maximum{bounds.max.x, bounds.max.y, bounds.max.z};
+  const auto same_point = [](QVec3 a, QVec3 b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+  };
+  for (std::size_t axis = 0u; axis < 3u; ++axis) {
+    if (minimum[axis] == maximum[axis]) continue;
+    for (std::size_t corner = 0u; corner < 8u; ++corner) {
+      if ((corner & (1u << axis)) != 0u) continue;
+      bool duplicate = false;
+      for (std::size_t fixed_axis = 0u; fixed_axis < 3u; ++fixed_axis) {
+        duplicate = duplicate || (minimum[fixed_axis] == maximum[fixed_axis] &&
+                                 (corner & (1u << fixed_axis)) != 0u);
+      }
+      if (duplicate) continue;
+      const QVec3 start{(corner & 1u) ? maximum[0] : minimum[0],
+                        (corner & 2u) ? maximum[1] : minimum[1],
+                        (corner & 4u) ? maximum[2] : minimum[2]};
+      QVec3 end = start;
+      if (axis == 0u) end.x = maximum[0];
+      if (axis == 1u) end.y = maximum[1];
+      if (axis == 2u) end.z = maximum[2];
+      if (spans[axis] &&
+          ((same_point(spans[axis]->start, start) && same_point(spans[axis]->end, end)) ||
+           (same_point(spans[axis]->start, end) && same_point(spans[axis]->end, start)))) {
+        continue;
+      }
+      append_dimension_dashes(frame, projector, start, end, raster_scale);
+    }
+  }
+  constexpr std::array kAxisColors{kOverlayToolAxisXColor, kOverlayToolAxisYColor,
+                                    kOverlayToolAxisZColor};
+  for (std::size_t axis = 0u; axis < spans.size(); ++axis) {
+    if (!spans[axis]) continue;
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::GroupBounds,
+        .start = spans[axis]->start,
+        .end = spans[axis]->end,
+        .color = kAxisColors[axis],
+        .width_pixels = kOverlaySelectionDimensionLineWidthPixels,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::SelectionDimensions,
+    });
+  }
+  return frame;
+}
+
+void strip_replaced_selection_cages(ViewportOverlayFrame &frame) {
+  std::erase_if(frame.lines, [](const ViewportOverlayLine &line) {
+    return line.source == ViewportOverlaySource::GroupBounds ||
+           (line.source == ViewportOverlaySource::Tool &&
+            line.layer == ViewportOverlayLayer::GroupBounds &&
+            line.style_role == ViewportOverlayStyleRole::GroupBounds);
+  });
+}
+
+bool dimension_selection_source(ViewportOverlaySource source) {
+  return source == ViewportOverlaySource::Selection ||
+         source == ViewportOverlaySource::ComponentSelection;
+}
+
+std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds(
+    const ViewportOverlaySubmissionRequest &request,
+    const ViewportOverlayFrame *selection,
+    const RenderOverlaySelectionSnapshot *scene,
+    ViewportOverlaySubmissionWorkCounters &work) {
+  const bool component = request.scene_selection_mode == RenderOverlaySelectionMode::Component;
+  std::optional<ViewportSelectionDimensionBounds> bounds;
+  std::unordered_map<int, std::unordered_map<int, QVec3>> preview_positions;
+  std::unordered_map<const RenderToolPreviewMeshRecord *, ViewportSelectionDimensionBounds>
+      preview_bounds;
+  for (const RenderToolPreviewMeshRecord &preview : request.selection_dimension_preview_meshes) {
+    const auto &vertices = preview.mesh.geometry().vertices;
+    const bool dynamic = preview.dynamic_positions && preview.dynamic_position_payload &&
+                         preview.dynamic_position_payload->size() == vertices.size();
+    if (component) {
+      if (!dynamic || preview.source_object_id < 0) continue;
+      auto &positions = preview_positions[preview.source_object_id];
+      positions.reserve(vertices.size());
+      for (std::size_t index = 0u; index < vertices.size(); ++index) {
+        positions.try_emplace(static_cast<int>(vertices[index].source_vertex_id),
+            transform_point(preview.transform, (*preview.dynamic_position_payload)[index]));
+      }
+      work.selection_dimension_source_record_count += vertices.size();
+    } else if (preview.suppress_source) {
+      std::optional<ViewportSelectionDimensionBounds> candidate;
+      const auto append_at = [&](const QMat4 &world) {
+        for (std::size_t index = 0u; index < vertices.size(); ++index) {
+          include_dimension_point(candidate, transform_point(world, dynamic
+              ? (*preview.dynamic_position_payload)[index] : vertices[index].position));
+        }
+        work.selection_dimension_source_record_count += vertices.size();
+      };
+      if (preview.instance_transforms.empty()) append_at(preview.transform);
+      else for (const QMat4 &world : preview.instance_transforms) append_at(world);
+      if (candidate) preview_bounds.emplace(&preview, *candidate);
+    }
+  }
+  const auto append_preview = [&](const RenderToolPreviewMeshRecord &preview) {
+    const auto found = preview_bounds.find(&preview);
+    if (found == preview_bounds.end()) return false;
+    include_dimension_point(bounds, found->second.min);
+    include_dimension_point(bounds, found->second.max);
+    return true;
+  };
+  const auto append_entity_preview = [&](EntityId entity) {
+    bool replaced = false;
+    for (const auto &[preview, candidate] : preview_bounds) {
+      if (preview->source_entity == entity || preview->visibility_entity == entity) {
+        include_dimension_point(bounds, candidate.min);
+        include_dimension_point(bounds, candidate.max);
+        replaced = true;
+      }
+    }
+    return replaced;
+  };
+  const auto leaf_preview_matches = [](const RenderToolPreviewMeshRecord &preview,
+                                       EntityId entity, EntityId occurrence,
+                                       EntityId definition, EntityId member) {
+    if (occurrence != kInvalidEntityId) {
+      return (preview.visibility_entity == occurrence ||
+              preview.source_entity == occurrence ||
+              preview.visibility_entity == kInvalidEntityId) &&
+             (preview.source_entity == member || preview.source_entity == definition ||
+              preview.source_entity == occurrence);
+    }
+    return preview.source_entity == entity;
+  };
+  const auto append_leaf = [&](EntityId entity, EntityId occurrence, EntityId definition,
+                                EntityId member, const QMat4 &world,
+                                std::span<const MeshVertex> vertices) {
+    bool replaced = false;
+    for (const auto &[preview, candidate] : preview_bounds) {
+      if (leaf_preview_matches(*preview, entity, occurrence, definition, member)) {
+        include_dimension_point(bounds, candidate.min);
+        include_dimension_point(bounds, candidate.max);
+        replaced = true;
+      }
+    }
+    if (!replaced) {
+      for (const auto &vertex : vertices) {
+        include_dimension_point(bounds, transform_point(world, vertex.position));
+      }
+      work.selection_dimension_source_record_count += vertices.size();
+    }
+  };
+  const auto curve_preview = [&](EntityId entity)
+      -> const ViewportSelectionDimensionBounds * {
+    for (const auto &preview : request.selection_dimension_preview_curves) {
+      if (preview.source_entity == entity && preview.suppress_source &&
+          preview.selection_dimension_bounds) {
+        return &*preview.selection_dimension_bounds;
+      }
+    }
+    return nullptr;
+  };
+  if (!component && scene != nullptr) {
+    for (const RenderOverlayBoundsSnapshot &selected : scene->selected_mesh_bounds) {
+      bool member_preview = false;
+      const auto *selected_objects = request.selected_mesh_outline_snapshot;
+      if (selected_objects != nullptr && !preview_bounds.empty()) {
+        for (const auto &member : selected_objects->instance_selection_fills) {
+          if (member.occurrence != selected.entity) continue;
+          for (const auto &[preview, candidate] : preview_bounds) {
+            if (leaf_preview_matches(*preview, member.occurrence, member.occurrence,
+                                      member.definition, member.member)) member_preview = true;
+          }
+        }
+      }
+      if (member_preview) {
+        for (const auto &member : selected_objects->instance_selection_fills) {
+          if (member.occurrence == selected.entity) {
+            append_leaf(member.occurrence, member.occurrence, member.definition,
+                        member.member, member.world_transform, member.vertices);
+          }
+        }
+        continue;
+      }
+      if (!append_entity_preview(selected.entity)) {
+        include_dimension_point(bounds, selected.min);
+        include_dimension_point(bounds, selected.max);
+      }
+    }
+    for (const RenderOverlayBoundsSnapshot &group : scene->group_bounds) {
+      bool replaced = false;
+      const auto *suppression = request.selection_dimension_preview_suppression;
+      const bool suppressed = suppression != nullptr &&
+          std::ranges::find(suppression->entities, group.entity) != suppression->entities.end();
+      if (!preview_bounds.empty() || !request.selection_dimension_preview_curves.empty()) {
+        bool leaf_preview = false;
+        for (const auto &mesh : scene->hierarchy_selection_wires) {
+          if (mesh.selection_root != group.entity) continue;
+          for (const auto &[preview, candidate] : preview_bounds) {
+            if (leaf_preview_matches(*preview, mesh.entity, mesh.occurrence,
+                                      mesh.definition, mesh.member)) leaf_preview = true;
+          }
+        }
+        for (const auto &curve : scene->curves) {
+          if (curve.selection_root == group.entity && curve_preview(curve.entity) != nullptr) {
+            leaf_preview = true;
+          }
+        }
+        if (leaf_preview) {
+          for (const auto &mesh : scene->hierarchy_selection_wires) {
+            if (mesh.selection_root == group.entity) {
+              append_leaf(mesh.entity, mesh.occurrence, mesh.definition, mesh.member,
+                          mesh.world_transform, mesh.vertices);
+            }
+          }
+          for (const auto &curve : scene->curves) {
+            if (curve.selection_root != group.entity) continue;
+            const auto *current = curve_preview(curve.entity);
+            if (current == nullptr && curve.selection_dimension_bounds) {
+              current = &*curve.selection_dimension_bounds;
+            }
+            if (current != nullptr) {
+              include_dimension_point(bounds, current->min);
+              include_dimension_point(bounds, current->max);
+            }
+          }
+          replaced = true;
+        }
+      }
+      if (!replaced && suppressed) {
+        for (const auto &marker : request.selection_dimension_preview_groups) {
+          if (marker.source_entity != group.entity) continue;
+          for (const QMat4 &world : marker.instance_transforms) {
+            for (unsigned corner = 0; corner < 8; ++corner) {
+              include_dimension_point(bounds, transform_point(world, {
+                  (corner & 1u) ? marker.local_max.x : marker.local_min.x,
+                  (corner & 2u) ? marker.local_max.y : marker.local_min.y,
+                  (corner & 4u) ? marker.local_max.z : marker.local_min.z}));
+            }
+            replaced = true;
+          }
+        }
+      }
+      if (!replaced) {
+        include_dimension_point(bounds, group.min);
+        include_dimension_point(bounds, group.max);
+      }
+    }
+    work.selection_dimension_source_record_count +=
+        scene->selected_mesh_bounds.size() + scene->group_bounds.size();
+  }
+  if (selection != nullptr) {
+    std::unordered_set<int> replaced_objects;
+    const auto append_point = [&](int object, int vertex, QVec3 point) {
+      if (component) {
+        const auto object_positions = preview_positions.find(object);
+        if (object_positions != preview_positions.end()) {
+          const auto position = object_positions->second.find(vertex);
+          if (position != object_positions->second.end()) point = position->second;
+        }
+      } else {
+        if (replaced_objects.contains(object)) return;
+        bool replaced = false;
+        for (const auto &preview : request.selection_dimension_preview_meshes) {
+          if (preview.source_object_id == object && append_preview(preview)) replaced = true;
+        }
+        if (replaced) {
+          replaced_objects.insert(object);
+          return;
+        }
+      }
+      include_dimension_point(bounds, point);
+    };
+    for (const auto &line : selection->lines) {
+      if (!dimension_selection_source(line.source) ||
+          (line.layer != ViewportOverlayLayer::SelectedFaceEdge &&
+           (component || line.layer != ViewportOverlayLayer::SelectedEdge))) continue;
+      append_point(line.element.object_id, line.element.edge_a, line.start);
+      append_point(line.element.object_id, line.element.edge_b, line.end);
+    }
+    for (const auto &triangle : selection->triangles) {
+      if (!dimension_selection_source(triangle.source) ||
+          (triangle.layer != ViewportOverlayLayer::SelectedVisibleFace &&
+           triangle.layer != ViewportOverlayLayer::SelectedXrayFace &&
+           triangle.layer != ViewportOverlayLayer::SelectedFaceMask)) continue;
+      append_point(triangle.element.object_id, triangle.element.vertex_id, triangle.a);
+      append_point(triangle.element.object_id, triangle.element.edge_a, triangle.b);
+      append_point(triangle.element.object_id, triangle.element.edge_b, triangle.c);
+    }
+    work.selection_dimension_source_record_count +=
+        selection->lines.size() + selection->triangles.size();
+  }
+  return bounds;
+}
+
 ViewportOverlaySceneSubmissionStamp scene_submission_stamp(
     const RenderOverlaySelectionSnapshot *snapshot,
     bool scene_overlay_requested) {
@@ -171,7 +569,7 @@ ViewportOverlayFrame build_persistent_frame(
     const ViewportOverlaySubmissionRequest &request,
     const ViewportSettings &settings,
     const ViewportOverlayFrame *selection_overlay_frame,
-    bool selection_overlay_visible) {
+    bool selection_overlay_visible, bool dimension_box_visible) {
   ViewportOverlayFrame frame;
   if (selection_overlay_visible && selection_overlay_frame != nullptr) {
     QDR_PROFILE_SCOPE("Viewport overlay copy cached selection frame");
@@ -215,6 +613,7 @@ ViewportOverlayFrame build_persistent_frame(
   if (uses_mesh_outlines(request)) strip_mesh_selection_wires(frame);
   if (request.wireframe_pane) strip_wireframe_point_occluders(frame);
   strip_component_source_wires_under_selection(frame);
+  if (dimension_box_visible) strip_replaced_selection_cages(frame);
   return frame;
 }
 
@@ -263,6 +662,64 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       result.selection_source_refreshed = true;
     }
   }
+  const bool dimensions_visible = request.overlays_visible &&
+      request.selection_dimensions_visible &&
+      (request.scene_selection_mode != RenderOverlaySelectionMode::Component ||
+       request.style_selection_context == ViewportOverlaySelectionContext::Face);
+  if (dimensions_visible) {
+    const RenderOverlaySelectionSnapshot *dimension_scene =
+        request.scene_overlay_requested
+            ? (request.selection_dimension_scene_snapshot != nullptr
+                   ? request.selection_dimension_scene_snapshot : request.scene_overlay_snapshot)
+            : nullptr;
+    const auto dimension_scene_stamp = scene_submission_stamp(dimension_scene,
+                                                              dimension_scene != nullptr);
+    const std::uint64_t selection_revision = selection_overlay_visible
+        ? selection_source_.publication_revision : 0u;
+    if (!selection_dimensions_.valid ||
+        selection_dimensions_.selection_overlay_revision != selection_revision ||
+        selection_dimensions_.scene != dimension_scene_stamp ||
+        selection_dimensions_.tool_preview_identity != request.tool_preview_overlay_identity ||
+        selection_dimensions_.tool_preview_revision != request.tool_preview_overlay_revision ||
+        selection_dimensions_.mode != request.scene_selection_mode ||
+        selection_dimensions_.context != request.style_selection_context) {
+      auto bounds = selection_dimension_bounds(request,
+          selection_overlay_visible ? &selection_source_.frame : nullptr,
+          dimension_scene, work_counters_);
+      ++work_counters_.selection_dimension_bounds_build_count;
+      if (!selection_dimensions_.valid ||
+          !same_dimension_bounds(selection_dimensions_.bounds, bounds)) {
+        selection_dimensions_.publication_revision = ++selection_dimension_publication_revision_;
+      }
+      selection_dimensions_.selection_overlay_revision = selection_revision;
+      selection_dimensions_.scene = dimension_scene_stamp;
+      selection_dimensions_.tool_preview_identity = request.tool_preview_overlay_identity;
+      selection_dimensions_.tool_preview_revision = request.tool_preview_overlay_revision;
+      selection_dimensions_.mode = request.scene_selection_mode;
+      selection_dimensions_.context = request.style_selection_context;
+      selection_dimensions_.bounds = bounds;
+      selection_dimensions_.valid = true;
+    }
+    result.selection_dimension_bounds = selection_dimensions_.bounds;
+    result.selection_dimension_signature = selection_dimensions_.publication_revision;
+  }
+  const bool dimension_box_visible = result.selection_dimension_bounds.has_value();
+  ViewportOverlaySelectionDimensionSubmissionStamp dimension_stamp;
+  if (dimension_box_visible) {
+    dimension_stamp = {
+        .bounds_revision = result.selection_dimension_signature,
+        .camera_values = {request.camera.eye.x, request.camera.eye.y, request.camera.eye.z,
+                          request.camera.right.x, request.camera.right.y, request.camera.right.z,
+                          request.camera.up.x, request.camera.up.y, request.camera.up.z,
+                          request.camera.forward.x, request.camera.forward.y, request.camera.forward.z,
+                          request.camera.viewport_size.x, request.camera.viewport_size.y,
+                          request.camera.orthographic_size, request.camera.fov_degrees,
+                          request.camera.near_plane, request.camera.far_plane},
+        .projection = request.camera.projection,
+        .raster_scale = request.raster_scale,
+        .active = true,
+    };
+  }
   const ViewportOverlayPersistentSubmissionStamp persistent_stamp{
       .selection_overlay_revision =
           selection_overlay_visible && selection_source_.valid
@@ -280,6 +737,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       .scene_overlay_requested = request.scene_overlay_requested,
       .wireframe_pane = request.wireframe_pane,
       .point_light_gizmos_visible = request.point_light_gizmos_visible,
+      .selection_dimension_box_visible = dimension_box_visible,
   };
   const bool point_light_radius_enabled =
       request.overlays_visible && request.point_light_gizmos_visible &&
@@ -324,6 +782,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
   const ViewportOverlayDynamicSubmissionStamp dynamic_stamp{
       .mesh_outline_revision = mesh_outline_source_.revision(request.viewport_index),
       .point_light_radius = point_light_radius,
+      .selection_dimensions = dimension_stamp,
       .dynamic_tools = request.dynamic_tool_source,
       .volatile_modeling =
           request.overlays_visible
@@ -384,7 +843,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
             selection_overlay_visible && selection_source_.valid
                 ? &selection_source_.frame
                 : nullptr,
-            selection_overlay_visible),
+            selection_overlay_visible, dimension_box_visible),
         request.camera);
     pane.persistent = persistent_stamp;
     pane.persistent_valid = true;
@@ -418,6 +877,13 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
   }
 
   if (dynamic_changed) {
+    if (!pane.dynamic_valid || pane.dynamic.selection_dimensions != dimension_stamp) {
+      pane.selection_dimension_frame = dimension_box_visible
+          ? build_selection_dimension_frame(*result.selection_dimension_bounds,
+                                            request.camera, request.raster_scale)
+          : ViewportOverlayFrame{};
+      if (dimension_box_visible) ++work_counters_.selection_dimension_frame_build_count;
+    }
     if (!pane.dynamic_valid ||
         pane.dynamic.point_light_radius != point_light_radius) {
       if (point_light_radius.active) {
@@ -438,6 +904,8 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     const ViewportOverlayFrame &curve_overlay_frame =
         curve_overlay_source_.frame(curve_preview);
     append_overlay_frame(dynamic_frame, curve_overlay_frame);
+    if (dimension_box_visible) strip_replaced_selection_cages(dynamic_frame);
+    append_overlay_frame(dynamic_frame, pane.selection_dimension_frame);
     ViewportOverlayStyleResolver::apply(
         dynamic_frame, settings,
         ViewportOverlayStyleContext{
@@ -469,6 +937,7 @@ void ViewportOverlaySubmissionCoordinator::invalidate(
 void ViewportOverlaySubmissionCoordinator::invalidate_all() {
   panes_ = {};
   selection_source_ = {};
+  selection_dimensions_ = {};
   curve_overlay_source_.reset();
   mesh_outline_source_.reset();
 }

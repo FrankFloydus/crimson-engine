@@ -183,6 +183,10 @@ public:
         tool_preview_occurrence_suppressions_;
     RenderToolPreviewSuppressionSnapshot tool_preview_suppression_;
     ViewportOverlayFrame tool_preview_overlay_frame_;
+    /// Pins the accepted candidate for CPU selection measurements as well as GPU streams.
+    std::vector<RenderToolPreviewMeshRecord> selection_dimension_preview_meshes_;
+    std::vector<RenderToolPreviewGroupMarkerRecord> selection_dimension_preview_groups_;
+    std::vector<RenderToolPreviewCurveRecord> selection_dimension_preview_curves_;
     std::uint64_t tool_preview_overlay_revision_ = 0u;
     RenderOverlaySelectionSnapshot filtered_scene_overlay_snapshot_;
     RenderOverlayCollisionSnapshot filtered_collision_snapshot_;

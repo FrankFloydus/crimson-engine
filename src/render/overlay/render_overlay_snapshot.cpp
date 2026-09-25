@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -441,24 +442,38 @@ std::optional<RenderOverlayCurveSnapshot> curve_snapshot_for_entity(
     return std::nullopt;
   }
 
+  EntityId selection_root = kInvalidEntityId;
   bool selected = false;
   for (EntityId ancestor = entity; ancestor != kInvalidEntityId;
        ancestor = document.parent(ancestor)) {
     if (const SelectionComponent *selection = document.selection(ancestor);
         selection != nullptr && selection->selected) {
       selected = true;
-      break;
+      if (local_visibility_allows(local_visibility, ancestor)) {
+        selection_root = ancestor;
+      }
+    }
+  }
+  const QMat4 world_transform = document.world_transform_matrix(entity);
+  std::optional<ViewportSelectionDimensionBounds> dimension_bounds;
+  if (selection_root != kInvalidEntityId) {
+    if (const auto bounds = curve_world_bounds(*curve, *binding,
+                                              world_transform)) {
+      dimension_bounds = ViewportSelectionDimensionBounds{
+          .min = bounds->min, .max = bounds->max};
     }
   }
   const ModelingObjectComponent *object = document.modeling_object(entity);
   return RenderOverlayCurveSnapshot{
       .entity = entity,
+      .selection_root = selection_root,
       .curve_id = binding->curve,
       .curve_revision = curve->revision.value,
       .modeling_object_id = object != nullptr ? object->object_id : -1,
       .sample_payload = curve_sample_payload(*curve),
-      .world_transform = document.world_transform_matrix(entity),
+      .world_transform = world_transform,
       .selected = selected,
+      .selection_dimension_bounds = dimension_bounds,
   };
 }
 
@@ -545,9 +560,13 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
             !hierarchy_mesh_entities.insert(descendant).second) {
           continue;
         }
+        const std::size_t wire_begin = snapshot.hierarchy_selection_wires.size();
         append_display_wire_meshes(snapshot.hierarchy_selection_wires,
                                    document, assets, *mesh_projection,
                                    descendant, local_visibility, false);
+        for (std::size_t index = wire_begin; index < snapshot.hierarchy_selection_wires.size(); ++index) {
+          snapshot.hierarchy_selection_wires[index].selection_root = entity;
+        }
       }
     }
 
@@ -1150,6 +1169,19 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
   }
   for (RenderOverlayCurveSnapshot &curve : selection_snapshot_.curves) {
     curve.world_transform = document.world_transform_matrix(curve.entity);
+    if (curve.selection_root != kInvalidEntityId) {
+      const CurveComponent *binding = document.curve(curve.entity);
+      const CurveAsset *asset = assets.curve(curve.curve_id);
+      if (binding == nullptr || asset == nullptr) {
+        return false;
+      }
+      const auto bounds = curve_world_bounds(*asset, *binding,
+                                             curve.world_transform);
+      curve.selection_dimension_bounds = bounds
+          ? std::optional{ViewportSelectionDimensionBounds{
+                .min = bounds->min, .max = bounds->max}}
+          : std::nullopt;
+    }
   }
 
   static_cast<RenderSourceStamp &>(selection_snapshot_) = current;
@@ -1172,14 +1204,49 @@ void RenderOverlaySnapshotCache::refresh_selection_curves(
     const SceneDocument &document, const AssetRegistry &assets,
     const RenderSourceStamp &current,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
+  const auto same_bounds = [](const auto &left, const auto &right) {
+    if (left.has_value() != right.has_value()) return false;
+    return !left ||
+        (left->min.x == right->min.x && left->min.y == right->min.y &&
+         left->min.z == right->min.z && left->max.x == right->max.x &&
+         left->max.y == right->max.y && left->max.z == right->max.z);
+  };
   const std::vector<EntityId> curve_entities = document.curve_entities();
+  std::unordered_map<EntityId, const RenderOverlayCurveSnapshot *> previous_curves;
+  previous_curves.reserve(selection_snapshot_.curves.size());
+  for (const RenderOverlayCurveSnapshot &curve : selection_snapshot_.curves) {
+    previous_curves.emplace(curve.entity, &curve);
+  }
+  std::unordered_set<EntityId> affected_ancestors;
   std::vector<RenderOverlayCurveSnapshot> curves;
   curves.reserve(curve_entities.size());
   for (const EntityId entity : curve_entities) {
     if (std::optional<RenderOverlayCurveSnapshot> curve =
             curve_snapshot_for_entity(document, assets, entity,
                                       local_visibility)) {
+      const auto previous = previous_curves.find(entity);
+      const bool changed = previous == previous_curves.end() ||
+          previous->second->curve_id != curve->curve_id ||
+          previous->second->curve_revision != curve->curve_revision ||
+          previous->second->sample_payload != curve->sample_payload ||
+          !same_bounds(previous->second->selection_dimension_bounds,
+                       curve->selection_dimension_bounds);
+      if (changed) {
+        for (EntityId ancestor = document.parent(entity);
+             ancestor != kInvalidEntityId; ancestor = document.parent(ancestor)) {
+          affected_ancestors.insert(ancestor);
+        }
+      }
       curves.push_back(std::move(*curve));
+    }
+  }
+  for (RenderOverlayBoundsSnapshot &group : selection_snapshot_.group_bounds) {
+    if (affected_ancestors.contains(group.entity)) {
+      if (const auto bounds =
+              entity_hierarchy_world_bounds(document, assets, group.entity)) {
+        group.min = bounds->min;
+        group.max = bounds->max;
+      }
     }
   }
   stats_.selection_curve_entity_visit_count += curve_entities.size();

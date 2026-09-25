@@ -132,6 +132,7 @@ enum class ViewportBoolSettingId {
     TextureLock,
     TextureLockScale,
     ShowCollisions,
+    ShowDimensions,
     Count,
 };
 

@@ -684,6 +684,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kViewportToggleOverlays)) {
     return "Toggle Viewport Overlays";
   }
+  if (is(quader_command::kViewportToggleDimensions)) {
+    return "Toggle Selection Dimensions";
+  }
   if (is(quader_command::kViewportToggleCollisions)) {
     return "Toggle Collision Display";
   }
@@ -907,6 +910,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleOverlays.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kViewportToggleDimensions.string()) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleCollisions.string()) {
@@ -3068,6 +3074,11 @@ void QuaderCommandsApi::Impl::register_commands() {
                    });
   // These display switches are bindable commands, deliberately unassigned by
   // default. Menus and other retained controls dispatch through these routes.
+  register_command(quader_command::kViewportToggleDimensions,
+                   "Toggle Dimensions", [this] {
+                     return preferences_.set_dimensions_visible(
+                         !preferences_.dimensions_visible());
+                   });
   register_command(quader_command::kViewportToggleCollisions,
                    "Collisions", [this] {
                      return preferences_.set_collisions_visible(

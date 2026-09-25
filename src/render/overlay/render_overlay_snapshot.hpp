@@ -35,12 +35,15 @@ struct RenderToolPreviewSuppressionSnapshot;
 /// Pins one visible authored curve and its derived local samples for rendering.
 struct RenderOverlayCurveSnapshot {
   EntityId entity = kInvalidEntityId;
+  /// Outermost selected hierarchy root whose dimensions include this curve.
+  EntityId selection_root = kInvalidEntityId;
   AssetId curve_id = kInvalidAssetId;
   std::uint64_t curve_revision = 0;
   int modeling_object_id = -1;
   std::shared_ptr<const CurveSamplePayload> sample_payload;
   QMat4 world_transform;
   bool selected = false;
+  std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds;
 };
 
 /**
@@ -49,6 +52,8 @@ struct RenderOverlayCurveSnapshot {
  */
 struct RenderOverlayMeshSnapshot {
   EntityId entity = kInvalidEntityId;
+  /// Selected hierarchy root owning this leaf, when published as hierarchy wire.
+  EntityId selection_root = kInvalidEntityId;
   // Expanded instance records retain their canonical identity so transient
   // preview suppression can target one member in one occurrence precisely.
   EntityId occurrence = kInvalidEntityId;

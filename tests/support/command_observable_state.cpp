@@ -1663,6 +1663,8 @@ std::string capture_preferences(const CaptureData &data) {
               bool_text(preferences.mesh_grid_visible()));
   writer.line("preferences.overlays_visible",
               bool_text(preferences.overlays_visible()));
+  writer.line("preferences.dimensions_visible",
+              bool_text(preferences.dimensions_visible()));
   writer.line("preferences.collisions_visible",
               bool_text(preferences.collisions_visible()));
   writer.line("preferences.grid_snap",

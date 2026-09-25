@@ -291,6 +291,10 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Domain::Preferences | Domain::Viewport | Domain::Overlay |
                    Domain::Revisions,
                Outcome::ChangeRequired),
+      contract(quader_command::kViewportToggleDimensions, Fixture::Viewport,
+               Domain::Preferences | Domain::Viewport | Domain::Overlay |
+                   Domain::Revisions,
+               Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleCollisions, Fixture::Viewport,
                Domain::Preferences | Domain::Viewport | Domain::Overlay |
                    Domain::Revisions,
@@ -803,9 +807,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 221U);
+  static_assert(std::size(kContracts) == 222U);
 #else
-  static_assert(std::size(kContracts) == 220U);
+  static_assert(std::size(kContracts) == 221U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

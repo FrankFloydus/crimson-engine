@@ -1180,6 +1180,8 @@ void QtViewportPanel::prepare_viewports(
       settings.bool_value(ViewportBoolSettingId::ShowOverlays);
   const bool hover_dimensions_visible =
       settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions);
+  const bool selection_dimensions_visible =
+      settings.bool_value(ViewportBoolSettingId::ShowDimensions);
   const double dimension_font_size_points = static_cast<double>(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize));
   const bool gizmos_visible =
@@ -1210,7 +1212,9 @@ void QtViewportPanel::prepare_viewports(
          !overlays_visible ||
          pane_state.id != interaction_pane_id_ ||
          !pane_state.frame->isVisible()) &&
-        !footprint_dimensions_visible) {
+        !footprint_dimensions_visible &&
+        !(selection_dimensions_visible && overlays_visible &&
+          pane_state.frame->isVisible())) {
       pane_state.edge_length_hud->hide();
     }
   }
@@ -1491,6 +1495,7 @@ void QtViewportPanel::prepare_viewports(
                 .wireframe_pane =
                     shading == ViewportShadingMode::Wireframe,
                 .point_light_gizmos_visible = point_light_gizmos_visible,
+                .selection_dimensions_visible = selection_dimensions_visible,
             },
             settings);
     pane_state.edge_length_hud->present(
@@ -1505,7 +1510,11 @@ void QtViewportPanel::prepare_viewports(
             pane_state.id == interaction_pane_id_ &&
             !viewport_interaction_active,
         dimension_font_size_points,
-        &active_box_preview_, overlays_visible && tool_overlay_visible);
+        &active_box_preview_, overlays_visible && tool_overlay_visible,
+        overlay_submission.selection_dimension_bounds
+            ? &*overlay_submission.selection_dimension_bounds : nullptr,
+        overlay_submission.selection_dimension_signature,
+        selection_dimensions_visible && overlays_visible);
     sync_pane_control_selection(pane_state);
   }
   if (diagnostics_enabled) {

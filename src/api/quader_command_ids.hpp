@@ -131,6 +131,8 @@ inline constexpr QuaderCommandId kViewportToggleMeshGrid{
     "viewport.toggle_mesh_grid"};
 inline constexpr QuaderCommandId kViewportToggleOverlays{
     "viewport.toggle_overlays"};
+inline constexpr QuaderCommandId kViewportToggleDimensions{
+    "viewport.toggle_dimensions"};
 inline constexpr QuaderCommandId kViewportToggleCollisions{
     "viewport.toggle_collisions"};
 inline constexpr QuaderCommandId kViewportToggleInfo{
@@ -486,6 +488,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportToggleGizmos,
     kViewportToggleMeshGrid,
     kViewportToggleOverlays,
+    kViewportToggleDimensions,
     kViewportToggleCollisions,
     kViewportToggleInfo,
     kViewportToggleNavigationGizmo,

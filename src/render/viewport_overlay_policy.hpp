@@ -163,6 +163,7 @@ inline constexpr float kOverlayHoverWireLineWidthPixels = 2.5f;
 inline constexpr float kOverlayOpenEdgeLineWidthPixels = 1.0f;
 inline constexpr float kOverlayDiagnosticEdgeLineWidthPixels = 4.0f;
 inline constexpr float kOverlayGroupBoundsLineWidthPixels = 1.5f;
+inline constexpr float kOverlaySelectionDimensionLineWidthPixels = 2.0f;
 inline constexpr float kOverlayToolPlaneLineWidthPixels = 1.0f;
 inline constexpr float kOverlayToolPreviewLineWidthPixels = 1.15f;
 inline constexpr float kOverlayToolPreviewSeamLineWidthPixels = 2.25f;

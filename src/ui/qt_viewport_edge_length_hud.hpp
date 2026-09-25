@@ -27,8 +27,8 @@ class ViewportCameraController;
 struct ModelingBoxPreview;
 
 /**
- * Presents compact world-space edge and active footprint dimensions in map
- * units. Borrows existing semantic state; never queries scene meshes.
+ * Presents compact world-space edge, footprint, and selection dimensions in
+ * map units. Borrows existing semantic state; never queries scene meshes.
  */
 class QtViewportEdgeLengthHud final : public QObject {
 public:
@@ -46,7 +46,10 @@ public:
                const QRect &logical_viewport_bounds, bool edge_enabled,
                double font_size_points,
                const ModelingBoxPreview *footprint_preview = nullptr,
-               bool footprint_enabled = false);
+               bool footprint_enabled = false,
+               const ViewportSelectionDimensionBounds *selection_bounds = nullptr,
+               std::uint64_t selection_signature = 0u,
+               bool selection_enabled = false);
   void hide();
   void raise();
 
@@ -61,15 +64,21 @@ private:
     std::optional<QVec3> outside_reference;
   };
 
-  std::array<QLabel *, 3> labels_ = {};
+  std::array<QLabel *, 6> labels_ = {};
   QtUiScaleMetrics ui_scale_metrics_;
-  std::array<std::optional<Dimension>, 3> dimensions_ = {};
-  std::array<QString, 3> dimension_texts_ = {};
+  std::array<std::optional<Dimension>, 6> dimensions_ = {};
+  std::array<QString, 6> dimension_texts_ = {};
+  std::optional<ViewportSelectionDimensionBounds> selection_bounds_;
+  std::array<double, 3> selection_lengths_ = {};
   QRect logical_viewport_bounds_;
   std::uint64_t frame_signature_ = 0;
   std::uint64_t camera_signature_ = 0;
+  std::uint64_t selection_signature_ = 0;
+  std::uint64_t selection_camera_signature_ = 0;
   double font_size_points_ = 0.0;
   bool frame_signature_valid_ = false;
+  bool selection_signature_valid_ = false;
+  bool selection_projection_valid_ = false;
   bool font_size_valid_ = false;
   bool view_valid_ = false;
 };

@@ -105,6 +105,9 @@ void SceneRenderBridge::shutdown() {
   tool_preview_occurrence_suppressions_.clear();
   tool_preview_suppression_ = {};
   tool_preview_overlay_frame_ = {};
+  selection_dimension_preview_meshes_.clear();
+  selection_dimension_preview_groups_.clear();
+  selection_dimension_preview_curves_.clear();
   ++tool_preview_overlay_revision_;
   filtered_scene_overlay_snapshot_ = {};
   filtered_collision_snapshot_ = {};
@@ -146,6 +149,9 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   tool_preview_occurrence_suppressions_.clear();
   tool_preview_suppression_ = {};
   tool_preview_overlay_frame_ = {};
+  selection_dimension_preview_meshes_.clear();
+  selection_dimension_preview_groups_.clear();
+  selection_dimension_preview_curves_.clear();
   ++tool_preview_overlay_revision_;
   filtered_scene_overlay_snapshot_ = {};
   filtered_collision_snapshot_ = {};
@@ -575,6 +581,9 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
   ++tool_preview_submission_revision_;
   (void)overlay_cache_.set_transform_position_streams(preview.meshes);
   tool_preview_overlay_frame_ = std::move(overlay_candidate);
+  selection_dimension_preview_meshes_ = std::move(preview.meshes);
+  selection_dimension_preview_groups_ = std::move(preview.group_markers);
+  selection_dimension_preview_curves_ = std::move(preview.curves);
   ++tool_preview_overlay_revision_;
 
   if (!tool_preview_suppression_valid_ ||
@@ -618,6 +627,11 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
 ViewportOverlaySubmissionResult SceneRenderBridge::submit_viewport_overlay(
     ViewportOverlaySubmissionRequest request,
     const ViewportSettings &settings) {
+  request.selection_dimension_scene_snapshot = request.scene_overlay_snapshot;
+  request.selection_dimension_preview_meshes = selection_dimension_preview_meshes_;
+  request.selection_dimension_preview_groups = selection_dimension_preview_groups_;
+  request.selection_dimension_preview_curves = selection_dimension_preview_curves_;
+  request.selection_dimension_preview_suppression = &tool_preview_suppression_;
   if (!tool_preview_suppression_.empty() &&
       request.scene_overlay_snapshot != nullptr) {
     const RenderOverlaySelectionSnapshot &source =

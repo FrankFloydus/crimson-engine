@@ -7,6 +7,10 @@
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
+#include "render/overlay/viewport_selection_dimension_geometry.hpp"
+#include "render/overlay/viewport_overlay_dash.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
+#include "render/render_scene_snapshot.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
@@ -21,6 +25,8 @@
 #include <cstdint>
 #include <array>
 #include <limits>
+#include <set>
+#include <cmath>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -170,6 +176,7 @@ ViewportOverlaySubmissionRequest submission_request(
       .style_selection_context = ViewportOverlaySelectionContext::Edge,
       .overlays_visible = true,
       .scene_overlay_requested = true,
+      .selection_dimensions_visible = false,
   };
 }
 
@@ -582,6 +589,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
             ? ViewportOverlaySelectionContext::Edge
             : ViewportOverlaySelectionContext::Face;
     request.style_selection_context = request.selection_source.selection_context;
+    request.selection_dimensions_visible = false;
 
     EXPECT_TRUE(coordinator.submit(request, settings, target).persistent_submitted);
     ASSERT_EQ(target.persistent_frame.lines.size(), 2u);
@@ -1168,6 +1176,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
     request.scene_selection_mode = RenderOverlaySelectionMode::Object;
     request.style_selection_context = ViewportOverlaySelectionContext::Object;
     request.selection_source.selection_context = ViewportOverlaySelectionContext::Object;
+    request.selection_dimensions_visible = false;
     ViewportOverlaySubmissionCoordinator coordinator;
     RecordingOverlayTarget target;
     const auto settings = ViewportSettings::defaults();
@@ -1233,6 +1242,573 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
     }
     EXPECT_EQ(target.dynamic_frame.lines[0].color, ordinary_hover.lines[0].color);
   }
+}
+
+void expect_dimension_bounds(const ViewportOverlaySubmissionResult &result,
+                              QVec3 minimum, QVec3 maximum) {
+  ASSERT_TRUE(result.selection_dimension_bounds.has_value());
+  const auto &bounds = *result.selection_dimension_bounds;
+  EXPECT_FLOAT_EQ(bounds.min.x, minimum.x);
+  EXPECT_FLOAT_EQ(bounds.min.y, minimum.y);
+  EXPECT_FLOAT_EQ(bounds.min.z, minimum.z);
+  EXPECT_FLOAT_EQ(bounds.max.x, maximum.x);
+  EXPECT_FLOAT_EQ(bounds.max.y, maximum.y);
+  EXPECT_FLOAT_EQ(bounds.max.z, maximum.z);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     SelectionDimensionsAggregateMeshesGroupsAndInstancesIntoOneBox) {
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  StaticSelectionFrameProvider provider({});
+  RenderOverlaySelectionSnapshot scene;
+  scene.selected_mesh_bounds = {
+      {.entity = 1, .min = {-2, -1, 0}, .max = {2, 1, 3}},
+      {.entity = 2, .min = {4, 2, -3}, .max = {7, 6, 2}}};
+  scene.group_bounds = {
+      {.entity = 3, .min = {-5, -4, -2}, .max = {-3, 0, 1}},
+      {.entity = 4, .min = {0, 0, 0}, .max = {4, 8, 9}}};
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Object;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  auto result = coordinator.submit(request, settings, target);
+  expect_dimension_bounds(result, {-5, -4, -3}, {7, 8, 9});
+  EXPECT_EQ(std::ranges::count_if(target.persistent_frame.lines, [](const auto &line) {
+    return line.layer == ViewportOverlayLayer::GroupBounds;
+  }), 0);
+  EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, [](const auto &line) {
+    return line.source == ViewportOverlaySource::SelectionDimensions &&
+           line.style_role == ViewportOverlayStyleRole::ExplicitColor;
+  }), 3);
+  request.selection_dimensions_visible = false;
+  EXPECT_FALSE(coordinator.submit(request, settings, target).selection_dimension_bounds);
+  EXPECT_EQ(std::ranges::count_if(target.persistent_frame.lines, [](const auto &line) {
+    return line.layer == ViewportOverlayLayer::GroupBounds;
+  }), 36);
+  EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines, [](const auto &line) {
+    return line.source == ViewportOverlaySource::SelectionDimensions;
+  }));
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Group;
+  result = coordinator.submit(request, settings, target);
+  expect_dimension_bounds(result, {-5, -4, -3}, {7, 8, 9});
+}
+
+ViewportOverlayCamera dimension_test_camera() {
+  ViewportOverlayCamera camera;
+  camera.eye = {20.0f, 18.0f, 25.0f};
+  camera.forward = normalize(QVec3{} - camera.eye);
+  camera.right = normalize(cross(camera.forward, QVec3{0, 1, 0}));
+  camera.up = normalize(cross(camera.right, camera.forward));
+  camera.viewport_size = {1000, 800};
+  return camera;
+}
+
+std::size_t expect_dimension_box_edges(const ViewportOverlayFrame &frame,
+                                      const ViewportSelectionDimensionBounds &bounds,
+                                      const ViewportOverlayCamera &camera,
+                                      float raster_scale = 1.0f) {
+  const std::array<float, 3> minimum{bounds.min.x, bounds.min.y, bounds.min.z};
+  const std::array<float, 3> maximum{bounds.max.x, bounds.max.y, bounds.max.z};
+  std::set<std::pair<std::size_t, unsigned int>> edges;
+  const OverlayCameraProjector projector(camera);
+  const auto spans = viewport_selection_dimension_spans(
+      bounds, camera, viewport_host_defaults().map_units_per_world_unit);
+  constexpr std::array kColors{kOverlayToolAxisXColor, kOverlayToolAxisYColor,
+                               kOverlayToolAxisZColor};
+  std::array<int, 3> solid_counts{};
+  for (const auto &line : frame.lines) {
+    if (line.source != ViewportOverlaySource::SelectionDimensions) continue;
+    EXPECT_EQ(line.layer, ViewportOverlayLayer::GroupBounds);
+    EXPECT_EQ(viewport_overlay_depth_mode(line), ViewportOverlayDepthMode::DrawOnTop);
+    const std::array<float, 3> start{line.start.x, line.start.y, line.start.z};
+    const std::array<float, 3> end{line.end.x, line.end.y, line.end.z};
+    std::size_t axis = 3u;
+    unsigned int fixed_maximum = 0u;
+    for (std::size_t component = 0u; component < 3u; ++component) {
+      EXPECT_GE(start[component], minimum[component] - 0.00001f);
+      EXPECT_LE(start[component], maximum[component] + 0.00001f);
+      EXPECT_GE(end[component], minimum[component] - 0.00001f);
+      EXPECT_LE(end[component], maximum[component] + 0.00001f);
+      if (start[component] != end[component]) {
+        EXPECT_EQ(axis, 3u) << "Dimension segments must follow a single world axis";
+        axis = component;
+      } else {
+        EXPECT_TRUE(std::abs(start[component] - minimum[component]) < 0.00001f ||
+                    std::abs(start[component] - maximum[component]) < 0.00001f);
+        if (start[component] == maximum[component] && minimum[component] != maximum[component]) {
+          fixed_maximum |= 1u << component;
+        }
+      }
+    }
+    EXPECT_LT(axis, 3u) << "Dimension box cannot contain zero-length segments";
+    if (axis >= 3u) continue;
+    edges.emplace(axis, fixed_maximum);
+    if (line.style_role == ViewportOverlayStyleRole::ExplicitColor) {
+      ++solid_counts[axis];
+      EXPECT_EQ(line.color, kColors[axis]);
+      EXPECT_FLOAT_EQ(line.width_pixels, kOverlaySelectionDimensionLineWidthPixels * raster_scale);
+      EXPECT_TRUE(spans[axis].has_value());
+      if (spans[axis]) {
+        EXPECT_LT(length(line.start - spans[axis]->start), 0.00001f);
+        EXPECT_LT(length(line.end - spans[axis]->end), 0.00001f);
+      }
+    } else {
+      EXPECT_EQ(line.style_role, ViewportOverlayStyleRole::GroupBounds);
+      const QVec2 screen_start = projector.project(projector.view_point_for(line.start)).pixel;
+      const QVec2 screen_end = projector.project(projector.view_point_for(line.end)).pixel;
+      const QVec2 delta = screen_end - screen_start;
+      EXPECT_LE(std::hypot(delta.x, delta.y), kViewportOverlayDashPixels * raster_scale + 0.01f);
+    }
+  }
+  for (std::size_t axis = 0u; axis < 3u; ++axis) {
+    EXPECT_EQ(solid_counts[axis], spans[axis] ? 1 : 0);
+  }
+  return edges.size();
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     TiltedFaceDimensionsDrawAllBoxEdgesWithMatchingColoredMeasurementSpans) {
+  ViewportOverlayFrame face;
+  face.triangles.push_back({.layer = ViewportOverlayLayer::SelectedVisibleFace,
+      .a = {-4, -3, -2}, .b = {4, -3, -2}, .c = {-4, 3, 2},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 1, .face_id = 1}});
+  StaticSelectionFrameProvider provider(face);
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.style_selection_context = ViewportOverlaySelectionContext::Face;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Face;
+  request.camera = dimension_test_camera();
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  auto settings = ViewportSettings::defaults();
+  auto result = coordinator.submit(request, settings, target);
+  ASSERT_TRUE(result.selection_dimension_bounds);
+  EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame, *result.selection_dimension_bounds,
+                                      request.camera), 12u);
+  EXPECT_GT(target.dynamic_frame.lines.size(), 12u);
+  EXPECT_TRUE(std::ranges::all_of(target.persistent_frame.lines, [](const auto &line) {
+    return line.source != ViewportOverlaySource::SelectionDimensions;
+  }));
+  const auto before = coordinator.work_counters();
+  for (int frame = 0; frame < 10; ++frame) {
+    EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  }
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_frame_build_count,
+            before.selection_dimension_frame_build_count);
+  request.camera.eye.x += 1.0f;
+  const auto moved = coordinator.submit(request, settings, target);
+  EXPECT_TRUE(moved.dynamic_submitted);
+  EXPECT_FALSE(moved.persistent_submitted);
+  EXPECT_FALSE(moved.selection_source_refreshed);
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_frame_build_count,
+            before.selection_dimension_frame_build_count + 1u);
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_bounds_build_count,
+            before.selection_dimension_bounds_build_count);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            before.dynamic_source_compose_count);
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::BoundingBoxWire, {0.2f, 0.4f, 0.6f, 1}));
+  (void)coordinator.submit(request, settings, target);
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_frame_build_count,
+            before.selection_dimension_frame_build_count + 1u);
+  for (const auto &line : target.dynamic_frame.lines) {
+    if (line.source == ViewportOverlaySource::SelectionDimensions &&
+        line.style_role == ViewportOverlayStyleRole::GroupBounds) {
+      EXPECT_EQ(line.color, rgba8(51, 102, 153));
+    }
+  }
+  request.raster_scale = 2.0f;
+  result = coordinator.submit(request, settings, target);
+  EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame, *result.selection_dimension_bounds,
+                                      request.camera, 2.0f), 12u);
+  request.selection_dimensions_visible = false;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines, [](const auto &line) {
+    return line.source == ViewportOverlaySource::SelectionDimensions;
+  }));
+  request.selection_dimensions_visible = true;
+  (void)coordinator.submit(request, settings, target);
+  request.overlays_visible = false;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines, [](const auto &line) {
+    return line.source == ViewportOverlaySource::SelectionDimensions;
+  }));
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     FlatSelectionDimensionsHaveFourUniqueEdgesAndTwoColoredSpans) {
+  StaticSelectionFrameProvider provider({});
+  RenderOverlaySelectionSnapshot scene;
+  scene.selected_mesh_bounds.push_back({.entity = 1, .min = {-4, -3, 0}, .max = {4, 3, 0}});
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Object;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  request.camera = dimension_test_camera();
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  auto result = coordinator.submit(request, settings, target);
+  ASSERT_TRUE(result.selection_dimension_bounds);
+  EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame, *result.selection_dimension_bounds,
+                                      request.camera), 4u);
+  request.camera = {.eye = {0, 0, 20}, .viewport_size = {800, 600},
+                    .projection = ViewportOverlayProjection::Orthographic};
+  result = coordinator.submit(request, settings, target);
+  EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame, *result.selection_dimension_bounds,
+                                      request.camera), 4u);
+  scene.selected_mesh_bounds.front().max.y = -3;
+  ++scene.selection_revision;
+  result = coordinator.submit(request, settings, target);
+  EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame, *result.selection_dimension_bounds,
+                                      request.camera), 1u);
+  scene.selected_mesh_bounds.front().max.x = -4;
+  ++scene.selection_revision;
+  result = coordinator.submit(request, settings, target);
+  EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame, *result.selection_dimension_bounds,
+                                      request.camera), 0u);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     DimensionDashesClipNearPlaneAndViewportBeforeSubdivision) {
+  StaticSelectionFrameProvider provider({});
+  RenderOverlaySelectionSnapshot scene;
+  scene.selected_mesh_bounds.push_back({.entity = 1, .min = {-10000, -0.02f, -100},
+                                        .max = {10000, 0.02f, 1}});
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Object;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  request.camera.viewport_size = {800, 600};
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto result = coordinator.submit(request, ViewportSettings::defaults(), target);
+  ASSERT_TRUE(result.selection_dimension_bounds);
+  const OverlayCameraProjector projector(request.camera);
+  std::size_t dashed_count = 0u;
+  for (const auto &line : target.dynamic_frame.lines) {
+    if (line.source != ViewportOverlaySource::SelectionDimensions ||
+        line.style_role != ViewportOverlayStyleRole::GroupBounds) continue;
+    ++dashed_count;
+    for (QVec3 point : {line.start, line.end}) {
+      const auto view = projector.view_point_for(point);
+      EXPECT_GE(-view.z, request.camera.near_plane - 0.0001f);
+      EXPECT_LE(-view.z, request.camera.far_plane + 0.0001f);
+      const auto projected = projector.project(view);
+      EXPECT_TRUE(std::isfinite(projected.pixel.x));
+      EXPECT_TRUE(std::isfinite(projected.pixel.y));
+      EXPECT_GE(projected.pixel.x, -1.0f);
+      EXPECT_LE(projected.pixel.x, 801.0f);
+      EXPECT_GE(projected.pixel.y, -1.0f);
+      EXPECT_LE(projected.pixel.y, 601.0f);
+    }
+  }
+  EXPECT_GT(dashed_count, 0u);
+  // Each of twelve clipped segments is no longer than the pane diagonal.
+  EXPECT_LE(dashed_count, 12u * 78u);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     FaceDimensionsUseOnlySelectedFacesAcrossObjects) {
+  ViewportOverlayFrame frame;
+  frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::SelectedVisibleFace,
+      .a = {0, 0, 2}, .b = {3, 0, 2}, .c = {0, 4, 2},
+      .source = ViewportOverlaySource::Selection,
+      .element = {.object_id = 1, .face_id = 1}});
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SelectedFaceEdge,
+      .start = {-2, 3, -1}, .end = {-1, 8, 2},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 2, .face_id = 7}});
+  for (auto layer : {ViewportOverlayLayer::SourceWire, ViewportOverlayLayer::HoverFaceEdge,
+                     ViewportOverlayLayer::SelectedEdge}) {
+    frame.lines.push_back({.layer = layer, .start = {-100, -100, -100},
+                           .end = {100, 100, 100},
+                           .source = ViewportOverlaySource::ComponentSelection});
+  }
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::SourceWireDepthStamp,
+      .a = {-50, 0, 0}, .b = {50, 0, 0}, .c = {0, 50, 0},
+      .source = ViewportOverlaySource::Selection});
+  StaticSelectionFrameProvider provider(frame);
+  RenderOverlaySelectionSnapshot scene;
+  scene.selected_mesh_bounds.push_back({.min = {-200, -200, -200}, .max = {200, 200, 200}});
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.style_selection_context = ViewportOverlaySelectionContext::Face;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Face;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {-2, 0, -1}, {3, 8, 2});
+  for (auto context : {ViewportOverlaySelectionContext::Edge, ViewportOverlaySelectionContext::Vertex}) {
+    request.style_selection_context = context;
+    EXPECT_FALSE(coordinator.submit(request, settings, target).selection_dimension_bounds);
+  }
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     SelectionDimensionBoundsRemainRetainedAcrossCameraStylePanesAndVisibility) {
+  StaticSelectionFrameProvider provider({});
+  RenderOverlaySelectionSnapshot scene;
+  scene.selected_mesh_bounds.push_back({.entity = 1, .min = {1, 2, 3}, .max = {4, 6, 8}});
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Object;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  auto settings = ViewportSettings::defaults();
+  const auto initial = coordinator.submit(request, settings, target);
+  const auto work = coordinator.work_counters();
+  for (int frame = 0; frame < 12; ++frame) {
+    request.camera.eye.x = static_cast<float>(frame);
+    request.viewport_index = static_cast<std::size_t>(frame % 4);
+    const auto unchanged = coordinator.submit(request, settings, target);
+    expect_dimension_bounds(unchanged, {1, 2, 3}, {4, 6, 8});
+    EXPECT_EQ(unchanged.selection_dimension_signature, initial.selection_dimension_signature);
+  }
+  (void)settings.set_color(ViewportColorSettingId::SelectionWire, {0.3f, 0.2f, 0.8f, 1});
+  request.raster_scale = 2.0f;
+  request.camera.projection = ViewportOverlayProjection::Orthographic;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {1, 2, 3}, {4, 6, 8});
+  request.selection_dimensions_visible = false;
+  EXPECT_FALSE(coordinator.submit(request, settings, target).selection_dimension_bounds);
+  request.selection_dimensions_visible = true;
+  request.overlays_visible = false;
+  EXPECT_FALSE(coordinator.submit(request, settings, target).selection_dimension_bounds);
+  request.overlays_visible = true;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {1, 2, 3}, {4, 6, 8});
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_bounds_build_count,
+            work.selection_dimension_bounds_build_count);
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_source_record_count,
+            work.selection_dimension_source_record_count);
+  scene.selected_mesh_bounds.clear();
+  ++scene.selection_revision;
+  const auto cleared = coordinator.submit(request, settings, target);
+  EXPECT_FALSE(cleared.selection_dimension_bounds);
+  EXPECT_NE(cleared.selection_dimension_signature, initial.selection_dimension_signature);
+}
+
+RenderToolPreviewMeshRecord dimension_preview(int object, EntityId entity) {
+  RenderToolPreviewMeshRecord preview;
+  preview.source_object_id = object;
+  preview.source_entity = entity;
+  preview.dynamic_positions = true;
+  preview.suppress_source = true;
+  preview.layout_key = 1u;
+  preview.mesh.edit_geometry().vertices = {
+      {.position = {-8, 0, 0}, .source_vertex_id = 1},
+      {.position = {8, 4, 0}, .source_vertex_id = 2},
+      {.position = {8, 0, 20}, .source_vertex_id = 3}};
+  preview.mesh.edit_geometry().indices = {0, 1, 2};
+  preview.dynamic_position_payload = std::make_shared<const std::vector<QVec3>>(
+      std::vector<QVec3>{{2, 1, 0}, {4, 3, 0}, {3, 2, 1}});
+  return preview;
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     ObjectDimensionsReplaceCommittedPreviewExtremaAndKeepUntouchedSelection) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedEdge,
+      .start = {-8, 0, 0}, .end = {8, 4, 20},
+      .source = ViewportOverlaySource::Selection,
+      .element = {.object_id = 10, .edge_a = 1, .edge_b = 2}});
+  StaticSelectionFrameProvider provider(frame);
+  RenderOverlaySelectionSnapshot scene;
+  scene.selected_mesh_bounds = {
+      {.entity = 100, .min = {-8, 0, 0}, .max = {8, 4, 20}},
+      {.entity = 200, .min = {10, 0, 0}, .max = {12, 2, 2}}};
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Object;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  std::vector previews{dimension_preview(10, 100), dimension_preview(99, 999)};
+  previews.back().suppress_source = false;
+  previews.back().dynamic_position_payload = std::make_shared<const std::vector<QVec3>>(
+      std::vector<QVec3>{{-100, -100, -100}, {100, 100, 100}, {0, 0, 0}});
+  request.selection_dimension_preview_meshes = previews;
+  request.tool_preview_overlay_revision = 1u;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 0, 0}, {12, 3, 2});
+  const auto work = coordinator.work_counters();
+  for (int frame_index = 0; frame_index < 8; ++frame_index) {
+    EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  }
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_bounds_build_count,
+            work.selection_dimension_bounds_build_count);
+  previews.front().dynamic_position_payload = std::make_shared<const std::vector<QVec3>>(
+      std::vector<QVec3>{{3, 1, 0}, {5, 3, 0}, {4, 2, 1}});
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {3, 0, 0}, {12, 3, 2});
+  EXPECT_EQ(provider.build_count, 1);
+  request.selection_dimension_preview_meshes = {};
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {-8, 0, 0}, {12, 4, 20});
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     FaceDimensionsProjectOnlySelectedVertexIdsThroughAcceptedDynamicPositions) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedFaceEdge,
+      .start = {-8, 0, 0}, .end = {8, 4, 0},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 10, .edge_a = 1, .edge_b = 2, .face_id = 1}});
+  StaticSelectionFrameProvider provider(frame);
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.style_selection_context = ViewportOverlaySelectionContext::Face;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Face;
+  std::vector previews{dimension_preview(10, 100)};
+  request.selection_dimension_preview_meshes = previews;
+  request.tool_preview_overlay_revision = 1u;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 1, 0}, {4, 3, 0});
+  previews.front().dynamic_position_payload = std::make_shared<const std::vector<QVec3>>(
+      std::vector<QVec3>{{3, 2, 1}, {4, 4, 1}, {-100, -100, -100}});
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {3, 2, 1}, {4, 4, 1});
+  EXPECT_EQ(provider.build_count, 1);
+  request.selection_dimension_preview_meshes = {};
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {-8, 0, 0}, {8, 4, 0});
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     PartialGroupAndInstancePreviewsRetainUntouchedLeavesWithoutOldExtrema) {
+  StaticSelectionFrameProvider provider({});
+  RenderOverlaySelectionSnapshot scene;
+  scene.group_bounds = {{.entity = 300, .min = {-8, 0, 0}, .max = {15, 4, 20}}};
+  scene.selected_mesh_bounds = {{.entity = 400, .min = {-8, 0, 0}, .max = {22, 4, 20}}};
+  const std::vector<MeshVertex> untouched_group{{.position = {13, 0, 0}}, {.position = {15, 2, 2}}};
+  const std::vector<MeshVertex> untouched_instance{{.position = {20, 0, 0}}, {.position = {22, 2, 2}}};
+  std::vector previews{dimension_preview(10, 100), dimension_preview(11, 101)};
+  previews.back().visibility_entity = 400;
+  const auto &original = previews.front().mesh.geometry().vertices;
+  scene.hierarchy_selection_wires = {
+      {.entity = 100, .selection_root = 300, .vertices = original},
+      {.entity = 200, .selection_root = 300, .vertices = untouched_group}};
+  RenderOverlaySelectedObjectSnapshot selected_objects;
+  selected_objects.instance_selection_fills = {
+      {.occurrence = 400, .definition = 500, .member = 101, .vertices = original},
+      {.occurrence = 400, .definition = 500, .member = 102, .vertices = untouched_instance}};
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Group;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  request.selection_dimension_preview_meshes = previews;
+  request.selected_mesh_outline_snapshot = &selected_objects;
+  request.tool_preview_overlay_revision = 1u;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 0, 0}, {22, 3, 2});
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     RotatedGroupPreviewMeasuresMeshVerticesInsteadOfItsLooseCage) {
+  StaticSelectionFrameProvider provider({});
+  RenderOverlaySelectionSnapshot scene;
+  scene.group_bounds = {{.entity = 300, .min = {0, 0, 0}, .max = {2, 2, 0}}};
+  std::vector previews{dimension_preview(10, 100)};
+  previews.front().dynamic_position_payload = std::make_shared<const std::vector<QVec3>>(
+      std::vector<QVec3>{{0, 0, 0}, {2, 0, 0}, {0, 2, 0}});
+  constexpr float kDiagonal = 0.70710678f;
+  previews.front().transform.values = {
+      kDiagonal, kDiagonal, 0, 0, -kDiagonal, kDiagonal, 0, 0,
+      0, 0, 1, 0, 0, 0, 0, 1};
+  scene.hierarchy_selection_wires = {{.entity = 100, .selection_root = 300,
+      .vertices = previews.front().mesh.geometry().vertices}};
+  const std::vector<RenderToolPreviewGroupMarkerRecord> markers{{
+      .source_entity = 300, .local_min = {0, 0, 0}, .local_max = {2, 2, 0},
+      .instance_transforms = {previews.front().transform}}};
+  const RenderToolPreviewSuppressionSnapshot suppression{.entities = {300, 100}};
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Group;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  request.selection_dimension_preview_meshes = previews;
+  request.selection_dimension_preview_groups = markers;
+  ViewportOverlayFrame preview_cage;
+  preview_cage.lines.push_back({.layer = ViewportOverlayLayer::GroupBounds,
+      .start = {-9, -9, -9}, .end = {9, -9, -9},
+      .style_role = ViewportOverlayStyleRole::GroupBounds,
+      .source = ViewportOverlaySource::Tool});
+  request.tool_preview_overlay_frame = &preview_cage;
+  request.selection_dimension_preview_suppression = &suppression;
+  request.tool_preview_overlay_revision = 1u;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  expect_dimension_bounds(coordinator.submit(request, ViewportSettings::defaults(), target),
+                          {-2 * kDiagonal, 0, 0}, {2 * kDiagonal, 2 * kDiagonal, 0});
+  EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines, [](const auto &line) {
+    return line.source == ViewportOverlaySource::Tool &&
+           line.layer == ViewportOverlayLayer::GroupBounds;
+  }));
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     MeshPreviewKeepsGroupedCurveBoundsAndUsesAcceptedCurveReplacement) {
+  StaticSelectionFrameProvider provider({});
+  RenderOverlaySelectionSnapshot scene;
+  scene.group_bounds = {{.entity = 300, .min = {-8, 0, 0}, .max = {30, 4, 20}}};
+  std::vector previews{dimension_preview(10, 100)};
+  scene.hierarchy_selection_wires = {{.entity = 100, .selection_root = 300,
+      .vertices = previews.front().mesh.geometry().vertices}};
+  RenderOverlayCurveSnapshot grouped_curve;
+  grouped_curve.entity = 200;
+  grouped_curve.selection_root = 300;
+  grouped_curve.selection_dimension_bounds = ViewportSelectionDimensionBounds{{20, 0, 0}, {30, 2, 2}};
+  scene.curves.push_back(grouped_curve);
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Group;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  request.selection_dimension_preview_meshes = previews;
+  request.tool_preview_overlay_revision = 1u;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 0, 0}, {30, 3, 2});
+  RenderToolPreviewCurveRecord curve_preview;
+  curve_preview.source_entity = 200;
+  curve_preview.suppress_source = true;
+  curve_preview.selection_dimension_bounds = ViewportSelectionDimensionBounds{{5, 1, 0}, {7, 2, 1}};
+  const std::array curve_previews{curve_preview};
+  request.selection_dimension_preview_curves = curve_previews;
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 1, 0}, {7, 3, 1});
 }
 
 } // namespace

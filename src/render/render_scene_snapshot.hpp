@@ -307,6 +307,8 @@ struct RenderToolPreviewCurveRecord final {
   float solidify_radius = static_cast<float>(kCurveSolidifyDefaultRadius);
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
+  /// Exact authored bounds, including solidification, across preview placements.
+  std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds;
 };
 
 /** Owns one transient Light descriptor and every preview placement. */

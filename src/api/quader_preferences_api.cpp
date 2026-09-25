@@ -236,6 +236,16 @@ bool QuaderPreferencesApi::overlays_visible() const {
   return hooks_.overlays_visible ? hooks_.overlays_visible() : false;
 }
 
+QuaderApiVoidResult QuaderPreferencesApi::set_dimensions_visible(bool visible) {
+  return hooks_.set_dimensions_visible
+             ? hooks_.set_dimensions_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::dimensions_visible() const {
+  return hooks_.dimensions_visible ? hooks_.dimensions_visible() : false;
+}
+
 QuaderApiVoidResult QuaderPreferencesApi::set_collisions_visible(bool visible) {
   return hooks_.set_collisions_visible
              ? hooks_.set_collisions_visible(visible)

@@ -20,6 +20,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_bounds.hpp"
 #include "scene/scene_mesh_occurrence_projection.hpp"
 #include "scene/scene_texture_mapping.hpp"
 
@@ -1861,6 +1862,21 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
         });
       }
     }
+    std::optional<SceneBounds> selection_dimension_bounds;
+    if (curve.suppress_source) {
+      for (const QMat4 &transform : curve.instance_transforms) {
+        const auto bounds = curve_world_bounds(*asset, component, transform);
+        if (!bounds) {
+          continue;
+        }
+        if (selection_dimension_bounds) {
+          include_point(*selection_dimension_bounds, bounds->min);
+          include_point(*selection_dimension_bounds, bounds->max);
+        } else {
+          selection_dimension_bounds = *bounds;
+        }
+      }
+    }
     snapshot.curves.push_back({
         .source_entity = curve.source_entity,
         .visibility_entity = visibility_entity,
@@ -1874,6 +1890,11 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
         .solidify_radius = curve.solidify_radius,
         .suppress_source = curve.suppress_source,
         .layout_key = curve.layout_key,
+        .selection_dimension_bounds = selection_dimension_bounds
+            ? std::optional{ViewportSelectionDimensionBounds{
+                  .min = selection_dimension_bounds->min,
+                  .max = selection_dimension_bounds->max}}
+            : std::nullopt,
     });
   }
 

@@ -9,12 +9,17 @@
 #include "assets/default_material_catalog.hpp"
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "core/color_space.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/projection/picking_cache_projection.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/instance_batch_planner.hpp"
@@ -43,9 +48,11 @@
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/overlay/viewport_primitive_creation_overlay_builder.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
+#include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_bounds.hpp"
 #include "viewport/viewport_settings.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/primitive_creation_controls.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
@@ -72,6 +79,67 @@
 using namespace quader;
 
 namespace {
+
+/// Receives the real coordinator streams without requiring a GPU backend.
+class DimensionExtractionTarget final : public ViewportOverlaySubmissionTarget {
+public:
+  [[nodiscard]] ViewportOverlayCameraUpdate update_overlay_cameras(
+      std::size_t, std::uint8_t, ViewportOverlayCamera) override {
+    return {true, true};
+  }
+  void submit_persistent_overlay(std::size_t, std::uint8_t,
+                                 ViewportOverlayFrame,
+                                 ViewportOverlayCamera) override {}
+  void submit_dynamic_overlay(std::size_t, std::uint8_t,
+                              ViewportOverlayFrame,
+                              ViewportOverlayCamera) override {}
+};
+
+/// Uses the same modeling publication consumed by the native viewport.
+class DimensionModelingFrameProvider final
+    : public ViewportOverlaySelectionFrameProvider {
+public:
+  explicit DimensionModelingFrameProvider(const ModelingSessionService &modeling)
+      : modeling_(modeling) {}
+
+  [[nodiscard]] ViewportOverlayFrame
+  build_selection_overlay_frame() const override {
+    return modeling_.selection_overlay_frame();
+  }
+
+private:
+  const ModelingSessionService &modeling_;
+};
+
+void expect_dimension_extents(const ViewportOverlaySubmissionResult &result,
+                              QVec3 min, QVec3 max) {
+  ASSERT_TRUE(result.selection_dimension_bounds.has_value());
+  const auto &bounds = *result.selection_dimension_bounds;
+  EXPECT_NEAR(bounds.min.x, min.x, 0.0001f);
+  EXPECT_NEAR(bounds.min.y, min.y, 0.0001f);
+  EXPECT_NEAR(bounds.min.z, min.z, 0.0001f);
+  EXPECT_NEAR(bounds.max.x, max.x, 0.0001f);
+  EXPECT_NEAR(bounds.max.y, max.y, 0.0001f);
+  EXPECT_NEAR(bounds.max.z, max.z, 0.0001f);
+}
+
+/// Keeps extraction snapshots alive for the duration of each native submission.
+ViewportOverlaySubmissionResult extract_selection_dimensions(
+    const SceneDocument &scene, const AssetRegistry &assets,
+    RenderOverlaySelectionMode mode,
+    ViewportOverlaySubmissionCoordinator &coordinator,
+    DimensionExtractionTarget &target) {
+  const auto selection = build_render_overlay_selection_snapshot(scene, assets);
+  const auto objects =
+      build_render_overlay_selected_object_snapshot(scene, assets, true);
+  return coordinator.submit(
+      {.scene_overlay_snapshot = &selection,
+       .selected_mesh_outline_snapshot = &objects,
+       .scene_selection_mode = mode,
+       .overlays_visible = true,
+       .scene_overlay_requested = true},
+      ViewportSettings::defaults(), target);
+}
 
 /// Supplies deterministic project-material snapshots to render tests.
 class TestProjectMaterialResolver final
@@ -1263,6 +1331,7 @@ TEST(RenderSceneSnapshotTests,
   ASSERT_TRUE(document.set_light(light, {.type = LightType::Point}));
   const EntityId curve = document.create_entity("Edited Curve", EntityKind::Curve);
   ASSERT_TRUE(document.set_curve(curve, {.curve = curve_asset}));
+  ASSERT_TRUE(document.set_selected(curve, true));
   const RenderSceneBindingKey binding{
       .scene_session_id = 17u,
       .activation_generation = 19u,
@@ -2686,6 +2755,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   const AssetId asset = assets.add_curve(make_overlay_curve_asset());
   ASSERT_NE(asset, kInvalidAssetId);
   const EntityId group = document.create_entity("Curve Parent", EntityKind::Empty);
+  ASSERT_TRUE(document.set_selected(group, true));
   const EntityId curve = document.create_entity("Moving Curve", EntityKind::Curve);
   ASSERT_TRUE(document.set_curve(curve, CurveComponent{.curve = asset}));
   ASSERT_TRUE(document.set_parent(curve, group, false));
@@ -2694,6 +2764,14 @@ TEST(RenderOverlaySnapshotCacheTests,
   RenderOverlaySnapshotCache cache;
   const auto &initial = cache.selection_snapshot(document, assets);
   ASSERT_EQ(initial.curves.size(), 1u);
+  EXPECT_EQ(initial.curves.front().selection_root, group);
+  ASSERT_TRUE(initial.curves.front().selection_dimension_bounds.has_value());
+  const auto initial_bounds = *initial.curves.front().selection_dimension_bounds;
+  EXPECT_FLOAT_EQ(initial_bounds.min.x, 1.0f);
+  EXPECT_FLOAT_EQ(initial_bounds.max.x, 5.0f);
+  EXPECT_FLOAT_EQ(initial_bounds.min.y, 2.0f);
+  EXPECT_FLOAT_EQ(initial_bounds.max.y, 3.5f);
+  EXPECT_FLOAT_EQ(initial_bounds.min.z, 3.0f);
   const auto samples = initial.curves.front().sample_payload;
   const auto *records = initial.curves.data();
   ASSERT_NE(samples, nullptr);
@@ -2712,6 +2790,13 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_FLOAT_EQ(moved.curves.front().world_transform.values[12], 6.0f);
   EXPECT_FLOAT_EQ(moved.curves.front().world_transform.values[13], 0.0f);
   EXPECT_FLOAT_EQ(moved.curves.front().world_transform.values[14], -4.0f);
+  ASSERT_TRUE(moved.curves.front().selection_dimension_bounds.has_value());
+  const auto moved_bounds = *moved.curves.front().selection_dimension_bounds;
+  EXPECT_FLOAT_EQ(moved_bounds.min.x, 6.0f);
+  EXPECT_FLOAT_EQ(moved_bounds.max.x, 10.0f);
+  EXPECT_FLOAT_EQ(moved_bounds.min.y, 0.0f);
+  EXPECT_FLOAT_EQ(moved_bounds.max.y, 1.5f);
+  EXPECT_FLOAT_EQ(moved_bounds.min.z, -4.0f);
   EXPECT_FLOAT_EQ(samples->samples.front().position.x, 0.0f);
   const auto frame = ViewportSceneOverlayBuilder::build_selection_frame(
       {}, moved, false, RenderOverlaySelectionMode::Object, false, false);
@@ -2721,6 +2806,42 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_FLOAT_EQ(frame.lines.front().start.z, -4.0f);
   (void)cache.selection_snapshot(document, assets);
   EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+}
+
+TEST(RenderSceneExtractionTests,
+     CurvePreviewDimensionsIncludeExactCubicExtentsAndEverySolidifiedPlacement) {
+  AssetRegistry assets;
+  const AssetId curve = assets.add_curve(make_overlay_curve_asset());
+  QMat4 first;
+  first.values[12] = 10.0f;
+  QMat4 second;
+  second.values[0] = 2.0f;
+  second.values[5] = 3.0f;
+  second.values[10] = 4.0f;
+  second.values[12] = -3.0f;
+  second.values[13] = 5.0f;
+  second.values[14] = 2.0f;
+  ToolPreviewScene preview;
+  preview.curves.push_back({
+      .source_entity = 7u,
+      .curve = curve,
+      .instance_transforms = {first, second},
+      .solidify = true,
+      .solidify_radius = 0.25f,
+      .suppress_source = true,
+  });
+  const auto snapshot =
+      build_render_tool_preview_scene_snapshot(std::move(preview), assets);
+  ASSERT_TRUE(snapshot.complete);
+  ASSERT_EQ(snapshot.curves.size(), 1u);
+  ASSERT_TRUE(snapshot.curves.front().selection_dimension_bounds.has_value());
+  const auto bounds = *snapshot.curves.front().selection_dimension_bounds;
+  EXPECT_FLOAT_EQ(bounds.min.x, -3.5f);
+  EXPECT_FLOAT_EQ(bounds.max.x, 14.25f);
+  EXPECT_FLOAT_EQ(bounds.min.y, -0.25f);
+  EXPECT_FLOAT_EQ(bounds.max.y, 10.25f);
+  EXPECT_FLOAT_EQ(bounds.min.z, -0.25f);
+  EXPECT_FLOAT_EQ(bounds.max.z, 3.0f);
 }
 
 TEST(RenderOverlaySnapshotCacheTests,
@@ -2807,6 +2928,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   ASSERT_TRUE(document.set_curve(curve, {.curve = curve_asset}));
 
   RenderOverlaySnapshotCache cache;
+  ASSERT_TRUE(document.set_selected(curve, true));
   const auto persistent = cache.update_persistent(document, assets, true, 1u, {});
   ASSERT_NE(persistent.scene_wireframe, nullptr);
   ASSERT_EQ(persistent.scene_wireframe->meshes.size(), 512u);
@@ -2824,6 +2946,9 @@ TEST(RenderOverlaySnapshotCacheTests,
   const auto *selected_light_storage = initial.selected_lights.data();
   const auto *point_light_storage = initial.point_light_gizmos.data();
   const auto initial_curve_samples = initial.curves.front().sample_payload;
+  ASSERT_TRUE(initial.curves.front().selection_dimension_bounds.has_value());
+  const float initial_curve_max_y =
+      initial.curves.front().selection_dimension_bounds->max.y;
 
   CurveAsset replacement = *assets.curve(curve_asset);
   modeling::CurveDocument edited = *replacement.document;
@@ -2849,6 +2974,10 @@ TEST(RenderOverlaySnapshotCacheTests,
   const auto &refreshed = cache.selection_snapshot(document, assets);
   ASSERT_EQ(refreshed.curves.size(), 1u);
   EXPECT_NE(refreshed.curves.front().sample_payload, initial_curve_samples);
+  ASSERT_TRUE(refreshed.curves.front().selection_dimension_bounds.has_value());
+  EXPECT_EQ(refreshed.curves.front().selection_root, curve);
+  EXPECT_GT(refreshed.curves.front().selection_dimension_bounds->max.y,
+            initial_curve_max_y);
   EXPECT_EQ(refreshed.hierarchy_selection_wires.data(), hierarchy_storage);
   EXPECT_EQ(refreshed.group_bounds.data(), group_storage);
   EXPECT_EQ(refreshed.selected_mesh_bounds.data(), mesh_bounds_storage);
@@ -2906,6 +3035,78 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(removed.curves.front().entity, first);
   EXPECT_EQ(cache.stats().selection_build_count, 2u)
       << "membership removal changes structural revisions and must rebuild";
+  EXPECT_EQ(cache.stats().selection_curve_refresh_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     CurvePublicationRefreshesSelectedGroupDimensionsWithoutReplacingStorage) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId curve_asset = assets.add_curve(make_overlay_curve_asset());
+  const EntityId group = document.create_entity("Curve Group", EntityKind::Empty);
+  const EntityId curve = document.create_entity("Curve Child", EntityKind::Curve);
+  ASSERT_TRUE(document.set_curve(curve, {.curve = curve_asset}));
+  ASSERT_TRUE(document.set_parent(curve, group, false));
+  ASSERT_TRUE(document.set_selected(group, true));
+  const EntityId other_group =
+      document.create_entity("Unchanged Group", EntityKind::Empty);
+  const EntityId mesh = document.create_entity("Unchanged Mesh", EntityKind::Mesh);
+  const AssetId mesh_asset = assets.add_mesh(make_overlay_triangle_mesh());
+  ASSERT_TRUE(document.set_mesh(mesh, {.mesh = mesh_asset}));
+  ASSERT_TRUE(document.set_parent(mesh, other_group, false));
+  ASSERT_TRUE(document.set_selected(other_group, true));
+
+  RenderOverlaySnapshotCache cache;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  DimensionExtractionTarget target;
+  const auto submit = [&]() {
+    const auto &snapshot = cache.selection_snapshot(document, assets);
+    return coordinator.submit(
+        {.scene_overlay_snapshot = &snapshot,
+         .scene_selection_mode = RenderOverlaySelectionMode::Group,
+         .overlays_visible = true,
+         .scene_overlay_requested = true},
+        ViewportSettings::defaults(), target);
+  };
+  const auto initial_submission = submit();
+  expect_dimension_extents(initial_submission, {-0.5f, 0.0f, 0.0f},
+                           {4.0f, 1.5f, 1.0f});
+  const auto &initial = cache.selection_snapshot(document, assets);
+  ASSERT_EQ(initial.group_bounds.size(), 2u);
+  const auto *group_storage = initial.group_bounds.data();
+  const auto *wire_storage = initial.hierarchy_selection_wires.data();
+  const auto old_group_record = std::ranges::find_if(initial.group_bounds,
+      [other_group](const auto &bounds) { return bounds.entity == other_group; });
+  ASSERT_NE(old_group_record, initial.group_bounds.end());
+  const auto old_group = *old_group_record;
+
+  CurveAsset replacement = *assets.curve(curve_asset);
+  modeling::CurveDocument edited = *replacement.document;
+  ASSERT_TRUE(edited.transform(
+      modeling::Transform3{.origin = {10.0f, 3.0f, 0.0f}}).ok());
+  replacement.document =
+      std::make_shared<const modeling::CurveDocument>(std::move(edited));
+  ASSERT_TRUE(assets.replace_curve(curve_asset, std::move(replacement)));
+  ASSERT_TRUE(document.notify_curve_payload_changed(curve));
+
+  const auto refreshed_submission = submit();
+  expect_dimension_extents(refreshed_submission, {-0.5f, 0.0f, 0.0f},
+                           {14.0f, 4.5f, 1.0f});
+  EXPECT_NE(refreshed_submission.selection_dimension_signature,
+            initial_submission.selection_dimension_signature);
+  const auto &refreshed = cache.selection_snapshot(document, assets);
+  EXPECT_EQ(refreshed.group_bounds.data(), group_storage);
+  EXPECT_EQ(refreshed.hierarchy_selection_wires.data(), wire_storage);
+  const auto unchanged = std::ranges::find_if(refreshed.group_bounds,
+      [other_group](const auto &bounds) { return bounds.entity == other_group; });
+  ASSERT_NE(unchanged, refreshed.group_bounds.end());
+  EXPECT_FLOAT_EQ(unchanged->min.x, old_group.min.x);
+  EXPECT_FLOAT_EQ(unchanged->max.x, old_group.max.x);
+  EXPECT_FLOAT_EQ(unchanged->max.z, old_group.max.z);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_curve_refresh_count, 1u);
+  EXPECT_EQ(submit().selection_dimension_signature,
+            refreshed_submission.selection_dimension_signature);
   EXPECT_EQ(cache.stats().selection_curve_refresh_count, 1u);
 }
 
@@ -5173,6 +5374,254 @@ TEST(LightRenderableCacheTests, ConvertsEditorIntensityToViewportFilamentUnits) 
         EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(light),
                         static_cast<float>(physical * kPi));
     }
+}
+
+TEST(RenderSelectionDimensionIntegrationTests,
+     SingleAndMultipleMeshesMeasureTransformedAggregateExtents) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
+  const EntityId first = scene.create_entity("First Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(first, {.mesh = mesh}));
+  ASSERT_TRUE(scene.set_transform(first, {.position = {4.0f, 2.0f, -3.0f},
+                                          .scale = {2.0f, 1.0f, 3.0f}}));
+  const EntityId second = scene.create_entity("Second Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(second, {.mesh = mesh}));
+  ASSERT_TRUE(scene.set_transform(second, {.position = {-5.0f, -4.0f, 10.0f}}));
+  ASSERT_TRUE(scene.set_selected(first, true));
+
+  ViewportOverlaySubmissionCoordinator coordinator;
+  DimensionExtractionTarget target;
+  expect_dimension_extents(extract_selection_dimensions(
+                               scene, assets, RenderOverlaySelectionMode::Object,
+                               coordinator, target),
+                           {2.0f, 2.0f, -6.0f}, {6.0f, 2.0f, 0.0f});
+  ASSERT_TRUE(scene.set_selected(second, true));
+  expect_dimension_extents(extract_selection_dimensions(
+                               scene, assets, RenderOverlaySelectionMode::Object,
+                               coordinator, target),
+                           {-6.0f, -4.0f, -6.0f}, {6.0f, 2.0f, 11.0f});
+}
+
+TEST(RenderSelectionDimensionIntegrationTests,
+     SingleAndMultipleGroupsIncludeNestedInstanceContent) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
+  const EntityId definition = scene.create_empty("Hidden Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  ASSERT_TRUE(scene.set_visible(definition, false));
+  ASSERT_TRUE(scene.set_transform(definition, {.position = {100.0f, 0.0f, 0.0f}}));
+  const EntityId member = scene.create_entity("Definition Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(member, {.mesh = mesh}));
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+  ASSERT_TRUE(scene.set_transform(member, {.position = {1.0f, 0.0f, 0.0f}}));
+
+  const EntityId first = scene.create_empty("First Group");
+  ASSERT_TRUE(scene.set_transform(first, {.position = {10.0f, 0.0f, 0.0f}}));
+  const EntityId child = scene.create_entity("Group Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(child, {.mesh = mesh}));
+  ASSERT_TRUE(scene.set_parent(child, first, false));
+  ASSERT_TRUE(scene.set_transform(child, {.position = {2.0f, 1.0f, 0.0f}}));
+  const EntityId occurrence = scene.create_entity("Nested Instance", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(occurrence, {.definition = definition}));
+  ASSERT_TRUE(scene.set_parent(occurrence, first, false));
+  ASSERT_TRUE(scene.set_transform(occurrence, {.position = {-4.0f, 3.0f, 5.0f}}));
+
+  const EntityId second = scene.create_empty("Second Group");
+  ASSERT_TRUE(scene.set_transform(second, {.position = {-20.0f, -2.0f, -5.0f}}));
+  const EntityId second_child = scene.create_entity("Second Group Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(second_child, {.mesh = mesh}));
+  ASSERT_TRUE(scene.set_parent(second_child, second, false));
+  ASSERT_TRUE(scene.set_selected(first, true));
+
+  ViewportOverlaySubmissionCoordinator coordinator;
+  DimensionExtractionTarget target;
+  expect_dimension_extents(extract_selection_dimensions(
+                               scene, assets, RenderOverlaySelectionMode::Group,
+                               coordinator, target),
+                           {6.0f, 1.0f, -1.0f}, {13.0f, 3.0f, 6.0f});
+  ASSERT_TRUE(scene.set_selected(second, true));
+  expect_dimension_extents(extract_selection_dimensions(
+                               scene, assets, RenderOverlaySelectionMode::Group,
+                               coordinator, target),
+                           {-21.0f, -2.0f, -6.0f}, {13.0f, 3.0f, 6.0f});
+}
+
+TEST(RenderSelectionDimensionIntegrationTests,
+     FormalInstancesAndMixedSelectionMeasurePublicOccurrences) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
+  const EntityId definition = scene.create_empty("Hidden Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  ASSERT_TRUE(scene.set_visible(definition, false));
+  ASSERT_TRUE(scene.set_transform(definition, {.position = {100.0f, 0.0f, 0.0f}}));
+  for (const QVec3 position : {QVec3{}, QVec3{4.0f, 2.0f, 6.0f}}) {
+    const EntityId member = scene.create_entity("Definition Member", EntityKind::Mesh);
+    ASSERT_TRUE(scene.set_mesh(member, {.mesh = mesh}));
+    ASSERT_TRUE(scene.set_parent(member, definition, false));
+    ASSERT_TRUE(scene.set_transform(member, {.position = position}));
+  }
+  const EntityId first = scene.create_entity("First Instance", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(first, {.definition = definition}));
+  ASSERT_TRUE(scene.set_transform(first, {.position = {10.0f, -3.0f, 5.0f},
+                                          .scale = {2.0f, 1.0f, 3.0f}}));
+  const EntityId second = scene.create_entity("Second Instance", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(second, {.definition = definition}));
+  ASSERT_TRUE(scene.set_transform(second, {.position = {-10.0f, 7.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_selected(first, true));
+
+  ViewportOverlaySubmissionCoordinator coordinator;
+  DimensionExtractionTarget target;
+  expect_dimension_extents(extract_selection_dimensions(
+                               scene, assets, RenderOverlaySelectionMode::Object,
+                               coordinator, target),
+                           {8.0f, -3.0f, 2.0f}, {20.0f, -1.0f, 26.0f});
+  ASSERT_TRUE(scene.set_selected(second, true));
+  expect_dimension_extents(extract_selection_dimensions(
+                               scene, assets, RenderOverlaySelectionMode::Object,
+                               coordinator, target),
+                           {-11.0f, -3.0f, -1.0f}, {20.0f, 9.0f, 26.0f});
+
+  const EntityId group = scene.create_empty("Mixed Group");
+  const EntityId child = scene.create_entity("Group Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(child, {.mesh = mesh}));
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+  ASSERT_TRUE(scene.set_transform(child, {.position = {30.0f, -8.0f, -5.0f}}));
+  const EntityId loose_mesh = scene.create_entity("Mixed Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(loose_mesh, {.mesh = mesh}));
+  ASSERT_TRUE(scene.set_transform(loose_mesh, {.position = {-30.0f, 12.0f, 40.0f}}));
+  ASSERT_TRUE(scene.set_selected(group, true));
+  ASSERT_TRUE(scene.set_selected(loose_mesh, true));
+  expect_dimension_extents(extract_selection_dimensions(
+                               scene, assets, RenderOverlaySelectionMode::Object,
+                               coordinator, target),
+                           {-31.0f, -8.0f, -6.0f}, {31.0f, 12.0f, 41.0f});
+}
+
+TEST(RenderSelectionDimensionIntegrationTests,
+     SelectedFacesMeasureOnlyChosenVerticesAcrossMeshes) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader_poly::Document polygon = *make_authored_quad_mesh().authored_polygon_document;
+  polygon.vertices.insert(polygon.vertices.end(), {
+      {.id = 5u, .position = {-1.0f, 10.0f, -1.0f}},
+      {.id = 6u, .position = {1.0f, 10.0f, -1.0f}},
+      {.id = 7u, .position = {1.0f, 10.0f, 1.0f}},
+      {.id = 8u, .position = {-1.0f, 10.0f, 1.0f}},
+  });
+  polygon.faces.push_back({.id = 2u, .vertices = {5u, 6u, 7u, 8u}});
+  polygon.next_vertex_id = 9u;
+  polygon.next_face_id = 3u;
+  const auto first = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(polygon), {.name = "First Faces"});
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  const auto second = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(polygon), {.name = "Second Faces"});
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.object(second.value()).set_transform(
+      {.position = {10.0f, 5.0f, -4.0f}}).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(first.value(), 1).ok());
+
+  DimensionModelingFrameProvider provider(session.modeling());
+  DimensionExtractionTarget target;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  const auto submit = [&] {
+    const auto scene = build_render_overlay_selection_snapshot(session.scene(), session.assets());
+    const auto revisions = editor.revisions();
+    return coordinator.submit(
+        {.selection_source = {
+             .source_identity = reinterpret_cast<std::uintptr_t>(&session.modeling()),
+             .content_revision = revisions.modeling_content_revision,
+             .selection_revision = revisions.modeling_selection_revision,
+             .scene_revision = revisions.scene_revision,
+             .asset_revision = revisions.asset_revision,
+             .overlay_signature = session.modeling().selection_overlay_signature(),
+             .selection_context = ViewportOverlaySelectionContext::Face},
+         .selection_frame_provider = &provider,
+         .scene_overlay_snapshot = &scene,
+         .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = ViewportOverlaySelectionContext::Face,
+         .overlays_visible = true,
+         .scene_overlay_requested = true},
+        ViewportSettings::defaults(), target);
+  };
+  expect_dimension_extents(submit(), {-1.0f, 0.0f, -1.0f}, {1.0f, 0.0f, 1.0f});
+  ASSERT_TRUE(editor.selection().select_face(
+      second.value(), 1, QuaderSelectionEdit::Add).ok());
+  expect_dimension_extents(submit(), {-1.0f, 0.0f, -5.0f}, {11.0f, 5.0f, 1.0f});
+  ASSERT_TRUE(editor.selection().select_face(
+      first.value(), 2, QuaderSelectionEdit::Add).ok());
+  expect_dimension_extents(submit(), {-1.0f, 0.0f, -5.0f}, {11.0f, 10.0f, 1.0f});
+}
+
+TEST(RenderSelectionDimensionIntegrationTests,
+     LiveFaceExtrusionRefreshesDimensionsAndCancelRestoresCommittedBounds) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader_poly::Document polygon;
+  const std::array vertices{
+      quader_poly::add_vertex(polygon, {0.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(polygon, {2.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(polygon, {2.0f, 1.0f, 0.0f}),
+      quader_poly::add_vertex(polygon, {0.0f, 1.0f, 0.0f})};
+  const auto face = quader_poly::add_face(polygon, vertices);
+  const auto object = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(std::move(polygon)),
+      {.name = "Extrusion Dimensions"});
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(object.value(),
+      static_cast<QuaderElementId>(face)).ok());
+
+  DimensionModelingFrameProvider provider(session.modeling());
+  DimensionExtractionTarget target;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  const auto submit = [&] {
+    const auto revisions = editor.revisions();
+    return coordinator.submit(
+        {.selection_source = {
+             .source_identity = reinterpret_cast<std::uintptr_t>(&session.modeling()),
+             .content_revision = revisions.modeling_content_revision,
+             .selection_revision = revisions.modeling_selection_revision,
+             .scene_revision = revisions.scene_revision,
+             .asset_revision = revisions.asset_revision,
+             .overlay_signature = session.modeling().selection_overlay_signature(),
+             .selection_context = ViewportOverlaySelectionContext::Face},
+         .selection_frame_provider = &provider,
+         .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = ViewportOverlaySelectionContext::Face,
+         .overlays_visible = true},
+        ViewportSettings::defaults(), target);
+  };
+  expect_dimension_extents(submit(), {0.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 0.0f});
+  ASSERT_TRUE(session.extrude().set_mode(modeling::FaceExtrudeMode::Region).ok);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(session.extrude().set_amount(1.0).ok);
+  const auto durable = editor.revisions();
+  for (const double amount : {2.15, 2.1501, 3.25, 0.0, -1.25}) {
+    SCOPED_TRACE(amount);
+    ASSERT_TRUE(session.extrude().set_amount(amount).ok);
+    const auto revisions = editor.revisions();
+    EXPECT_EQ(revisions.modeling_content_revision, durable.modeling_content_revision);
+    EXPECT_EQ(revisions.asset_revision, durable.asset_revision);
+    const auto result = submit();
+    EXPECT_TRUE(result.selection_source_refreshed);
+    const float height = static_cast<float>(
+        amount / viewport_host_defaults().map_units_per_world_unit);
+    expect_dimension_extents(result, {0.0f, 0.0f, height}, {2.0f, 1.0f, height});
+    const auto work = coordinator.work_counters();
+    EXPECT_FALSE(submit().selection_source_refreshed);
+    EXPECT_EQ(coordinator.work_counters().selection_dimension_bounds_build_count,
+              work.selection_dimension_bounds_build_count);
+  }
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(session.extrude().preview_active());
+  const auto canceled = submit();
+  EXPECT_TRUE(canceled.selection_source_refreshed);
+  expect_dimension_extents(canceled, {0.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 0.0f});
 }
 
 TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds) {

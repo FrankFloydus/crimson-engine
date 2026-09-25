@@ -2113,6 +2113,7 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   bool gizmos_visible = true;
   bool mesh_grid_visible = true;
   bool overlays_visible = true;
+  bool dimensions_visible = true;
   bool viewport_info_visible = true;
   bool navigation_gizmo_visible = true;
   bool grid_snap_enabled = true;
@@ -2169,6 +2170,13 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
           [&](bool visible) {
             const bool changed = overlays_visible != visible;
             overlays_visible = visible;
+            return runtime_result(changed);
+          },
+      .dimensions_visible = [&]() { return dimensions_visible; },
+      .set_dimensions_visible =
+          [&](bool visible) {
+            const bool changed = dimensions_visible != visible;
+            dimensions_visible = visible;
             return runtime_result(changed);
           },
       .grid_snap_enabled = [&]() { return grid_snap_enabled; },
@@ -2236,6 +2244,8 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.preferences().set_gizmos_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_mesh_grid_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_overlays_visible(false).changed());
+  EXPECT_TRUE(editor.preferences().set_dimensions_visible(false).changed());
+  EXPECT_FALSE(editor.preferences().set_dimensions_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_viewport_info_visible(false).changed());
   EXPECT_TRUE(
       editor.preferences().set_navigation_gizmo_visible(false).changed());
@@ -2250,6 +2260,7 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_FALSE(editor.preferences().gizmos_visible());
   EXPECT_FALSE(editor.preferences().mesh_grid_visible());
   EXPECT_FALSE(editor.preferences().overlays_visible());
+  EXPECT_FALSE(editor.preferences().dimensions_visible());
   EXPECT_FALSE(editor.preferences().viewport_info_visible());
   EXPECT_FALSE(editor.preferences().navigation_gizmo_visible());
   EXPECT_FALSE(editor.preferences().grid_snap_enabled());
@@ -2270,6 +2281,10 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.commands()
                   .execute(quader::quader_command::kViewportToggleOverlays)
                   .changed());
+  EXPECT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleDimensions)
+                  .changed());
+  EXPECT_TRUE(editor.preferences().dimensions_visible());
   EXPECT_TRUE(editor.commands()
                   .execute(quader::quader_command::kViewportToggleInfo)
                   .changed());
@@ -2295,6 +2310,7 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
                   .ok());
   const auto catalog = editor.commands().keybinding_catalog();
   for (const quader::QuaderCommandId command : {
+           quader::quader_command::kViewportToggleDimensions,
            quader::quader_command::kViewportToggleInfo,
            quader::quader_command::kViewportToggleNavigationGizmo,
            quader::quader_command::kViewportLayoutThreePrimaryRight,
@@ -22069,9 +22085,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 221u);
+  EXPECT_EQ(commands.size(), 222u);
 #else
-  EXPECT_EQ(commands.size(), 220u);
+  EXPECT_EQ(commands.size(), 221u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

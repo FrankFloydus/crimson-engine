@@ -1654,6 +1654,19 @@ void UISystem::install_runtime_hooks(
             }
             return runtime_status(changed);
           },
+      .dimensions_visible = [this]() {
+        return viewport_settings_.bool_value(ViewportBoolSettingId::ShowDimensions);
+      },
+      .set_dimensions_visible =
+          [this](bool visible) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::ShowDimensions, visible);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
       .collisions_visible = [this]() {
         return viewport_settings_.bool_value(ViewportBoolSettingId::ShowCollisions);
       },

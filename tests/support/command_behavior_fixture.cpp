@@ -517,6 +517,11 @@ private:
             [this](bool value) {
               return set_preference(overlays_visible_, value);
             },
+        .dimensions_visible = [this] { return dimensions_visible_; },
+        .set_dimensions_visible =
+            [this](bool value) {
+              return set_preference(dimensions_visible_, value);
+            },
         .collisions_visible = [this] { return collisions_visible_; },
         .set_collisions_visible =
             [this](bool value) {
@@ -1345,6 +1350,7 @@ private:
   bool gizmos_visible_ = true;
   bool mesh_grid_visible_ = true;
   bool overlays_visible_ = true;
+  bool dimensions_visible_ = true;
   bool collisions_visible_ = true;
   bool grid_snap_enabled_ = true;
   bool vertex_snap_enabled_ = true;

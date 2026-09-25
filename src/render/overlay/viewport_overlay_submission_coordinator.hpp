@@ -21,6 +21,10 @@
 namespace quader {
 
 class ViewportSettings;
+struct RenderToolPreviewMeshRecord;
+struct RenderToolPreviewGroupMarkerRecord;
+struct RenderToolPreviewCurveRecord;
+struct RenderToolPreviewSuppressionSnapshot;
 
 /** Source-owner facts that invalidate the shared component-selection frame. */
 struct ViewportOverlaySelectionSourceStamp final {
@@ -99,6 +103,7 @@ struct ViewportOverlayPersistentSubmissionStamp final {
   bool scene_overlay_requested = false;
   bool wireframe_pane = false;
   bool point_light_gizmos_visible = false;
+  bool selection_dimension_box_visible = false;
 
   friend bool operator==(const ViewportOverlayPersistentSubmissionStamp &,
                          const ViewportOverlayPersistentSubmissionStamp &) =
@@ -117,10 +122,23 @@ struct ViewportOverlayPointLightRadiusSubmissionStamp final {
                          const ViewportOverlayPointLightRadiusSubmissionStamp &) = default;
 };
 
+/** Screen-spaced dimension dashes use only the retained bounds and pane camera. */
+struct ViewportOverlaySelectionDimensionSubmissionStamp final {
+  std::uint64_t bounds_revision = 0u;
+  std::array<float, 18u> camera_values{};
+  ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
+  float raster_scale = 1.0f;
+  bool active = false;
+
+  friend bool operator==(const ViewportOverlaySelectionDimensionSubmissionStamp &,
+                         const ViewportOverlaySelectionDimensionSubmissionStamp &) = default;
+};
+
 /** Keys the small frame-volatile stream separately from retained geometry. */
 struct ViewportOverlayDynamicSubmissionStamp final {
   std::uint64_t mesh_outline_revision = 0u;
   ViewportOverlayPointLightRadiusSubmissionStamp point_light_radius;
+  ViewportOverlaySelectionDimensionSubmissionStamp selection_dimensions;
   ViewportOverlayDynamicToolSourceStamp dynamic_tools;
   /** Identifies one volatile modeling-overlay publication without hashing its geometry. */
   struct VolatileModelingSourceStamp final {
@@ -185,6 +203,13 @@ struct ViewportOverlaySubmissionRequest final {
   const ViewportOverlaySelectionFrameProvider *selection_frame_provider =
       nullptr;
   const RenderOverlaySelectionSnapshot *scene_overlay_snapshot = nullptr;
+  /// Original bounds before source-replacing previews suppress render cages.
+  const RenderOverlaySelectionSnapshot *selection_dimension_scene_snapshot = nullptr;
+  /// Accepted preview payloads pinned by the bridge for this submission.
+  std::span<const RenderToolPreviewMeshRecord> selection_dimension_preview_meshes;
+  std::span<const RenderToolPreviewGroupMarkerRecord> selection_dimension_preview_groups;
+  std::span<const RenderToolPreviewCurveRecord> selection_dimension_preview_curves;
+  const RenderToolPreviewSuppressionSnapshot *selection_dimension_preview_suppression = nullptr;
   /// Borrowed persistent mesh geometry; present only for whole-mesh outline selection.
   const RenderOverlaySelectedObjectSnapshot *selected_mesh_outline_snapshot = nullptr;
   const ViewportOverlayFrame *volatile_modeling_overlay_frame = nullptr;
@@ -206,6 +231,7 @@ struct ViewportOverlaySubmissionRequest final {
   bool scene_overlay_requested = false;
   bool wireframe_pane = false;
   bool point_light_gizmos_visible = false;
+  bool selection_dimensions_visible = true;
 };
 
 /** Outcome plus the unstyled dynamic stream consumed by the Qt edge HUD. */
@@ -213,6 +239,8 @@ struct ViewportOverlaySubmissionResult final {
   /// Borrowed from the coordinator until this pane changes or is invalidated.
   const ViewportOverlayFrame *edge_hud_frame = nullptr;
   std::uint64_t dynamic_source_signature = 0u;
+  std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds;
+  std::uint64_t selection_dimension_signature = 0u;
   bool persistent_submitted = false;
   bool dynamic_submitted = false;
   bool persistent_recovered = false;
@@ -231,6 +259,9 @@ struct ViewportOverlaySubmissionWorkCounters final {
   std::uint64_t curve_overlay_build_count = 0u;
   std::uint64_t point_light_radius_source_refresh_count = 0u;
   std::uint64_t point_light_radius_camera_build_count = 0u;
+  std::uint64_t selection_dimension_bounds_build_count = 0u;
+  std::uint64_t selection_dimension_source_record_count = 0u;
+  std::uint64_t selection_dimension_frame_build_count = 0u;
 };
 
 /**
@@ -263,6 +294,19 @@ private:
     bool valid = false;
   };
 
+  /** Bounds depend on selection publications, never on camera or paint style. */
+  struct SelectionDimensionSourceState final {
+    std::uint64_t selection_overlay_revision = 0u;
+    ViewportOverlaySceneSubmissionStamp scene;
+    std::uintptr_t tool_preview_identity = 0u;
+    std::uint64_t tool_preview_revision = 0u;
+    RenderOverlaySelectionMode mode = RenderOverlaySelectionMode::Object;
+    ViewportOverlaySelectionContext context = ViewportOverlaySelectionContext::Any;
+    std::optional<ViewportSelectionDimensionBounds> bounds;
+    std::uint64_t publication_revision = 0u;
+    bool valid = false;
+  };
+
   /** Retains per-pane persistent and dynamic overlay stream state. */
   struct PaneState final {
     ViewportOverlayPersistentSubmissionStamp persistent;
@@ -274,16 +318,19 @@ private:
     ViewportOverlaySceneSubmissionStamp point_light_source;
     std::vector<RenderOverlayLightMarkerSnapshot> selected_point_lights;
     ViewportOverlayFrame point_light_radius_frame;
+    ViewportOverlayFrame selection_dimension_frame;
     bool point_light_source_valid = false;
     bool point_light_radius_enabled = false;
   };
 
   std::array<PaneState, kMaxViewportSlots> panes_;
   SelectionSourceState selection_source_;
+  SelectionDimensionSourceState selection_dimensions_;
   CurveToolOverlayCache curve_overlay_source_;
   SelectedMeshOutlineCache mesh_outline_source_;
   ViewportOverlaySubmissionWorkCounters work_counters_;
   std::uint64_t dynamic_source_publication_revision_ = 0u;
+  std::uint64_t selection_dimension_publication_revision_ = 0u;
 };
 
 } // namespace quader
