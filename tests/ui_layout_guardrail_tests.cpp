@@ -2265,14 +2265,9 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     HomePresentationContainsOnlyProjectEntryChrome) {
+     HomeKeepsEditorChromeInWorkspace) {
   const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
-  const std::string home_header =
-      read_source_file("src/ui/qt_project_home_page.hpp");
-  const std::string home_source =
-      read_source_file("src/ui/qt_project_home_page.cpp");
-
   expect_contains(ui_source, "main_window_->menuBar()->hide()");
   expect_contains(ui_source, "main_window_->statusBar()->hide()");
   expect_contains(ui_source, "selection_toolbar_->hide()");
@@ -2290,12 +2285,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_header, "workspace_window_state_");
   expect_contains(ui_source, "capture_workspace_window_state()");
   expect_contains(ui_source, "std::string state_bytes = workspace_window_state_");
-  expect_missing(home_header, "QLabel *title_label_");
-  expect_missing(home_source, "projectHome.title");
-  expect_missing(home_source, "projectHome.separator");
-  expect_contains(home_source,
-                  "left_rail_->setBackgroundRole(QPalette::AlternateBase)");
-  expect_missing(home_source, "left_rail_->setPalette(");
 }
 
 TEST(UiLayoutGuardrailTests,

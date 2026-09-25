@@ -4796,11 +4796,11 @@ void UISystem::refresh_localized_chrome() {
   }
   if (project_home_page_ != nullptr) {
     project_home_page_->set_labels(QtProjectHomeLabels{
-        .new_project = text("ui.home.new_project", "New"),
-        .open_project = text("ui.home.open_project", "Open"),
+        .new_project = text("ui.home.new_project", "New project"),
+        .open_project = text("ui.home.open_project", "Open project…"),
         .recent_projects =
-            text("ui.home.recent_projects", "Recent"),
-        .recent_name_column = text("ui.home.recent_name", "Name"),
+            text("ui.home.recent_projects", "Recent projects"),
+        .recent_name_column = text("ui.home.recent_name", "Project"),
         .recent_last_modified_column = text(
             "ui.home.recent_last_modified", "Last modified"),
         .recent_size_column = text("ui.home.recent_size", "Size"),
@@ -4819,6 +4819,20 @@ void UISystem::refresh_localized_chrome() {
             text("ui.home.recent_action.copy_path", "Copy path"),
         .remove_recent_project = text(
             "ui.home.recent_action.remove", "Remove from recent"),
+        .title = text("ui.home.title", "Projects"),
+        .tutorial_title = text(
+            "ui.home.tutorial.title", "Your first hour in Quader"),
+        .tutorial_description = text(
+            "ui.home.tutorial.description",
+            "Learn the basics and build your first scene."),
+        .tutorial_action = text("ui.home.tutorial.action", "Start tutorial"),
+        .documentation_title = text(
+            "ui.home.documentation.title", "Read the Docs"),
+        .documentation_description = text(
+            "ui.home.documentation.description",
+            "Explore guides to Quader’s tools and workflows."),
+        .documentation_action = text(
+            "ui.home.documentation.action", "Open docs"),
     });
   }
   if (scene_workspace_ != nullptr) {

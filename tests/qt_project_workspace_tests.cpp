@@ -20,6 +20,7 @@
 #include "render/render_system.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_application_style.hpp"
 #include "ui/qt_auxiliary_window_state.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_main_menu.hpp"
@@ -46,6 +47,7 @@
 
 #include <QAction>
 #include <QAbstractItemModel>
+#include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QBuffer>
@@ -87,10 +89,13 @@
 #include <QPushButton>
 #include <QPixmap>
 #include <QScreen>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyleOption>
+#include <QStyleOptionViewItem>
 #include <QTableView>
 #include <QToolBar>
 #include <QToolButton>
@@ -1757,15 +1762,382 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
+     HomeLayoutKeepsCardsReadableAcrossScaleWidthAndNativePalettes) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_project_home_presentation_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+  const QPalette native_palette = application.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application);
+  const QIcon application_icon = quader::qt_multiresolution_icon(
+      QStringLiteral(QUADER_SOURCE_DIR "/resources/icons/quader_256.png"));
+  ASSERT_FALSE(application_icon.isNull());
+  QApplication::setWindowIcon(application_icon);
+  quader::QtProjectHomePage home;
+  const std::vector<quader::QtRecentProjectItem> projects{
+      {.name = QStringLiteral("Courtyard"),
+       .manifest_path = QStringLiteral("C:/Projects/Courtyard/Courtyard.qproj"),
+       .manifest_last_modified_unix_ms = 1790250000000,
+       .manifest_size_bytes = 32768u},
+      {.name = QStringLiteral("Industrial passage"),
+       .manifest_path = QStringLiteral(
+           "C:/Projects/Experiments/Environment blockouts/Industrial passage/"
+           "Industrial passage.qproj"),
+       .manifest_last_modified_unix_ms = 1790163600000,
+       .manifest_size_bytes = 18432u},
+      {.name = QStringLiteral("Lighting studies"),
+       .manifest_path = QStringLiteral(
+           "C:/Projects/Lighting studies/Lighting studies.qproj"),
+       .manifest_last_modified_unix_ms = 1789990800000,
+       .manifest_size_bytes = 4096u},
+      {.name = QStringLiteral("Archived prototype"),
+       .manifest_path = QStringLiteral("D:/Archive/Prototype/Prototype.qproj"),
+       .available = false},
+  };
+  home.set_recent_projects(projects);
+  home.resize(1200, 740);
+  home.show();
+  auto *scroll = home.findChild<QScrollArea *>(
+      QStringLiteral("projectHome.scroll"));
+  auto *table = home.findChild<QTableView *>(
+      QStringLiteral("projectHome.recentProjects.view"));
+  auto *recent_frame = home.findChild<QFrame *>(
+      QStringLiteral("projectHome.recentProjects.frame"));
+  auto *title = home.findChild<QLabel *>(QStringLiteral("projectHome.title"));
+  auto *logo = home.findChild<QLabel *>(QStringLiteral("projectHome.logo"));
+  auto *new_project = home.findChild<QPushButton *>(
+      QStringLiteral("projectHome.newProject"));
+  auto *open_project = home.findChild<QPushButton *>(
+      QStringLiteral("projectHome.openProject"));
+  auto *tutorial = home.findChild<QWidget *>(
+      QStringLiteral("projectHome.tutorial.card"));
+  auto *documentation = home.findChild<QWidget *>(
+      QStringLiteral("projectHome.documentation.card"));
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_NE(scroll->widget(), nullptr);
+  ASSERT_NE(table, nullptr);
+  ASSERT_NE(recent_frame, nullptr);
+  ASSERT_NE(title, nullptr);
+  ASSERT_NE(logo, nullptr);
+  ASSERT_NE(new_project, nullptr);
+  ASSERT_NE(open_project, nullptr);
+  ASSERT_NE(tutorial, nullptr);
+  ASSERT_NE(documentation, nullptr);
+  EXPECT_EQ(new_project->text(), QStringLiteral("New project"));
+  EXPECT_EQ(open_project->text(), QStringLiteral("Open project\u2026"));
+  EXPECT_TRUE(new_project->isDefault());
+  EXPECT_FALSE(QImage(QStringLiteral(":/quader/home/tutorial.png")).isNull());
+  EXPECT_FALSE(QImage(QStringLiteral(":/quader/home/documentation.png")).isNull());
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+  const auto settle_layout = [&]() {
+    for (int pass = 0; pass < 4; ++pass) {
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      application.processEvents();
+      home.layout()->activate();
+      scroll->widget()->layout()->activate();
+    }
+  };
+  const auto render_project_name = [&](const QString &manifest_path) {
+    home.set_recent_projects({{
+        .name = QStringLiteral("Same project name"),
+        .manifest_path = manifest_path,
+    }});
+    QStyleOptionViewItem option;
+    option.initFrom(table);
+    option.rect = QRect(0, 0, 480,
+                        table->verticalHeader()->defaultSectionSize());
+    option.widget = table;
+    option.state = QStyle::State_Enabled | QStyle::State_Active;
+    option.font = table->font();
+    option.fontMetrics = QFontMetrics(option.font);
+    QImage rendered(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(table->palette().color(QPalette::Base));
+    QPainter painter(&rendered);
+    const QModelIndex index = table->model()->index(
+        0, quader::QtRecentProjectsModel::NameColumn);
+    table->itemDelegateForIndex(index)->paint(&painter, option, index);
+    painter.end();
+    return rendered;
+  };
+  const QImage first_path = render_project_name(
+      QStringLiteral("C:/Alpha/project.qproj"));
+  const QImage second_path = render_project_name(
+      QStringLiteral("C:/Omega/project.qproj"));
+  const QRect path_line(0, first_path.height() / 2, first_path.width(),
+                        first_path.height() - first_path.height() / 2);
+  EXPECT_NE(first_path.copy(path_line), second_path.copy(path_line))
+      << "same-name projects must display their distinct paths on the second line";
+  home.set_recent_projects(projects);
+  const auto content_rect = [&](QWidget *widget) {
+    return QRect(widget->mapTo(scroll->widget(), QPoint()), widget->size());
+  };
+  const auto expect_rounded_recent_frame = [&]() {
+    QStyleOption option;
+    option.initFrom(recent_frame);
+    if (!quader::qt_application_style_active(&option)) {
+      return;
+    }
+    QWidget *content = scroll->widget();
+    QImage rendered(content->size(), QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(content->palette().color(QPalette::Window));
+    QPainter painter(&rendered);
+    content->render(&painter);
+    painter.end();
+    const QRect bounds = content_rect(recent_frame);
+    ASSERT_TRUE(rendered.rect().contains(bounds.adjusted(-2, -2, 2, 2)));
+    const QColor exterior = rendered.pixelColor(bounds.topLeft() - QPoint(2, 2));
+    for (const QPoint &corner : {bounds.topLeft(), bounds.topRight(),
+                                  bounds.bottomLeft(), bounds.bottomRight()}) {
+      EXPECT_EQ(rendered.pixelColor(corner), exterior)
+          << "table children must not cover the rounded outer corners";
+    }
+    const QColor border = recent_frame->palette().color(QPalette::Midlight);
+    EXPECT_NE(border, exterior);
+    for (const QPoint &edge : {
+             QPoint(bounds.center().x(), bounds.top()),
+             QPoint(bounds.center().x(), bounds.bottom()),
+             QPoint(bounds.left(), bounds.center().y()),
+             QPoint(bounds.right(), bounds.center().y())}) {
+      EXPECT_EQ(rendered.pixelColor(edge), border)
+          << "the contained recent-project surface must retain its quiet border";
+    }
+  };
+  const auto review = [&](const QString &suffix, bool stacked) {
+    settle_layout();
+    SCOPED_TRACE(suffix.toStdString());
+    expect_rounded_recent_frame();
+    EXPECT_TRUE(title->isVisible());
+    EXPECT_TRUE(logo->isVisible());
+    ASSERT_FALSE(logo->pixmap().isNull());
+    EXPECT_EQ(logo->accessibleName(), QStringLiteral("Quader"));
+    EXPECT_LE(logo->pixmap().deviceIndependentSize().width(), logo->width());
+    EXPECT_LE(logo->pixmap().deviceIndependentSize().height(), logo->height());
+    if (home.layoutDirection() == Qt::RightToLeft) {
+      EXPECT_GT(content_rect(logo).left(), content_rect(title).right());
+    } else {
+      EXPECT_LT(content_rect(logo).right(), content_rect(title).left());
+    }
+    EXPECT_LE(std::abs(content_rect(logo).center().y() -
+                       content_rect(title).center().y()),
+              1);
+    EXPECT_TRUE(new_project->isVisible());
+    EXPECT_TRUE(open_project->isVisible());
+    EXPECT_GE(title->height(), title->fontMetrics().height());
+    EXPECT_GE(new_project->width(), new_project->sizeHint().width());
+    EXPECT_GE(open_project->width(), open_project->sizeHint().width());
+    EXPECT_GT(content_rect(tutorial).top(), content_rect(table).bottom());
+    if (stacked) {
+      EXPECT_GT(content_rect(documentation).top(),
+                content_rect(tutorial).bottom());
+    } else {
+      EXPECT_EQ(content_rect(tutorial).top(), content_rect(documentation).top());
+      EXPECT_LE(std::abs(tutorial->width() - documentation->width()), 1);
+      EXPECT_FALSE(content_rect(tutorial).intersects(content_rect(documentation)));
+    }
+    for (const QString &kind : {QStringLiteral("tutorial"),
+                                QStringLiteral("documentation")}) {
+      auto *card = home.findChild<QWidget *>(
+          QStringLiteral("projectHome.%1.card").arg(kind));
+      auto *card_title = home.findChild<QLabel *>(
+          QStringLiteral("projectHome.%1.title").arg(kind));
+      auto *description = home.findChild<QLabel *>(
+          QStringLiteral("projectHome.%1.description").arg(kind));
+      auto *action = home.findChild<QPushButton *>(
+          QStringLiteral("projectHome.%1.action").arg(kind));
+      ASSERT_NE(card, nullptr);
+      ASSERT_NE(card_title, nullptr);
+      ASSERT_NE(description, nullptr);
+      ASSERT_NE(action, nullptr);
+      EXPECT_TRUE(card->isVisible());
+      EXPECT_TRUE(card_title->isVisible());
+      EXPECT_TRUE(description->isVisible());
+      EXPECT_TRUE(action->isVisible());
+      EXPECT_FALSE(card_title->text().isEmpty());
+      EXPECT_FALSE(description->text().isEmpty());
+      EXPECT_TRUE(description->wordWrap());
+      EXPECT_GE(description->height(),
+                description->heightForWidth(description->width()));
+      EXPECT_GE(card_title->height(),
+                card_title->heightForWidth(card_title->width()));
+      EXPECT_GE(action->width(), action->sizeHint().width());
+      EXPECT_TRUE(card->rect().contains(
+          QRect(action->mapTo(card, QPoint()), action->size())));
+      EXPECT_LE(card_title->mapTo(card, QPoint()).y() + card_title->height(),
+                description->mapTo(card, QPoint()).y());
+      EXPECT_LE(description->mapTo(card, QPoint()).y() + description->height(),
+                action->mapTo(card, QPoint()).y());
+      EXPECT_LE(content_rect(card).right(), scroll->widget()->rect().right());
+      EXPECT_GE(content_rect(card).left(), 0);
+    }
+    if (!review_directory.isEmpty()) {
+      EXPECT_TRUE(home.grab().save(QDir(review_directory).filePath(
+          QStringLiteral("launcher-%1.png").arg(suffix))));
+    }
+  };
+
+  int cycle = 0;
+  int baseline_row_height = 0;
+  QSize baseline_logo_size;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    const auto &metrics = scale_controller.metrics();
+    home.apply_ui_scale(metrics);
+    home.resize(metrics.px(1200), metrics.px(740));
+    settle_layout();
+    table->setCurrentIndex(table->model()->index(0, 0));
+    table->selectRow(0);
+    table->setFocus();
+    const int row_height = table->verticalHeader()->defaultSectionSize();
+    EXPECT_GE(row_height, table->fontMetrics().height() * 2);
+    if (cycle == 0) {
+      baseline_row_height = row_height;
+      baseline_logo_size = logo->size();
+    } else if (factor == 1.0F) {
+      EXPECT_EQ(row_height, baseline_row_height);
+      EXPECT_EQ(logo->size(), baseline_logo_size);
+    } else {
+      EXPECT_GT(row_height, baseline_row_height);
+      EXPECT_GT(logo->width(), baseline_logo_size.width());
+      EXPECT_GT(logo->height(), baseline_logo_size.height());
+    }
+    review(QStringLiteral("%1-%2").arg(qRound(factor * 100)).arg(cycle++), false);
+    if (factor == 2.0F) {
+      quader::QtProjectHomePage restored_at_saved_scale;
+      restored_at_saved_scale.apply_ui_scale(metrics);
+      const auto *restored_logo = restored_at_saved_scale.findChild<QLabel *>(
+          QStringLiteral("projectHome.logo"));
+      ASSERT_NE(restored_logo, nullptr);
+      EXPECT_FALSE(restored_logo->pixmap().isNull());
+      EXPECT_EQ(restored_logo->pixmap().deviceIndependentSize(),
+                logo->pixmap().deviceIndependentSize());
+      for (const QString &object_name : {
+               QStringLiteral("projectHome.title"),
+               QStringLiteral("projectHome.recentProjects.label"),
+               QStringLiteral("projectHome.tutorial.title"),
+               QStringLiteral("projectHome.documentation.title")}) {
+        const auto *live_label = home.findChild<QLabel *>(object_name);
+        const auto *restored_label =
+            restored_at_saved_scale.findChild<QLabel *>(object_name);
+        ASSERT_NE(live_label, nullptr);
+        ASSERT_NE(restored_label, nullptr);
+        EXPECT_DOUBLE_EQ(restored_label->font().pointSizeF(),
+                         live_label->font().pointSizeF())
+            << object_name.toStdString()
+            << " must look identical after saved-scale startup and live scaling";
+        EXPECT_EQ(restored_label->font().weight(), live_label->font().weight());
+      }
+      home.resize(1200, 740);
+      review(QStringLiteral("200-fixed-window"), true);
+      EXPECT_GT(scroll->verticalScrollBar()->maximum(), 0);
+      scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+      settle_layout();
+      if (!review_directory.isEmpty()) {
+        EXPECT_TRUE(home.grab().save(QDir(review_directory).filePath(
+            QStringLiteral("launcher-200-fixed-window-scrolled.png"))));
+      }
+      scroll->verticalScrollBar()->setValue(0);
+    }
+  }
+
+  home.resize(660, 740);
+  review(QStringLiteral("narrow"), true);
+  auto translated = quader::QtProjectHomeLabels::defaults();
+  translated.title = QStringLiteral("Progetti");
+  translated.new_project = QStringLiteral("Nuovo progetto");
+  translated.open_project = QStringLiteral("Apri progetto\u2026");
+  translated.recent_projects = QStringLiteral("Progetti recenti");
+  translated.recent_name_column = QStringLiteral("Progetto");
+  translated.recent_last_modified_column = QStringLiteral("Ultima modifica");
+  translated.recent_size_column = QStringLiteral("Dimensione");
+  translated.tutorial_title = QStringLiteral("La tua prima ora in Quader");
+  translated.tutorial_description =
+      QStringLiteral("Impara le basi e costruisci la tua prima scena.");
+  translated.tutorial_action = QStringLiteral("Inizia il tutorial");
+  translated.documentation_title = QStringLiteral("Leggi la documentazione");
+  translated.documentation_description = QStringLiteral(
+      "Esplora le guide agli strumenti e ai flussi di lavoro di Quader.");
+  translated.documentation_action = QStringLiteral("Apri la documentazione");
+  home.set_labels(std::move(translated));
+  review(QStringLiteral("narrow-italian"), true);
+  home.set_labels(quader::QtProjectHomeLabels::defaults());
+  home.resize(1200, 740);
+  home.setLayoutDirection(Qt::RightToLeft);
+  review(QStringLiteral("rtl"), false);
+  EXPECT_GT(content_rect(tutorial).left(), content_rect(documentation).left());
+  EXPECT_GT(content_rect(title).left(), content_rect(new_project).left());
+
+  home.setLayoutDirection(Qt::LeftToRight);
+  QPalette light_palette(QColor(238, 238, 238), QColor(250, 250, 250));
+  light_palette.setColor(QPalette::Window, QColor(250, 250, 250));
+  light_palette.setColor(QPalette::Base, QColor(255, 255, 255));
+  light_palette.setColor(QPalette::AlternateBase, QColor(242, 242, 242));
+  light_palette.setColor(QPalette::Button, QColor(238, 238, 238));
+  light_palette.setColor(QPalette::Text, QColor(20, 20, 20));
+  light_palette.setColor(QPalette::WindowText, QColor(45, 45, 45));
+  light_palette.setColor(QPalette::ButtonText, QColor(20, 20, 20));
+  light_palette.setColor(QPalette::Highlight, QColor(0, 90, 180));
+  light_palette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
+  home.setPalette(light_palette);
+  review(QStringLiteral("explicit-light-palette"), false);
+  EXPECT_EQ(tutorial->palette().color(QPalette::Text),
+            light_palette.color(QPalette::Text));
+  home.setPalette(QPalette{});
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  review(QStringLiteral("native-high-contrast-fallback"), false);
+  EXPECT_EQ(application.palette().resolveMask(), 0u);
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::NoPreference);
+
+  home.set_recent_projects({});
+  settle_layout();
+  expect_rounded_recent_frame();
+  EXPECT_TRUE(table->isHidden());
+  EXPECT_TRUE(tutorial->isVisible());
+  EXPECT_TRUE(documentation->isVisible());
+  if (!review_directory.isEmpty()) {
+    EXPECT_TRUE(home.grab().save(QDir(review_directory).filePath(
+        QStringLiteral("launcher-empty.png"))));
+  }
+
+  std::vector<quader::QtRecentProjectItem> many_projects;
+  for (int index = 0; index < 12; ++index) {
+    many_projects.push_back({
+        .name = QStringLiteral("Project %1").arg(index),
+        .manifest_path = QStringLiteral("C:/Projects/%1/project.qproj").arg(index),
+    });
+  }
+  home.set_recent_projects(many_projects);
+  settle_layout();
+  EXPECT_EQ(home.recent_projects_model().rowCount(),
+            quader::kQtProjectHomeMaximumRecentProjects);
+  EXPECT_EQ(home.recent_projects_model().projects().back().name,
+            QStringLiteral("Project 9"));
+  scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+  settle_layout();
+  EXPECT_TRUE(tutorial->isVisible());
+  EXPECT_TRUE(documentation->isVisible());
+  EXPECT_LE(tutorial->mapTo(scroll->viewport(), QPoint()).y() + tutorial->height(),
+            scroll->viewport()->height());
+  if (!review_directory.isEmpty()) {
+    EXPECT_TRUE(home.grab().save(QDir(review_directory).filePath(
+        QStringLiteral("launcher-ten-recent-scrolled.png"))));
+  }
+}
+
+TEST(QtProjectWorkspaceTests,
      HomeAndWorkspaceDispatchPresentationIntentWithoutMutatingModels) {
   int argc = 1;
   char application_name[] = "quader_ui_test";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
-  QPixmap application_icon_pixmap(16, 16);
-  application_icon_pixmap.fill(Qt::cyan);
-  QApplication::setWindowIcon(QIcon(application_icon_pixmap));
-
   quader::QtProjectHomePage home;
   int new_project_requests = 0;
   int open_project_requests = 0;
@@ -1793,34 +2165,41 @@ TEST(QtProjectWorkspaceTests,
   home.show();
   QCoreApplication::processEvents();
 
-  EXPECT_EQ(home.findChild<QLabel *>(QStringLiteral("projectHome.title")),
-            nullptr);
+  auto *title = home.findChild<QLabel *>(QStringLiteral("projectHome.title"));
+  ASSERT_NE(title, nullptr);
+  EXPECT_EQ(title->text(), QStringLiteral("Projects"));
   EXPECT_NE(home.findChild<QLabel *>(
                 QStringLiteral("projectHome.recentProjects.label")),
             nullptr);
-  auto *left_rail = home.findChild<QWidget *>(
-      QStringLiteral("projectHome.leftRail"));
-  ASSERT_NE(left_rail, nullptr);
-  EXPECT_EQ(left_rail->minimumWidth(), left_rail->maximumWidth());
-  EXPECT_EQ(left_rail->backgroundRole(), QPalette::AlternateBase);
-  QPalette updated_palette = application.palette();
-  updated_palette.setColor(QPalette::AlternateBase, QColor(57, 43, 68));
-  QApplication::setPalette(updated_palette);
-  QCoreApplication::processEvents();
-  EXPECT_EQ(left_rail->palette().color(left_rail->backgroundRole()),
-            QColor(57, 43, 68));
-  auto *brand_icon = home.findChild<QLabel *>(
-      QStringLiteral("projectHome.brand.icon"));
-  ASSERT_NE(brand_icon, nullptr);
-  EXPECT_FALSE(brand_icon->pixmap().isNull());
-  EXPECT_EQ(brand_icon->accessibleName(), QStringLiteral("Quader"));
-  EXPECT_NE(home.findChild<QLabel *>(
+  EXPECT_EQ(home.findChild<QWidget *>(
+                QStringLiteral("projectHome.leftRail")),
+            nullptr);
+  EXPECT_EQ(home.findChild<QLabel *>(
                 QStringLiteral("projectHome.brand.name")),
             nullptr);
-  auto *recent_navigation = home.findChild<QPushButton *>(
-      QStringLiteral("projectHome.navigation.recent"));
-  ASSERT_NE(recent_navigation, nullptr);
-  EXPECT_TRUE(recent_navigation->isChecked());
+  EXPECT_EQ(home.findChild<QPushButton *>(
+                QStringLiteral("projectHome.navigation.recent")),
+            nullptr);
+  auto *tutorial_action = home.findChild<QPushButton *>(
+      QStringLiteral("projectHome.tutorial.action"));
+  auto *documentation_action = home.findChild<QPushButton *>(
+      QStringLiteral("projectHome.documentation.action"));
+  ASSERT_NE(tutorial_action, nullptr);
+  ASSERT_NE(documentation_action, nullptr);
+  EXPECT_EQ(tutorial_action->text(), QStringLiteral("Start tutorial"));
+  EXPECT_EQ(documentation_action->text(), QStringLiteral("Open docs"));
+  const auto retained_projects = home.recent_projects_model().projects();
+  tutorial_action->click();
+  documentation_action->click();
+  tutorial_action->setFocus();
+  send_key(*tutorial_action, Qt::Key_Space);
+  documentation_action->setFocus();
+  send_key(*documentation_action, Qt::Key_Space);
+  EXPECT_EQ(new_project_requests, 0);
+  EXPECT_EQ(open_project_requests, 0);
+  EXPECT_TRUE(recent_actions.empty());
+  EXPECT_EQ(home.recent_projects_model().projects(), retained_projects)
+      << "the first-version resource cards are visual placeholders";
   auto *actions_menu = home.findChild<QMenu *>(
       QStringLiteral("projectHome.recentProjects.actionsMenu"));
   ASSERT_NE(actions_menu, nullptr)
@@ -1846,43 +2225,43 @@ TEST(QtProjectWorkspaceTests,
   auto *recent_view = home.findChild<QTableView *>(
       QStringLiteral("projectHome.recentProjects.view"));
   ASSERT_NE(recent_view, nullptr);
-  auto *brand_name = home.findChild<QLabel *>(
-      QStringLiteral("projectHome.brand.name"));
-  ASSERT_NE(brand_name, nullptr);
-
+  const int baseline_row_height =
+      recent_view->verticalHeader()->defaultSectionSize();
+  const int baseline_metadata_width = recent_view->columnWidth(
+      quader::QtRecentProjectsModel::LastModifiedColumn);
+  const double baseline_title_size = title->font().pointSizeF();
   home.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
-  EXPECT_EQ(left_rail->minimumWidth(), 496);
-  EXPECT_EQ(left_rail->maximumWidth(), 496);
-  EXPECT_EQ(left_rail->layout()->contentsMargins(), QMargins(56, 64, 56, 56));
-  EXPECT_EQ(brand_icon->minimumSize(), QSize(88, 88));
-  EXPECT_EQ(brand_icon->maximumSize(), QSize(88, 88));
-  EXPECT_DOUBLE_EQ(brand_name->font().pointSizeF(), 30.0);
-  EXPECT_EQ(recent_view->verticalHeader()->defaultSectionSize(), 96);
-  EXPECT_EQ(recent_view->columnWidth(
+  EXPECT_GT(recent_view->verticalHeader()->defaultSectionSize(),
+            baseline_row_height);
+  EXPECT_GT(recent_view->columnWidth(
                 quader::QtRecentProjectsModel::LastModifiedColumn),
-            368);
-  EXPECT_EQ(recent_view->columnWidth(
-                quader::QtRecentProjectsModel::SizeColumn),
-            224);
-  EXPECT_EQ(recent_view->columnWidth(
-                quader::QtRecentProjectsModel::ActionsColumn),
-            144);
+            baseline_metadata_width);
+  EXPECT_GT(title->font().pointSizeF(), baseline_title_size);
 
   home.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
-  EXPECT_EQ(left_rail->minimumWidth(), 248);
-  EXPECT_EQ(left_rail->maximumWidth(), 248);
-  EXPECT_EQ(left_rail->layout()->contentsMargins(), QMargins(28, 32, 28, 28));
-  EXPECT_EQ(brand_icon->minimumSize(), QSize(44, 44));
-  EXPECT_EQ(brand_icon->maximumSize(), QSize(44, 44));
-  EXPECT_DOUBLE_EQ(brand_name->font().pointSizeF(), 15.0);
-  EXPECT_EQ(recent_view->verticalHeader()->defaultSectionSize(), 48);
+  EXPECT_EQ(recent_view->verticalHeader()->defaultSectionSize(),
+            baseline_row_height);
+  EXPECT_EQ(recent_view->columnWidth(
+                quader::QtRecentProjectsModel::LastModifiedColumn),
+            baseline_metadata_width);
+  EXPECT_DOUBLE_EQ(title->font().pointSizeF(), baseline_title_size);
   ASSERT_EQ(recent_view->model()->columnCount(),
             quader::QtRecentProjectsModel::ColumnCount);
   EXPECT_EQ(recent_view->model()
                 ->headerData(quader::QtRecentProjectsModel::NameColumn,
                              Qt::Horizontal)
                 .toString(),
-            QStringLiteral("Name"));
+            QStringLiteral("Project"));
+  EXPECT_TRUE(recent_view->model()
+                  ->headerData(quader::QtRecentProjectsModel::ActionsColumn,
+                               Qt::Horizontal)
+                  .toString()
+                  .isEmpty());
+  EXPECT_EQ(recent_view->model()
+                ->headerData(quader::QtRecentProjectsModel::ActionsColumn,
+                             Qt::Horizontal, Qt::AccessibleTextRole)
+                .toString(),
+            QStringLiteral("Actions"));
   EXPECT_EQ(recent_view->model()
                 ->headerData(
                     quader::QtRecentProjectsModel::LastModifiedColumn,
@@ -1936,7 +2315,17 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(available_rect.isValid());
   click_widget(*recent_view->viewport(), available_rect.center());
   EXPECT_EQ(recent_view->currentIndex().row(), 0);
-  home.set_recent_projects(recent_projects);
+  int recent_model_resets = 0;
+  int recent_data_changes = 0;
+  QObject::connect(recent_view->model(), &QAbstractItemModel::modelReset,
+                   &home, [&]() { ++recent_model_resets; });
+  QObject::connect(recent_view->model(), &QAbstractItemModel::dataChanged,
+                   &home, [&]() { ++recent_data_changes; });
+  for (int frame = 0; frame < 5; ++frame) {
+    home.set_recent_projects(recent_projects);
+  }
+  EXPECT_EQ(recent_model_resets, 0);
+  EXPECT_EQ(recent_data_changes, 0);
   EXPECT_EQ(recent_view->currentIndex().row(), 0)
       << "an unchanged app refresh must preserve the selected recent project";
   send_key(*recent_view, Qt::Key_Return);

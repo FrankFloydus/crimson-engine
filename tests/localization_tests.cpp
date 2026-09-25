@@ -689,7 +689,7 @@ TEST(LocalizationResourceTests,
 }
 
 TEST(LocalizationResourceTests,
-     ProjectHomeUsesTerseRailAndLocalizedRecentActions) {
+     ProjectHomeUsesLocalizedProjectEntryAndRecentActions) {
   const std::vector<std::pair<std::string, LocalizationService::Catalog>>
       catalogs = load_resource_locale_catalogs();
   const auto find_catalog = [&](std::string_view locale)
@@ -705,9 +705,9 @@ TEST(LocalizationResourceTests,
   ASSERT_NE(english, nullptr);
   ASSERT_NE(italian, nullptr);
 
-  EXPECT_EQ(english->at("ui.home.new_project"), "New");
-  EXPECT_EQ(english->at("ui.home.open_project"), "Open");
-  EXPECT_EQ(english->at("ui.home.recent_projects"), "Recent");
+  EXPECT_EQ(english->at("ui.home.new_project"), "New project");
+  EXPECT_EQ(english->at("ui.home.open_project"), "Open project…");
+  EXPECT_EQ(english->at("ui.home.recent_projects"), "Recent projects");
   EXPECT_EQ(english->at("ui.home.recent_last_modified"), "Last modified");
   EXPECT_EQ(english->at("ui.home.recent_size"), "Size");
   EXPECT_EQ(english->at("ui.home.recent_actions"), "Actions");
@@ -718,9 +718,9 @@ TEST(LocalizationResourceTests,
   EXPECT_EQ(english->at("ui.home.recent_action.remove"),
             "Remove from recent");
 
-  EXPECT_EQ(italian->at("ui.home.new_project"), "Nuovo");
-  EXPECT_EQ(italian->at("ui.home.open_project"), "Apri");
-  EXPECT_EQ(italian->at("ui.home.recent_projects"), "Recenti");
+  EXPECT_EQ(italian->at("ui.home.new_project"), "Nuovo progetto");
+  EXPECT_EQ(italian->at("ui.home.open_project"), "Apri progetto…");
+  EXPECT_EQ(italian->at("ui.home.recent_projects"), "Progetti recenti");
   EXPECT_EQ(italian->at("ui.home.recent_last_modified"), "Ultima modifica");
   EXPECT_EQ(italian->at("ui.home.recent_size"), "Dimensione");
   EXPECT_EQ(italian->at("ui.home.recent_actions"), "Azioni");

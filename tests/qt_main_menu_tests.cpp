@@ -428,8 +428,20 @@ TEST_F(QtFileMenuTests, RecentSceneActionRebindsInPlaceAndReportsOpenFailure) {
 }
 
 TEST_F(QtFileMenuTests, RebuildLocalizesTheEmptyRecentAndRecoveryMenus) {
+  menu_->refresh();
+  auto *project_return = menu_bar_->findChild<QAction *>(
+      QStringLiteral("command_project_close"));
+  ASSERT_NE(project_return, nullptr);
+  EXPECT_EQ(project_return->text(), QStringLiteral("Quit to Project List"));
+
   ASSERT_TRUE(localization_.select_locale("it-IT"));
   menu_->rebuild();
+  menu_->refresh();
+  project_return = menu_bar_->findChild<QAction *>(
+      QStringLiteral("command_project_close"));
+  ASSERT_NE(project_return, nullptr);
+  EXPECT_EQ(project_return->text(),
+            QStringLiteral("Torna all'elenco dei progetti"));
   show_recent_menu();
   ASSERT_EQ(recent_menu()->actions().size(), 1);
   EXPECT_EQ(recent_menu()->title(), QString::fromStdString(localization_.text(

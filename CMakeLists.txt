@@ -1056,6 +1056,13 @@ qt_add_resources(quader_ui "quader_outliner_icons"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_directional_light.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_group.png")
 
+qt_add_resources(quader_ui "quader_project_home_artwork"
+    PREFIX "/quader/home"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/home"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/home/tutorial.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/home/documentation.png")
+
 quader_enable_common_pch(quader_ui)
 target_include_directories(quader_ui
     PUBLIC src

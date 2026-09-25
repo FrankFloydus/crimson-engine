@@ -23,15 +23,19 @@ class QLabel;
 class QAction;
 class QEvent;
 class QFrame;
+class QBoxLayout;
 class QHBoxLayout;
 class QMenu;
 class QPushButton;
+class QScrollArea;
 class QSpacerItem;
 class QStackedWidget;
 class QTableView;
 class QVBoxLayout;
 
 namespace quader {
+
+class QtProjectHomeResourceCard;
 
 inline constexpr int kQtProjectHomeMaximumRecentProjects = 10;
 
@@ -66,6 +70,15 @@ struct QtProjectHomeLabels {
   QString open_recent_project_location;
   QString copy_recent_project_path;
   QString remove_recent_project;
+  QString title = QStringLiteral("Projects");
+  QString tutorial_title = QStringLiteral("Your first hour in Quader");
+  QString tutorial_description =
+      QStringLiteral("Learn the basics and build your first scene.");
+  QString tutorial_action = QStringLiteral("Start tutorial");
+  QString documentation_title = QStringLiteral("Read the Docs");
+  QString documentation_description =
+      QStringLiteral("Explore guides to Quader\u2019s tools and workflows.");
+  QString documentation_action = QStringLiteral("Open docs");
 
   [[nodiscard]] static QtProjectHomeLabels defaults();
 };
@@ -160,30 +173,40 @@ public:
 
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
+  void changeEvent(QEvent *event) override;
 
 private:
   void dispatch_recent_project_open(const QModelIndex &index);
   void dispatch_recent_project_action(QtRecentProjectAction action);
   void show_recent_project_actions(const QModelIndex &index);
-  void refresh_brand_icon();
+  void refresh_layout_metrics();
+  void refresh_reflow();
+  void refresh_project_icons();
+  void refresh_project_logo();
   void refresh_labels();
   void refresh_recent_projects_page();
 
   QtProjectHomeLabels labels_ = QtProjectHomeLabels::defaults();
-  QFrame *left_rail_ = nullptr;
-  QVBoxLayout *rail_layout_ = nullptr;
+  QScrollArea *scroll_area_ = nullptr;
+  QWidget *content_ = nullptr;
+  QBoxLayout *header_layout_ = nullptr;
+  QWidget *brand_ = nullptr;
   QHBoxLayout *brand_layout_ = nullptr;
-  QSpacerItem *brand_actions_spacer_ = nullptr;
-  QSpacerItem *project_recent_spacer_ = nullptr;
-  QLabel *brand_icon_ = nullptr;
-  QLabel *brand_name_ = nullptr;
-  QFont brand_font_baseline_;
+  QLabel *logo_ = nullptr;
+  QWidget *project_actions_ = nullptr;
+  QHBoxLayout *project_actions_layout_ = nullptr;
+  QSpacerItem *header_body_spacer_ = nullptr;
+  QLabel *title_ = nullptr;
+  QFont title_font_baseline_;
   QPushButton *new_project_button_ = nullptr;
   QPushButton *open_project_button_ = nullptr;
-  QPushButton *recent_navigation_button_ = nullptr;
   QLabel *recent_projects_label_ = nullptr;
   QFont recent_heading_font_baseline_;
   QVBoxLayout *recent_layout_ = nullptr;
+  QBoxLayout *cards_layout_ = nullptr;
+  QtProjectHomeResourceCard *tutorial_card_ = nullptr;
+  QtProjectHomeResourceCard *documentation_card_ = nullptr;
+  QFrame *recent_projects_frame_ = nullptr;
   QStackedWidget *recent_projects_stack_ = nullptr;
   QTableView *recent_projects_view_ = nullptr;
   QLabel *no_recent_projects_label_ = nullptr;
@@ -197,6 +220,7 @@ private:
   RequestCallback new_project_requested_;
   RequestCallback open_project_requested_;
   RecentProjectActionCallback recent_project_action_requested_;
+  bool refreshing_layout_ = false;
   float applied_ui_scale_factor_ = 0.0F;
   std::uint64_t applied_ui_scale_revision_ =
       std::numeric_limits<std::uint64_t>::max();
