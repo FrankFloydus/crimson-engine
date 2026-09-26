@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/viewport/viewport_selection_interaction.hpp"
+#include "api/quader_operation_input_context.hpp"
 
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
@@ -660,6 +661,8 @@ void ViewportSelectionInteraction::reset() {
   paint_selection_active_ = false;
   viewport_hover_state_initialized_ = false;
   viewport_hovered_last_frame_ = false;
+  curve_anchor_hint_hovered_ = false;
+  curve_tangent_hint_hovered_ = false;
   last_selection_command_result_ = {.ok = true};
 }
 
@@ -940,6 +943,63 @@ const ViewportSelectionMarquee &ViewportSelectionInteraction::marquee() const {
   return marquee_cache_;
 }
 
+void ViewportSelectionInteraction::populate_operation_input_context(
+    QuaderOperationInputContext &context,
+    const ViewportInteractionFrame &frame) const {
+  using Gesture = QuaderInputSelectionGesture;
+  if (frame.input.viewport_hovered && !frame.input.text_input_active &&
+      !frame.input.navigation_active && !frame.input_result.navigation_active &&
+      !frame.input.pointer_interaction_canceled &&
+      context.transform_handle == QuaderInputTransformHandle::None) {
+    context.curve_anchor_hovered = curve_anchor_hint_hovered_;
+    context.curve_tangent_hovered = curve_tangent_hint_hovered_;
+  }
+  if (box_state_.active && box_state_.dragging) {
+    context.selection_gesture = lasso_context_ ? Gesture::Lasso : Gesture::Box;
+    context.selection_crossing = marquee().rule == ModelingBoxSelectionRule::Crossing;
+    context.pointer_dragging = true;
+  } else if (paint_selection_active_) {
+    context.selection_gesture = Gesture::Paint;
+    context.pointer_dragging = true;
+  } else {
+    std::optional<ModelingPickSelectRequest> request;
+    if (pending_first_pick_) {
+      request = pending_first_pick_->request;
+    } else if (box_pointer_) {
+      request = ModelingPickSelectRequest{
+          .click_count = depth_click_baseline_ && depth_click_baseline_->double_click_pending ? 2 : 1,
+          .control_pressed = box_pointer_->modifiers.primary,
+          .shift_pressed = box_pointer_->modifiers.shift,
+          .alt_pressed = box_pointer_->modifiers.alt,
+          .cycle_depth = box_cycle_depth_};
+    }
+    if (request) {
+      const auto traversal = request->edge_traversal_requested(
+          to_modeling_selection_mode(frame.selection_state.summary.mode));
+      if (traversal != ModelingEdgeSelectionTraversal::None) {
+        context.selection_gesture = traversal == ModelingEdgeSelectionTraversal::Loop
+                                       ? Gesture::EdgeLoop : Gesture::EdgeRing;
+        context.selection_toggle = request->shift_pressed;
+      } else if (request->depth_cycle_requested(
+                     to_modeling_selection_mode(frame.selection_state.summary.mode))) {
+        context.selection_gesture = Gesture::DepthCycle;
+      } else if (request->click_count > 1 &&
+                 (frame.selection_state.summary.mode == QuaderSelectionMode::Vertex ||
+                  frame.selection_state.summary.mode == QuaderSelectionMode::Face)) {
+        context.selection_gesture = Gesture::ExpandComponent;
+      }
+    }
+  }
+  if (context.selection_gesture == Gesture::None) return;
+  if (const auto operation = pointer_edit_operation(frame)) {
+    using Edit = quader_editor_core::SelectionEditOperation;
+    context.selection_operation = *operation == Edit::Add
+        ? QuaderInputSelectionOperation::Add
+        : *operation == Edit::Remove ? QuaderInputSelectionOperation::Remove
+                                    : QuaderInputSelectionOperation::Replace;
+  }
+}
+
 std::optional<quader_editor_core::SelectionEditOperation>
 ViewportSelectionInteraction::pointer_edit_operation(
     const ViewportInteractionFrame &frame) const {
@@ -1218,6 +1278,8 @@ void ViewportSelectionInteraction::handle_frame(
   }
 
   auto publish_empty_hover = [&](bool preserve_component_candidate) {
+    curve_anchor_hint_hovered_ = false;
+    curve_tangent_hint_hovered_ = false;
     const ModelingCommandResult clear_hover_result =
         preserve_component_candidate
             ? selection_owner(editor).preview_spatial_hover(std::nullopt)
@@ -1235,6 +1297,11 @@ void ViewportSelectionInteraction::handle_frame(
   auto clear_hover = [&]() { publish_empty_hover(false); };
   auto clear_spatial_hover = [&]() { publish_empty_hover(true); };
   auto preview_hover = [&](std::optional<ResolvedSelectionTarget> target) {
+    const bool curve_control = target &&
+        target->sub_selection_kind == EditorSubSelectionKind::CurveControl &&
+        target->sub_element.has_value();
+    const bool anchor = curve_control &&
+        target->sub_element->role == EditorSubSelectionElementRole::Primary;
     const ModelingCommandResult hover =
         selection_owner(editor).preview_spatial_hover(
             std::move(target),
@@ -1244,6 +1311,8 @@ void ViewportSelectionInteraction::handle_frame(
       LOG_ERROR("Viewport hover failed: {}",
                 hover.message.empty() ? "Hover failed." : hover.message);
     }
+    curve_anchor_hint_hovered_ = hover.ok && anchor;
+    curve_tangent_hint_hovered_ = hover.ok && curve_control && !anchor;
     hover_clear_state_ = HoverClearState::Armed;
   };
 

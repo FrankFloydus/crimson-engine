@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/outliner_panel.hpp"
+#include "ui/qt_contextual_input_hints.hpp"
 
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
@@ -22,6 +23,10 @@
 #include <QAbstractItemView>
 #include <QAction>
 #include <QContextMenuEvent>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QHeaderView>
@@ -345,6 +350,7 @@ class OutlinerTreeView final : public QTreeView {
 public:
   using ContextMenuHandler = std::function<void(EntityId, QPoint)>;
   using SelectionGestureFinishedHandler = std::function<void()>;
+  enum class DropHint { None, Parent, Reorder, Root, InstanceScope };
 
   explicit OutlinerTreeView(QWidget *parent = nullptr) : QTreeView(parent) {
     install_qt_tree_relationship_presentation(*this);
@@ -352,6 +358,58 @@ public:
 
   ContextMenuHandler context_menu_handler;
   SelectionGestureFinishedHandler selection_gesture_finished_handler;
+  std::uint64_t hint_revision = 0;
+
+  [[nodiscard]] bool hint_drag_active() const noexcept {
+    return hint_source_drag_ || hint_drag_hovering_;
+  }
+
+  void publish_drop_hint(DropHint kind, std::string_view target = {}) {
+    hint_validation_seen_ = true;
+    if (!hint_drag_active()) {
+      return;
+    }
+    if (hint_kind_ != kind || hint_target_ != target) {
+      hint_kind_ = kind;
+      hint_target_ = target;
+      ++hint_revision;
+    }
+  }
+
+  void invalidate_drop_hint() { clear_drop_hint(); }
+
+  [[nodiscard]] std::vector<QuaderOperationInputHint> input_hints() const {
+    if (!hint_drag_active() || hint_kind_ == DropHint::None) {
+      return {};
+    }
+    QuaderOperationInputHint hint{
+        .gesture = QuaderOperationInputGesture::PrimaryDrag,
+        .priority = 100,
+        .active = true,
+    };
+    switch (hint_kind_) {
+    case DropHint::Parent:
+      hint.label_key = "operation.hints.outliner.parent_to";
+      hint.label_fallback = "Parent to";
+      hint.detail = hint_target_;
+      break;
+    case DropHint::Reorder:
+      hint.label_key = "operation.hints.outliner.reorder";
+      hint.label_fallback = "Reorder";
+      break;
+    case DropHint::Root:
+      hint.label_key = "operation.hints.outliner.move_root";
+      hint.label_fallback = "Move to scene root";
+      break;
+    case DropHint::InstanceScope:
+      hint.label_key = "operation.hints.outliner.move_scope";
+      hint.label_fallback = "Move to current instance scope";
+      break;
+    case DropHint::None:
+      break;
+    }
+    return {std::move(hint)};
+  }
 
   [[nodiscard]] bool selection_gesture_active() const noexcept {
     return selection_gesture_active_;
@@ -361,6 +419,7 @@ public:
     ++interaction_generation_;
     selection_gesture_active_ = false;
     resetting_selection_anchor_ = false;
+    clear_drag_hints();
   }
 
   void reset_selection_anchor(const QModelIndex &index) {
@@ -387,7 +446,40 @@ protected:
     if (interaction_generation_ != generation) {
       return;
     }
+    hint_source_drag_ = true;
+    ++hint_revision;
+    QPointer<OutlinerTreeView> guard(this);
     QTreeView::startDrag(supported_actions);
+    if (guard) {
+      clear_drag_hints();
+    }
+  }
+
+  void dragEnterEvent(QDragEnterEvent *event) override {
+    const auto *data = dynamic_cast<const OutlinerMimeData *>(event->mimeData());
+    hint_drag_hovering_ = data != nullptr && data->source == model();
+    ++hint_revision;
+    QTreeView::dragEnterEvent(event);
+  }
+
+  void dragMoveEvent(QDragMoveEvent *event) override {
+    hint_validation_seen_ = false;
+    QTreeView::dragMoveEvent(event);
+    if (!hint_validation_seen_ || !event->isAccepted()) {
+      clear_drop_hint();
+    }
+  }
+
+  void dragLeaveEvent(QDragLeaveEvent *event) override {
+    hint_drag_hovering_ = false;
+    clear_drop_hint();
+    ++hint_revision;
+    QTreeView::dragLeaveEvent(event);
+  }
+
+  void dropEvent(QDropEvent *event) override {
+    clear_drag_hints();
+    QTreeView::dropEvent(event);
   }
 
   QItemSelectionModel::SelectionFlags
@@ -446,6 +538,7 @@ protected:
         event->type() == QEvent::WindowDeactivate ||
         event->type() == QEvent::Hide) {
       finish_selection_gesture();
+      clear_drag_hints();
     }
     return handled;
   }
@@ -468,6 +561,29 @@ protected:
   }
 
 private:
+  void clear_drop_hint() {
+    if (hint_kind_ != DropHint::None || !hint_target_.empty()) {
+      hint_kind_ = DropHint::None;
+      hint_target_.clear();
+      ++hint_revision;
+    }
+  }
+
+  void clear_drag_hints() noexcept {
+    if (hint_drag_active()) {
+      hint_source_drag_ = false;
+      hint_drag_hovering_ = false;
+      ++hint_revision;
+    }
+    clear_drop_hint();
+  }
+
+  DropHint hint_kind_ = DropHint::None;
+  std::string hint_target_;
+  bool hint_source_drag_ = false;
+  bool hint_drag_hovering_ = false;
+  bool hint_validation_seen_ = false;
+
   void finish_selection_gesture() {
     if (!selection_gesture_active_) {
       return;
@@ -540,6 +656,16 @@ struct OutlinerPanel::Impl {
                                  QHeaderView::Stretch);
     layout->addWidget(tree_);
 
+    qt_register_contextual_input_hints(
+        panel_, *tree_,
+        [tree = tree_](Qt::KeyboardModifiers) {
+          return QtContextualInputHintSourceState{
+              .revision = tree->hint_revision,
+              .active = tree->hint_drag_active(),
+          };
+        },
+        [tree = tree_](Qt::KeyboardModifiers) { return tree->input_hints(); });
+
     tree_->context_menu_handler = [this](EntityId entity,
                                          QPoint global_position) {
       show_context_menu(entity, global_position);
@@ -556,7 +682,11 @@ struct OutlinerPanel::Impl {
     };
     model_->drop_handler = [this](const OutlinerMimeData &drag, int row,
                                    const QModelIndex &parent, bool commit) {
-      return handle_drop(drag, row, parent, commit);
+      const bool accepted = handle_drop(drag, row, parent, commit);
+      if (!commit && !accepted) {
+        tree_->invalidate_drop_hint();
+      }
+      return accepted;
     };
 
     QObject::connect(model_, &QStandardItemModel::itemChanged, &panel_,
@@ -733,6 +863,7 @@ private:
     if (document_changed) {
       collapsed_entities_.clear();
     }
+    tree_->invalidate_drop_hint();
 
     std::vector<EntityRecord> next_records;
     {
@@ -1133,6 +1264,15 @@ private:
             ? entity_id(model_->index(row, 0, parent))
             : kInvalidEntityId;
     if (!commit) {
+      const OutlinerTreeView::DropHint hint =
+          row >= 0 ? OutlinerTreeView::DropHint::Reorder
+          : parent.isValid() ? OutlinerTreeView::DropHint::Parent
+          : instance_scope_definition_ != kInvalidEntityId
+              ? OutlinerTreeView::DropHint::InstanceScope
+              : OutlinerTreeView::DropHint::Root;
+      tree_->publish_drop_hint(hint, destination_record != nullptr
+                                       ? std::string_view(destination_record->name)
+                                       : std::string_view{});
       return true;
     }
     const std::uint64_t scheduled_generation = runtime_binding_generation_;

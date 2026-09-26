@@ -22,6 +22,8 @@
 
 namespace quader {
 
+struct QuaderOperationInputContext;
+
 /** Identifies the history domain mutated by a native viewport tool commit. */
 enum class ViewportNativeToolCommitDomain {
   Modeling,
@@ -177,6 +179,9 @@ public:
     [[nodiscard]] ModelingBoxPreview
     box_preview(const ViewportToolPreviewPort &preview,
                 bool snap_enabled = true) const;
+    /// Copies retained hover decisions from the active modal tool.
+    void populate_operation_input_context(
+        QuaderOperationInputContext &context) const;
 
     bool set_active_tool(ViewportToolState &state, ViewportToolId tool,
                          ViewportInputResult *result = nullptr);
@@ -233,6 +238,7 @@ public:
     void reset_native_lifecycles();
 
   private:
+    void clear_modal_input_hints();
     [[nodiscard]] const ViewportNativeToolLifecycleAdapter *
     active_native_lifecycle() const;
     [[nodiscard]] ViewportNativeToolLifecycleAdapter *

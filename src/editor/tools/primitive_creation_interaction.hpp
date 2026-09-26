@@ -42,6 +42,13 @@ public:
   [[nodiscard]] double axis_world_scale() const { return drag_axis_scale_; }
   [[nodiscard]] ViewportPrimitiveCreationShape shape() const { return shape_; }
   [[nodiscard]] ViewportSphereType sphere_type() const { return sphere_type_; }
+  /// The visible controls may precede the first captured resize gesture.
+  [[nodiscard]] ViewportPrimitiveCreationShape presented_shape() const {
+    return cached_cube_ ? cached_cube_->shape : shape_;
+  }
+  [[nodiscard]] ViewportSphereType presented_sphere_type() const {
+    return cached_cube_ ? cached_cube_->sphere_type : sphere_type_;
+  }
 
 private:
   void update_subdivision_controls();

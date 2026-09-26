@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_operation_input_hint_types.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/retained_ui_presenter.hpp"
 
@@ -14,6 +15,7 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace quader {
@@ -26,6 +28,8 @@ class QuaderToolsApi;
 struct QtOperationInputHint {
   QString badge;
   QString label;
+  std::uint8_t priority = 50;
+  bool active = false;
   friend bool operator==(const QtOperationInputHint &, const QtOperationInputHint &) = default;
 };
 
@@ -34,12 +38,23 @@ class QtOperationInputHints final : public QWidget {
 public:
   explicit QtOperationInputHints(QWidget *parent = nullptr);
   void refresh(const QuaderToolsApi &tools, const QuaderCommandsApi &commands,
-               const LocalizationService &localization);
+               const LocalizationService &localization,
+               const QuaderOperationInputContext &context = {});
+  /// Presents an already retained local-control projection. Empty snapshots suppress
+  /// viewport fallback while that control owns input. The source retires on rebind.
+  void refresh_snapshot(std::span<const QuaderOperationInputHint> hints,
+                        std::uint64_t revision, const void *source_owner,
+                        const QuaderCommandsApi &commands,
+                        const LocalizationService &localization);
   /// Drops presentation without consulting a possibly expired runtime owner.
   void invalidate();
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   [[nodiscard]] const std::vector<QtOperationInputHint> &hints() const { return hints_; }
   [[nodiscard]] std::uint64_t projection_revision() const { return projection_revision_; }
+  /// Whole groups currently fitting the row, in authored presentation order.
+  [[nodiscard]] const std::vector<std::size_t> &visible_hint_indices() const {
+    return visible_hint_indices_;
+  }
   [[nodiscard]] QSize sizeHint() const override;
   [[nodiscard]] QSize minimumSizeHint() const override;
 
@@ -54,20 +69,27 @@ private:
     const QuaderToolsApi *tools = nullptr;
     const QuaderCommandsApi *commands = nullptr;
     const LocalizationService *localization = nullptr;
+    const void *source_owner = nullptr;
     std::uint64_t hints_revision = 0;
     std::uint64_t bindings_revision = 0;
     std::uint64_t localization_revision = 0;
+    QuaderOperationInputContext context;
     friend bool operator==(const Stamp &, const Stamp &) = default;
   };
   /// Retains logical-pixel badge and label rectangles within the status row.
-  struct ItemGeometry { QRect badge; QRect label; };
-  [[nodiscard]] int layout_items(int width, std::vector<ItemGeometry> *items) const;
+  struct ItemGeometry { QRect badge; QRect label; std::size_t hint_index = 0; };
+  void present(std::span<const QuaderOperationInputHint> hints, const Stamp &stamp,
+               const QuaderCommandsApi &commands,
+               const LocalizationService &localization);
+  [[nodiscard]] int row_height() const;
+  [[nodiscard]] int item_width(const QtOperationInputHint &hint) const;
   void refresh_geometry();
 
   RetainedUiPresenter<Stamp> presenter_;
   QtUiScaleMetrics metrics_;
   std::vector<QtOperationInputHint> hints_;
   std::vector<ItemGeometry> geometry_;
+  std::vector<std::size_t> visible_hint_indices_;
   std::uint64_t projection_revision_ = 0;
 };
 

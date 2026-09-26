@@ -3103,6 +3103,7 @@ ModelingToolStatus ModelingOverlayService::tool_status(
   status.knife_active = runtime_status.knife_active;
   status.knife_has_active_stroke = runtime_status.knife_has_active_stroke;
   status.knife_has_current = runtime_status.knife_has_current;
+  status.knife_current_closes_stroke = runtime_status.knife_current_closes_stroke;
   status.knife_can_commit = runtime_status.knife_can_commit;
   status.cut_active = runtime_status.cut_active;
   status.cut_can_preview = runtime_status.cut_can_preview;
@@ -3153,6 +3154,7 @@ ModelingToolStatus ModelingOverlayService::tool_status(
   status.poly_active = runtime_status.poly_active;
   status.poly_closed = runtime_status.poly_closed;
   status.poly_has_current = runtime_status.poly_has_current;
+  status.poly_current_closes_stroke = runtime_status.poly_current_closes_stroke;
   status.poly_can_commit = runtime_status.poly_can_commit;
   status.poly_point_count = runtime_status.poly_point_count;
   return status;

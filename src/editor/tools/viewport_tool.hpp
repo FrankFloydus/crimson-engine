@@ -64,6 +64,7 @@ struct ViewportPointerToolEvent {
     std::span<const ViewportPointerButtonEdge> pointer_pressed_edges;
     std::span<const ViewportPointerButtonEdge> pointer_released_edges;
     float pointer_drag_threshold_pixels = 4.0f;
+    float viewport_pixel_scale = 1.0f;
     double monotonic_time_seconds = 0.0;
     bool camera_changed = false;
     std::span<ViewportNavigationWheelEvent> wheel_events;
@@ -88,6 +89,9 @@ struct ViewportModalToolState {
   bool insert_edge_loop_drag_active = false;
   bool cut_drag_active = false;
   bool mirror_drag_active = false;
+  bool plane_endpoint_hovered = false;
+  bool plane_body_hovered = false;
+  bool stroke_close_hovered = false;
   std::optional<ViewportPointerGesture> primary_pointer_gesture;
   ViewportPointerReleaseSuppression primary_release_suppression;
   PrimitiveCreationInteraction primitive_creation;

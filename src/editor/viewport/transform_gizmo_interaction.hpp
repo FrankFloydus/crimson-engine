@@ -26,6 +26,7 @@
 namespace quader {
 
 class QuaderEditorApi;
+struct QuaderOperationInputContext;
 
 /// Counts camera-independent selection-pivot cache work for diagnostics and tests.
 struct TransformGizmoSelectionCacheStats {
@@ -51,6 +52,10 @@ public:
              ViewportCurveInteractionPort *curve_tool);
 
   [[nodiscard]] bool dragging() const { return dragging_; }
+  /// Copies accepted hit/gesture state without picking or querying scene data.
+  void populate_operation_input_context(
+      QuaderOperationInputContext &context,
+      const ViewportInteractionFrame &frame) const;
   [[nodiscard]] ViewportPointerCursor pointer_cursor() const {
     if (!current_frame_ || current_frame_->info.tool !=
                                quader_editor_core::ViewportInteractionTool::Rotate) {
@@ -107,6 +112,7 @@ private:
       CurveControlSelectionIdentity identity;
       QVec3 world_pivot = {};
       QuaderTransform3 orientation = {};
+      bool anchors_only = false;
     };
 
     /**
@@ -171,6 +177,10 @@ private:
     void clear_frame();
 
     bool dragging_ = false;
+    QuaderTransformOperation active_operation_ = QuaderTransformOperation::Transform;
+    bool active_duplicate_ = false;
+    bool presented_curve_route_ = false;
+    bool presented_curve_anchors_only_ = false;
     DragBackend active_backend_ = DragBackend::None;
     std::optional<PendingGizmoDrag> pending_drag_;
     std::optional<CurveControlSelectionIdentity> active_curve_selection_;

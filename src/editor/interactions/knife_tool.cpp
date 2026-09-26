@@ -191,6 +191,8 @@ KnifeToolPreview knife_tool_preview(const KnifeToolState& state)
 	preview.active = state.active;
 	preview.has_active_stroke = state.has_active_stroke;
 	preview.has_current = state.has_current;
+	preview.current_closes_stroke = state.has_current &&
+		state.current_target_valid && state.current_closes_stroke;
 	preview.target_object_id = state.target_object_id;
 	preview.previous_point =
 		state.has_active_stroke && state.previous_point_index < state.point_positions.size() ?
@@ -214,6 +216,7 @@ void reset_knife_tool(KnifeToolState& state)
 void clear_knife_hover(KnifeToolState& state, SelectionHoverState& hover)
 {
 	state.has_current = false;
+	state.current_closes_stroke = false;
 	state.current_target_valid = false;
 	state.current_object_id = -1;
 	state.status = KnifeToolStatus::HoverMiss;
@@ -592,9 +595,11 @@ bool update_knife_preview_from_resolved_point(
 		KnifeToolState& state,
 		SelectionHoverState& hover,
 		const KnifeResolvedPoint& point,
-		bool active)
+		bool active,
+		double grid_size)
 {
 	state.active = active;
+	state.current_closes_stroke = false;
 	if (!point.has_point) {
 		clear_knife_hover(state, hover);
 		return false;
@@ -651,6 +656,8 @@ bool update_knife_preview_from_resolved_point(
 	state.current_point = point.point;
 	state.current_target = normalized_target;
 	state.face_normal = point.normal;
+	state.current_closes_stroke = target_valid &&
+		knife_current_closes_active_stroke(state, grid_size);
         state.status = target_valid ? KnifeToolStatus::Preview
                                     : KnifeToolStatus::InvalidTarget;
         hover = {};
@@ -707,7 +714,7 @@ bool update_knife_preview_from_pick(
 		objects, state, ray, grid_size, snap_enabled, constrain_axis,
 		target_object_id);
 	return update_knife_preview_from_resolved_point(
-		objects, state, hover, point, true);
+		objects, state, hover, point, true, grid_size);
 }
 
 bool update_knife_preview_from_hit(
@@ -736,11 +743,12 @@ bool update_knife_preview_from_hit(
 	const KnifeResolvedPoint point = resolve_knife_point_from_hit(
 		objects, state, hit, grid_size, snap_enabled, constrain_axis);
 	return update_knife_preview_from_resolved_point(
-		objects, state, hover, point, true);
+		objects, state, hover, point, true, grid_size);
 }
 
 bool accept_knife_current_point(KnifeToolState& state, double grid_size)
 {
+	state.current_closes_stroke = false;
 	if (!state.has_current || !state.current_target_valid) {
 		return false;
 	}

@@ -8,6 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "api/quader_api_types.hpp"
+#include "api/quader_operation_input_hint_types.hpp"
 #include "api/quader_viewport_layout_types.hpp"
 #include "viewport/viewport_runtime_binding_token.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
@@ -147,6 +148,10 @@ public:
   }
   /** Shares current interaction guards with commands dispatched by other panels. */
   [[nodiscard]] QuaderViewportKeybindingContext command_input_context();
+  /// Retained semantic projection from the last accepted input frame.
+  [[nodiscard]] const QuaderOperationInputContext &operation_input_context() const {
+    return operation_input_context_;
+  }
   /// Counts retained primitive-feedback updates after revision/geometry gates.
   [[nodiscard]] std::uint64_t primitive_feedback_update_count() const {
     return primitive_feedback_update_count_;
@@ -273,6 +278,7 @@ private:
   ViewportShortcutController shortcut_controller_;
   ViewportHoverController hover_controller_;
   ViewportInteractionController interaction_controller_;
+  QuaderOperationInputContext operation_input_context_{.viewport_available = false};
   QtViewportContextMenuPresenter context_menu_presenter_;
   QtViewportDeletePopupPresenter delete_popup_presenter_;
   QtViewportQuickMenuPresenter quick_menu_presenter_;

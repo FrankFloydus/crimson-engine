@@ -72,9 +72,9 @@ public:
     void record_active_settings_origin(ViewportPaneId pane);
     [[nodiscard]] std::uint64_t active_tool_revision() const;
     /// Cheap gate for owner-selected operation hints, including lifecycle/rebind.
-    [[nodiscard]] std::uint64_t active_input_hints_revision() const;
+    [[nodiscard]] std::uint64_t active_input_hints_revision(const QuaderOperationInputContext &context = {}) const;
     /// Resolve only after the hint revision changes; key mappings remain command-owned.
-    [[nodiscard]] std::vector<QuaderOperationInputHint> active_input_hints() const;
+    [[nodiscard]] std::vector<QuaderOperationInputHint> active_input_hints(const QuaderOperationInputContext &context = {}) const;
     QuaderApiVoidResult set_setting(std::string_view tool_id,
                                     std::string_view name, double value,
                                     QuaderToolSettingEditOptions options = {});
@@ -154,7 +154,9 @@ public:
     mutable std::string active_tool_id_;
     mutable std::uint64_t active_tool_revision_ = 0;
     mutable bool active_tool_valid_ = false;
-    mutable std::array<std::uint64_t, 5> input_hints_source_ = {};
+    mutable std::array<std::uint64_t, 17> input_hints_source_ = {};
+    mutable QuaderOperationInputContext input_hints_context_;
+    mutable std::string input_hints_native_tool_id_;
     mutable std::uint64_t input_hints_revision_ = 0;
     mutable bool input_hints_source_valid_ = false;
     mutable std::optional<QuaderPrimitiveCreationState> primitive_creation_state_;

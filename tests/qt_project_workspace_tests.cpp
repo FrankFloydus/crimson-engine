@@ -22,6 +22,7 @@
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_application_style.hpp"
 #include "ui/qt_auxiliary_window_state.hpp"
+#include "ui/qt_contextual_input_hints.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_main_menu.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
@@ -46,6 +47,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QAction>
+#include <QAbstractAnimation>
 #include <QAbstractItemModel>
 #include <QAbstractItemDelegate>
 #include <QAbstractItemView>
@@ -53,6 +55,7 @@
 #include <QBuffer>
 #include <QByteArray>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QCheckBox>
 #include <QComboBox>
@@ -66,6 +69,7 @@
 #include <QFrame>
 #include <QFocusEvent>
 #include <QGuiApplication>
+#include <QGraphicsOpacityEffect>
 #include <QHeaderView>
 #include <QIcon>
 #include <QIODevice>
@@ -88,6 +92,7 @@
 #include <QPalette>
 #include <QPointer>
 #include <QPushButton>
+#include <QPropertyAnimation>
 #include <QPixmap>
 #include <QScreen>
 #include <QScrollArea>
@@ -2801,9 +2806,24 @@ TEST(QtProjectWorkspaceTests,
                 central_stack->currentWidget()),
             nullptr);
 
-  const auto reopened = editor.project().open(manifest_path);
-  ASSERT_TRUE(reopened.ok()) << reopened.error_message();
+  ui.refresh({}, {});
+  auto *recent_projects = ui.main_window()->findChild<QTableView *>(
+      QStringLiteral("projectHome.recentProjects.view"));
+  ASSERT_NE(recent_projects, nullptr);
+  ASSERT_EQ(recent_projects->model()->rowCount(), 1);
+  recent_projects->setCurrentIndex(recent_projects->model()->index(0, 0));
+  send_key(*recent_projects, Qt::Key_Return);
   ASSERT_TRUE(editor.project().has_project());
+  EXPECT_EQ(editor.project().manifest_path(), manifest_path);
+  auto *status_message = ui.main_window()->findChild<QLabel *>(
+      QStringLiteral("statusMessage"));
+  ASSERT_NE(status_message, nullptr);
+  EXPECT_TRUE(status_message->text().isEmpty())
+      << "opening a recent project must not publish a success banner";
+  EXPECT_TRUE(status_message->isHidden());
+  ui.refresh({}, {});
+  EXPECT_TRUE(status_message->text().isEmpty());
+  EXPECT_TRUE(status_message->isHidden());
   auto *exit_action = ui.main_window()->findChild<QAction *>(
       QStringLiteral("action_exit"));
   ASSERT_NE(exit_action, nullptr);
@@ -3007,7 +3027,7 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
-     CommandErrorsRemainVisibleAndAnnounceOncePerFailureUntilSuccess) {
+     StatusDiagnosticsKeepPriorityAndExpireWithoutRevivingOldFailures) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const std::filesystem::path isolated_profile =
       std::filesystem::temp_directory_path() /
@@ -3122,9 +3142,37 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_FALSE(message->is_error());
   announcements = 0;
 
-  ASSERT_TRUE(editor.tools()
-                  .activate(quader::ViewportToolId::CreatePrimitive)
-                  .ok());
+  const auto activated = editor.commands().execute(
+      quader::quader_command::kToolsActivateCreateBox);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  ui.refresh({}, {});
+  EXPECT_TRUE(message->text().isEmpty())
+      << "successful tool activation must not replace contextual hints";
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_TRUE(hints->hints().empty())
+      << "A tool alone does not publish hints before a viewport receives input.";
+  // Error priority is independent of the particular tool. Supply a real local
+  // receiving surface without requiring the uninitialized GPU viewport here.
+  QWidget hint_surface;
+  hint_surface.setAttribute(Qt::WA_DontShowOnScreen, true);
+  hint_surface.setMouseTracking(true);
+  hint_surface.resize(120, 30);
+  quader::qt_register_contextual_input_hints(
+      hint_surface, hint_surface,
+      [](Qt::KeyboardModifiers) {
+        return quader::QtContextualInputHintSourceState{1, true, true};
+      },
+      [](Qt::KeyboardModifiers) {
+        return std::vector{quader::QuaderOperationInputHint{
+            quader::QuaderOperationInputGesture::Information, {},
+            "test.active_input_context", "Active Control"}};
+      });
+  hint_surface.show();
+  const QPoint hint_position(10, 10);
+  QMouseEvent hint_hover(QEvent::MouseMove, QPointF(hint_position),
+      QPointF(hint_surface.mapToGlobal(hint_position)), Qt::NoButton,
+      Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(&hint_surface, &hint_hover);
   ui.refresh({}, {});
   ASSERT_FALSE(hints->hints().empty());
   EXPECT_FALSE(hints->isHidden());
@@ -3217,6 +3265,9 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_FALSE(message->autoFillBackground());
   EXPECT_EQ(message->palette().color(QPalette::Window), ordinary_background);
   EXPECT_EQ(message->palette().color(QPalette::WindowText), ordinary_text);
+  EXPECT_EQ(message->text(), QStringLiteral("Some optional items were skipped."));
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(hints->isHidden());
   EXPECT_EQ(announcements, 4);
 
   ASSERT_TRUE(editor.ui().notify(notification).ok());
@@ -3227,6 +3278,8 @@ TEST(QtProjectWorkspaceTests,
   ui.refresh({}, {});
   EXPECT_FALSE(message->is_error());
   EXPECT_FALSE(message->autoFillBackground());
+  EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_TRUE(message->isHidden());
   EXPECT_FALSE(hints->isHidden());
   EXPECT_EQ(announcements, 5)
       << "a subsequent successful command dismisses a direct error silently";
@@ -3246,8 +3299,371 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_FALSE(message->is_error())
       << "a successful direct edit with an empty result must clear the error";
   EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_TRUE(message->isHidden());
   EXPECT_FALSE(hints->isHidden());
   EXPECT_EQ(announcements, 6);
+
+  const auto final_failure = editor.commands().execute(
+      quader::quader_command::kModelingCombineFaces);
+  ASSERT_FALSE(final_failure.ok());
+  ui.refresh({}, {});
+  ASSERT_TRUE(message->is_error());
+  ASSERT_TRUE(hints->isHidden());
+  EXPECT_EQ(announcements, 7);
+  const auto failed_command_revision = editor.commands().last_status_revision();
+  ASSERT_TRUE(editor.ui()
+                  .notify({.level = quader::QuaderNotificationLevel::Info,
+                           .message = "Operation completed successfully."})
+                  .ok());
+  EXPECT_EQ(editor.commands().last_status_revision(), failed_command_revision);
+  EXPECT_FALSE(message->is_error());
+  EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(hints->isHidden());
+  const auto restored_hint_revision = hints->projection_revision();
+  for (int frame = 0; frame < 100; ++frame) {
+    ui.refresh({}, {});
+  }
+  EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(hints->isHidden());
+  EXPECT_EQ(hints->projection_revision(), restored_hint_revision);
+  EXPECT_EQ(announcements, 7);
+
+  ASSERT_TRUE(editor.ui()
+                  .notify({.level = quader::QuaderNotificationLevel::Warning,
+                           .message = "Some optional items were skipped."})
+                  .ok());
+  ASSERT_FALSE(message->isHidden());
+  ASSERT_TRUE(hints->isHidden());
+  auto *hold_timer = message->findChild<QTimer *>();
+  auto *fade = message->findChild<QPropertyAnimation *>();
+  auto *opacity = qobject_cast<QGraphicsOpacityEffect *>(message->graphicsEffect());
+  ASSERT_NE(hold_timer, nullptr);
+  ASSERT_NE(fade, nullptr);
+  ASSERT_NE(opacity, nullptr);
+  ASSERT_TRUE(hold_timer->isActive());
+  // Advance the direct warning through the real widget phases without a second
+  // five-second wait. Its owner must stay authoritative until fading finishes.
+  hold_timer->stop();
+  ASSERT_TRUE(QMetaObject::invokeMethod(hold_timer, "timeout", Qt::DirectConnection));
+  ASSERT_EQ(fade->state(), QAbstractAnimation::Running);
+  fade->setCurrentTime(fade->duration() / 2);
+  ASSERT_GT(opacity->opacity(), 0.0);
+  ASSERT_LT(opacity->opacity(), 1.0);
+  ui.refresh({}, {});
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(hints->isHidden());
+  fade->setCurrentTime(fade->duration());
+  EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(hints->isHidden());
+  EXPECT_EQ(announcements, 7);
+
+  const auto expiring_failure = editor.commands().execute(
+      quader::quader_command::kModelingCombineFaces);
+  ASSERT_FALSE(expiring_failure.ok());
+  QElapsedTimer elapsed;
+  elapsed.start();
+  ui.refresh({}, {});
+  ASSERT_TRUE(message->is_error());
+  ASSERT_FALSE(message->isHidden());
+  ASSERT_TRUE(hints->isHidden());
+  ASSERT_TRUE(hold_timer->isActive());
+  EXPECT_DOUBLE_EQ(opacity->opacity(), 1.0);
+  EXPECT_EQ(announcements, 8);
+  const auto expiring_revision = editor.commands().last_status_revision();
+  // Exercise command failure expiry on the real clock. Frame refreshes and a
+  // locale change must not extend its hold or interrupt its fade.
+  QEventLoop expiry_loop;
+  bool observed_fade = false;
+  QTimer expiry_observer;
+  expiry_observer.setInterval(25);
+  QObject::connect(&expiry_observer, &QTimer::timeout, &expiry_loop, [&] {
+    if (message->isHidden()) {
+      EXPECT_FALSE(hints->isHidden())
+          << "expiry must restore hints without waiting for another app frame";
+      expiry_loop.quit();
+      return;
+    }
+    ui.refresh({}, {});
+    if (elapsed.elapsed() < 4900) {
+      EXPECT_DOUBLE_EQ(opacity->opacity(), 1.0);
+      EXPECT_FALSE(message->isHidden());
+    }
+    if (opacity->opacity() > 0.0 && opacity->opacity() < 1.0) {
+      observed_fade = true;
+      EXPECT_GE(elapsed.elapsed(), 5000);
+      EXPECT_TRUE(hints->isHidden());
+    }
+  });
+  QTimer locale_change;
+  locale_change.setSingleShot(true);
+  QObject::connect(&locale_change, &QTimer::timeout, &expiry_loop, [&] {
+    EXPECT_TRUE(editor.preferences().set_locale("it-IT").ok());
+    ui.refresh({}, {});
+    EXPECT_FALSE(message->isHidden());
+    EXPECT_EQ(announcements, 8);
+  });
+  QTimer expiry_deadline;
+  expiry_deadline.setSingleShot(true);
+  QObject::connect(&expiry_deadline, &QTimer::timeout, &expiry_loop, [&] {
+    ADD_FAILURE()
+        << "the diagnostic did not expire within its notification timeout";
+    expiry_loop.quit();
+  });
+  expiry_observer.start();
+  locale_change.start(3000);
+  expiry_deadline.start(6500);
+  expiry_loop.exec();
+  expiry_observer.stop();
+  locale_change.stop();
+  expiry_deadline.stop();
+  EXPECT_TRUE(observed_fade);
+  EXPECT_GE(elapsed.elapsed(), 5000);
+  EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(message->is_error());
+  EXPECT_FALSE(hints->isHidden());
+  EXPECT_EQ(announcements, 8);
+  EXPECT_EQ(editor.commands().last_status_revision(), expiring_revision);
+  ASSERT_TRUE(editor.preferences().set_locale("en-US").ok());
+  ui.refresh({}, {});
+  EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(hints->isHidden());
+  EXPECT_EQ(announcements, 8);
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
+     StatusHintsKeepBarAndWorkspaceGeometryStableAcrossContextsAndScale) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-status-hint-geometry-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-status-hint-geometry-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  const auto project_root = isolated_profile / "Status hint geometry project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  ASSERT_TRUE(editor.project().create(project_root).ok());
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &scene = *project.active_scene()->session;
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+  ui.main_window()->resize(1800, 1100);
+  auto *status_bar = ui.main_window()->statusBar();
+  QWidget *workspace = ui.main_window()->centralWidget();
+  ASSERT_NE(workspace, nullptr);
+  auto *workspace_stack = qobject_cast<QStackedWidget *>(workspace);
+  QWidget *scene_workspace = workspace->findChild<QWidget *>(
+      QStringLiteral("sceneWorkspace"));
+  ASSERT_NE(workspace_stack, nullptr);
+  ASSERT_NE(scene_workspace, nullptr);
+  // Scene rendering requires an initialized GPU. Exercise the retained native
+  // workspace and status-bar layout directly without starting that lifecycle.
+  workspace_stack->setCurrentWidget(scene_workspace);
+  status_bar->show();
+  ui.main_window()->show();
+  auto *hints = dynamic_cast<quader::QtOperationInputHints *>(
+      status_bar->findChild<QWidget *>(QStringLiteral("operationInputHints")));
+  auto *message = dynamic_cast<quader::QtStatusMessage *>(
+      status_bar->findChild<QLabel *>(QStringLiteral("statusMessage")));
+  ASSERT_NE(hints, nullptr);
+  ASSERT_NE(message, nullptr);
+  message->set_error_sound_callback([] {});
+
+  QWidget hint_surface;
+  hint_surface.setAttribute(Qt::WA_DontShowOnScreen, true);
+  hint_surface.setMouseTracking(true);
+  hint_surface.resize(120, 30);
+  std::uint64_t context_revision = 1;
+  std::vector<quader::QuaderOperationInputHint> context_hints;
+  quader::qt_register_contextual_input_hints(
+      hint_surface, hint_surface,
+      [&](Qt::KeyboardModifiers) {
+        return quader::QtContextualInputHintSourceState{
+            context_revision, true, true};
+      },
+      [&](Qt::KeyboardModifiers) { return context_hints; });
+  hint_surface.show();
+  const auto receive_context = [&] {
+    send_mouse_event(hint_surface, QEvent::MouseMove, QPoint(10, 10),
+        Qt::NoButton, Qt::NoButton);
+    ui.refresh({}, {});
+  };
+  const auto settle_layout = [&] {
+    for (int delivery = 0; delivery < 8; ++delivery) {
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      QCoreApplication::processEvents();
+    }
+  };
+  receive_context();
+  settle_layout();
+
+  class GeometryObserver final : public QObject {
+  public:
+    struct Sample {
+      const QWidget *widget;
+      QRect geometry;
+    };
+    bool recording = false;
+    std::vector<Sample> samples;
+  protected:
+    bool eventFilter(QObject *target, QEvent *event) override {
+      if (recording && (event->type() == QEvent::Move ||
+                        event->type() == QEvent::Resize ||
+                        event->type() == QEvent::Show)) {
+        auto *widget = qobject_cast<QWidget *>(target);
+        if (widget != nullptr && widget->isVisible()) {
+          samples.push_back({widget, widget->geometry()});
+        }
+      }
+      return false;
+    }
+  } observer;
+  status_bar->installEventFilter(&observer);
+  workspace->installEventFilter(&observer);
+  hints->installEventFilter(&observer);
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+  std::array<int, 3> status_heights{};
+  const std::array scale_factors{1.0, 2.0, 1.0};
+  for (std::size_t stage = 0; stage < scale_factors.size(); ++stage) {
+    SCOPED_TRACE("scale stage " + std::to_string(stage));
+    observer.recording = false;
+    context_hints.clear();
+    ++context_revision;
+    ASSERT_TRUE(editor.ui().notify({}).ok());
+    ASSERT_TRUE(editor.preferences().set_interface_scale(scale_factors[stage]).ok());
+    receive_context();
+    settle_layout();
+    ASSERT_TRUE(status_bar->isVisible());
+    ASSERT_TRUE(hints->hints().empty());
+    ASSERT_TRUE(hints->isHidden());
+    ASSERT_TRUE(message->isHidden());
+    const QRect status_geometry = status_bar->geometry();
+    const QRect workspace_geometry = workspace->geometry();
+    ASSERT_GT(status_geometry.height(), 0);
+    ASSERT_GT(workspace_geometry.height(), 0);
+    status_heights[stage] = status_geometry.height();
+    std::optional<QRect> hint_row_geometry;
+    observer.samples.clear();
+    observer.recording = true;
+    const auto expect_stable_geometry = [&] {
+      EXPECT_EQ(status_bar->geometry(), status_geometry);
+      EXPECT_EQ(workspace->geometry(), workspace_geometry);
+      if (!hints->isHidden()) {
+        if (!hint_row_geometry.has_value()) {
+          hint_row_geometry = hints->geometry();
+        }
+        EXPECT_EQ(hints->y(), hint_row_geometry->y());
+        EXPECT_EQ(hints->height(), hint_row_geometry->height());
+        EXPECT_GE(hints->height(), hints->sizeHint().height());
+      }
+      for (QAbstractAnimation *animation :
+           ui.main_window()->findChildren<QAbstractAnimation *>()) {
+        const auto *property_animation = qobject_cast<QPropertyAnimation *>(animation);
+        if (property_animation != nullptr &&
+            property_animation->propertyName() == "opacity") {
+          continue;
+        }
+        EXPECT_NE(animation->state(), QAbstractAnimation::Running)
+            << "a status-context change must not animate the workspace";
+      }
+    };
+    const auto inspect_transition = [&] {
+      expect_stable_geometry();
+      for (int delivery = 0; delivery < 8; ++delivery) {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+        QCoreApplication::processEvents();
+        expect_stable_geometry();
+      }
+      for (const auto &sample : observer.samples) {
+        if (sample.widget == status_bar) {
+          EXPECT_EQ(sample.geometry, status_geometry);
+        } else if (sample.widget == workspace) {
+          EXPECT_EQ(sample.geometry, workspace_geometry);
+        } else if (hint_row_geometry.has_value()) {
+          EXPECT_EQ(sample.geometry.y(), hint_row_geometry->y());
+          EXPECT_EQ(sample.geometry.height(), hint_row_geometry->height());
+        }
+      }
+      observer.samples.clear();
+    };
+    const auto capture = [&](const QString &state) {
+      if (!review_directory.isEmpty()) {
+        EXPECT_TRUE(status_bar->grab().save(QDir(review_directory).filePath(
+            QStringLiteral("status-hint-geometry-%1-%2.png")
+                .arg(static_cast<int>(stage)).arg(state))));
+      }
+    };
+
+    capture(QStringLiteral("empty"));
+    context_hints = {{quader::QuaderOperationInputGesture::MiddleDrag, {},
+        "test.status.orbit", "Orbit"}};
+    ++context_revision;
+    receive_context();
+    ASSERT_FALSE(hints->isHidden());
+    inspect_transition();
+    capture(QStringLiteral("one-hint"));
+
+    context_hints = {
+        {quader::QuaderOperationInputGesture::Shift, {},
+         "test.status.precision", "Precision", 100, true},
+        {quader::QuaderOperationInputGesture::Control, {},
+         "test.status.snap", "Grid Snap"},
+        {quader::QuaderOperationInputGesture::EscapeOrRightClick, {},
+         "test.status.cancel", "Cancel Value"}};
+    ++context_revision;
+    receive_context();
+    ASSERT_EQ(hints->hints().size(), 3u);
+    inspect_transition();
+    capture(QStringLiteral("changed-hints"));
+
+    for (const auto level : {quader::QuaderNotificationLevel::Error,
+                            quader::QuaderNotificationLevel::Warning}) {
+      ASSERT_TRUE(editor.ui().notify({.level = level,
+          .message = "Unable to complete the requested operation."}).ok());
+      ASSERT_FALSE(message->isHidden());
+      ASSERT_TRUE(hints->isHidden());
+      inspect_transition();
+      capture(level == quader::QuaderNotificationLevel::Error
+          ? QStringLiteral("error") : QStringLiteral("warning"));
+    }
+    ASSERT_TRUE(editor.ui().notify({.message = "Operation completed."}).ok());
+    ASSERT_TRUE(message->isHidden());
+    ASSERT_FALSE(hints->isHidden());
+    inspect_transition();
+    capture(QStringLiteral("restored-hints"));
+
+    context_hints.clear();
+    ++context_revision;
+    receive_context();
+    ASSERT_TRUE(hints->isHidden());
+    ASSERT_TRUE(message->isHidden());
+    inspect_transition();
+    capture(QStringLiteral("empty-again"));
+  }
+  observer.recording = false;
+  EXPECT_GT(status_heights[1], status_heights[0]);
+  EXPECT_EQ(status_heights[2], status_heights[0]);
   ui.shutdown();
 }
 

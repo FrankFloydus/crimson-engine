@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "api/quader_command_ids.hpp"
+#include "api/quader_operation_input_hint_types.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "assets/default_material_catalog.hpp"
@@ -14813,4 +14814,145 @@ TEST(ViewportInteractionControllerTests,
   (void)dispatch_curve_preset_pointer(harness, sequence, false, false, true,
                                       kLocal);
   EXPECT_EQ(harness.session.curve().point_count(), 0u);
+}
+
+
+TEST(ViewportOperationInputContextTests,
+     NavigationFollowsAcceptedRouterAndOrthographicOwner) {
+  using Navigation = quader::QuaderInputNavigation;
+  for (const bool orthographic : {false, true}) {
+    ViewportInteractionHarness harness;
+    if (orthographic) {
+      harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    }
+    harness.input.navigation_bindings.fly_pressed = true;
+    harness.input.navigation_bindings.fly_down = true;
+    harness.input_result = harness.router.handle_frame(harness.input, harness.camera);
+    quader::QuaderOperationInputContext context;
+    harness.controller.populate_operation_input_context(context, harness.frame());
+    EXPECT_EQ(context.navigation, orthographic ? Navigation::Pan : Navigation::Fly);
+    EXPECT_EQ(context.orthographic, orthographic);
+    EXPECT_EQ(context.orbit_available, !orthographic);
+    EXPECT_EQ(context.transform_handle, quader::QuaderInputTransformHandle::None);
+    harness.input.navigation_bindings = {};
+    harness.input.navigation_bindings.fly_released = true;
+    harness.input_result = harness.router.handle_frame(harness.input, harness.camera);
+    context = {};
+    harness.controller.populate_operation_input_context(context, harness.frame());
+    EXPECT_EQ(context.navigation, Navigation::None);
+  }
+}
+
+TEST(ViewportOperationInputContextTests,
+     RestingModifiersDoNotInventSelectionAndPreserveSnapPreferences) {
+  ViewportInteractionHarness harness;
+  harness.input.modifiers = {.primary = true, .shift = true, .alt = true};
+  harness.input.transform_vertex_snap_down = true;
+  harness.settings.set_bool_value(quader::ViewportBoolSettingId::GridSnap, false);
+  harness.settings.set_bool_value(quader::ViewportBoolSettingId::RotationSnap, true);
+  (void)harness.dispatch_frame(harness.frame());
+  const auto work = harness.controller.material_interaction_work_stats();
+  const auto light_picks = harness.controller.point_light_range_hover_pick_count();
+  quader::QuaderOperationInputContext expected;
+  harness.controller.populate_operation_input_context(expected, harness.frame());
+  EXPECT_TRUE(expected.control);
+  EXPECT_TRUE(expected.shift);
+  EXPECT_TRUE(expected.alt);
+  EXPECT_TRUE(expected.held_vertex_snap);
+  EXPECT_FALSE(expected.grid_snap_enabled);
+  EXPECT_TRUE(expected.angle_snap_enabled);
+  EXPECT_EQ(expected.selection_gesture, quader::QuaderInputSelectionGesture::None);
+  for (int iteration = 0; iteration < 8; ++iteration) {
+    quader::QuaderOperationInputContext repeated;
+    harness.controller.populate_operation_input_context(repeated, harness.frame());
+    EXPECT_EQ(repeated, expected);
+  }
+  EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count,
+            work.face_pick_count);
+  EXPECT_EQ(harness.controller.point_light_range_hover_pick_count(), light_picks);
+  harness.settings.set_bool_value(quader::ViewportBoolSettingId::SnappingEnabled, false);
+  quader::QuaderOperationInputContext disabled;
+  harness.controller.populate_operation_input_context(disabled, harness.frame());
+  EXPECT_FALSE(disabled.grid_snap_available);
+  EXPECT_FALSE(disabled.angle_snap_available);
+}
+
+TEST(ViewportOperationInputContextTests,
+     BoxGestureKeepsPressOperationWhileCrossingAndModifiersChange) {
+  ViewportInteractionHarness harness;
+  harness.input.modifiers.shift = true;
+  const quader::QVec2 press{600.0f, 450.0f};
+  harness.input.mouse_local = press;
+  harness.input.mouse_screen = press;
+  (void)harness.dispatch_frame(harness.frame(true, true, false, press));
+  harness.input.modifiers = {.primary = true};
+  harness.input.mouse_local = {300.0f, 200.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  const auto drag = harness.frame(false, true, false, press);
+  (void)harness.dispatch_frame(drag);
+  quader::QuaderOperationInputContext context;
+  harness.controller.populate_operation_input_context(context, drag);
+  EXPECT_EQ(context.selection_gesture, quader::QuaderInputSelectionGesture::Box);
+  EXPECT_EQ(context.selection_operation, quader::QuaderInputSelectionOperation::Add);
+  EXPECT_TRUE(context.selection_crossing);
+  EXPECT_TRUE(context.pointer_dragging);
+  EXPECT_TRUE(context.control);
+  EXPECT_FALSE(context.shift);
+  harness.controller.reset();
+  context = {};
+  harness.controller.populate_operation_input_context(context, harness.frame());
+  EXPECT_EQ(context.selection_gesture, quader::QuaderInputSelectionGesture::None);
+  EXPECT_FALSE(context.pointer_dragging);
+}
+
+TEST(ViewportOperationInputContextTests,
+     DuplicateDragKeepsCapturedOperationAfterShiftReleaseAndResetClearsHit) {
+  ViewportInteractionHarness harness;
+  const auto box = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+  (void)harness.dispatch_frame(harness.frame());
+  const auto *gizmo = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(gizmo, nullptr);
+  const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(axis, nullptr);
+  const auto press = axis->screen_tip;
+  harness.input.mouse_local = press;
+  harness.input.mouse_screen = press;
+  harness.input.modifiers.shift = true;
+  (void)harness.controller.handle_before_active_tool(
+      harness.editor, harness.frame(true, true, false, press));
+  harness.input.modifiers.shift = false;
+  harness.input.mouse_local = press + quader::QVec2{100.0f, 0.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  const auto drag = harness.frame(false, true, false, press);
+  (void)harness.controller.handle_before_active_tool(harness.editor, drag);
+  ASSERT_TRUE(harness.controller.dragging());
+  quader::QuaderOperationInputContext context;
+  harness.controller.populate_operation_input_context(context, drag);
+  EXPECT_EQ(context.transform_operation, quader::QuaderInputTransformOperation::Duplicate);
+  EXPECT_EQ(context.transform_handle, quader::QuaderInputTransformHandle::Axis);
+  EXPECT_TRUE(context.pointer_dragging);
+  EXPECT_FALSE(context.shift);
+  EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor));
+  harness.controller.reset();
+  context = {};
+  harness.controller.populate_operation_input_context(context, harness.frame());
+  EXPECT_EQ(context.transform_handle, quader::QuaderInputTransformHandle::None);
+  EXPECT_EQ(context.transform_operation, quader::QuaderInputTransformOperation::None);
+}
+
+
+TEST(ViewportOperationInputContextTests,
+     OrbitSnapHintFollowsCanonicalActionWithoutPhysicalAlt) {
+  ViewportInteractionHarness harness;
+  harness.input.navigation_bindings.orbit_snap_pressed = true;
+  harness.input.navigation_bindings.orbit_snap_down = true;
+  harness.input_result = harness.router.handle_frame(harness.input, harness.camera);
+  quader::QuaderOperationInputContext context;
+  harness.controller.populate_operation_input_context(context, harness.frame());
+  EXPECT_EQ(context.navigation, quader::QuaderInputNavigation::Orbit);
+  EXPECT_TRUE(context.orbit_snap_active);
+  EXPECT_FALSE(context.alt);
 }

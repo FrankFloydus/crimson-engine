@@ -14,23 +14,32 @@
 
 namespace quader {
 
-/// Declares the selection gesture semantics owned by the lasso tool.
-[[nodiscard]] std::vector<QuaderOperationInputHint> lasso_selection_input_hints();
+/// Cheap semantic phase projected from the authoritative modeling tool owner.
+struct ModelingOperationHintState {
+  bool can_apply = false;
+  bool dragging = false;
+  bool active_stroke = false;
+  bool closed = false;
+  bool extrusion_pending = false;
+  bool extrusion_region = true;
+};
 
-/// Describes radial placement and settings using canonical input targets.
+[[nodiscard]] std::vector<QuaderOperationInputHint>
+lasso_selection_input_hints(const QuaderOperationInputContext &context = {});
+[[nodiscard]] std::vector<QuaderOperationInputHint>
+selection_gesture_input_hints(const QuaderOperationInputContext &context);
 [[nodiscard]] std::vector<QuaderOperationInputHint>
 radial_array_input_hints(bool can_finalize, bool center_locked);
-
-/// Selects hints from owner state without resolving bindings or localizing text.
 [[nodiscard]] std::vector<QuaderOperationInputHint>
-primitive_creation_input_hints(QuaderPrimitiveCreationShape kind, bool can_finalize);
-
-/// Describes the pointer and canonical key actions for one active viewport tool.
+primitive_creation_input_hints(QuaderPrimitiveCreationShape kind, bool can_finalize,
+                               const QuaderOperationInputContext &context = {});
 [[nodiscard]] std::vector<QuaderOperationInputHint>
-viewport_tool_input_hints(std::string_view tool_id);
-
-/// Describes navigation gestures that remain available across viewport tools.
+viewport_tool_input_hints(std::string_view tool_id,
+                          const ModelingOperationHintState &state = {},
+                          const QuaderOperationInputContext &context = {});
 [[nodiscard]] std::vector<QuaderOperationInputHint>
-viewport_navigation_input_hints();
+viewport_navigation_input_hints(const QuaderOperationInputContext &context = {});
+[[nodiscard]] std::vector<QuaderOperationInputHint>
+viewport_auxiliary_input_hints(const QuaderOperationInputContext &context);
 
 } // namespace quader

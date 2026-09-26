@@ -6126,7 +6126,11 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   auto *pivot_action =
       menu_bar.findChild<QAction *>(QStringLiteral("tool_pivot"));
   ASSERT_NE(pivot_action, nullptr);
-  EXPECT_TRUE(pivot_action->text().contains(QStringLiteral("\tP")));
+  // P belongs to Parent to Active; Pivot remains available without a default.
+  EXPECT_TRUE(editor.commands()
+                  .shortcut_for(quader_command::kToolsActivatePivot)
+                  .empty());
+  EXPECT_FALSE(pivot_action->text().contains(QLatin1Char('\t')));
   auto *two_vertical =
       menu_bar.findChild<QAction *>(QStringLiteral("layout_two_vertical"));
   ASSERT_NE(two_vertical, nullptr);

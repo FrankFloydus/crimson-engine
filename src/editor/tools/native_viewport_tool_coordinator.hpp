@@ -113,6 +113,9 @@ public:
   [[nodiscard]] CommandResult refresh();
   [[nodiscard]] NativeViewportToolPresentationSnapshot
   presentation_snapshot() const;
+  /// Projects retained input facts without repeating viewport picking.
+  void populate_operation_input_context(
+      QuaderOperationInputContext &context) const;
 
   /** Routes one toolkit-neutral pointer frame through the native-tool owner. */
   [[nodiscard]] ViewportNativeToolInteractionResult handle_pointer_frame(
@@ -167,6 +170,8 @@ private:
   ViewportNativeToolInteraction interaction_;
   ExtrudeViewportInteraction extrude_interaction_;
   std::unique_ptr<ViewportCurveInteractionPort> curve_interaction_;
+  mutable std::optional<std::uint64_t> hint_curve_selection_revision_;
+  mutable bool hint_curve_anchor_selection_only_ = false;
 };
 
 } // namespace quader

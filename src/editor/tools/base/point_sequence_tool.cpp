@@ -43,6 +43,9 @@ ViewportToolResult PointSequenceTool::handle_event(
   ViewportToolPreviewPort *preview_port = context.ports.preview;
   ViewportToolCommitPort *commit_port = context.ports.commit;
   const ViewportPointerToolEvent &pointer = event.pointer;
+  if (!pointer.can_interact || pointer.suppress_hover_work) {
+    context.modal_state->stroke_close_hovered = false;
+  }
   switch (modeling_tool()) {
   case ModelingViewportTool::Knife:
     if (point_context == nullptr || !point_context->make_event_at) {
@@ -50,10 +53,12 @@ ViewportToolResult PointSequenceTool::handle_event(
     }
     if (pointer.can_interact && !pointer.suppress_hover_work &&
         hover_port != nullptr && hover_port->claim(ModelingBoxDragState::Idle)) {
-      handle_result(
-          context, "Knife hover",
-          hover_port->update_knife_hover(
-              point_context->make_event_at(pointer.mouse_local, false)));
+      const ModelingCommandResult hovered = hover_port->update_knife_hover(
+          point_context->make_event_at(pointer.mouse_local, false));
+      handle_result(context, "Knife hover", hovered);
+      context.modal_state->stroke_close_hovered =
+          hovered.ok && preview_port != nullptr &&
+          preview_port->tool_status().knife_current_closes_stroke;
     }
     if (pointer.can_interact && pointer.left_clicked &&
         preview_port != nullptr) {
@@ -62,6 +67,7 @@ ViewportToolResult PointSequenceTool::handle_event(
           preview_port->accept_knife_point(
               point_context->make_event_at(pointer.left_click_local, false)),
           true);
+      context.modal_state->stroke_close_hovered = false;
     }
     if (pointer.finalize_pressed && commit_port != nullptr) {
       const ModelingCommandResult command =
@@ -83,10 +89,12 @@ ViewportToolResult PointSequenceTool::handle_event(
     if (pointer.can_interact && !pointer.suppress_hover_work &&
         point_context != nullptr && point_context->make_event_at &&
         hover_port != nullptr && hover_port->claim(ModelingBoxDragState::Idle)) {
-      handle_result(
-          context, "Poly hover",
-          hover_port->update_poly_hover(
-              point_context->make_event_at(pointer.mouse_local, false)));
+      const ModelingCommandResult hovered = hover_port->update_poly_hover(
+          point_context->make_event_at(pointer.mouse_local, false));
+      handle_result(context, "Poly hover", hovered);
+      context.modal_state->stroke_close_hovered =
+          hovered.ok && preview_port != nullptr &&
+          preview_port->tool_status().poly_current_closes_stroke;
     }
     if (pointer.can_interact && pointer.left_clicked &&
         point_context != nullptr && point_context->make_event_at &&
@@ -96,6 +104,7 @@ ViewportToolResult PointSequenceTool::handle_event(
           preview_port->accept_poly_point(
               point_context->make_event_at(pointer.left_click_local, false)),
           true);
+      context.modal_state->stroke_close_hovered = false;
     }
     if (pointer.finalize_pressed && commit_port != nullptr) {
       const ModelingCommandResult command = commit_port->commit_poly_tool();

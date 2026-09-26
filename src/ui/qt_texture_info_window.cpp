@@ -6,7 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_texture_info_window.hpp"
 
+#include "ui/qt_contextual_input_hints.hpp"
+
 #include <QAbstractItemView>
+#include <QEvent>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QImage>
@@ -29,6 +32,7 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -83,8 +87,35 @@ public:
   explicit QtTextureInfoCanvas(QWidget *parent = nullptr) : QWidget(parent) {
     setObjectName(QStringLiteral("textureInfo.canvas"));
     setFocusPolicy(Qt::StrongFocus);
+    // A trailing buttonless move must retire a pan whose release was lost.
+    setMouseTracking(true);
     setMinimumSize(kPreviewMinimumWidth, kPreviewMinimumHeight);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    qt_register_contextual_input_hints(
+        *this, *this,
+        [this](Qt::KeyboardModifiers) {
+          return QtContextualInputHintSourceState{
+              .revision = static_cast<std::uint64_t>(!image_.isNull()) |
+                          (static_cast<std::uint64_t>(panning_) << 1u),
+              .active = !image_.isNull() && panning_};
+        },
+        [this](Qt::KeyboardModifiers) {
+          using Gesture = QuaderOperationInputGesture;
+          std::vector<QuaderOperationInputHint> hints;
+          if (image_.isNull()) {
+            return hints;
+          }
+          hints.push_back({Gesture::PrimaryOrMiddleDrag, {},
+                           "operation.hints.texture_info.pan", "Pan image",
+                           90, panning_});
+          if (!panning_) {
+            hints.push_back({Gesture::Wheel, {},
+                             "operation.hints.texture_info.zoom", "Zoom image", 85});
+            hints.push_back({Gesture::PrimaryOrMiddleDoubleClick, {},
+                             "operation.hints.texture_info.fit", "Fit image", 50});
+          }
+          return hints;
+        });
     refresh_properties();
   }
 
@@ -123,6 +154,16 @@ public:
   }
 
 protected:
+  bool event(QEvent *event) override {
+    if (event->type() == QEvent::UngrabMouse ||
+        event->type() == QEvent::FocusOut ||
+        event->type() == QEvent::WindowDeactivate ||
+        event->type() == QEvent::Hide) {
+      panning_ = false;
+    }
+    return QWidget::event(event);
+  }
+
   void paintEvent(QPaintEvent *) override {
     QPainter painter(this);
     painter.fillRect(rect(), palette().brush(backgroundRole()));
@@ -162,7 +203,10 @@ protected:
   }
 
   void mouseMoveEvent(QMouseEvent *event) override {
-    if (!panning_) {
+    if (!panning_ ||
+        (!event->buttons().testFlag(Qt::LeftButton) &&
+         !event->buttons().testFlag(Qt::MiddleButton))) {
+      panning_ = false;
       QWidget::mouseMoveEvent(event);
       return;
     }
@@ -263,6 +307,12 @@ QtTextureInfoWindow::QtTextureInfoWindow(QWidget *parent,
                               Qt::WindowCloseButtonHint),
       ui_scale_metrics_(metrics), images_(std::make_unique<ImageStorage>()) {
   setObjectName(QStringLiteral("textureInfo.window"));
+  qt_register_contextual_input_hints(
+      *this, *this,
+      [](Qt::KeyboardModifiers) { return QtContextualInputHintSourceState{}; },
+      [](Qt::KeyboardModifiers) {
+        return std::vector<QuaderOperationInputHint>{};
+      });
   setAttribute(Qt::WA_DeleteOnClose, false);
   resize(metrics.size(QSize(kDefaultWidth, kDefaultHeight)));
 

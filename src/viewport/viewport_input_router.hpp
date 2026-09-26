@@ -47,6 +47,9 @@ public:
       return navigation_mode_ == ViewportDragMode::Orbit ||
              navigation_mode_ == ViewportDragMode::OrbitSnap;
     }
+    bool orbit_snap_navigating() const {
+      return navigation_mode_ == ViewportDragMode::OrbitSnap;
+    }
     bool pan_navigating() const {
       return navigation_mode_ == ViewportDragMode::Pan;
     }

@@ -198,6 +198,7 @@ target_link_libraries(quader_modeling_runtime
 add_library(quader_editor_metadata STATIC
     src/editor/metadata/command_presentation_catalog.cpp
     src/editor/metadata/operation_input_hint_catalog.cpp
+    src/editor/metadata/transform_operation_input_hints.cpp
     src/editor/metadata/host_contract.cpp
     src/editor/tools/base/viewport_tool_descriptor_catalog.cpp)
 add_library(quader::editor_metadata ALIAS quader_editor_metadata)

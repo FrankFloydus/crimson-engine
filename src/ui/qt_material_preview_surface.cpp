@@ -7,6 +7,7 @@
 #include "ui/qt_material_preview_surface.hpp"
 
 #include "core/logger.hpp"
+#include "ui/qt_contextual_input_hints.hpp"
 #include "ui/qt_input_adapter.hpp"
 
 #include <QEvent>
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace quader {
 
@@ -26,6 +28,57 @@ QtMaterialPreviewSurface::QtMaterialPreviewSurface(QWindow *parent)
     : QWindow(parent) {
   setObjectName(QStringLiteral("standardMaterialEditor.previewSurface"));
   setSurfaceType(QSurface::RasterSurface);
+  qt_register_contextual_input_hints(
+      *this, *this,
+      [this](Qt::KeyboardModifiers) {
+        const bool navigable = input_hints_available();
+        return QtContextualInputHintSourceState{
+            .revision = static_cast<std::uint64_t>(drag_mode_) |
+                        (static_cast<std::uint64_t>(navigable) << 8u),
+            .active = navigable && drag_mode_ != DragMode::None};
+      },
+      [this](Qt::KeyboardModifiers modifiers) {
+        using Gesture = QuaderOperationInputGesture;
+        std::vector<QuaderOperationInputHint> hints;
+        if (!input_hints_available()) {
+          return hints;
+        }
+        const bool captured = drag_mode_ != DragMode::None;
+        DragMode mode = drag_mode_;
+        if (!captured) {
+          if (modifiers.testFlag(Qt::ControlModifier) ||
+              modifiers.testFlag(Qt::MetaModifier)) {
+            mode = DragMode::RotateEnvironment;
+          } else if (modifiers.testFlag(Qt::ShiftModifier)) {
+            mode = DragMode::Pan;
+          } else {
+            mode = DragMode::Tumble;
+          }
+        }
+        if (!captured || mode == DragMode::Tumble) {
+          hints.push_back({Gesture::MiddleDrag, {},
+                           "operation.hints.preview.rotate", "Rotate preview",
+                           90, mode == DragMode::Tumble});
+        }
+        if (!captured || mode == DragMode::Pan) {
+          hints.push_back({Gesture::ShiftMiddleDrag, {},
+                           "operation.hints.preview.pan", "Pan preview",
+                           80, mode == DragMode::Pan});
+        }
+        if (!captured || mode == DragMode::RotateEnvironment) {
+          hints.push_back({Gesture::ControlMiddleDrag, {},
+                           "operation.hints.preview.environment",
+                           "Rotate environment horizontally", 80,
+                           mode == DragMode::RotateEnvironment});
+        }
+        if (!captured) {
+          hints.push_back({Gesture::Wheel, {}, "operation.hints.preview.zoom",
+                           "Zoom preview", 85});
+          hints.push_back({Gesture::MiddleDoubleClick, {},
+                           "operation.hints.preview.reset", "Reset preview", 50});
+        }
+        return hints;
+      });
 }
 
 QtMaterialPreviewSurface::~QtMaterialPreviewSurface() { shutdown(); }
@@ -103,6 +156,10 @@ bool QtMaterialPreviewSurface::needs_rendering() const {
          ready_to_render();
 }
 
+bool QtMaterialPreviewSurface::input_hints_available() const noexcept {
+  return native_surface_available_ && isVisible() && width() > 0 && height() > 0;
+}
+
 void QtMaterialPreviewSurface::synchronize_render_size() {
   if (!initialized_) {
     return;
@@ -171,10 +228,19 @@ bool QtMaterialPreviewSurface::reset_preview() {
 }
 
 bool QtMaterialPreviewSurface::event(QEvent *event) {
+  if (event != nullptr &&
+      (event->type() == QEvent::UngrabMouse ||
+       event->type() == QEvent::FocusOut ||
+       event->type() == QEvent::WindowDeactivate ||
+       event->type() == QEvent::WindowBlocked ||
+       event->type() == QEvent::Hide)) {
+    drag_mode_ = DragMode::None;
+  }
   if (event != nullptr && event->type() == QEvent::PlatformSurface) {
     auto *surface_event = static_cast<QPlatformSurfaceEvent *>(event);
     if (surface_event->surfaceEventType() ==
         QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
+      drag_mode_ = DragMode::None;
       native_surface_available_ = false;
       swap_chain_.reset();
       swap_chain_native_id_ = 0u;

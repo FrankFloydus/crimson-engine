@@ -9,6 +9,7 @@
 #include "core/release_features.hpp"
 #include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/metadata/operation_input_hint_catalog.hpp"
+#include "editor/metadata/transform_operation_input_hints.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_settings_presentation_internal.hpp"
@@ -1109,6 +1110,35 @@ std::string_view active_tool_id(const SceneSession &session) {
       viewport_tool_for_modeling(session.modeling().tool_status().active_tool));
 }
 
+std::vector<QuaderOperationInputHint>
+viewport_transform_array_curve_input_hints(
+    const SceneSession &session, std::string_view tool_id,
+    const QuaderOperationInputContext &context) {
+  TransformOperationHintState state;
+  if (tool_id == "curve") {
+    const auto &curve = session.curve();
+    state.can_apply = curve.can_apply();
+    state.owner_dragging = curve.dragging();
+    state.curve_drawing = curve.drawing();
+    state.curve_preset = curve.creation_kind() != CurveCreationKind::Draw;
+    state.curve_construction_dragging = curve.point_construction_dragging();
+  } else if (tool_id == "pivot") {
+    state.can_apply = session.pivot().persistent_active();
+  } else if (tool_id == "linear_array") {
+    const auto handle = session.linear_array().handle_state();
+    state.can_apply = handle.visible;
+    state.owner_dragging = handle.dragging;
+  } else if (tool_id == "radial_array") {
+    state.can_apply = session.radial_array().has_valid_center();
+    state.radial_center_locked = session.radial_array().center_locked();
+    state.instances_available = release_has_feature(ReleaseFeature::Instancing);
+  } else if (tool_id == "path_array") {
+    state.can_apply = session.path_array().preview_valid();
+    state.path_has_source = session.path_array().has_source();
+  }
+  return transform_operation_input_hints(tool_id, state, context);
+}
+
 const char *fallback_tool_settings_description(
     ModelingToolSettingsTargetKind kind) {
   switch (kind) {
@@ -1759,40 +1789,132 @@ std::uint64_t QuaderToolsApi::active_tool_revision() const {
   return active_tool_revision_;
 }
 
-std::uint64_t QuaderToolsApi::active_input_hints_revision() const {
+std::uint64_t QuaderToolsApi::active_input_hints_revision(
+    const QuaderOperationInputContext &context) const {
   const SceneSession &session = scene_session(session_);
+  const auto &modeling = session.modeling();
   const auto &primitive = session.primitive_creation();
-  const bool active = primitive.active();
-  const std::array<std::uint64_t, 5> source{
-      active_tool_revision(), active_settings_revision(),
-      active ? session.scene().selection_revision() : 0u,
-      active ? session.modeling().selection_revision() : 0u,
-      active ? (static_cast<std::uint64_t>(session.modeling().box_drag_state()) << 1u) |
-                   static_cast<std::uint64_t>(primitive.can_apply()) : 0u};
-  if (!input_hints_source_valid_ || input_hints_source_ != source) {
+  const auto &extrude = session.extrude();
+  // Read only source revisions and scalar phases here. tool_status() constructs
+  // plane overlays, so defer it to projection after this retained gate changes.
+  const std::array<std::uint64_t, 17> source{
+      modeling.tool_settings_revision(), modeling.tool_preview_source_revision(),
+      session.scene().selection_revision(), modeling.selection_revision(),
+      modeling.content_revision(), primitive.tool_settings_revision(),
+      extrude.tool_settings_revision(), session.uv_peel().tool_settings_revision(),
+      session.curve().tool_settings_revision(),
+      session.curve().control_selection_revision(),
+      session.linear_array().tool_settings_revision(),
+      session.radial_array().tool_settings_revision(),
+      session.path_array().tool_settings_revision(),
+      session.pivot().tool_settings_revision(),
+      session.pivot().selection_pivot_revision(),
+      static_cast<std::uint64_t>(modeling.box_drag_state()) |
+          (static_cast<std::uint64_t>(primitive.active()) << 3u) |
+          (static_cast<std::uint64_t>(primitive.can_apply()) << 4u),
+      static_cast<std::uint64_t>(extrude.active()) |
+          (static_cast<std::uint64_t>(extrude.dragging()) << 1u) |
+          (static_cast<std::uint64_t>(extrude.preview_active()) << 2u) |
+          (static_cast<std::uint64_t>(session.curve().dragging()) << 3u) |
+          (static_cast<std::uint64_t>(session.curve().point_construction_dragging()) << 4u)};
+  const std::string_view native_id = session.native_tools().active_tool_id();
+  if (!input_hints_source_valid_ || input_hints_source_ != source ||
+      input_hints_context_ != context || input_hints_native_tool_id_ != native_id) {
     input_hints_source_ = source;
+    input_hints_context_ = context;
+    input_hints_native_tool_id_ = native_id;
     input_hints_source_valid_ = true;
     ++input_hints_revision_;
   }
   return input_hints_revision_;
 }
 
-std::vector<QuaderOperationInputHint> QuaderToolsApi::active_input_hints() const {
-  const SceneSession &session = scene_session(session_);
-  std::vector<QuaderOperationInputHint> hints;
-  if (session.radial_array().active()) {
-    hints = radial_array_input_hints(session.radial_array().has_valid_center(),
-                                     session.radial_array().center_locked());
-  } else {
-    const auto &primitive = session.primitive_creation();
-    const auto kind = primitive.active_kind();
-    const auto shape = kind ? primitive_creation_shape(*kind) : std::nullopt;
-    hints = shape ? primitive_creation_input_hints(*shape, primitive.can_apply())
-                  : viewport_tool_input_hints(active_tool_id(session));
+std::vector<QuaderOperationInputHint> QuaderToolsApi::active_input_hints(
+    const QuaderOperationInputContext &context) const {
+  if (!context.viewport_available) return {};
+  if (context.navigation != QuaderInputNavigation::None) {
+    return viewport_navigation_input_hints(context);
   }
-  std::vector<QuaderOperationInputHint> navigation =
-      viewport_navigation_input_hints();
-  hints.insert(hints.end(), navigation.begin(), navigation.end());
+  if (context.selection_gesture != QuaderInputSelectionGesture::None) {
+    if (context.selection_gesture == QuaderInputSelectionGesture::EnterInstance &&
+        !release_has_feature(ReleaseFeature::Instancing)) return {};
+    return selection_gesture_input_hints(context);
+  }
+  if (context.point_light_range_hovered || context.point_light_range_dragging ||
+      context.material_transfer != QuaderInputMaterialTransfer::None) {
+    if ((context.point_light_range_hovered || context.point_light_range_dragging) &&
+        !release_has_feature(ReleaseFeature::Lights)) return {};
+    auto auxiliary = viewport_auxiliary_input_hints(context);
+    std::erase_if(auxiliary, [](const QuaderOperationInputHint &hint) {
+      return hint.gesture == QuaderOperationInputGesture::Keybinding &&
+             !release_allows_input_target(hint.command.string());
+    });
+    return auxiliary;
+  }
+  const SceneSession &session = scene_session(session_);
+  const auto &modeling = session.modeling();
+  std::vector<QuaderOperationInputHint> hints;
+  const auto &primitive = session.primitive_creation();
+  const auto kind = primitive.active_kind();
+  const auto shape = kind ? primitive_creation_shape(*kind) : std::nullopt;
+  if (shape) {
+    auto primitive_context = context;
+    primitive_context.pointer_dragging = context.pointer_dragging ||
+        modeling.box_drag_state() != ModelingBoxDragState::Idle;
+    hints = primitive_creation_input_hints(*shape, primitive.can_apply(), primitive_context);
+  } else if (session.extrude().active()) {
+    const auto &extrude = session.extrude();
+    hints = viewport_tool_input_hints("extrude", {
+        .dragging = extrude.dragging(),
+        .extrusion_pending = extrude.preview_active(),
+        .extrusion_region = extrude.mode() == modeling::FaceExtrudeMode::Region}, context);
+  } else if (session.uv_peel().active()) {
+    hints = viewport_tool_input_hints("uv_peel", {.can_apply = session.uv_peel().preview_valid()}, context);
+  } else if (modeling.operation_preview_active()) {
+    hints = viewport_tool_input_hints("operation", {.can_apply = true}, context);
+  } else {
+    const std::string_view active_id = active_tool_id(session);
+    const bool passive_curve_context = (active_id == "select" || active_id == "move") &&
+        (context.curve_anchor_hovered || context.curve_tangent_hovered ||
+         (context.curve_anchor_selection_only && context.transform_handle != QuaderInputTransformHandle::None));
+    const std::string_view tool_id = passive_curve_context ? "curve" : active_id;
+    if (tool_id == "move" || tool_id == "rotate" || tool_id == "scale" ||
+        tool_id == "pivot" || tool_id == "curve" || tool_id == "linear_array" ||
+        tool_id == "radial_array" || tool_id == "path_array" || context.quick_pivot) {
+      hints = viewport_transform_array_curve_input_hints(session, tool_id, context);
+      if (hints.empty() && (tool_id == "move" || tool_id == "rotate" || tool_id == "scale" || passive_curve_context)) {
+        hints = viewport_navigation_input_hints(context);
+      }
+    } else {
+      ModelingOperationHintState state;
+      if (tool_id == "knife" || tool_id == "poly" || tool_id == "cut" || tool_id == "mirror") {
+        const auto status = modeling.tool_status();
+        if (tool_id == "knife") {
+          state.can_apply = status.knife_can_commit;
+          state.active_stroke = status.knife_has_active_stroke;
+        } else if (tool_id == "poly") {
+          state.can_apply = status.poly_can_commit;
+          state.active_stroke = status.poly_point_count > 0;
+          state.closed = status.poly_closed;
+        } else if (tool_id == "cut") {
+          state.can_apply = status.cut_preview_valid;
+          state.dragging = status.cut_dragging;
+        } else {
+          state.can_apply = status.mirror_preview_valid;
+          state.dragging = status.mirror_dragging;
+        }
+      }
+      hints = viewport_tool_input_hints(tool_id, state, context);
+    }
+  }
+  std::erase_if(hints, [](const QuaderOperationInputHint &hint) {
+    return hint.gesture == QuaderOperationInputGesture::Command
+               ? !release_allows_command(hint.command.string())
+               : (hint.gesture == QuaderOperationInputGesture::Keybinding ||
+                  hint.gesture == QuaderOperationInputGesture::KeybindingHold ||
+                  hint.gesture == QuaderOperationInputGesture::KeybindingModifier) &&
+                     !release_allows_input_target(hint.command.string());
+  });
   return hints;
 }
 

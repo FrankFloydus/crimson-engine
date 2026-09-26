@@ -264,7 +264,7 @@ viewport_input_action_binding_catalog() {
       },
       {
           .target_id = viewport_input_action_target_id("navigation.fly"),
-          .label = "Fly / Orthographic Pan",
+          .label = "Fly Navigation",
           .localization_key =
               "keybindings.target.viewport.navigation.fly.label",
           .shortcut = "RightMouseDrag",

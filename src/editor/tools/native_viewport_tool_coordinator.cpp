@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "api/quader_operation_input_context.hpp"
 #include "editor/tools/uv_peel_tool_service.hpp"
 #include "core/release_features.hpp"
 
@@ -18,6 +19,7 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <optional>
 #include <utility>
@@ -376,6 +378,35 @@ NativeViewportToolCoordinator::presentation_snapshot() const {
       .path_array_source_picking = path_array_.active(),
       .selection_pivot_revision = pivot_.selection_pivot_revision(),
   };
+}
+
+void NativeViewportToolCoordinator::populate_operation_input_context(
+    QuaderOperationInputContext &context) const {
+  if (!extrude_.active() && !uv_peel_.active()) {
+    interaction_.populate_operation_input_context(context);
+  } else {
+    context.curve_anchor_hovered = false;
+    context.curve_tangent_hovered = false;
+    context.path_source_hovered = false;
+    context.linear_array_endpoint_hovered = false;
+    context.pivot_handle_hovered = false;
+  }
+  context.quick_pivot = pivot_.quick_edit_active();
+  const bool editable_controls = curve_.controls_editable();
+  const std::uint64_t selection_revision = curve_.control_selection_revision();
+  if (editable_controls &&
+      hint_curve_selection_revision_ != selection_revision) {
+    const CurveControlSelection &selection = curve_.control_selection();
+    hint_curve_anchor_selection_only_ =
+        !selection.empty() &&
+        std::all_of(selection.controls.begin(), selection.controls.end(),
+                    [](CurveControlTarget target) {
+                      return target.kind == CurveControlKind::Anchor;
+                    });
+    hint_curve_selection_revision_ = selection_revision;
+  }
+  context.curve_anchor_selection_only =
+      editable_controls && hint_curve_anchor_selection_only_;
 }
 
 ViewportNativeToolInteractionResult

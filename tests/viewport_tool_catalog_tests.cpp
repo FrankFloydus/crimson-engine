@@ -12,6 +12,7 @@
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/input/quader_input_binding.hpp"
 #include "editor/interactions/tool_identity.hpp"
+#include "api/quader_operation_input_context.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/metadata/host_contract.hpp"
@@ -80,11 +81,14 @@ public:
   bool fail_query = false;
   bool fail_point_hover = false;
   bool fail_edge_loop_begin = false;
+  bool allow_hover = true;
+  ModelingToolStatus status;
+  mutable int status_queries = 0;
   int hover_updates = 0;
   int invalidations = 0;
   int cancellations = 0;
 
-  bool claim(ModelingBoxDragState) override { return true; }
+  bool claim(ModelingBoxDragState) override { return allow_hover; }
   void invalidate() override { ++invalidations; }
   ModelingBoxPreview update_box_hover(const ModelingBoxToolEvent &) override {
     ++hover_updates;
@@ -109,7 +113,10 @@ public:
     return point_hover_result();
   }
 
-  ModelingToolStatus tool_status() const override { return {}; }
+  ModelingToolStatus tool_status() const override {
+    ++status_queries;
+    return status;
+  }
   ModelingBoxPreview box_preview(bool) const override {
     return fail_query
                ? ModelingBoxPreview{
@@ -185,6 +192,98 @@ private:
     };
   }
 };
+
+TEST(ViewportToolCatalogTests, ModalPlaneHintsRetainAcceptedHoverWithoutRepeatingQueries) {
+  ViewportToolRuntime runtime;
+  ViewportToolState state;
+  ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::Mirror));
+  ViewportCameraController camera;
+  camera.set_viewport_size(640.0f, 480.0f);
+  FailingToolPreviewPorts ports;
+  ports.status.mirror_points = {{{-1.0f, 0.0f, 0.0f},
+                                 {1.0f, 0.0f, 0.0f}, {}}};
+  ports.status.mirror_captured_point_count = 2;
+  ports.status.mirror_has_line = true;
+  RejectingToolCommitPort commit;
+  ViewportPointToolContext point;
+  point.make_event_at = [](QVec2, bool) { return ModelingToolRayEvent{}; };
+  ViewportToolContext context{
+      .state = state, .camera = camera,
+      .ports = {.hover = &ports, .preview = &ports, .commit = &commit,
+                .cancel = &ports},
+      .point = &point,
+  };
+  ViewportToolEvent event{
+      .kind = ViewportToolEventKind::Frame, .tool = ViewportToolId::Mirror,
+      .pointer = {.hovered = true, .can_interact = true,
+                  .mouse_local = camera.project_world_point(
+                      ports.status.mirror_points[0]).position},
+  };
+  (void)runtime.handle_active_tool_event(state, context, event);
+  QuaderOperationInputContext hints;
+  runtime.populate_operation_input_context(hints);
+  EXPECT_TRUE(hints.plane_endpoint_hovered);
+  EXPECT_FALSE(hints.plane_body_hovered);
+  const int status_queries = ports.status_queries;
+  ports.allow_hover = false;
+  for (int frame = 0; frame < 20; ++frame) {
+    (void)runtime.handle_active_tool_event(state, context, event);
+    runtime.populate_operation_input_context(hints);
+    EXPECT_TRUE(hints.plane_endpoint_hovered);
+  }
+  EXPECT_EQ(ports.status_queries, status_queries);
+
+  ports.allow_hover = true;
+  event.pointer.mouse_local = camera.project_world_point({}).position;
+  (void)runtime.handle_active_tool_event(state, context, event);
+  runtime.populate_operation_input_context(hints);
+  EXPECT_FALSE(hints.plane_endpoint_hovered);
+  EXPECT_TRUE(hints.plane_body_hovered);
+  event.pointer.suppress_hover_work = true;
+  (void)runtime.handle_active_tool_event(state, context, event);
+  runtime.populate_operation_input_context(hints);
+  EXPECT_FALSE(hints.plane_endpoint_hovered);
+  EXPECT_FALSE(hints.plane_body_hovered);
+}
+
+TEST(ViewportToolCatalogTests, StrokeClosureHintsFollowOwnerHoverAndClearWhenInterrupted) {
+  for (const ViewportToolId tool : {ViewportToolId::Knife, ViewportToolId::Poly}) {
+    ViewportToolRuntime runtime;
+    ViewportToolState state;
+    ASSERT_TRUE(runtime.set_active_tool(state, tool));
+    ViewportCameraController camera;
+    FailingToolPreviewPorts ports;
+    ports.status.knife_current_closes_stroke = true;
+    ports.status.poly_current_closes_stroke = true;
+    ViewportPointToolContext point;
+    point.make_event_at = [](QVec2, bool) { return ModelingToolRayEvent{}; };
+    ViewportToolContext context{
+        .state = state, .camera = camera,
+        .ports = {.hover = &ports, .preview = &ports, .cancel = &ports},
+        .point = &point,
+    };
+    ViewportToolEvent event{
+        .kind = ViewportToolEventKind::Frame, .tool = tool,
+        .pointer = {.hovered = true, .can_interact = true},
+    };
+    (void)runtime.handle_active_tool_event(state, context, event);
+    QuaderOperationInputContext hints;
+    runtime.populate_operation_input_context(hints);
+    EXPECT_TRUE(hints.stroke_close_hovered);
+    const int status_queries = ports.status_queries;
+    ports.allow_hover = false;
+    for (int frame = 0; frame < 20; ++frame) {
+      (void)runtime.handle_active_tool_event(state, context, event);
+    }
+    runtime.populate_operation_input_context(hints);
+    EXPECT_TRUE(hints.stroke_close_hovered);
+    EXPECT_EQ(ports.status_queries, status_queries);
+    event.pointer.can_interact = false;
+    (void)runtime.handle_active_tool_event(state, context, event);
+    runtime.populate_operation_input_context(hints);
+    EXPECT_FALSE(hints.stroke_close_hovered);
+  }
+}
 
 /// Drives the real persistent primitive owner through deterministic rays.
 class PrimitivePointerHarness final {

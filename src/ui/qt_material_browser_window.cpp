@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_contextual_input_hints.hpp"
 
 #include "ui/qt_apply_cancel_input_filter.hpp"
 #include "ui/qt_application_theme.hpp"
@@ -24,6 +25,7 @@
 #include <QDialog>
 #include <QDrag>
 #include <QDragEnterEvent>
+#include <QDragLeaveEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QEvent>
@@ -358,6 +360,7 @@ public:
       std::function<void(const QModelIndex &, const QPoint &)>;
 
   ContextMenuHandler context_menu_handler;
+  std::function<void(bool)> hint_drag_state_changed;
 
   [[nodiscard]] bool keyboard_activation_in_progress() const noexcept {
     return keyboard_activation_in_progress_;
@@ -371,8 +374,15 @@ protected:
     }
     QDrag drag(this);
     drag.setMimeData(data);
+    if (hint_drag_state_changed) {
+      hint_drag_state_changed(true);
+    }
+    QPointer<View> guard(this);
     // The owner publishes the move. Never remove source rows after a drop.
     (void)drag.exec(Qt::MoveAction, Qt::MoveAction);
+    if (guard && hint_drag_state_changed) {
+      hint_drag_state_changed(false);
+    }
   }
 
   void keyPressEvent(QKeyEvent *event) override {
@@ -479,6 +489,39 @@ public:
   std::uint64_t generation = 0;
   bool organization_enabled = true;
   std::function<bool(const QMimeData *, const QString &, bool)> receive_drop;
+  std::uint64_t hint_revision = 0;
+  QString hint_destination;
+  bool hint_drag_active = false;
+  bool hint_drag_hovering = false;
+
+  void set_hint_drag_active(bool active) {
+    if (hint_drag_active != active ||
+        (!active && (hint_drag_hovering || !hint_destination.isEmpty()))) {
+      hint_drag_active = active;
+      if (!active) {
+        hint_drag_hovering = false;
+      }
+      hint_destination.clear();
+      ++hint_revision;
+    }
+  }
+
+  void set_hint_destination(QString destination) {
+    if (hint_destination != destination) {
+      hint_destination = std::move(destination);
+      ++hint_revision;
+    }
+  }
+
+  void set_hint_drag_hovering(bool hovering) {
+    if (hint_drag_hovering != hovering) {
+      hint_drag_hovering = hovering;
+      ++hint_revision;
+    }
+    if (!hovering) {
+      set_hint_destination({});
+    }
+  }
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
     apply_ui_scale_to_qt_tree_relationship_presentation(*this, metrics);
@@ -500,7 +543,12 @@ protected:
     data->setData(QString::fromLatin1(kFolderDragMime), bytes);
     QDrag drag(this);
     drag.setMimeData(data);
+    set_hint_drag_active(true);
+    QPointer<MaterialFolderTree> guard(this);
     (void)drag.exec(Qt::MoveAction, Qt::MoveAction);
+    if (guard) {
+      set_hint_drag_active(false);
+    }
   }
 
   void dragEnterEvent(QDragEnterEvent *event) override {
@@ -509,7 +557,9 @@ protected:
          event->mimeData()->hasFormat(QString::fromLatin1(kFolderDragMime)))) {
       event->setDropAction(Qt::MoveAction);
       event->accept();
+      set_hint_drag_hovering(true);
     } else {
+      set_hint_destination({});
       event->ignore();
     }
   }
@@ -522,12 +572,16 @@ protected:
       QTreeWidget::dragMoveEvent(event);
       event->setDropAction(Qt::MoveAction);
       event->accept();
+      set_hint_drag_hovering(true);
+      set_hint_destination(target->data(0, kFolderPathRole).toString());
     } else {
+      set_hint_destination({});
       event->ignore();
     }
   }
 
   void dropEvent(QDropEvent *event) override {
+    set_hint_drag_hovering(false);
     QTreeWidgetItem *target = itemAt(event->position().toPoint());
     if (organization_enabled && target != nullptr && receive_drop &&
         receive_drop(event->mimeData(),
@@ -537,6 +591,11 @@ protected:
     } else {
       event->ignore();
     }
+  }
+
+  void dragLeaveEvent(QDragLeaveEvent *event) override {
+    set_hint_drag_hovering(false);
+    QTreeWidget::dragLeaveEvent(event);
   }
 };
 
@@ -1133,6 +1192,11 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
 
   auto *keyboard_list =
       new KeyboardActivationView<QTableView>(content_stack_);
+  const auto hint_drag_changed = [folder_tree](bool active) {
+    folder_tree->set_hint_drag_active(active);
+  };
+  keyboard_grid->hint_drag_state_changed = hint_drag_changed;
+  keyboard_list->hint_drag_state_changed = hint_drag_changed;
   list_view_ = keyboard_list;
   list_view_->setObjectName(QStringLiteral("materialBrowser.listView"));
   list_view_->setModel(proxy_);
@@ -1331,6 +1395,45 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(
                        thumbnail_wheel_remainder_ = 0.0;
                      }
                    });
+
+  qt_register_contextual_input_hints(
+      *this, *this,
+      [this, folder_tree](Qt::KeyboardModifiers) {
+        return QtContextualInputHintSourceState{
+            .revision = (folder_tree->hint_revision << 2U) |
+                        (owns_browser_focus(QApplication::focusWidget()) ? 1U : 0U) |
+                        (folder_tree->organization_enabled ? 2U : 0U),
+            .active = folder_tree->hint_drag_active ||
+                      folder_tree->hint_drag_hovering,
+        };
+      },
+      [this, folder_tree](Qt::KeyboardModifiers modifiers) {
+        std::vector<QuaderOperationInputHint> hints;
+        if (folder_tree->hint_drag_active || folder_tree->hint_drag_hovering) {
+          if (folder_tree->organization_enabled &&
+              !folder_tree->hint_destination.isEmpty()) {
+            QuaderOperationInputHint hint{
+                .gesture = QuaderOperationInputGesture::PrimaryDrag,
+                .label_key = "operation.hints.browser.move_to",
+                .label_fallback = "Move to",
+                .priority = 100,
+                .active = true,
+            };
+            hint.detail = folder_tree->hint_destination.toUtf8().toStdString();
+            hints.push_back(std::move(hint));
+          }
+          return hints;
+        }
+        if (owns_browser_focus(QApplication::focusWidget())) {
+          hints.push_back({
+              .gesture = QuaderOperationInputGesture::ControlWheel,
+              .label_key = "operation.hints.browser.thumbnail_size",
+              .label_fallback = "Thumbnail size",
+              .active = modifiers.testFlag(Qt::ControlModifier),
+          });
+        }
+        return hints;
+      });
 }
 
 QtMaterialBrowserWindow::~QtMaterialBrowserWindow() {
@@ -1538,6 +1641,8 @@ void QtMaterialBrowserWindow::set_project_generation(std::uint64_t generation) {
     filter_popup_->close();
   }
   project_generation_ = generation;
+  static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_drag_active(false);
+  static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_drag_hovering(false);
   assignment_available_ = false;
   dependency_revision_ = 0;
   ++action_eligibility_revision_;
@@ -1694,10 +1799,12 @@ void QtMaterialBrowserWindow::set_delete_folder_callback(DeleteFolderCallback ca
 }
 
 void QtMaterialBrowserWindow::set_move_folder_callback(MoveFolderCallback callback) {
+  static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_destination({});
   move_folder_ = std::move(callback);
 }
 
 void QtMaterialBrowserWindow::set_move_materials_callback(MoveMaterialsCallback callback) {
+  static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_destination({});
   move_materials_ = std::move(callback);
 }
 
@@ -1825,6 +1932,9 @@ bool QtMaterialBrowserWindow::event(QEvent *event) {
                event->type() == QEvent::StyleChange) {
       queue_row_metrics_update();
     } else if (event->type() == QEvent::Hide) {
+      if (folder_tree_ != nullptr) {
+        static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_drag_active(false);
+      }
       if (filter_popup_) {
         filter_popup_->close();
       }
@@ -2089,6 +2199,10 @@ void QtMaterialBrowserWindow::update_purpose_presentation() {
   folder_tree_->setDragEnabled(normal);
   folder_tree_->setAcceptDrops(normal);
   static_cast<MaterialFolderTree *>(folder_tree_)->organization_enabled = normal;
+  if (!normal) {
+    static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_drag_active(false);
+    static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_drag_hovering(false);
+  }
   model_->set_drag_context(project_generation_, normal);
   refresh_usage_presentation();
   refresh_content_page();
@@ -2167,6 +2281,7 @@ void QtMaterialBrowserWindow::follow_moved_folder(const QString &source,
 }
 
 void QtMaterialBrowserWindow::rebuild_folder_tree() {
+  static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_destination({});
   QString selection = selected_folder();
   std::set<QString> expanded;
   for (QTreeWidgetItemIterator it(folder_tree_); *it != nullptr; ++it) {

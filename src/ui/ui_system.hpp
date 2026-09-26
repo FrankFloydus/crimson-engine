@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_editor_api_types.hpp"
 #include "api/quader_events_api.hpp"
 #include "api/quader_materials_api.hpp"
 #include "api/quader_modeling_api.hpp"
@@ -185,8 +186,9 @@ private:
   void clear_project_workspace_events();
   void refresh_status_bar();
   void refresh_status_selection();
-  void present_status_notification(const QuaderApiStatus &result,
-                                   int timeout_ms = 0);
+  void present_status_result(const QuaderApiStatus &result);
+  void present_status_notification(QuaderNotification notification);
+  void restart_status_message_dismissal();
   void present_lifecycle_result(const QuaderApiStatus &result);
   void present_standard_material_error(std::string_view message);
   void refresh_localized_chrome();
@@ -537,11 +539,9 @@ private:
   };
   RetainedUiPresenter<StandardMaterialEditorPresentationStamp>
       standard_material_editor_presenter_;
-  /** Captures command, live-object, and localization state shown in the status bar. */
+  /** Gates command failure and notification presentation before formatting. */
   struct StatusPresentationStamp final {
     std::uint64_t command_revision = 0u;
-    std::uint32_t live_count = 0u;
-    std::uint8_t live_kind = 0u;
     std::uint64_t localization_revision = 0u;
     friend bool operator==(const StatusPresentationStamp &,
                            const StatusPresentationStamp &) = default;
@@ -560,7 +560,7 @@ private:
   RetainedUiPresenter<StatusSelectionPresentationStamp>
       status_selection_presenter_;
   std::uint64_t status_observed_command_revision_ = 0u;
-  std::optional<QuaderApiStatus> status_notification_;
+  std::optional<QuaderNotification> status_notification_;
   std::uint64_t status_notification_command_revision_ = 0u;
   std::uint64_t status_notification_generation_ = 0u;
   bool home_visible_ = false;

@@ -23,6 +23,7 @@ namespace quader {
 class QuaderEditorApi;
 struct QuaderPrimitiveCreationState;
 class ViewportToolHoverPort;
+struct QuaderOperationInputContext;
 
 /**
  * Carries the host facts needed to resolve Curve-control gizmo priority,
@@ -99,6 +100,10 @@ public:
   cancel_active_drag(QuaderEditorApi &editor,
                      NativeViewportToolCoordinator &native_tools);
   [[nodiscard]] bool dragging() const;
+  /// Copies owner-accepted state after dispatch; never performs hover picking.
+  void populate_operation_input_context(
+      QuaderOperationInputContext &context,
+      const ViewportInteractionFrame &frame) const;
   [[nodiscard]] bool transform_gizmo_pointer_active() const;
   [[nodiscard]] bool point_light_range_pointer_active() const {
     return point_light_range_.pointer_active();
@@ -226,6 +231,7 @@ private:
   ViewportSelectionInteraction selection_;
   // Ownership only: transfer happens on the semantic trigger, never while held.
   std::optional<MaterialTransferPointer> material_transfer_pointer_;
+  ViewportInputActionKind accepted_material_hint_action_ = ViewportInputActionKind::None;
   // A reset drops pane ownership, but the old release must not become a click
   // in the new scene. The shared pointer primitive retires it on release or a
   // fresh press.

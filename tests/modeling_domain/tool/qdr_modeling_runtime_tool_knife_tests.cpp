@@ -156,6 +156,20 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappingAndAcceptFlowStayInEditorCor
 	EXPECT_TRUE(state.segments[0].first_point == 0U);
 	EXPECT_TRUE(state.segments[0].second_point == 1U);
 	EXPECT_FALSE(state.preview_lines.empty());
+	EXPECT_FALSE(quader_editor_core::knife_tool_preview(state).current_closes_stroke);
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_pick(
+		session, state, hover,
+		{{0.5F, 2.0F, 0.5F}, {0.0F, -1.0F, 0.0F}},
+		0.5, true, false));
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(state, 0.5));
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_pick(
+		session, state, hover,
+		{{0.0F, 2.0F, 1.0F}, {0.0F, -1.0F, 0.0F}},
+		0.5, true, false));
+	EXPECT_TRUE(quader_editor_core::knife_tool_preview(state).current_closes_stroke);
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(state, 0.5));
+	EXPECT_FALSE(state.has_active_stroke);
+	EXPECT_FALSE(quader_editor_core::knife_tool_preview(state).current_closes_stroke);
 }
 
 TEST(QdrModelingRuntimeToolKnifeTests,

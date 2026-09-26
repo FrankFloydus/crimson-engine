@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/color_space.hpp"
 #include "core/localization_service.hpp"
+#include "ui/qt_contextual_input_hints.hpp"
 #include "ui/qt_numeric_format.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 
@@ -228,6 +229,67 @@ QtFaceTextureCanvas::QtFaceTextureCanvas(QWidget *parent) : QWidget(parent) {
   feedback_->setMargin(metrics_.px(8));
   feedback_->hide();
   refresh_rotation_cursor();
+  qt_register_contextual_input_hints(
+      *this, *this,
+      [this](Qt::KeyboardModifiers) {
+        const bool ready = editor_ && presentation_.selected_face_count == 1 &&
+                           outline_.size() >= 3;
+        const auto stamp = static_cast<std::uint64_t>(hovered_) |
+                           (static_cast<std::uint64_t>(dragged_) << 3) |
+                           (static_cast<std::uint64_t>(gesture_active_) << 6) |
+                           (static_cast<std::uint64_t>(panning_) << 7) |
+                           (static_cast<std::uint64_t>(presentation_.editable) << 8);
+        return QtContextualInputHintSourceState{
+            stamp, ready, gesture_active_ || panning_};
+      },
+      [this](Qt::KeyboardModifiers modifiers) {
+        using Gesture = QuaderOperationInputGesture;
+        std::vector<QuaderOperationInputHint> hints;
+        if (panning_) {
+          return hints;
+        }
+        if (gesture_active_) {
+          hints.push_back({Gesture::Escape, {},
+                           "operation.hints.cancel_texture_edit",
+                           "Cancel Texture Edit", 100});
+        }
+        if (presentation_.editable) {
+          const bool shift = modifiers.testFlag(Qt::ShiftModifier);
+          const bool control = modifiers.testFlag(Qt::ControlModifier);
+          const Handle handle = gesture_active_ ? dragged_ : hovered_;
+          switch (handle) {
+          case Handle::None:
+            hints.push_back({Gesture::Control, {},
+                             "operation.hints.texture_pixel_snap", "Pixel Snap",
+                             70, control && !shift});
+            break;
+          case Handle::Width:
+          case Handle::Height:
+            hints.push_back({Gesture::Control, {},
+                             "operation.hints.texture_unit_repeats",
+                             "Whole-unit Repeats", 70, control && !shift});
+            hints.push_back({Gesture::Shift, {},
+                             "operation.hints.texture_grid_repeats",
+                             "Grid-sized Repeats", 70, shift});
+            break;
+          case Handle::Rotation:
+            hints.push_back({Gesture::Control, {},
+                             "operation.hints.texture_degree_steps",
+                             "1\xC2\xB0 Steps", 70, control && !shift});
+            hints.push_back({Gesture::Shift, {},
+                             "operation.hints.texture_angle_steps",
+                             "Configured Angle Step", 70, shift});
+            break;
+          }
+        }
+        if (!gesture_active_) {
+          hints.push_back({Gesture::MiddleDrag, {}, "operation.hints.pan",
+                           "Pan", 40});
+          hints.push_back({Gesture::Wheel, {}, "operation.hints.zoom",
+                           "Zoom", 40});
+        }
+        return hints;
+      });
 }
 
 QtFaceTextureCanvas::~QtFaceTextureCanvas() { abandon(); }

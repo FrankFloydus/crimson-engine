@@ -84,6 +84,7 @@ private:
   void mark_render_pending();
   void recreate_swap_chain(bool force_retry = false);
   [[nodiscard]] void *native_window_handle() const;
+  [[nodiscard]] bool input_hints_available() const noexcept;
 
   RenderSystem *render_system_ = nullptr;
   RenderAdditionalSwapChain swap_chain_;

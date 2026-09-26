@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_numeric_spin_box.hpp"
+#include "ui/qt_contextual_input_hints.hpp"
 #include "ui/qt_horizontal_pointer_capture.hpp"
 
 #include <QAbstractSpinBox>
@@ -306,6 +307,41 @@ QtNumericSpinBoxController::QtNumericSpinBoxController(
   });
   connect(line_edit_, &QLineEdit::textChanged, this,
           [this]() { schedule_geometry_refresh(); });
+  qt_register_contextual_input_hints(
+      spin_box_, *this,
+      [this](Qt::KeyboardModifiers) {
+        const auto stamp = static_cast<std::uint64_t>(editing_) |
+                           (static_cast<std::uint64_t>(dragging_) << 1) |
+                           (static_cast<std::uint64_t>(drag_mode_) << 2);
+        return QtContextualInputHintSourceState{
+            stamp, can_interact(), editing_ || dragging_};
+      },
+      [this](Qt::KeyboardModifiers modifiers) {
+        using Gesture = QuaderOperationInputGesture;
+        std::vector<QuaderOperationInputHint> hints;
+        if (editing_) {
+          hints.push_back({Gesture::Enter, {}, "operation.hints.accept_value",
+                           "Accept Value", 100});
+          hints.push_back({Gesture::Escape, {}, "operation.hints.restore_value",
+                           "Restore Value", 100});
+        } else if (dragging_) {
+          const bool shift = modifiers.testFlag(Qt::ShiftModifier);
+          const bool control = modifiers.testFlag(Qt::ControlModifier);
+          hints.push_back({Gesture::EscapeOrRightClick, {},
+                           "operation.hints.cancel_value", "Cancel Value", 100});
+          if (qobject_cast<QDoubleSpinBox *>(&spin_box_) ||
+              drag_mode_ == QtNumericDragMode::NativeSteps) {
+            hints.push_back({Gesture::Shift, {}, "operation.hints.precision",
+                             "Precision", 70, shift && !control});
+          }
+          hints.push_back({Gesture::Control, {}, "operation.hints.numeric_snap",
+                           "Snap", 70, control && !shift});
+          hints.push_back({Gesture::ControlShift, {},
+                           "operation.hints.numeric_fine_snap", "Fine Snap",
+                           60, control && shift});
+        }
+        return hints;
+      });
   refresh_geometry();
   refresh_presentation();
 }

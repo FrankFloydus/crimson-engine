@@ -163,6 +163,7 @@ struct KnifeToolState {
   bool has_active_stroke = false;
   bool has_current = false;
   bool current_target_valid = false;
+  bool current_closes_stroke = false;
   int current_object_id = -1;
   int target_object_id = -1;
   quader_poly::KnifePointTarget current_target;
@@ -186,6 +187,7 @@ struct KnifeToolPreview {
   bool active = false;
   bool has_active_stroke = false;
   bool has_current = false;
+  bool current_closes_stroke = false;
   int target_object_id = -1;
   quader::QVec3 previous_point;
   quader::QVec3 current_point;
@@ -231,6 +233,7 @@ struct PolyToolPreview {
   bool active = false;
   bool closed = false;
   bool has_current = false;
+  bool current_closes_stroke = false;
   bool finalizable = false;
   std::uint32_t point_count = 0;
   std::uint32_t line_count = 0;

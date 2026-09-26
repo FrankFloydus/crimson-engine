@@ -115,6 +115,7 @@ EditorRuntimeStatus editor_runtime_status(const EditorRuntimeState& runtime)
             knife.active,
             knife.has_active_stroke,
             knife.has_current,
+            knife.current_closes_stroke,
             knife.can_commit,
             cut_is_active(runtime.cut) ||
                 runtime.active_tool == ViewportInteractionTool::Cut,
@@ -129,6 +130,7 @@ EditorRuntimeStatus editor_runtime_status(const EditorRuntimeState& runtime)
             poly.active || runtime.active_tool == ViewportInteractionTool::Poly,
             poly.closed,
             poly.has_current,
+            poly.current_closes_stroke,
             poly.finalizable,
             static_cast<int>(poly.point_count),
             runtime.transform_drag.active,

@@ -7,6 +7,7 @@
 #include "editor/tools/base/drawn_plane_tool.hpp"
 
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/tools/viewport_native_tool_interaction.hpp"
 
 #include <array>
 #include <optional>
@@ -169,13 +170,39 @@ ViewportToolResult handle_drawn_plane_lifecycle(
   bool &drag_active = drawn_plane_drag_active(*context.modal_state, kind);
   const std::string_view tool_name = drawn_plane_tool_name(kind);
 
+  const auto clear_hover_hint = [&] {
+    context.modal_state->plane_endpoint_hovered = false;
+    context.modal_state->plane_body_hovered = false;
+  };
+  if (!pointer.can_interact || pointer.suppress_hover_work ||
+      (pointer.left_down && drag_active)) {
+    clear_hover_hint();
+  }
+
   if (pointer.can_interact && !pointer.suppress_hover_work &&
       !(pointer.left_down && drag_active) &&
       hover_port.claim(ModelingBoxDragState::Idle)) {
-    handle_result(context, std::string(tool_name) + " hover",
-                  update_drawn_plane_hover(hover_port, kind,
-                                           point_context.make_event_at(
-                                               pointer.mouse_local, false)));
+    const ModelingCommandResult hovered = update_drawn_plane_hover(
+        hover_port, kind,
+        point_context.make_event_at(pointer.mouse_local, false));
+    handle_result(context, std::string(tool_name) + " hover", hovered);
+    clear_hover_hint();
+    if (hovered.ok) {
+      // Reuse the accepted hover gate; unchanged frames never repeat projection.
+      const ModelingToolStatus status = preview_port.tool_status();
+      const auto &points = drawn_plane_points(status, kind);
+      const int count = drawn_plane_captured_point_count(status, kind);
+      context.modal_state->plane_endpoint_hovered =
+          ViewportNativeToolInteraction::hit_drawn_plane_captured_point(
+              points, count, pointer.mouse_local, context.camera,
+              pointer.viewport_pixel_scale).has_value();
+      context.modal_state->plane_body_hovered =
+          !context.modal_state->plane_endpoint_hovered &&
+          ViewportNativeToolInteraction::hit_drawn_plane_line(
+              points, count, drawn_plane_has_line(status, kind),
+              pointer.mouse_local, context.camera,
+              pointer.viewport_pixel_scale);
+    }
   }
   if (pointer.can_interact && pointer.left_clicked) {
     const ModelingToolStatus before = preview_port.tool_status();
@@ -211,6 +238,7 @@ ViewportToolResult handle_drawn_plane_lifecycle(
     }
     drag_active = command.ok &&
                   drawn_plane_dragging(preview_port.tool_status(), kind);
+    clear_hover_hint();
   } else if (pointer.can_interact && pointer.left_down &&
              (drag_active ||
               drawn_plane_dragging(preview_port.tool_status(), kind))) {

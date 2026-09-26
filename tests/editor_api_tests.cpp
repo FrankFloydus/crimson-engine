@@ -22485,7 +22485,7 @@ TEST(EditorApiTests,
   ASSERT_NE(fly, nullptr);
   ASSERT_NE(zoom, nullptr);
   ASSERT_NE(zoom_to_cursor, nullptr);
-  EXPECT_EQ(fly->label, "Fly / Orthographic Pan");
+  EXPECT_EQ(fly->label, "Fly Navigation");
   EXPECT_EQ(zoom->label, "Zoom / Adjust Fly Speed");
   EXPECT_EQ(zoom_to_cursor->label,
             "Zoom to Cursor / Adjust Fly Speed");

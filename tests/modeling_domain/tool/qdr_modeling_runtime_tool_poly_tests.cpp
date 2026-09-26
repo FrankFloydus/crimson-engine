@@ -60,13 +60,16 @@ TEST(QdrModelingRuntimeToolPolyTests, PolyToolPreviewsPlacedVerticesStraightened
 	EXPECT_TRUE(preview.finalizable);
 	EXPECT_TRUE(preview.point_count == 3U);
 	EXPECT_TRUE(preview.line_count == 2U);
+	EXPECT_FALSE(preview.current_closes_stroke);
 
 	EXPECT_TRUE(quader_editor_core::update_poly_hover(state, { 0.005F, 0.0F, 0.005F }, { 0.0F, 1.0F, 0.0F }, false, 1.0, false).ok);
+	EXPECT_TRUE(quader_editor_core::poly_tool_preview(state).current_closes_stroke);
 	EXPECT_TRUE(quader_editor_core::accept_poly_current_point(state).ok);
 	EXPECT_TRUE(state.closed);
 	EXPECT_FALSE(state.has_current);
 	preview = quader_editor_core::poly_tool_preview(state);
 	EXPECT_TRUE(preview.closed);
+	EXPECT_FALSE(preview.current_closes_stroke);
 	EXPECT_TRUE(preview.line_count == 3U);
 }
 

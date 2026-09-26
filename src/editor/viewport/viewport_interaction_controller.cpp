@@ -7,6 +7,7 @@
 #include "editor/viewport/viewport_interaction_controller.hpp"
 
 #include "api/quader_editor_api.hpp"
+#include "api/quader_operation_input_context.hpp"
 #include "core/logger.hpp"
 #include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
@@ -23,6 +24,8 @@
 #include <string_view>
 
 namespace quader {
+
+
 namespace {
 
 CommandResult place_active_light_at_world_position(
@@ -262,6 +265,103 @@ bool material_transfer_trigger_matches(
 }
 
 } // namespace
+
+void ViewportInteractionController::populate_operation_input_context(
+    QuaderOperationInputContext &context,
+    const ViewportInteractionFrame &frame) const {
+  context.orthographic =
+      frame.camera.state().projection == ViewportProjection::Orthographic;
+  context.orbit_available = !frame.camera.orthographic_view_locked();
+  context.shift = frame.input.modifiers.shift;
+  context.control = frame.input.modifiers.primary;
+  context.alt = frame.input.modifiers.alt;
+  context.orbit_snap_active = frame.input_router.orbit_snap_navigating();
+  context.held_vertex_snap = frame.input.transform_vertex_snap_down;
+  context.quick_pivot = frame.input.quick_pivot_down;
+  context.grid_snap_available = viewport_snapping_active(frame.settings);
+  context.grid_snap_enabled = frame.settings.bool_value(ViewportBoolSettingId::GridSnap);
+  context.angle_snap_available = viewport_snapping_active(frame.settings);
+  context.angle_snap_enabled = frame.settings.bool_value(ViewportBoolSettingId::RotationSnap);
+  if (frame.input_router.fly_navigating()) {
+    context.navigation = QuaderInputNavigation::Fly;
+  } else if (frame.input_router.orbit_navigating()) {
+    context.navigation = QuaderInputNavigation::Orbit;
+  } else if (frame.input_router.pan_navigating()) {
+    context.navigation = QuaderInputNavigation::Pan;
+  } else if (frame.input_result.camera_changed &&
+      (std::any_of(frame.input.navigation_bindings.wheel_events.begin(),
+                   frame.input.navigation_bindings.wheel_events.end(), [](const auto &wheel) {
+        return !wheel.consumed && std::abs(wheel.steps) > 0.000001f &&
+            (wheel.action == ViewportInputActionKind::Zoom ||
+             wheel.action == ViewportInputActionKind::ZoomToCursor);
+      }) || (frame.input.navigation_bindings.wheel_events.empty() &&
+             frame.input.mouse_wheel != 0.0f &&
+             (frame.input.navigation_bindings.zoom_wheel ||
+              frame.input.navigation_bindings.zoom_to_cursor_wheel)))) {
+    context.navigation = QuaderInputNavigation::Zoom;
+  }
+  if (context.navigation != QuaderInputNavigation::None) return;
+  tool_runtime_.populate_operation_input_context(context);
+  transform_gizmo_.populate_operation_input_context(context, frame);
+  selection_.populate_operation_input_context(context, frame);
+  context.point_light_range_hovered = point_light_range_.hovered();
+  context.point_light_range_dragging = point_light_range_.dragging();
+  context.pointer_dragging = context.pointer_dragging ||
+                             dragging();
+  const auto &primitive = tool_runtime_.primitive_creation_interaction();
+  const auto &controls = primitive.frame();
+  const int control = controls.active >= 0 ? controls.active : controls.hovered;
+  if (controls.visible && control >= 6 && control <= 8 &&
+      controls.controls[static_cast<std::size_t>(control)].visible &&
+      controls.controls[static_cast<std::size_t>(control)].enabled) {
+    using Control = QuaderInputPrimitiveControl;
+    switch (primitive.presented_shape()) {
+    case ViewportPrimitiveCreationShape::Box:
+      context.primitive_control = control == 6 ? Control::SubdivisionsX
+                                : control == 7 ? Control::SubdivisionsY
+                                               : Control::SubdivisionsZ;
+      break;
+    case ViewportPrimitiveCreationShape::Cylinder:
+    case ViewportPrimitiveCreationShape::Cone:
+      context.primitive_control = Control::Sides;
+      break;
+    case ViewportPrimitiveCreationShape::Sphere:
+      context.primitive_control = primitive.presented_sphere_type() == ViewportSphereType::Quad
+          ? Control::SubdivisionLevel
+          : control == 6 ? Control::Segments : Control::Rings;
+      break;
+    case ViewportPrimitiveCreationShape::Torus:
+      context.primitive_control = control == 6 ? Control::MajorSegments
+                                              : Control::MinorSegments;
+      break;
+    }
+  }
+  if (material_input_blocked(frame) || !frame.input.viewport_hovered) return;
+  const auto count = frame.selection_state.summary.selected_face_count;
+  using Action = ViewportInputActionKind;
+  using Transfer = QuaderInputMaterialTransfer;
+  const auto material_action = material_transfer_pointer_
+      ? material_transfer_pointer_->action : accepted_material_hint_action_;
+  switch (material_action) {
+  case Action::ApplySelectedFaceMaterialToFace:
+    if (count == 1) context.material_transfer = Transfer::SelectedFaceToFace;
+    break;
+  case Action::ApplySelectedFaceMaterialToMesh:
+    if (count == 1) context.material_transfer = Transfer::SelectedFaceToMesh;
+    break;
+  case Action::ApplyFaceMaterialToSelection:
+    if (count > 0) context.material_transfer = Transfer::FaceToSelection;
+    break;
+  case Action::ApplyFaceMaterialToMesh:
+    context.material_transfer = Transfer::FaceToMesh;
+    break;
+  case Action::TransferFaceTexture:
+    if (count == 1) context.material_transfer = Transfer::ContinueTexture;
+    break;
+  default:
+    break;
+  }
+}
 
 ViewportBeforeToolInteractionResult
 ViewportInteractionController::handle_before_active_tool(
@@ -753,6 +853,7 @@ void ViewportInteractionController::handle_after_active_tool_impl(
       return;
     }
   }
+  accepted_material_hint_action_ = ViewportInputActionKind::None;
   handle_material_interactions(editor, prepared, tool_result, before_tool,
                                runtime_binding);
   if (!runtime_binding.current()) {
@@ -866,6 +967,7 @@ void ViewportInteractionController::handle_material_interactions(
       if (!runtime_binding.current()) {
         return;
       }
+      if (transferred.ok()) accepted_material_hint_action_ = action;
       log_material_interaction_failure(
           action == ViewportInputActionKind::TransferFaceTexture
               ? "Continue texture from selected face"
@@ -896,11 +998,13 @@ void ViewportInteractionController::handle_material_interactions(
     if (!runtime_binding.current()) {
       return;
     }
+    if (applied.ok()) accepted_material_hint_action_ = ViewportInputActionKind::ApplyFaceMaterialToMesh;
     log_material_interaction_failure("Apply face material to mesh", applied);
   }
 }
 
 void ViewportInteractionController::cancel_pending_material_interaction() {
+  accepted_material_hint_action_ = ViewportInputActionKind::None;
   if (material_transfer_pointer_.has_value()) {
     transfer_release_suppression_.begin(
         material_transfer_pointer_->pointer.press.button, true);

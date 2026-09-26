@@ -162,6 +162,7 @@ public:
 		result.active = state.active;
 		result.closed = state.closed;
 		result.has_current = state.has_current;
+		result.current_closes_stroke = current_closes_stroke(state);
 		result.finalizable = can_commit(state);
 		result.point_count = saturated_size(state.points.size());
 		result.line_count = saturated_size(state.preview_lines.size());

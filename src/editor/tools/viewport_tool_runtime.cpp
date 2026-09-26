@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/viewport_tool_runtime.hpp"
 
+#include "api/quader_operation_input_context.hpp"
+
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "core/release_features.hpp"
@@ -173,14 +175,23 @@ ViewportToolRuntime::transform_tool(ViewportToolId tool) const {
 bool ViewportToolRuntime::set_active_tool(ViewportToolState &state,
                                           ViewportToolId tool,
                                           ViewportInputResult *result) {
-  return controller_.activate_tool(registry_, host_, state, tool, active_tool_,
-                                   result);
+  const ViewportTool *previous = active_tool_;
+  const bool accepted = controller_.activate_tool(
+      registry_, host_, state, tool, active_tool_, result);
+  if (previous != active_tool_) {
+    clear_modal_input_hints();
+  }
+  return accepted;
 }
 
 void ViewportToolRuntime::sync_active_tool(ViewportToolId tool) {
+  const ViewportTool *previous = active_tool_;
   active_tool_ = registry_.find(registry_.available(tool)
                                    ? tool
                                    : ViewportToolId::Select);
+  if (previous != active_tool_) {
+    clear_modal_input_hints();
+  }
 }
 
 bool ViewportToolRuntime::has_active_modal_preview(
@@ -211,6 +222,28 @@ void ViewportToolRuntime::clear_modal_drag_state() {
   modal_state_.insert_edge_loop_drag_active = false;
   modal_state_.cut_drag_active = false;
   modal_state_.mirror_drag_active = false;
+  clear_modal_input_hints();
+}
+
+void ViewportToolRuntime::clear_modal_input_hints() {
+  modal_state_.plane_endpoint_hovered = false;
+  modal_state_.plane_body_hovered = false;
+  modal_state_.stroke_close_hovered = false;
+}
+
+void ViewportToolRuntime::populate_operation_input_context(
+    QuaderOperationInputContext &context) const {
+  const ViewportToolId tool = active_tool_ != nullptr
+                                 ? active_tool_->viewport_tool()
+                                 : ViewportToolId::Select;
+  const bool plane_tool = tool == ViewportToolId::Cut ||
+                          tool == ViewportToolId::Mirror;
+  context.plane_endpoint_hovered =
+      plane_tool && modal_state_.plane_endpoint_hovered;
+  context.plane_body_hovered = plane_tool && modal_state_.plane_body_hovered;
+  context.stroke_close_hovered =
+      (tool == ViewportToolId::Knife || tool == ViewportToolId::Poly) &&
+      modal_state_.stroke_close_hovered;
 }
 
 bool ViewportToolRuntime::handle_shortcut(const ViewportShortcut &shortcut,
@@ -309,11 +342,16 @@ ViewportToolRuntime::handle_active_tool_event(ViewportToolState &state,
     return {};
   }
   context.modal_state = &modal_state_;
+  if (event.kind == ViewportToolEventKind::Cancel ||
+      event.kind == ViewportToolEventKind::Activation) {
+    clear_modal_input_hints();
+  }
   if (event.kind == ViewportToolEventKind::Frame &&
       active_tool_->viewport_tool() != ViewportToolId::CreatePrimitive &&
       modal_state_.primary_release_suppression.consume(
           QuaderMouseButton::Left, event.pointer.left_clicked,
           event.pointer.left_down, event.pointer.left_released)) {
+    clear_modal_input_hints();
     return {
         .handled = true,
         .consumed = true,

@@ -12,6 +12,8 @@
 #include "core/localization_service.hpp"
 #include "core/release_features.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "ui/qt_operation_input_hints.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 #include "render/render_system.hpp"
@@ -415,6 +417,71 @@ TEST_F(PublicReleaseUiTests, AdvancedSelectionDisappearsOnlyFromDiscoverySurface
               nullptr);
   }
   palette.reject();
+}
+
+TEST_F(PublicReleaseUiTests, ContextHintsRespectPublicAvailabilityAndCurrentBindings) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto idle = editor.tools().active_input_hints();
+  ASSERT_EQ(idle.size(), 3u);
+  EXPECT_EQ(idle[0].label_fallback, "Orbit");
+  EXPECT_EQ(idle[1].label_fallback, "Pan");
+  EXPECT_EQ(idle[2].label_fallback, "Fly Navigation");
+  const auto contains = [](const auto &hints, QuaderCommandId command) {
+    for (const auto &hint : hints) if (hint.command.string() == command.string()) return true;
+    return false;
+  };
+  for (const auto command : {quader_command::kToolsActivateCreateBox,
+                             quader_command::kToolsActivateCreateCylinder,
+                             quader_command::kToolsActivateCreateSphere}) {
+    ASSERT_TRUE(editor.commands().execute(command).ok());
+    const auto pending = editor.tools().active_input_hints();
+    EXPECT_FALSE(contains(pending, quader_command::kToolsApplyPrimitiveCreation));
+    EXPECT_TRUE(contains(pending, quader_command::kToolsCancelPrimitiveCreation));
+  }
+  for (const auto blocked : {quader_command::kToolsActivateCreateCone,
+                             quader_command::kToolsActivateCreateTorus}) {
+    EXPECT_FALSE(editor.commands().execute(blocked).ok());
+    EXPECT_TRUE(contains(editor.tools().active_input_hints(), quader_command::kToolsTogglePrimitiveHemisphere));
+  }
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
+  QtOperationInputHints widget;
+  ASSERT_TRUE(editor.commands().set_shortcut(quader_command::kToolsFlipPrimitiveFaces, "Ctrl+K D").ok());
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  bool rebound_found = false;
+  for (const auto &hint : widget.hints()) rebound_found |= hint.badge == QStringLiteral("Ctrl+K D");
+  EXPECT_TRUE(rebound_found);
+  ASSERT_TRUE(editor.commands().remove_shortcut(quader_command::kToolsFlipPrimitiveFaces).ok());
+  widget.refresh(editor.tools(), editor.commands(), localization);
+  for (const auto &hint : widget.hints()) EXPECT_NE(hint.badge, QStringLiteral("Ctrl+K D"));
+
+  QuaderOperationInputContext context;
+  context.material_transfer = QuaderInputMaterialTransfer::ContinueTexture;
+  EXPECT_TRUE(editor.tools().active_input_hints(context).empty());
+  context = {};
+  context.point_light_range_hovered = true;
+  EXPECT_TRUE(editor.tools().active_input_hints(context).empty());
+  context = {};
+  context.selection_gesture = QuaderInputSelectionGesture::EnterInstance;
+  EXPECT_TRUE(editor.tools().active_input_hints(context).empty());
+
+  SceneSession session;
+  QuaderEditorApi phase_editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  ASSERT_TRUE(phase_editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ModelingBoxPreview preview;
+  preview.ok = true;
+  preview.valid = true;
+  preview.drag_state = ModelingBoxDragState::Height;
+  preview.corners = {QVec3{-1, 0, -1}, QVec3{-1, 0, 1}, QVec3{1, 0, 1}, QVec3{1, 0, -1},
+                     QVec3{-1, 2, -1}, QVec3{-1, 2, 1}, QVec3{1, 2, 1}, QVec3{1, 2, -1}};
+  preview.corner_count = preview.corners.size();
+  ASSERT_TRUE(session.primitive_creation().accept_preview(preview, "Hint Box").ok);
+  EXPECT_TRUE(contains(phase_editor.tools().active_input_hints(), quader_command::kToolsApplyPrimitiveCreation));
+  context = {};
+  context.pointer_dragging = true;
+  EXPECT_FALSE(contains(phase_editor.tools().active_input_hints(context), quader_command::kToolsApplyPrimitiveCreation));
 }
 
 } // namespace

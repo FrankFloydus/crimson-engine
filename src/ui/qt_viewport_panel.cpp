@@ -657,6 +657,7 @@ void QtViewportPanel::shutdown() {
 
 void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
     NativeViewportToolCoordinator *native_tools) {
+  operation_input_context_ = {.viewport_available = false};
   hide_primitive_feedback();
   for (Pane &pane_state : panes_) {
     pane_state.surface->set_interaction_cursor(ViewportPointerCursor::Default);
@@ -674,6 +675,7 @@ void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
 }
 
 void QtViewportPanel::abandon_interactions() {
+  operation_input_context_ = {.viewport_available = false};
   if (environment_popup_ != nullptr) {
     environment_popup_->abandon_runtime();
   }
@@ -999,6 +1001,7 @@ void QtViewportPanel::process_input(
                           : ViewportProbeClock::time_point{};
   primitive_feedback_input_eligible_ = false;
   pointer_cursor_pane_.reset();
+  operation_input_context_ = {.viewport_available = false};
   process_viewport_input(editor, document, assets, modeling, default_material,
                          native_tools, point_placement, delta_seconds);
   if (primitive_feedback_input_eligible_ && workspace_ != nullptr) {
@@ -4031,6 +4034,7 @@ void QtViewportPanel::process_viewport_input(
                       .pointer_released_edges = input.pointer_released_edges,
                       .pointer_drag_threshold_pixels =
                           interaction_frame.pointer_drag_threshold_pixels,
+                      .viewport_pixel_scale = viewport_pixel_scale,
                       .monotonic_time_seconds =
                           interaction_frame.monotonic_time_seconds,
                       .camera_changed = result.camera_changed,
@@ -4220,6 +4224,23 @@ void QtViewportPanel::process_viewport_input(
       (input.viewport_hovered || interaction_controller_.primitive_creation_pointer_active()) &&
       editor.preferences().gizmos_visible() &&
       !show_context_menu && !show_delete_popup && !show_quick_menu;
+
+  auto &hint_context = operation_input_context_;
+  hint_context.viewport_available =
+      !input.text_input_active && !input.pointer_interaction_canceled &&
+      (input.viewport_hovered || input.viewport_focused || interaction_locked) &&
+      !show_context_menu && !show_delete_popup && !show_quick_menu;
+  if (!hint_context.viewport_available) return;
+  interaction_controller_.populate_operation_input_context(hint_context, interaction_frame);
+  if (navigation_gizmo_locked_pane) {
+    hint_context.navigation = QuaderInputNavigation::Orbit;
+  }
+  if (hint_context.navigation == QuaderInputNavigation::None) {
+    native_tools.populate_operation_input_context(hint_context);
+    hint_context.pointer_dragging = hint_context.pointer_dragging ||
+                                   native_tools.pointer_dragging() ||
+                                   modal_tool_dragging_;
+  }
 }
 
 bool QtViewportPanel::sync_active_tool_from_editor(

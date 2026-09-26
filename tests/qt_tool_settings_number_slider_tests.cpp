@@ -2147,21 +2147,36 @@ TEST(QtFaceTextureControlsTests,
                   editor, quader::QuaderFaceTextureField::ScaleY, 4.0).ok());
   ASSERT_TRUE(editor.selection().select_faces(source.value(), {1, 2}).ok());
   panel.refresh();
-  QCoreApplication::processEvents();
+  // Wrapped labels and numeric minima publish queued layout changes. Drain the
+  // same bounded layout cycle used by the scale-link presentation tests.
+  auto *dispatcher = QAbstractEventDispatcher::instance();
+  ASSERT_NE(dispatcher, nullptr);
+  bool layout_settled = false;
+  for (int iteration = 0; iteration < 64; ++iteration) {
+    if (!dispatcher->processEvents(QEventLoop::AllEvents)) {
+      layout_settled = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(layout_settled);
+  const auto numeric_bounds = [content](const QWidget *widget) {
+    return QRect(widget->mapTo(content, QPoint()), widget->size());
+  };
   EXPECT_EQ(scale_x->geometry().top(), scale_y->geometry().top());
   EXPECT_LT(scale_x->geometry().right(), scale_y->geometry().left());
   EXPECT_EQ(shift_x->geometry().top(), shift_y->geometry().top());
   EXPECT_LT(shift_x->geometry().right(), shift_y->geometry().left());
   EXPECT_LT(scale_x->geometry().bottom(), shift_x->geometry().top());
-  EXPECT_LT(shift_x->geometry().bottom(), rotate->geometry().top());
+  EXPECT_LT(numeric_bounds(shift_x).bottom(), numeric_bounds(rotate).top());
   EXPECT_EQ(scale_x->geometry().left(), shift_x->geometry().left());
   EXPECT_EQ(scale_x->geometry().right(), shift_x->geometry().right());
   EXPECT_EQ(scale_y->geometry().left(), shift_y->geometry().left());
   EXPECT_EQ(scale_y->geometry().right(), shift_y->geometry().right());
-  EXPECT_EQ(rotate->geometry().left(), scale_x->geometry().left());
-  EXPECT_EQ(rotate->geometry().right(), scale_y->geometry().right());
+  // Rotation owns a full-width row and a readable, independently sized label.
+  EXPECT_GE(numeric_bounds(rotate).left(), numeric_bounds(scale_x).left());
+  EXPECT_EQ(numeric_bounds(rotate).right(), numeric_bounds(scale_y).right());
   for (QDoubleSpinBox *spin : {scale_x, scale_y, shift_x, shift_y, rotate}) {
-    EXPECT_TRUE(content->rect().contains(spin->geometry()));
+    EXPECT_TRUE(content->rect().contains(numeric_bounds(spin)));
   }
   TexturePresentationEvents heading_events;
   header->installEventFilter(&heading_events);
@@ -2220,6 +2235,12 @@ TEST(QtFaceTextureControlsTests,
             untouched_revision.modeling_content_revision);
   EXPECT_EQ(editor.revisions().scene_revision, untouched_revision.scene_revision);
   EXPECT_EQ(editor.revisions().asset_revision, untouched_revision.asset_revision);
+  EXPECT_FALSE(quader::qt_install_numeric_spin_box(*scale_y).is_editing());
+  // Tab may start the next numeric editor's own draft. Settle that receiver
+  // before checking that the entire panel has no active numeric interaction.
+  ASSERT_NE(QApplication::focusWidget(), nullptr);
+  QApplication::focusWidget()->clearFocus();
+  QCoreApplication::processEvents();
   EXPECT_FALSE(panel.numeric_interaction_active());
 
   scale_x->setValue(5.0);
@@ -2266,6 +2287,10 @@ TEST(QtFaceTextureControlsTests,
   const auto tab_revision = editor.revisions().modeling_content_revision;
   process_events_for(75);
   EXPECT_EQ(editor.revisions().modeling_content_revision, tab_revision);
+  EXPECT_FALSE(quader::qt_install_numeric_spin_box(*scale_y).is_editing());
+  ASSERT_NE(QApplication::focusWidget(), nullptr);
+  QApplication::focusWidget()->clearFocus();
+  QCoreApplication::processEvents();
   EXPECT_FALSE(panel.numeric_interaction_active());
 
   ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());

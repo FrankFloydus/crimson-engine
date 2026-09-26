@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 
+#include "api/quader_operation_input_context.hpp"
+
 #include "assets/asset_registry.hpp"
 #include "core/logger.hpp"
 #include "core/release_features.hpp"
@@ -153,6 +155,10 @@ ViewportNativeToolInteraction::handle_frame(
   }
   ViewportNativeToolInteractionResult output;
   pointer_cursor_ = ViewportPointerCursor::Default;
+  curve_control_hover_accepted_ = false;
+  path_source_hovered_ = false;
+  linear_array_endpoint_hovered_ = false;
+  pivot_handle_hovered_ = false;
   const ViewportInputFrame &input = frame.input;
   const ViewportInputResult &input_result = frame.input_result;
   const bool canceled_left_release = left_release_suppression_.consume(
@@ -242,6 +248,7 @@ ViewportNativeToolInteraction::handle_frame(
     output.blocks_transform_gizmo = true;
 
     const auto clear_source_hover = [&]() {
+      path_source_hovered_ = false;
       if (selection == nullptr) {
         return;
       }
@@ -358,6 +365,7 @@ ViewportNativeToolInteraction::handle_frame(
                             .entity = *candidate,
                         }}
                   : std::nullopt);
+      path_source_hovered_ = hovered.ok && candidate.has_value();
       if (!hovered.ok) {
         LOG_ERROR("Path Array hover failed: {}",
                   hovered.message.empty() ? "Hover failed."
@@ -711,6 +719,7 @@ ViewportNativeToolInteraction::handle_frame(
             curve_control_hit(frame, preview, control_local, false);
       }
       const std::optional<CurveControlTarget> hit = curve_control_hover_target_;
+      curve_control_hover_accepted_ = hit.has_value();
       if (hit) {
         pointer_cursor_ = ViewportPointerCursor::OpenHand;
       }
@@ -1057,6 +1066,7 @@ ViewportNativeToolInteraction::handle_frame(
         handle_hit = linear_array_hover_hit_;
       }
       if (handle_hit) {
+        linear_array_endpoint_hovered_ = true;
         pointer_cursor_ = ViewportPointerCursor::OpenHand;
       }
       if (can_interact && frame.left_pressed && !canceled_left_release &&
@@ -1175,6 +1185,7 @@ ViewportNativeToolInteraction::handle_frame(
       handle_hit = pivot_hover_hit_;
     }
     if (handle_hit) {
+      pivot_handle_hovered_ = true;
       pointer_cursor_ = ViewportPointerCursor::OpenHand;
     }
     if (can_interact && frame.left_pressed && !canceled_left_release &&
@@ -1252,6 +1263,10 @@ ViewportNativeToolInteraction::handle_frame(
 }
 
 void ViewportNativeToolInteraction::clear_drag_state() {
+  curve_control_hover_accepted_ = false;
+  path_source_hovered_ = false;
+  linear_array_endpoint_hovered_ = false;
+  pivot_handle_hovered_ = false;
   pointer_cursor_ = ViewportPointerCursor::Default;
   radial_array_wheel_kind_.reset();
   curve_control_hover_key_.reset();
@@ -1271,6 +1286,21 @@ void ViewportNativeToolInteraction::clear_drag_state() {
   curve_preset_placement_press_.reset();
   curve_conversion_press_.reset();
   path_array_source_press_.reset();
+}
+
+void ViewportNativeToolInteraction::populate_operation_input_context(
+    QuaderOperationInputContext &context) const {
+  context.curve_anchor_hovered =
+      context.curve_anchor_hovered ||
+      (curve_control_hover_accepted_ && curve_control_hover_target_ &&
+       curve_control_hover_target_->kind == CurveControlKind::Anchor);
+  context.curve_tangent_hovered =
+      context.curve_tangent_hovered ||
+      (curve_control_hover_accepted_ && curve_control_hover_target_ &&
+       curve_control_hover_target_->kind != CurveControlKind::Anchor);
+  context.path_source_hovered = path_source_hovered_;
+  context.linear_array_endpoint_hovered = linear_array_endpoint_hovered_;
+  context.pivot_handle_hovered = pivot_handle_hovered_;
 }
 
 bool ViewportNativeToolInteraction::dragging() const {

@@ -60,6 +60,7 @@ struct EditorRuntimeStatus {
   bool knife_active = false;
   bool knife_has_active_stroke = false;
   bool knife_has_current = false;
+  bool knife_current_closes_stroke = false;
   bool knife_can_commit = false;
   bool cut_active = false;
   bool cut_can_preview = false;
@@ -72,6 +73,7 @@ struct EditorRuntimeStatus {
   bool poly_active = false;
   bool poly_closed = false;
   bool poly_has_current = false;
+  bool poly_current_closes_stroke = false;
   bool poly_can_commit = false;
   int poly_point_count = 0;
   bool transform_drag_active = false;

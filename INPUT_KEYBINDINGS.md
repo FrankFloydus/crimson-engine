@@ -29,6 +29,8 @@ bindings. Do not copy that catalog into documentation. Follow root `AGENTS.md` f
 | Semantic navigation | `src/viewport/viewport_input_router.*` (`ViewportInputRouter`) |
 | Tool/selection/gizmo precedence | `src/editor/viewport/viewport_interaction_controller.*` |
 | Active operation hint declarations | `src/editor/metadata/operation_input_hint_catalog.*`, exposed by `QuaderToolsApi` |
+| Transform, array and curve hint phases | `src/editor/metadata/transform_operation_input_hints.*` |
+| Receiving local-control hint source | `src/ui/qt_contextual_input_hints.*`, registered by each control owner |
 | Bottom-bar keybinding presentation | `src/ui/qt_operation_input_hints.*` |
 
 `QuaderCommandsApi::Impl::register_default_keybindings()` and
@@ -180,12 +182,45 @@ face clicks cannot alter a pending extrusion's source; the disk accepts Ctrl and
   from public catalogs, conflict presentation and input eligibility. Resolve release availability
   before sequence prefixes or deferred pointer reservations; resetting available shortcuts keeps
   dormant overrides for future cumulative releases.
-- Operation hints declare typed commands and gesture labels at the tool owner. The shared status
-  widget resolves current bindings/localization only when their revisions or operation state change;
-  disabled or unassigned commands have no badge. Extend the owner catalog for new operations, not
-  a second shortcut map in the widget. Primitive hints show keyboard commands only, occupying the
-  existing single status-bar row with compact badges; narrow widths must not create another row.
-  See `tests/operation_input_hint_tests.cpp`.
+
+## Contextual input hints
+
+The bottom bar describes the input owner receiving the current interaction. It is a presentation
+of semantic state, never a second dispatcher or a command catalog. Project viewport phases through
+`QuaderOperationInputContext` and the authoritative tool/session owners; do not reconstruct hit tests,
+selection, geometry, drag state, or tool eligibility in the status widget.
+Only errors and warnings may replace contextual hints. Success, informational and operation-complete
+messages must not appear in the bottom bar or suppress its hints; the UI severity filter owns this
+policy for command status and direct notifications alike.
+All bottom-bar errors/warnings yield back to hints after five seconds plus a 200 ms opacity fade.
+Only a new diagnostic restarts that interval; frame and localization refreshes do not.
+
+- Idle perspective navigation shows only Orbit, Pan and Fly Navigation, using their current
+  bindings. Fly navigation replaces these with movement, Fly Speed and Reset Fly Speed. Respect
+  orthographic capabilities. Never add an Escape/End Navigation hint; navigation input behavior
+  remains with its existing owner.
+- Tool hints reflect the current phase and hovered or captured handle. Offer Apply only when the
+  owner can accept that phase, and name cancellation for the action it actually cancels. Show
+  modifier, axis and snap hints only where that interaction supports them; distinguish enabling
+  from disabling snap and retain the actual operation once a drag has begun. Do not append idle
+  navigation, Select, Focus or unrelated commands to every active tool.
+- Numeric editors, local panels and dialogs publish their own hints through
+  `qt_register_contextual_input_hints`. Capture and active editing take precedence over hover.
+  An empty local snapshot still suppresses viewport hints; popup, modal, text-input and focus-loss
+  ownership must not expose stale viewport instructions. Hint registration does not consume or
+  remap input. Destroying a source invalidates its retained presentation safely.
+- Remappable actions declare typed command IDs or canonical resolver targets, including related
+  targets for movement/axis groups. Resolve badges from current bindings; disabled, unavailable or
+  deliberately unassigned actions have no badge. Intrinsic control gestures remain with their
+  control owner. Do not hard-code WASD or other defaults into the presenter.
+- Gate hint construction, binding lookup, localization and retained Qt updates by source identity,
+  semantic context/owner revision, keybinding revision and locale revision. Cheap observers must
+  not allocate snapshots or scan every registered control. Unchanged frames do no presentation work.
+- Keep the existing single status-bar row. At narrow widths retain higher-priority completion and
+  cancellation before optional alternatives; do not wrap to another row.
+
+Extend the existing owner catalog or local provider for new contexts. See
+`tests/operation_input_hint_tests.cpp` for phase, remapping and unchanged-frame contracts.
 
 ## Mouse and held-key contracts
 

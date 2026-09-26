@@ -35,6 +35,7 @@
 #include "ui/qt_face_texture_canvas.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_command_palette.hpp"
+#include "ui/qt_contextual_input_hints.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_main_window.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
@@ -295,31 +296,16 @@ std::string localized_release_message(
 }
 
 std::string status_bar_message(
-    const ModelingLiveStatus &live_status,
     const LocalizationService &localization,
-    const std::optional<QuaderApiStatus> &command_status) {
-  if (command_status.has_value() && !command_status->ok()) {
-    return command_status->message.empty()
-               ? localization.text("ui.status.command_failed", "Command failed.")
-               : localized_release_message(localization, command_status->message);
-  }
-  if (live_status.kind ==
-      ModelingLiveStatusKind::MergeByDistanceMergedVertices) {
-    std::string message = localization.text(
-        "ui.status.merge_by_distance.merged_vertices",
-        "Merged {count} vertices");
-    constexpr std::string_view kCountToken = "{count}";
-    if (const std::size_t token = message.find(kCountToken);
-        token != std::string::npos) {
-      message.replace(token, kCountToken.size(),
-                      std::to_string(live_status.count));
-    }
-    return message;
-  }
-  if (!command_status.has_value()) {
+    const QuaderNotification &notification) {
+  if (notification.level == QuaderNotificationLevel::Info) {
     return {};
   }
-  return command_status->message;
+  if (notification.level == QuaderNotificationLevel::Error &&
+      notification.message.empty()) {
+    return localization.text("ui.status.command_failed", "Command failed.");
+  }
+  return localized_release_message(localization, notification.message);
 }
 
 std::string read_binary_file(const std::filesystem::path &path) {
@@ -954,6 +940,10 @@ bool UISystem::initialize(RenderSystem &render_system,
   status_message_->setWordWrap(false);
   status_message_->hide();
   operation_input_hints_ = new QtOperationInputHints(main_window_->statusBar());
+  if (auto *application = qobject_cast<QApplication *>(QCoreApplication::instance())) {
+    qt_set_contextual_input_hints_refresh_callback(
+        *application, *operation_input_hints_, [this]() { refresh_status_bar(); });
+  }
   status_selection_ = new QLabel(main_window_->statusBar());
   status_selection_->setObjectName(QStringLiteral("statusSelection"));
   auto *selection_separator = new QFrame(main_window_->statusBar());
@@ -1058,6 +1048,10 @@ void UISystem::install_runtime_hooks(
   status_observed_command_revision_ = editor.commands().last_status_revision();
   status_notification_.reset();
   ++status_notification_generation_;
+  if (status_message_ != nullptr) {
+    status_message_->present({}, false);
+    status_message_->hide();
+  }
   project_workspace_instance_edit_revision_ = 0;
   project_workspace_instance_edit_revision_valid_ = false;
   bind_scene_backed_panels();
@@ -1416,10 +1410,7 @@ void UISystem::install_runtime_hooks(
           },
       .notify =
           [this](QuaderNotification notification) {
-            present_status_notification(
-                {.ok = notification.level != QuaderNotificationLevel::Error,
-                 .message = std::move(notification.message)},
-                5000);
+            present_status_notification(std::move(notification));
             return runtime_status(false);
           },
   });
@@ -4093,29 +4084,41 @@ void UISystem::refresh_status_bar() {
     return;
   }
   if (operation_input_hints_ != nullptr) {
-    operation_input_hints_->refresh(editor_->tools(), editor_->commands(), localization_);
+    QuaderOperationInputContext context{.viewport_available = false};
+    if (!home_visible_ && viewport_panel_ != nullptr && viewport_panel_->isVisible()) {
+      context = viewport_panel_->operation_input_context();
+    }
+    auto *application = qobject_cast<QApplication *>(QCoreApplication::instance());
+    const auto local = application != nullptr
+                           ? qt_contextual_input_hints_state(*application)
+                           : QtContextualInputHintState{};
+    const bool viewport_capture = context.viewport_available &&
+        (context.navigation != QuaderInputNavigation::None || context.pointer_dragging ||
+         context.selection_gesture != QuaderInputSelectionGesture::None ||
+         context.point_light_range_dragging);
+    if (local.overrides_viewport &&
+        (local.blocks_viewport || local.active || !viewport_capture)) {
+      operation_input_hints_->refresh_snapshot(
+          qt_contextual_input_hints(*application), local.revision,
+          local.source_owner, editor_->commands(), localization_);
+    } else {
+      operation_input_hints_->refresh(editor_->tools(), editor_->commands(),
+                                      localization_, context);
+    }
   }
   const auto sync_message_visibility = [this]() {
-    const bool error = status_message_->is_error();
-    const bool message_priority = error ||
-        (status_notification_.has_value() && !status_message_->text().isEmpty());
+    const bool has_message = !status_message_->text().isEmpty();
     const bool has_hints = operation_input_hints_ != nullptr &&
                            !operation_input_hints_->hints().empty();
     if (operation_input_hints_ != nullptr &&
-        operation_input_hints_->isHidden() == (has_hints && !message_priority)) {
-      operation_input_hints_->setVisible(has_hints && !message_priority);
+        operation_input_hints_->isHidden() == (has_hints && !has_message)) {
+      operation_input_hints_->setVisible(has_hints && !has_message);
     }
-    const bool visible = !status_message_->text().isEmpty() &&
-                         (message_priority || !has_hints);
-    if (status_message_->isHidden() == visible) {
-      status_message_->setVisible(visible);
+    if (status_message_->isHidden() == has_message) {
+      status_message_->setVisible(has_message);
     }
   };
   sync_message_visibility();
-  const ModelingLiveStatus live_status = [&]() {
-    QDR_PROFILE_SCOPE("UI status bar query live status");
-    return modeling_->live_status();
-  }();
   const std::uint64_t command_revision = [&]() {
     QDR_PROFILE_SCOPE("UI status bar query command status revision");
     return editor_->commands().last_status_revision();
@@ -4125,12 +4128,8 @@ void UISystem::refresh_status_bar() {
     status_notification_.reset();
     ++status_notification_generation_;
   }
-  const std::uint8_t live_kind =
-      static_cast<std::uint8_t>(live_status.kind);
   const StatusPresentationStamp stamp{
       .command_revision = command_revision,
-      .live_count = live_status.count,
-      .live_kind = live_kind,
       .localization_revision = localization_.revision(),
   };
   if (!status_presenter_.needs_refresh(stamp)) {
@@ -4139,58 +4138,98 @@ void UISystem::refresh_status_bar() {
 
   {
     QDR_PROFILE_SCOPE("UI status bar present message");
-    const auto command_status = status_notification_.has_value()
-                                    ? status_notification_
-                                    : editor_->commands().last_status();
-    const bool error = command_status.has_value() && !command_status->ok();
-    const QString message = QString::fromStdString(status_bar_message(
-        status_notification_.has_value() ? ModelingLiveStatus{} : live_status,
-        localization_, command_status));
+    QuaderNotification notification;
+    if (status_notification_.has_value()) {
+      notification = *status_notification_;
+    } else if (auto result = editor_->commands().last_status();
+               result.has_value() && !result->ok()) {
+      notification = {.level = QuaderNotificationLevel::Error,
+                      .message = std::move(result->message)};
+    }
+    const bool error = notification.level == QuaderNotificationLevel::Error;
+    const QString message = QString::fromStdString(
+        status_bar_message(localization_, notification));
     const bool new_command =
         status_observed_command_revision_ != command_revision;
     status_observed_command_revision_ = command_revision;
     status_message_->present(message, error, new_command && error);
+    if (!message.isEmpty() &&
+        (new_command || !status_message_->dismissal_active())) {
+      restart_status_message_dismissal();
+    }
     sync_message_visibility();
   }
   status_presenter_.mark_presented(stamp);
 }
 
-void UISystem::present_status_notification(const QuaderApiStatus &result,
-                                           int timeout_ms) {
+void UISystem::present_status_result(const QuaderApiStatus &result) {
+  present_status_notification(
+      {.level = result.ok() ? QuaderNotificationLevel::Info
+                           : QuaderNotificationLevel::Error,
+       .message = result.ok() ? std::string{} : result.message});
+}
+
+void UISystem::present_status_notification(QuaderNotification notification) {
   if (status_message_ == nullptr) return;
-  status_notification_ = result;
+  const bool informational = notification.level == QuaderNotificationLevel::Info;
+  if (informational) {
+    // Retain a silent success until the next command, so a dismissed command
+    // failure cannot reappear after a direct edit that did not change its revision.
+    notification.message.clear();
+  }
+  status_notification_ = std::move(notification);
   status_notification_command_revision_ =
       editor_ != nullptr ? editor_->commands().last_status_revision() : 0u;
   status_observed_command_revision_ = status_notification_command_revision_;
-  const std::uint64_t generation = ++status_notification_generation_;
+  ++status_notification_generation_;
   const QString message = QString::fromStdString(
-      !result.ok() && result.message.empty()
-          ? localization_.text("ui.status.command_failed", "Command failed.")
-          : localized_release_message(localization_, result.message));
-  status_message_->present(message, !result.ok(), !result.ok());
+      status_bar_message(localization_, *status_notification_));
+  const bool error = status_notification_->level == QuaderNotificationLevel::Error;
+  status_message_->present(message, error, error);
   if (operation_input_hints_ != nullptr) {
     operation_input_hints_->setVisible(
         message.isEmpty() && !operation_input_hints_->hints().empty());
   }
   status_message_->setVisible(!message.isEmpty());
   status_presenter_.invalidate();
-  if (timeout_ms > 0) {
-    QTimer::singleShot(timeout_ms, status_message_, [this, generation]() {
-      if (status_notification_generation_ == generation) {
-        status_notification_.reset();
-        status_presenter_.invalidate();
-      }
-    });
+  if (!message.isEmpty()) {
+    restart_status_message_dismissal();
   }
+}
+
+void UISystem::restart_status_message_dismissal() {
+  const auto generation = ++status_notification_generation_;
+  const auto command_revision =
+      editor_ != nullptr ? editor_->commands().last_status_revision() : 0u;
+  status_message_->restart_dismissal([this, generation, command_revision]() {
+    if (status_notification_generation_ != generation || editor_ == nullptr) {
+      return;
+    }
+    if (editor_->commands().last_status_revision() != command_revision) {
+      // A command may have finished before the next UI frame. Present its
+      // result instead of dismissing it with the previous message's timer.
+      refresh_status_bar();
+      return;
+    }
+    status_notification_ = QuaderNotification{};
+    status_notification_command_revision_ = command_revision;
+    ++status_notification_generation_;
+    status_presenter_.invalidate();
+    refresh_status_bar();
+  });
 }
 
 void UISystem::present_lifecycle_result(const QuaderApiStatus &result) {
   QDR_PROFILE_SCOPE("UI present lifecycle result");
-  present_status_notification(result);
-
   const bool restored_scene_warning =
       result.ok() && result.message.find("restored scenes were skipped") !=
                          std::string::npos;
+  if (restored_scene_warning) {
+    present_status_notification({.level = QuaderNotificationLevel::Warning,
+                                 .message = result.message});
+  } else {
+    present_status_result(result);
+  }
   if (result.ok() && !restored_scene_warning) {
     return;
   }
@@ -4232,7 +4271,7 @@ void UISystem::present_standard_material_error(std::string_view message) {
   if (message.empty()) {
     return;
   }
-  present_status_notification({.ok = false, .message = std::string(message)});
+  present_status_result({.ok = false, .message = std::string(message)});
   if (standard_material_error_message_box_ == nullptr) {
     return;
   }
@@ -5621,19 +5660,18 @@ void UISystem::show_material_texture_info(ProjectAssetId material_id,
   if (!inspected.succeeded()) {
     material_texture_info_window_->clear();
     material_texture_info_window_->hide();
-    present_status_notification(inspected, 6000);
+    present_status_result(inspected);
     return;
   }
   const QuaderProjectMaterialTextureInfo &texture = inspected.value();
   if (texture.rgba8 == nullptr) {
     material_texture_info_window_->clear();
     material_texture_info_window_->hide();
-    present_status_notification(
+    present_status_result(
         {.ok = false,
          .message = localization_.text(
              "ui.material_browser.texture.no_pixels",
-             "The material albedo texture has no decoded pixels.")},
-        6000);
+             "The material albedo texture has no decoded pixels.")});
     return;
   }
   const auto absolute_utf8 = texture.absolute_path.u8string();
@@ -5668,12 +5706,11 @@ void UISystem::show_material_texture_info(ProjectAssetId material_id,
   if (!presented) {
     material_texture_info_window_->clear();
     material_texture_info_window_->hide();
-    present_status_notification(
+    present_status_result(
         {.ok = false,
          .message = localization_.text(
              "ui.material_browser.texture.invalid_pixels",
-             "The material albedo texture has invalid image data.")},
-        6000);
+             "The material albedo texture has invalid image data.")});
     return;
   }
   material_texture_info_catalog_revision_ =
@@ -5762,7 +5799,7 @@ void UISystem::handle_material_browser_action(
     const auto result = editor_->project_assets().material_albedo_texture_info(
         request.target.project_asset);
     if (!result.succeeded()) {
-      present_status_notification(result, 6000);
+      present_status_result(result);
       return std::nullopt;
     }
     return result.value();
@@ -5787,12 +5824,11 @@ void UISystem::handle_material_browser_action(
     const auto texture = inspect_target();
     if (texture.has_value() &&
         !platform_reveal_file(texture->absolute_path)) {
-      present_status_notification(
+      present_status_result(
           {.ok = false,
            .message = localization_.text(
                "ui.material_browser.texture.reveal_failed",
-               "Could not open the texture file location.")},
-          6000);
+               "Could not open the texture file location.")});
     }
     return;
   }
@@ -6244,9 +6280,8 @@ void UISystem::import_material_textures(
         .arg(static_cast<qulonglong>(imported_count))
         .arg(static_cast<qulonglong>(failed_count));
   }();
-  present_status_notification(
-      {.ok = result.ok() && failed_count == 0u, .message = status.toStdString()},
-      5000);
+  present_status_result(
+      {.ok = result.ok() && failed_count == 0u, .message = status.toStdString()});
 
   if (result.ok && failed_count == 0u) {
     return;

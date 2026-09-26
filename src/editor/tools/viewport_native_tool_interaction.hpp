@@ -37,6 +37,7 @@ class SceneDocument;
 class ViewportCameraController;
 class ViewportPointPlacementService;
 struct ViewportRay;
+struct QuaderOperationInputContext;
 
 /** Commits the coordinator-owned native tool without depending on public API. */
 class ViewportNativeToolLifecyclePort {
@@ -145,6 +146,9 @@ public:
   [[nodiscard]] ViewportPointerCursor pointer_cursor() const {
     return pointer_cursor_;
   }
+  /// Projects only the eligible hover accepted by the most recent input frame.
+  void populate_operation_input_context(
+      QuaderOperationInputContext &context) const;
 
   [[nodiscard]] static std::optional<int> hit_drawn_plane_captured_point(
       const std::array<QVec3, 3> &points, int captured_point_count,
@@ -261,6 +265,10 @@ private:
   std::optional<HandleHoverKey> pivot_hover_key_;
   bool linear_array_hover_hit_ = false;
   bool pivot_hover_hit_ = false;
+  bool curve_control_hover_accepted_ = false;
+  bool path_source_hovered_ = false;
+  bool linear_array_endpoint_hovered_ = false;
+  bool pivot_handle_hovered_ = false;
   // The next adjustment family owns the pending physical wheel fraction.
   std::optional<ViewportRadialArrayInputEventKind> radial_array_wheel_kind_;
 };

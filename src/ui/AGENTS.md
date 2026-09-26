@@ -91,7 +91,13 @@ file except through prior written authorization from Francesco Di Blasi.
   modeling API routes; the nested menu's revision fence protects both targets.
 - `QtStatusMessage` owns error contrast and the portable Qt system alert. Announce new failures once;
   unchanged frames, localization and runtime rebinding must not replay sounds. `UISystem` retains
-  direct notifications separately from command status, with errors taking priority over tool hints.
+  direct notifications separately from command status. The bottom bar displays only contextual
+  input hints or errors/warnings, with errors and warnings taking priority. Filter both message
+  sources centrally by severity: success, information, operation completion, tool activation and
+  project-open confirmations must neither appear there nor suppress hints.
+  Every bottom-bar error/warning stays visible for five seconds, then fades out over 200 ms using
+  opacity only; contextual hints return automatically. A new diagnostic restarts the five seconds.
+  Unchanged frames, locale refreshes and retained messages must not restart or resurrect it.
   Direct user actions publish failures through `editor.ui().notify`; command dispatch already owns
   its status. Tool result ports identify explicit attempts so hover/preview refreshes remain silent.
 - Numeric fields use `QtSpinBox` or `QtDoubleSpinBox` and the shared

@@ -366,6 +366,18 @@ const std::vector<IncludeException> &allowed_include_exceptions() {
        "api/quader_settings_presentation_types.hpp",
        "SceneSession stores the stateless public settings-origin value contract; "
        "it does not depend on an API facade or viewport owner."},
+      {"src/editor/tools/native_viewport_tool_coordinator.cpp",
+       "api/quader_operation_input_context.hpp",
+       "The coordinator projects accepted input into a stateless public value "
+       "contract, without depending on an API facade or command owner."},
+      {"src/editor/tools/viewport_native_tool_interaction.cpp",
+       "api/quader_operation_input_context.hpp",
+       "Native tools publish their accepted gestures through the stateless "
+       "input-context value contract, without invoking an API facade."},
+      {"src/editor/tools/viewport_tool_runtime.cpp",
+       "api/quader_operation_input_context.hpp",
+       "The runtime copies retained hover facts into the stateless public "
+       "input-context value contract, without an API facade dependency."},
       {"src/editor/commands/editor_command_registry.hpp",
        "api/quader_editor_api_types.hpp",
        "command registry still consumes public editor command value types"},

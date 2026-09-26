@@ -84,6 +84,55 @@ Wireframe, Solid and Shaded remain available. Ordinary construction grids, camer
 navigation and internal camera clipping remain available. Fixed internal lighting,
 environment resources and default-material shaders remain implementation support.
 
+## Godot bridge scope
+
+The current Godot bridge imports meshes and supported static concave collisions.
+Its **Always refresh material**, **Import lights** and **Always override lights**
+controls are hidden, and material/texture import plus new light creation are disabled
+even when older Godot scenes retain enabled option values. Saved options and the
+underlying implementation remain available for a future release. Existing Godot
+resource files remain intact; previously imported tagged lights are carried forward
+unchanged when geometry is replaced. The bridge's capability owner is
+`../quader-godot/src/bridge_features.hpp`; native `ReleaseFeature` scheduling alone
+does not reactivate these bridge capabilities.
+
+Initial Import, **Auto sync on save**, collision generation from the saved mesh flag,
+subtree replacement and scene Undo/Redo remain available. **Import Scale** is a
+per-link numeric multiplier, defaulting to `1` Godot unit per Quader unit. Committing
+a scale edit reimports an existing link even with automatic synchronization off;
+scale and geometry publish together as one undo action. Legacy nodes use `1`.
+The bridge packages the
+current native reader so supported public saves use the same persistence reader as
+the application.
+
+## Unreal Engine bridge scope
+
+The Windows x64 bridge targets Unreal Engine 5.8 onward and imports meshes and
+supported static triangle collision only. Materials, textures and lights are not
+imported. A linked **Quader** actor provides **Quader Project**, **Scene**, **Import**,
+**Auto Sync on Save** and **Import Scale**. The numeric conversion defaults to `100`
+Unreal units per Quader unit; Quader Y-up coordinates convert to Unreal Z-up as
+`(-Z, X, Y)`. This does not change native Quader units or scene formats.
+
+Each link owns stable, reusable Static Mesh assets. New assets share the flat
+`/Game/Quader/Assets/StaticMeshes/` folder with source-name/identity-based filenames;
+existing assets retain their paths and references and are updated in place. Reimport
+updates those assets and generated Static Mesh child actors, preserving manually
+added content. Imported meshes are visible beneath their Quader parent in Unreal's
+World Outliner.
+Independently placed copies of a link's assets receive its geometry updates; separate
+links have independent asset ownership. Source-deleted mesh assets are retained.
+Older component-based links migrate to child actors on the next successful import,
+with Undo/Redo and existing asset references preserved.
+Existing-asset reimport and scale conversion support Undo/Redo; first-import Undo
+removes generated actors but retains new reusable assets.
+
+Collision uses saved **Generate Collisions**, **Mesh** and **Static Body** settings
+with **Use Complex Collision As Simple**, preserving concave openings. Unsupported
+saved combinations import visual geometry and report skipped collisions. Cooked
+games use saved assets and cooked collision without the source project or reader.
+The editor packages the current native reader; no separate QDR parser is introduced.
+
 ## Mesh physics controls
 
 - [ ] **Collision Type and Body type (UI only, both executables)**

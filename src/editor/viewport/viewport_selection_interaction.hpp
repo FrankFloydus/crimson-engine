@@ -26,6 +26,7 @@ namespace quader {
 class QuaderEditorApi;
 class ViewportToolHoverPort;
 struct ViewportToolResult;
+struct QuaderOperationInputContext;
 
 /**
  * Stores the active viewport selection marquee for overlay presentation.
@@ -73,6 +74,10 @@ public:
     pick_context_menu_target(QuaderEditorApi &editor,
                              const ViewportInteractionFrame &frame);
     [[nodiscard]] const ViewportSelectionMarquee &marquee() const;
+    /// Projects the captured gesture; resting modifiers never create hints.
+    void populate_operation_input_context(
+        QuaderOperationInputContext &context,
+        const ViewportInteractionFrame &frame) const;
     [[nodiscard]] bool lasso_pointer_active() const {
       return lasso_context_.has_value();
     }
@@ -190,6 +195,8 @@ private:
   bool paint_selection_active_ = false;
   bool viewport_hover_state_initialized_ = false;
   bool viewport_hovered_last_frame_ = false;
+  bool curve_anchor_hint_hovered_ = false;
+  bool curve_tangent_hint_hovered_ = false;
   ViewportSelectionInteractionWorkStats work_stats_;
   ModelingCommandResult last_selection_command_result_{.ok = true};
   SceneSurfaceQueryScratch scene_surface_scratch_;

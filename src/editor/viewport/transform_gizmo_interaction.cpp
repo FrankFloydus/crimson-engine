@@ -8,6 +8,7 @@
 
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_operation_input_context.hpp"
 #include "core/logger.hpp"
 #include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
@@ -390,6 +391,10 @@ TransformGizmoInteraction::selected_curve_controls(
       .identity = identity,
       .world_pivot = *world_pivot,
       .orientation = curve_control_orientation(preview, transform_space),
+      .anchors_only = std::all_of(selection.controls.begin(),
+                                  selection.controls.end(), [](const auto &control) {
+        return control.kind == CurveControlKind::Anchor;
+      }),
   };
   cached_curve_control_key_ = key;
   cached_curve_control_snapshot_ = snapshot;
@@ -528,6 +533,8 @@ bool TransformGizmoInteraction::begin_pending_drag(
 
     curve_move_state_ = begin.state;
     dragging_ = true;
+    active_operation_ = QuaderTransformOperation::Transform;
+    active_duplicate_ = false;
     active_backend_ = DragBackend::CurveControl;
     active_curve_selection_ = pending.curve_selection;
     active_axis_ = pending.axis;
@@ -551,6 +558,9 @@ bool TransformGizmoInteraction::begin_pending_drag(
   }
 
   dragging_ = begin.value().active;
+  active_operation_ = dragging_ ? pending.begin_request.operation
+                               : QuaderTransformOperation::Transform;
+  active_duplicate_ = dragging_ && pending.begin_request.duplicate_selected;
   active_backend_ = dragging_ ? DragBackend::EditorTransform
                               : DragBackend::None;
   active_axis_ =
@@ -687,6 +697,12 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
       curve_controls.has_value();
   const ViewportToolId tool =
       curve_route ? ViewportToolId::Move : active_tool;
+  presented_curve_route_ = curve_route;
+  presented_curve_anchors_only_ =
+      dragging_ ? curve_anchor_snap_eligible_
+                : (curve_controls.has_value() ? curve_controls->anchors_only
+                   : (cached_curve_control_snapshot_.has_value() &&
+                      cached_curve_control_snapshot_->anchors_only));
   if (!frame.settings.bool_value(ViewportBoolSettingId::ShowGizmos) ||
       (!curve_route && !viewport_tool_supports_transform_gizmo(tool))) {
     clear_frame();
@@ -1217,6 +1233,8 @@ const quader_editor_core::TransformGizmoFrame* TransformGizmoInteraction::frame(
 
 void TransformGizmoInteraction::reset_drag_state() {
   dragging_ = false;
+  active_operation_ = QuaderTransformOperation::Transform;
+  active_duplicate_ = false;
   active_backend_ = DragBackend::None;
   active_curve_selection_.reset();
   quader_editor_core::reset_move(curve_move_state_);
@@ -1241,7 +1259,54 @@ void TransformGizmoInteraction::reset_curve_control_cache() {
 
 void TransformGizmoInteraction::clear_frame() {
   current_frame_.reset();
+  presented_curve_route_ = false;
+  presented_curve_anchors_only_ = false;
   hover_axis_ = quader_editor_core::TransformAxis::None;
+}
+
+void TransformGizmoInteraction::populate_operation_input_context(
+    QuaderOperationInputContext &context,
+    const ViewportInteractionFrame &interaction) const {
+  if (frame() == nullptr) return;
+  const auto axis = dragging_ ? active_axis_
+                    : pending_drag_ ? pending_drag_->axis : hover_axis_;
+  using Axis = quader_editor_core::TransformAxis;
+  if (axis == Axis::None) return;
+  using Tool = quader_editor_core::ViewportInteractionTool;
+  const Tool tool = current_frame_->info.tool;
+  using Handle = QuaderInputTransformHandle;
+  context.transform_handle =
+      axis == Axis::All ? (tool == Tool::Rotate ? Handle::Trackball : Handle::Center)
+      : (axis == Axis::Xy || axis == Axis::Xz || axis == Axis::Yz)
+          ? Handle::Plane : Handle::Axis;
+  context.pointer_dragging = dragging_;
+  const auto operation = pending_drag_ ? pending_drag_->begin_request.operation
+                                      : active_operation_;
+  const bool duplicate = pending_drag_ ? pending_drag_->begin_request.duplicate_selected
+                                      : active_duplicate_;
+  using Operation = QuaderInputTransformOperation;
+  context.transform_operation =
+      duplicate ? Operation::Duplicate
+      : operation == QuaderTransformOperation::Extrude ? Operation::Extrude
+      : operation == QuaderTransformOperation::Inset ? Operation::Inset
+      : tool == Tool::Rotate ? Operation::Rotate
+      : tool == Tool::Scale ? Operation::Scale : Operation::Move;
+  const auto &selection = interaction.selection_state.summary;
+  const bool object_mode = selection.mode == QuaderSelectionMode::Object ||
+                           selection.mode == QuaderSelectionMode::Group;
+  const bool surface_mode = selection.mode == QuaderSelectionMode::Edge ||
+                            selection.mode == QuaderSelectionMode::Face;
+  context.can_duplicate = !presented_curve_route_ && object_mode;
+  context.can_component_extrude = !presented_curve_route_ && surface_mode &&
+                                 (tool == Tool::Move || tool == Tool::Rotate);
+  context.can_component_inset = !presented_curve_route_ && surface_mode &&
+                               tool == Tool::Scale;
+  context.curve_anchor_selection_only = presented_curve_route_ &&
+                                        presented_curve_anchors_only_;
+  context.can_vertex_snap = tool == Tool::Move &&
+      quader_editor_core::move_axis_supports_vertex_snap(axis) &&
+      viewport_vertex_snap_radius(interaction.settings) > 0.0f &&
+      (!presented_curve_route_ || presented_curve_anchors_only_);
 }
 
 } // namespace quader
