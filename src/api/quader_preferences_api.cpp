@@ -346,18 +346,6 @@ bool QuaderPreferencesApi::viewport_info_visible() const {
   return hooks_.viewport_info_visible ? hooks_.viewport_info_visible() : false;
 }
 
-QuaderApiVoidResult
-QuaderPreferencesApi::set_navigation_gizmo_visible(bool visible) {
-  return hooks_.set_navigation_gizmo_visible
-             ? hooks_.set_navigation_gizmo_visible(visible)
-             : unavailable("Preferences runtime is not attached.");
-}
-
-bool QuaderPreferencesApi::navigation_gizmo_visible() const {
-  return hooks_.navigation_gizmo_visible ? hooks_.navigation_gizmo_visible()
-                                         : false;
-}
-
 QuaderApiVoidResult QuaderPreferencesApi::save() {
     return hooks_.save ? hooks_.save() : unavailable("Preferences runtime is not attached.");
 }

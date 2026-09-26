@@ -99,7 +99,8 @@ vec3 surfaceGridPlaneSlotCoverages(
 }
 
 vec4 surfaceGridOverlay() {
-    if (materialParams.surfaceGridEnabled <= 0.5) {
+    // Materials retain one shared grid; the view independently suppresses it.
+    if (materialParams.surfaceGridEnabled <= 0.5 || getMaterialGlobal0().z >= 0.5) {
         return vec4(0.0);
     }
 

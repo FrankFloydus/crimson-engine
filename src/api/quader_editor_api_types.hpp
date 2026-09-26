@@ -334,8 +334,6 @@ struct QuaderPreferencesRuntimeHooks {
     std::function<QuaderApiVoidResult(double)> set_rotation_snap_degrees;
     std::function<bool()> viewport_info_visible;
     std::function<QuaderApiVoidResult(bool)> set_viewport_info_visible;
-    std::function<bool()> navigation_gizmo_visible;
-    std::function<QuaderApiVoidResult(bool)> set_navigation_gizmo_visible;
 };
 
 /**

@@ -248,6 +248,15 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
   }
 }
 
+QAction *QtToolToolbar::tool_action(ViewportToolId tool) const {
+  for (const ToolAction &entry : tool_actions_) {
+    if (entry.tool == tool && entry.action != nullptr) {
+      return entry.action;
+    }
+  }
+  return nullptr;
+}
+
 bool QtToolToolbar::event(QEvent *event) {
   const bool handled = QToolBar::event(event);
   if (event != nullptr &&
@@ -316,12 +325,19 @@ void QtToolToolbar::set_localization(
 void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
                                 const QuaderSelectionSummary &selection,
                                 bool force) {
-  const std::string active_tool = editor.tools().active_tool();
+  const auto &viewports = editor.viewports();
+  const auto pane = viewports.focused_pane();
+  const auto selected_tool = viewports.selected_tool(pane);
+  const auto control_revision = viewports.control_revision(pane);
+  const auto runtime_tool_revision = editor.tools().active_tool_revision();
   const auto primitive_shape = editor.tools().preferred_primitive_shape();
   const auto keybindings_revision = editor.commands().keybindings_revision();
   if (!force && synchronization_valid_ &&
       synchronized_editor_ == &editor &&
-      synchronized_active_tool_ == active_tool &&
+      synchronized_selected_tool_ == selected_tool &&
+      synchronized_pane_ == pane &&
+      synchronized_control_revision_ == control_revision &&
+      synchronized_runtime_tool_revision_ == runtime_tool_revision &&
       synchronized_selection_mode_ == selection.mode &&
       synchronized_selection_revision_ == selection.selection_revision &&
       synchronized_primitive_shape_ == primitive_shape &&
@@ -330,7 +346,10 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
   }
   synchronization_valid_ = true;
   synchronized_editor_ = &editor;
-  synchronized_active_tool_ = active_tool;
+  synchronized_selected_tool_ = selected_tool;
+  synchronized_pane_ = pane;
+  synchronized_control_revision_ = control_revision;
+  synchronized_runtime_tool_revision_ = runtime_tool_revision;
   synchronized_selection_mode_ = selection.mode;
   synchronized_selection_revision_ = selection.selection_revision;
   synchronized_primitive_shape_ = primitive_shape;
@@ -340,7 +359,7 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
     if (entry.action == nullptr) {
       continue;
     }
-    const bool checked = active_tool == entry.tool_id;
+    const bool checked = selected_tool == entry.tool;
     if (entry.action->isChecked() != checked) {
       const QSignalBlocker blocker(entry.action);
       entry.action->setChecked(checked);

@@ -11,10 +11,16 @@
 #include "render/overlay/viewport_overlay_dash.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "render/render_scene_snapshot.hpp"
+#include "render/viewport_overlay_policy.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/modeling/runtime/selection_types.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/viewport/viewport_tool_overlay_projection.hpp"
+#include "editor/viewport/viewport_selection_interaction.hpp"
+#include "editor/interactions/transform_gizmo.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
 
 #include "viewport/viewport_settings.hpp"
 #include "assets/asset_registry.hpp"
@@ -923,6 +929,111 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
       settings, target);
   EXPECT_TRUE(reactivated.persistent_submitted);
   EXPECT_TRUE(reactivated.dynamic_submitted);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     PassivePaneGizmoPublishesAndReusesWithoutOtherPanesGestureVisuals) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(8.0f);
+  camera.set_view_direction({0.0f, 0.0f, -1.0f});
+  const auto overlay_camera =
+      ViewportCameraAdapter::overlay_camera(camera, camera.viewport_size());
+  quader_editor_core::TransformGizmoFrameInput gizmo_input;
+  gizmo_input.tool = quader_editor_core::ViewportInteractionTool::Move;
+  gizmo_input.has_selection = true;
+  gizmo_input.has_pivot = true;
+  gizmo_input.camera =
+      ViewportCameraAdapter::runtime_camera(camera, camera.viewport_size());
+  auto gizmo = quader_editor_core::build_transform_gizmo_frame(gizmo_input);
+  ASSERT_TRUE(gizmo.info.ok);
+  ViewportSelectionMarquee marquee{
+      .active = true,
+      .start = {20.0f, 30.0f},
+      .end = {100.0f, 130.0f},
+  };
+  const std::vector<quader_editor_core::SelectionOverlayPoint> snap_points{{
+      .layer = quader_editor_core::SelectionOverlayLayer::SnapTargetVertex,
+      .position = {1.0f, 1.0f, 0.0f},
+  }};
+  ViewportToolOverlaySourceInputs inputs{
+      .source_identity = reinterpret_cast<std::uintptr_t>(&gizmo),
+      .overlay_camera = &overlay_camera,
+      .viewport_camera = &camera,
+      .transform_gizmo = &gizmo,
+      .transform_snap_points = &snap_points,
+      .selection_marquee = &marquee,
+      .interaction_pane = false,
+      .gizmos_visible = true,
+      .overlays_visible = true,
+  };
+  ViewportToolOverlaySource passive{inputs};
+  const auto passive_frame = passive.build_dynamic_tool_overlay_frame();
+  EXPECT_FALSE(passive_frame.lines.empty() && passive_frame.triangles.empty());
+  const auto marquee_line = [](const auto &line) {
+    return line.layer == ViewportOverlayLayer::ToolPreviewLine &&
+           line.color == kOverlaySelectionMarqueeLineColor;
+  };
+  const auto marquee_fill = [](const auto &triangle) {
+    return triangle.layer == ViewportOverlayLayer::ToolPreviewFill &&
+           triangle.color == kOverlaySelectionMarqueeFillColor;
+  };
+  const auto snap_point = [](const auto &point) {
+    return point.layer == ViewportOverlayLayer::SnapTargetVertex;
+  };
+  EXPECT_EQ(std::count_if(passive_frame.lines.begin(), passive_frame.lines.end(),
+                          marquee_line), 0);
+  EXPECT_EQ(std::count_if(passive_frame.triangles.begin(), passive_frame.triangles.end(),
+                          marquee_fill), 0);
+  EXPECT_EQ(std::count_if(passive_frame.points.begin(), passive_frame.points.end(),
+                          snap_point), 0);
+
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  StaticSelectionFrameProvider selection{{}};
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_modeling;
+  CurveToolPreviewState curve;
+  auto request = submission_request(selection, scene, volatile_modeling, curve);
+  request.camera = overlay_camera;
+  request.dynamic_tool_source = passive.source_stamp();
+  request.dynamic_tool_frame_provider = &passive;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  const auto first_compose_count =
+      coordinator.work_counters().dynamic_source_compose_count;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            first_compose_count);
+
+  // Gesture changes in another pane do not invalidate this pane's idle gizmo.
+  marquee.end = {200.0f, 180.0f};
+  const ViewportToolOverlaySource other_gesture_changed{inputs};
+  EXPECT_EQ(other_gesture_changed.source_stamp(), passive.source_stamp());
+  gizmo_input.tool = quader_editor_core::ViewportInteractionTool::Rotate;
+  gizmo = quader_editor_core::build_transform_gizmo_frame(gizmo_input);
+  const ViewportToolOverlaySource rotated{inputs};
+  EXPECT_NE(rotated.source_stamp(), passive.source_stamp());
+  request.dynamic_tool_source = rotated.source_stamp();
+  request.dynamic_tool_frame_provider = &rotated;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+
+  inputs.interaction_pane = true;
+  const auto gesture_frame =
+      ViewportToolOverlaySource{inputs}.build_dynamic_tool_overlay_frame();
+  EXPECT_EQ(std::count_if(gesture_frame.lines.begin(), gesture_frame.lines.end(),
+                          marquee_line), 4);
+  EXPECT_EQ(std::count_if(gesture_frame.triangles.begin(), gesture_frame.triangles.end(),
+                          marquee_fill), 2);
+  EXPECT_EQ(std::count_if(gesture_frame.points.begin(), gesture_frame.points.end(),
+                          snap_point), 1);
+  inputs.interaction_pane = false;
+  inputs.gizmos_visible = false;
+  const ViewportToolOverlaySource hidden{inputs};
+  EXPECT_NE(hidden.source_stamp(), rotated.source_stamp());
+  const auto hidden_frame = hidden.build_dynamic_tool_overlay_frame();
+  EXPECT_TRUE(hidden_frame.lines.empty());
+  EXPECT_TRUE(hidden_frame.triangles.empty());
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,

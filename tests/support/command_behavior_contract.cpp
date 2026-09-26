@@ -282,20 +282,16 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kViewportViewBack, Fixture::Viewport,
                kPersistedCameraDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleGrid, Fixture::Viewport,
-               Domain::Preferences | Domain::Viewport | Domain::Overlay |
-                   Domain::Revisions,
+               kViewportDomains | Domain::Overlay,
                Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleGizmos, Fixture::Viewport,
-               Domain::Preferences | Domain::Viewport | Domain::Overlay |
-                   Domain::Revisions,
+               kViewportDomains | Domain::Overlay,
                Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleMeshGrid, Fixture::Viewport,
-               Domain::Preferences | Domain::Viewport | Domain::Overlay |
-                   Domain::Revisions,
+               kViewportDomains | Domain::Overlay,
                Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleOverlays, Fixture::Viewport,
-               Domain::Preferences | Domain::Viewport | Domain::Overlay |
-                   Domain::Revisions,
+               kViewportDomains | Domain::Overlay,
                Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleDimensions, Fixture::Viewport,
                Domain::Preferences | Domain::Viewport | Domain::Overlay |
@@ -306,11 +302,6 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                    Domain::Revisions,
                Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleInfo, Fixture::Viewport,
-               Domain::Preferences | Domain::Viewport | Domain::Overlay |
-                   Domain::Revisions,
-               Outcome::ChangeRequired),
-      contract(quader_command::kViewportToggleNavigationGizmo,
-               Fixture::Viewport,
                Domain::Preferences | Domain::Viewport | Domain::Overlay |
                    Domain::Revisions,
                Outcome::ChangeRequired),
@@ -352,8 +343,6 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                kViewportDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportGridDecrement, Fixture::Viewport,
                kViewportDomains, Outcome::ChangeRequired),
-      contract(quader_command::kViewportGridReset, Fixture::Viewport,
-               kViewportDomains, Outcome::ChangeRequired, UndoRepeat::None),
 
       // Catalog-generated modeling command. Keep its canonical id explicit.
       contract(quader_command::kModelingDuplicateMeshes,
@@ -713,18 +702,20 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
       contract(quader_command::kModelingApplyActivePreview,
                Fixture::ModelingPreview,
-               kTopologyDomains | Domain::Tool, Outcome::ChangeRequired,
+               kTopologyDomains | Domain::Tool | Domain::Viewport,
+               Outcome::ChangeRequired,
                UndoRepeat::CommitPreview),
       contract(quader_command::kModelingCancelActivePreview,
-               Fixture::ModelingPreview, kPreviewDomains,
+               Fixture::ModelingPreview, kPreviewDomains | Domain::Viewport,
                Outcome::ChangeRequired, UndoRepeat::CancelPreview),
       contract(quader_command::kToolsApplyPrimitiveCreation,
                Fixture::PrimitivePreview,
-               kTopologySceneDomains | Domain::Tool,
+               kTopologySceneDomains | Domain::Tool | Domain::Viewport,
                Outcome::ChangeRequired, UndoRepeat::CommitPreview),
       contract(quader_command::kToolsCancelPrimitiveCreation,
                Fixture::PrimitivePreview,
-               kPreviewDomains | Domain::SceneGraph | Domain::History,
+               kPreviewDomains | Domain::SceneGraph | Domain::History |
+                   Domain::Viewport,
                Outcome::ChangeRequired, UndoRepeat::CancelPreview),
 
       // Edits the existing creation step; API tests verify its undo/redo.
@@ -813,9 +804,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 224U);
+  static_assert(std::size(kContracts) == 222U);
 #else
-  static_assert(std::size(kContracts) == 223U);
+  static_assert(std::size(kContracts) == 221U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

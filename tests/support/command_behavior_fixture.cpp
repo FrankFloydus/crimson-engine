@@ -564,12 +564,6 @@ private:
             [this](bool value) {
               return set_preference(viewport_info_visible_, value);
             },
-        .navigation_gizmo_visible =
-            [this] { return navigation_gizmo_visible_; },
-        .set_navigation_gizmo_visible =
-            [this](bool value) {
-              return set_preference(navigation_gizmo_visible_, value);
-            },
     });
   }
 
@@ -1241,10 +1235,7 @@ private:
 
   void configure_command_specific_state() {
     if (contract_.fixture == CanonicalCommandFixture::Viewport) {
-      if (command_id_ == quader_command::kViewportGridReset.string()) {
-        require_ok(editor().viewports().set_grid_preset(9),
-                   "Move grid preset away from reset target");
-      } else if (command_id_ ==
+      if (command_id_ ==
                      quader_command::kViewportGridIncrement.string() ||
                  command_id_ ==
                      quader_command::kViewportGridDecrement.string()) {
@@ -1367,7 +1358,6 @@ private:
   bool vertex_snap_enabled_ = true;
   bool rotation_snap_enabled_ = true;
   bool viewport_info_visible_ = true;
-  bool navigation_gizmo_visible_ = true;
   double rotation_snap_degrees_ = 15.0;
 };
 

@@ -140,6 +140,9 @@ struct ResolvedSelectionClickRequest {
    */
   EditorSubSelectionKind miss_sub_selection_kind =
       EditorSubSelectionKind::None;
+  /// Nonzero only for the ordinary click and its recognized depth correction.
+  std::uint64_t gesture_merge_key = 0;
+  std::optional<std::uint64_t> expected_history_revision;
 };
 
 /** Carries resolved marquee targets, baseline, and canonical edit policy. */
@@ -195,7 +198,11 @@ public:
   try_delete_sub_selection();
 
   DocumentCommandResult set_scene_selection(std::span<const EntityId> entities,
-                                            EntityId active = kInvalidEntityId);
+                                            EntityId active = kInvalidEntityId,
+                                            std::uint64_t gesture_merge_key = 0,
+                                            std::optional<std::uint64_t>
+                                                expected_history_revision = {});
+  [[nodiscard]] std::uint64_t selection_history_revision() const;
   DocumentCommandResult
   set_inspection_scene_selection(std::span<const EntityId> entities,
                                  EntityId active = kInvalidEntityId);
@@ -326,7 +333,9 @@ private:
   [[nodiscard]] ResolvedSelectionApplyResult scene_pick_selection_result(
       EntityId target_entity, ModelingSelectionMode mode,
       const ModelingPickSelectRequest &request,
-      const EditorSelectionBoxBaseline *baseline = nullptr);
+      const EditorSelectionBoxBaseline *baseline = nullptr,
+      std::uint64_t gesture_merge_key = 0,
+      std::optional<std::uint64_t> expected_history_revision = {});
   [[nodiscard]] ModelingSelectionSummary
   scene_box_selection(std::span<const EntityId> target_entities,
                       ModelingSelectionMode mode, ModelingSelectionEdit edit,
@@ -349,7 +358,10 @@ private:
   scene_summary_for(ModelingSelectionMode mode) const;
   DocumentCommandResult
   apply_scene_selection_state(SceneSelectionState selection,
-                              bool preserve_selection_mode = false);
+                              bool preserve_selection_mode = false,
+                              std::uint64_t gesture_merge_key = 0,
+                              std::optional<std::uint64_t>
+                                  expected_history_revision = {});
   DocumentCommandResult
   apply_runtime_scene_selection_state(SceneSelectionState selection,
                                       bool preserve_selection_mode = false);

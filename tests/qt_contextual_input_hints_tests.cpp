@@ -13,7 +13,9 @@
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_spin_box.hpp"
+#include "ui/qt_viewport_control_strip.hpp"
 
+#include <QAction>
 #include <QApplication>
 #include <QDialog>
 #include <QDragEnterEvent>
@@ -25,6 +27,8 @@
 #include <QMouseEvent>
 #include <QRegion>
 #include <QScopeGuard>
+#include <QToolButton>
+#include <QWidgetAction>
 #include <QWindow>
 
 #include <algorithm>
@@ -281,6 +285,163 @@ TEST_F(QtContextualInputHintsTests,
   QCoreApplication::sendEvent(application_.get(), &activate);
   mouse(surface, QEvent::MouseMove, {10, 10});
   EXPECT_TRUE(has("surface"));
+}
+
+TEST_F(QtContextualInputHintsTests,
+       ViewportStripControlsKeepFallbackAcrossFocusPressAndRelease) {
+  QWidget host;
+  QtViewportControlStrip strip(&host);
+  strip.setGeometry(0, 0, 420, 36);
+  QAction action(QStringLiteral("Toggle snapping"), &host);
+  action.setObjectName(QStringLiteral("hintToggle"));
+  action.setCheckable(true);
+  strip.add_action(action);
+  QWidget panel(&host);
+  panel.setGeometry(0, 60, 200, 150);
+  bool panel_active = false;
+  std::uint64_t panel_revision = 1;
+  register_hint(panel, panel_active, panel_revision, "test.panel_hint");
+  int commands = 0;
+  QObject::connect(&action, &QAction::triggered, &host,
+                   [&commands]() { ++commands; });
+  show(host);
+  auto *button = strip.findChild<QToolButton *>(
+      QStringLiteral("viewportStrip_hintToggle"));
+  ASSERT_NE(button, nullptr);
+  ASSERT_TRUE(button->isVisible());
+  mouse(panel, QEvent::MouseMove, {10, 10});
+  ASSERT_TRUE(has("test.panel_hint"));
+
+  const QPointF center(button->rect().center());
+  mouse(*button, QEvent::MouseMove, center);
+  button->setFocus(Qt::TabFocusReason);
+  ASSERT_TRUE(button->hasFocus());
+  const auto before = state();
+  EXPECT_FALSE(before.overrides_viewport);
+  EXPECT_FALSE(before.blocks_viewport);
+  EXPECT_FALSE(has("test.panel_hint"));
+  const auto expect_fallback = [&]() {
+    const auto current = state();
+    EXPECT_FALSE(current.overrides_viewport);
+    EXPECT_FALSE(current.blocks_viewport);
+    EXPECT_EQ(current.revision, before.revision);
+  };
+  mouse(*button, QEvent::MouseButtonPress, center,
+         Qt::LeftButton, Qt::LeftButton);
+  expect_fallback();
+  EXPECT_EQ(commands, 0);
+  mouse(*button, QEvent::MouseButtonRelease, center, Qt::LeftButton);
+  expect_fallback();
+  EXPECT_EQ(commands, 1);
+  key(*button, Qt::Key_Space);
+  expect_fallback();
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+  QCoreApplication::sendEvent(button, &release);
+  expect_fallback();
+  EXPECT_EQ(commands, 2);
+  QCoreApplication::processEvents();
+  expect_fallback();
+}
+
+TEST_F(QtContextualInputHintsTests,
+       ViewportStripMenusKeepFallbackWithoutLeakingAnUnrelatedPanelHint) {
+  QWidget host;
+  QtViewportControlStrip strip(&host);
+  strip.setGeometry(0, 0, 420, 36);
+  QWidget panel(&host);
+  panel.setGeometry(0, 60, 200, 150);
+  bool panel_active = false;
+  std::uint64_t panel_revision = 1;
+  register_hint(panel, panel_active, panel_revision, "test.panel_hint");
+  QMenu menu(&strip);
+  auto *submenu = menu.addMenu(QStringLiteral("Shading"));
+  submenu->addAction(QStringLiteral("Wireframe"));
+  QMenu unrelated(&host);
+  unrelated.addAction(QStringLiteral("Panel action"));
+  show(host);
+  mouse(panel, QEvent::MouseMove, {10, 10});
+  ASSERT_TRUE(has("test.panel_hint"));
+
+  const bool animate_menus = QApplication::isEffectEnabled(Qt::UI_AnimateMenu);
+  const auto restore_menu_effects = qScopeGuard([animate_menus]() {
+    QApplication::setEffectEnabled(Qt::UI_AnimateMenu, animate_menus);
+  });
+  QApplication::setEffectEnabled(Qt::UI_AnimateMenu, false);
+  menu.popup(host.mapToGlobal(QPoint(20, 36)));
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::activePopupWidget(), &menu);
+  const auto expect_fallback = [&]() {
+    const auto current = state();
+    EXPECT_FALSE(current.overrides_viewport);
+    EXPECT_FALSE(current.blocks_viewport);
+    EXPECT_FALSE(has("test.panel_hint"));
+  };
+  expect_fallback();
+  const auto menu_revision = state().revision;
+  for (int frame = 0; frame < 16; ++frame) {
+    EXPECT_EQ(state().revision, menu_revision);
+  }
+  submenu->popup(menu.mapToGlobal(QPoint(menu.width(), 0)));
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::activePopupWidget(), submenu);
+  mouse(*submenu, QEvent::MouseMove, {8, 8});
+  expect_fallback();
+  submenu->close();
+  menu.close();
+
+  unrelated.popup(host.mapToGlobal(QPoint(20, 60)));
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::activePopupWidget(), &unrelated);
+  EXPECT_TRUE(state().blocks_viewport);
+  EXPECT_TRUE(hints().empty());
+  unrelated.close();
+  mouse(panel, QEvent::MouseMove, {10, 10});
+  EXPECT_TRUE(has("test.panel_hint"));
+}
+
+TEST_F(QtContextualInputHintsTests,
+       ViewportStripOwnershipDoesNotBypassTextOrModalSuppression) {
+  QWidget host;
+  QtViewportControlStrip strip(&host);
+  strip.setGeometry(0, 0, 420, 36);
+  QLineEdit field(&host);
+  field.setGeometry(0, 60, 200, 30);
+  QMenu menu(&strip);
+  auto *editor_action = new QWidgetAction(&menu);
+  auto *popup_editor = new QLineEdit;
+  editor_action->setDefaultWidget(popup_editor);
+  menu.addAction(editor_action);
+  show(host);
+  field.setFocus();
+  ASSERT_TRUE(field.hasFocus());
+  mouse(strip, QEvent::MouseMove, {10, 10});
+  EXPECT_TRUE(state().blocks_viewport);
+  EXPECT_TRUE(hints().empty());
+  field.clearFocus();
+
+  const bool animate_menus = QApplication::isEffectEnabled(Qt::UI_AnimateMenu);
+  const auto restore_menu_effects = qScopeGuard([animate_menus]() {
+    QApplication::setEffectEnabled(Qt::UI_AnimateMenu, animate_menus);
+  });
+  QApplication::setEffectEnabled(Qt::UI_AnimateMenu, false);
+  menu.popup(host.mapToGlobal(QPoint(20, 36)));
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::activePopupWidget(), &menu);
+  popup_editor->setFocus(Qt::TabFocusReason);
+  ASSERT_EQ(QApplication::focusWidget(), popup_editor);
+  mouse(*popup_editor, QEvent::MouseMove, {8, 8});
+  EXPECT_TRUE(state().blocks_viewport);
+  EXPECT_TRUE(hints().empty());
+  menu.close();
+
+  QDialog dialog(&host);
+  dialog.setModal(true);
+  show(dialog);
+  ASSERT_EQ(QApplication::activeModalWidget(), &dialog);
+  mouse(strip, QEvent::MouseMove, {10, 10});
+  EXPECT_TRUE(state().blocks_viewport);
+  EXPECT_TRUE(hints().empty());
+  dialog.close();
 }
 
 TEST_F(QtContextualInputHintsTests,

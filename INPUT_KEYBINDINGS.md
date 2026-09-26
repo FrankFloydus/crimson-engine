@@ -39,6 +39,15 @@ comes from the target catalog and modeling/tool descriptors. Query `commands().k
 for current/default mappings, unassigned actions, source, diagnostics, and read-only `when` expressions.
 Do not introduce a parallel map through private Qt shortcuts, widget key checks, parsing, or settings.
 
+Orbit, snap-orbit, and Pan retain their compiled mouse gestures. The keybinding service locks
+these targets; the public catalog marks them noneditable, and Settings omits their rows. Neither
+assignment, unassignment, replacement nor a legacy file can override them. Their physical
+button/modifier combinations are reserved across press, click, double-click and drag, including
+any position in a multi-key sequence, when the action's context overlaps viewport navigation.
+Fly Navigation and its controls remain editable: the reservation excludes active fly navigation,
+where the same middle button can reset fly speed. Loading ignores only the legacy fixed-target
+or reserved-gesture overrides and keeps unrelated custom bindings.
+
 ## Command and default-binding lifecycle
 
 Treat a command addition, rename, removal, or requested default change as one change across:
@@ -264,9 +273,12 @@ Extrude retains that edge's final preview even when snap-key release coalesces i
 
 Some actions must reserve constituent presses before their Click/DoubleClick resolves. Preserve the
 material-transfer, Curve-conversion, and orthographic Mesh-depth-selection tests when modifying that
-path. Their reserved gestures must not mutate selection or start a gizmo first. Delayed selection
-freezes the ray and first-click modifiers, cancels on context loss, and commits a lone click once at
-its deadline. Rebinding/unassigning must remove the corresponding reservation/timing behavior.
+path. Their reserved presses must not start a gizmo first. Ordinary orthographic selection and
+deselection publish immediately on Click release, without waiting for a possible depth double-click.
+Retain the pre-first-click selection and frozen modifiers for a recognized depth double-click;
+its correction coalesces with the first click only while the gesture context and history head still
+match. Context loss cancels an unreleased gesture but never reverts an already published single
+click. Rebinding/unassigning removes the corresponding reservation and depth-double behavior.
 
 Face material copies share texture continuation's source-preserving pointer ownership. A selected
 source must be exactly one face; sampling into the selection can target faces across meshes.
@@ -286,7 +298,7 @@ the old remainder on axis change or direction reversal. Emit every completed det
 event with its event-time local cursor position. Opposite events in one frame cannot collapse to a net
 scalar: zoom limits are evaluated in order. An accepted wheel event survives a later hover leave.
 Camera zoom and Fly speed consume that same ordered stream. `pixelDelta` follows its own calibrated
-continuous path; never divide it by 120 or merge it with angle accumulation. Relative/reset grid
+continuous path; never divide it by 120 or merge it with angle accumulation. Relative grid
 bindings resolve to semantic `SetGridPreset` shortcuts using the synchronized current preset.
 
 Camera depth samples actual surfaces within the view's clip range, only at navigation gestures and

@@ -1596,8 +1596,52 @@ std::string capture_viewports(const CaptureData &data) {
       ViewportPaneId::Front,
       ViewportPaneId::Side,
   };
+  // Missing pane-control fields encode these fixed baseline defaults. Record
+  // explicit overrides even when their effective value equals the default:
+  // they change how later application-default edits affect the pane.
+  constexpr std::array<QuaderViewportControl, 8> kPaneControls{
+      QuaderViewportControl::SnappingEnabled,
+      QuaderViewportControl::GridSnap,
+      QuaderViewportControl::VertexSnap,
+      QuaderViewportControl::RotationSnap,
+      QuaderViewportControl::ShowGrid,
+      QuaderViewportControl::ShowGizmos,
+      QuaderViewportControl::ShowOverlays,
+      QuaderViewportControl::ShowMeshGrid,
+  };
   for (ViewportPaneId pane : kPanes) {
     const std::string prefix = "viewport.pane[" + enum_text(pane) + "]";
+    if (viewports.selected_tool(pane) != ViewportToolId::Select) {
+      writer.line(prefix + ".selected_tool",
+                  enum_text(viewports.selected_tool(pane)));
+    }
+    if (viewports.preferred_selection_tool(pane) != ViewportToolId::Select) {
+      writer.line(prefix + ".preferred_selection_tool",
+                  enum_text(viewports.preferred_selection_tool(pane)));
+    }
+    if (viewports.transform_space(pane) != QuaderTransformSpace::Global) {
+      writer.line(prefix + ".transform_space",
+                  enum_text(viewports.transform_space(pane)));
+    }
+    for (const auto control : kPaneControls) {
+      const bool baseline = control != QuaderViewportControl::ShowMeshGrid;
+      const bool value = viewports.control(pane, control);
+      const bool overridden = viewports.control_overridden(pane, control);
+      if (value == baseline && !overridden) {
+        continue;
+      }
+      const std::string control_prefix =
+          prefix + ".control[" + enum_text(control) + "]";
+      writer.line(control_prefix, bool_text(value));
+      writer.line(control_prefix + ".override", bool_text(overridden));
+    }
+    if (viewports.rotation_snap_degrees(pane) != 15.0 ||
+        viewports.rotation_snap_overridden(pane)) {
+      writer.line(prefix + ".rotation_snap_degrees",
+                  double_bits(viewports.rotation_snap_degrees(pane)));
+      writer.line(prefix + ".rotation_snap_override",
+                  bool_text(viewports.rotation_snap_overridden(pane)));
+    }
     writer.line(prefix + ".view", enum_text(viewports.view(pane)));
       writer.line(prefix + ".shading",
                   enum_text(viewports.shading_mode(pane)));
@@ -1681,8 +1725,6 @@ std::string capture_preferences(const CaptureData &data) {
               double_bits(preferences.rotation_snap_degrees()));
   writer.line("preferences.viewport_info_visible",
               bool_text(preferences.viewport_info_visible()));
-  writer.line("preferences.navigation_gizmo_visible",
-              bool_text(preferences.navigation_gizmo_visible()));
 
   const auto uv_peel = data.editor.modeling().uv_peel_settings();
   writer.line("preferences.uv_peel.axis", enum_text(uv_peel.options.axis));

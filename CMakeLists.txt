@@ -985,7 +985,6 @@ add_library(quader_ui STATIC
     src/ui/qt_standard_material_preview_image_cache.cpp
     src/ui/qt_standard_material_editor_window.cpp
     src/ui/standard_material_preview_render_snapshot_adapter.cpp
-    src/ui/qt_navigation_gizmo.cpp
     src/ui/qt_operation_input_hints.cpp
     src/ui/qt_contextual_input_hints.cpp
     src/ui/qt_project_home_page.cpp
@@ -1182,6 +1181,7 @@ set(QUADER_SELECTION_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_vertex.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_edge.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_face.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_backface.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_mesh.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_group.png")
 
@@ -1694,7 +1694,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_standard_material_preview_image_cache_tests.cpp
         tests/qt_standard_material_editor_window_tests.cpp
         tests/qt_texture_info_window_tests.cpp
-        tests/qt_navigation_gizmo_tests.cpp
+        tests/qt_viewport_header_tests.cpp
         tests/qt_project_workspace_tests.cpp
         tests/qt_relative_pointer_input_tests.cpp
         tests/qt_horizontal_pointer_capture_tests.cpp

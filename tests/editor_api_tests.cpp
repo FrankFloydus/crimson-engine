@@ -842,10 +842,10 @@ void expect_selection_depth_input(const quader::ViewportInputFrame &input,
   EXPECT_EQ(input.cycle_selection_depth_modifiers.alt, modifiers.alt);
 }
 
-void expect_selection_click_delay(const quader::ViewportInputFrame &input,
-                                  bool delayed,
-                                  quader::ViewportModifiers modifiers = {}) {
-  EXPECT_EQ(input.selection_click_delay_for_double_click, delayed);
+void expect_selection_click_provenance(const quader::ViewportInputFrame &input,
+                                       bool paired,
+                                       quader::ViewportModifiers modifiers = {}) {
+  EXPECT_EQ(input.selection_click_has_depth_double_click, paired);
   EXPECT_EQ(input.selection_click_modifiers.primary, modifiers.primary);
   EXPECT_EQ(input.selection_click_modifiers.shift, modifiers.shift);
   EXPECT_EQ(input.selection_click_modifiers.alt, modifiers.alt);
@@ -2141,7 +2141,6 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   bool overlays_visible = true;
   bool dimensions_visible = true;
   bool viewport_info_visible = true;
-  bool navigation_gizmo_visible = true;
   bool grid_snap_enabled = true;
   bool vertex_snap_enabled = true;
   bool rotation_snap_enabled = true;
@@ -2240,13 +2239,6 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
             viewport_info_visible = visible;
             return runtime_result(changed);
           },
-      .navigation_gizmo_visible = [&]() { return navigation_gizmo_visible; },
-      .set_navigation_gizmo_visible =
-          [&](bool visible) {
-            const bool changed = navigation_gizmo_visible != visible;
-            navigation_gizmo_visible = visible;
-            return runtime_result(changed);
-          },
   });
 
   EXPECT_TRUE(editor.preferences().snapping_enabled());
@@ -2256,7 +2248,6 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.preferences().mesh_grid_visible());
   EXPECT_TRUE(editor.preferences().overlays_visible());
   EXPECT_TRUE(editor.preferences().viewport_info_visible());
-  EXPECT_TRUE(editor.preferences().navigation_gizmo_visible());
   EXPECT_TRUE(editor.preferences().grid_snap_enabled());
   EXPECT_TRUE(editor.preferences().vertex_snap_enabled());
   EXPECT_TRUE(editor.preferences().rotation_snap_enabled());
@@ -2273,8 +2264,6 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.preferences().set_dimensions_visible(false).changed());
   EXPECT_FALSE(editor.preferences().set_dimensions_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_viewport_info_visible(false).changed());
-  EXPECT_TRUE(
-      editor.preferences().set_navigation_gizmo_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_grid_snap_enabled(false).changed());
   EXPECT_TRUE(editor.preferences().set_vertex_snap_enabled(false).changed());
   EXPECT_TRUE(editor.preferences().set_rotation_snap_enabled(false).changed());
@@ -2288,12 +2277,23 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_FALSE(editor.preferences().overlays_visible());
   EXPECT_FALSE(editor.preferences().dimensions_visible());
   EXPECT_FALSE(editor.preferences().viewport_info_visible());
-  EXPECT_FALSE(editor.preferences().navigation_gizmo_visible());
   EXPECT_FALSE(editor.preferences().grid_snap_enabled());
   EXPECT_FALSE(editor.preferences().vertex_snap_enabled());
   EXPECT_FALSE(editor.preferences().rotation_snap_enabled());
   EXPECT_DOUBLE_EQ(editor.preferences().rotation_snap_degrees(), 22.5);
   EXPECT_FALSE(editor.preferences().set_rotation_snap_degrees(22.5).changed());
+
+  quader::ViewportSettings viewport_defaults;
+  (void)viewport_defaults.set_bool_value(quader::ViewportBoolSettingId::ShowGrid,
+                                         grid_visible);
+  (void)viewport_defaults.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos,
+                                         gizmos_visible);
+  (void)viewport_defaults.set_bool_value(quader::ViewportBoolSettingId::ShowMeshGrid,
+                                         mesh_grid_visible);
+  (void)viewport_defaults.set_bool_value(quader::ViewportBoolSettingId::ShowOverlays,
+                                         overlays_visible);
+  (void)quader::QuaderViewportApiRuntimeAccess::workspace(editor.viewports())
+      .update_control_defaults(viewport_defaults, 1u);
 
   EXPECT_TRUE(editor.commands()
                   .execute(quader::quader_command::kViewportToggleGrid)
@@ -2314,20 +2314,19 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.commands()
                   .execute(quader::quader_command::kViewportToggleInfo)
                   .changed());
-  EXPECT_TRUE(
-      editor.commands()
-          .execute(quader::quader_command::kViewportToggleNavigationGizmo)
-          .changed());
   EXPECT_TRUE(editor.commands()
                   .execute(
                       quader::quader_command::kSelectToggleBackfaceSelection)
                   .changed());
-  EXPECT_TRUE(editor.preferences().grid_visible());
-  EXPECT_TRUE(editor.preferences().gizmos_visible());
-  EXPECT_TRUE(editor.preferences().mesh_grid_visible());
-  EXPECT_TRUE(editor.preferences().overlays_visible());
+  EXPECT_FALSE(editor.preferences().grid_visible());
+  EXPECT_FALSE(editor.preferences().gizmos_visible());
+  EXPECT_FALSE(editor.preferences().mesh_grid_visible());
+  EXPECT_FALSE(editor.preferences().overlays_visible());
+  EXPECT_TRUE(editor.viewports().control(quader::QuaderViewportControl::ShowGrid));
+  EXPECT_TRUE(editor.viewports().control(quader::QuaderViewportControl::ShowGizmos));
+  EXPECT_TRUE(editor.viewports().control(quader::QuaderViewportControl::ShowMeshGrid));
+  EXPECT_TRUE(editor.viewports().control(quader::QuaderViewportControl::ShowOverlays));
   EXPECT_TRUE(editor.preferences().viewport_info_visible());
-  EXPECT_TRUE(editor.preferences().navigation_gizmo_visible());
   EXPECT_FALSE(editor.preferences().backface_selection_enabled());
 
   ASSERT_TRUE(editor.commands()
@@ -2338,7 +2337,6 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   for (const quader::QuaderCommandId command : {
            quader::quader_command::kViewportToggleDimensions,
            quader::quader_command::kViewportToggleInfo,
-           quader::quader_command::kViewportToggleNavigationGizmo,
            quader::quader_command::kViewportLayoutThreePrimaryRight,
            quader::quader_command::kViewportLayoutThreePrimaryLeft,
            quader::quader_command::kViewportLayoutThreePrimaryBottom,
@@ -4777,7 +4775,7 @@ TEST(EditorApiTests, OutlinerDoesNotClaimViewportOnlyActionsOrTheirPrefixes) {
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
   create_selected_box(editor, "Outliner Navigation Box");
   for (const std::string target : {
-           std::string("viewport.navigation.orbit"),
+           std::string("viewport.navigation.fly"),
            std::string("viewport.add_popup"), std::string("viewport.quick_pivot")}) {
     SCOPED_TRACE(target);
     ASSERT_TRUE(editor.commands().set_shortcut(target, "Ctrl+Alt+F24 G").ok());
@@ -4970,6 +4968,58 @@ TEST(EditorApiTests, KeybindingConflictsUseSemanticWhenOverlap) {
         service.conflicts_for("G", "activeTool.move");
     ASSERT_EQ(move_conflicts.size(), 1u);
     EXPECT_EQ(move_conflicts.front().target_id, "tool.move");
+}
+
+TEST(EditorApiTests,
+     KeybindingServiceLocksExistingOverridesAndPreservesDisjointFlyRules) {
+  quader::QuaderKeybindingService service;
+  constexpr std::string_view kReservedWhen =
+      "viewportFocus && !textInputActive && !navigation.flyActive";
+  constexpr std::string_view kFlyWhen =
+      "viewportFocus && !textInputActive && navigation.flyActive";
+  ASSERT_TRUE(service.add_default_keybinding(
+      "orbit", "MiddleMouseDrag", std::string(kReservedWhen)));
+  ASSERT_TRUE(service.add_default_keybinding("tool", "W", "viewportFocus"));
+  ASSERT_TRUE(service.add_default_keybinding("fly", "F", std::string(kFlyWhen)));
+  ASSERT_TRUE(service.set_user_shortcut("orbit", "Alt+LeftMouseDrag").ok);
+  ASSERT_TRUE(service.set_user_shortcut("tool", "Ctrl+K MiddleMouseClick",
+                                        "viewportFocus").ok);
+  ASSERT_TRUE(service.set_user_shortcut("fly", "MiddleMouseDoubleClick",
+                                        std::string(kFlyWhen)).ok);
+  const auto legacy = service.user_keybindings();
+  EXPECT_EQ(service.shortcut_for("orbit"), "Alt+LeftMouseDrag");
+  EXPECT_EQ(service.shortcut_for("tool"), "Ctrl+K MiddleMouseClick");
+
+  service.lock_target("orbit", std::string(kReservedWhen));
+  EXPECT_FALSE(service.target_editable("orbit"));
+  EXPECT_TRUE(service.target_editable("fly"));
+  EXPECT_EQ(service.shortcut_for("orbit"), "MiddleMouseDrag");
+  EXPECT_EQ(service.shortcut_for("tool"), "W");
+  EXPECT_EQ(service.shortcut_for("fly"), "MiddleMouseDoubleClick");
+  EXPECT_FALSE(service.set_user_shortcut("orbit", "F19").ok);
+  EXPECT_FALSE(service.remove_user_shortcut("orbit").ok);
+  EXPECT_FALSE(service.reset_user_shortcut("orbit").ok);
+  EXPECT_FALSE(service.set_user_shortcut("tool", "MiddleMouseDrag F19",
+                                         "viewportFocus").ok);
+  EXPECT_FALSE(service.replace_user_keybindings(legacy).ok);
+  ASSERT_TRUE(service.adopt_loaded_user_keybindings(legacy).ok);
+  const auto retained = service.user_keybindings();
+  ASSERT_EQ(retained.size(), 1u);
+  EXPECT_EQ(retained.front().target_id, "fly");
+  EXPECT_EQ(service.shortcut_for("orbit"), "MiddleMouseDrag");
+  EXPECT_EQ(service.shortcut_for("tool"), "W");
+  EXPECT_EQ(service.shortcut_for("fly"), "MiddleMouseDoubleClick");
+
+  quader::QuaderKeybindingContext context;
+  context.set("viewportFocus", true);
+  EXPECT_EQ(service.dispatch(single_input_chord("MiddleMouseDrag"), context)
+                .target_id,
+            "orbit");
+  context.set("navigation.active", true);
+  context.set("navigation.flyActive", true);
+  EXPECT_EQ(service.dispatch(single_input_chord("MiddleMouseDoubleClick"), context)
+                .target_id,
+            "fly");
 }
 
 TEST(EditorApiTests,
@@ -7146,22 +7196,41 @@ TEST(EditorApiTests,
   editor.tools().record_active_settings_origin(
       static_cast<quader::ViewportPaneId>(999));
   EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
-  ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Front));
   EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Move).changed());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
+  ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Front));
   ASSERT_TRUE(editor.tools().set_setting("move", "auto_merge_vertices", true).ok());
   for (int frame = 0; frame < 32; ++frame) {
     EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
   }
 
+  // Explicit activation in another pane acquires its operation even when the
+  // same tool already executes elsewhere. Passive focus above does not.
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).changed());
+  const auto acquired = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(acquired.serial, started.serial + 1u);
+  EXPECT_EQ(acquired.target_id, "move");
+  EXPECT_EQ(acquired.pane, quader::ViewportPaneId::Front);
+  EXPECT_EQ(editor.viewports().selected_tool(quader::ViewportPaneId::Top),
+            quader::ViewportToolId::Move);
+  EXPECT_EQ(editor.viewports().selected_tool(quader::ViewportPaneId::Front),
+            quader::ViewportToolId::Move);
+  EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Move).changed());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), acquired);
+
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Rotate).ok());
   EXPECT_FALSE(editor.tools().active_settings().active);
-  editor.tools().record_active_settings_origin(quader::ViewportPaneId::Front);
-  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
+  const auto rotated = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(rotated.serial, acquired.serial + 1u);
+  EXPECT_EQ(rotated.target_id, "rotate");
+  EXPECT_EQ(rotated.pane, quader::ViewportPaneId::Front);
+  EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Rotate).changed());
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), rotated);
   EXPECT_FALSE(editor.tools().activate("unknown_settings_origin_tool").ok());
-  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), started);
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), rotated);
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LassoSelect).ok());
   const auto lasso = editor.tools().active_settings_presentation_origin();
-  EXPECT_EQ(lasso.serial, started.serial + 1u);
+  EXPECT_EQ(lasso.serial, rotated.serial + 1u);
   EXPECT_EQ(lasso.target_id, "lasso_select");
   EXPECT_EQ(lasso.pane, quader::ViewportPaneId::Front);
 }
@@ -7670,19 +7739,215 @@ TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
 
   ASSERT_TRUE(
       editor.preferences()
-          .set_shortcut("viewport.navigation.orbit", "Alt+LeftMouseDrag")
+          .set_shortcut("viewport.navigation.fly", "Alt+LeftMouseDrag")
           .ok());
-  EXPECT_EQ(editor.commands().shortcut_for("viewport.navigation.orbit"),
+  EXPECT_EQ(editor.commands().shortcut_for("viewport.navigation.fly"),
             "Alt+LeftMouseDrag");
 
   action = quader::ViewportInputActionKind::None;
   EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
-      *quader::quader_input_parse_chord("MiddleMouseDrag"), state, true, false,
+      *quader::quader_input_parse_chord("RightMouseDrag"), state, true, false,
       action));
   ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
       *quader::quader_input_parse_chord("Alt+LeftMouseDrag"), state, true,
       false, action));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::Fly);
+}
+
+TEST(EditorApiTests,
+     FixedViewportNavigationBindingsRejectEveryPublicMutation) {
+  const auto path = keybinding_test_path("fixed-navigation-mutations");
+  {
+    std::ofstream file(path);
+    file << "[]\n";
+  }
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto revision = editor.commands().keybindings_revision();
+  const std::string disk_before = read_text_file(path);
+  EXPECT_EQ(std::count_if(catalog.begin(), catalog.end(),
+                          [](const auto &entry) { return !entry.editable; }),
+            3);
+  const auto expect_rejected = [](const quader::QuaderApiVoidResult &result) {
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+  };
+  for (const std::string_view target : {
+           "viewport.navigation.orbit", "viewport.navigation.orbit_snap",
+           "viewport.navigation.pan"}) {
+    SCOPED_TRACE(target);
+    const auto *entry = find_keybinding_catalog_entry(catalog, target);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_FALSE(entry->editable);
+    EXPECT_FALSE(entry->customized);
+    const auto &action = entry->key;
+    EXPECT_FALSE(editor.commands()
+                     .analyze_shortcut_assignment(action, "Alt+LeftMouseDrag")
+                     .ok);
+    expect_rejected(editor.commands().set_shortcut(target, "Alt+LeftMouseDrag"));
+    expect_rejected(
+        editor.preferences().set_shortcut(target, "Alt+LeftMouseDrag"));
+    expect_rejected(editor.commands().remove_shortcut(target));
+    expect_rejected(editor.preferences().remove_shortcut(target));
+    expect_rejected(editor.commands().reset_shortcut(target));
+    expect_rejected(editor.preferences().reset_shortcut(target));
+    for (const auto policy : {quader::QuaderKeybindingConflictPolicy::Reject,
+                              quader::QuaderKeybindingConflictPolicy::Replace}) {
+      expect_rejected(editor.commands().set_action_shortcut(
+          action, "Alt+LeftMouseDrag", policy));
+      expect_rejected(editor.preferences().set_action_shortcut(
+          action, entry->default_shortcut, policy));
+      expect_rejected(editor.commands().reset_action_shortcut(action, policy));
+      expect_rejected(editor.preferences().reset_action_shortcut(action, policy));
+    }
+    expect_rejected(editor.commands().remove_action_shortcut(action));
+    expect_rejected(editor.preferences().remove_action_shortcut(action));
+    EXPECT_EQ(editor.commands().shortcut_for(target), entry->default_shortcut);
+  }
+  EXPECT_EQ(editor.commands().keybindings_revision(), revision);
+  EXPECT_EQ(read_text_file(path), disk_before);
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
+     FixedNavigationReservesMouseGestureSequencesButKeepsFlyEditable) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *undo = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kEditUndo.string());
+  const auto *fly_forward = find_keybinding_catalog_entry(
+      catalog, "viewport.navigation.fly_forward");
+  ASSERT_NE(undo, nullptr);
+  ASSERT_NE(fly_forward, nullptr);
+  EXPECT_TRUE(fly_forward->editable);
+  const auto revision = editor.commands().keybindings_revision();
+  for (const std::string_view modifier : {"", "Alt+", "Shift+"}) {
+    for (const std::string_view gesture : {
+             "MiddleMouse", "MiddleMouseClick", "MiddleMouseDoubleClick",
+             "MiddleMouseDrag"}) {
+      const std::string chord = std::string(modifier) + std::string(gesture);
+      for (const std::string &shortcut : {
+               chord, chord + " Ctrl+Alt+F22", "Ctrl+Alt+F22 " + chord}) {
+        SCOPED_TRACE(shortcut);
+        const auto analysis = editor.commands().analyze_shortcut_assignment(
+            undo->key, shortcut);
+        EXPECT_FALSE(analysis.ok);
+        EXPECT_NE(analysis.message.find("reserved"), std::string::npos);
+        EXPECT_FALSE(editor.preferences()
+                         .set_action_shortcut(
+                             undo->key, shortcut,
+                             quader::QuaderKeybindingConflictPolicy::Replace)
+                         .ok());
+        EXPECT_FALSE(editor.commands()
+                         .set_shortcut(quader::quader_command::kEditUndo,
+                                       shortcut)
+                         .ok());
+      }
+    }
+  }
+  EXPECT_EQ(editor.commands().keybindings_revision(), revision);
+  EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kEditUndo),
+            "Ctrl+Z");
+  for (const std::string_view shortcut : {
+           "Ctrl+MiddleMouseDrag", "Shift+Alt+MiddleMouseClick"}) {
+    EXPECT_TRUE(editor.commands()
+                    .analyze_shortcut_assignment(undo->key, shortcut)
+                    .ok)
+        << shortcut;
+  }
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(fly_forward->key, "MiddleMouseDrag")
+                  .ok());
+  quader::ViewportToolState state;
+  quader::ViewportInputActionKind action = quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      single_input_chord("MiddleMouseDrag"), state, true, false, action));
   EXPECT_EQ(action, quader::ViewportInputActionKind::Orbit);
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      single_input_chord("MiddleMouseDrag"), state, true, false,
+      action, {.navigation_active = true, .fly_navigation_active = true}));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::FlyForward);
+  const auto idle_w = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("W"), state, true, false);
+  ASSERT_EQ(idle_w.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(idle_w.shortcut.kind, quader::ViewportShortcutKind::ActivateTool);
+  EXPECT_EQ(idle_w.shortcut.tool, quader::ViewportToolId::Move);
+  ASSERT_TRUE(editor.preferences().reset_action_shortcut(fly_forward->key).ok());
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      single_input_chord("W"), state, true, false, action,
+      {.navigation_active = true, .fly_navigation_active = true}));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::FlyForward);
+}
+
+TEST(EditorApiTests,
+     LegacyNavigationOverridesIgnoreOnlyFixedTargetsAndReservedGestures) {
+  for (const bool remove_fixed : {false, true}) {
+    SCOPED_TRACE(remove_fixed);
+    const auto path = keybinding_test_path(
+        remove_fixed ? "fixed-navigation-legacy-removal"
+                     : "fixed-navigation-legacy-override");
+    {
+      std::ofstream file(path);
+      file << "[\n";
+      for (const std::string_view target : {
+               "viewport.navigation.orbit", "viewport.navigation.orbit_snap",
+               "viewport.navigation.pan"}) {
+        file << "{\"command\":\"" << (remove_fixed ? "-" : "") << target
+             << "\",\"key\":\"Alt+LeftMouseDrag\",\"when\":\"true\"},\n";
+      }
+      file << "{\"command\":\"" << quader::quader_command::kEditUndo.string()
+           << "\",\"key\":\"Ctrl+K MiddleMouseClick\","
+              "\"when\":\"navigation.flyActive\"},\n"
+           << "{\"command\":\"" << quader::quader_command::kEditRedo.string()
+           << "\",\"key\":\"Ctrl+Alt+F20\",\"when\":\"true\"},\n"
+           << "{\"command\":\"viewport.navigation.fly\","
+              "\"key\":\"Alt+LeftMouseDrag\"},\n"
+           << "{\"command\":\"viewport.navigation.fly_forward\","
+              "\"key\":\"Shift+MiddleMouseDoubleClick\"},\n"
+           << "{\"command\":\"-"
+           << quader::quader_command::kDeleteSelection.string()
+           << "\"}\n]\n";
+    }
+    const std::string legacy_file = read_text_file(path);
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(read_text_file(path), legacy_file);
+    EXPECT_EQ(editor.commands().shortcut_for("viewport.navigation.orbit"),
+              "MiddleMouseDrag");
+    EXPECT_EQ(editor.commands().shortcut_for("viewport.navigation.orbit_snap"),
+              "Alt+MiddleMouseDrag");
+    EXPECT_EQ(editor.commands().shortcut_for("viewport.navigation.pan"),
+              "Shift+MiddleMouseDrag");
+    EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kEditUndo),
+              "Ctrl+Z");
+    EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kEditRedo),
+              "Ctrl+Alt+F20");
+    EXPECT_EQ(editor.commands().shortcut_for("viewport.navigation.fly"),
+              "Alt+LeftMouseDrag");
+    EXPECT_EQ(editor.commands().shortcut_for("viewport.navigation.fly_forward"),
+              "Shift+MiddleMouseDoubleClick");
+    EXPECT_TRUE(editor.commands()
+                    .shortcut_for(quader::quader_command::kDeleteSelection)
+                    .empty());
+    ASSERT_TRUE(editor.preferences()
+                    .reset_shortcut(quader::quader_command::kEditRedo)
+                    .ok());
+    const std::string canonical_file = read_text_file(path);
+    EXPECT_EQ(canonical_file.find("viewport.navigation.orbit"),
+              std::string::npos);
+    EXPECT_EQ(canonical_file.find("viewport.navigation.pan"), std::string::npos);
+    EXPECT_EQ(canonical_file.find("Ctrl+K MiddleMouseClick"), std::string::npos);
+    EXPECT_NE(canonical_file.find("Shift+MiddleMouseDoubleClick"),
+              std::string::npos);
+    std::filesystem::remove(path);
+  }
 }
 
 TEST(EditorApiTests,
@@ -9051,7 +9316,7 @@ TEST(EditorApiTests,
 
   for (const std::string_view unsupported : {
            "Ctrl+K V", "WheelUp", "LeftMouse", "LeftMouseClick",
-           "LeftMouseDoubleClick", "MiddleMouseDrag"}) {
+           "LeftMouseDoubleClick", "Ctrl+MiddleMouseDrag"}) {
     SCOPED_TRACE(unsupported);
     const quader::QuaderKeybindingAssignmentAnalysis analysis =
         editor.commands().analyze_shortcut_assignment(action, unsupported);
@@ -9263,7 +9528,7 @@ TEST(EditorApiTests,
     input.pressed_input_chords.push_back(double_click);
     resolve_frame(input);
     expect_selection_depth_input(input, true, binding.modifiers);
-    expect_selection_click_delay(input, false);
+    expect_selection_click_provenance(input, false);
     EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
     EXPECT_FALSE(input.keybinding_input_consumed);
     EXPECT_TRUE(input.resolved_shortcuts.empty());
@@ -9276,14 +9541,14 @@ TEST(EditorApiTests,
     input.modifiers = {};
     resolve_frame(input);
     expect_selection_depth_input(input, true, binding.modifiers);
-    expect_selection_click_delay(input, true, binding.modifiers);
+    expect_selection_click_provenance(input, true, binding.modifiers);
 
     input.pressed_input_chords.clear();
     input.active_input_chords.push_back(double_click);
     input.released_input_chords.push_back(double_click);
     resolve_frame(input);
     expect_selection_depth_input(input, false);
-    expect_selection_click_delay(input, false);
+    expect_selection_click_provenance(input, false);
 
     input.active_input_chords.clear();
     input.released_input_chords.clear();
@@ -9333,7 +9598,7 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     OrthographicSelectionDepthFirstClickDelayUsesBindingContext) {
+     OrthographicSelectionDepthFirstClickProvenanceUsesBindingContext) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   ASSERT_TRUE(editor.commands()
@@ -9362,7 +9627,7 @@ TEST(EditorApiTests,
       click.gesture = gesture;
       input.pressed_input_chords = {click};
       resolve_frame(input);
-      expect_selection_click_delay(input, true, binding.modifiers);
+      expect_selection_click_provenance(input, true, binding.modifiers);
       expect_selection_depth_input(input, false);
       EXPECT_FALSE(input.keybinding_input_consumed);
     }
@@ -9371,17 +9636,17 @@ TEST(EditorApiTests,
     input.active_input_chords = {click};
     input.released_input_chords = {click};
     resolve_frame(input);
-    expect_selection_click_delay(input, false);
+    expect_selection_click_provenance(input, false);
     input.active_input_chords.clear();
     input.released_input_chords.clear();
     input.pressed_input_chords = {click};
     input.modifiers = {};
     resolve_frame(input);
-    expect_selection_click_delay(input, true, binding.modifiers);
+    expect_selection_click_provenance(input, true, binding.modifiers);
 
     input.orthographic_view = false;
     resolve_frame(input);
-    expect_selection_click_delay(input, false);
+    expect_selection_click_provenance(input, false);
     input.orthographic_view = true;
     for (const auto mode : {quader::ViewportSelectionMode::Vertex,
                             quader::ViewportSelectionMode::Edge,
@@ -9389,7 +9654,7 @@ TEST(EditorApiTests,
                             quader::ViewportSelectionMode::Group}) {
       state.selection_mode = mode;
       resolve_frame(input);
-      expect_selection_click_delay(input, false);
+      expect_selection_click_provenance(input, false);
     }
     state.selection_mode = quader::ViewportSelectionMode::Object;
     for (const auto blocked_member : {
@@ -9402,17 +9667,17 @@ TEST(EditorApiTests,
              &quader::ViewportInputFrame::keybinding_input_consumed}) {
       input.*blocked_member = true;
       resolve_frame(input);
-      expect_selection_click_delay(input, false);
+      expect_selection_click_provenance(input, false);
       input.*blocked_member = false;
     }
     input.viewport_focused = false;
     resolve_frame(input);
-    expect_selection_click_delay(input, false);
+    expect_selection_click_provenance(input, false);
   }
 }
 
 TEST(EditorApiTests,
-     OrthographicSelectionDepthFirstClickDelayFollowsOverridesAndConsumption) {
+     OrthographicSelectionDepthFirstClickProvenanceFollowsOverridesAndConsumption) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   ASSERT_TRUE(editor.commands()
@@ -9456,45 +9721,45 @@ TEST(EditorApiTests,
   // A plain first click can become a Shift double-click even when plain depth
   // cycling has moved elsewhere or is unassigned.
   for (const auto shortcut : {"LeftMouse", "LeftMouseClick"}) {
-    expect_selection_click_delay(resolve(shortcut), true);
+    expect_selection_click_provenance(resolve(shortcut), true);
   }
   ASSERT_TRUE(editor.preferences().remove_action_shortcut(cycle->key).ok());
-  expect_selection_click_delay(resolve("LeftMouseClick"), true);
-  expect_selection_click_delay(resolve("Ctrl+LeftMouseClick"), true,
+  expect_selection_click_provenance(resolve("LeftMouseClick"), true);
+  expect_selection_click_provenance(resolve("Ctrl+LeftMouseClick"), true,
                                {.primary = true});
-  expect_selection_click_delay(resolve("Ctrl+Shift+Alt+LeftMouseClick"), true,
+  expect_selection_click_provenance(resolve("Ctrl+Shift+Alt+LeftMouseClick"), true,
                                {.primary = true, .shift = true, .alt = true});
 
   ASSERT_TRUE(editor.preferences()
                   .set_action_shortcut(add->key, "Alt+LeftMouseDoubleClick")
                   .ok());
   for (const auto shortcut : {"Shift+LeftMouse", "Shift+LeftMouseClick"}) {
-    expect_selection_click_delay(resolve(shortcut), true, {.shift = true});
+    expect_selection_click_provenance(resolve(shortcut), true, {.shift = true});
   }
   for (const auto shortcut : {"Alt+LeftMouse", "Alt+LeftMouseClick"}) {
-    expect_selection_click_delay(resolve(shortcut), true, {.alt = true});
+    expect_selection_click_provenance(resolve(shortcut), true, {.alt = true});
   }
   expect_selection_depth_input(resolve("Alt+LeftMouseDoubleClick"), true,
                                {.shift = true});
   for (const auto shortcut : {"Alt+LeftMouseDoubleClick", "Alt+LeftMouseDrag",
                               "Alt+RightMouseClick", "Alt+Mouse4Click"}) {
-    expect_selection_click_delay(resolve(shortcut), false);
+    expect_selection_click_provenance(resolve(shortcut), false);
   }
 
   ASSERT_TRUE(editor.preferences()
                   .set_action_shortcut(add->key, "Alt+Mouse4DoubleClick")
                   .ok());
-  expect_selection_click_delay(resolve("Alt+LeftMouseClick"), false);
-  expect_selection_click_delay(resolve("Alt+Mouse4Click"), false);
+  expect_selection_click_provenance(resolve("Alt+LeftMouseClick"), false);
+  expect_selection_click_provenance(resolve("Alt+Mouse4Click"), false);
   ASSERT_TRUE(editor.preferences()
                   .set_action_shortcut(add->key, "Alt+LeftMouseDoubleClick A")
                   .ok());
-  expect_selection_click_delay(resolve("Alt+LeftMouseClick"), false);
+  expect_selection_click_provenance(resolve("Alt+LeftMouseClick"), false);
   ASSERT_TRUE(editor.preferences().remove_action_shortcut(add->key).ok());
-  expect_selection_click_delay(resolve("Shift+LeftMouseClick"), false);
-  expect_selection_click_delay(resolve("LeftMouseClick"), false);
+  expect_selection_click_provenance(resolve("Shift+LeftMouseClick"), false);
+  expect_selection_click_provenance(resolve("LeftMouseClick"), false);
   ASSERT_TRUE(editor.preferences().reset_action_shortcut(add->key).ok());
-  expect_selection_click_delay(resolve("Shift+LeftMouseClick"), true,
+  expect_selection_click_provenance(resolve("Shift+LeftMouseClick"), true,
                                {.shift = true});
 
   for (const auto shortcut : {"Shift+LeftMouse", "Shift+LeftMouseClick"}) {
@@ -9503,13 +9768,13 @@ TEST(EditorApiTests,
                     .ok());
     const auto input = resolve(shortcut);
     EXPECT_TRUE(input.apply_face_material_to_mesh_pressed);
-    expect_selection_click_delay(input, false);
+    expect_selection_click_provenance(input, false);
   }
   const auto coalesced = resolve_chords(
       {single_input_chord("Shift+LeftMouse"),
        single_input_chord("Shift+LeftMouseClick")});
   EXPECT_TRUE(coalesced.apply_face_material_to_mesh_pressed);
-  expect_selection_click_delay(coalesced, false);
+  expect_selection_click_provenance(coalesced, false);
 
   ASSERT_TRUE(editor.preferences().reset_action_shortcut(apply_face->key).ok());
   const auto *grid = find_keybinding_catalog_entry(
@@ -9521,7 +9786,7 @@ TEST(EditorApiTests,
   const auto pending_chord = resolve("Shift+LeftMouseClick");
   EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
   EXPECT_TRUE(pending_chord.keybinding_input_consumed);
-  expect_selection_click_delay(pending_chord, false);
+  expect_selection_click_provenance(pending_chord, false);
 }
 
 TEST(EditorApiTests,
@@ -12321,8 +12586,9 @@ TEST(EditorApiTests,
     ASSERT_NE(presentation, nullptr);
     EXPECT_EQ(presentation->domain, quader::CommandPresentationDomain::Object);
     EXPECT_EQ(presentation->group, quader::CommandPresentationGroup::Transform);
+    EXPECT_FALSE(quader::has_command_presentation_surface(
+        *presentation, quader::CommandPresentationSurface::MainMenu));
     for (const auto surface : {
-             quader::CommandPresentationSurface::MainMenu,
              quader::CommandPresentationSurface::ViewportContextMenu,
              quader::CommandPresentationSurface::CommandPalette}) {
       EXPECT_TRUE(quader::has_command_presentation_surface(*presentation,
@@ -14671,6 +14937,95 @@ TEST(EditorApiTests, GroupModeRightClickPickSelectsGroupBeforeContextDelete) {
     EXPECT_FALSE(
         harness.editor.query().entity(right_group.value().id).has_value());
     EXPECT_FALSE(harness.editor.query().entity(right.value().entity).has_value());
+}
+
+TEST(EditorApiTests, PaneControlHandlesTargetOnlyTheirPaneAndRejectInvalidChanges) {
+  quader::QuaderViewportApi viewports;
+  auto perspective = viewports.main();
+  auto top = viewports.pane(quader::ViewportPaneId::Top);
+  ASSERT_TRUE(viewports.set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  ASSERT_TRUE(viewports.record_selected_tool(quader::ViewportPaneId::Perspective,
+                                            quader::ViewportToolId::Move).changed());
+  ASSERT_TRUE(viewports.record_selected_tool(quader::ViewportPaneId::Top,
+                                            quader::ViewportToolId::LassoSelect).changed());
+  ASSERT_TRUE(viewports.record_selected_tool(quader::ViewportPaneId::Top,
+                                            quader::ViewportToolId::Rotate).changed());
+  ASSERT_TRUE(top.set_transform_space(quader::QuaderTransformSpace::Local).changed());
+  ASSERT_TRUE(top.set_control(quader::QuaderViewportControl::SnappingEnabled,
+                              false).changed());
+  ASSERT_TRUE(perspective.set_control(quader::QuaderViewportControl::SnappingEnabled,
+                                      true).changed());
+  ASSERT_TRUE(top.set_rotation_snap_degrees(30.0).changed());
+  const auto top_revision = top.control_revision();
+
+  ASSERT_TRUE(top.focus().changed());
+  EXPECT_EQ(viewports.selected_tool(), quader::ViewportToolId::Rotate);
+  EXPECT_EQ(viewports.preferred_selection_tool(), quader::ViewportToolId::LassoSelect);
+  EXPECT_EQ(top.preferred_selection_tool(), quader::ViewportToolId::LassoSelect);
+  EXPECT_EQ(perspective.preferred_selection_tool(), quader::ViewportToolId::Select);
+  EXPECT_EQ(viewports.transform_space(), quader::QuaderTransformSpace::Local);
+  EXPECT_FALSE(viewports.control(quader::QuaderViewportControl::SnappingEnabled));
+  EXPECT_DOUBLE_EQ(viewports.rotation_snap_degrees(), 30.0);
+  EXPECT_TRUE(viewports.control_overridden(quader::ViewportPaneId::Top,
+                                          quader::QuaderViewportControl::SnappingEnabled));
+  EXPECT_TRUE(viewports.rotation_snap_overridden(quader::ViewportPaneId::Top));
+  EXPECT_FALSE(viewports.control_overridden(quader::ViewportPaneId::Top,
+                                           quader::QuaderViewportControl::ShowGrid));
+  EXPECT_FALSE(top.focus().changed());
+  EXPECT_FALSE(viewports.set_rotation_snap_degrees(30.0).changed());
+  EXPECT_FALSE(viewports.set_control(quader::QuaderViewportControl::SnappingEnabled,
+                                     false).changed());
+  EXPECT_EQ(viewports.control_revision(), top_revision);
+
+  EXPECT_EQ(perspective.selected_tool(), quader::ViewportToolId::Move);
+  EXPECT_EQ(perspective.transform_space(), quader::QuaderTransformSpace::Global);
+  EXPECT_TRUE(perspective.control(quader::QuaderViewportControl::SnappingEnabled));
+  ASSERT_TRUE(perspective.focus().changed());
+  EXPECT_EQ(viewports.selected_tool(), quader::ViewportToolId::Move);
+  EXPECT_EQ(viewports.preferred_selection_tool(), quader::ViewportToolId::Select);
+  EXPECT_EQ(top.selected_tool(), quader::ViewportToolId::Rotate);
+
+  EXPECT_FALSE(viewports.set_control(quader::QuaderViewportControl::Count, true).ok());
+  EXPECT_FALSE(viewports.set_control(static_cast<quader::ViewportPaneId>(99),
+                                     quader::QuaderViewportControl::ShowGrid, false).ok());
+  EXPECT_FALSE(viewports.set_rotation_snap_degrees(
+      std::numeric_limits<double>::quiet_NaN()).ok());
+  EXPECT_FALSE(viewports.set_rotation_snap_degrees(-1.0).ok());
+  EXPECT_FALSE(viewports.set_transform_space(
+      static_cast<quader::QuaderTransformSpace>(99)).ok());
+  EXPECT_FALSE(viewports.record_selected_tool(quader::ViewportPaneId::Top,
+                                              static_cast<quader::ViewportToolId>(99)).ok());
+  EXPECT_EQ(top.preferred_selection_tool(), quader::ViewportToolId::LassoSelect);
+  EXPECT_EQ(top.control_revision(), top_revision);
+}
+
+TEST(EditorApiTests, PaneControlStateFollowsTheBoundSceneWorkspace) {
+  quader::QuaderViewportApi viewports;
+  quader::ViewportWorkspaceService first;
+  quader::ViewportWorkspaceService second;
+  quader::QuaderViewportApiRuntimeAccess::bind_scene_workspace(viewports, first);
+  ASSERT_TRUE(viewports.set_control(quader::ViewportPaneId::Top,
+                                    quader::QuaderViewportControl::GridSnap, false).changed());
+  ASSERT_TRUE(viewports.record_selected_tool(quader::ViewportPaneId::Top,
+                                            quader::ViewportToolId::LassoSelect).changed());
+  ASSERT_TRUE(viewports.record_selected_tool(quader::ViewportPaneId::Top,
+                                            quader::ViewportToolId::Move).changed());
+  const auto revision = viewports.control_revision(quader::ViewportPaneId::Top);
+  quader::QuaderViewportApiRuntimeAccess::bind_scene_workspace(viewports, second);
+  EXPECT_EQ(viewports.selected_tool(quader::ViewportPaneId::Top),
+            quader::ViewportToolId::Select);
+  EXPECT_EQ(viewports.preferred_selection_tool(quader::ViewportPaneId::Top),
+            quader::ViewportToolId::Select);
+  EXPECT_FALSE(viewports.control_overridden(quader::ViewportPaneId::Top,
+                                           quader::QuaderViewportControl::GridSnap));
+  quader::QuaderViewportApiRuntimeAccess::bind_scene_workspace(viewports, first);
+  EXPECT_EQ(viewports.selected_tool(quader::ViewportPaneId::Top),
+            quader::ViewportToolId::Move);
+  EXPECT_EQ(viewports.preferred_selection_tool(quader::ViewportPaneId::Top),
+            quader::ViewportToolId::LassoSelect);
+  EXPECT_FALSE(viewports.control(quader::ViewportPaneId::Top,
+                                 quader::QuaderViewportControl::GridSnap));
+  EXPECT_EQ(viewports.control_revision(quader::ViewportPaneId::Top), revision);
 }
 
 TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
@@ -22178,11 +22533,16 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.viewports().grid_preset(), 7);
   dispatch_and_apply_grid("Alt+WheelDown", 7, 6);
   EXPECT_EQ(editor.viewports().grid_preset(), 6);
-  dispatch_and_apply_grid("Alt+MiddleMouseClick", 10,
-                          quader::viewport_default_grid_preset(),
-                          {.navigation_active = true,
-                           .orbit_navigation_active = true});
-  EXPECT_EQ(editor.viewports().grid_preset(), 6);
+  ASSERT_TRUE(editor.viewports().set_grid_preset(10).ok());
+  state.grid_preset = 10;
+  const auto removed_grid_reset =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Alt+MiddleMouseClick"), state, true, false,
+          {.navigation_active = true, .orbit_navigation_active = true});
+  EXPECT_EQ(removed_grid_reset.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.viewports().grid_preset(), 10);
+  EXPECT_FALSE(editor.commands().descriptor("viewport.grid.reset").has_value());
 
   const quader::QuaderViewportKeybindingDispatch removed_grid_f8 =
       editor.commands().dispatch_viewport_input_binding(
@@ -22215,9 +22575,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 224u);
+  EXPECT_EQ(commands.size(), 222u);
 #else
-  EXPECT_EQ(commands.size(), 223u);
+  EXPECT_EQ(commands.size(), 221u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -22362,9 +22722,14 @@ TEST(EditorApiTests,
   EXPECT_TRUE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kViewportGridDecrement.string(),
       "Alt+WheelDown"));
-  EXPECT_TRUE(has_keybinding_catalog_entry(
-      catalog, quader::quader_command::kViewportGridReset.string(),
-      "Alt+MiddleMouseClick"));
+  EXPECT_EQ(find_keybinding_catalog_entry(catalog, "viewport.grid.reset"),
+            nullptr);
+  EXPECT_EQ(find_keybinding_catalog_entry(
+                catalog, "viewport.toggle_navigation_gizmo"), nullptr);
+  EXPECT_FALSE(editor.commands().descriptor("viewport.grid.reset").has_value());
+  EXPECT_FALSE(editor.commands()
+                   .descriptor("viewport.toggle_navigation_gizmo")
+                   .has_value());
 
   for (int preset = 1; preset <= 10; ++preset) {
     const std::string preset_target =
@@ -22524,43 +22889,43 @@ TEST(EditorApiTests,
   const quader::QuaderKeybindingCatalogEntry *before_undo =
       find_keybinding_catalog_entry(
           before, quader::quader_command::kEditUndo.string());
-  const quader::QuaderKeybindingCatalogEntry *before_orbit =
-      find_keybinding_catalog_entry(before, "viewport.navigation.orbit");
+  const quader::QuaderKeybindingCatalogEntry *before_fly =
+      find_keybinding_catalog_entry(before, "viewport.navigation.fly");
   ASSERT_NE(before_undo, nullptr);
-  ASSERT_NE(before_orbit, nullptr);
+  ASSERT_NE(before_fly, nullptr);
   const auto undo_context = before_undo->context;
-  const auto orbit_context = before_orbit->context;
+  const auto fly_context = before_fly->context;
   const std::string undo_when = before_undo->when;
-  const std::string orbit_when = before_orbit->when;
+  const std::string fly_when = before_fly->when;
 
   ASSERT_TRUE(editor.preferences()
                   .remove_shortcut(quader::quader_command::kEditUndo)
                   .ok());
   ASSERT_TRUE(editor.preferences()
-                  .remove_shortcut("viewport.navigation.orbit")
+                  .remove_shortcut("viewport.navigation.fly")
                   .ok());
   const std::vector<quader::QuaderKeybindingCatalogEntry> removed =
       editor.commands().keybinding_catalog();
   const quader::QuaderKeybindingCatalogEntry *removed_undo =
       find_keybinding_catalog_entry(
           removed, quader::quader_command::kEditUndo.string());
-  const quader::QuaderKeybindingCatalogEntry *removed_orbit =
-      find_keybinding_catalog_entry(removed, "viewport.navigation.orbit");
+  const quader::QuaderKeybindingCatalogEntry *removed_fly =
+      find_keybinding_catalog_entry(removed, "viewport.navigation.fly");
   ASSERT_NE(removed_undo, nullptr);
-  ASSERT_NE(removed_orbit, nullptr);
+  ASSERT_NE(removed_fly, nullptr);
   EXPECT_TRUE(removed_undo->shortcut.empty());
-  EXPECT_TRUE(removed_orbit->shortcut.empty());
+  EXPECT_TRUE(removed_fly->shortcut.empty());
   EXPECT_EQ(removed_undo->context, undo_context);
-  EXPECT_EQ(removed_orbit->context, orbit_context);
+  EXPECT_EQ(removed_fly->context, fly_context);
   EXPECT_EQ(removed_undo->when, undo_when);
-  EXPECT_EQ(removed_orbit->when, orbit_when);
+  EXPECT_EQ(removed_fly->when, fly_when);
 
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader::quader_command::kEditUndo,
                                 "Ctrl+Alt+Z")
                   .ok());
   ASSERT_TRUE(editor.preferences()
-                  .set_shortcut("viewport.navigation.orbit",
+                  .set_shortcut("viewport.navigation.fly",
                                 "Alt+LeftMouseDrag")
                   .ok());
   const std::vector<quader::QuaderKeybindingCatalogEntry> overridden =
@@ -22568,17 +22933,17 @@ TEST(EditorApiTests,
   const quader::QuaderKeybindingCatalogEntry *overridden_undo =
       find_keybinding_catalog_entry(
           overridden, quader::quader_command::kEditUndo.string());
-  const quader::QuaderKeybindingCatalogEntry *overridden_orbit =
+  const quader::QuaderKeybindingCatalogEntry *overridden_fly =
       find_keybinding_catalog_entry(overridden,
-                                    "viewport.navigation.orbit");
+                                    "viewport.navigation.fly");
   ASSERT_NE(overridden_undo, nullptr);
-  ASSERT_NE(overridden_orbit, nullptr);
+  ASSERT_NE(overridden_fly, nullptr);
   EXPECT_EQ(overridden_undo->shortcut, "Ctrl+Alt+Z");
-  EXPECT_EQ(overridden_orbit->shortcut, "Alt+LeftMouseDrag");
+  EXPECT_EQ(overridden_fly->shortcut, "Alt+LeftMouseDrag");
   EXPECT_EQ(overridden_undo->context, undo_context);
-  EXPECT_EQ(overridden_orbit->context, orbit_context);
+  EXPECT_EQ(overridden_fly->context, fly_context);
   EXPECT_EQ(overridden_undo->when, undo_when);
-  EXPECT_EQ(overridden_orbit->when, orbit_when);
+  EXPECT_EQ(overridden_fly->when, fly_when);
 }
 
 TEST(EditorApiLayerTests,

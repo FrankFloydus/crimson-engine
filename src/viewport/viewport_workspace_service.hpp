@@ -6,10 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_viewport_control_types.hpp"
 #include "math/types.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_layout.hpp"
 #include "viewport/viewport_local_visibility.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <array>
 #include <cstdint>
@@ -126,6 +128,16 @@ struct ViewportWorkspacePaneState {
     ViewportCameraController camera;
     QVec2 render_size = {1.0f, 1.0f};
     bool visible_this_frame = false;
+    ViewportToolId selected_tool = ViewportToolId::Select;
+    ViewportToolId preferred_selection_tool = ViewportToolId::Select;
+    ViewportTransformSpace transform_space = ViewportTransformSpace::Global;
+    std::array<std::optional<bool>, kQuaderViewportControlCount>
+        control_overrides{};
+    std::optional<double> rotation_snap_override;
+    std::uint64_t control_revision = 0u;
+    std::uint64_t transform_space_revision = 0u;
+    // Derived projection only; mutations go through workspace overrides.
+    ViewportSettings effective_settings;
 };
 
 /**
@@ -172,14 +184,35 @@ public:
   [[nodiscard]] int grid_preset() const { return grid_preset_; }
   bool set_grid_preset(int preset);
 
-  [[nodiscard]] ViewportTransformSpace transform_space() const {
-    return transform_space_;
-  }
+  [[nodiscard]] ViewportTransformSpace transform_space() const;
+  [[nodiscard]] ViewportTransformSpace transform_space(ViewportPaneId pane) const;
   bool set_transform_space(ViewportTransformSpace space);
+  bool set_transform_space(ViewportPaneId pane, ViewportTransformSpace space);
   bool toggle_transform_space();
+  bool toggle_transform_space(ViewportPaneId pane);
   [[nodiscard]] std::uint64_t transform_space_revision() const {
     return transform_space_revision_;
   }
+  [[nodiscard]] std::uint64_t
+  transform_space_revision(ViewportPaneId pane) const;
+
+  [[nodiscard]] ViewportToolId selected_tool(ViewportPaneId pane) const;
+  [[nodiscard]] ViewportToolId preferred_selection_tool(ViewportPaneId pane) const;
+  // Implicit execution fallback retains the user's last selection-tool choice.
+  bool record_selected_tool(ViewportPaneId pane, ViewportToolId tool,
+                            bool remember_selection = true);
+  [[nodiscard]] bool control(ViewportPaneId pane,
+                             QuaderViewportControl control) const;
+  bool set_control(ViewportPaneId pane, QuaderViewportControl control,
+                    bool enabled);
+  [[nodiscard]] double rotation_snap_degrees(ViewportPaneId pane) const;
+  bool set_rotation_snap_degrees(ViewportPaneId pane, double degrees);
+  [[nodiscard]] std::uint64_t control_revision(ViewportPaneId pane) const;
+  /// Applies revised application defaults without changing explicit overrides.
+  bool update_control_defaults(const ViewportSettings &settings,
+                                std::uint64_t revision);
+  [[nodiscard]] const ViewportSettings &
+  effective_settings(ViewportPaneId pane) const;
 
   [[nodiscard]] ViewportShadingMode shading_mode(ViewportPaneId pane) const;
   bool set_shading_mode(ViewportPaneId pane, ViewportShadingMode mode);
@@ -276,8 +309,10 @@ private:
   ViewportPaneId focused_pane_ = ViewportPaneId::Perspective;
   bool focused_pane_maximized_ = false;
   int grid_preset_ = 0;
-  ViewportTransformSpace transform_space_ = ViewportTransformSpace::Global;
   std::uint64_t transform_space_revision_ = 0u;
+  ViewportSettings control_defaults_;
+  std::uint64_t control_defaults_revision_ = 0u;
+  bool control_defaults_valid_ = false;
   float default_fly_speed_ = kDefaultViewportFlyNavigationSpeed;
   std::vector<ViewportWorkspaceAuxiliaryViewportState> auxiliary_viewports_;
   ViewportLocalVisibilitySnapshot local_visibility_snapshot_;

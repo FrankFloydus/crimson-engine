@@ -48,6 +48,10 @@ material {
         },
         {
             type : float,
+            name : gridIntensity
+        },
+        {
+            type : float,
             name : parentGridSize
         },
         {
@@ -296,7 +300,7 @@ fragment {
             alpha *= fade;
         }
 
-        alpha = clamp(alpha, 0.0, 1.0);
+        alpha = clamp(alpha * materialParams.gridIntensity, 0.0, 1.0);
         if (alpha < 0.002) {
             discard;
         }

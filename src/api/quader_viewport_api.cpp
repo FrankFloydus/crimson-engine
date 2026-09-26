@@ -7,15 +7,29 @@
 #include "api/quader_viewport_api.hpp"
 
 #include "core/release_features.hpp"
+#include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "viewport/viewport_shading_mode_conversions.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
 #include <memory>
+#include <cmath>
 #include <utility>
 
 namespace quader {
+namespace {
+
+bool valid_pane(ViewportPaneId pane) {
+  return static_cast<std::size_t>(pane) < kViewportPaneCount;
+}
+
+bool valid_control(QuaderViewportControl control) {
+  return static_cast<std::size_t>(control) < kQuaderViewportControlCount;
+}
+
+} // namespace
+
 /**
  * Owns QuaderViewportApi implementation state that should not leak through public headers.
  */
@@ -78,6 +92,108 @@ ViewportPaneId QuaderViewportApi::focused_pane() const {
   return impl_->workspace->focused_pane();
 }
 
+QuaderApiVoidResult QuaderViewportApi::focus_pane(ViewportPaneId pane) {
+  if (!valid_pane(pane)) {
+    return unavailable("The requested viewport pane is not valid.");
+  }
+  return runtime_status(impl_->workspace->focus_pane(pane));
+}
+
+ViewportToolId QuaderViewportApi::selected_tool() const {
+  return selected_tool(focused_pane());
+}
+
+ViewportToolId QuaderViewportApi::selected_tool(ViewportPaneId pane) const {
+  return impl_->workspace->selected_tool(pane);
+}
+
+ViewportToolId QuaderViewportApi::preferred_selection_tool() const {
+  return preferred_selection_tool(focused_pane());
+}
+
+ViewportToolId
+QuaderViewportApi::preferred_selection_tool(ViewportPaneId pane) const {
+  return impl_->workspace->preferred_selection_tool(pane);
+}
+
+QuaderApiVoidResult QuaderViewportApi::record_selected_tool(
+    ViewportPaneId pane, ViewportToolId tool) {
+  if (!valid_pane(pane)) {
+    return unavailable("The requested viewport pane is not valid.");
+  }
+  if (!viewport_tool_available(tool)) {
+    return unavailable("The requested viewport tool is unavailable.");
+  }
+  return runtime_status(impl_->workspace->record_selected_tool(pane, tool));
+}
+
+bool QuaderViewportApi::control(QuaderViewportControl control_id) const {
+  return control(focused_pane(), control_id);
+}
+
+bool QuaderViewportApi::control(ViewportPaneId pane,
+                                QuaderViewportControl control_id) const {
+  return impl_->workspace->control(pane, control_id);
+}
+
+bool QuaderViewportApi::control_overridden(
+    ViewportPaneId pane, QuaderViewportControl control_id) const {
+  return valid_pane(pane) && valid_control(control_id) &&
+         impl_->workspace->pane(pane)
+             .control_overrides[static_cast<std::size_t>(control_id)]
+             .has_value();
+}
+
+QuaderApiVoidResult QuaderViewportApi::set_control(
+    QuaderViewportControl control_id, bool enabled) {
+  return set_control(focused_pane(), control_id, enabled);
+}
+
+QuaderApiVoidResult QuaderViewportApi::set_control(
+    ViewportPaneId pane, QuaderViewportControl control_id, bool enabled) {
+  if (!valid_pane(pane) || !valid_control(control_id)) {
+    return unavailable("The requested viewport pane or control is not valid.");
+  }
+  if (control_id == QuaderViewportControl::ShowMeshGrid &&
+      !release_has_feature(ReleaseFeature::MeshGrid)) {
+    return unavailable(release_feature_unavailable_message());
+  }
+  return runtime_status(impl_->workspace->set_control(pane, control_id, enabled));
+}
+
+double QuaderViewportApi::rotation_snap_degrees() const {
+  return rotation_snap_degrees(focused_pane());
+}
+
+double QuaderViewportApi::rotation_snap_degrees(ViewportPaneId pane) const {
+  return impl_->workspace->rotation_snap_degrees(pane);
+}
+
+bool QuaderViewportApi::rotation_snap_overridden(ViewportPaneId pane) const {
+  return valid_pane(pane) &&
+         impl_->workspace->pane(pane).rotation_snap_override.has_value();
+}
+
+QuaderApiVoidResult QuaderViewportApi::set_rotation_snap_degrees(double degrees) {
+  return set_rotation_snap_degrees(focused_pane(), degrees);
+}
+
+QuaderApiVoidResult QuaderViewportApi::set_rotation_snap_degrees(
+    ViewportPaneId pane, double degrees) {
+  if (!valid_pane(pane) || !std::isfinite(degrees) || degrees <= 0.0) {
+    return unavailable("The rotation snap angle must be finite and positive.");
+  }
+  return runtime_status(impl_->workspace->set_rotation_snap_degrees(pane, degrees));
+}
+
+std::uint64_t QuaderViewportApi::control_revision() const {
+  return control_revision(focused_pane());
+}
+
+std::uint64_t QuaderViewportApi::control_revision(ViewportPaneId pane) const {
+  return impl_->workspace->control_revision(pane);
+}
+
 int QuaderViewportApi::grid_preset() const {
   return impl_->workspace->grid_preset();
 }
@@ -87,7 +203,12 @@ QuaderApiVoidResult QuaderViewportApi::set_grid_preset(int preset) {
 }
 
 QuaderTransformSpace QuaderViewportApi::transform_space() const {
-  switch (impl_->workspace->transform_space()) {
+  return transform_space(focused_pane());
+}
+
+QuaderTransformSpace
+QuaderViewportApi::transform_space(ViewportPaneId pane) const {
+  switch (impl_->workspace->transform_space(pane)) {
   case ViewportTransformSpace::Global:
     return QuaderTransformSpace::Global;
   case ViewportTransformSpace::Local:
@@ -98,18 +219,41 @@ QuaderTransformSpace QuaderViewportApi::transform_space() const {
 
 QuaderApiVoidResult
 QuaderViewportApi::set_transform_space(QuaderTransformSpace space) {
+  return set_transform_space(focused_pane(), space);
+}
+
+QuaderApiVoidResult QuaderViewportApi::set_transform_space(
+    ViewportPaneId pane, QuaderTransformSpace space) {
+  if (!valid_pane(pane) ||
+      (space != QuaderTransformSpace::Global &&
+       space != QuaderTransformSpace::Local)) {
+    return unavailable("The requested viewport pane or transform space is not valid.");
+  }
   const ViewportTransformSpace viewport_space =
       space == QuaderTransformSpace::Local ? ViewportTransformSpace::Local
                                            : ViewportTransformSpace::Global;
-  return runtime_status(impl_->workspace->set_transform_space(viewport_space));
+  return runtime_status(impl_->workspace->set_transform_space(pane, viewport_space));
 }
 
 QuaderApiVoidResult QuaderViewportApi::toggle_transform_space() {
-  return runtime_status(impl_->workspace->toggle_transform_space());
+  return toggle_transform_space(focused_pane());
+}
+
+QuaderApiVoidResult
+QuaderViewportApi::toggle_transform_space(ViewportPaneId pane) {
+  if (!valid_pane(pane)) {
+    return unavailable("The requested viewport pane is not valid.");
+  }
+  return runtime_status(impl_->workspace->toggle_transform_space(pane));
 }
 
 std::uint64_t QuaderViewportApi::transform_space_revision() const {
   return impl_->workspace->transform_space_revision();
+}
+
+std::uint64_t
+QuaderViewportApi::transform_space_revision(ViewportPaneId pane) const {
+  return impl_->workspace->transform_space_revision(pane);
 }
 
 QuaderShadingMode QuaderViewportApi::shading_mode(ViewportPaneId pane) const {
@@ -257,6 +401,49 @@ QuaderApiVoidResult QuaderCameraHandle::focus_origin() {
 QuaderViewportHandle::QuaderViewportHandle(QuaderViewportApi& viewports, ViewportPaneId pane)
     : viewports_(viewports)
     , pane_(pane) {}
+
+QuaderApiVoidResult QuaderViewportHandle::focus() {
+  return viewports_.focus_pane(pane_);
+}
+
+ViewportToolId QuaderViewportHandle::selected_tool() const {
+  return viewports_.selected_tool(pane_);
+}
+
+ViewportToolId QuaderViewportHandle::preferred_selection_tool() const {
+  return viewports_.preferred_selection_tool(pane_);
+}
+
+bool QuaderViewportHandle::control(QuaderViewportControl control_id) const {
+  return viewports_.control(pane_, control_id);
+}
+
+QuaderApiVoidResult QuaderViewportHandle::set_control(
+    QuaderViewportControl control_id, bool enabled) {
+  return viewports_.set_control(pane_, control_id, enabled);
+}
+
+double QuaderViewportHandle::rotation_snap_degrees() const {
+  return viewports_.rotation_snap_degrees(pane_);
+}
+
+QuaderApiVoidResult
+QuaderViewportHandle::set_rotation_snap_degrees(double degrees) {
+  return viewports_.set_rotation_snap_degrees(pane_, degrees);
+}
+
+QuaderTransformSpace QuaderViewportHandle::transform_space() const {
+  return viewports_.transform_space(pane_);
+}
+
+QuaderApiVoidResult
+QuaderViewportHandle::set_transform_space(QuaderTransformSpace space) {
+  return viewports_.set_transform_space(pane_, space);
+}
+
+std::uint64_t QuaderViewportHandle::control_revision() const {
+  return viewports_.control_revision(pane_);
+}
 
 QuaderApiVoidResult
 QuaderViewportHandle::set_shading_mode(QuaderShadingMode mode) {

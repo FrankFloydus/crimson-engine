@@ -56,6 +56,7 @@ struct ViewportToolOverlaySourceInputs final {
   const ModelingBoxPreview *box_preview = nullptr;
   /// Borrows the picking owner's physical-pixel layout and publication revision.
   const PrimitiveCreationControlsFrame *primitive_creation_controls = nullptr;
+  /// Pane-derived idle frame, or the input owner's frame in its initiating pane.
   const quader_editor_core::TransformGizmoFrame *transform_gizmo = nullptr;
   const std::vector<quader_editor_core::SelectionOverlayPoint> *
       transform_snap_points = nullptr;

@@ -427,17 +427,24 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
             std::string::npos);
   EXPECT_NE(transform_gizmo.find(".precision = frame.input.modifiers.primary"),
             std::string::npos);
+  // The passive per-pane cache also builds frames and queries a pivot. These
+  // ordering guarantees apply to the interaction owner, whose captured drag
+  // pivot must win over fresh selection queries and hover picking.
+  const std::size_t interaction_frame =
+      transform_gizmo.find("TransformGizmoInteraction::handle_frame(");
+  ASSERT_NE(interaction_frame, std::string::npos);
   const std::size_t selection_center =
-      transform_gizmo.find("editor.query().selection_transform_pivot()");
+      transform_gizmo.find("editor.query().selection_transform_pivot()",
+                           interaction_frame);
   EXPECT_EQ(transform_gizmo.find(
                 "camera_navigation_frame && !dragging_ && "
                 "!pending_drag_.has_value()"),
             std::string::npos);
   ASSERT_NE(selection_center, std::string::npos);
   const std::size_t suppress_hover =
-      transform_gizmo.find("const bool suppress_hover");
+      transform_gizmo.find("const bool suppress_hover", interaction_frame);
   const std::size_t build_frame =
-      transform_gizmo.find("build_transform_gizmo_frame");
+      transform_gizmo.find("build_transform_gizmo_frame", interaction_frame);
   ASSERT_NE(suppress_hover, std::string::npos);
   ASSERT_NE(build_frame, std::string::npos);
   EXPECT_LT(selection_center, suppress_hover);
@@ -445,7 +452,7 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
   EXPECT_NE(transform_gizmo.find("frame.input_result.navigation_active ||"),
             std::string::npos);
   const std::size_t active_drag_pivot =
-      transform_gizmo.find("pivot = active_drag_pivot_");
+      transform_gizmo.find("pivot = active_drag_pivot_", interaction_frame);
   ASSERT_NE(active_drag_pivot, std::string::npos);
   EXPECT_LT(active_drag_pivot, selection_center);
   EXPECT_NE(transform_gizmo.find("active_drag_pivot_ = preview.value().pivot"),
@@ -771,8 +778,15 @@ TEST(ViewportToolGuardrailTests,
             std::string::npos);
   EXPECT_NE(selection.find("viewport_pointer_edge_after("),
             std::string::npos);
-  EXPECT_NE(selection.find("viewport_pointer_deadline_reached("),
+  EXPECT_EQ(selection.find("viewport_pointer_deadline_reached("),
+            std::string::npos)
+      << "Ordinary selection must publish on release without waiting for the "
+         "native double-click interval.";
+  EXPECT_NE(selection.find("selection_click_has_depth_double_click"),
             std::string::npos);
+  EXPECT_NE(selection.find(".expected_history_revision ="),
+            std::string::npos)
+      << "A recognized depth double must retain guarded gesture coalescing.";
   EXPECT_NE(selection.find("box_release_suppression_.consume("),
             std::string::npos);
   EXPECT_NE(panel_header.find("NativeViewportToolCoordinator"),

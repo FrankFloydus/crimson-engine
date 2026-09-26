@@ -2839,7 +2839,8 @@ struct QtSettingsDialog::Impl {
       rows.reserve(catalog.size());
       for (std::size_t index = 0u; index < catalog.size(); ++index) {
         const QuaderKeybindingCatalogEntry &entry = catalog[index];
-        if (!release_allows_input_target(entry.action_id) ||
+        if (!entry.editable ||
+            !release_allows_input_target(entry.action_id) ||
             !release_presents_command(entry.action_id)) {
           continue;
         }

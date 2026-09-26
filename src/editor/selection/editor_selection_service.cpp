@@ -452,7 +452,9 @@ EditorSelectionService::try_delete_sub_selection() {
 }
 
 DocumentCommandResult EditorSelectionService::apply_scene_selection_state(
-    SceneSelectionState selection, bool preserve_selection_mode) {
+    SceneSelectionState selection, bool preserve_selection_mode,
+    std::uint64_t gesture_merge_key,
+    std::optional<std::uint64_t> expected_history_revision) {
   const auto preflight = selection_edit_preflight();
   if (!preflight.ok) {
     return {.ok = false, .message = preflight.message};
@@ -473,7 +475,15 @@ DocumentCommandResult EditorSelectionService::apply_scene_selection_state(
   }
   return document_commands_.select_entities(
       std::move(selection.selected), selection.active,
-      SceneSelectionApplicationMode::UndoableCommand, publish);
+      SceneSelectionApplicationMode::UndoableCommand, publish,
+      {.merge_key = gesture_merge_key == 0
+                        ? std::string{}
+                        : "selection-click/" + std::to_string(gesture_merge_key)},
+      expected_history_revision);
+}
+
+std::uint64_t EditorSelectionService::selection_history_revision() const {
+  return document_commands_.history_revision();
 }
 
 DocumentCommandResult
@@ -534,7 +544,10 @@ DocumentCommandResult EditorSelectionService::publish_scene_selection(
 
 DocumentCommandResult
 EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
-                                            EntityId active) {
+                                            EntityId active,
+                                            std::uint64_t gesture_merge_key,
+                                            std::optional<std::uint64_t>
+                                                expected_history_revision) {
   QDR_PROFILE_FUNCTION();
   const ModelingSelectionSummary before = modeling_.selection_summary();
   SceneSelectionState selection;
@@ -563,7 +576,8 @@ EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
     selection = make_user_scene_selection(scene_, entities, active);
   }
   DocumentCommandResult result =
-      apply_scene_selection_state(std::move(selection));
+      apply_scene_selection_state(std::move(selection), false, gesture_merge_key,
+                                  expected_history_revision);
   return merge_modeling_selection_change(result, before,
                                          modeling_.selection_summary());
 }
@@ -1329,7 +1343,9 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     }
     if (selection_mode_uses_scene_document(selection_mode)) {
       return scene_pick_selection_result(kInvalidEntityId, selection_mode,
-                                         request.policy, baseline);
+                                         request.policy, baseline,
+                                         request.gesture_merge_key,
+                                         request.expected_history_revision);
     }
     // Blender-style edge loop/ring gestures are inert when the pointer misses.
     if (edge_traversal != ModelingEdgeSelectionTraversal::None) {
@@ -1396,7 +1412,9 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       // a spatial miss; an explicit target has no source occurrence and keeps
       // the checked invalid-target failure below.
       return scene_pick_selection_result(kInvalidEntityId, selection_mode,
-                                         request.policy, baseline);
+                                         request.policy, baseline,
+                                         request.gesture_merge_key,
+                                         request.expected_history_revision);
     }
     const bool selectable = scene_target_selectable(resolved_entity);
     // Canonical definition members inherit a hidden storage root. During an
@@ -1418,7 +1436,8 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
                                 ? nearest_group_ancestor(resolved_entity)
                                 : resolved_entity;
     return scene_pick_selection_result(target, selection_mode, request.policy,
-                                       baseline);
+                                       baseline, request.gesture_merge_key,
+                                       request.expected_history_revision);
   }
 
   if (winner.domain == ResolvedSelectionDomain::RegisteredSubElement) {
@@ -2137,7 +2156,9 @@ ResolvedSelectionApplyResult
 EditorSelectionService::scene_pick_selection_result(
     EntityId target_entity, ModelingSelectionMode mode,
     const ModelingPickSelectRequest &request,
-    const EditorSelectionBoxBaseline *baseline) {
+    const EditorSelectionBoxBaseline *baseline,
+    std::uint64_t gesture_merge_key,
+    std::optional<std::uint64_t> expected_history_revision) {
   if (!scene_target_selectable(target_entity)) {
     target_entity = kInvalidEntityId;
   }
@@ -2182,7 +2203,7 @@ EditorSelectionService::scene_pick_selection_result(
     command = modeling_command_result_from_document(set_scene_selection(
         std::span<const EntityId>(resolved.selected.data(),
                                   resolved.selected.size()),
-        resolved.active));
+        resolved.active, gesture_merge_key, expected_history_revision));
   }
 
   const ModelingSelectionSummary current = summary();

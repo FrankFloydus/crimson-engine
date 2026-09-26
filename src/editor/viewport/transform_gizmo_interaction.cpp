@@ -18,6 +18,7 @@
 #include "editor/viewport/viewport_surface_occlusion_policy.hpp"
 #include "editor/viewport/viewport_vertex_snap_aggregation.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "render/render_signature_builder.hpp"
 #include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
@@ -90,12 +91,14 @@ quader_poly::Transform3 runtime_orientation(
 }
 
 quader_editor_core::TransformGizmoFrameInput
-make_gizmo_input(const ViewportInteractionFrame &frame, ViewportToolId tool,
+make_gizmo_input(const ViewportCameraController &camera,
+                  const ViewportSettings &settings, QVec2 viewport_size,
+                  int grid_preset, float raster_scale, ViewportToolId tool,
                   QVec3 pivot, quader_poly::Transform3 orientation,
                   quader_editor_core::TransformAxis active_axis,
                   quader_editor_core::TransformAxis hover_axis) {
   const float viewport_pixel_scale =
-      viewport_sanitized_pixel_scale(frame.viewport_pixel_scale);
+      viewport_sanitized_pixel_scale(raster_scale);
   quader_editor_core::TransformGizmoFrameInput input;
   input.tool = viewport_tool_interaction_tool(tool);
   input.active_axis = active_axis;
@@ -105,9 +108,9 @@ make_gizmo_input(const ViewportInteractionFrame &frame, ViewportToolId tool,
   input.pivot = pivot;
   input.orientation = orientation;
   input.camera = ViewportCameraAdapter::runtime_camera(
-      frame.camera, frame.input.viewport_size);
+      camera, viewport_size);
   input.grid_size =
-      viewport_grid_world_size_for_preset(frame.input.grid_preset);
+      viewport_grid_world_size_for_preset(grid_preset);
   input.gizmo_size_pixels =
       kOverlayTransformGizmoSizePixels * viewport_pixel_scale;
   input.pick_radius_pixels =
@@ -115,7 +118,7 @@ make_gizmo_input(const ViewportInteractionFrame &frame, ViewportToolId tool,
   input.move_center_radius_pixels =
       kOverlayTransformGizmoMoveCenterRadiusPixels * viewport_pixel_scale;
   input.gizmo_scale = std::max(
-      frame.settings.float_value(ViewportFloatSettingId::GizmoSize), 0.1f);
+      settings.float_value(ViewportFloatSettingId::GizmoSize), 0.1f);
   input.ring_segments = 64;
   return input;
 }
@@ -322,6 +325,129 @@ QuaderTransform3 curve_control_orientation(
 }
 
 } // namespace
+
+const quader_editor_core::TransformGizmoFrame *
+TransformGizmoPresentation::prepare(
+    QuaderEditorApi &editor, const TransformGizmoPresentationInput &input) {
+  const ViewportCurveInteractionPort *curve =
+      release_has_feature(ReleaseFeature::Curves) &&
+              input.curve_control_route_available
+          ? input.curve_tool
+          : nullptr;
+  const CurveToolPreviewState *curve_preview =
+      curve != nullptr && curve->controls_editable() &&
+              !curve->point_construction_dragging() &&
+              !curve->control_selection().empty()
+          ? &curve->preview_state()
+          : nullptr;
+  if (curve_preview != nullptr &&
+      (!curve_preview->active || !curve_preview->document.has_value())) {
+    curve_preview = nullptr;
+  }
+  if (!input.settings.bool_value(ViewportBoolSettingId::ShowGizmos) ||
+      (curve_preview == nullptr &&
+       !viewport_tool_supports_transform_gizmo(input.tool))) {
+    frame_signature_.reset();
+    frame_.reset();
+    return nullptr;
+  }
+
+  // Gate scene queries before reading bounds, selected controls, or orientation.
+  // Camera changes only invalidate the projected frame below.
+  const auto &selection = input.selection_state;
+  RenderSignatureBuilder selection_signature;
+  selection_signature.add_value(input.source_identity)
+      .add_value(reinterpret_cast<std::uintptr_t>(&editor))
+      .add_value(selection.scene_revision)
+      .add_value(selection.asset_revision)
+      .add_value(selection.pivot_revision)
+      .add_value(selection.summary.content_revision)
+      .add_value(selection.summary.selection_revision)
+      .add_value(static_cast<std::uint64_t>(selection.summary.mode))
+      .add_bool(selection.summary.has_selection)
+      .add_value(input.transform_preview_revision)
+      .add_value(static_cast<std::uint64_t>(input.transform_space))
+      .add_bool(curve_preview != nullptr);
+  if (curve_preview != nullptr) {
+    selection_signature.add_value(curve->control_selection_revision())
+        .add_value(curve_preview->document->content_identity().value)
+        .add_value(curve_preview->entity)
+        .add_value(static_cast<std::uint64_t>(curve_preview->modeling_object_id))
+        .add_mat4(curve_preview->world_transform)
+        .add_bool(curve_preview->drawing);
+  }
+  if (selection_signature_ != selection_signature.value()) {
+    selection_signature_ = selection_signature.value();
+    pivot_.reset();
+    orientation_ = {};
+    curve_controls_ = false;
+    if (curve_preview != nullptr) {
+      ++selection_pivot_recompute_count_;
+      pivot_ = curve->selected_controls_world_pivot();
+      if (pivot_.has_value()) {
+        curve_controls_ = true;
+        orientation_ =
+            curve_control_orientation(*curve_preview, input.transform_space);
+      }
+    }
+    if (!pivot_.has_value() && selection.summary.has_selection) {
+      ++selection_pivot_recompute_count_;
+      pivot_ = editor.query().selection_transform_pivot();
+      if (input.transform_space == QuaderTransformSpace::Local) {
+        orientation_ = editor.query().selection_transform_orientation()
+                           .value_or(QuaderTransform3{});
+      }
+    }
+  }
+  if (!pivot_.has_value()) {
+    frame_signature_.reset();
+    frame_.reset();
+    return nullptr;
+  }
+
+  const auto &camera = input.camera.state();
+  const auto pose = input.camera.pose();
+  const ViewportToolId tool = curve_controls_ ? ViewportToolId::Move : input.tool;
+  RenderSignatureBuilder frame_signature;
+  frame_signature.add_value(*selection_signature_)
+      .add_value(static_cast<std::uint64_t>(tool))
+      .add_value(input.pane_settings_revision)
+      .add_value(static_cast<std::uint64_t>(input.grid_preset))
+      .add_float(viewport_sanitized_pixel_scale(input.raster_scale))
+      .add_float(input.settings.float_value(ViewportFloatSettingId::GizmoSize))
+      .add_vec2(input.camera.viewport_size())
+      .add_vec3(pose.eye)
+      .add_vec3(pose.target)
+      .add_vec3(pose.up)
+      .add_value(static_cast<std::uint64_t>(camera.projection))
+      .add_float(camera.orthographic_size)
+      .add_float(camera.fov_degrees)
+      .add_float(camera.near_plane)
+      .add_float(camera.far_plane);
+  if (frame_signature_ != frame_signature.value()) {
+    frame_signature_ = frame_signature.value();
+    ++frame_build_count_;
+    const auto gizmo_input = make_gizmo_input(
+        input.camera, input.settings, input.camera.viewport_size(),
+        input.grid_preset, input.raster_scale, tool, *pivot_,
+        runtime_orientation(orientation_),
+        quader_editor_core::TransformAxis::None,
+        quader_editor_core::TransformAxis::None);
+    frame_ = quader_editor_core::build_transform_gizmo_frame(gizmo_input);
+  }
+  return frame_.has_value() && frame_->info.ok ? &*frame_ : nullptr;
+}
+
+void TransformGizmoPresentation::reset() {
+  selection_signature_.reset();
+  frame_signature_.reset();
+  pivot_.reset();
+  orientation_ = {};
+  curve_controls_ = false;
+  frame_.reset();
+  frame_build_count_ = 0;
+  selection_pivot_recompute_count_ = 0;
+}
 
 std::optional<TransformGizmoInteraction::CurveControlSelectionSnapshot>
 TransformGizmoInteraction::selected_curve_controls(
@@ -814,7 +940,8 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
   }();
 
   quader_editor_core::TransformGizmoFrameInput gizmo_input = make_gizmo_input(
-      frame, tool, pivot, orientation,
+      frame.camera, frame.settings, frame.input.viewport_size,
+      frame.input.grid_preset, frame.viewport_pixel_scale, tool, pivot, orientation,
       dragging_ ? active_axis_
                 : (pending_drag_.has_value()
                        ? pending_drag_->axis

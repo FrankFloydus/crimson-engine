@@ -615,6 +615,12 @@ Tests: [transform/texture workflows](tests/editor_api_tests.cpp),
 - Perspective/orthographic shading choices are session-only per-pane slots; temporary Alt-orbit orthographic
   snaps retain the perspective slot. Explicitly selecting that same axis still transitions to a
   manual orthographic view.
+- Orthographic ground-grid bounds must project the actual camera right/up basis onto the grid plane.
+  Top/Bottom Alt-orbit snaps can retain a quarter-turn roll, exchanging the visible width and height;
+  using only the named axis clips wide viewports. The ground-grid intensity follows the actual
+  projection, including temporary snaps, while the perspective rectangle and Mesh Grid stay separate.
+  See [placement policy](src/viewport/viewport_grid_placement_policy.hpp) and
+  `ViewportGridPlacementPolicyTests` / `RenderGroundGridRuntimeTests`.
 
 Owners: [scene occurrence projection](src/scene/scene_mesh_occurrence_projection.cpp),
 [viewport workspace](src/viewport/viewport_workspace_service.cpp).

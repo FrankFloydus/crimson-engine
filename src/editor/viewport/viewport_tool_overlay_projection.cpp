@@ -382,7 +382,7 @@ std::uint64_t tool_overlay_publication_revision(
       .add_bool(inputs.radial_array_center_visible)
       .add_float(viewport_sanitized_pixel_scale(inputs.raster_scale));
   const bool transform_gizmo_visible =
-      inputs.interaction_pane && inputs.gizmos_visible &&
+      inputs.gizmos_visible &&
       !inputs.pivot_handle_editing && inputs.transform_gizmo != nullptr;
   const bool marquee_visible =
       inputs.interaction_pane && inputs.overlays_visible &&
@@ -412,21 +412,22 @@ std::uint64_t tool_overlay_publication_revision(
     if (inputs.tool_overlay_visible) {
       add_box_preview(signature, inputs.box_preview);
     }
-    if (transform_gizmo_visible) {
-      signature.add_value(revisions.modeling_content)
-          .add_value(revisions.modeling_selection)
-          .add_value(revisions.modeling_transform_preview)
-          .add_value(revisions.scene_transform)
-          .add_value(revisions.scene_selection)
-          .add_value(revisions.transform_space)
-          .add_value(revisions.selection_pivot)
-          .add_value(revisions.curve_preview);
-      add_gizmo_info(signature, inputs.transform_gizmo);
-    }
     if (inputs.overlays_visible) {
       add_snap_points(signature, inputs.transform_snap_points);
       add_selection_marquee(signature, inputs.selection_marquee);
     }
+  }
+  if (transform_gizmo_visible) {
+    signature.add_value(revisions.active_tool)
+        .add_value(revisions.modeling_content)
+        .add_value(revisions.modeling_selection)
+        .add_value(revisions.modeling_transform_preview)
+        .add_value(revisions.scene_transform)
+        .add_value(revisions.scene_selection)
+        .add_value(revisions.transform_space)
+        .add_value(revisions.selection_pivot)
+        .add_value(revisions.curve_preview);
+    add_gizmo_info(signature, inputs.transform_gizmo);
   }
   add_pivot_handle(signature, inputs.pivot_handle);
   add_linear_array_handle(signature, inputs.linear_array_handle);
@@ -471,11 +472,6 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
       ViewportToolOverlayProjection::append_primitive_creation_controls(
           frame, *inputs_.overlay_camera, *inputs_.primitive_creation_controls);
     }
-    if (inputs_.gizmos_visible && !inputs_.pivot_handle_editing &&
-        inputs_.transform_gizmo != nullptr) {
-      ViewportToolOverlayProjection::append_transform_gizmo(
-          frame, *inputs_.overlay_camera, *inputs_.transform_gizmo);
-    }
     if (inputs_.overlays_visible) {
       if (inputs_.transform_snap_points != nullptr) {
         SelectionOverlayProjection::append_world_space_overlay_points(
@@ -487,6 +483,11 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
             inputs_.raster_scale);
       }
     }
+  }
+  if (inputs_.gizmos_visible && !inputs_.pivot_handle_editing &&
+      inputs_.transform_gizmo != nullptr) {
+    ViewportToolOverlayProjection::append_transform_gizmo(
+        frame, *inputs_.overlay_camera, *inputs_.transform_gizmo);
   }
   if (inputs_.viewport_camera != nullptr && inputs_.pivot_handle != nullptr) {
     ViewportToolOverlayProjection::append_pivot_handle(

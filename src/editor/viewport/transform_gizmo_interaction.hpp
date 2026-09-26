@@ -36,6 +36,46 @@ struct TransformGizmoSelectionCacheStats {
   std::uint64_t curve_control_cache_hit_count = 0;
 };
 
+/** Read-only inputs for one pane's idle transform-gizmo presentation. */
+struct TransformGizmoPresentationInput final {
+  const ViewportCameraController &camera;
+  const ViewportSettings &settings;
+  const ViewportInteractionSelectionState &selection_state;
+  ViewportToolId tool = ViewportToolId::Select;
+  QuaderTransformSpace transform_space = QuaderTransformSpace::Global;
+  int grid_preset = 0;
+  float raster_scale = 1.0f;
+  std::uint64_t transform_preview_revision = 0;
+  std::uint64_t pane_settings_revision = 0;
+  std::uintptr_t source_identity = 0;
+  const ViewportCurveInteractionPort *curve_tool = nullptr;
+  bool curve_control_route_available = false;
+};
+
+/** Retains a pane's derived gizmo without owning input or a modeling operation. */
+class TransformGizmoPresentation final {
+public:
+  [[nodiscard]] const quader_editor_core::TransformGizmoFrame *
+  prepare(QuaderEditorApi &editor, const TransformGizmoPresentationInput &input);
+  void reset();
+  [[nodiscard]] std::uint64_t frame_build_count() const {
+    return frame_build_count_;
+  }
+  [[nodiscard]] std::uint64_t selection_pivot_recompute_count() const {
+    return selection_pivot_recompute_count_;
+  }
+
+private:
+  std::optional<std::uint64_t> selection_signature_;
+  std::optional<std::uint64_t> frame_signature_;
+  std::optional<QVec3> pivot_;
+  QuaderTransform3 orientation_;
+  bool curve_controls_ = false;
+  std::optional<quader_editor_core::TransformGizmoFrame> frame_;
+  std::uint64_t frame_build_count_ = 0;
+  std::uint64_t selection_pivot_recompute_count_ = 0;
+};
+
 /**
  * Owns transform gizmo hit testing and transform drag lifecycle routing for viewport frames.
  */

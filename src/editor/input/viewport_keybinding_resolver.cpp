@@ -617,7 +617,7 @@ void record_selection_click_provenance(
     return;
   }
 
-  input.selection_click_delay_for_double_click = false;
+  input.selection_click_has_depth_double_click = false;
   input.selection_click_modifiers = {};
   if (handled || input.keybinding_input_consumed) {
     return;
@@ -628,7 +628,7 @@ void record_selection_click_provenance(
   if (!has_left_mouse_depth_double_click_binding(editor, state, input, click)) {
     return;
   }
-  input.selection_click_delay_for_double_click = true;
+  input.selection_click_has_depth_double_click = true;
   input.selection_click_modifiers = {
       .primary = chord.primary, .shift = chord.shift, .alt = chord.alt};
 }
@@ -719,7 +719,7 @@ void ViewportKeybindingResolver::resolve(
   input.material_transfer_edges.clear();
   input.curve_conversion_edges.clear();
   input.command_pointer_edges.clear();
-  input.selection_click_delay_for_double_click = false;
+  input.selection_click_has_depth_double_click = false;
   input.selection_click_modifiers = {};
   input.cycle_selection_depth_pressed = false;
   input.cycle_selection_depth_modifiers = {};

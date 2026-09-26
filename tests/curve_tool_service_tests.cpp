@@ -139,7 +139,6 @@ struct CurveToolHarness {
 
   ViewportNativeToolInteractionResult frame(bool pressed, bool down,
                                              bool released,
-                                             bool gizmo = false,
                                              bool suppress_hover = false) {
     input.pointer_pressed_edges.clear();
     input.pointer_released_edges.clear();
@@ -166,7 +165,6 @@ struct CurveToolHarness {
         nullptr, nullptr, &session.point_placement(), camera,
         {.input = input,
          .input_result = input_result,
-         .navigation_gizmo_consumed = gizmo,
          .suppress_hover_work = suppress_hover,
          .handles_visible = handles_visible,
          .scene_surface_revision = scene_surfaces != nullptr
@@ -2154,8 +2152,6 @@ TEST(CurveToolServiceTests, PointerCaptureBlocksSelectionAndCancelsForNavigation
   EXPECT_EQ(harness.session.curve().point_count(), 0u);
   harness.input.text_input_active = false;
   EXPECT_TRUE(harness.frame(true, true, false, true).curve_consumed);
-  EXPECT_EQ(harness.session.curve().point_count(), 0u);
-  EXPECT_TRUE(harness.frame(true, true, false, false, true).curve_consumed);
   EXPECT_EQ(harness.session.curve().point_count(), 0u);
 
   const auto press = harness.frame(true, true, false);
@@ -4558,7 +4554,7 @@ TEST(CurveToolServiceTests,
 }
 
 TEST(CurveToolServiceTests,
-     NavigationButtonPressRebindingsSuppressTheirCompetingDrag) {
+     FixedNavigationPressBindingsRejectReassignmentWhileFlyRemainsEditable) {
   /// Describes one press binding that competes with a navigation drag.
   struct BindingCase {
     std::string_view press;
@@ -4584,8 +4580,22 @@ TEST(CurveToolServiceTests,
     ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
     const QuaderKeybindingActionKey action{
         "viewport.curve.toggle_point_smoothness", "viewport.tool.curve"};
-    ASSERT_TRUE(harness.editor.preferences().set_action_shortcut(
-        action, std::string(entry.press)).ok());
+    const auto assigned = harness.editor.preferences().set_action_shortcut(
+        action, std::string(entry.press));
+    if (entry.navigation != ViewportInputActionKind::Fly) {
+      EXPECT_FALSE(assigned.ok());
+      EXPECT_FALSE(assigned.changed());
+      harness.resolve_chords({entry.press, entry.drag});
+      EXPECT_TRUE(harness.input.curve_conversion_edges.empty());
+      EXPECT_EQ(harness.input.navigation_bindings.orbit_pressed,
+                entry.navigation == ViewportInputActionKind::Orbit);
+      EXPECT_EQ(harness.input.navigation_bindings.orbit_snap_pressed,
+                entry.navigation == ViewportInputActionKind::OrbitSnap);
+      EXPECT_EQ(harness.input.navigation_bindings.pan_pressed,
+                entry.navigation == ViewportInputActionKind::Pan);
+      continue;
+    }
+    ASSERT_TRUE(assigned.ok()) << assigned.error_message();
     harness.session.history().clear();
     auto &curve = harness.session.curve();
     const auto before = *curve.preview_state().document;
@@ -4751,7 +4761,7 @@ TEST(CurveToolServiceTests,
 }
 
 TEST(CurveToolServiceTests,
-     DeferredNavigationButtonClicksOwnTheirCompetingDragThroughRelease) {
+     FixedNavigationClickBindingsRejectReassignmentWhileFlyRemainsEditable) {
   /// Describes one deferred click that shares a button with navigation.
   struct BindingCase {
     std::string_view click;
@@ -4788,8 +4798,22 @@ TEST(CurveToolServiceTests,
                         .ok());
       }
     }
-    ASSERT_TRUE(harness.editor.preferences().set_action_shortcut(
-        action, std::string(entry.click)).ok());
+    const auto assigned = harness.editor.preferences().set_action_shortcut(
+        action, std::string(entry.click));
+    if (entry.navigation != ViewportInputActionKind::Fly) {
+      EXPECT_FALSE(assigned.ok());
+      EXPECT_FALSE(assigned.changed());
+      harness.resolve_chords({entry.press, entry.drag});
+      EXPECT_TRUE(harness.input.curve_conversion_edges.empty());
+      EXPECT_EQ(harness.input.navigation_bindings.orbit_pressed,
+                entry.navigation == ViewportInputActionKind::Orbit);
+      EXPECT_EQ(harness.input.navigation_bindings.orbit_snap_pressed,
+                entry.navigation == ViewportInputActionKind::OrbitSnap);
+      EXPECT_EQ(harness.input.navigation_bindings.pan_pressed,
+                entry.navigation == ViewportInputActionKind::Pan);
+      continue;
+    }
+    ASSERT_TRUE(assigned.ok()) << assigned.error_message();
     harness.session.history().clear();
     auto &curve = harness.session.curve();
     const auto before = *curve.preview_state().document;
@@ -5044,7 +5068,7 @@ TEST(CurveToolServiceTests, ReboundClicksReserveThePressAndOnlyConvertTheSameAnc
 }
 
 TEST(CurveToolServiceTests, InterruptedDeferredConversionLeavesNoAuthoredEdit) {
-  for (const int interruption : {0, 1, 2, 3}) {
+  for (const int interruption : {0, 1, 2}) {
     SCOPED_TRACE(interruption);
     CurveToolHarness harness;
     harness.make_curve();
@@ -5071,9 +5095,8 @@ TEST(CurveToolServiceTests, InterruptedDeferredConversionLeavesNoAuthoredEdit) {
       ASSERT_TRUE(harness.input_result.camera_changed);
     }
     harness.input.text_input_active = interruption == 1;
-    harness.input.pointer_interaction_canceled = interruption == 3;
-    (void)harness.frame(false, interruption != 3, interruption == 3,
-                        interruption == 2);
+    harness.input.pointer_interaction_canceled = interruption == 2;
+    (void)harness.frame(false, interruption != 2, interruption == 2);
     harness.input_result = {};
     harness.input.text_input_active = false;
     harness.input.pointer_interaction_canceled = false;

@@ -39,6 +39,9 @@ public:
       quader_editor_core::PreviewTransactionKind kind) const;
   [[nodiscard]] ModelingToolSettingsTarget active_runtime_tool_target(
       const quader_editor_core::EditorRuntimeStatus &runtime_status) const;
+  /// Describes an idle selected tool without changing the executing runtime.
+  [[nodiscard]] ModelingToolSettingsTarget selected_runtime_tool_target(
+      quader_editor_core::ViewportInteractionTool tool) const;
 
 private:
   std::string active_preview_action_id_;

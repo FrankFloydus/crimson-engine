@@ -93,6 +93,10 @@ std::uint64_t ground_grid_presentation_signature(
       .add_vec3(pose.up)
       .add_value(static_cast<std::uint32_t>(state.projection))
       .add_float(state.orthographic_size)
+      .add_float(settings.float_value(
+          state.projection == ViewportProjection::Orthographic
+              ? ViewportFloatSettingId::Grid2DIntensity
+              : ViewportFloatSettingId::Grid3DIntensity))
       .add_value(viewport_width)
       .add_value(viewport_height)
       .add_float(std::max(grid_world_spacing, 0.0001f))
@@ -268,6 +272,12 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
                                                                        : 0.0f);
   ground_grid_material_instance_->setParameter("depthBiasAmount",
                                                kGroundGridDepthBias);
+  ground_grid_material_instance_->setParameter(
+      "gridIntensity",
+      settings.float_value(
+          controller.state().projection == ViewportProjection::Orthographic
+              ? ViewportFloatSettingId::Grid2DIntensity
+              : ViewportFloatSettingId::Grid3DIntensity));
   const float spacing = std::max(grid_world_spacing, 0.0001f);
   const float parent_spacing = std::max(kParentGridWorldSize, spacing);
   const InstanceEditStyle instance_edit_style =

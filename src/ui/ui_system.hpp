@@ -72,7 +72,6 @@ class QtOperationInputHints;
 class QtStatusMessage;
 class QtUnsavedConfirmationDialog;
 class QtViewportPanel;
-class QtViewportControlStrip;
 class QtProjectHomePage;
 class QtSceneWorkspace;
 class QtSelectionToolbar;
@@ -272,7 +271,6 @@ private:
   QtTextureToolbar *texture_toolbar_ = nullptr;
   QtToolToolbar *tool_toolbar_ = nullptr;
   QtViewportPanel *viewport_panel_ = nullptr;
-  QtViewportControlStrip *viewport_control_strip_ = nullptr;
   OutlinerPanel *outliner_panel_ = nullptr;
   InspectorPanel *inspector_panel_ = nullptr;
   LayerPanel *layer_panel_ = nullptr;
@@ -328,6 +326,7 @@ private:
   bool ui_settings_changed_ = false;
   std::string localized_locale_;
   std::uint64_t localized_revision_ = 0u;
+  std::uint64_t viewport_defaults_revision_ = 1u;
 
   /** Captures revisions that determine whether the retained outliner must refresh. */
   struct OutlinerPresentationStamp final {
@@ -369,6 +368,8 @@ private:
   };
   /** Captures the tool choice and effective bindings presented by the toolbar. */
   struct ToolbarToolPresentationStamp final {
+    ViewportPaneId pane = ViewportPaneId::Perspective;
+    std::uint64_t pane_control_revision = 0u;
     std::uint64_t active_tool_revision = 0u;
     std::uint64_t keybindings_revision = 0u;
     QuaderPrimitiveCreationShape preferred_primitive_shape =
@@ -378,12 +379,15 @@ private:
   };
   /** Captures the transform-space revision presented by the toolbar. */
   struct ToolbarTransformPresentationStamp final {
+    ViewportPaneId pane = ViewportPaneId::Perspective;
     std::uint64_t transform_space_revision = 0u;
     friend bool operator==(const ToolbarTransformPresentationStamp &,
                            const ToolbarTransformPresentationStamp &) = default;
   };
   /** Captures the active settings revision presented in the viewport. */
   struct ToolSettingsPresentationStamp final {
+    ViewportPaneId pane = ViewportPaneId::Perspective;
+    std::uint64_t pane_control_revision = 0u;
     std::uint64_t active_settings_revision = 0u;
     std::uint64_t operation_serial = 0u;
     std::uint64_t active_tool_revision = 0u;

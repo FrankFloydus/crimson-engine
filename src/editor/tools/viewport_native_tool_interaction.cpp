@@ -72,8 +72,7 @@ bool native_pointer_interrupted(
          !frame.input.viewport_focused || frame.input.text_input_active ||
          frame.input_result.cancel_requested ||
          frame.input_result.navigation_active ||
-         frame.input_result.camera_changed || frame.input_result.view_changed ||
-         frame.navigation_gizmo_consumed;
+         frame.input_result.camera_changed || frame.input_result.view_changed;
 }
 
 const ViewportPointerButtonEdge *matching_left_release(
@@ -961,7 +960,6 @@ ViewportNativeToolInteraction::handle_frame(
                            !input_result.navigation_active &&
                            !input_result.camera_changed &&
                            !input_result.view_changed &&
-                           !frame.navigation_gizmo_consumed &&
                            !frame.suppress_hover_work;
     const float grid_size =
         viewport_grid_world_size_for_preset(input.grid_preset);
@@ -1123,8 +1121,7 @@ ViewportNativeToolInteraction::handle_frame(
 
   if (pivot != nullptr) {
     const bool blocked_by_navigation = input_result.fly_navigation_active ||
-                                       input_result.navigation_active ||
-                                       frame.navigation_gizmo_consumed;
+                                       input_result.navigation_active;
     if (input.quick_pivot_released) {
       pivot->end_quick_edit();
       if (pivot_handle_press_) {

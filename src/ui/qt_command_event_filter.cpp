@@ -102,7 +102,7 @@ bool suppress_settings_button_space(QuaderEditorApi &editor,
       dynamic_cast<const QAbstractButton *>(focus) == nullptr) {
     return false;
   }
-  const auto settings = editor.tools().active_settings();
+  const auto settings = editor.tools().settings_for_pane(editor.viewports().focused_pane());
   // An unassigned/remapped lifecycle key must not activate whichever button
   // happens to have focus. This reserves the Qt edge without inventing intent.
   return settings.active && (settings.apply_visible || settings.can_cancel);

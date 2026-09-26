@@ -288,17 +288,10 @@ void ViewportInteractionController::populate_operation_input_context(
     context.navigation = QuaderInputNavigation::Orbit;
   } else if (frame.input_router.pan_navigating()) {
     context.navigation = QuaderInputNavigation::Pan;
-  } else if (frame.input_result.camera_changed &&
-      (std::any_of(frame.input.navigation_bindings.wheel_events.begin(),
-                   frame.input.navigation_bindings.wheel_events.end(), [](const auto &wheel) {
-        return !wheel.consumed && std::abs(wheel.steps) > 0.000001f &&
-            (wheel.action == ViewportInputActionKind::Zoom ||
-             wheel.action == ViewportInputActionKind::ZoomToCursor);
-      }) || (frame.input.navigation_bindings.wheel_events.empty() &&
-             frame.input.mouse_wheel != 0.0f &&
-             (frame.input.navigation_bindings.zoom_wheel ||
-              frame.input.navigation_bindings.zoom_to_cursor_wheel)))) {
-    context.navigation = QuaderInputNavigation::Zoom;
+  } else {
+    // A wheel tick is an instantaneous action, not a held navigation mode.
+    // Keep the idle/tool hints instead of replacing them for one frame.
+    context.navigation = QuaderInputNavigation::None;
   }
   if (context.navigation != QuaderInputNavigation::None) return;
   tool_runtime_.populate_operation_input_context(context);
@@ -1388,8 +1381,6 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   output.curve_gizmo_prepass =
       !light_range_prepass && curve != nullptr && curve->controls_editable() &&
       !frame.cancel_consumed &&
-      (!frame.native_tool.navigation_gizmo_consumed ||
-       curve_gizmo_pointer_active) &&
       (curve_gizmo_pointer_active ||
        (curve_gizmo_start_allowed && !native_tools.pointer_dragging() &&
         interaction.input.curve_conversion_edges.empty() &&
@@ -1479,7 +1470,6 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   if (!light_range_prepass && !output.curve_gizmo_prepass) {
     output.before_tool =
         frame.cancel_consumed ||
-                frame.native_tool.navigation_gizmo_consumed ||
                 output.native_tool.blocks_transform_gizmo
             ? ViewportBeforeToolInteractionResult{.gizmo_consumed = true}
             : handle_before_active_tool_impl(editor, interaction, curve,

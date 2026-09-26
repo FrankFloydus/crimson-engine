@@ -199,8 +199,12 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
   EXPECT_EQ(primitive.group, CommandPresentationGroup::Creation);
   EXPECT_EQ(primitive.activation,
             CommandPresentationActivation::InteractiveTool);
-  EXPECT_TRUE(quader::has_command_presentation_surface(
+  EXPECT_FALSE(quader::has_command_presentation_surface(
       primitive, CommandPresentationSurface::MainMenu));
+  EXPECT_TRUE(quader::has_command_presentation_surface(
+      primitive, CommandPresentationSurface::Toolbar));
+  EXPECT_TRUE(quader::has_command_presentation_surface(
+      primitive, CommandPresentationSurface::CommandPalette));
   EXPECT_EQ(primitive.settings_route, "tool_settings");
 
   const CommandPresentationDescriptor &legacy_primitive = require_presentation(
@@ -212,8 +216,10 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
                            quader::quader_command::kToolsActivateCreateCone,
                            quader::quader_command::kToolsActivateCreateTorus}) {
     const auto &presentation = require_presentation(shape);
-    EXPECT_TRUE(quader::has_command_presentation_surface(
+    EXPECT_FALSE(quader::has_command_presentation_surface(
         presentation, CommandPresentationSurface::MainMenu));
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        presentation, CommandPresentationSurface::Toolbar));
     EXPECT_TRUE(quader::has_command_presentation_surface(
         presentation, CommandPresentationSurface::CommandPalette));
     EXPECT_FALSE(quader::has_command_presentation_surface(

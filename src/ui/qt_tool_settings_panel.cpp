@@ -544,7 +544,15 @@ struct QtToolSettingsPanel::Impl {
     }
 
     const std::uint64_t generation = binding_generation_;
-    const QuaderToolSettingsTarget target = editor_->tools().active_settings();
+    const auto pane = editor_->viewports().focused_pane();
+    const bool pane_changed = pane != target_pane_;
+    if (pane_changed) {
+      // A queued edit belongs to its original presentation. Focus transfer must
+      // not activate that tool or deliver its delayed draft to the next pane.
+      discard_pending_number_dispatches();
+    }
+    target_pane_ = pane;
+    const QuaderToolSettingsTarget target = editor_->tools().settings_for_pane(pane);
     if (generation != binding_generation_ || editor_ == nullptr) {
       return;
     }
@@ -560,12 +568,12 @@ struct QtToolSettingsPanel::Impl {
     }
 
     const std::uint64_t presentation_serial =
-        editor_->tools().active_settings_presentation_origin().serial;
+        editor_->tools().settings_presentation_serial(target_pane_);
     const bool new_activation =
-        inactive_presented_ ||
+        inactive_presented_ || pane_changed ||
         target_presentation_serial_ != presentation_serial ||
         (last_target_.has_value() && last_target_->tool_id != target.tool_id);
-    if (!last_target_.has_value() ||
+    if (!last_target_.has_value() || pane_changed ||
         target_presentation_serial_ != presentation_serial ||
         !same_target_structure(*last_target_, target)) {
       rebuild(target);
@@ -574,7 +582,7 @@ struct QtToolSettingsPanel::Impl {
     }
     last_target_ = target;
     target_presentation_serial_ = presentation_serial;
-    target_tool_revision_ = editor_->tools().active_tool_revision();
+    target_tool_revision_ = editor_->tools().selected_tool_revision(target_pane_);
     if (new_activation) {
       set_expanded(true);
     }
@@ -654,7 +662,10 @@ struct QtToolSettingsPanel::Impl {
 
   [[nodiscard]] bool prepare_lifecycle_intent(
       QuaderEditorApi &editor, QuaderNativeToolSettingsIntent intent) {
-    if (editor_ != &editor || !presentation_is_current()) {
+    if (editor_ != &editor || !presentation_is_current() ||
+        !editor_->tools().pane_owns_executing_tool(target_pane_) ||
+        (intent == QuaderNativeToolSettingsIntent::Cancel && !last_target_->can_cancel) ||
+        (intent == QuaderNativeToolSettingsIntent::Apply && !last_target_->apply_visible)) {
       discard_pending_number_dispatches();
       return false;
     }
@@ -669,12 +680,12 @@ struct QtToolSettingsPanel::Impl {
     number_dispatch_failed_ = false;
     const std::uint64_t generation = binding_generation_;
     const std::uint64_t controls_generation = control_generation_;
-    const std::uint64_t tool_revision = editor_->tools().active_tool_revision();
+    const std::uint64_t tool_revision = editor_->tools().selected_tool_revision(target_pane_);
     const auto still_current = [&] {
       return editor_ == &editor && generation == binding_generation_ &&
              controls_generation == control_generation_ &&
              presentation_is_current() &&
-             editor_->tools().active_tool_revision() == tool_revision;
+             editor_->tools().selected_tool_revision(target_pane_) == tool_revision;
     };
     for (QWidget *widget = QApplication::focusWidget();
          widget != nullptr && panel_.isAncestorOf(widget);
@@ -717,9 +728,68 @@ struct QtToolSettingsPanel::Impl {
 private:
   [[nodiscard]] bool presentation_is_current() const {
     return editor_ != nullptr && has_active_target() &&
-           editor_->tools().active_tool_revision() == target_tool_revision_ &&
-           editor_->tools().active_settings_presentation_origin().serial ==
+           editor_->viewports().focused_pane() == target_pane_ &&
+           editor_->tools().selected_tool_revision(target_pane_) == target_tool_revision_ &&
+           editor_->tools().settings_presentation_serial(target_pane_) ==
                target_presentation_serial_;
+  }
+
+  /// Only an accepted mutation may acquire the pane's executing owner. Refresh
+  /// the retained source fence after that acquisition, not on focus or hover.
+  void observe_settings_mutation(const QuaderApiVoidResult &result,
+                                 std::uint64_t generation,
+                                 std::uint64_t controls_generation,
+                                 ViewportPaneId pane) {
+    if (!result.ok() || editor_ == nullptr || generation != binding_generation_ ||
+        controls_generation != control_generation_ || pane != target_pane_ ||
+        editor_->viewports().focused_pane() != pane) {
+      return;
+    }
+    target_presentation_serial_ = editor_->tools().settings_presentation_serial(pane);
+    target_tool_revision_ = editor_->tools().selected_tool_revision(pane);
+    for (auto &binding : controls_) {
+      if (binding.pending_number_lifecycle) {
+        binding.pending_number_lifecycle->presentation_serial = target_presentation_serial_;
+      }
+      for (auto &component : binding.vector3_components) {
+        if (component.pending_lifecycle) {
+          component.pending_lifecycle->presentation_serial = target_presentation_serial_;
+        }
+      }
+    }
+  }
+
+  template <class Value>
+  QuaderApiVoidResult set_pane_setting(std::string_view tool_id,
+                                      std::string_view control_id, Value value) {
+    const auto generation = binding_generation_;
+    const auto controls_generation = control_generation_;
+    const auto pane = target_pane_;
+    auto result = editor_->tools().set_setting(pane, tool_id, control_id, value);
+    observe_settings_mutation(result, generation, controls_generation, pane);
+    return result;
+  }
+
+  QuaderApiVoidResult set_pane_setting(std::string_view tool_id,
+                                      std::string_view control_id, double value,
+                                      QuaderToolSettingEditOptions options) {
+    const auto generation = binding_generation_;
+    const auto controls_generation = control_generation_;
+    const auto pane = target_pane_;
+    auto result = editor_->tools().set_setting(pane, tool_id, control_id, value,
+                                              std::move(options));
+    observe_settings_mutation(result, generation, controls_generation, pane);
+    return result;
+  }
+
+  QuaderApiVoidResult execute_pane_action(std::string_view tool_id,
+                                         std::string_view action_id) {
+    const auto generation = binding_generation_;
+    const auto controls_generation = control_generation_;
+    const auto pane = target_pane_;
+    auto result = editor_->tools().execute_action(pane, tool_id, action_id);
+    observe_settings_mutation(result, generation, controls_generation, pane);
+    return result;
   }
 
   void notify_presentation_changed() {
@@ -1061,14 +1131,14 @@ private:
     if (!binding.pending_number_value.has_value()) {
       if (editor_ == nullptr || !last_target_.has_value() ||
           !last_target_->active ||
-          editor_->tools().active_settings_presentation_origin().serial !=
+          editor_->tools().settings_presentation_serial(target_pane_) !=
               target_presentation_serial_) {
         return;
       }
       binding.pending_number_lifecycle = NumberDispatchLifecycle{
           .binding_generation = binding_generation_,
-          .settings_revision = editor_->tools().active_settings_revision(),
-          .active_tool_revision = editor_->tools().active_tool_revision(),
+          .settings_revision = editor_->tools().settings_revision(target_pane_),
+          .active_tool_revision = editor_->tools().selected_tool_revision(target_pane_),
           .presentation_serial = target_presentation_serial_,
           .tool_id = last_target_->tool_id,
           .merge_key = binding.continuous_number_merge_key,
@@ -1110,14 +1180,14 @@ private:
     if (!component.pending_value.has_value()) {
       if (editor_ == nullptr || !last_target_.has_value() ||
           !last_target_->active ||
-          editor_->tools().active_settings_presentation_origin().serial !=
+          editor_->tools().settings_presentation_serial(target_pane_) !=
               target_presentation_serial_) {
         return;
       }
       component.pending_lifecycle = NumberDispatchLifecycle{
           .binding_generation = binding_generation_,
-          .settings_revision = editor_->tools().active_settings_revision(),
-          .active_tool_revision = editor_->tools().active_tool_revision(),
+          .settings_revision = editor_->tools().settings_revision(target_pane_),
+          .active_tool_revision = editor_->tools().selected_tool_revision(target_pane_),
           .presentation_serial = target_presentation_serial_,
           .tool_id = last_target_->tool_id,
           .merge_key = component.continuous_merge_key,
@@ -1142,12 +1212,13 @@ private:
     }
     const NumberDispatchLifecycle &lifecycle =
         *binding.pending_number_lifecycle;
-    if (binding_generation_ != lifecycle.binding_generation ||
-        editor_->tools().active_settings_revision() !=
+    if (editor_->viewports().focused_pane() != target_pane_ ||
+        binding_generation_ != lifecycle.binding_generation ||
+        editor_->tools().settings_revision(target_pane_) !=
             lifecycle.settings_revision ||
-        editor_->tools().active_tool_revision() !=
+        editor_->tools().selected_tool_revision(target_pane_) !=
             lifecycle.active_tool_revision ||
-        editor_->tools().active_settings_presentation_origin().serial !=
+        editor_->tools().settings_presentation_serial(target_pane_) !=
             lifecycle.presentation_serial) {
       return false;
     }
@@ -1180,12 +1251,13 @@ private:
     }
     const NumberDispatchLifecycle &lifecycle =
         *component.pending_lifecycle;
-    if (binding_generation_ != lifecycle.binding_generation ||
-        editor_->tools().active_settings_revision() !=
+    if (editor_->viewports().focused_pane() != target_pane_ ||
+        binding_generation_ != lifecycle.binding_generation ||
+        editor_->tools().settings_revision(target_pane_) !=
             lifecycle.settings_revision ||
-        editor_->tools().active_tool_revision() !=
+        editor_->tools().selected_tool_revision(target_pane_) !=
             lifecycle.active_tool_revision ||
-        editor_->tools().active_settings_presentation_origin().serial !=
+        editor_->tools().settings_presentation_serial(target_pane_) !=
             lifecycle.presentation_serial ||
         last_target_->tool_id != lifecycle.tool_id ||
         last_target_->preview_active != lifecycle.preview_active) {
@@ -1202,9 +1274,9 @@ private:
       return;
     }
     const std::uint64_t settings_revision =
-        editor_->tools().active_settings_revision();
+        editor_->tools().settings_revision(target_pane_);
     const std::uint64_t active_tool_revision =
-        editor_->tools().active_tool_revision();
+        editor_->tools().selected_tool_revision(target_pane_);
     for (ControlWidget &binding : controls_) {
       if (binding.pending_number_lifecycle.has_value()) {
         binding.pending_number_lifecycle->settings_revision =
@@ -1251,16 +1323,16 @@ private:
     }
     const std::uint64_t generation = binding_generation_;
     const std::uint64_t controls_generation = control_generation_;
-    const std::uint64_t tool_revision = editor_->tools().active_tool_revision();
+    const std::uint64_t tool_revision = editor_->tools().selected_tool_revision(target_pane_);
     const std::uint64_t settings_revision =
-        editor_->tools().active_settings_revision();
+        editor_->tools().settings_revision(target_pane_);
     const auto dispatch = binding.number_dispatch;
     dispatch(
         value, {.merge_key = std::move(merge_key)});
     if (editor_ == nullptr || generation != binding_generation_ ||
         controls_generation != control_generation_ ||
         !presentation_is_current() ||
-        editor_->tools().active_tool_revision() != tool_revision) {
+        editor_->tools().selected_tool_revision(target_pane_) != tool_revision) {
       number_dispatch_failed_ = true;
       return;
     }
@@ -1273,7 +1345,7 @@ private:
         last_target_.has_value() &&
         control_index < last_target_->controls.size() &&
         value != last_target_->controls[control_index].number_value;
-    if (editor_->tools().active_settings_revision() != settings_revision ||
+    if (editor_->tools().settings_revision(target_pane_) != settings_revision ||
         differs_from_presented_owner) {
       synchronize_accepted_number(control_index, value);
     }
@@ -1292,7 +1364,7 @@ private:
              control_generation_ == controls_generation &&
              presentation_is_current();
     };
-    const auto target = editor->tools().active_settings();
+    const auto target = editor->tools().settings_for_pane(target_pane_);
     if (!binding_is_current()) {
       return;
     }
@@ -1358,13 +1430,13 @@ private:
     }
     const std::uint64_t generation = binding_generation_;
     const std::uint64_t controls_generation = control_generation_;
-    const std::uint64_t tool_revision = editor_->tools().active_tool_revision();
+    const std::uint64_t tool_revision = editor_->tools().selected_tool_revision(target_pane_);
     const auto dispatch = component.dispatch;
     dispatch(value, {.merge_key = std::move(merge_key)});
     if (editor_ == nullptr || generation != binding_generation_ ||
         controls_generation != control_generation_ ||
         !presentation_is_current() ||
-        editor_->tools().active_tool_revision() != tool_revision) {
+        editor_->tools().selected_tool_revision(target_pane_) != tool_revision) {
       number_dispatch_failed_ = true;
       return;
     }
@@ -1598,7 +1670,7 @@ private:
                            return;
                          }
                          const QuaderApiVoidResult result =
-                             editor_->tools().set_setting(tool_id, control_id,
+                             set_pane_setting(tool_id, control_id,
                                                           checked);
                          present_failure(editor_, "Tool settings update", result);
                          if (!result.ok()) {
@@ -1625,7 +1697,7 @@ private:
               return;
             }
             const QuaderApiVoidResult result =
-                editor_->tools().set_setting(tool_id, control_id, value,
+                set_pane_setting(tool_id, control_id, value,
                                              std::move(options));
             present_failure(editor_, "Tool settings update", result);
             if (!result.ok()) {
@@ -1892,7 +1964,7 @@ private:
               if (!presentation_is_current()) {
                 return;
               }
-              const QuaderApiVoidResult result = editor_->tools().set_setting(
+              const QuaderApiVoidResult result = set_pane_setting(
                   tool_id, component_id, value, std::move(options));
               present_failure(editor_, "Tool settings update", result);
               if (!result.ok()) {
@@ -1972,7 +2044,7 @@ private:
                     !presentation_is_current()) {
                   return;
                 }
-                const QuaderApiVoidResult result = editor_->tools().set_setting(
+                const QuaderApiVoidResult result = set_pane_setting(
                     tool_id, control_id, std::string_view(option_id));
                 present_failure(editor_, "Tool settings update", result);
                 if (!result.ok()) {
@@ -2020,7 +2092,7 @@ private:
               }
               const QByteArray option_id =
                   dropdown->itemData(index).toString().toUtf8();
-              const QuaderApiVoidResult result = editor_->tools().set_setting(
+              const QuaderApiVoidResult result = set_pane_setting(
                   tool_id, control_id,
                   std::string_view(option_id.constData(),
                                    static_cast<std::size_t>(option_id.size())));
@@ -2072,7 +2144,7 @@ private:
                              return;
                            }
                            const QuaderApiVoidResult result =
-                               editor_->tools().set_setting(tool_id, control_id,
+                               set_pane_setting(tool_id, control_id,
                                                             value);
                            present_failure(editor_, "Tool settings update", result);
                            if (!result.ok()) {
@@ -2110,7 +2182,7 @@ private:
                            return;
                          }
                          const QuaderApiVoidResult result =
-                             editor_->tools().execute_action(tool_id,
+                             execute_pane_action(tool_id,
                                                              action_id);
                          present_failure(editor_, "Tool settings action", result);
                          schedule_refresh();
@@ -2438,6 +2510,7 @@ private:
   QuaderEditorApi *editor_ = nullptr;
   std::uint64_t binding_generation_ = 0;
   std::uint64_t target_presentation_serial_ = 0;
+  ViewportPaneId target_pane_ = ViewportPaneId::Perspective;
   std::uint64_t target_tool_revision_ = 0;
   std::uint64_t control_generation_ = 0;
   bool number_dispatch_failed_ = false;

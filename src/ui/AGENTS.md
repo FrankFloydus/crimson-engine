@@ -44,6 +44,10 @@ file except through prior written authorization from Francesco Di Blasi.
   the corresponding owner revisions are unchanged.
 - `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
   cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
+  Each pane reserves a fixed control strip above its native render surface. Convert input and
+  overlay coordinates against that surface, not the full pane frame. Strip actions have independent
+  checked-state presentation and dispatch through the focused pane's public API; never share
+  checkable QActions between panes. Camera and Shading stay visible when icons overflow.
   Hover presents tool feedback without taking keyboard focus from panel editors. The first pointer
   press acquires focus and performs its action in the same gesture. One masked native orange border
   marks the focused pane, including single/maximized layouts; panel focus clears it. It shares the
@@ -54,10 +58,13 @@ file except through prior written authorization from Francesco Di Blasi.
   Object selection does not own or interrupt these edits. Gate retained refresh on the document
   settings revision before copying values; runtime replacement abandons dialogs and numeric
   gestures without accessing the old owners. See `tests/qt_environment_settings_popup_tests.cpp`.
-- Its retained settings overlay shows only actual settings controls and their actions, with the
+- Its single retained settings overlay follows the focused pane and queries that pane's selected
+  tool without activating it. It shows only actual settings controls and their actions, with the
   operation title in the disclosure header. No descriptions or empty shell are shown. Expansion
-  starts expanded for each activation; an explicit collapse lasts for that activation. Scene-owned origin
-  metadata pins the overlay to the initiating pane; hover and parameter edits never move it.
+  starts expanded for each activation; an explicit collapse lasts for that activation. Scene-owned
+  origin metadata protects the executing operation but does not pin the overlay's visual position.
+  Focus changes neither settle nor acquire a tool; settings mutations acquire the pane's tool using
+  the same settlement rules as viewport editing. Drafts retain their originating pane/session fence.
   Collapse settles field drafts without terminating the operation. See
   `tests/qt_viewport_settings_overlay_tests.cpp` and the settings-control tests.
   Each value uses one label-left, field-right row. Measure localized labels with the active font

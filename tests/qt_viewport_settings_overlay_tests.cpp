@@ -18,6 +18,7 @@
 #include "ui/qt_viewport_panel.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
@@ -111,6 +112,22 @@ protected:
         &session_->point_placement(), 1.0 / 60.0);
   }
 
+  void focus_surface(quader::ViewportPaneId pane) {
+    auto *previous = host_->surface(session_->viewport_workspace().focused_pane());
+    auto *target = host_->surface(pane);
+    ASSERT_NE(previous, nullptr);
+    ASSERT_NE(target, nullptr);
+    // Native pointer transfer also leaves the previous child window. Keeping
+    // two synthetic surfaces hovered routes later frames to the stale one.
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(previous, &leave);
+    QFocusEvent blur(QEvent::FocusOut, Qt::OtherFocusReason);
+    QApplication::sendEvent(previous, &blur);
+    QFocusEvent focus(QEvent::FocusIn, Qt::OtherFocusReason);
+    QApplication::sendEvent(target, &focus);
+    ASSERT_EQ(session_->viewport_workspace().focused_pane(), pane);
+  }
+
   void expect_settings_fit_without_scrolling() {
     auto *scroll = settings_->findChild<QScrollArea *>(
         QStringLiteral("tool_settings.scroll"));
@@ -166,13 +183,12 @@ protected:
 };
 
 TEST_F(QtViewportSettingsOverlayTests,
-       OperationOriginStaysPinnedAndEachActivationStartsExpanded) {
+       SettingsFollowTheFocusedPaneWithoutActivatingItsRememberedTool) {
   EXPECT_TRUE(settings_->isHidden());
   EXPECT_FALSE(settings_->has_settings());
   EXPECT_TRUE(settings_->expanded());
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
-  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
   refresh();
 
   ASSERT_TRUE(settings_->has_settings());
@@ -189,16 +205,33 @@ TEST_F(QtViewportSettingsOverlayTests,
   EXPECT_FALSE(settings_->expanded());
   ASSERT_TRUE(editor_->tools().set_setting(quader::kCreatePrimitiveToolId,
       quader::kBoxSubdivisionsXSetting, 4.0).ok());
+  refresh();
+  EXPECT_FALSE(settings_->expanded());
+  const auto origin = editor_->tools().active_settings_presentation_origin();
+  const auto tool_revision = editor_->tools().active_tool_revision();
+  const auto settings_revision = editor_->tools().active_settings_revision();
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Front));
   refresh();
+  EXPECT_FALSE(settings_->has_settings());
+  EXPECT_TRUE(settings_->isHidden());
+  EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin);
+  EXPECT_EQ(editor_->tools().active_tool_revision(), tool_revision);
+  EXPECT_EQ(editor_->tools().active_settings_revision(), settings_revision);
+  EXPECT_TRUE(editor_->tools().has_active_primitive_creation());
+  EXPECT_EQ(session_->viewport_workspace().selected_tool(quader::ViewportPaneId::Top),
+            quader::ViewportToolId::CreatePrimitive);
+  EXPECT_EQ(session_->viewport_workspace().selected_tool(quader::ViewportPaneId::Front),
+            quader::ViewportToolId::Select);
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  refresh();
   EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Top));
-  EXPECT_FALSE(settings_->expanded());
+  EXPECT_FALSE(settings_->isHidden());
+  EXPECT_TRUE(settings_->expanded());
 
   // A complete cancel/start between refreshes still represents a new operation.
   ASSERT_TRUE(editor_->tools().cancel_active_tool_preview().ok());
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
-  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Front));
   refresh();
   EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Side));
   EXPECT_TRUE(settings_->expanded());
@@ -213,7 +246,156 @@ TEST_F(QtViewportSettingsOverlayTests,
   refresh();
   EXPECT_TRUE(settings_->expanded());
   EXPECT_FALSE(settings_->isHidden());
-  EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Front));
+  EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Side));
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
+       FocusPresentsMoveSettingsAndHidesRotateScaleWithoutSettlingTheActiveTool) {
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Move).ok());
+  ASSERT_TRUE(editor_->tools().set_setting("move", "auto_merge_vertices", false).ok());
+  refresh();
+  ASSERT_EQ(settings_->target_id(), "move");
+  auto *auto_merge = settings_->findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.control.auto_merge_vertices"));
+  ASSERT_NE(auto_merge, nullptr);
+  EXPECT_FALSE(auto_merge->isChecked());
+
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Rotate).ok());
+  refresh();
+  EXPECT_FALSE(settings_->has_settings());
+  EXPECT_TRUE(settings_->isHidden());
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Front));
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Scale).ok());
+  refresh();
+  EXPECT_FALSE(settings_->has_settings());
+  EXPECT_TRUE(settings_->isHidden());
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Perspective));
+  ASSERT_TRUE(editor_->tools().begin_primitive_creation(
+      quader::QuaderPrimitiveCreationShape::Box).ok());
+  refresh();
+  ASSERT_TRUE(settings_->has_settings());
+  const auto origin = editor_->tools().active_settings_presentation_origin();
+  const auto active_tool = editor_->tools().active_tool();
+  const auto tool_revision = editor_->tools().active_tool_revision();
+  const auto settings_revision = editor_->tools().active_settings_revision();
+
+  for (const auto pane : {quader::ViewportPaneId::Top,
+                          quader::ViewportPaneId::Side,
+                          quader::ViewportPaneId::Front,
+                          quader::ViewportPaneId::Perspective}) {
+    SCOPED_TRACE(quader::viewport_pane_stable_id(pane));
+    ASSERT_TRUE(session_->viewport_workspace().focus_pane(pane));
+    refresh();
+    process_input();
+    refresh();
+    EXPECT_EQ(editor_->tools().active_tool(), active_tool);
+    EXPECT_EQ(editor_->tools().active_tool_revision(), tool_revision);
+    EXPECT_EQ(editor_->tools().active_settings_revision(), settings_revision);
+    EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin);
+    EXPECT_TRUE(editor_->tools().has_active_primitive_creation());
+    EXPECT_EQ(session_->primitive_creation().shape_count(), 0u);
+    EXPECT_TRUE(session_->modeling().objects().empty());
+    EXPECT_FALSE(editor_->history().can_undo());
+    if (pane == quader::ViewportPaneId::Top) {
+      ASSERT_EQ(settings_->target_id(), "move");
+      EXPECT_EQ(settings_->parentWidget(), frame(pane));
+      auto_merge = settings_->findChild<QCheckBox *>(
+          QStringLiteral("tool_settings.control.auto_merge_vertices"));
+      ASSERT_NE(auto_merge, nullptr);
+      EXPECT_TRUE(auto_merge->isVisible());
+      EXPECT_FALSE(auto_merge->isChecked());
+    } else if (pane == quader::ViewportPaneId::Perspective) {
+      EXPECT_TRUE(settings_->has_settings());
+      EXPECT_FALSE(settings_->isHidden());
+      EXPECT_EQ(settings_->parentWidget(), frame(pane));
+    } else {
+      EXPECT_FALSE(settings_->has_settings());
+      EXPECT_TRUE(settings_->isHidden());
+    }
+  }
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
+       NativeFocusAndHoverPresentPaneSettingsWithoutSettlingPendingExtrusion) {
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Move).ok());
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Rotate).ok());
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Front));
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Scale).ok());
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Perspective));
+  const auto created = editor_->modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Focused pane extrusion");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor_->selection().select_face(created.value(), 1).ok());
+  ASSERT_TRUE(editor_->tools().set_setting("extrude", "extrude.amount", 1.0).ok());
+  refresh();
+  ASSERT_TRUE(editor_->tools().active_settings().preview_active);
+  ASSERT_EQ(settings_->target_id(), "extrude");
+  const auto origin = editor_->tools().active_settings_presentation_origin();
+  const auto before = editor_->query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(before.has_value());
+  const auto history_before = editor_->history().snapshot();
+  const auto settings_revision = editor_->tools().active_settings_revision();
+  for (const auto pane : {quader::ViewportPaneId::Top,
+                          quader::ViewportPaneId::Side,
+                          quader::ViewportPaneId::Front,
+                          quader::ViewportPaneId::Perspective}) {
+    SCOPED_TRACE(quader::viewport_pane_stable_id(pane));
+    auto *surface = host_->surface(pane);
+    ASSERT_NE(surface, nullptr);
+    ASSERT_NO_FATAL_FAILURE(focus_surface(pane));
+    const QPointF position(surface->width() * 0.6, surface->height() * 0.4);
+    QMouseEvent hover(QEvent::MouseMove, position, position,
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(surface, &hover);
+    process_input();
+    refresh();
+    EXPECT_EQ(session_->viewport_workspace().focused_pane(), pane);
+    EXPECT_EQ(editor_->tools().active_tool(), "extrude");
+    EXPECT_TRUE(editor_->tools().active_settings().preview_active);
+    EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin);
+    EXPECT_EQ(editor_->tools().active_settings_revision(), settings_revision);
+    const auto history = editor_->history().snapshot();
+    EXPECT_EQ(history.can_undo, history_before.can_undo);
+    EXPECT_EQ(history.can_redo, history_before.can_redo);
+    EXPECT_EQ(history.undo_label, history_before.undo_label);
+    EXPECT_EQ(history.redo_label, history_before.redo_label);
+    const auto after = editor_->query().compiled_object_mesh(created.value());
+    ASSERT_TRUE(after.has_value());
+    EXPECT_EQ(after->indices, before->indices);
+    ASSERT_EQ(after->vertices.size(), before->vertices.size());
+    for (std::size_t index = 0; index < before->vertices.size(); ++index) {
+      const auto &actual = after->vertices[index].position;
+      const auto &expected = before->vertices[index].position;
+      EXPECT_EQ(actual.x, expected.x);
+      EXPECT_EQ(actual.y, expected.y);
+      EXPECT_EQ(actual.z, expected.z);
+    }
+    if (pane == quader::ViewportPaneId::Top) {
+      EXPECT_EQ(settings_->target_id(), "move");
+      EXPECT_FALSE(settings_->isHidden());
+      EXPECT_EQ(settings_->parentWidget(), frame(pane));
+      ASSERT_NE(settings_->findChild<QCheckBox *>(
+          QStringLiteral("tool_settings.control.auto_merge_vertices")), nullptr);
+    } else if (pane == quader::ViewportPaneId::Perspective) {
+      EXPECT_EQ(settings_->target_id(), "extrude");
+      EXPECT_FALSE(settings_->isHidden());
+      EXPECT_EQ(settings_->parentWidget(), frame(pane));
+      auto *apply = settings_->findChild<QPushButton *>(
+          QStringLiteral("tool_settings.apply"));
+      ASSERT_NE(apply, nullptr);
+      EXPECT_TRUE(apply->isEnabled());
+      EXPECT_TRUE(apply->isVisible());
+    } else {
+      EXPECT_FALSE(settings_->has_settings());
+      EXPECT_TRUE(settings_->isHidden());
+    }
+  }
 }
 
 TEST_F(QtViewportSettingsOverlayTests,
@@ -230,7 +412,6 @@ TEST_F(QtViewportSettingsOverlayTests,
   EXPECT_EQ(settings_->findChild<QComboBox *>(QStringLiteral("tool_settings.control.primitive.type")), nullptr);
   settings_->set_expanded(false);
   const auto first_origin = editor_->tools().active_settings_presentation_origin();
-  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
   const auto repeated = editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Box);
   ASSERT_TRUE(repeated.ok());
   EXPECT_FALSE(repeated.changed());
@@ -239,6 +420,10 @@ TEST_F(QtViewportSettingsOverlayTests,
   EXPECT_FALSE(settings_->expanded());
   EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Top));
 
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
+  refresh();
+  EXPECT_TRUE(settings_->isHidden());
+  EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), first_origin);
   ASSERT_TRUE(editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Sphere).ok());
   refresh();
   EXPECT_EQ(header->text(), QStringLiteral("Crea sfera"));
@@ -340,13 +525,14 @@ TEST_F(QtViewportSettingsOverlayTests,
   }
 
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Perspective));
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   ASSERT_TRUE(session_->viewport_workspace().set_layout(quader::ViewportLayoutId::Single));
   refresh();
   EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Perspective));
   ASSERT_NO_FATAL_FAILURE(expect_anchored(9));
   ASSERT_TRUE(session_->viewport_workspace().set_layout(quader::ViewportLayoutId::FourQuad));
   refresh();
-  EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Top));
+  EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Perspective));
   ASSERT_NO_FATAL_FAILURE(expect_anchored(9));
 
   OverlayPresentationEvents events;
@@ -363,7 +549,7 @@ TEST_F(QtViewportSettingsOverlayTests,
 }
 
 TEST_F(QtViewportSettingsOverlayTests,
-       AcceptedPrimitiveFootprintMovesToolbarSettingsToTheActualInputPane) {
+       AcceptedPrimitiveFootprintSurvivesFocusOnAPaneWithoutSettings) {
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
   ASSERT_TRUE(editor_->tools().begin_primitive_creation(
       quader::QuaderPrimitiveCreationShape::Sphere).ok());
@@ -372,8 +558,11 @@ TEST_F(QtViewportSettingsOverlayTests,
   auto *surface = host_->surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
   surface->resize(800, 600);
-  QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  ASSERT_NO_FATAL_FAILURE(focus_surface(quader::ViewportPaneId::Perspective));
+  refresh();
+  EXPECT_TRUE(settings_->isHidden());
+  ASSERT_TRUE(editor_->tools().begin_primitive_creation(
+      quader::QuaderPrimitiveCreationShape::Sphere).ok());
   ASSERT_TRUE(session_->viewport_workspace().camera(quader::ViewportPaneId::Perspective)
       .restore_perspective_pose({.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
   process_input();
@@ -397,8 +586,26 @@ TEST_F(QtViewportSettingsOverlayTests,
     EXPECT_TRUE(settings_->rect().contains(
         QRect(action->mapTo(settings_, QPoint()), action->size())));
   }
-  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
+  const auto origin = editor_->tools().active_settings_presentation_origin();
+  const auto content_revision = session_->modeling().content_revision();
+  const auto settings_revision = editor_->tools().active_settings_revision();
+  const bool can_undo = editor_->history().can_undo();
+  ASSERT_NO_FATAL_FAILURE(focus_surface(quader::ViewportPaneId::Side));
   refresh();
+  process_input();
+  refresh();
+  EXPECT_EQ(session_->viewport_workspace().focused_pane(), quader::ViewportPaneId::Side);
+  EXPECT_TRUE(settings_->isHidden());
+  EXPECT_FALSE(settings_->has_settings());
+  EXPECT_TRUE(editor_->tools().live_primitive_creation().has_value());
+  EXPECT_EQ(session_->primitive_creation().shape_count(), 1);
+  EXPECT_EQ(session_->modeling().content_revision(), content_revision);
+  EXPECT_EQ(editor_->tools().active_settings_revision(), settings_revision);
+  EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin);
+  EXPECT_EQ(editor_->history().can_undo(), can_undo);
+  ASSERT_NO_FATAL_FAILURE(focus_surface(quader::ViewportPaneId::Perspective));
+  refresh();
+  EXPECT_FALSE(settings_->isHidden());
   EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Perspective));
 }
 
@@ -660,6 +867,9 @@ TEST_F(QtViewportSettingsOverlayTests,
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Front));
+  refresh();
+  EXPECT_TRUE(settings_->isHidden());
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Side));
   refresh();
   EXPECT_FALSE(settings_->isHidden());
   EXPECT_TRUE(settings_->expanded());

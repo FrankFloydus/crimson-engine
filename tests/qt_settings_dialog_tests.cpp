@@ -866,6 +866,10 @@ TEST(QtSettingsDialogTests,
                 "settingsGroup_navigation", "settingsPage_navigation");
   expect_group("viewportSetting_GridMajorLineSize", "settingsGroup_grid",
                 "settingsPage_appearance");
+  expect_group("viewportSetting_Grid2DIntensity", "settingsGroup_grid",
+                "settingsPage_appearance");
+  expect_group("viewportSetting_Grid3DIntensity", "settingsGroup_grid",
+                "settingsPage_appearance");
   expect_group("viewportSetting_SelectionFaceColor", "settingsGroup_selection",
                 "settingsPage_appearance");
   expect_group("viewportSetting_PickVertexRadius", "settingsGroup_picking",
@@ -2926,7 +2930,7 @@ TEST(QtSettingsDialogTests,
 }
 
 TEST(QtSettingsDialogTests,
-     KeybindingEditorListsEveryCatalogRowByContext) {
+     KeybindingEditorListsEditableCatalogRowsByContext) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-settings-keybindings-tests";
@@ -3057,7 +3061,10 @@ TEST(QtSettingsDialogTests,
 
   const std::vector<QuaderKeybindingCatalogEntry> catalog =
       editor.commands().keybinding_catalog();
-  ASSERT_EQ(model->rowCount(), static_cast<int>(catalog.size()));
+  const int editable_row_count = static_cast<int>(std::count_if(
+      catalog.begin(), catalog.end(),
+      [](const auto &entry) { return entry.editable; }));
+  ASSERT_EQ(model->rowCount(), editable_row_count);
   const QuaderKeybindingCatalogEntry *mirror = find_keybinding_catalog_entry(
       catalog, quader_command::kToolsActivateMirror.string());
   ASSERT_NE(mirror, nullptr);
@@ -3065,6 +3072,9 @@ TEST(QtSettingsDialogTests,
   EXPECT_EQ(mirror->shortcut, "M");
   std::multiset<std::string> expected_rows;
   for (const QuaderKeybindingCatalogEntry &entry : catalog) {
+    if (!entry.editable) {
+      continue;
+    }
     expected_rows.insert(entry.action_id + "|" +
                          (entry.shortcut.empty() ? "Unassigned"
                                                  : entry.shortcut));
@@ -3260,7 +3270,16 @@ TEST(QtSettingsDialogTests,
       find_row(quader_command::kEditRedo.string(), "Ctrl+Shift+Z"), 0);
   EXPECT_GE(find_row(quader_command::kDeleteSelection.string(), "Delete"),
             0);
-  EXPECT_GE(find_row("viewport.navigation.orbit", "MiddleMouseDrag"), 0);
+  for (const std::string_view fixed_target : {
+           "viewport.navigation.orbit", "viewport.navigation.orbit_snap",
+           "viewport.navigation.pan"}) {
+    const auto *fixed = find_keybinding_catalog_entry(catalog, fixed_target);
+    ASSERT_NE(fixed, nullptr);
+    EXPECT_FALSE(fixed->editable);
+    EXPECT_EQ(find_row(fixed_target, fixed->shortcut), -1);
+  }
+  EXPECT_GE(find_row("viewport.navigation.fly", "RightMouseDrag"), 0);
+  EXPECT_GE(find_row("viewport.navigation.fly_forward", "W"), 0);
   EXPECT_GE(
       find_row(editor.commands().keybinding_target_id_for_selection_mode(
                    QuaderSelectionMode::Vertex),
@@ -3303,7 +3322,7 @@ TEST(QtSettingsDialogTests,
   shortcut_clear->click();
   QCoreApplication::processEvents();
   EXPECT_TRUE(shortcut_filter->text().isEmpty());
-  EXPECT_EQ(model->rowCount(), static_cast<int>(catalog.size()));
+  EXPECT_EQ(model->rowCount(), editable_row_count);
 
   dialog.show();
   QCoreApplication::processEvents();
@@ -3455,18 +3474,19 @@ TEST(QtSettingsDialogTests,
 
     QMouseEvent click_press(QEvent::MouseButtonPress, QPointF{16.0, 16.0},
                             QPointF{116.0, 116.0}, Qt::MiddleButton,
-                            Qt::MiddleButton, Qt::AltModifier);
+                            Qt::MiddleButton,
+                            Qt::ControlModifier | Qt::AltModifier);
     QMouseEvent click_release(QEvent::MouseButtonRelease,
                               QPointF{16.0, 16.0}, QPointF{116.0, 116.0},
                               Qt::MiddleButton, Qt::NoButton,
-                              Qt::AltModifier);
+                              Qt::ControlModifier | Qt::AltModifier);
     QCoreApplication::sendEvent(recorder, &click_press);
     QCoreApplication::sendEvent(recorder, &click_release);
     EXPECT_FALSE(use->isEnabled());
     send_key(*recorder, Qt::Key_L);
     EXPECT_TRUE(use->isEnabled());
     EXPECT_TRUE(recorder->text().contains(
-        QStringLiteral("Alt+MiddleMouseClick L")));
+        QStringLiteral("Ctrl+Alt+MiddleMouseClick L")));
 
     QMouseEvent left_click_press(
         QEvent::MouseButtonPress, QPointF{17.0, 17.0},
@@ -3518,7 +3538,7 @@ TEST(QtSettingsDialogTests,
 
   constexpr std::string_view kCaptured =
       "Ctrl+K Escape Enter Tab Backspace Delete WheelUp Mouse7DoubleClick "
-      "Mouse6Drag Alt+MiddleMouseClick L LeftMouseClick RightMouseClick "
+      "Mouse6Drag Ctrl+Alt+MiddleMouseClick L LeftMouseClick RightMouseClick "
       "Shift+RightMouse";
   const auto catalog = editor.commands().keybinding_catalog();
   const QuaderKeybindingCatalogEntry *undo = find_keybinding_catalog_entry(
@@ -5345,8 +5365,8 @@ TEST(QtMainMenuTests,
 
   const QList<QAction *> top_level_actions = menu_bar.actions();
   const std::array<QMenu *, 13> expected_top_level{
-      file_menu, edit_menu, select_menu, create_menu, object_menu,
-      mesh_menu, vertex_menu, edge_menu, face_menu, uv_menu, view_menu,
+      file_menu, edit_menu, view_menu, select_menu, create_menu, object_menu,
+      mesh_menu, vertex_menu, edge_menu, face_menu, uv_menu,
       window_menu, help_menu,
   };
   ASSERT_EQ(top_level_actions.size(),
@@ -5826,11 +5846,12 @@ TEST(QtMainMenuTests,
   auto *clear_selection = menu_bar.findChild<QAction *>(
       QStringLiteral("command_edit_clear_selection"));
 
-  const std::array<QAction *, 14> select_actions{
+  EXPECT_EQ(toggle_backface_selection, nullptr);
+
+  const std::array<QAction *, 13> select_actions{
       clear_selection,
       select_all,
       select_inverse,
-      toggle_backface_selection,
       select_direction,
       select_loops,
       select_ring,
@@ -5866,7 +5887,6 @@ TEST(QtMainMenuTests,
                                           Qt::DirectConnection));
     EXPECT_TRUE(select_all->isVisible());
     EXPECT_TRUE(select_inverse->isVisible());
-    EXPECT_TRUE(toggle_backface_selection->isVisible());
     for (QAction *action : mode_specific_actions) {
       EXPECT_TRUE(action->isVisible());
     }
@@ -5878,14 +5898,14 @@ TEST(QtMainMenuTests,
   expect_visible_for_mode(QuaderSelectionMode::Vertex);
   expect_visible_for_mode(QuaderSelectionMode::Group);
 
-  EXPECT_TRUE(toggle_backface_selection->isCheckable());
-  EXPECT_FALSE(toggle_backface_selection->isChecked());
-  EXPECT_EQ(toggle_backface_selection->text(),
-            QStringLiteral("Toggle Backface Selection\tCtrl+Shift+F9"));
-  toggle_backface_selection->trigger();
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader_command::kSelectToggleBackfaceSelection),
+            "Ctrl+Shift+F9");
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader_command::kSelectToggleBackfaceSelection)
+                  .ok());
   EXPECT_TRUE(
       viewport_settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
-  EXPECT_TRUE(toggle_backface_selection->isChecked());
 
   ASSERT_TRUE(localization.select_locale("it-IT"));
   ASSERT_TRUE(QMetaObject::invokeMethod(mesh_menu, "aboutToShow",
@@ -5958,7 +5978,7 @@ TEST(QtMainMenuTests,
 }
 
 TEST(QtMainMenuTests,
-     ObjectArrangeMenuRemainsVisibleAndOwnsTheSingleGridSnapControl) {
+     DirectArrangementCommandsRemainModeScopedWithoutSubmenus) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-align-menu-tests";
@@ -5985,27 +6005,6 @@ TEST(QtMainMenuTests,
                   .ok());
 
   ViewportSettings viewport_settings = ViewportSettings::defaults();
-  const auto runtime_result = [](bool changed) {
-    return QuaderApiVoidResult{
-        .ok = true,
-        .changed = changed,
-        .message = {},
-        .mutation_kind = QuaderMutationKind::Runtime,
-    };
-  };
-  editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
-      .grid_snap_enabled =
-          [&] {
-            return viewport_settings.bool_value(
-                ViewportBoolSettingId::GridSnap);
-          },
-      .set_grid_snap_enabled =
-          [&](bool enabled) {
-            return runtime_result(viewport_settings.set_bool_value(
-                ViewportBoolSettingId::GridSnap, enabled));
-          },
-  });
-
   LocalizationService localization = loaded_localization();
   QMenuBar menu_bar;
   QtMainMenu menu;
@@ -6029,12 +6028,11 @@ TEST(QtMainMenuTests,
       menu_bar.findChild<QAction *>(QStringLiteral("action_grid_snap"));
   ASSERT_NE(edit_menu, nullptr);
   ASSERT_NE(object_menu, nullptr);
-  ASSERT_NE(arrange_menu, nullptr);
-  ASSERT_NE(snapping_menu, nullptr);
+  EXPECT_EQ(arrange_menu, nullptr);
+  EXPECT_EQ(snapping_menu, nullptr);
   ASSERT_NE(align_x_min, nullptr);
-  ASSERT_NE(grid_snap, nullptr);
-  EXPECT_TRUE(arrange_menu->findChildren<QAction *>().contains(align_x_min));
-  EXPECT_TRUE(snapping_menu->actions().contains(grid_snap));
+  EXPECT_EQ(grid_snap, nullptr);
+  EXPECT_TRUE(object_menu->actions().contains(align_x_min));
   EXPECT_EQ(menu_bar.findChild<QAction *>(
                 QStringLiteral("action_align_snap_to_grid")),
             nullptr);
@@ -6054,13 +6052,20 @@ TEST(QtMainMenuTests,
     ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
                                           Qt::DirectConnection));
     EXPECT_EQ(align_x_min->isEnabled(), mode == QuaderSelectionMode::Object);
-    EXPECT_TRUE(grid_snap->isEnabled());
-    EXPECT_TRUE(grid_snap->isCheckable());
   }
 
-  ASSERT_TRUE(grid_snap->isChecked());
-  grid_snap->trigger();
-  EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::GridSnap));
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_EQ(align_x_min->text(), QStringLiteral("Align X Minimum"));
+  auto *distribute_centers = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_modeling_distribute_centers_x"));
+  ASSERT_NE(distribute_centers, nullptr);
+  EXPECT_TRUE(object_menu->actions().contains(distribute_centers));
+  EXPECT_EQ(distribute_centers->text(),
+            QStringLiteral("Distribute Centers Along X"));
+
 }
 
 TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
@@ -6125,12 +6130,14 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   menu.refresh();
   auto *pivot_action =
       menu_bar.findChild<QAction *>(QStringLiteral("tool_pivot"));
-  ASSERT_NE(pivot_action, nullptr);
+  EXPECT_EQ(pivot_action, nullptr);
+  ASSERT_TRUE(editor.commands()
+                  .descriptor(quader_command::kToolsActivatePivot)
+                  .has_value());
   // P belongs to Parent to Active; Pivot remains available without a default.
   EXPECT_TRUE(editor.commands()
                   .shortcut_for(quader_command::kToolsActivatePivot)
                   .empty());
-  EXPECT_FALSE(pivot_action->text().contains(QLatin1Char('\t')));
   auto *two_vertical =
       menu_bar.findChild<QAction *>(QStringLiteral("layout_two_vertical"));
   ASSERT_NE(two_vertical, nullptr);
@@ -6138,6 +6145,11 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   auto *local_visibility_action = menu_bar.findChild<QAction *>(
       QStringLiteral("command_viewport_toggle_local_visibility"));
   ASSERT_NE(local_visibility_action, nullptr);
+  auto *view_root = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view"));
+  ASSERT_NE(view_root, nullptr);
+  ASSERT_GE(view_root->actions().size(), 2);
+  EXPECT_EQ(view_root->actions().front(), local_visibility_action);
+  EXPECT_TRUE(view_root->actions()[1]->isSeparator());
   EXPECT_TRUE(local_visibility_action->isCheckable());
   EXPECT_FALSE(local_visibility_action->isChecked());
   EXPECT_TRUE(local_visibility_action->isEnabled());
@@ -6188,11 +6200,14 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
                                 "Ctrl+Alt+2")
                   .ok());
   menu.refresh();
-  EXPECT_TRUE(pivot_action->text().contains(QStringLiteral("\tCtrl+Alt+P")));
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader_command::kToolsActivatePivot), "Ctrl+Alt+P");
   EXPECT_TRUE(two_vertical->text().contains(QStringLiteral("\tCtrl+Alt+2")));
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
-  pivot_action->trigger();
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader_command::kToolsActivatePivot)
+                  .ok());
   ASSERT_TRUE(editor.commands().last_status().has_value());
   EXPECT_TRUE(editor.commands().last_status()->ok());
   EXPECT_EQ(editor.tools().active_tool(), "pivot");
@@ -6262,9 +6277,9 @@ TEST(QtMainMenuTests,
   auto *find_replace = menu_bar.findChild<QAction *>(
       QStringLiteral("action_material_find_replace"));
   ASSERT_NE(object_menu, nullptr);
-  ASSERT_NE(materials_menu, nullptr);
+  EXPECT_EQ(materials_menu, nullptr);
   ASSERT_NE(find_replace, nullptr);
-  EXPECT_TRUE(materials_menu->actions().contains(find_replace));
+  EXPECT_TRUE(object_menu->actions().contains(find_replace));
   EXPECT_TRUE(find_replace->shortcut().isEmpty());
   EXPECT_FALSE(find_replace->isEnabled());
   find_replace->trigger();

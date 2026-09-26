@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_editor_api_types.hpp"
+#include "api/quader_viewport_control_types.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -36,14 +37,44 @@ public:
     QuaderApiVoidResult set_layout(ViewportLayoutId layout);
     [[nodiscard]] std::size_t active_pane_count() const;
     [[nodiscard]] ViewportPaneId focused_pane() const;
+    QuaderApiVoidResult focus_pane(ViewportPaneId pane);
+
+    [[nodiscard]] ViewportToolId selected_tool() const;
+    [[nodiscard]] ViewportToolId selected_tool(ViewportPaneId pane) const;
+    [[nodiscard]] ViewportToolId preferred_selection_tool() const;
+    [[nodiscard]] ViewportToolId preferred_selection_tool(ViewportPaneId pane) const;
+    /// Records accepted tool selection; does not activate or settle an operation.
+    QuaderApiVoidResult record_selected_tool(ViewportPaneId pane,
+                                              ViewportToolId tool);
+    [[nodiscard]] bool control(QuaderViewportControl control) const;
+    [[nodiscard]] bool control(ViewportPaneId pane,
+                               QuaderViewportControl control) const;
+    [[nodiscard]] bool control_overridden(ViewportPaneId pane,
+                                          QuaderViewportControl control) const;
+    QuaderApiVoidResult set_control(QuaderViewportControl control, bool enabled);
+    QuaderApiVoidResult set_control(ViewportPaneId pane,
+                                    QuaderViewportControl control, bool enabled);
+    [[nodiscard]] double rotation_snap_degrees() const;
+    [[nodiscard]] double rotation_snap_degrees(ViewportPaneId pane) const;
+    [[nodiscard]] bool rotation_snap_overridden(ViewportPaneId pane) const;
+    QuaderApiVoidResult set_rotation_snap_degrees(double degrees);
+    QuaderApiVoidResult set_rotation_snap_degrees(ViewportPaneId pane,
+                                                  double degrees);
+    [[nodiscard]] std::uint64_t control_revision() const;
+    [[nodiscard]] std::uint64_t control_revision(ViewportPaneId pane) const;
 
     [[nodiscard]] int grid_preset() const;
     QuaderApiVoidResult set_grid_preset(int preset);
 
     [[nodiscard]] QuaderTransformSpace transform_space() const;
+    [[nodiscard]] QuaderTransformSpace transform_space(ViewportPaneId pane) const;
     QuaderApiVoidResult set_transform_space(QuaderTransformSpace space);
+    QuaderApiVoidResult set_transform_space(ViewportPaneId pane,
+                                             QuaderTransformSpace space);
     QuaderApiVoidResult toggle_transform_space();
+    QuaderApiVoidResult toggle_transform_space(ViewportPaneId pane);
     [[nodiscard]] std::uint64_t transform_space_revision() const;
+    [[nodiscard]] std::uint64_t transform_space_revision(ViewportPaneId pane) const;
 
     [[nodiscard]] QuaderShadingMode shading_mode(ViewportPaneId pane) const;
     QuaderApiVoidResult set_shading_mode(ViewportPaneId pane,
@@ -107,6 +138,16 @@ class QuaderViewportHandle final {
 public:
     QuaderViewportHandle(QuaderViewportApi& viewports, ViewportPaneId pane);
 
+    QuaderApiVoidResult focus();
+    [[nodiscard]] ViewportToolId selected_tool() const;
+    [[nodiscard]] ViewportToolId preferred_selection_tool() const;
+    [[nodiscard]] bool control(QuaderViewportControl control) const;
+    QuaderApiVoidResult set_control(QuaderViewportControl control, bool enabled);
+    [[nodiscard]] double rotation_snap_degrees() const;
+    QuaderApiVoidResult set_rotation_snap_degrees(double degrees);
+    [[nodiscard]] QuaderTransformSpace transform_space() const;
+    QuaderApiVoidResult set_transform_space(QuaderTransformSpace space);
+    [[nodiscard]] std::uint64_t control_revision() const;
     QuaderApiVoidResult set_shading_mode(QuaderShadingMode mode);
     QuaderApiVoidResult set_view(ViewportView view);
     QuaderApiVoidResult capture_screenshot(const std::filesystem::path &path);

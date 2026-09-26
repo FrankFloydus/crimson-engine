@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_contextual_input_hints.hpp"
+#include "ui/qt_viewport_control_strip.hpp"
 
 #include <QApplication>
 #include <QDropEvent>
@@ -129,8 +130,15 @@ public:
       return true;
     };
 
-    if (!application_inactive_ && !QApplication::activePopupWidget()) {
-      if (native_drag_) {
+    const QWidget *popup = QApplication::activePopupWidget();
+    const bool viewport_popup = popup != nullptr &&
+        qt_viewport_control_strip_ancestor(popup) != nullptr;
+    if (!application_inactive_ && (popup == nullptr || viewport_popup)) {
+      if (viewport_popup) {
+        // Viewport menus retain that pane's hints. Text editors and modal
+        // dialogs still suppress viewport context, as elsewhere in the app.
+        overridden = text_editor(QApplication::focusWidget());
+      } else if (native_drag_) {
         // A native drag's receiving surface, not its source mouse capture,
         // owns drop intent while crossing browser/panel boundaries.
         captured_.clear();

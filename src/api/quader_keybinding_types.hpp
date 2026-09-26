@@ -114,6 +114,7 @@ struct QuaderKeybindingCatalogEntry {
   QuaderKeybindingSourceKind source = QuaderKeybindingSourceKind::Default;
   bool customized = false;
   bool unassigned = false;
+  bool editable = true;
 };
 
 /**

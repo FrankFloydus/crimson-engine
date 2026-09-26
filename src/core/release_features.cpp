@@ -41,7 +41,7 @@ constexpr std::array kFeatures{
     ReleaseFeatureDescriptor{ReleaseFeature::PathArray, "path_array", "Path Array", kUnreleasedProductRelease},
     ReleaseFeatureDescriptor{ReleaseFeature::Curves, "curves", "Curves", kUnreleasedProductRelease},
     ReleaseFeatureDescriptor{ReleaseFeature::Pivot, "pivot", "Pivot editing", kUnreleasedProductRelease},
-    ReleaseFeatureDescriptor{ReleaseFeature::LassoSelection, "lasso_selection", "Lasso selection", kUnreleasedProductRelease},
+    ReleaseFeatureDescriptor{ReleaseFeature::LassoSelection, "lasso_selection", "Lasso selection", kPublicRelease01},
     ReleaseFeatureDescriptor{ReleaseFeature::CameraSettings, "camera_settings", "Camera settings controls", kUnreleasedProductRelease},
     ReleaseFeatureDescriptor{ReleaseFeature::CastShadows, "cast_shadows", "Mesh Cast Shadow control", kUnreleasedProductRelease},
     ReleaseFeatureDescriptor{ReleaseFeature::TorusPrimitive, "torus_primitive", "Torus primitive", kUnreleasedProductRelease},

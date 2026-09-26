@@ -705,9 +705,6 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kViewportToggleInfo)) {
     return "Toggle Viewport Info";
   }
-  if (is(quader_command::kViewportToggleNavigationGizmo)) {
-    return "Toggle Navigation Gizmo";
-  }
   if (is(quader_command::kViewportToggleTextureLock)) {
     return "Toggle Texture Lock";
   }
@@ -749,9 +746,6 @@ std::string explicit_keybinding_label(std::string_view command_id,
   }
   if (is(quader_command::kViewportLayoutFourQuad)) {
     return "Switch to Four-View Quad Layout";
-  }
-  if (is(quader_command::kViewportGridReset)) {
-    return "Reset Grid Size to 32";
   }
   if (is(quader_command::kToolsActivateCreateBox)) {
     return "Create Box";
@@ -935,10 +929,6 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleInfo.string()) {
-    return stable();
-  }
-  if (command_id ==
-      quader_command::kViewportToggleNavigationGizmo.string()) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleTextureLock.string()) {
@@ -1143,6 +1133,8 @@ public:
     dispatch_modal_lifecycle_input_binding(const QuaderInputChord &chord);
     void reset_pending_modal_lifecycle_input_binding();
     QuaderApiVoidResult execute_native_tool_settings_intent(
+        QuaderNativeToolSettingsIntent intent);
+    QuaderApiVoidResult execute_modeling_preview_intent(
         QuaderNativeToolSettingsIntent intent);
     void reset_pending_keybinding_chord();
     void reset_pending_non_modal_keybinding_chord();
@@ -1502,6 +1494,11 @@ QuaderCommandsApi::Impl::keybinding_catalog() const {
         group.default_mappings.empty()
             ? std::string{}
             : group.default_mappings.back().shortcut;
+    const bool editable = std::all_of(
+        group.target_ids.begin(), group.target_ids.end(),
+        [&](const std::string &target) {
+          return keybindings_.target_editable(target);
+        });
     catalog.push_back({
         .key = {.action_id = group.action_id, .scope_id = group.scope_id},
         .action_id = group.action_id,
@@ -1522,6 +1519,7 @@ QuaderCommandsApi::Impl::keybinding_catalog() const {
                                    : QuaderKeybindingSourceKind::Default,
         .customized = group.customized,
         .unassigned = shortcut.empty(),
+        .editable = editable,
     });
   }
   return catalog;
@@ -1619,6 +1617,14 @@ QuaderCommandsApi::Impl::analyze_shortcut_assignment(
     analysis.message =
         "Hold Vertex Snap requires exactly one keyboard press chord so it "
         "can remain active while held.";
+    return analysis;
+  }
+  if (const auto error = keybindings_.validate_user_keybinding({
+          .target_id = proposed_entry->target_id,
+          .sequence = *proposed,
+          .when = proposed_entry->when,
+      })) {
+    analysis.message = *error;
     return analysis;
   }
 
@@ -1796,6 +1802,9 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::remove_action_shortcut(
       keybinding_catalog_entry(catalog, action);
   if (entry == nullptr) {
     return failure("Unknown keybinding action.");
+  }
+  if (!entry->editable) {
+    return failure("Orbit and Pan bindings are fixed and cannot be changed.");
   }
   if (entry->unassigned) {
     return {
@@ -2089,7 +2098,11 @@ QuaderCommandsApi::Impl::resolve_immediate_global_command(
 std::optional<QuaderKeybindingContext>
 QuaderCommandsApi::Impl::tool_settings_keybinding_context(
     const ViewportToolState &state) const {
-  const auto settings = tools_.active_settings();
+  const auto pane = viewports_.focused_pane();
+  if (!tools_.pane_owns_executing_tool(pane)) {
+    return std::nullopt;
+  }
+  const auto settings = tools_.settings_for_pane(pane);
   if (!settings.active || (!settings.apply_visible && !settings.can_cancel)) {
     return std::nullopt;
   }
@@ -2259,9 +2272,10 @@ void QuaderCommandsApi::Impl::reset_pending_modal_lifecycle_input_binding() {
 QuaderApiVoidResult
 QuaderCommandsApi::Impl::execute_native_tool_settings_intent(
     QuaderNativeToolSettingsIntent intent) {
-  const auto settings = tools_.active_settings();
+  const auto pane = viewports_.focused_pane();
+  const auto settings = tools_.settings_for_pane(pane);
   if (intent != QuaderNativeToolSettingsIntent::None &&
-      (!settings.active ||
+      (!tools_.pane_owns_executing_tool(pane) || !settings.active ||
        (intent == QuaderNativeToolSettingsIntent::Apply && !settings.can_apply) ||
        (intent == QuaderNativeToolSettingsIntent::Cancel && !settings.can_cancel))) {
     return {.ok = true, .changed = false, .revisions = api_.revisions()};
@@ -2272,14 +2286,33 @@ QuaderCommandsApi::Impl::execute_native_tool_settings_intent(
   switch (intent) {
   case QuaderNativeToolSettingsIntent::Apply:
     return native ? tools_.commit_active_tool_preview()
-                  : api_.modeling().commit_preview("Apply Tool Preview");
+                  : execute_modeling_preview_intent(intent);
   case QuaderNativeToolSettingsIntent::Cancel:
     return native ? tools_.cancel_active_tool_preview()
-                  : api_.modeling().cancel_preview();
+                  : execute_modeling_preview_intent(intent);
   case QuaderNativeToolSettingsIntent::None:
     break;
   }
   return failure("No native Tool Settings lifecycle intent was provided.");
+}
+
+QuaderApiVoidResult QuaderCommandsApi::Impl::execute_modeling_preview_intent(
+    QuaderNativeToolSettingsIntent intent) {
+  const auto binding = api_.query().document_binding();
+  const auto origin = tools_.active_settings_presentation_origin();
+  const auto pane = origin.serial != 0u ? origin.pane : viewports_.focused_pane();
+  const auto previous_tool = tools_.active_tool();
+  auto result = intent == QuaderNativeToolSettingsIntent::Apply
+      ? api_.modeling().commit_preview("Apply Tool Preview")
+      : api_.modeling().cancel_preview();
+  // A lifecycle callback may synchronously replace the document or start a
+  // different operation. Only synchronize the owner that actually completed.
+  if (result.ok() && api_.query().document_binding() == binding &&
+      tools_.active_settings_presentation_origin() == origin &&
+      tools_.active_tool() != previous_tool) {
+    tools_.synchronize_pane_tool_after_execution(pane);
+  }
+  return result;
 }
 
 void QuaderCommandsApi::Impl::reset_pending_keybinding_chord() {
@@ -2717,10 +2750,15 @@ void QuaderCommandsApi::Impl::register_commands() {
 #endif
   register_command(
       quader_command::kModelingApplyActivePreview, "Apply Active Preview",
-      [this] { return api_.modeling().commit_preview("Apply Tool Preview"); });
+      [this] {
+        return execute_modeling_preview_intent(QuaderNativeToolSettingsIntent::Apply);
+      });
   register_command(quader_command::kModelingCancelActivePreview,
                    "Cancel Active Preview",
-                   [this] { return api_.modeling().cancel_preview(); });
+                   [this] {
+                     return execute_modeling_preview_intent(
+                         QuaderNativeToolSettingsIntent::Cancel);
+                   });
   register_command(quader_command::kToolsApplyPrimitiveCreation,
                    "Finalize Tool",
                    [this] {
@@ -3082,23 +3120,27 @@ void QuaderCommandsApi::Impl::register_commands() {
       "Ctrl+4");
   register_command(quader_command::kViewportToggleGrid, "Toggle Grid",
                    [this] {
-                     return preferences_.set_grid_visible(
-                         !preferences_.grid_visible());
+                     return viewports_.set_control(
+                         QuaderViewportControl::ShowGrid,
+                         !viewports_.control(QuaderViewportControl::ShowGrid));
                    });
   register_command(quader_command::kViewportToggleGizmos, "Toggle Gizmos",
                    [this] {
-                     return preferences_.set_gizmos_visible(
-                         !preferences_.gizmos_visible());
+                     return viewports_.set_control(
+                         QuaderViewportControl::ShowGizmos,
+                         !viewports_.control(QuaderViewportControl::ShowGizmos));
                    });
   register_command(quader_command::kViewportToggleMeshGrid,
                    "Toggle Mesh Grid", [this] {
-                     return preferences_.set_mesh_grid_visible(
-                         !preferences_.mesh_grid_visible());
+                     return viewports_.set_control(
+                         QuaderViewportControl::ShowMeshGrid,
+                         !viewports_.control(QuaderViewportControl::ShowMeshGrid));
                    });
   register_command(quader_command::kViewportToggleOverlays,
                    "Toggle Overlays", [this] {
-                     return preferences_.set_overlays_visible(
-                         !preferences_.overlays_visible());
+                     return viewports_.set_control(
+                         QuaderViewportControl::ShowOverlays,
+                         !viewports_.control(QuaderViewportControl::ShowOverlays));
                    });
   // These display switches are bindable commands, deliberately unassigned by
   // default. Menus and other retained controls dispatch through these routes.
@@ -3116,11 +3158,6 @@ void QuaderCommandsApi::Impl::register_commands() {
                    "Toggle Viewport Info", [this] {
                      return preferences_.set_viewport_info_visible(
                          !preferences_.viewport_info_visible());
-                   });
-  register_command(quader_command::kViewportToggleNavigationGizmo,
-                   "Toggle Navigation Gizmo", [this] {
-                     return preferences_.set_navigation_gizmo_visible(
-                         !preferences_.navigation_gizmo_visible());
                    });
   // Texture-lock switches are bindable viewport actions, deliberately unassigned
   // by default so adding the controls does not claim existing user shortcuts.
@@ -3149,22 +3186,6 @@ void QuaderCommandsApi::Impl::register_commands() {
         return viewports_.set_grid_preset(viewports_.grid_preset() - 1);
       },
       "Alt+WheelDown", [this] { return viewports_.grid_preset() > 1; });
-  register_command(
-      quader_command::kViewportGridReset, "Reset Grid Size to 32",
-      [this] {
-        return viewports_.set_grid_preset(viewport_default_grid_preset());
-      },
-      "Alt+MiddleMouseClick", [this] {
-        return viewports_.grid_preset() != viewport_default_grid_preset();
-      });
-  register_keybinding_target_metadata(
-      std::string(quader_command::kViewportGridReset.string()),
-      "Reset Grid Size to 32",
-      command_keybinding_localization_key(
-          quader_command::kViewportGridReset.string()),
-      QuaderKeybindingContextKind::Viewport,
-      "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive",
-      "Alt+MiddleMouseClick");
 
   for (const QuaderMeshArrangementDescriptor &descriptor :
        quader_mesh_arrangement_catalog()) {
@@ -3172,7 +3193,8 @@ void QuaderCommandsApi::Impl::register_commands() {
         descriptor.command_id, arrangement_command_label(descriptor),
         [this, descriptor] {
           const QuaderMeshArrangementOptions options{
-              .snap_to_grid = preferences_.grid_snap_enabled(),
+              .snap_to_grid =
+                  viewports_.control(QuaderViewportControl::GridSnap),
               .grid_size = viewport_grid_world_size_for_preset(
                   viewports_.grid_preset()),
           };
@@ -3376,14 +3398,24 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
 
   for (const ViewportInputActionBindingDescriptor &descriptor :
        viewport_input_action_binding_catalog()) {
+    const bool fixed_navigation =
+        descriptor.action == ViewportInputActionKind::Orbit ||
+        descriptor.action == ViewportInputActionKind::OrbitSnap ||
+        descriptor.action == ViewportInputActionKind::Pan;
+    const std::string when = fixed_navigation
+        ? "viewportFocus && !textInputActive && !navigation.flyActive"
+        : (descriptor.when.empty() ? std::string(kViewportContext)
+                                   : std::string(descriptor.when));
     register_keybinding_target_metadata(
         descriptor.target_id, std::string(descriptor.label),
         std::string(descriptor.localization_key),
         keybinding_context_kind_for_viewport_input(descriptor.context),
-        descriptor.when.empty() ? std::string(kViewportContext)
-                                : std::string(descriptor.when),
+        when,
         {}, descriptor.action_id.empty() ? descriptor.target_id
                                          : std::string(descriptor.action_id));
+    if (fixed_navigation) {
+      keybindings_.lock_target(descriptor.target_id, when);
+    }
     if (descriptor.selection_mode_mask != 0u) {
       keybinding_target_catalog_.set_selection_modes(
           descriptor.target_id, descriptor.selection_mode_mask,

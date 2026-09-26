@@ -35,13 +35,6 @@ inline constexpr double kNavigationFlyFastMultiplier = 4.0;
 inline constexpr double kNavigationFlySlowMultiplier = 0.25;
 inline constexpr double kNavigationFlyMaxDeltaSeconds = 0.25;
 inline constexpr double kNavigationOrthogonalSnapDot = 0.965925826289068;
-// Safety bounds only. The Qt host applies the 50%-300% interface factor to
-// its authored view-cube size before entering the portable interaction math.
-inline constexpr double kViewCubeMinSize = 24.0;
-inline constexpr double kViewCubeMaxSize = 384.0;
-inline constexpr double kViewCubeHalfFactor = 0.23;
-inline constexpr double kViewCubeAxisFactor = 0.45;
-inline constexpr double kViewCubeFaceVisibilityEpsilon = 0.0001;
 inline constexpr double kSelectionBoxDefaultDragThreshold = 4.0;
 inline constexpr double kTransformGizmoTau = 6.28318530717958647692;
 inline constexpr double kTransformGizmoAxisHideScore = 0.02;

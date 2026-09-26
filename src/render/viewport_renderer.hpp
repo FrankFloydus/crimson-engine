@@ -85,9 +85,9 @@ public:
     void set_scene_visible(bool visible);
     void set_scene_layer_mask(std::uint8_t layer_mask);
     void set_shadowing_enabled(bool enabled);
-    /** Updates the cached per-view diagnostic and Solid surface override. */
+    /** Updates cached per-view diagnostics, Solid mode, and mesh-grid visibility. */
     void set_material_presentation(ViewportMaterialDebugMode mode,
-                                   bool solid);
+                                   bool solid, bool mesh_grid_visible = true);
     void set_material_debug_mode(ViewportMaterialDebugMode mode);
     void render(filament::Renderer& renderer);
 
@@ -137,6 +137,7 @@ public:
     ViewportMaterialDebugMode material_debug_mode_ =
         ViewportMaterialDebugMode::None;
     bool solid_material_presentation_ = false;
+    bool mesh_grid_visible_ = true;
     bool has_material_presentation_ = false;
     InstanceEditStyle instance_edit_style_;
     std::optional<std::uint64_t> camera_presentation_signature_;

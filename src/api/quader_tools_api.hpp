@@ -51,6 +51,11 @@ public:
 
     QuaderApiVoidResult activate(std::string_view tool_id);
     QuaderApiVoidResult activate(ViewportToolId tool);
+    /// Acquires the single editing runtime only when a pane starts an edit.
+    QuaderApiVoidResult acquire_pane_tool(ViewportPaneId pane);
+    [[nodiscard]] bool pane_owns_executing_tool(ViewportPaneId pane) const;
+    /// Called after an accepted tool lifecycle ends, never from frame refresh.
+    void synchronize_pane_tool_after_execution(ViewportPaneId pane);
     /// Starts a new extrusion with this mode while retaining the remembered amount.
     QuaderApiVoidResult activate_extrude(QuaderExtrudeMode mode);
     [[nodiscard]] bool can_activate(std::string_view tool_id) const;
@@ -65,6 +70,11 @@ public:
     QuaderApiVoidResult begin_light_creation(QuaderLightType type);
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
     [[nodiscard]] std::uint64_t active_settings_revision() const;
+    /// Pure presentation of a pane's choice; never starts or settles a tool.
+    [[nodiscard]] QuaderToolSettingsTarget settings_for_pane(ViewportPaneId pane) const;
+    [[nodiscard]] std::uint64_t settings_revision(ViewportPaneId pane) const;
+    [[nodiscard]] std::uint64_t settings_presentation_serial(ViewportPaneId pane) const;
+    [[nodiscard]] std::uint64_t selected_tool_revision(ViewportPaneId pane) const;
     /// Borrowed until the next operation start or session replacement; no descriptor work.
     [[nodiscard]] const QuaderSettingsPresentationOrigin &
     active_settings_presentation_origin() const;
@@ -87,6 +97,17 @@ public:
                                     std::string_view name,
                                     const char *value);
     QuaderApiVoidResult execute_action(std::string_view tool_id,
+                                       std::string_view action_id);
+    QuaderApiVoidResult set_setting(ViewportPaneId pane, std::string_view tool_id,
+                                    std::string_view name, double value,
+                                    QuaderToolSettingEditOptions options = {});
+    QuaderApiVoidResult set_setting(ViewportPaneId pane, std::string_view tool_id,
+                                    std::string_view name, bool value);
+    QuaderApiVoidResult set_setting(ViewportPaneId pane, std::string_view tool_id,
+                                    std::string_view name, std::string_view value);
+    QuaderApiVoidResult set_setting(ViewportPaneId pane, std::string_view tool_id,
+                                    std::string_view name, const char *value);
+    QuaderApiVoidResult execute_action(ViewportPaneId pane, std::string_view tool_id,
                                        std::string_view action_id);
     QuaderApiVoidResult reset_active_settings();
     QuaderApiVoidResult
@@ -142,6 +163,14 @@ public:
     void rebind_session(QuaderApiSession session);
 
   private:
+    QuaderApiVoidResult acquire_pane_settings(ViewportPaneId pane,
+                                             std::string_view tool_id);
+    /** Retains the pane's selected-tool settings projection without activating it. */
+    struct PaneSettingsStamp {
+      std::array<std::uint64_t, 7> source = {};
+      std::uint64_t revision = 0;
+      bool valid = false;
+    };
     QuaderApiSession session_;
     QuaderToolsRuntimeHooks hooks_;
     mutable const void *active_settings_source_identity_ = nullptr;
@@ -154,7 +183,7 @@ public:
     mutable std::string active_tool_id_;
     mutable std::uint64_t active_tool_revision_ = 0;
     mutable bool active_tool_valid_ = false;
-    mutable std::array<std::uint64_t, 17> input_hints_source_ = {};
+    mutable std::array<std::uint64_t, 20> input_hints_source_ = {};
     mutable QuaderOperationInputContext input_hints_context_;
     mutable std::string input_hints_native_tool_id_;
     mutable std::uint64_t input_hints_revision_ = 0;
@@ -165,6 +194,7 @@ public:
     mutable std::uint64_t primitive_creation_selection_revision_ = 0;
     mutable std::uint64_t primitive_creation_instance_revision_ = 0;
     mutable std::uint64_t primitive_creation_revision_ = 0;
+    mutable std::array<PaneSettingsStamp, 4> pane_settings_stamps_;
 };
 
 } // namespace quader

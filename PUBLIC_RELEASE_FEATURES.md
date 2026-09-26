@@ -74,7 +74,8 @@ Solid retains its existing flat-color appearance; Shaded displays the material t
   - Fog controls and environment/fog color previews.
   - Post-processing controls, including exposure-related rendering settings.
 - [ ] **Camera settings dropdown (UI only)** — `ReleaseFeature::CameraSettings`
-  - The viewport Camera launcher and its Near/Far controls.
+  - Near/Far clipping controls in the Environment popup's Camera section.
+  - The separate Camera view selector remains available.
   - Camera clipping values and programmatic clipping updates remain supported.
 - [ ] **Mesh Cast Shadow control (UI only)** — `ReleaseFeature::CastShadows`
   - Cast Shadow in the mesh inspector's Lighting section.
@@ -83,6 +84,19 @@ Solid retains its existing flat-color appearance; Shaded displays the material t
 Wireframe, Solid and Shaded remain available. Ordinary construction grids, camera
 navigation and internal camera clipping remain available. Fixed internal lighting,
 environment resources and default-material shaders remain implementation support.
+Every viewport has its own control strip, Camera and Shading selectors, selected tool,
+transform space, snapping, and grid/gizmo/overlay visibility. Grid spacing and appearance
+remain shared. The single Tool Settings panel follows the focused viewport.
+
+**2D Grid Intensity** and **3D Grid Intensity** are public, shared appearance
+preferences for orthographic and perspective construction grids respectively. Both
+range from `0` to `4`, default to `1`, and multiply grid/axis opacity without changing
+grid spacing or snapping. These controls do not enable or affect gated Mesh Grid.
+
+Orbit, snapped orbit and pan use fixed navigation bindings in both executables;
+their gestures are protected from reassignment and omitted from Keybindings.
+Fly navigation remains remappable. The navigation gizmo and Reset Grid Size to 32
+command have been removed entirely, including their UI and command bindings.
 
 ## Godot bridge scope
 
@@ -218,7 +232,6 @@ workflows, not an equivalent geometric result produced through permitted tools.
   - Persistent Pivot Tool, pivot alignment and snapping settings.
   - Temporary Quick Pivot gesture.
   - Copy Pivot from Active and origin/pivot rebasing operations.
-- [ ] **Lasso selection** — `ReleaseFeature::LassoSelection`.
 - [ ] **Advanced selection controls (UI only)** — `ReleaseFeature::AdvancedSelectionUi`
   - Select Direction.
   - Select Co-planar Faces.
@@ -229,8 +242,15 @@ workflows, not an equivalent geometric result produced through permitted tools.
 
 Normal move/rotate/scale, their internal transform centers and camera navigation
 pivots remain available. The Inspector's Link Scale control for proportional X/Y/Z
-numeric edits remains available; it does not enable UV editing. Box/click selection
-remains available.
+numeric edits remains available; it does not enable UV editing.
+
+Box/click and **Lasso Select** are public. Holding a pane's selection button exposes
+**Box Select** and **Lasso Select**; a short click restores that pane's remembered
+method. The memory survives other tool activations and layout changes in the open
+scene, and resets to Box Select when reopened. Lasso also uses `Shift+Q` and exposes
+**Enable select partial intersection**; this does not reactivate the advanced
+selection controls listed above. Backface Selection remains a shared preference,
+with a button immediately after Local Transforms in each pane strip.
 
 ## Scene instances
 

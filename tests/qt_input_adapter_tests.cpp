@@ -33,6 +33,7 @@
 #include "math/glm_bridge.hpp"
 #include "ui/qt_application_cursor.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -192,6 +193,20 @@ struct NavigationPanelTestContext {
     QMouseEvent event(type, local, local + QPointF{100, 100}, button,
                       buttons, modifiers);
     QApplication::sendEvent(surface, &event);
+  }
+};
+
+/// Detects a transiently empty hint row even if its final contents recover.
+class InputHintVisibilityProbe final : public QObject {
+public:
+  int hides = 0;
+
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (event->type() == QEvent::Hide) {
+      ++hides;
+    }
+    return QObject::eventFilter(watched, event);
   }
 };
 
@@ -770,8 +785,17 @@ TEST(QtViewportSurfaceInputTests,
       QApplication::setActiveWindow(&host);
       field.setFocus();
       ASSERT_EQ(QApplication::focusWidget(), &field);
+      for (const auto &placement : workspace.active_pane_placements()) {
+        ASSERT_TRUE(editor.viewports().focus_pane(placement.pane_id).ok());
+        ASSERT_TRUE(editor.tools().activate(
+            quader::ViewportToolId::CreatePrimitive).ok());
+      }
+      ASSERT_TRUE(editor.viewports().focus_pane(
+          quader::ViewportPaneId::Perspective).ok());
       ASSERT_TRUE(editor.tools().activate(
           quader::ViewportToolId::CreatePrimitive).ok());
+      const auto primitive_origin =
+          editor.tools().active_settings_presentation_origin();
 
       const auto process_input = [&] {
         panel.process_input(
@@ -801,6 +825,8 @@ TEST(QtViewportSurfaceInputTests,
         EXPECT_EQ(workspace.focused_pane(), panes[index]);
         EXPECT_EQ(QApplication::focusWidget(), &field);
         EXPECT_EQ(surface->cursor().shape(), Qt::CrossCursor);
+        EXPECT_EQ(editor.tools().active_settings_presentation_origin(),
+                  primitive_origin);
         if (previous != nullptr) {
           EXPECT_EQ(previous->cursor().shape(), Qt::ArrowCursor);
         }
@@ -3538,22 +3564,28 @@ TEST(QtViewportSurfaceInputTests,
     const auto selected_before = session.scene().selected_entities();
     const auto active_before = session.scene().primary_selection();
     const auto selection_revision_before = session.scene().selection_revision();
-    const auto history_before = editor.history().snapshot();
+    const auto undo_count_before = session.history().undo_count();
+    const auto first_click_changes = active_before != objects[0] ? 1u : 0u;
+    const auto depth_click_changes = expected != objects[0] ? 1u : 0u;
     send_mouse(QEvent::MouseButtonPress, Qt::LeftButton);
     send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
-    EXPECT_EQ(session.scene().selected_entities(), selected_before);
-    EXPECT_EQ(session.scene().primary_selection(), active_before);
-    EXPECT_EQ(session.scene().selection_revision(), selection_revision_before);
-    expect_history_unchanged(editor.history().snapshot(), history_before);
+    EXPECT_EQ(session.scene().selected_entities(),
+              std::vector<quader::EntityId>{objects[0]});
+    EXPECT_EQ(session.scene().primary_selection(), objects[0]);
+    EXPECT_EQ(session.scene().selection_revision(),
+              selection_revision_before + first_click_changes);
+    EXPECT_EQ(session.history().undo_count(),
+              undo_count_before + first_click_changes);
     send_mouse(QEvent::MouseButtonDblClick, Qt::LeftButton);
     send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
     EXPECT_EQ(session.scene().primary_selection(), expected);
     EXPECT_EQ(session.scene().selection_revision(),
-              selection_revision_before + 1u);
+              selection_revision_before + first_click_changes + depth_click_changes);
+    EXPECT_EQ(session.history().undo_count(), undo_count_before + 1u);
     process_input();
     EXPECT_EQ(session.scene().primary_selection(), expected);
     EXPECT_EQ(session.scene().selection_revision(),
-              selection_revision_before + 1u);
+              selection_revision_before + first_click_changes + depth_click_changes);
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_EQ(session.scene().selected_entities(), selected_before);
     EXPECT_EQ(session.scene().primary_selection(), active_before);
@@ -3639,22 +3671,37 @@ TEST(QtViewportSurfaceInputTests,
         const auto active_before = session.scene().primary_selection();
         const auto selection_revision_before = session.scene().selection_revision();
         const auto history_before = editor.history().snapshot();
+        const auto undo_count_before = session.history().undo_count();
+        const auto first_click_changes =
+            !coalesced && active_before != room.value().entity ? 1u : 0u;
+        const auto depth_click_changes =
+            coalesced || expected != room.value().entity ? 1u : 0u;
         send_mouse(QEvent::MouseButtonPress, Qt::LeftButton);
         send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
-        EXPECT_EQ(session.scene().selected_entities(), selected_before);
-        EXPECT_EQ(session.scene().primary_selection(), active_before);
-        EXPECT_EQ(session.scene().selection_revision(), selection_revision_before);
-        expect_history_unchanged(editor.history().snapshot(), history_before);
+        if (coalesced) {
+          EXPECT_EQ(session.scene().selected_entities(), selected_before);
+          EXPECT_EQ(session.scene().primary_selection(), active_before);
+          expect_history_unchanged(editor.history().snapshot(), history_before);
+        } else {
+          EXPECT_EQ(session.scene().selected_entities(),
+                    std::vector<quader::EntityId>{room.value().entity});
+          EXPECT_EQ(session.scene().primary_selection(), room.value().entity);
+        }
+        EXPECT_EQ(session.scene().selection_revision(),
+                  selection_revision_before + first_click_changes);
+        EXPECT_EQ(session.history().undo_count(),
+                  undo_count_before + first_click_changes);
         send_mouse(QEvent::MouseButtonDblClick, Qt::LeftButton);
         send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
         process_input();
         EXPECT_EQ(session.scene().primary_selection(), expected);
         EXPECT_EQ(session.scene().selection_revision(),
-                  selection_revision_before + 1u);
+                  selection_revision_before + first_click_changes + depth_click_changes);
+        EXPECT_EQ(session.history().undo_count(), undo_count_before + 1u);
         process_input();
         EXPECT_EQ(session.scene().primary_selection(), expected);
         EXPECT_EQ(session.scene().selection_revision(),
-                  selection_revision_before + 1u);
+                  selection_revision_before + first_click_changes + depth_click_changes);
         EXPECT_FALSE(session.modeling().transform_drag_active());
       }
     }
@@ -3722,12 +3769,24 @@ TEST(QtViewportSurfaceInputTests,
             editor, session.scene(), session.assets(), session.modeling(), {},
             session.native_tools(), &session.point_placement(), 1.0 / 60.0);
       };
-      const auto double_click = [&](Qt::KeyboardModifiers modifiers,
-                                    bool selection_changes = true) {
+      const auto double_click = [&](
+          Qt::KeyboardModifiers modifiers,
+          std::initializer_list<quader::EntityId> first_click_entities,
+          quader::EntityId first_click_active,
+          bool depth_changes_after_first = true,
+          bool selection_changes = true) {
         const auto selected_before = session.scene().selected_entities();
         const auto active_before = session.scene().primary_selection();
         const auto selection_revision_before = session.scene().selection_revision();
         const auto history_before = editor.history().snapshot();
+        const auto undo_count_before = session.history().undo_count();
+        std::vector<quader::EntityId> selected_after_first(first_click_entities);
+        std::sort(selected_after_first.begin(), selected_after_first.end());
+        const auto first_click_changes =
+            selected_after_first != selected_before || first_click_active != active_before
+                ? 1u
+                : 0u;
+        const bool separate_first_release = frame_schedules[schedule][1];
         constexpr std::array kEventTypes{
             QEvent::MouseButtonPress, QEvent::MouseButtonRelease,
             QEvent::MouseButtonDblClick, QEvent::MouseButtonRelease};
@@ -3743,15 +3802,30 @@ TEST(QtViewportSurfaceInputTests,
             process_input();
           }
           if (index < 2u) {
-            EXPECT_EQ(session.scene().selected_entities(), selected_before);
-            EXPECT_EQ(session.scene().primary_selection(), active_before);
+            const bool first_click_published = index == 1u && separate_first_release;
+            EXPECT_EQ(session.scene().selected_entities(),
+                      first_click_published ? selected_after_first : selected_before);
+            EXPECT_EQ(session.scene().primary_selection(),
+                      first_click_published ? first_click_active : active_before);
             EXPECT_EQ(session.scene().selection_revision(),
-                      selection_revision_before);
-            expect_history_unchanged(editor.history().snapshot(), history_before);
+                      selection_revision_before +
+                          (first_click_published ? first_click_changes : 0u));
+            EXPECT_EQ(session.history().undo_count(),
+                      undo_count_before +
+                          (first_click_published ? first_click_changes : 0u));
+            if (!first_click_published || first_click_changes == 0u) {
+              expect_history_unchanged(editor.history().snapshot(), history_before);
+            }
           }
         }
+        const auto publication_count =
+            separate_first_release
+                ? first_click_changes + (depth_changes_after_first ? 1u : 0u)
+                : (selection_changes ? 1u : 0u);
         EXPECT_EQ(session.scene().selection_revision(),
-                  selection_revision_before + (selection_changes ? 1u : 0u));
+                  selection_revision_before + publication_count);
+        EXPECT_EQ(session.history().undo_count(),
+                  undo_count_before + (selection_changes ? 1u : 0u));
         if (!selection_changes) {
           expect_history_unchanged(editor.history().snapshot(), history_before);
         }
@@ -3782,24 +3856,32 @@ TEST(QtViewportSurfaceInputTests,
           };
       process_input();
 
-      double_click(Qt::ShiftModifier);
+      double_click(Qt::ShiftModifier,
+                   {front.value().entity, unrelated.value().entity},
+                   front.value().entity);
       expect_selection({unrelated.value().entity, behind.value().entity});
 
       ASSERT_TRUE(editor.selection()
                       .select_object(front.value(), quader::QuaderSelectionEdit::Add)
                       .ok());
-      double_click(Qt::ControlModifier);
+      double_click(Qt::ControlModifier,
+                   {behind.value().entity, unrelated.value().entity},
+                   unrelated.value().entity);
       expect_selection({unrelated.value().entity, front.value().entity});
 
       // Further Remove gestures advance through the stack. An already removed
       // mesh stays unselected when the traversal wraps back to it.
-      double_click(Qt::ControlModifier);
+      double_click(Qt::ControlModifier, {unrelated.value().entity},
+                   unrelated.value().entity, false);
       expect_selection({unrelated.value().entity});
-      double_click(Qt::ControlModifier, false);
+      double_click(Qt::ControlModifier, {unrelated.value().entity},
+                   unrelated.value().entity, false, false);
       expect_selection({unrelated.value().entity});
 
       // Changing the operation restarts at the first mesh behind the front hit.
-      double_click(Qt::ShiftModifier);
+      double_click(Qt::ShiftModifier,
+                   {front.value().entity, unrelated.value().entity},
+                   front.value().entity);
       expect_selection({unrelated.value().entity, behind.value().entity});
       const auto selected_before_undo = session.scene().selected_entities();
       const auto active_before_undo = session.scene().primary_selection();
@@ -3860,6 +3942,7 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset);
 
   ASSERT_TRUE(session.viewport_workspace().set_grid_preset(2));
+  // The retired Alt+MMB reset gesture must leave the shared grid size unchanged.
   const quader::ViewportCameraPose camera_before_click =
       session.viewport_workspace()
           .camera(quader::ViewportPaneId::Perspective)
@@ -3875,7 +3958,7 @@ TEST(QtViewportSurfaceInputTests,
                              Qt::AltModifier);
   QApplication::sendEvent(surface, &middle_release);
   process_input();
-  EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset);
+  EXPECT_EQ(session.viewport_workspace().grid_preset(), 2);
   const quader::ViewportCameraPose camera_after_click =
       session.viewport_workspace()
           .camera(quader::ViewportPaneId::Perspective)
@@ -4377,6 +4460,186 @@ TEST(QtViewportSurfaceInputTests,
                             Qt::NoButton, Qt::NoModifier);
   QApplication::sendEvent(surface, &blank_release);
   process_input();
+}
+
+TEST(QtViewportSurfaceInputTests,
+     WheelTicksKeepIdleAndToolHintsStableAcrossOwningAndPassivePanes) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-wheel-hint-stability-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::LocalizationService localization;
+
+  for (const bool active_box : {false, true}) {
+    SCOPED_TRACE(active_box);
+    NavigationPanelTestContext context;
+    ASSERT_NE(context.surface, nullptr);
+    auto &workspace = context.session.viewport_workspace();
+    ASSERT_TRUE(workspace.set_layout(quader::ViewportLayoutId::FourQuad));
+    context.panel.refresh_workspace_layout();
+    if (active_box) {
+      ASSERT_TRUE(context.editor.tools()
+                      .activate(quader::ViewportToolId::CreatePrimitive).ok());
+      ASSERT_TRUE(context.editor.tools().pane_owns_executing_tool(
+          quader::ViewportPaneId::Perspective));
+    }
+    const auto origin = context.editor.tools().active_settings_presentation_origin();
+    const auto tool_revision = context.editor.tools().active_tool_revision();
+    const auto history = context.editor.history().snapshot();
+    quader::QtOperationInputHints row;
+    row.setAttribute(Qt::WA_DontShowOnScreen);
+    row.resize(1600, 40);
+    InputHintVisibilityProbe visibility;
+    row.installEventFilter(&visibility);
+    const auto publish = [&]() {
+      context.process();
+      row.refresh(context.editor.tools(), context.editor.commands(),
+                  localization, context.panel.operation_input_context());
+    };
+
+    for (const auto pane : {quader::ViewportPaneId::Perspective,
+                            quader::ViewportPaneId::Top}) {
+      SCOPED_TRACE(static_cast<int>(pane));
+      QEvent leave(QEvent::Leave);
+      QFocusEvent blur(QEvent::FocusOut);
+      QApplication::sendEvent(context.surface, &leave);
+      QApplication::sendEvent(context.surface, &blur);
+      context.surface = context.panel.surface(pane);
+      ASSERT_NE(context.surface, nullptr);
+      context.surface->resize(800, 600);
+      ASSERT_TRUE(context.editor.viewports().focus_pane(pane).ok());
+      QEnterEvent enter({20, 20}, {20, 20}, {120, 120});
+      QFocusEvent focus(QEvent::FocusIn);
+      QApplication::sendEvent(context.surface, &enter);
+      QApplication::sendEvent(context.surface, &focus);
+      auto &camera = workspace.camera(pane);
+      camera.focus_origin(64.0f);
+      if (active_box && pane == quader::ViewportPaneId::Top) {
+        ASSERT_FALSE(context.editor.tools().pane_owns_executing_tool(pane));
+      }
+
+      for (const auto modifiers : {Qt::NoModifier, Qt::ControlModifier}) {
+        SCOPED_TRACE(static_cast<int>(modifiers));
+        // Prime the same held modifier state before comparing wheel/idle frames.
+        context.mouse(QEvent::MouseMove, {20, 20}, Qt::NoButton,
+                      Qt::NoButton, modifiers);
+        publish();
+        publish();
+        ASSERT_TRUE(context.panel.operation_input_context().viewport_available);
+        ASSERT_EQ(context.panel.operation_input_context().control,
+                  modifiers == Qt::ControlModifier);
+        ASSERT_FALSE(row.hints().empty());
+        ASSERT_FALSE(row.isHidden());
+        const auto expected_hints = row.hints();
+        const auto projection = row.projection_revision();
+        visibility.hides = 0;
+        const auto native_hints = context.editor.tools().active_input_hints(
+            context.panel.operation_input_context());
+        if (active_box) {
+          EXPECT_EQ(std::ranges::any_of(native_hints, [](const auto &hint) {
+                      return hint.label_key == "operation.hints.cancel_creation";
+                    }),
+                    pane == quader::ViewportPaneId::Perspective);
+        }
+        const auto expect_stable = [&]() {
+          EXPECT_EQ(row.hints(), expected_hints);
+          EXPECT_EQ(row.projection_revision(), projection);
+          EXPECT_FALSE(row.isHidden());
+          EXPECT_EQ(visibility.hides, 0);
+          EXPECT_EQ(context.editor.tools().active_tool_revision(), tool_revision);
+          EXPECT_EQ(context.editor.tools().active_settings_presentation_origin(),
+                    origin);
+          expect_history_unchanged(context.editor.history().snapshot(), history);
+        };
+        for (const int delta : {120, -120, 120, -120}) {
+          SCOPED_TRACE(delta);
+          const auto zoom_scale = [&]() {
+            return camera.state().projection == quader::ViewportProjection::Orthographic
+                ? camera.state().orthographic_size : camera.state().distance;
+          };
+          const float before_zoom = zoom_scale();
+          context.wheel({20, 20}, delta, modifiers);
+          publish();
+          if (delta > 0) {
+            EXPECT_LT(zoom_scale(), before_zoom);
+          } else {
+            EXPECT_GT(zoom_scale(), before_zoom);
+          }
+          expect_stable();
+          for (int idle_frame = 0; idle_frame < 3; ++idle_frame) {
+            publish();
+            expect_stable();
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     FlyWheelSpeedChangesKeepTheFlyHintRowStable) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-fly-wheel-hint-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  (void)context.camera.set_default_fly_speed(32.0f);
+  context.camera.reset_fly_speed();
+  context.process();
+  context.mouse(QEvent::MouseButtonPress, {400, 300}, Qt::RightButton,
+                Qt::RightButton);
+  context.process();
+  context.mouse(QEvent::MouseMove, {420, 300}, Qt::NoButton, Qt::RightButton);
+  context.process();
+  ASSERT_EQ(context.panel.operation_input_context().navigation,
+            quader::QuaderInputNavigation::Fly);
+  quader::LocalizationService localization;
+  quader::QtOperationInputHints row;
+  row.setAttribute(Qt::WA_DontShowOnScreen);
+  row.resize(1600, 40);
+  InputHintVisibilityProbe visibility;
+  row.installEventFilter(&visibility);
+  const auto publish = [&]() {
+    context.process();
+    row.refresh(context.editor.tools(), context.editor.commands(), localization,
+                context.panel.operation_input_context());
+  };
+  publish();
+  ASSERT_FALSE(row.hints().empty());
+  const auto expected_hints = row.hints();
+  const auto projection = row.projection_revision();
+  const auto native_hints = context.editor.tools().active_input_hints(
+      context.panel.operation_input_context());
+  ASSERT_TRUE(std::ranges::any_of(native_hints, [](const auto &hint) {
+    return hint.label_key == "operation.hints.navigation.fly_speed";
+  }));
+  for (const int delta : {120, -120, 120, -120}) {
+    const float before_speed = context.camera.fly_speed();
+    context.wheel({420, 300}, delta);
+    publish();
+    if (delta > 0) {
+      EXPECT_GT(context.camera.fly_speed(), before_speed);
+    } else {
+      EXPECT_LT(context.camera.fly_speed(), before_speed);
+    }
+    for (int frame = 0; frame < 4; ++frame) {
+      EXPECT_EQ(context.panel.operation_input_context().navigation,
+                quader::QuaderInputNavigation::Fly);
+      EXPECT_EQ(row.hints(), expected_hints);
+      EXPECT_EQ(row.projection_revision(), projection);
+      EXPECT_FALSE(row.isHidden());
+      EXPECT_EQ(visibility.hides, 0);
+      publish();
+    }
+  }
+  context.mouse(QEvent::MouseButtonRelease, {420, 300}, Qt::RightButton,
+                Qt::NoButton);
+  context.process();
 }
 
 TEST(QtViewportSurfaceInputTests,

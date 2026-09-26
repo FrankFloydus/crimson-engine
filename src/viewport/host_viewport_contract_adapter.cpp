@@ -1029,7 +1029,6 @@ bool viewport_target_requires_router_dispatch(std::string_view target_id) {
          target_id == quader_command::kViewportFocusOrigin.string() ||
          target_id == quader_command::kViewportGridIncrement.string() ||
          target_id == quader_command::kViewportGridDecrement.string() ||
-         target_id == quader_command::kViewportGridReset.string() ||
          target_id == "viewport.cancel_active_tool" ||
          target_id == "viewport.toggle_maximized" ||
          target_id == "viewport.delete_popup" ||
@@ -1117,8 +1116,6 @@ bool viewport_router_shortcut_for_target_id(std::string_view target_id,
     ++requested_grid_preset;
   } else if (target_id == quader_command::kViewportGridDecrement.string()) {
     --requested_grid_preset;
-  } else if (target_id == quader_command::kViewportGridReset.string()) {
-    requested_grid_preset = viewport_default_grid_preset();
   } else {
     return viewport_router_shortcut_for_target_id(target_id, shortcut);
   }

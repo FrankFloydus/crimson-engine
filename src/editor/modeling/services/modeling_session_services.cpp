@@ -4300,17 +4300,13 @@ ModelingToolSettingsTarget ModelingToolSettingsService::active_preview_target(
 ModelingToolSettingsTarget
 ModelingToolSettingsService::active_runtime_tool_target(
     const quader_editor_core::EditorRuntimeStatus &runtime_status) const {
-  ModelingToolSettingsTarget target;
-  if (runtime_status.active_tool ==
-      quader_editor_core::ViewportInteractionTool::Move) {
-    target.kind = ModelingToolSettingsTargetKind::Move;
-  } else if (runtime_status.active_tool ==
-             quader_editor_core::ViewportInteractionTool::LassoSelect) {
-    target.kind = ModelingToolSettingsTargetKind::LassoSelect;
+  if (runtime_status.active_tool == quader_editor_core::ViewportInteractionTool::Cut &&
+      !runtime_status.cut_active) {
+    return {};
   }
-  if (target.kind != ModelingToolSettingsTargetKind::None) {
-    target.active = true;
-    target.label = fallback_tool_settings_label(target.kind);
+  ModelingToolSettingsTarget target =
+      selected_runtime_tool_target(runtime_status.active_tool);
+  if (target.active) {
     return target;
   }
   if (runtime_status.cut_active) {
@@ -4318,6 +4314,24 @@ ModelingToolSettingsService::active_runtime_tool_target(
     target.active = true;
     target.label =
         fallback_tool_settings_label(ModelingToolSettingsTargetKind::Cut);
+  }
+  return target;
+}
+
+ModelingToolSettingsTarget
+ModelingToolSettingsService::selected_runtime_tool_target(
+    quader_editor_core::ViewportInteractionTool tool) const {
+  ModelingToolSettingsTarget target;
+  if (tool == quader_editor_core::ViewportInteractionTool::Move) {
+    target.kind = ModelingToolSettingsTargetKind::Move;
+  } else if (tool == quader_editor_core::ViewportInteractionTool::LassoSelect) {
+    target.kind = ModelingToolSettingsTargetKind::LassoSelect;
+  } else if (tool == quader_editor_core::ViewportInteractionTool::Cut) {
+    target.kind = ModelingToolSettingsTargetKind::Cut;
+  }
+  if (target.kind != ModelingToolSettingsTargetKind::None) {
+    target.active = true;
+    target.label = fallback_tool_settings_label(target.kind);
     return target;
   }
   return target;

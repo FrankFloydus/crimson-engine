@@ -140,65 +140,247 @@ TEST_F(QtFileMenuTests, RecoveryRoutesThroughTheFileMenuAndTracksAvailability) {
   EXPECT_EQ(recovery_requests_, 1);
 }
 
-TEST_F(QtFileMenuTests,
-       ViewShadingMenuPresentsAndDispatchesFourExclusiveModesInOrder) {
-  auto *shading =
-      menu_bar_->findChild<QMenu *>(QStringLiteral("menu_view_shading"));
-  ASSERT_NE(shading, nullptr);
+TEST_F(QtFileMenuTests, CompactMenusKeepFocusCommandsDirectlyUnderView) {
+  const auto top_level = menu_bar_->actions();
+  ASSERT_GE(top_level.size(), 3);
+  ASSERT_NE(top_level[0]->menu(), nullptr);
+  ASSERT_NE(top_level[1]->menu(), nullptr);
+  ASSERT_NE(top_level[2]->menu(), nullptr);
+  EXPECT_EQ(top_level[0]->menu()->objectName(), QStringLiteral("menu_file"));
+  EXPECT_EQ(top_level[1]->menu()->objectName(), QStringLiteral("menu_edit"));
+  EXPECT_EQ(top_level[2]->menu()->objectName(), QStringLiteral("menu_view"));
 
-  const QList<QAction *> actions = shading->actions();
-  ASSERT_EQ(actions.size(), 4);
-  menu_->refresh();
-  EXPECT_EQ(actions[0]->objectName(),
-            QStringLiteral("command_viewport_shading_wireframe"));
-  EXPECT_EQ(actions[1]->objectName(),
-            QStringLiteral("command_viewport_shading_solid"));
-  EXPECT_EQ(actions[2]->objectName(),
-            QStringLiteral("command_viewport_shading_shaded"));
-  EXPECT_EQ(actions[3]->objectName(),
-            QStringLiteral("command_viewport_shading_rendered"));
-  EXPECT_EQ(actions[0]->text(), QStringLiteral("Wireframe\tF5"));
-  EXPECT_EQ(actions[1]->text(), QStringLiteral("Solid"));
-  EXPECT_EQ(actions[2]->text(), QStringLiteral("Shaded\tF6"));
-  EXPECT_EQ(actions[3]->text(), QStringLiteral("Rendered\tF7"));
-
-  QActionGroup *group = actions.front()->actionGroup();
-  ASSERT_NE(group, nullptr);
-  EXPECT_TRUE(group->isExclusive());
-  for (QAction *action : actions) {
-    EXPECT_TRUE(action->isCheckable());
-    EXPECT_TRUE(action->shortcut().isEmpty());
-    EXPECT_EQ(action->actionGroup(), group);
+  auto *view = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_view"));
+  ASSERT_NE(view, nullptr);
+  const auto actions = view->actions();
+  ASSERT_GE(actions.size(), 6);
+  EXPECT_EQ(actions[0]->property("quaderCommandId").toString(),
+            QStringLiteral("viewport.toggle_local_visibility"));
+  EXPECT_TRUE(actions[1]->isSeparator());
+  EXPECT_EQ(actions[2]->property("quaderCommandId").toString(),
+            QStringLiteral("viewport.frame_selection"));
+  EXPECT_EQ(actions[3]->property("quaderCommandId").toString(),
+            QStringLiteral("viewport.focus_all"));
+  EXPECT_EQ(actions[4]->property("quaderCommandId").toString(),
+            QStringLiteral("viewport.focus_origin"));
+  EXPECT_TRUE(actions[5]->isSeparator());
+  for (const char *removed : {"menu_view_viewpoint", "menu_view_camera",
+                              "menu_view_shading", "menu_object_transform",
+                              "menu_object_snapping"}) {
+    EXPECT_EQ(menu_bar_->findChild<QMenu *>(QString::fromLatin1(removed)),
+              nullptr) << removed;
   }
+  EXPECT_EQ(menu_bar_->findChild<QAction *>(
+                QStringLiteral("action_keyboard_shortcuts")), nullptr);
+  EXPECT_EQ(menu_bar_->findChild<QAction *>(
+                QStringLiteral("command_select_toggle_backface_selection")),
+            nullptr);
+  auto *object = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_object"));
+  auto *display = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_view_display"));
+  ASSERT_NE(object, nullptr);
+  ASSERT_NE(display, nullptr);
+  for (const char *name : {"command_scene_hide_selection",
+                           "command_scene_unhide_hidden_objects"}) {
+    auto *action = menu_bar_->findChild<QAction *>(QString::fromLatin1(name));
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(view->actions().contains(action));
+    EXPECT_FALSE(object->actions().contains(action));
+  }
+  EXPECT_FALSE(display->actions().contains(actions[0]));
+  for (const char *name : {"command_viewport_toggle_transform_space",
+                           "command_viewport_spawn_window"}) {
+    EXPECT_EQ(menu_bar_->findChild<QAction *>(QString::fromLatin1(name)), nullptr);
+  }
+  EXPECT_TRUE(editor_->commands()
+                  .descriptor(quader_command::kViewportToggleTransformSpace)
+                  .has_value());
+  EXPECT_TRUE(editor_->commands()
+                  .descriptor(quader_command::kViewportSpawnWindow)
+                  .has_value());
+}
 
-  EXPECT_FALSE(actions[0]->isChecked());
-  EXPECT_FALSE(actions[1]->isChecked());
-  EXPECT_TRUE(actions[2]->isChecked());
-  EXPECT_FALSE(actions[3]->isChecked());
+TEST_F(QtFileMenuTests, SelectMenuSeparatesDistinctSelectionFamilies) {
+  auto *select = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_select"));
+  ASSERT_NE(select, nullptr);
+  const auto actions = select->actions();
+  for (const char *name : {"command_edit_clear_selection",
+                           "command_select_inverse", "command_select_edge_ring"}) {
+    auto *action = select->findChild<QAction *>(QString::fromLatin1(name));
+    ASSERT_NE(action, nullptr) << name;
+    const qsizetype index = actions.indexOf(action);
+    ASSERT_GE(index, 0);
+    ASSERT_LT(index + 1, actions.size());
+    EXPECT_TRUE(actions[index + 1]->isSeparator()) << name;
+  }
+  ASSERT_FALSE(actions.empty());
+  EXPECT_FALSE(actions.front()->isSeparator());
+  EXPECT_FALSE(actions.back()->isSeparator());
+  for (qsizetype index = 1; index < actions.size(); ++index) {
+    EXPECT_FALSE(actions[index - 1]->isSeparator() && actions[index]->isSeparator());
+  }
+}
 
-  actions[1]->trigger();
+TEST_F(QtFileMenuTests, ObjectMenuFlattensFormerGroupsAndOmitsDelete) {
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  QtUiScaleApplicationController scale_controller(*application_);
+  auto *object = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_object"));
+  ASSERT_NE(object, nullptr);
+  const auto actions = object->actions();
+  ASSERT_FALSE(actions.empty());
+  EXPECT_FALSE(actions.front()->isSeparator());
+  EXPECT_FALSE(actions.back()->isSeparator());
+  QStringList group_starts;
+  bool starts_group = true;
+  for (auto *action : actions) {
+    EXPECT_EQ(action->menu(), nullptr);
+    EXPECT_NE(action->objectName(), QStringLiteral("command_edit_delete"));
+    if (action->isSeparator()) {
+      EXPECT_FALSE(starts_group);
+      starts_group = true;
+    } else if (starts_group) {
+      group_starts.append(action->objectName());
+      starts_group = false;
+    }
+  }
+  EXPECT_EQ(group_starts, (QStringList{
+      QStringLiteral("command_edit_create_instance"),
+      QStringLiteral("command_edit_group"),
+      QStringLiteral("command_modeling_align_x_min"),
+      QStringLiteral("command_modeling_align_y_min"),
+      QStringLiteral("command_modeling_align_z_min"),
+      QStringLiteral("command_modeling_distribute_centers_x"),
+      QStringLiteral("command_modeling_distribute_gaps_x"),
+      QStringLiteral("command_edit_duplicate"),
+      QStringLiteral("action_material_find_replace"),
+  }));
+  EXPECT_TRUE(editor_->commands().descriptor(quader_command::kDeleteSelection)
+                  .has_value());
+  EXPECT_EQ(editor_->commands().shortcut_for(quader_command::kDeleteSelection),
+            "Delete");
+
+  const auto review_menu = [&](QMenu &reviewed, const QString &filename,
+                               int &row_height) {
+    reviewed.setAttribute(Qt::WA_DontShowOnScreen, true);
+    reviewed.popup(QPoint(20, 20));
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(reviewed.isVisible());
+    reviewed.setActiveAction(reviewed.actions().front());
+    row_height = reviewed.actionGeometry(reviewed.actions().front()).height();
+    EXPECT_GE(row_height, scale_controller.metrics().px(28));
+    const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+    if (!directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(directory));
+      QImage image(reviewed.size(), QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      reviewed.render(&image);
+      EXPECT_TRUE(image.save(QDir(directory).filePath(filename)));
+    }
+    reviewed.close();
+    QCoreApplication::processEvents();
+  };
+  auto *view = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_view"));
+  auto *window = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_window"));
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(window, nullptr);
+  const auto review_roots = [&](const QString &suffix) {
+    int row_height = 0;
+    review_menu(*view, QStringLiteral("view-menu-full-") + suffix + ".png",
+                row_height);
+    review_menu(*window, QStringLiteral("window-menu-full-") + suffix + ".png",
+                row_height);
+  };
+  int row_100 = 0;
+  review_menu(*object, QStringLiteral("object-menu-full-100.png"), row_100);
+  review_roots(QStringLiteral("100"));
+  ASSERT_TRUE(scale_controller.apply_factor(2.0F));
+  int row_200 = 0;
+  review_menu(*object, QStringLiteral("object-menu-full-200.png"), row_200);
+  EXPECT_GT(row_200, row_100);
+  review_roots(QStringLiteral("200"));
+  ASSERT_TRUE(scale_controller.apply_factor(1.0F));
+  int row_down = 0;
+  review_menu(*object, QStringLiteral("object-menu-full-scale-down.png"), row_down);
+  EXPECT_EQ(row_down, row_100);
+  review_roots(QStringLiteral("scale-down"));
+}
+
+TEST_F(QtFileMenuTests,
+       ViewportControlsFollowFocusWithoutMutatingApplicationDefaults) {
+  auto &viewports = editor_->viewports();
+  ASSERT_TRUE(viewports.set_layout(ViewportLayoutId::TwoVertical).ok());
+  constexpr ViewportPaneId kFirst = ViewportPaneId::Perspective;
+  constexpr ViewportPaneId kSecond = ViewportPaneId::Top;
+  ASSERT_TRUE(viewports.focus_pane(kFirst).ok());
+
+  struct ControlAction {
+    const char *object_name;
+    QuaderViewportControl control;
+    ViewportBoolSettingId preference;
+  };
+  constexpr ControlAction kControls[] = {
+      {"command_viewport_toggle_grid", QuaderViewportControl::ShowGrid,
+       ViewportBoolSettingId::ShowGrid},
+      {"command_viewport_toggle_gizmos", QuaderViewportControl::ShowGizmos,
+       ViewportBoolSettingId::ShowGizmos},
+      {"command_viewport_toggle_overlays", QuaderViewportControl::ShowOverlays,
+       ViewportBoolSettingId::ShowOverlays},
+      {"command_viewport_toggle_mesh_grid", QuaderViewportControl::ShowMeshGrid,
+       ViewportBoolSettingId::ShowMeshGrid},
+  };
+  for (const auto &entry : kControls) {
+    SCOPED_TRACE(entry.object_name);
+    auto *action = menu_bar_->findChild<QAction *>(
+        QString::fromLatin1(entry.object_name));
+    ASSERT_NE(action, nullptr);
+    const bool default_value = viewport_settings_.bool_value(entry.preference);
+    const bool original = viewports.control(kFirst, entry.control);
+    const bool second_original = viewports.control(kSecond, entry.control);
+    ASSERT_TRUE(viewports.focus_pane(kFirst).ok());
+    menu_->refresh();
+    ASSERT_EQ(action->isChecked(), original);
+    action->trigger();
+    EXPECT_EQ(viewports.control(kFirst, entry.control), !original);
+    EXPECT_EQ(viewports.control(kSecond, entry.control), second_original);
+    EXPECT_EQ(viewport_settings_.bool_value(entry.preference), default_value);
+    EXPECT_TRUE(viewports.control_overridden(kFirst, entry.control));
+    EXPECT_FALSE(viewports.control_overridden(kSecond, entry.control));
+
+    ASSERT_TRUE(viewports.focus_pane(kSecond).ok());
+    menu_->refresh();
+    EXPECT_EQ(action->isChecked(), second_original);
+    ASSERT_TRUE(viewports.focus_pane(kFirst).ok());
+    menu_->refresh();
+    EXPECT_EQ(action->isChecked(), !original);
+  }
+}
+
+TEST_F(QtFileMenuTests, RemovedMenuEntriesRetainTheirPublicCommands) {
+  for (const QuaderCommandId id : {
+           quader_command::kToolsActivateMove,
+           quader_command::kToolsActivateRotate,
+           quader_command::kToolsActivateScale,
+           quader_command::kToolsActivateCreateBox,
+           quader_command::kToolsActivateCreateCylinder,
+           quader_command::kToolsActivateCreateSphere,
+           quader_command::kToolsActivateCreateCone,
+           quader_command::kToolsActivateCreateTorus,
+           quader_command::kViewportViewTop,
+           quader_command::kViewportShadingShaded,
+           quader_command::kSelectToggleBackfaceSelection,
+       }) {
+    SCOPED_TRACE(std::string(id.string()));
+    EXPECT_TRUE(editor_->commands().descriptor(id).has_value());
+    for (const auto *action : menu_bar_->findChildren<QAction *>()) {
+      EXPECT_NE(action->property("quaderCommandId").toString(),
+                QString::fromUtf8(id.string().data(),
+                                  static_cast<qsizetype>(id.string().size())));
+    }
+  }
+  ASSERT_TRUE(editor_->commands().execute(
+      quader_command::kViewportShadingSolid).ok());
   EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
             QuaderShadingMode::Solid);
-  menu_->refresh();
-  EXPECT_TRUE(actions[1]->isChecked());
-
-  actions[3]->trigger();
-  EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
-            QuaderShadingMode::Rendered);
-  menu_->refresh();
-  EXPECT_TRUE(actions[3]->isChecked());
-
-  actions[0]->trigger();
-  EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
-            QuaderShadingMode::Wireframe);
-  menu_->refresh();
-  EXPECT_TRUE(actions[0]->isChecked());
-
-  actions[2]->trigger();
-  EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
-            QuaderShadingMode::Shaded);
-  menu_->refresh();
-  EXPECT_TRUE(actions[2]->isChecked());
 }
 
 TEST_F(QtFileMenuTests, ComponentMenusPresentOnlyTheInterpolatedBridge) {

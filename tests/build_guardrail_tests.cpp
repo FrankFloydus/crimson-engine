@@ -3348,7 +3348,11 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
   expect_contains(ui_system_source,
                   "scene_workspace_ = new QtSceneWorkspace(central_stack_)");
   expect_contains(ui_system_source,
-                  "scene_workspace_->set_viewport_widget(viewport_panel_)");
+                  "scene_workspace_->set_viewport_widget(viewport_container)");
+  expect_contains(ui_system_source,
+                  "viewport_panel_ = new QtViewportPanel(viewport_container)");
+  expect_contains(ui_system_source,
+                  "viewport_layout->addWidget(viewport_panel_, 1)");
   expect_contains(ui_system_source,
                   "central_stack_->addWidget(project_home_page_)");
   expect_contains(ui_system_source,
@@ -3642,7 +3646,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   EXPECT_LT(status_gate, status_setter);
 
   const std::size_t tool_settings_revision =
-      frame_refresh.find("active_settings_revision()");
+      frame_refresh.find("settings_revision(frame_focused_pane)");
   const std::size_t tool_settings_gate =
       frame_refresh.find("if (tool_settings_panel_ != nullptr &&");
   const std::size_t tool_settings_refresh =
@@ -3658,8 +3662,8 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   EXPECT_LT(numeric_interaction_gate, tool_settings_refresh);
   EXPECT_LT(tool_settings_gate, tool_settings_refresh);
   expect_missing(frame_refresh, "tools().active_settings()");
-  expect_contains(number_dispatch_lifecycle, "active_settings_revision()");
-  expect_contains(number_dispatch_lifecycle, "active_tool_revision()");
+  expect_contains(number_dispatch_lifecycle, "settings_revision(target_pane_)");
+  expect_contains(number_dispatch_lifecycle, "selected_tool_revision(target_pane_)");
   expect_missing(number_dispatch_lifecycle, "active_settings()");
   expect_contains(primitive_reset_availability,
                   "modeling_.box_drag_state()");

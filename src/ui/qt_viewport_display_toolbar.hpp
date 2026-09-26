@@ -7,10 +7,12 @@
 #pragma once
 
 #include "api/quader_command_ids.hpp"
+#include "api/quader_viewport_layout_types.hpp"
 
 #include <QToolBar>
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string_view>
@@ -26,7 +28,7 @@ class QtUiScaleMetrics;
 
 /**
  * Presents viewport display switches as retained command-backed actions.
- * Viewport settings remain public Preferences API owned.
+ * Focused-pane display state remains public Viewport API owned.
  */
 class QtViewportDisplayToolbar final : public QToolBar {
 public:
@@ -49,8 +51,12 @@ private:
     std::string_view fallback;
   };
 
-  /// Caches every preference value that can change checked presentation.
+  /// Gates command queries and caches focused-pane checked presentation.
   struct PresentedState {
+    const QuaderEditorApi *editor = nullptr;
+    ViewportPaneId pane = ViewportPaneId::Perspective;
+    std::uint64_t control_revision = 0;
+    std::uint64_t keybindings_revision = 0;
     std::array<bool, 4> toggles{};
 
     bool operator==(const PresentedState &) const = default;

@@ -59,7 +59,7 @@ struct ViewportSelectionApplyResult {
 class ViewportSelectionInteraction {
 public:
     void reset();
-    /// Resolves an earlier single click before a new gesture can pick its gizmo.
+    /// Captures the baseline for a possible native depth double-click.
     [[nodiscard]] std::optional<ViewportInteractionSelectionState>
     prepare_frame(QuaderEditorApi &editor,
                   const ViewportInteractionFrame &frame);
@@ -87,9 +87,9 @@ public:
     pointer_edit_operation(const ViewportInteractionFrame &frame) const;
     /// Cancels the owned gesture while reserving its eventual button release.
     bool cancel_lasso_drag();
-    /// Reports ownership of a deferred click, marquee, or held paint gesture.
+    /// Reports ownership of a marquee or held paint gesture.
     [[nodiscard]] bool pointer_interaction_active() const {
-      return pending_first_pick_.has_value() || box_state_.active ||
+      return box_state_.active ||
              box_pointer_.has_value() || paint_selection_active_ ||
              box_release_suppression_.active();
     }
@@ -124,8 +124,10 @@ private:
     std::uint64_t scene_revision = 0;
     std::uint64_t asset_revision = 0;
     std::uint64_t keybindings_revision = 0;
+    std::uint64_t history_revision = 0;
+    std::uint64_t gesture_merge_key = 0;
     bool double_click_pending = false;
-    bool delay_single_click = false;
+    bool has_depth_double_click = false;
 
     [[nodiscard]] bool matches_context(const ViewportInteractionFrame &frame,
                                        SceneSessionId current_scene) const;
@@ -133,27 +135,6 @@ private:
                                      SceneSessionId current_scene) const;
   };
 
-  /// Freezes a completed single pick until native double-click disambiguation.
-  struct PendingFirstPick {
-    ViewportPointerGesture pointer;
-    ModelingPickSelectRequest request;
-    std::optional<ResolvedSelectionTarget> winner;
-    std::optional<ResolvedComponentBodyTarget> component_body_target;
-    std::optional<ResolvedSelectionTarget> hovered_before_selection;
-    EditorSubSelectionKind miss_sub_selection_kind =
-        EditorSubSelectionKind::None;
-  };
-
-  /// Defers hover invalidation until the after-tool selection phase.
-  struct PendingPickFeedback {
-    QVec2 local = {};
-    std::optional<ResolvedSelectionTarget> hovered_before_selection;
-  };
-
-  ViewportSelectionApplyResult commit_pending_pick(
-      QuaderEditorApi &editor, const ViewportInteractionFrame &frame);
-  [[nodiscard]] bool pending_click_matches_context(
-      QuaderEditorApi &editor, const ViewportInteractionFrame &frame) const;
   std::optional<ViewportSelectionApplyResult> commit_pick_selection(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       QVec2 local_mouse, int click_count,
@@ -162,8 +143,6 @@ private:
       bool preserve_existing_component_selection_on_hit = false,
       ViewportModifiers click_modifiers = {},
       bool cycle_depth = false, ViewportModifiers cycle_modifiers = {},
-      std::optional<ResolvedSelectionTarget> hovered_before_selection =
-          std::nullopt,
       ViewportCurveInteractionPort *curve = nullptr,
       bool curve_controls_only = false);
   void clear_curve_control_box();
@@ -179,8 +158,6 @@ private:
   bool box_cycle_depth_ = false;
   ViewportModifiers box_cycle_modifiers_ = {};
   std::optional<DepthClickBaseline> depth_click_baseline_;
-  std::optional<PendingFirstPick> pending_first_pick_;
-  std::optional<PendingPickFeedback> pending_pick_feedback_;
   std::optional<ResolvedSelectionTarget> box_hovered_before_selection_;
   std::optional<EditorSelectionBoxBaseline> box_baseline_;
   std::optional<DepthClickBaseline> lasso_context_;

@@ -490,7 +490,7 @@ TEST_F(QtOperationInputHintTests, DisabledCommandsAreOmittedAndIntrinsicGestures
   EXPECT_FALSE(widget.accessibleName().contains(QStringLiteral("Apply")));
 }
 
-TEST_F(QtOperationInputHintTests, HeldAndModifierBindingsRemainAccurateAfterRemapping) {
+TEST_F(QtOperationInputHintTests, FixedNavigationModifierSurvivesHeldBindingRemapping) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
@@ -505,12 +505,12 @@ TEST_F(QtOperationInputHintTests, HeldAndModifierBindingsRemainAccurateAfterRema
   widget.refresh_snapshot(hints, 1, &hints, editor.commands(), localization);
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("D held")));
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("Alt")));
-  ASSERT_TRUE(editor.commands().set_shortcut(orbit_snap, "F19").ok());
+  EXPECT_FALSE(editor.commands().set_shortcut(orbit_snap, "F19").ok());
   ASSERT_TRUE(editor.commands().set_shortcut(quick_pivot, "F20").ok());
   widget.refresh_snapshot(hints, 1, &hints, editor.commands(), localization);
   EXPECT_TRUE(contains_badge(widget, QStringLiteral("F20 held")));
-  EXPECT_TRUE(contains_badge(widget, QStringLiteral("F19")));
-  EXPECT_FALSE(contains_badge(widget, QStringLiteral("Alt")));
+  EXPECT_FALSE(contains_badge(widget, QStringLiteral("F19")));
+  EXPECT_TRUE(contains_badge(widget, QStringLiteral("Alt")));
 }
 
 TEST_F(QtOperationInputHintTests, DynamicTargetNamesParticipateInRetainedPresentation) {

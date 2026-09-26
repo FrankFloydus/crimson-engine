@@ -122,7 +122,7 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
       input.pointer_interaction_canceled || !input.viewport_focused ||
       input.text_input_active || input.navigation_active ||
       frame.input_result.navigation_active || frame.input_result.camera_changed ||
-      frame.input_result.view_changed || frame.navigation_gizmo_consumed;
+      frame.input_result.view_changed;
   if (frame.input_result.cancel_requested || (press_ && interrupted)) {
     hover(ExtrudeHandlePart::None);
     const bool had_press = press_.has_value() || tool.dragging();

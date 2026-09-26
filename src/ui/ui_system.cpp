@@ -38,6 +38,7 @@
 #include "ui/qt_contextual_input_hints.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_main_window.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_material_browser_window.hpp"
@@ -58,7 +59,6 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_unsaved_confirmation_dialog.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
-#include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -524,21 +524,64 @@ bool UISystem::initialize(RenderSystem &render_system,
   auto *viewport_layout = new QVBoxLayout(viewport_container);
   viewport_layout->setContentsMargins(0, 0, 0, 0);
   viewport_layout->setSpacing(0);
-  viewport_control_strip_ = new QtViewportControlStrip(viewport_container);
-  const auto snapping_actions = snapping_toolbar_->viewport_actions();
-  viewport_control_strip_->add_action(*snapping_actions.front());
-  viewport_control_strip_->add_separator();
-  for (std::size_t index = 1; index < snapping_actions.size(); ++index) {
-    viewport_control_strip_->add_action(*snapping_actions[index]);
-  }
-  viewport_control_strip_->add_separator();
-  for (auto *action : viewport_display_toolbar_->viewport_actions()) {
-    if (action != nullptr) {
-      viewport_control_strip_->add_action(*action);
+  std::vector<QAction *> viewport_actions;
+  for (const auto tool : {ViewportToolId::Select, ViewportToolId::Move,
+                          ViewportToolId::Rotate, ViewportToolId::Scale}) {
+    if (auto *action = tool_toolbar_->tool_action(tool); action != nullptr) {
+      viewport_actions.push_back(action);
     }
   }
-  viewport_layout->addWidget(viewport_control_strip_);
+  const auto snapping_actions = snapping_toolbar_->viewport_actions();
+  viewport_actions.push_back(snapping_actions.front());
+  auto *backface_selection = new QAction(
+      qt_multiresolution_icon(QStringLiteral(":/quader/icons/selection_backface.png")),
+      QString::fromStdString(localization_.text(
+          "ui.menu.select.toggle_backface_selection", "Toggle Backface Selection")),
+      viewport_container);
+  backface_selection->setObjectName(QStringLiteral("backfaceSelection"));
+  backface_selection->setCheckable(true);
+  QObject::connect(backface_selection, &QAction::triggered, viewport_container,
+                   [this]() {
+                     if (editor_ != nullptr) {
+                       (void)editor_->commands().execute(
+                           quader_command::kSelectToggleBackfaceSelection);
+                     }
+                   });
+  viewport_actions.push_back(backface_selection);
+  viewport_actions.push_back(nullptr);
+  for (std::size_t index = 1; index < snapping_actions.size(); ++index) {
+    viewport_actions.push_back(snapping_actions[index]);
+  }
+  viewport_actions.push_back(nullptr);
+  for (auto *action : viewport_display_toolbar_->viewport_actions()) {
+    if (action != nullptr) {
+      viewport_actions.push_back(action);
+    }
+  }
   viewport_panel_ = new QtViewportPanel(viewport_container);
+  viewport_panel_->set_control_actions(
+      viewport_actions, tool_toolbar_->tool_action(ViewportToolId::LassoSelect));
+  viewport_panel_->set_control_action_requested_callback(
+      [this](ViewportPaneId pane, QAction &action) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        const auto focused = editor_->viewports().focus_pane(pane);
+        if (!focused.ok()) {
+          present_lifecycle_result(focused);
+          return;
+        }
+        // The original actions dispatch through the existing command owners.
+        // Synchronize their toggle direction to the clicked pane first.
+        tool_toolbar_->synchronize(*editor_, editor_->selection().summary(), true);
+        snapping_toolbar_->synchronize(*editor_, true);
+        viewport_display_toolbar_->synchronize(*editor_, true);
+        const auto generation = runtime_binding_generation_;
+        action.trigger();
+        if (editor_ != nullptr && generation == runtime_binding_generation_) {
+          viewport_panel_->refresh_control_actions(*editor_);
+        }
+      });
   viewport_panel_->set_viewport_settings(viewport_settings_);
   viewport_panel_->set_localization(localization_);
   viewport_layout->addWidget(viewport_panel_, 1);
@@ -1136,7 +1179,8 @@ void UISystem::install_runtime_hooks(
           return;
         }
         present_lifecycle_result(
-            editor_->preferences().set_rotation_snap_degrees(degrees));
+            editor_->viewports().set_rotation_snap_degrees(
+                editor_->viewports().focused_pane(), degrees));
       });
   viewport_display_toolbar_->set_command_requested_callback(
       [this](QuaderCommandId command_id) {
@@ -1162,7 +1206,8 @@ void UISystem::install_runtime_hooks(
           return;
         }
         present_lifecycle_result(
-            editor_->preferences().set_snapping_enabled(enabled));
+            editor_->viewports().set_control(editor_->viewports().focused_pane(),
+                QuaderViewportControl::SnappingEnabled, enabled));
       });
   snapping_toolbar_->set_grid_snap_enabled_requested_callback(
       [this](bool enabled) {
@@ -1170,7 +1215,8 @@ void UISystem::install_runtime_hooks(
           return;
         }
         present_lifecycle_result(
-            editor_->preferences().set_grid_snap_enabled(enabled));
+            editor_->viewports().set_control(editor_->viewports().focused_pane(),
+                QuaderViewportControl::GridSnap, enabled));
       });
   snapping_toolbar_->set_vertex_snap_enabled_requested_callback(
       [this](bool enabled) {
@@ -1178,7 +1224,8 @@ void UISystem::install_runtime_hooks(
           return;
         }
         present_lifecycle_result(
-            editor_->preferences().set_vertex_snap_enabled(enabled));
+            editor_->viewports().set_control(editor_->viewports().focused_pane(),
+                QuaderViewportControl::VertexSnap, enabled));
       });
   snapping_toolbar_->set_rotation_snap_enabled_requested_callback(
       [this](bool enabled) {
@@ -1186,7 +1233,8 @@ void UISystem::install_runtime_hooks(
           return;
         }
         present_lifecycle_result(
-            editor_->preferences().set_rotation_snap_enabled(enabled));
+            editor_->viewports().set_control(editor_->viewports().focused_pane(),
+                QuaderViewportControl::RotationSnap, enabled));
       });
 
   ViewportWorkspaceService &workspace =
@@ -1793,19 +1841,6 @@ void UISystem::install_runtime_hooks(
                 ViewportBoolSettingId::ShowInfo, visible);
             if (changed) {
               (void)save_viewport_settings();
-              synchronize_settings_surfaces(true);
-            }
-            return runtime_status(changed);
-          },
-      .navigation_gizmo_visible =
-          [this]() { return settings_.navigation_gizmo_visible(); },
-      .set_navigation_gizmo_visible =
-          [this](bool visible) {
-            const bool changed =
-                settings_.navigation_gizmo_visible() != visible;
-            settings_.set_navigation_gizmo_visible(visible);
-            if (changed) {
-              (void)save_settings();
               synchronize_settings_surfaces(true);
             }
             return runtime_status(changed);
@@ -3034,7 +3069,6 @@ void UISystem::shutdown() {
   startup_presentation_started_ = {};
   startup_expected_maximized_ = false;
   viewport_panel_ = nullptr;
-  viewport_control_strip_ = nullptr;
   central_stack_ = nullptr;
   project_home_page_ = nullptr;
   scene_workspace_ = nullptr;
@@ -3143,8 +3177,12 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       (face_texture_panel_ != nullptr &&
        (face_texture_panel_->numeric_interaction_active() ||
         face_texture_panel_->interaction_active()));
-  const std::uint64_t frame_tool_settings_revision =
-      editor_ != nullptr ? editor_->tools().active_settings_revision() : 0u;
+  const ViewportPaneId frame_focused_pane = editor_ != nullptr
+      ? editor_->viewports().focused_pane() : ViewportPaneId::Perspective;
+  const std::uint64_t frame_pane_control_revision = editor_ != nullptr
+      ? editor_->viewports().control_revision(frame_focused_pane) : 0u;
+  const std::uint64_t frame_tool_settings_revision = editor_ != nullptr
+      ? editor_->tools().settings_revision(frame_focused_pane) : 0u;
   const std::uint64_t frame_active_tool_revision =
       editor_ != nullptr ? editor_->tools().active_tool_revision() : 0u;
   const bool frame_operation_preview_active =
@@ -3194,12 +3232,15 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         };
       }();
       const ToolbarToolPresentationStamp tool_stamp{
+          .pane = frame_focused_pane,
+          .pane_control_revision = frame_pane_control_revision,
           .active_tool_revision = frame_active_tool_revision,
           .keybindings_revision = editor_->commands().keybindings_revision(),
           .preferred_primitive_shape =
               editor_->tools().preferred_primitive_shape(),
       };
       const ToolbarTransformPresentationStamp transform_stamp{
+          .pane = frame_focused_pane,
           .transform_space_revision = frame_transform_space_revision,
       };
       const bool owner_state_changed =
@@ -3242,6 +3283,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     if (texture_toolbar_ != nullptr) {
       QDR_PROFILE_SCOPE("UI synchronize texture toolbar");
       texture_toolbar_->synchronize(*editor_);
+    }
+    if (viewport_panel_ != nullptr) {
+      viewport_panel_->refresh_control_actions(*editor_);
     }
   }
   if (viewport_panel_ != nullptr) {
@@ -3335,11 +3379,12 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   }
   const std::uint64_t settings_operation_serial =
       editor_ != nullptr
-          ? editor_->tools().active_settings_presentation_origin().serial
+          ? editor_->tools().settings_presentation_serial(frame_focused_pane)
           : 0u;
   const auto *presented_settings = tool_settings_presenter_.presented_stamp();
   const bool settings_lifecycle_changed =
       presented_settings == nullptr ||
+      presented_settings->pane != frame_focused_pane ||
       presented_settings->operation_serial != settings_operation_serial ||
       presented_settings->active_tool_revision != frame_active_tool_revision ||
       presented_settings->operation_preview_active !=
@@ -3349,6 +3394,8 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   if (tool_settings_panel_ != nullptr &&
       (!numeric_interaction_active || settings_lifecycle_changed)) {
     const ToolSettingsPresentationStamp stamp{
+        .pane = frame_focused_pane,
+        .pane_control_revision = frame_pane_control_revision,
         .active_settings_revision = frame_tool_settings_revision,
         .operation_serial = settings_operation_serial,
         .active_tool_revision = frame_active_tool_revision,
@@ -3491,6 +3538,8 @@ bool UISystem::save_settings() {
 }
 
 bool UISystem::save_viewport_settings() {
+  ++viewport_defaults_revision_;
+  apply_viewport_settings_to_workspace();
   if (settings_paths_.viewport_settings_file.empty()) {
     return false;
   }
@@ -5251,7 +5300,6 @@ void UISystem::handle_settings_dialog_change(const QtSettingsChange &change) {
   case QtSettingsChangeKind::ViewportPreview:
     return;
   case QtSettingsChangeKind::ViewportCommit:
-    apply_viewport_settings_to_workspace();
     (void)save_viewport_settings();
     break;
   case QtSettingsChangeKind::InterfacePreview:
@@ -5342,9 +5390,6 @@ void UISystem::apply_ui_scale_to_retained_surfaces(
   if (viewport_display_toolbar_ != nullptr) {
     viewport_display_toolbar_->apply_ui_scale(metrics);
   }
-  if (viewport_control_strip_ != nullptr) {
-    viewport_control_strip_->apply_ui_scale(metrics);
-  }
   if (texture_toolbar_ != nullptr) {
     texture_toolbar_->apply_ui_scale(metrics);
   }
@@ -5428,12 +5473,14 @@ void UISystem::apply_viewport_settings_to_workspace() {
   }
   ViewportWorkspaceService &workspace =
       QuaderViewportApiRuntimeAccess::workspace(editor_->viewports());
+  workspace.update_control_defaults(viewport_settings_, viewport_defaults_revision_);
   (void)workspace.set_default_fly_speed(viewport_settings_.float_value(
       ViewportFloatSettingId::DefaultFlyNavigationSpeed));
 }
 
 void UISystem::synchronize_settings_surfaces(bool refresh_dialog) {
   QDR_PROFILE_SCOPE("UI synchronize settings surfaces");
+  apply_viewport_settings_to_workspace();
   toolbar_owner_presenter_.invalidate();
   toolbar_tool_presenter_.invalidate();
   toolbar_transform_presenter_.invalidate();
@@ -5445,6 +5492,9 @@ void UISystem::synchronize_settings_surfaces(bool refresh_dialog) {
   }
   if (texture_toolbar_ != nullptr && editor_ != nullptr) {
     texture_toolbar_->synchronize(*editor_, true);
+  }
+  if (viewport_panel_ != nullptr && editor_ != nullptr) {
+    viewport_panel_->refresh_control_actions(*editor_);
   }
   if (main_menu_ != nullptr) {
     main_menu_->refresh();

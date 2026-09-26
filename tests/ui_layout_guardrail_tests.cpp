@@ -73,11 +73,11 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_panel_section_header.hpp",
       "src/ui/qt_viewport_context_menu.hpp",
       "src/ui/qt_viewport_context_menu.cpp",
-      "src/ui/qt_navigation_gizmo.hpp",
-      "src/ui/qt_navigation_gizmo.cpp",
       "src/ui/qt_semantic_axis_colors.hpp",
       "src/ui/qt_viewport_panel.hpp",
       "src/ui/qt_viewport_panel.cpp",
+      "src/ui/qt_viewport_control_strip.hpp",
+      "src/ui/qt_viewport_control_strip.cpp",
       "src/ui/qt_viewport_surface.hpp",
       "src/ui/qt_viewport_surface.cpp",
       "src/ui/qt_main_window.hpp",
@@ -513,7 +513,7 @@ TEST(UiLayoutGuardrailTests,
   const std::size_t first_surface_presentation = viewport_source.find(
       "if (!pane_state.surface_presented)", geometry_stabilized);
   const std::size_t startup_geometry_reassert = viewport_source.find(
-      "pane_state.surface_container->setGeometry(pane_state.frame->rect())",
+      "pane_state.surface_container->setGeometry(pane_content_rect(pane_state))",
       first_surface_presentation);
   const std::size_t mark_surface_presented = viewport_source.find(
       "pane_state.surface_presented = true", startup_geometry_reassert);
@@ -532,7 +532,7 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_EQ(count_occurrences(
                 startup_reveal_span,
                 "pane_state.surface_container->setGeometry("
-                "pane_state.frame->rect())"),
+                "pane_content_rect(pane_state))"),
             1u);
   expect_contains(viewport_source, "devicePixelRatioF()");
   expect_contains(viewport_source,
@@ -909,13 +909,11 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     InspectorAndNavigationGizmoShareSemanticAxisColors) {
+     InspectorUsesSharedSemanticAxisColors) {
   const std::string inspector =
       read_source_file("src/ui/inspector_panel.cpp");
   const std::string axis_colors =
       read_source_file("src/ui/qt_semantic_axis_colors.hpp");
-  const std::string navigation_gizmo =
-      read_source_file("src/ui/qt_navigation_gizmo.cpp");
 
   expect_contains(inspector,
                   "#include \"ui/qt_semantic_axis_colors.hpp\"");
@@ -928,14 +926,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(axis_colors, "QColor(78, 142, 255)");
   expect_missing(axis_colors, "QPalette::Button");
   expect_missing(axis_colors, "setStyleSheet(");
-  expect_contains(navigation_gizmo,
-                  "qt_semantic_axis_color(edge.axis)");
-  expect_contains(navigation_gizmo,
-                  "qt_semantic_axis_color(marker.axis)");
-  expect_contains(navigation_gizmo,
-                  "painter.setPen(colors.shadow().color())");
-  expect_missing(navigation_gizmo, "colors.windowText().color()");
-  expect_missing(navigation_gizmo, "QColor axis_color(");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1024,7 +1014,7 @@ TEST(UiLayoutGuardrailTests,
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
   const std::string generic_action = source_slice(
       tool, "case QuaderToolSettingControlKind::Action:",
-      "control_layout.addWidget(button);");
+      "row_layout->addWidget(button, 0, 1);");
 
   expect_contains(settings_header,
                   "class QtSettingsDialog final : public QDialog");
@@ -1104,8 +1094,9 @@ TEST(UiLayoutGuardrailTests,
                   "    })");
   expect_contains(tool, "struct NumberDispatchLifecycle");
   expect_contains(tool, "number_dispatch_lifecycle_is_current(");
-  expect_contains(tool, "active_settings_revision()");
-  expect_contains(tool, "active_tool_revision()");
+  expect_contains(tool, "settings_revision(target_pane_)");
+  expect_contains(tool, "selected_tool_revision(target_pane_)");
+  expect_contains(tool, "editor_->viewports().focused_pane() == target_pane_");
   const std::string apply = source_slice(
       tool, "QObject::connect(apply_button_, &QPushButton::clicked",
       "QObject::connect(cancel_button_, &QPushButton::clicked");
@@ -1136,7 +1127,7 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(tool, "maximum_label");
   expect_contains(tool,
                   "option_localization_key = \"tool_settings.\"");
-  expect_contains(tool, "editor_->tools().active_settings()");
+  expect_contains(tool, "editor_->tools().settings_for_pane(pane)");
   expect_missing(tool, "editor_->tools().reset_active_settings()");
   expect_contains(tool, "editor_->tools().commit_active_tool_preview()");
   expect_contains(tool, "editor_->tools().cancel_active_tool_preview()");
@@ -1144,7 +1135,7 @@ TEST(UiLayoutGuardrailTests,
   const std::size_t action_flush =
       generic_action.find("flush_pending_number_dispatches();");
   const std::size_t action_dispatch =
-      generic_action.find("editor_->tools().execute_action(");
+      generic_action.find("execute_pane_action(");
   ASSERT_NE(action_flush, std::string::npos);
   ASSERT_NE(action_dispatch, std::string::npos);
   EXPECT_LT(action_flush, action_dispatch);
@@ -1310,14 +1301,14 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(prepare, "generation == binding_generation_");
   expect_contains(prepare, "controls_generation == control_generation_");
   expect_contains(prepare, "presentation_is_current()");
-  expect_contains(prepare, "active_tool_revision() == tool_revision");
+  expect_contains(prepare, "selected_tool_revision(target_pane_) == tool_revision");
 
   const std::string lifecycle = source_slice(
       panel, "  [[nodiscard]] bool number_dispatch_lifecycle_is_current(",
       "  [[nodiscard]] bool vector3_dispatch_lifecycle_is_current(");
   expect_contains(lifecycle, "binding_generation_ != lifecycle.binding_generation");
-  expect_contains(lifecycle, "active_settings_revision()");
-  expect_contains(lifecycle, "active_tool_revision()");
+  expect_contains(lifecycle, "settings_revision(target_pane_)");
+  expect_contains(lifecycle, "selected_tool_revision(target_pane_)");
 
   const std::string frame = source_slice(
       ui, "    const ToolSettingsPresentationStamp stamp{",
@@ -1541,7 +1532,16 @@ TEST(UiLayoutGuardrailTests,
                    "QtSettingsController::ChangeCallback settings_changed");
   expect_contains(menu_header, "viewport_settings_changed");
   expect_missing(menu_header, "std::function<void()> settings_changed");
-  expect_contains(menu, "context.viewport_settings_changed()");
+  expect_missing(menu, "context.viewport_settings_changed()");
+  expect_contains(menu, "context.editor.get().commands().execute(command_id)");
+  expect_contains(menu, "context.editor.get().viewports().control(");
+  const std::string grid_command = source_slice(
+      read_source_file("src/api/quader_commands_api.cpp"),
+      "register_command(quader_command::kViewportToggleGrid,",
+      "register_command(quader_command::kViewportToggleGizmos,");
+  expect_contains(grid_command, "viewports_.set_control(");
+  expect_contains(grid_command, "QuaderViewportControl::ShowGrid");
+  expect_missing(grid_command, "preferences_.");
   expect_contains(menu, "&QMenu::aboutToShow");
 
   expect_contains(ui_system,
@@ -1826,7 +1826,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system, "owner_state_changed);");
   expect_contains(ui_system,
                   "toolbar_owner_presenter_.needs_refresh(owner_stamp)");
-  expect_contains(toolbar, "editor.tools().active_tool()");
+  expect_contains(toolbar, "viewports.selected_tool(pane)");
+  expect_contains(toolbar, "synchronized_control_revision_ == control_revision");
+  expect_contains(toolbar, "synchronized_pane_ == pane");
+  expect_contains(toolbar, "editor.tools().active_tool_revision()");
   expect_contains(toolbar,
                   "command_id_for_tool_activation(entry.tool_id)");
   expect_contains(toolbar,
@@ -2360,53 +2363,21 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
 }
 
 TEST(UiLayoutGuardrailTests,
-     QtViewportRestoresPerPaneInteractiveNavigationGizmos) {
-  const std::string header =
-      read_source_file("src/ui/qt_navigation_gizmo.hpp");
-  const std::string gizmo =
-      read_source_file("src/ui/qt_navigation_gizmo.cpp");
+     QtViewportUsesPaneCameraControlsWithoutNavigationGizmo) {
   const std::string panel_header =
       read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string cmake = read_source_file("CMakeLists.txt");
 
-  expect_contains(header,
-                  "class QtNavigationGizmo final : public QFrame");
-  expect_contains(header,
-                  "class QtNavigationGizmoInteraction final");
-  expect_contains(gizmo,
-                  "quader_editor_core::build_view_cube_primitives(");
-  expect_contains(gizmo, "quader_editor_core::pick_view_cube(");
-  expect_contains(gizmo, "camera.update_drag_delta(camera_delta)");
-  expect_contains(gizmo, "camera.view_axis(");
-  expect_contains(gizmo, "ViewportAxisLock::Unlocked");
-  expect_contains(gizmo, "grabMouse()");
-  expect_contains(gizmo, "releaseMouse()");
-  expect_contains(
-      gizmo,
-      "qt_navigation_gizmo_camera_refresh_required(camera_snapshot_");
-  expect_contains(
-      gizmo,
-      "qt_navigation_gizmo_visibility_refresh_required(gizmo_visible_");
-  expect_contains(gizmo,
-                  "camera_snapshot_ = "
-                  "qt_navigation_gizmo_camera_snapshot(camera_)");
-
-  expect_contains(panel_header,
-                  "QtNavigationGizmo *navigation_gizmo = nullptr");
-  expect_contains(panel, "new QtNavigationGizmo(pane_state.id");
-  expect_contains(panel, "editor.preferences().navigation_gizmo_visible()");
-  expect_contains(panel, "workspace_->focus_pane(pane_id)");
-  expect_contains(panel, "navigation_gizmo_locked_pane");
-  expect_contains(panel, "navigation_gizmo_consumed");
-  expect_contains(cmake, "src/ui/qt_navigation_gizmo.cpp");
-  expect_contains(cmake, "tests/qt_navigation_gizmo_tests.cpp");
-
-  expect_missing(gizmo, "ImGui");
-  expect_missing(gizmo, "SDL");
-  expect_missing(gizmo, "setStyleSheet(");
-  expect_missing(gizmo, "setPalette(");
+  expect_missing(panel_header, "QtNavigationGizmo");
+  expect_missing(panel, "navigation_gizmo");
+  expect_missing(cmake, "src/ui/qt_navigation_gizmo.cpp");
+  expect_missing(cmake, "tests/qt_navigation_gizmo_tests.cpp");
+  expect_contains(cmake, "tests/qt_viewport_header_tests.cpp");
+  expect_contains(panel_header, "QMenu *camera_menu = nullptr");
+  expect_contains(panel, "set_pane_view(pane_state, view)");
+  expect_contains(panel, "const ViewportView view = workspace_->view(pane_state.id)");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2491,9 +2462,6 @@ TEST(UiLayoutGuardrailTests,
       "pane_state.surface_container->geometry() != pane_bounds");
   expect_contains(overlay_body,
                   "pane_state.toolbar->geometry() != toolbar_geometry");
-  expect_contains(
-      overlay_body,
-      "pane_state.navigation_gizmo->geometry() != navigation_geometry");
   expect_contains(overlay_body, "if (!pane_state.overlay_stack_valid)");
   expect_contains(overlay_body, "const bool becoming_visible = !host.visible");
   expect_contains(overlay_body,
@@ -2540,8 +2508,6 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string surface =
       read_source_file("src/ui/qt_viewport_surface.cpp");
-  const std::string navigation_gizmo =
-      read_source_file("src/ui/qt_navigation_gizmo.cpp");
 
   const std::size_t resolver =
       panel.find("ViewportKeybindingResolver::resolve(");
@@ -2606,14 +2572,6 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(delta_reset, pressed_edge_reset);
   EXPECT_LT(pressed_edge_reset, released_edge_reset);
   EXPECT_LT(released_edge_reset, render_size_sync);
-  expect_contains(navigation_gizmo,
-                  "const QPointF logical_delta = event->position() -");
-  expect_contains(navigation_gizmo,
-                  "static_cast<float>(logical_delta.x())");
-  expect_missing(navigation_gizmo, "logical_delta.x() * scale");
-  expect_contains(navigation_gizmo, "event->type() == QEvent::UngrabMouse");
-  expect_contains(navigation_gizmo,
-                  "event->type() == QEvent::WindowDeactivate");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2668,6 +2626,8 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string surface =
       read_source_file("src/ui/qt_viewport_surface.cpp");
+  const std::string strip =
+      read_source_file("src/ui/qt_viewport_control_strip.cpp");
 
   expect_contains(panel_header,
                   "std::vector<ViewportPanePlacement> displayed_placements_");
@@ -2680,9 +2640,31 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel_header, "QMenu *debug_view_menu = nullptr");
   expect_contains(panel_header,
                   "void refresh_keybinding_presentation(QuaderEditorApi &editor)");
-  expect_contains(panel, "new QPushButton(pane_state.toolbar)");
+  expect_contains(panel, "new QtViewportCompactMenuButton(pane_state.toolbar)");
   expect_contains(panel,
-                  "pane_state.display_menu->setMinimumWidth(chrome.menu_width)");
+                  "pane_state.camera_menu = new QMenu(pane_state.camera_button)");
+  expect_contains(panel, "pane_state.toolbar = new QtViewportControlStrip(");
+  expect_contains(panel, "const QRect pane_bounds = pane_content_rect(pane_state)");
+  const std::string pane_actions = source_slice(
+      panel, "void QtViewportPanel::set_control_actions(",
+      "void QtViewportPanel::set_settings_panel(");
+  expect_contains(pane_actions, "new QAction(pane_state.toolbar)");
+  expect_missing(pane_actions, "source->isChecked()");
+  expect_contains(pane_actions, "workspace_->selected_tool(pane_state.id)");
+  const auto controls_gate = pane_actions.find(
+      "pane_state.controls_valid && pane_state.controls_revision == revision");
+  const auto controls_loop = pane_actions.find(
+      "for (const auto &entry : pane_state.control_actions)", controls_gate);
+  ASSERT_NE(controls_gate, std::string::npos);
+  ASSERT_NE(controls_loop, std::string::npos);
+  EXPECT_LT(controls_gate, controls_loop);
+  const auto selection_presentation = pane_actions.find(
+      "const std::size_t preferred_selection =", controls_gate);
+  ASSERT_NE(selection_presentation, std::string::npos);
+  EXPECT_LT(controls_gate, selection_presentation);
+  expect_missing(pane_actions, "commands().available()");
+  expect_contains(strip, "QToolButton::DelayedPopup");
+  expect_missing(strip, "setStyleSheet(");
   expect_contains(panel, "pane_state.display_menu->addMenu(");
   expect_missing(panel, "new QComboBox(pane_state.toolbar)");
   expect_missing(panel, "viewportView_%1");
@@ -2718,8 +2700,7 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(active_tool_revision, active_tool_gate);
   EXPECT_LT(active_tool_gate, active_tool_string);
   const std::size_t active_tool_sync_end =
-      panel.find("const ViewportSettings &"
-                 "QtViewportPanel::active_viewport_settings() const",
+      panel.find("void QtViewportPanel::set_pane_view(",
                  active_tool_string);
   ASSERT_NE(active_tool_sync_end, std::string::npos);
   const std::string active_tool_sync_body =
@@ -2911,10 +2892,6 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
-  const std::string gizmo_header =
-      read_source_file("src/ui/qt_navigation_gizmo.hpp");
-  const std::string gizmo =
-      read_source_file("src/ui/qt_navigation_gizmo.cpp");
   const std::string surface_header =
       read_source_file("src/ui/qt_viewport_surface.hpp");
   const std::string surface =
@@ -2941,7 +2918,9 @@ TEST(UiLayoutGuardrailTests,
       panel, "void QtViewportPanel::abandon_interactions()",
       "void QtViewportPanel::attach_workspace(");
   expect_contains(abandon, "++runtime_binding_generation_;");
-  expect_contains(abandon, "navigation_gizmo->abandon_camera();");
+  expect_contains(abandon, "pane_state.camera_menu, pane_state.display_menu");
+  expect_contains(abandon, "pane_state.selection_action->menu()");
+  expect_contains(abandon, "menu->close()");
   expect_contains(abandon, "pane_state.surface->abandon_input();");
   expect_contains(abandon, "handle.widget->releaseMouse();");
   expect_contains(abandon, "split_handle_dragging_ = false;");
@@ -2961,15 +2940,20 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(abandon, "*interaction_native_tools_");
   expect_missing(abandon, "interaction_controller_.reset(interaction_editor_");
 
-  expect_contains(gizmo_header, "void abandon_camera();");
-  expect_contains(gizmo_header, "void abandon();");
-  const std::string abandon_camera = source_slice(
-      gizmo, "void QtNavigationGizmo::abandon_camera()",
-      "void QtNavigationGizmo::set_gizmo_visible(");
-  expect_contains(abandon_camera, "interaction_.abandon();");
-  expect_contains(abandon_camera, "camera_ = nullptr;");
-  expect_missing(abandon_camera, "*camera_");
-  expect_missing(abandon_camera, "finish_interaction(");
+  const std::string control_dispatch = source_slice(
+      panel, "void QtViewportPanel::dispatch_control_action(",
+      "void QtViewportPanel::refresh_selection_tool_actions(");
+  const auto dispatch_callback =
+      control_dispatch.find("control_action_requested_(pane_state.id, action)");
+  const auto dispatch_fence = control_dispatch.find(
+      "if (generation != runtime_binding_generation_) return;", dispatch_callback);
+  const auto dispatch_refresh =
+      control_dispatch.find("sync_pane_actions(pane_state)", dispatch_callback);
+  ASSERT_NE(dispatch_callback, std::string::npos);
+  ASSERT_NE(dispatch_fence, std::string::npos);
+  ASSERT_NE(dispatch_refresh, std::string::npos);
+  EXPECT_LT(dispatch_callback, dispatch_fence);
+  EXPECT_LT(dispatch_fence, dispatch_refresh);
 
   expect_contains(surface_header, "void abandon_input();");
   const std::string abandon_input = source_slice(
@@ -3061,18 +3045,61 @@ TEST(UiLayoutGuardrailTests,
             3u);
   expect_contains(input.substr(first_generation_gate),
                   "suppressed_keybinding_chords_.clear();");
+  const auto passive_pane_start = input.find(
+      "if (!editor.tools().pane_owns_executing_tool(*input_pane)) {");
+  const auto passive_pane_end = input.find(
+      "if ((interaction_frame.active_tool_allows_selection_fallback ||",
+      passive_pane_start);
+  ASSERT_NE(passive_pane_start, std::string::npos);
+  ASSERT_NE(passive_pane_end, std::string::npos);
+  const std::string passive_pane = input.substr(
+      passive_pane_start, passive_pane_end - passive_pane_start);
+  // Passive menus are mutually exclusive and return without reading the old
+  // owners. Each presenter still receives the generation fence for dispatch.
+  const auto expect_passive_menu_tail = [&](std::string_view presenter,
+                                            std::string_view branch_end) {
+    const auto call = passive_pane.find(presenter);
+    const auto end = passive_pane.find(branch_end, call);
+    const auto generation = passive_pane.find(
+        ".expected_generation = input_binding_generation", call);
+    const auto call_end = passive_pane.find("});", generation);
+    ASSERT_NE(call, std::string::npos);
+    ASSERT_NE(end, std::string::npos);
+    ASSERT_NE(generation, std::string::npos);
+    ASSERT_NE(call_end, std::string::npos);
+    ASSERT_LT(generation, end);
+    ASSERT_LT(call_end, end);
+    expect_contains(passive_pane.substr(call, call_end - call),
+                    ".current_generation = &runtime_binding_generation_");
+    EXPECT_EQ(passive_pane.substr(call_end + 3, end - call_end - 3)
+                  .find_first_not_of(" \t\r\n}"),
+              std::string::npos);
+  };
+  expect_passive_menu_tail("context_menu_presenter_.show(",
+                           "} else if (show_delete_popup)");
+  expect_passive_menu_tail("delete_popup_presenter_.show(",
+                           "} else if (show_quick_menu)");
+  expect_passive_menu_tail("quick_menu_presenter_.show(", "return;");
+  const auto passive_return = passive_pane.find("return;");
+  ASSERT_NE(passive_return, std::string::npos);
+  EXPECT_EQ(passive_pane.substr(passive_return + std::string_view("return;").size())
+                .find_first_not_of(" \t\r\n}"),
+            std::string::npos);
+  const auto ordinary_menu_start = input.find("if (show_context_menu) {");
+  ASSERT_NE(ordinary_menu_start, std::string::npos);
+  const std::string ordinary_menus = input.substr(ordinary_menu_start);
   const std::size_t context_menu =
-      input.find("context_menu_presenter_.show(");
-  const std::size_t context_menu_gate = input.find(
+      ordinary_menus.find("context_menu_presenter_.show(");
+  const std::size_t context_menu_gate = ordinary_menus.find(
       "runtime_binding_generation_ != input_binding_generation",
       context_menu);
   const std::size_t delete_popup =
-      input.find("delete_popup_presenter_.show(", context_menu);
-  const std::size_t delete_popup_gate = input.find(
+      ordinary_menus.find("delete_popup_presenter_.show(", context_menu);
+  const std::size_t delete_popup_gate = ordinary_menus.find(
       "runtime_binding_generation_ != input_binding_generation",
       delete_popup);
   const std::size_t final_tool_status =
-      input.find("const ModelingToolStatus final_tool_status", delete_popup);
+      ordinary_menus.find("const ModelingToolStatus final_tool_status", delete_popup);
   ASSERT_NE(context_menu, std::string::npos);
   ASSERT_NE(context_menu_gate, std::string::npos);
   ASSERT_NE(delete_popup, std::string::npos);
@@ -3653,14 +3680,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu, "QLatin1Char('\\t')");
   expect_contains(menu, "present_text(*entry.action,");
   expect_contains(menu, "if (action.text() != text)");
-  for (std::string_view axis_key :
-       {"ui.menu.align.axis_x", "ui.menu.align.axis_y",
-        "ui.menu.align.axis_z"}) {
-    expect_contains(menu, axis_key);
-  }
-  expect_contains(menu,
-                  "arrangement_menu->addMenu(qtext(context.localization, key, fallback))");
-
   for (std::string_view forbidden :
        {"setShortcut(", "setShortcuts(", "setShortcutContext(",
         "QShortcut", "QKeySequence"}) {
@@ -4322,7 +4341,7 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(suppress_hover, std::string::npos);
   ASSERT_NE(billboard_candidates, std::string::npos);
   EXPECT_LT(suppress_hover, billboard_candidates);
-  expect_contains(panel, "!suppress_hover_work && active_viewport_settings()");
+  expect_contains(panel, "!suppress_hover_work && viewport_settings.bool_value(");
   expect_contains(panel, "point_light_pick_cache_valid_");
   expect_contains(panel, "point_light_pick_cached_scene_revision_");
   const std::size_t light_selection_gate = panel.find(
@@ -4359,9 +4378,9 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(baseline_capture, std::string_view::npos);
   EXPECT_LT(press_gate, baseline_capture);
   expect_contains(prepare_selection.substr(press_gate, baseline_capture - press_gate),
-                  "return resolved_selection;");
+                  "return std::nullopt;");
   const auto idle_gate =
-      prepare_selection.find("!pending_first_pick_.has_value()");
+      prepare_selection.find("!frame.left_pressed && !frame.input.cycle_selection_depth_pressed");
   const auto scene_lookup =
       prepare_selection.find("scene_documents().active_scene_id()");
   ASSERT_NE(idle_gate, std::string_view::npos);

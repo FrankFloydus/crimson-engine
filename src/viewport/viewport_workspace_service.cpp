@@ -19,6 +19,50 @@
 namespace quader {
 namespace {
 
+constexpr std::array<ViewportBoolSettingId, kQuaderViewportControlCount>
+    kPaneControlSettings = {
+        ViewportBoolSettingId::SnappingEnabled,
+        ViewportBoolSettingId::GridSnap,
+        ViewportBoolSettingId::VertexSnap,
+        ViewportBoolSettingId::RotationSnap,
+        ViewportBoolSettingId::ShowGrid,
+        ViewportBoolSettingId::ShowGizmos,
+        ViewportBoolSettingId::ShowOverlays,
+        ViewportBoolSettingId::ShowMeshGrid,
+};
+
+bool valid_pane(ViewportPaneId pane) {
+  return static_cast<std::size_t>(pane) < kViewportPaneCount;
+}
+
+bool valid_control(QuaderViewportControl control) {
+  return static_cast<std::size_t>(control) < kQuaderViewportControlCount;
+}
+
+bool settings_equal(const ViewportSettings &left,
+                     const ViewportSettings &right) {
+  for (std::size_t index = 0; index < kViewportBoolSettingCount; ++index) {
+    const auto setting = static_cast<ViewportBoolSettingId>(index);
+    if (left.bool_value(setting) != right.bool_value(setting)) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0; index < kViewportFloatSettingCount; ++index) {
+    const auto setting = static_cast<ViewportFloatSettingId>(index);
+    if (left.float_value(setting) != right.float_value(setting)) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0; index < kViewportColorSettingCount; ++index) {
+    const auto setting = static_cast<ViewportColorSettingId>(index);
+    if (!viewport_setting_colors_approximately(left.color(setting),
+                                                right.color(setting))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 using LocalVisibilityEntityIds =
     std::vector<ViewportLocalVisibilityEntityId>;
 
@@ -139,7 +183,7 @@ bool ViewportWorkspaceService::set_layout(ViewportLayoutId layout) {
   layout_ = layout;
   focused_pane_maximized_ = false;
   if (!focused_pane_is_visible()) {
-    focused_pane_ = ViewportPaneId::Perspective;
+    (void)focus_pane(ViewportPaneId::Perspective);
   }
   return true;
 }
@@ -153,7 +197,7 @@ bool ViewportWorkspaceService::set_layout_policy(
   if (!supports_layout(layout_)) {
     layout_ = ViewportLayoutId::Single;
     focused_pane_maximized_ = false;
-    focused_pane_ = ViewportPaneId::Perspective;
+    (void)focus_pane(ViewportPaneId::Perspective);
   }
   return true;
 }
@@ -166,8 +210,11 @@ bool ViewportWorkspaceService::supports_layout(ViewportLayoutId layout) const {
 }
 
 bool ViewportWorkspaceService::focus_pane(ViewportPaneId pane) {
-  if (focused_pane_ == pane) {
+  if (!valid_pane(pane) || focused_pane_ == pane) {
     return false;
+  }
+  if (transform_space(focused_pane_) != transform_space(pane)) {
+    ++transform_space_revision_;
   }
   focused_pane_ = pane;
   return true;
@@ -256,21 +303,178 @@ ViewportWorkspaceService::camera(ViewportPaneId pane_id) const {
   return pane(pane_id).camera;
 }
 
+ViewportTransformSpace ViewportWorkspaceService::transform_space() const {
+  return transform_space(focused_pane_);
+}
+
+ViewportTransformSpace
+ViewportWorkspaceService::transform_space(ViewportPaneId pane_id) const {
+  return pane(pane_id).transform_space;
+}
+
+bool ViewportWorkspaceService::set_transform_space(ViewportTransformSpace space) {
+  return set_transform_space(focused_pane_, space);
+}
+
 bool ViewportWorkspaceService::set_transform_space(
-    ViewportTransformSpace space) {
-  if (transform_space_ == space) {
+    ViewportPaneId pane_id, ViewportTransformSpace space) {
+  if (!valid_pane(pane_id) ||
+      (space != ViewportTransformSpace::Global &&
+       space != ViewportTransformSpace::Local)) {
     return false;
   }
-  transform_space_ = space;
+  auto &state = pane(pane_id);
+  if (state.transform_space == space) {
+    return false;
+  }
+  state.transform_space = space;
+  ++state.transform_space_revision;
+  ++state.control_revision;
   ++transform_space_revision_;
   return true;
 }
 
 bool ViewportWorkspaceService::toggle_transform_space() {
+  return toggle_transform_space(focused_pane_);
+}
+
+bool ViewportWorkspaceService::toggle_transform_space(ViewportPaneId pane_id) {
   return set_transform_space(
-      transform_space_ == ViewportTransformSpace::Global
+      pane_id, transform_space(pane_id) == ViewportTransformSpace::Global
           ? ViewportTransformSpace::Local
           : ViewportTransformSpace::Global);
+}
+
+std::uint64_t ViewportWorkspaceService::transform_space_revision(
+    ViewportPaneId pane_id) const {
+  return pane(pane_id).transform_space_revision;
+}
+
+ViewportToolId
+ViewportWorkspaceService::selected_tool(ViewportPaneId pane_id) const {
+  return pane(pane_id).selected_tool;
+}
+
+ViewportToolId
+ViewportWorkspaceService::preferred_selection_tool(ViewportPaneId pane_id) const {
+  return pane(pane_id).preferred_selection_tool;
+}
+
+bool ViewportWorkspaceService::record_selected_tool(ViewportPaneId pane_id,
+                                                    ViewportToolId tool,
+                                                    bool remember_selection) {
+  if (!valid_pane(pane_id) ||
+      static_cast<unsigned>(tool) > static_cast<unsigned>(ViewportToolId::UvPeel)) {
+    return false;
+  }
+  auto &state = pane(pane_id);
+  const bool selection_changed = remember_selection &&
+      (tool == ViewportToolId::Select || tool == ViewportToolId::LassoSelect) &&
+      state.preferred_selection_tool != tool;
+  if (state.selected_tool == tool && !selection_changed) {
+    return false;
+  }
+  state.selected_tool = tool;
+  if (selection_changed) {
+    state.preferred_selection_tool = tool;
+  }
+  ++state.control_revision;
+  return true;
+}
+
+bool ViewportWorkspaceService::control(ViewportPaneId pane_id,
+                                       QuaderViewportControl control_id) const {
+  return valid_control(control_id) &&
+         effective_settings(pane_id).bool_value(
+             kPaneControlSettings[static_cast<std::size_t>(control_id)]);
+}
+
+bool ViewportWorkspaceService::set_control(ViewportPaneId pane_id,
+                                           QuaderViewportControl control_id,
+                                           bool enabled) {
+  if (!valid_pane(pane_id) || !valid_control(control_id) ||
+      (control_id == QuaderViewportControl::ShowMeshGrid &&
+       !release_has_feature(ReleaseFeature::MeshGrid))) {
+    return false;
+  }
+  auto &state = pane(pane_id);
+  const std::size_t index = static_cast<std::size_t>(control_id);
+  auto &override_value = state.control_overrides[index];
+  if (override_value == enabled) {
+    return false;
+  }
+  override_value = enabled;
+  (void)state.effective_settings.set_bool_value(kPaneControlSettings[index],
+                                               enabled);
+  ++state.control_revision;
+  return true;
+}
+
+double ViewportWorkspaceService::rotation_snap_degrees(
+    ViewportPaneId pane_id) const {
+  return effective_settings(pane_id).float_value(
+      ViewportFloatSettingId::RotationSnapDegrees);
+}
+
+bool ViewportWorkspaceService::set_rotation_snap_degrees(ViewportPaneId pane_id,
+                                                         double degrees) {
+  if (!valid_pane(pane_id) || !std::isfinite(degrees) || degrees <= 0.0) {
+    return false;
+  }
+  auto &state = pane(pane_id);
+  const double canonical = viewport_canonical_rotation_snap_degrees(degrees);
+  if (state.rotation_snap_override == canonical) {
+    return false;
+  }
+  state.rotation_snap_override = canonical;
+  (void)state.effective_settings.set_float_value(
+      ViewportFloatSettingId::RotationSnapDegrees, static_cast<float>(canonical));
+  ++state.control_revision;
+  return true;
+}
+
+std::uint64_t
+ViewportWorkspaceService::control_revision(ViewportPaneId pane_id) const {
+  return pane(pane_id).control_revision;
+}
+
+bool ViewportWorkspaceService::update_control_defaults(
+    const ViewportSettings &settings, std::uint64_t revision) {
+  if (control_defaults_valid_ && control_defaults_revision_ == revision) {
+    return false;
+  }
+  control_defaults_revision_ = revision;
+  control_defaults_valid_ = true;
+  if (settings_equal(control_defaults_, settings)) {
+    return false;
+  }
+  control_defaults_ = settings;
+  bool changed = false;
+  for (auto &state : panes_) {
+    ViewportSettings effective = control_defaults_;
+    for (std::size_t index = 0; index < kQuaderViewportControlCount; ++index) {
+      if (state.control_overrides[index]) {
+        (void)effective.set_bool_value(kPaneControlSettings[index],
+                                       *state.control_overrides[index]);
+      }
+    }
+    if (state.rotation_snap_override) {
+      (void)effective.set_float_value(
+          ViewportFloatSettingId::RotationSnapDegrees,
+          static_cast<float>(*state.rotation_snap_override));
+    }
+    if (!settings_equal(state.effective_settings, effective)) {
+      state.effective_settings = std::move(effective);
+      ++state.control_revision;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+const ViewportSettings &
+ViewportWorkspaceService::effective_settings(ViewportPaneId pane_id) const {
+  return pane(pane_id).effective_settings;
 }
 
 ViewportCameraPose

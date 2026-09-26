@@ -175,6 +175,8 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
          "Desaturation of surrounding meshes before Context Effect Strength. 0 keeps color; 1 removes color. Use Apply to preview."},
         {ViewportFloatSettingId::InstanceEditGridFade, ViewportSettingsSectionId::InstanceEditing, "Grid Fade", key("InstanceEditGridFade"), 0.0f, 1.0f, 0.15f,
          "0 keeps the normal grid; 1 hides it while editing an instance. Use Apply to preview."},
+        {ViewportFloatSettingId::Grid2DIntensity, ViewportSettingsSectionId::Grid, "2D Grid Intensity", key("Grid2DIntensity"), 0.0f, 4.0f, 1.0f},
+        {ViewportFloatSettingId::Grid3DIntensity, ViewportSettingsSectionId::Grid, "3D Grid Intensity", key("Grid3DIntensity"), 0.0f, 4.0f, 1.0f},
 }};
 
 const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBoolSettings{{

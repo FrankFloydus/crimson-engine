@@ -102,7 +102,11 @@ public:
                                               SceneSelectionApplicationMode::
                                                   UndoableCommand,
                                           CheckedSelectionPublication
-                                              publication = {});
+                                              publication = {},
+                                          UndoRedoExecuteOptions options = {},
+                                          std::optional<std::uint64_t>
+                                              expected_history_revision = {});
+    [[nodiscard]] std::uint64_t history_revision() const;
     DocumentCommandResult apply_entity_transform(EntityId entity,
                                                  TransformComponent transform);
     DocumentCommandResult rename_entity(EntityId entity, std::string name);

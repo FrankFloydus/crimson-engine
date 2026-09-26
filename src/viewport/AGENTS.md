@@ -9,8 +9,16 @@ file except through prior written authorization from Francesco Di Blasi.
 # Viewport Package Guide
 
 - `ViewportWorkspaceService` owns layout, focused pane, camera controllers, projection-specific
-  shading, grid preset, local visibility, and render size/visibility bookkeeping. UI presents this
+  shading, per-pane selected tools and control overrides, shared grid preset, and render
+  size/visibility bookkeeping. UI presents this
   state; render owns draw resources. Expose user intent through `QuaderViewportApi`.
+  Preference defaults feed one revision-gated projection. Explicit session overrides survive
+  layout/tab changes and later default changes; pane-local strip controls do not save preferences.
+  Backface Selection retains its existing shared preference and selection policy.
+  A pane's remembered tool is separate from the scene's single executing operation. Focus alone
+  never acquires or settles it. Actual editing acquires through `QuaderToolsApi`; capture retains
+  the initiating pane and its effective snapping through release. Passive gizmos use retained
+  presentation frames and must not run interactive tool lifecycle code.
 - Read [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md) for input changes. `ViewportInputRouter`
   consumes semantic navigation and resolved shortcuts; raw Qt/Win32 events stay in host adapters.
   Preserve explicit text-focus, navigation-capture, tool, viewport, and global shortcut contexts.

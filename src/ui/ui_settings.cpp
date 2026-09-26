@@ -85,9 +85,6 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         settings.set_panel_visible(
             *panel_id,
             parse_bool(value, settings.is_panel_visible(*panel_id)));
-      } else if (key == "NavigationGizmo") {
-        settings.navigation_gizmo_visible_ =
-            parse_bool(value, settings.navigation_gizmo_visible_);
       } else if (key == "Locale") {
         settings.set_locale(value);
       } else if (key == "VSync") {
@@ -154,9 +151,6 @@ bool UISettings::save(const std::filesystem::path& path) const {
       file << ui_panel_stable_id(id) << '='
            << (is_panel_visible(id) ? "true" : "false") << '\n';
     }
-    file << "\n[Show]\n";
-    file << "NavigationGizmo=" << (navigation_gizmo_visible_ ? "true" : "false")
-         << '\n';
     file << "\n[Localization]\n";
     file << "Locale=" << locale_ << '\n';
     file << "\n[Interface]\n";

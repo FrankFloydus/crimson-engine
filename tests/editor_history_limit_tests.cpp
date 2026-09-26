@@ -7,7 +7,9 @@
 #include "api/quader_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "core/undo_redo_manager.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 
@@ -16,9 +18,11 @@
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -345,6 +349,158 @@ TEST(EditorHistoryLimitTests, ProjectPolicyReachesExistingFutureAndReopenedScene
   ASSERT_TRUE(reopened.ok) << reopened.message;
   ASSERT_NE(project.active_scene(), nullptr);
   EXPECT_EQ(project.active_scene()->session->history().max_steps(), 2u);
+}
+
+TEST(EditorHistoryLimitTests,
+     ResolvedDepthCorrectionKeepsOneSelectionHistoryEntryAndOriginalBaseline) {
+  SceneSession session;
+  const EntityId before = session.scene().create_entity("Before");
+  const EntityId front = session.scene().create_entity("Front");
+  const EntityId behind = session.scene().create_entity("Behind");
+  ASSERT_TRUE(session.selection().set_scene_selection({&before, 1u}, before).ok);
+  session.history().clear();
+  const auto baseline = session.selection().capture_box_selection_baseline();
+  ResolvedSelectionClickRequest click;
+  click.winner = ResolvedSelectionTarget{
+      .domain = ResolvedSelectionDomain::SceneEntity, .entity = front};
+  click.gesture_merge_key = 1;
+  ASSERT_TRUE(session.selection().apply_resolved_click(click).command.ok);
+  ASSERT_EQ(session.scene().selected_entities(), std::vector<EntityId>{front});
+  click.winner->entity = behind;
+  click.baseline = baseline;
+  click.expected_history_revision =
+      session.selection().selection_history_revision();
+  ASSERT_TRUE(session.selection().apply_resolved_click(click).command.ok);
+  EXPECT_EQ(session.scene().selected_entities(), std::vector<EntityId>{behind});
+  EXPECT_EQ(session.history().undo_count(), 1u);
+  const auto revision = session.scene().selection_revision();
+  ASSERT_TRUE(session.history().undo().ok);
+  EXPECT_EQ(session.scene().selected_entities(), std::vector<EntityId>{before});
+  EXPECT_GT(session.scene().selection_revision(), revision);
+  EXPECT_FALSE(session.history().can_undo());
+  ASSERT_TRUE(session.history().redo().ok);
+  EXPECT_EQ(session.scene().selected_entities(), std::vector<EntityId>{behind});
+}
+
+TEST(EditorHistoryLimitTests,
+     SelectionGesturePublicationFailurePreservesHistoryPayloadAndRevisions) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const EntityId before = scene.create_entity("Before");
+  const EntityId front = scene.create_entity("Front");
+  const EntityId behind = scene.create_entity("Behind");
+  ASSERT_TRUE(scene.replace_selection({&before, 1u}, before));
+  bool reject = false;
+  std::vector<EntityId> published{before};
+  commands.set_selection_publication([&] {
+    if (reject) return command_invalid_result("Injected selection rejection");
+    published = scene.selected_entities();
+    return command_changed_result();
+  });
+  const auto select = [&](EntityId entity,
+                          std::optional<std::uint64_t> revision = {}) {
+    return commands.select_entities(
+        {entity}, entity, SceneSelectionApplicationMode::UndoableCommand, {},
+        {.merge_key = "selection-click/2"}, revision);
+  };
+  ASSERT_TRUE(select(front).ok);
+  const auto first_revision = history.revision();
+  const auto scene_revision = scene.revision();
+  const auto selection_revision = scene.selection_revision();
+  reject = true;
+  const auto rejected = select(behind, first_revision);
+  EXPECT_FALSE(rejected.ok);
+  EXPECT_FALSE(rejected.changed);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{front});
+  EXPECT_EQ(published, std::vector<EntityId>{front});
+  EXPECT_EQ(scene.revision(), scene_revision);
+  EXPECT_EQ(scene.selection_revision(), selection_revision);
+  EXPECT_EQ(history.revision(), first_revision);
+  EXPECT_EQ(history.undo_count(), 1u);
+
+  reject = false;
+  ASSERT_TRUE(select(behind, first_revision).ok);
+  EXPECT_EQ(history.undo_count(), 1u);
+  const auto merged_revision = scene.revision();
+  const auto merged_selection_revision = scene.selection_revision();
+  reject = true;
+  EXPECT_FALSE(history.undo().ok);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{behind});
+  EXPECT_EQ(published, std::vector<EntityId>{behind});
+  EXPECT_EQ(scene.revision(), merged_revision);
+  EXPECT_EQ(scene.selection_revision(), merged_selection_revision);
+  EXPECT_EQ(history.undo_count(), 1u);
+  reject = false;
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{before});
+  EXPECT_EQ(published, std::vector<EntityId>{before});
+  const auto undone_revision = scene.revision();
+  const auto undone_selection_revision = scene.selection_revision();
+  reject = true;
+  EXPECT_FALSE(history.redo().ok);
+  EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{before});
+  EXPECT_EQ(scene.revision(), undone_revision);
+  EXPECT_EQ(scene.selection_revision(), undone_selection_revision);
+  EXPECT_EQ(history.redo_count(), 1u);
+  reject = false;
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_EQ(published, std::vector<EntityId>{behind});
+}
+
+TEST(EditorHistoryLimitTests,
+     SelectionGestureDoesNotMergeOrdinaryClicksOrAcrossHistoryBoundaries) {
+  for (int scenario = 0; scenario < 4; ++scenario) {
+    SCOPED_TRACE(scenario);
+    SceneDocument scene;
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
+    const EntityId front = scene.create_entity("Front");
+    const EntityId behind = scene.create_entity("Behind");
+    const std::string first_key = scenario == 0 ? "" : "selection-click/3";
+    ASSERT_TRUE(commands.select_entities(
+        {front}, front, SceneSelectionApplicationMode::UndoableCommand, {},
+        {.merge_key = first_key}).ok);
+    const auto first_revision = history.revision();
+    if (scenario == 2) {
+      ASSERT_TRUE(commands.rename_entity(front, "Renamed").ok);
+    } else if (scenario == 3) {
+      ASSERT_TRUE(history.undo().ok);
+      ASSERT_TRUE(history.redo().ok);
+    }
+    const std::string next_key = scenario == 1 ? "selection-click/4" : first_key;
+    ASSERT_TRUE(commands.select_entities(
+        {behind}, behind, SceneSelectionApplicationMode::UndoableCommand, {},
+        {.merge_key = next_key}, first_revision).ok);
+    EXPECT_EQ(history.undo_count(), scenario == 2 ? 3u : 2u);
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_EQ(scene.selected_entities(), std::vector<EntityId>{front});
+  }
+}
+
+TEST(EditorHistoryLimitTests, SelectionGestureCannotMergeAcrossDocuments) {
+  SceneDocument first_scene;
+  SceneDocument second_scene;
+  EditorHistoryService history;
+  DocumentCommandService first(first_scene, history);
+  DocumentCommandService second(second_scene, history);
+  const EntityId first_entity = first_scene.create_entity("First");
+  const EntityId second_entity = second_scene.create_entity("Second");
+  first.set_selection_publication([] { return command_changed_result(); });
+  second.set_selection_publication([] { return command_changed_result(); });
+  ASSERT_TRUE(first.select_entities(
+      {first_entity}, first_entity, SceneSelectionApplicationMode::UndoableCommand,
+      {}, {.merge_key = "selection-click/5"}).ok);
+  ASSERT_TRUE(second.select_entities(
+      {second_entity}, second_entity,
+      SceneSelectionApplicationMode::UndoableCommand, {},
+      {.merge_key = "selection-click/5"}, history.revision()).ok);
+  EXPECT_EQ(history.undo_count(), 2u);
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_TRUE(second_scene.selected_entities().empty());
+  EXPECT_EQ(first_scene.selected_entities(), std::vector<EntityId>{first_entity});
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_TRUE(first_scene.selected_entities().empty());
 }
 
 } // namespace

@@ -160,14 +160,19 @@ void QtViewportDisplayToolbar::set_localization(
 
 void QtViewportDisplayToolbar::synchronize(const QuaderEditorApi &editor,
                                            bool force) {
-  const auto &preferences = editor.preferences();
+  const auto &viewports = editor.viewports();
+  const auto pane = viewports.focused_pane();
   const PresentedState state{
+      .editor = &editor,
+      .pane = pane,
+      .control_revision = viewports.control_revision(pane),
+      .keybindings_revision = editor.commands().keybindings_revision(),
       .toggles =
           {
-              preferences.grid_visible(),
-              preferences.gizmos_visible(),
-              preferences.mesh_grid_visible(),
-              preferences.overlays_visible(),
+              viewports.control(pane, QuaderViewportControl::ShowGrid),
+              viewports.control(pane, QuaderViewportControl::ShowGizmos),
+              viewports.control(pane, QuaderViewportControl::ShowMeshGrid),
+              viewports.control(pane, QuaderViewportControl::ShowOverlays),
           },
   };
   if (!force && presented_state_.has_value() &&

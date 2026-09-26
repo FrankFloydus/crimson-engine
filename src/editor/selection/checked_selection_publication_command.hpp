@@ -47,6 +47,16 @@ public:
   CommandResult undo() override { return apply(false); }
   CommandResult redo() override { return apply(true); }
 
+  bool merge_with(const IUndoableCommand &newer_command,
+                  std::string_view merge_key) override {
+    const auto *newer =
+        dynamic_cast<const CheckedSelectionPublicationCommand *>(&newer_command);
+    return !merge_key.empty() && newer != nullptr &&
+           &scene_ == &newer->scene_ && command_ && newer->command_ &&
+           publication_ && newer->publication_ &&
+           command_->merge_with(*newer->command_, merge_key);
+  }
+
 private:
   CommandResult apply(bool redo) {
     if (command_ == nullptr || !publication_) {

@@ -37,6 +37,7 @@ class QtToolToolbar final : public QToolBar {
 public:
   explicit QtToolToolbar(QWidget *parent = nullptr);
 
+  [[nodiscard]] QAction *tool_action(ViewportToolId tool) const;
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor,
@@ -74,7 +75,10 @@ private:
   QAction *curve_action_ = nullptr;
   const QuaderEditorApi *synchronized_editor_ = nullptr;
   bool synchronization_valid_ = false;
-  std::string synchronized_active_tool_;
+  ViewportToolId synchronized_selected_tool_ = ViewportToolId::Select;
+  ViewportPaneId synchronized_pane_ = ViewportPaneId::Perspective;
+  std::uint64_t synchronized_control_revision_ = 0;
+  std::uint64_t synchronized_runtime_tool_revision_ = 0;
   QuaderSelectionMode synchronized_selection_mode_ =
       QuaderSelectionMode::Object;
   std::uint64_t synchronized_selection_revision_ = 0;

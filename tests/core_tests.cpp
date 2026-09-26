@@ -1221,7 +1221,7 @@ TEST(AppFrameScheduleTests, FallbackAndIdleClearBackoffForNextActivation) {
   EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 1);
 }
 
-TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
+TEST(UISettingsTests, DefaultsKeepPanelVisibilityAndLocale) {
   const UISettings settings = UISettings::defaults();
 
   EXPECT_EQ(settings.locale(), "en-US");
@@ -1232,7 +1232,6 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::FaceTexture));
   EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Console));
-  EXPECT_TRUE(settings.navigation_gizmo_visible());
   EXPECT_TRUE(settings.vsync_enabled());
 }
 
@@ -1262,7 +1261,7 @@ TEST(UISettingsTests, VsyncDefaultsSurviveLegacyAndMalformedPreferences) {
   std::filesystem::remove(path);
 }
 
-TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
+TEST(UISettingsTests, RoundTripsPanelVisibilityAndLocale) {
   const std::filesystem::path path = std::filesystem::temp_directory_path() /
                                      "quader_ui_settings_round_trip.ini";
   std::filesystem::remove(path);
@@ -1274,7 +1273,6 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   settings.set_panel_visible(UIPanelId::Layers, false);
   settings.set_panel_visible(UIPanelId::FaceTexture, false);
   settings.set_panel_visible(UIPanelId::Console, true);
-  settings.set_navigation_gizmo_visible(false);
   settings.set_interface_scale(1.75F);
 
   ASSERT_TRUE(settings.save(path));
@@ -1305,7 +1303,6 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::FaceTexture));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
-  EXPECT_FALSE(loaded.navigation_gizmo_visible());
   EXPECT_FLOAT_EQ(loaded.interface_scale(), 1.75F);
 
   std::filesystem::remove(path);
@@ -1402,8 +1399,6 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
     file << "Layers=maybe\n";
     file << "Tool Settings=maybe\n";
     file << "Console=yes\n";
-    file << "[Show]\n";
-    file << "NavigationGizmo=no\n";
     file << "[Localization]\n";
     file << "Locale=   \n";
     file << "[Interface]\n";
@@ -1417,7 +1412,6 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
-  EXPECT_FALSE(loaded.navigation_gizmo_visible());
   EXPECT_FLOAT_EQ(loaded.interface_scale(), 1.0F);
 
   std::filesystem::remove(path);
@@ -1641,7 +1635,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
   ASSERT_EQ(viewport_color_settings().size(), 25u);
-  ASSERT_EQ(viewport_float_settings().size(), 32u);
+  ASSERT_EQ(viewport_float_settings().size(), 34u);
   ASSERT_EQ(viewport_bool_settings().size(), 15u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
@@ -2149,6 +2143,46 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
               std::string::npos);
   }
 
+  std::filesystem::remove(path);
+}
+
+TEST(ViewportSettingsTests, GridIntensitiesPersistAndSanitizeIndependently) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "quader_grid_intensity_settings.ini";
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.GridMinorLineSize=0.325\n";
+  }
+  ViewportSettings settings = ViewportSettings::load(path);
+  for (const auto id : {ViewportFloatSettingId::Grid2DIntensity,
+                        ViewportFloatSettingId::Grid3DIntensity}) {
+    EXPECT_FLOAT_EQ(settings.float_value(id), 1.0f);
+    EXPECT_TRUE(settings.set_float_value(id, -1.0f));
+    EXPECT_FLOAT_EQ(settings.float_value(id), 0.0f);
+    EXPECT_TRUE(settings.set_float_value(id, 20.0f));
+    EXPECT_FLOAT_EQ(settings.float_value(id), 4.0f);
+    EXPECT_TRUE(settings.set_float_value(
+        id, std::numeric_limits<float>::quiet_NaN()));
+    EXPECT_FLOAT_EQ(settings.float_value(id), 1.0f);
+    EXPECT_FALSE(settings.set_float_value(
+        id, std::numeric_limits<float>::infinity()));
+  }
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::Grid2DIntensity,
+                                       0.35f));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::Grid3DIntensity,
+                                       2.25f));
+  ASSERT_TRUE(settings.save(path));
+  ViewportSettings loaded = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::Grid2DIntensity),
+                  0.35f);
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::Grid3DIntensity),
+                  2.25f);
+  EXPECT_TRUE(loaded.reset_to_defaults());
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::Grid2DIntensity),
+                  1.0f);
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::Grid3DIntensity),
+                  1.0f);
   std::filesystem::remove(path);
 }
 
@@ -3550,6 +3584,59 @@ TEST(ViewportGridPlacementPolicyTests,
                                           kViewportGridOrthographicMargin);
   expect_vec3_near(front.axes.u_axis, {1.0f, 0.0f, 0.0f});
   expect_vec3_near(front.axes.v_axis, {0.0f, 1.0f, 0.0f});
+}
+
+TEST(ViewportGridPlacementPolicyTests,
+     SnappedAndLockedTopBottomCoverScreenCornersRegardlessOfCameraUp) {
+  for (const QVec2 viewport : {QVec2{1600.0f, 600.0f},
+                              QVec2{500.0f, 1000.0f}}) {
+    for (const int sign : {-1, 1}) {
+      for (const QVec3 authored_up : {QVec3{1.0f, 0.0f, 0.0f},
+                                      QVec3{0.0f, 0.0f, 1.0f},
+                                      QVec3{0.0f, 0.0f, -1.0f}}) {
+        for (const bool snapped : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << "viewport " << viewport.x << 'x' << viewport.y
+                       << " sign " << sign << " up " << authored_up.x << ','
+                       << authored_up.z << " snapped " << snapped);
+          ViewportCameraController camera;
+          camera.set_viewport_size(viewport.x, viewport.y);
+          const QVec3 target{12.0f, 0.0f, -8.0f};
+          ASSERT_TRUE(camera.restore_perspective_pose({
+              .eye = target + QVec3{0.0f, 24.0f * sign, 0.0f},
+              .target = target,
+              .up = authored_up,
+          }));
+          if (snapped) {
+            camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
+            camera.update_drag({101.0f, 100.0f});
+            camera.end_drag();
+            ASSERT_TRUE(camera.orbit_snap_orthographic_projection());
+          } else {
+            camera.view_axis(ViewportViewAxis::Y, sign);
+          }
+          ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+          const auto grid = ViewportGridPlacementPolicy::placement(
+              camera, static_cast<std::uint32_t>(viewport.x),
+              static_cast<std::uint32_t>(viewport.y));
+          ASSERT_EQ(grid.plane, ViewportGridPlane::XZ);
+          for (const QVec2 corner :
+               {QVec2{0.0f, 0.0f}, QVec2{viewport.x, 0.0f},
+                QVec2{0.0f, viewport.y}, viewport}) {
+            const auto ray = camera.ray_from_viewport_point(corner);
+            ASSERT_GT(std::fabs(ray.direction.y), 0.9f);
+            const QVec3 hit = ray.origin + ray.direction *
+                ((kViewportGridPlaneOffset - ray.origin.y) / ray.direction.y);
+            // The 25% margin also keeps every corner before the edge fade.
+            EXPECT_LE(std::fabs(hit.x - grid.origin.x),
+                      grid.plane_size.x * 0.401f);
+            EXPECT_LE(std::fabs(hit.z - grid.origin.z),
+                      grid.plane_size.y * 0.401f);
+          }
+        }
+      }
+    }
+  }
 }
 
 TEST(ViewportPointPlacementServiceTests,
@@ -8339,6 +8426,131 @@ TEST(ViewportWorkspaceServiceTests,
   EXPECT_EQ(workspace.transform_space_revision(), 2u);
 }
 
+TEST(ViewportWorkspaceServiceTests,
+     PaneControlsRetainExplicitOverridesWhileFollowingSharedDefaults) {
+  ViewportWorkspaceService workspace;
+  ViewportSettings defaults;
+  constexpr ViewportPaneId kFirst = ViewportPaneId::Perspective;
+  constexpr ViewportPaneId kSecond = ViewportPaneId::Top;
+  const bool default_grid = defaults.bool_value(ViewportBoolSettingId::ShowGrid);
+  EXPECT_FALSE(workspace.update_control_defaults(defaults, 1u));
+
+  // Setting the inherited value explicitly pins it against future defaults.
+  ASSERT_TRUE(workspace.set_control(kFirst, QuaderViewportControl::ShowGrid,
+                                    default_grid));
+  const std::uint64_t pinned_revision = workspace.control_revision(kFirst);
+  EXPECT_FALSE(workspace.set_control(kFirst, QuaderViewportControl::ShowGrid,
+                                     default_grid));
+  EXPECT_EQ(workspace.control_revision(kFirst), pinned_revision);
+  ASSERT_TRUE(defaults.set_bool_value(ViewportBoolSettingId::ShowGrid,
+                                      !default_grid));
+  ASSERT_TRUE(workspace.update_control_defaults(defaults, 2u));
+  EXPECT_EQ(workspace.control(kFirst, QuaderViewportControl::ShowGrid), default_grid);
+  EXPECT_EQ(workspace.control(kSecond, QuaderViewportControl::ShowGrid), !default_grid);
+  EXPECT_EQ(workspace.control_revision(kFirst), pinned_revision);
+
+  const std::uint64_t inherited_revision = workspace.control_revision(kSecond);
+  EXPECT_FALSE(workspace.update_control_defaults(defaults, 2u));
+  EXPECT_FALSE(workspace.update_control_defaults(defaults, 3u));
+  EXPECT_EQ(workspace.control_revision(kSecond), inherited_revision);
+
+  ASSERT_TRUE(workspace.set_rotation_snap_degrees(kFirst, 30.0));
+  EXPECT_FALSE(workspace.set_rotation_snap_degrees(kFirst, 30.0));
+  ASSERT_TRUE(defaults.set_float_value(ViewportFloatSettingId::RotationSnapDegrees,
+                                       90.0f));
+  ASSERT_TRUE(workspace.update_control_defaults(defaults, 4u));
+  EXPECT_DOUBLE_EQ(workspace.rotation_snap_degrees(kFirst), 30.0);
+  EXPECT_DOUBLE_EQ(workspace.rotation_snap_degrees(kSecond), 90.0);
+  EXPECT_FALSE(workspace.set_rotation_snap_degrees(kFirst, 0.0));
+  EXPECT_FALSE(workspace.set_rotation_snap_degrees(
+      kFirst, std::numeric_limits<double>::infinity()));
+
+  // Appearance is shared even when the visibility switch is pane-local.
+  ASSERT_TRUE(defaults.set_color(ViewportColorSettingId::GridMinor,
+                                 {0.4f, 0.3f, 0.2f, 1.0f}));
+  ASSERT_TRUE(workspace.update_control_defaults(defaults, 5u));
+  for (ViewportPaneId pane : {kFirst, kSecond}) {
+    const auto &effective = workspace.effective_settings(pane);
+    EXPECT_FLOAT_EQ(effective.color(ViewportColorSettingId::GridMinor).r, 0.4f);
+  }
+  EXPECT_EQ(workspace.control(kFirst, QuaderViewportControl::ShowGrid), default_grid);
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     PaneToolsAndTransformSpaceSurviveFocusAndLayoutChanges) {
+  ViewportWorkspaceService workspace;
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(workspace.record_selected_tool(ViewportPaneId::Perspective,
+                                            ViewportToolId::Move));
+  ASSERT_TRUE(workspace.record_selected_tool(ViewportPaneId::Top,
+                                            ViewportToolId::Rotate));
+  ASSERT_TRUE(workspace.set_transform_space(ViewportPaneId::Top,
+                                            ViewportTransformSpace::Local));
+  const auto top_revision = workspace.control_revision(ViewportPaneId::Top);
+  ASSERT_TRUE(workspace.focus_pane(ViewportPaneId::Top));
+  EXPECT_EQ(workspace.transform_space(), ViewportTransformSpace::Local);
+  EXPECT_EQ(workspace.selected_tool(ViewportPaneId::Perspective), ViewportToolId::Move);
+  EXPECT_EQ(workspace.selected_tool(ViewportPaneId::Top), ViewportToolId::Rotate);
+  EXPECT_EQ(workspace.control_revision(ViewportPaneId::Top), top_revision);
+  EXPECT_FALSE(workspace.record_selected_tool(ViewportPaneId::Top,
+                                             ViewportToolId::Rotate));
+
+  ASSERT_TRUE(workspace.set_focused_pane_maximized(true));
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::Single));
+  EXPECT_EQ(workspace.focused_pane(), ViewportPaneId::Perspective);
+  EXPECT_EQ(workspace.transform_space(), ViewportTransformSpace::Global);
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(workspace.focus_pane(ViewportPaneId::Top));
+  EXPECT_EQ(workspace.selected_tool(ViewportPaneId::Top), ViewportToolId::Rotate);
+  EXPECT_EQ(workspace.transform_space(), ViewportTransformSpace::Local);
+  EXPECT_EQ(workspace.control_revision(ViewportPaneId::Top), top_revision);
+
+  ASSERT_TRUE(workspace.set_grid_preset(7));
+  ASSERT_TRUE(workspace.focus_pane(ViewportPaneId::Perspective));
+  EXPECT_EQ(workspace.grid_preset(), 7);
+  EXPECT_FALSE(workspace.set_control(ViewportPaneId::Top,
+                                     QuaderViewportControl::Count, true));
+  EXPECT_FALSE(workspace.focus_pane(static_cast<ViewportPaneId>(99)));
+  ViewportWorkspaceService reopened;
+  EXPECT_EQ(reopened.selected_tool(ViewportPaneId::Top), ViewportToolId::Select);
+  EXPECT_EQ(reopened.transform_space(ViewportPaneId::Top),
+            ViewportTransformSpace::Global);
+}
+
+
+TEST(ViewportWorkspaceServiceTests,
+     SelectionToolPreferenceSurvivesOtherToolsAndImplicitFallback) {
+  ViewportWorkspaceService workspace;
+  constexpr auto kPane = ViewportPaneId::Top;
+  EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::Select);
+  ASSERT_TRUE(workspace.record_selected_tool(kPane, ViewportToolId::LassoSelect));
+  EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::LassoSelect);
+  EXPECT_EQ(workspace.preferred_selection_tool(ViewportPaneId::Perspective),
+            ViewportToolId::Select);
+
+  const auto lasso_revision = workspace.control_revision(kPane);
+  EXPECT_FALSE(workspace.record_selected_tool(kPane, ViewportToolId::LassoSelect));
+  EXPECT_EQ(workspace.control_revision(kPane), lasso_revision);
+  ASSERT_TRUE(workspace.record_selected_tool(kPane, ViewportToolId::Move));
+  EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::LassoSelect);
+  ASSERT_TRUE(workspace.record_selected_tool(kPane, ViewportToolId::Select, false));
+  EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::LassoSelect);
+
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(workspace.focus_pane(kPane));
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::Single));
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::LassoSelect);
+
+  const auto fallback_revision = workspace.control_revision(kPane);
+  EXPECT_FALSE(workspace.record_selected_tool(
+      kPane, static_cast<ViewportToolId>(99)));
+  EXPECT_EQ(workspace.control_revision(kPane), fallback_revision);
+  ASSERT_TRUE(workspace.record_selected_tool(kPane, ViewportToolId::Select));
+  EXPECT_EQ(workspace.control_revision(kPane), fallback_revision + 1u);
+  EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::Select);
+  EXPECT_FALSE(workspace.record_selected_tool(kPane, ViewportToolId::Select));
+}
 
 TEST(ViewportCameraTests, FlySpeedDefaultsUseHostViewportDefaults) {
   const ViewportHostDefaults defaults = viewport_host_defaults();
@@ -10164,68 +10376,6 @@ TEST(ViewportCameraTests,
   }
 }
 
-TEST(ViewportCameraTests, ViewCubeAxisSnapDoesNotLockOrbit) {
-  ViewportCameraController camera;
-  camera.set_viewport_size(800.0f, 600.0f);
-  camera.view_axis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
-
-  ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
-  ASSERT_FALSE(camera.orthographic_view_locked());
-
-  camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Orbit);
-  camera.update_drag({160.0f, 120.0f});
-  camera.end_drag();
-
-  EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
-  EXPECT_FALSE(camera.orthographic_view_locked());
-}
-
-TEST(ViewportCameraTests, ViewCubePrimitivesExposeVisibleAxisEdges) {
-  quader_editor_core::ViewCubePrimitiveInput input;
-  input.viewport_size = {200.0f, 200.0f};
-  input.widget_size = 70.0;
-  input.camera_transform.x_axis = {0.70710678f, 0.0f, -0.70710678f};
-  input.camera_transform.y_axis = {-0.40824829f, 0.81649658f, -0.40824829f};
-  input.camera_transform.z_axis = {0.57735027f, 0.57735027f, 0.57735027f};
-
-  const quader_editor_core::ViewCubePrimitives primitives =
-      quader_editor_core::build_view_cube_primitives(input);
-
-  EXPECT_TRUE(primitives.ok);
-  EXPECT_EQ(primitives.faces.size(), 3u);
-  EXPECT_EQ(primitives.edges.size(), 9u);
-
-  std::array<bool, 3> has_axis = {false, false, false};
-  for (const quader_editor_core::ViewCubeEdgePrimitive &edge :
-       primitives.edges) {
-    const float dx = edge.screen_end.x - edge.screen_start.x;
-    const float dy = edge.screen_end.y - edge.screen_start.y;
-    EXPECT_GT(dx * dx + dy * dy, 1.0f);
-    switch (edge.axis) {
-    case quader_editor_core::ViewAxis::X:
-      has_axis[0] = true;
-      break;
-    case quader_editor_core::ViewAxis::Y:
-      has_axis[1] = true;
-      break;
-    case quader_editor_core::ViewAxis::Z:
-      has_axis[2] = true;
-      break;
-    }
-  }
-  EXPECT_TRUE(has_axis[0]);
-  EXPECT_TRUE(has_axis[1]);
-  EXPECT_TRUE(has_axis[2]);
-
-  EXPECT_EQ(primitives.axis_edges.size(), 3u);
-  for (const quader_editor_core::ViewCubeEdgePrimitive &edge :
-       primitives.axis_edges) {
-    EXPECT_FLOAT_EQ(edge.local_start.x, 1.0f);
-    EXPECT_FLOAT_EQ(edge.local_start.y, -1.0f);
-    EXPECT_FLOAT_EQ(edge.local_start.z, 1.0f);
-  }
-}
-
 TEST(ViewportCameraTests, OrthographicAxisViewBuildsParallelPickingRays) {
   ViewportCameraController camera;
   camera.set_viewport_size(800.0f, 600.0f);
@@ -11199,11 +11349,6 @@ TEST(ViewportInputRouterTests,
       quader_command::kViewportGridDecrement.string(), 6, shortcut));
   EXPECT_EQ(shortcut.kind, ViewportShortcutKind::SetGridPreset);
   EXPECT_EQ(shortcut.grid_preset, 5);
-
-  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
-      quader_command::kViewportGridReset.string(), 10, shortcut));
-  EXPECT_EQ(shortcut.kind, ViewportShortcutKind::SetGridPreset);
-  EXPECT_EQ(shortcut.grid_preset, viewport_default_grid_preset());
 
   EXPECT_TRUE(viewport_router_shortcut_for_target_id(
       quader_command::kViewportGridIncrement.string(), 10, shortcut));

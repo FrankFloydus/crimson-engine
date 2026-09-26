@@ -13,9 +13,9 @@
 #include "viewport/viewport_runtime_binding_token.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
+#include "editor/viewport/transform_gizmo_interaction.hpp"
 #include "render/render_system.hpp"
 #include "render/viewport_info_stats.hpp"
-#include "ui/qt_navigation_gizmo.hpp"
 #include "ui/qt_startup_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
@@ -57,6 +57,7 @@ class NativeViewportToolCoordinator;
 class QuaderEditorApi;
 class QtToolSettingsPanel;
 class QtEnvironmentSettingsPopup;
+class QtViewportControlStrip;
 struct QuaderViewportKeybindingContext;
 class RenderOverlaySnapshotCache;
 class QtViewportEdgeLengthHud;
@@ -98,6 +99,12 @@ public:
   void abandon_interactions();
 
   void attach_workspace(ViewportWorkspaceService &workspace);
+  /// Copies action presentation into independent controls for each pane.
+  void set_control_actions(const std::vector<QAction *> &actions,
+                           QAction *lasso_action = nullptr);
+  void set_control_action_requested_callback(
+      std::function<void(ViewportPaneId, QAction &)> callback);
+  void refresh_control_actions(QuaderEditorApi &editor);
   /// Adopts one retained settings overlay; null detaches the host callbacks.
   void set_settings_panel(QtToolSettingsPanel *panel);
   /// Samples cheap operation metadata; unchanged frames do no widget work.
@@ -169,9 +176,11 @@ private:
   struct Pane {
     ViewportPaneId id = ViewportPaneId::Perspective;
     QFrame *frame = nullptr;
-    QWidget *toolbar = nullptr;
+    QtViewportControlStrip *toolbar = nullptr;
     QPushButton *display_button = nullptr;
+    QPushButton *camera_button = nullptr;
     QPushButton *environment_button = nullptr;
+    QAction *environment_overflow_action = nullptr;
     QMenu *display_menu = nullptr;
     QMenu *camera_menu = nullptr;
     QMenu *debug_view_menu = nullptr;
@@ -185,7 +194,6 @@ private:
     QRect primitive_feedback_bounds;
     qreal primitive_feedback_dpr = 0.0;
     bool primitive_feedback_valid = false;
-    QtNavigationGizmo *navigation_gizmo = nullptr;
     QtViewportEdgeLengthHud *edge_length_hud = nullptr;
     QtViewportFlyNavigationHud *fly_navigation_hud = nullptr;
     QtViewportSurface *surface = nullptr;
@@ -196,11 +204,27 @@ private:
     bool frame_presented = false;
     bool surface_presented = false;
     bool overlay_stack_valid = false;
+    /// Associates a pane-owned presentation action with its metadata source.
+    struct ControlAction {
+      QPointer<QAction> source;
+      QAction *action = nullptr;
+    };
+    std::vector<ControlAction> control_actions;
+    QAction *selection_action = nullptr;
+    std::array<ControlAction, 2> selection_choices{};
+    std::uint64_t controls_revision = 0u;
+    bool controls_valid = false;
+    TransformGizmoPresentation idle_gizmo;
   };
 
   void create_pane(Pane &pane);
   void refresh_pane_controls(Pane &pane);
   void sync_pane_control_selection(Pane &pane);
+  void sync_pane_actions(Pane &pane);
+  void dispatch_control_action(Pane &pane, QAction &action);
+  void refresh_selection_tool_actions(Pane &pane);
+  void scale_pane_controls(Pane &pane);
+  [[nodiscard]] QRect pane_content_rect(const Pane &pane) const;
   void update_pane_geometry();
   void update_pane_overlay_geometry(Pane &pane);
   void update_settings_overlay_geometry();
@@ -211,6 +235,10 @@ private:
                           ViewportPaneFocusTrigger trigger);
   [[nodiscard]] bool viewport_surface_has_keyboard_focus() const;
   [[nodiscard]] bool pane_surface_has_keyboard_focus(const Pane &pane) const;
+  [[nodiscard]] bool external_widget_has_keyboard_focus() const;
+  [[nodiscard]] bool pane_controls_have_presentation_focus(const Pane &pane) const;
+  void synchronize_control_focus(const QObject *object);
+  void refresh_control_hint_context();
   [[nodiscard]] bool pane_interaction_locked() const;
   void set_modal_tool_owns_viewport_snapshot(bool owns_viewport);
   [[nodiscard]] bool is_viewport_internal_event_target(
@@ -241,7 +269,6 @@ private:
                                     ModelingSessionService &modeling,
                                     NativeViewportToolCoordinator &native_tools,
                                     ViewportRuntimeBindingToken runtime_binding = {});
-  [[nodiscard]] const ViewportSettings &active_viewport_settings() const;
   [[nodiscard]] Pane &pane(ViewportPaneId pane_id);
   [[nodiscard]] const Pane &pane(ViewportPaneId pane_id) const;
 
@@ -267,6 +294,7 @@ private:
   const ViewportSettings *viewport_settings_ = nullptr;
   LocalizationService *localization_ = nullptr;
   std::function<QuaderMaterialReference()> primitive_creation_material_provider_;
+  std::function<void(ViewportPaneId, QAction &)> control_action_requested_;
   RenderFramePerformanceStats render_performance_ = {};
   ViewportSettings fallback_settings_ = ViewportSettings::defaults();
   ViewportLayoutId displayed_layout_ = ViewportLayoutId::Single;
@@ -293,6 +321,7 @@ private:
   std::uint64_t point_light_pick_generation_ = 0;
   ViewportPaneId interaction_pane_id_ = ViewportPaneId::Perspective;
   std::optional<ViewportPaneId> pointer_cursor_pane_;
+  std::optional<ViewportPaneId> gizmo_input_pane_;
   std::array<SplitHandleHost, 2> split_handles_;
   ViewportSplitHandleId active_split_handle_ =
       ViewportSplitHandleId::TwoHorizontal;

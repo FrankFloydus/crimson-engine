@@ -789,6 +789,52 @@ public:
     }
   }
 
+  /** Keeps a compiled gesture fixed and reserves its input in its real scope. */
+  void lock_target(std::string target_id, std::string reserved_when) {
+    locked_targets_.insert_or_assign(std::move(target_id),
+                                    std::move(reserved_when));
+    invalidate_effective_rule_cache();
+  }
+
+  [[nodiscard]] bool target_editable(std::string_view target_id) const {
+    return !locked_targets_.contains(std::string(target_id));
+  }
+
+  /** Rejects fixed-target edits and physical gestures that steal their input. */
+  [[nodiscard]] std::optional<std::string>
+  validate_user_keybinding(const QuaderKeybindingRule &requested) const {
+    if (!target_editable(requested.target_id)) {
+      return "Orbit and Pan bindings are fixed and cannot be changed.";
+    }
+    if (requested.removal) {
+      return std::nullopt;
+    }
+    for (const auto &fixed : default_rules_) {
+      const auto locked = locked_targets_.find(fixed.target_id);
+      if (locked == locked_targets_.end() || fixed.sequence.empty()) {
+        continue;
+      }
+      const auto &reserved = fixed.sequence.front();
+      const bool uses_reserved_input = std::any_of(
+          requested.sequence.begin(), requested.sequence.end(),
+          [&](const QuaderInputChord &chord) {
+            // Press/click/double-click and drag share one physical gesture.
+            // Reserving every sequence position also protects a drag while
+            // another command's multi-key prefix is pending.
+            return reserved.device == QuaderInputDevice::Mouse &&
+                chord.device == reserved.device &&
+                chord.mouse_button == reserved.mouse_button &&
+                chord.primary == reserved.primary &&
+                chord.shift == reserved.shift && chord.alt == reserved.alt;
+          });
+      if (uses_reserved_input && keybinding_detail::when_expressions_overlap(
+              requested.when, locked->second)) {
+        return "This mouse gesture is reserved for Orbit or Pan in the viewport.";
+      }
+    }
+    return std::nullopt;
+  }
+
   [[nodiscard]] bool has_target(std::string_view target_id) const {
     if (known_targets_.contains(std::string(target_id))) {
       return true;
@@ -871,6 +917,14 @@ public:
         return {.ok = false, .message = "Unknown command id."};
       }
 
+      if (!target_editable(rule.target_id)) {
+        if (!persist) {
+          continue;
+        }
+        return {.ok = false,
+                .message = "Orbit and Pan bindings are fixed and cannot be changed."};
+      }
+
       rule.source = "user";
       rule.weight = kUserWeight;
       rule.order = candidate_order++;
@@ -884,6 +938,13 @@ public:
         }
         rule.sequence = *parsed;
         rule.shortcut = keybinding_detail::format_shortcut(rule.sequence);
+      }
+
+      if (const auto error = validate_user_keybinding(rule)) {
+        if (!persist) {
+          continue;
+        }
+        return {.ok = false, .message = *error};
       }
 
       // One physical mapping is authoritative for each internal target. A
@@ -935,6 +996,10 @@ public:
     requested.source = "user";
     requested.weight = kUserWeight;
 
+    if (const auto error = validate_user_keybinding(requested)) {
+      return {.ok = false, .message = *error};
+    }
+
     if (const std::optional<QuaderKeybindingRule> current =
             effective_rule_for_target(target_id);
         current && !current->removal &&
@@ -958,6 +1023,10 @@ public:
 
   [[nodiscard]] QuaderKeybindingMutationResult
   remove_user_shortcut(std::string target_id) {
+    if (!target_editable(target_id)) {
+      return {.ok = false,
+              .message = "Orbit and Pan bindings are fixed and cannot be changed."};
+    }
     if (target_id.empty()) {
       return {.ok = false, .message = "Command id is required."};
     }
@@ -989,6 +1058,10 @@ public:
 
   [[nodiscard]] QuaderKeybindingMutationResult
   reset_user_shortcut(std::string_view target_id) {
+    if (!target_editable(target_id)) {
+      return {.ok = false,
+              .message = "Orbit and Pan bindings are fixed and cannot be changed."};
+    }
     if (target_id.empty()) {
       return {.ok = false, .message = "Command id is required."};
     }
@@ -1224,6 +1297,11 @@ public:
           return "Keybinding entry references an unknown command id: " +
                  target_id;
         }
+        // Ignore legacy edits to fixed navigation, including removals and
+        // malformed old mappings, without discarding unrelated overrides.
+        if (!target_editable(target_id)) {
+          continue;
+        }
 
         QuaderKeybindingRule rule;
         rule.target_id = target_id;
@@ -1240,6 +1318,9 @@ public:
           rule.sequence = *parsed;
           rule.shortcut = keybinding_detail::format_shortcut(rule.sequence);
         }
+        // Legacy entries may omit their scope. Retain them for the catalog's
+        // scope normalization; the effective cache excludes reserved gestures
+        // until that canonicalized candidate has been adopted.
         erase_rules_for(loaded, target_id);
         loaded.push_back(std::move(rule));
       }
@@ -1422,7 +1503,9 @@ private:
       QDR_PROFILE_SCOPE("Quader keybinding effective rule cache rebuild");
       std::unordered_set<std::string> shadowed_targets;
       for (const QuaderKeybindingRule &rule : user_rules_) {
-        shadowed_targets.insert(rule.target_id);
+        if (!validate_user_keybinding(rule)) {
+          shadowed_targets.insert(rule.target_id);
+        }
       }
 
       effective_rules_cache_.clear();
@@ -1434,7 +1517,7 @@ private:
         }
       }
       for (const QuaderKeybindingRule &rule : user_rules_) {
-        if (!rule.removal) {
+        if (!rule.removal && !validate_user_keybinding(rule)) {
           effective_rules_cache_.push_back(rule);
         }
       }
@@ -1471,6 +1554,7 @@ private:
     std::filesystem::path storage_path_;
     AtomicTextWriter atomic_text_writer_;
     std::unordered_set<std::string> known_targets_;
+    std::unordered_map<std::string, std::string> locked_targets_;
     std::vector<QuaderKeybindingRule> default_rules_;
     std::vector<QuaderKeybindingRule> user_rules_;
     mutable std::vector<QuaderKeybindingRule> effective_rules_cache_;

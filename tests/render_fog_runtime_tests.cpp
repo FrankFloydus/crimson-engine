@@ -39,6 +39,7 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -80,14 +81,16 @@ public:
     filament::Engine::destroy(&engine_);
   }
 
-  bool initialize(std::uint32_t size = kDefaultSize, bool srgb = false) {
-    size_ = size;
+  bool initialize(std::uint32_t width = kDefaultSize, bool srgb = false,
+                  std::uint32_t height = 0u) {
+    width_ = width;
+    height_ = height == 0u ? width : height;
     engine_ = filament::Engine::create(filament::Engine::Backend::VULKAN);
     if (engine_ == nullptr) return false;
     scene_ = engine_->createScene();
     renderer_ = engine_->createRenderer();
     swapchain_ = engine_->createSwapChain(
-        size_, size_, filament::SwapChain::CONFIG_READABLE |
+        width_, height_, filament::SwapChain::CONFIG_READABLE |
             (srgb ? filament::SwapChain::CONFIG_SRGB_COLORSPACE : 0u));
     // The windowless fixture has no QCoreApplication. Test main records the
     // actual executable directory before any temporary Qt test applications.
@@ -108,11 +111,11 @@ public:
                           viewport_grid_layer_mask(0u),
                           srgb ? ViewportRenderSurface::SrgbSwapchain
                                : ViewportRenderSurface::Swapchain);
-    camera_.set_viewport_size(size_, size_);
+    camera_.set_viewport_size(width_, height_);
     camera_.view_axis(ViewportViewAxis::Z, 1);
     camera_.focus_origin(4.0f);
     camera_.set_clip_planes(0.05f, 100.0f);
-    viewport_.resize(size_, size_);
+    viewport_.resize(width_, height_);
     viewport_.update_camera(camera_);
     viewport_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(),
                                  false);
@@ -387,6 +390,33 @@ public:
     return true;
   }
 
+  bool create_empty_axis_grid_sample(int sign, bool orbit_snap,
+                                    float roll_radians = 0.0f) {
+    destroy_patch();
+    if (!camera_.restore_perspective_pose(
+            {.eye = {0.0f, static_cast<float>(sign) * 16.0f, 0.0f},
+             .target = {},
+             .up = {std::sin(roll_radians), 0.0f, -std::cos(roll_radians)}})) {
+      return false;
+    }
+    if (orbit_snap) {
+      camera_.begin_drag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+      camera_.update_drag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
+      camera_.end_drag();
+    } else {
+      camera_.view_axis(ViewportViewAxis::Y, sign);
+    }
+    camera_.set_clip_planes(0.05f, 1000.0f);
+    viewport_.update_camera(camera_);
+    viewport_.set_scene_layer_mask(kViewportShadedSceneLayerMask);
+    viewport_.set_scene_visible(true);
+    viewport_.set_overlay_visible(true);
+    const QVec3 direction = normalize(camera_.pose().target - camera_.pose().eye);
+    return camera_.state().projection == ViewportProjection::Orthographic &&
+           camera_.orbit_snap_orthographic_projection() == orbit_snap &&
+           direction.y * static_cast<float>(sign) < -0.999f;
+  }
+
   QImage capture_grid(bool rendered, bool visible, bool axes_visible = true,
                       const ViewportSettings *authored_settings = nullptr) {
     ViewportSettings viewport_settings = authored_settings
@@ -416,7 +446,7 @@ public:
     }
     presentation_settings = viewport_settings;
     viewport_.update_ground_grid(camera_, 1.0f, viewport_settings, visible);
-    return capture_image(rendered, 0u, 0u, size_, size_);
+    return capture_image(rendered, 0u, 0u, width_, height_);
   }
 
   QPoint grid_pixel(QVec3 position) const {
@@ -472,7 +502,7 @@ public:
   }
 
   std::optional<QVec3> capture(bool rendered = true) {
-    const QImage image = capture_image(rendered, size_ / 2u, size_ / 2u, 1u, 1u);
+    const QImage image = capture_image(rendered, width_ / 2u, height_ / 2u, 1u, 1u);
     if (image.isNull()) return std::nullopt;
     const QRgb pixel = image.pixel(0, 0);
     return QVec3{float(qRed(pixel)), float(qGreen(pixel)), float(qBlue(pixel))};
@@ -500,7 +530,7 @@ public:
     viewport_.set_overlay_visible(false);
     viewport_.set_scene_layer_mask(rendered || use_rendered_scene_layer
         ? kViewportRenderedSceneLayerMask : kViewportShadedSceneLayerMask);
-    return capture_image(rendered, 0u, 0u, size_, size_);
+    return capture_image(rendered, 0u, 0u, width_, height_);
   }
 
   SceneSettings settings;
@@ -572,7 +602,8 @@ private:
   }
 
   static constexpr std::uint32_t kDefaultSize = 64u;
-  std::uint32_t size_ = kDefaultSize;
+  std::uint32_t width_ = kDefaultSize;
+  std::uint32_t height_ = kDefaultSize;
   filament::Engine *engine_ = nullptr;
   filament::Scene *scene_ = nullptr;
   filament::Renderer *renderer_ = nullptr;
@@ -1088,6 +1119,187 @@ TEST(RenderGroundGridRuntimeTests,
       const QString prefix = QString("resized_orthographic_grid_zoom_%1").arg(zoom_steps);
       ASSERT_TRUE(off.save(QDir(output_directory).filePath(prefix + "_off.png")));
       ASSERT_TRUE(on.save(QDir(output_directory).filePath(prefix + "_on.png")));
+    }
+  }
+}
+
+TEST(RenderGroundGridRuntimeTests,
+     ProjectionIntensityIsIndependentAndPreservesUnitOpacity) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for projection-specific "
+                   "ground-grid intensity coverage";
+  }
+  FogRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(256u, true));
+  const auto difference = [](const QImage &left, const QImage &right) {
+    std::pair<int, std::uint64_t> result{};
+    for (int y = 0; y < left.height(); ++y) {
+      for (int x = 0; x < left.width(); ++x) {
+        const QRgb a = left.pixel(x, y);
+        const QRgb b = right.pixel(x, y);
+        const int delta = std::max({std::abs(qRed(a) - qRed(b)),
+            std::abs(qGreen(a) - qGreen(b)), std::abs(qBlue(a) - qBlue(b))});
+        result.first = std::max(result.first, delta);
+        result.second += static_cast<std::uint64_t>(delta);
+      }
+    }
+    return result;
+  };
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_GRID_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(output_directory));
+  for (int mode = 0; mode < 3; ++mode) {
+    const bool perspective = mode == 0;
+    const QString name = perspective ? "perspective" :
+        (mode == 1 ? "axis_orthographic" : "snapped_orthographic");
+    SCOPED_TRACE(name.toStdString());
+    if (perspective) {
+      ASSERT_TRUE(harness.create_empty_grid_sample(
+          {0.0f, 16.0f, 16.0f}, {}, 1000.0f));
+    } else {
+      ASSERT_TRUE(harness.create_empty_axis_grid_sample(
+          1, mode == 2, 1.57079632679f));
+    }
+    const auto relevant = perspective ? ViewportFloatSettingId::Grid3DIntensity
+                                     : ViewportFloatSettingId::Grid2DIntensity;
+    const auto unrelated = perspective ? ViewportFloatSettingId::Grid2DIntensity
+                                      : ViewportFloatSettingId::Grid3DIntensity;
+    ViewportSettings authored = ViewportSettings::defaults();
+    EXPECT_FLOAT_EQ(authored.float_value(relevant), 1.0f);
+    EXPECT_FLOAT_EQ(authored.float_value(unrelated), 1.0f);
+    // A sub-white, partly transparent palette makes an unclamped >1 alpha
+    // visible as pixels brighter than the authored grid color over black.
+    for (const auto color : {ViewportColorSettingId::GridMinor,
+                             ViewportColorSettingId::GridMajor,
+                             ViewportColorSettingId::GridXAxis,
+                             ViewportColorSettingId::GridYAxis,
+                             ViewportColorSettingId::GridZAxis}) {
+      authored.set_color(color, {0.5f, 0.5f, 0.5f, 0.25f});
+    }
+    const QImage off = harness.capture_grid(false, false, true, &authored);
+    const QImage unit = harness.capture_grid(false, true, true, &authored);
+    ASSERT_FALSE(off.isNull());
+    ASSERT_FALSE(unit.isNull());
+    const auto unit_contrast = difference(off, unit);
+    ASSERT_GT(unit_contrast.first, 12);
+    ASSERT_GT(unit_contrast.second, 1000u);
+
+    authored.set_float_value(relevant, 1.0f);
+    authored.set_float_value(unrelated, 1.0f);
+    const QImage explicit_unit = harness.capture_grid(false, true, true, &authored);
+    ASSERT_FALSE(explicit_unit.isNull());
+    EXPECT_LE(difference(unit, explicit_unit).first, 1);
+
+    authored.set_float_value(unrelated, 4.0f);
+    const QImage other_projection = harness.capture_grid(false, true, true, &authored);
+    ASSERT_FALSE(other_projection.isNull());
+    EXPECT_LE(difference(unit, other_projection).first, 1)
+        << "Changing the other projection's multiplier must not affect this view";
+
+    authored.set_float_value(relevant, 0.0f);
+    const QImage zero = harness.capture_grid(false, true, true, &authored);
+    ASSERT_FALSE(zero.isNull());
+    EXPECT_LE(difference(off, zero).first, 1)
+        << "Zero intensity must hide lines and all origin axes";
+
+    authored.set_float_value(relevant, 0.5f);
+    const QImage half = harness.capture_grid(false, true, true, &authored);
+    ASSERT_FALSE(half.isNull());
+    const auto half_contrast = difference(off, half);
+    EXPECT_GT(half_contrast.second, unit_contrast.second * 0.35);
+    EXPECT_LT(half_contrast.second, unit_contrast.second * 0.90)
+        << "Half opacity must dim the grid without replacing its palette";
+
+    authored.set_float_value(relevant, 4.0f);
+    const QImage amplified = harness.capture_grid(false, true, true, &authored);
+    ASSERT_FALSE(amplified.isNull());
+    EXPECT_GT(difference(off, amplified).second, unit_contrast.second * 1.25);
+    int maximum_channel = 0;
+    for (int y = 0; y < amplified.height(); ++y) {
+      for (int x = 0; x < amplified.width(); ++x) {
+        const QRgb pixel = amplified.pixel(x, y);
+        maximum_channel = std::max(maximum_channel,
+            std::max({qRed(pixel), qGreen(pixel), qBlue(pixel)}));
+      }
+    }
+    EXPECT_LE(maximum_channel, 130)
+        << "Amplification must saturate opacity, not exceed the authored 0.5 sRGB color";
+
+    authored.set_float_value(relevant, 1.0f);
+    const QImage restored = harness.capture_grid(false, true, true, &authored);
+    ASSERT_FALSE(restored.isNull());
+    EXPECT_LE(difference(unit, restored).first, 1);
+    if (!output_directory.isEmpty()) {
+      for (const auto &[suffix, image] :
+           std::array<std::pair<QString, QImage>, 5u>{{
+               {"off", off}, {"unit", unit}, {"zero", zero},
+               {"half", half}, {"amplified", amplified}}}) {
+        ASSERT_TRUE(image.save(QDir(output_directory).filePath(
+            "grid_intensity_" + name + "_" + suffix + ".png")));
+      }
+    }
+  }
+}
+
+TEST(RenderGroundGridRuntimeTests,
+     SnappedTopAndBottomGridCoverWideAndPortraitCorners) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for rolled orthographic "
+                   "ground-grid viewport coverage";
+  }
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_GRID_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(output_directory));
+  ViewportSettings authored = ViewportSettings::defaults();
+  authored.set_float_value(ViewportFloatSettingId::Grid3DIntensity, 0.0f);
+  for (const auto color : {ViewportColorSettingId::GridMinor,
+                           ViewportColorSettingId::GridMajor}) {
+    authored.set_color(color, {0.5f, 0.5f, 0.5f, 1.0f});
+  }
+  for (const QSize size : {QSize(512, 192), QSize(192, 512)}) {
+    FogRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(static_cast<std::uint32_t>(size.width()),
+                                  true, static_cast<std::uint32_t>(size.height())));
+    for (const int sign : {-1, 1}) {
+      // Explicit axis selection plus two inherited Alt-snap camera rolls.
+      for (int variant = 0; variant < 3; ++variant) {
+        const bool snapped = variant != 0;
+        const float roll = variant == 1 ? 1.57079632679f : 3.14159265359f;
+        const QString name = QString("%1x%2_%3_variant_%4")
+            .arg(size.width()).arg(size.height())
+            .arg(sign > 0 ? "top" : "bottom").arg(variant);
+        SCOPED_TRACE(name.toStdString());
+        ASSERT_TRUE(harness.create_empty_axis_grid_sample(sign, snapped, roll));
+        const QImage off = harness.capture_grid(false, false, false, &authored);
+        const QImage on = harness.capture_grid(false, true, false, &authored);
+        ASSERT_FALSE(off.isNull());
+        ASSERT_FALSE(on.isNull());
+        ASSERT_EQ(on.size(), size);
+        constexpr int kInset = 4;
+        constexpr int kSampleSize = 28;
+        for (const int y : {kInset, size.height() - kInset - kSampleSize}) {
+          for (const int x : {kInset, size.width() - kInset - kSampleSize}) {
+            int maximum_contrast = 0;
+            std::size_t visible_pixels = 0u;
+            for (int py = y; py < y + kSampleSize; ++py) {
+              for (int px = x; px < x + kSampleSize; ++px) {
+                const int contrast = std::abs(qRed(on.pixel(px, py)) -
+                                              qRed(off.pixel(px, py)));
+                maximum_contrast = std::max(maximum_contrast, contrast);
+                visible_pixels += contrast >= 12 ? 1u : 0u;
+              }
+            }
+            EXPECT_GE(maximum_contrast, 12) << "corner " << x << ',' << y;
+            EXPECT_GE(visible_pixels, 20u)
+                << "The visible orthographic grid must reach corner " << x << ',' << y
+                << " even when the inherited camera roll swaps screen and plane extents";
+          }
+        }
+        if (!output_directory.isEmpty()) {
+          ASSERT_TRUE(on.save(QDir(output_directory).filePath(
+              "orthographic_grid_corners_" + name + ".png")));
+        }
+      }
     }
   }
 }

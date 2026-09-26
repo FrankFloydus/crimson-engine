@@ -24,7 +24,10 @@
 #include "ui/qt_command_palette.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_application_theme.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/ui_context.hpp"
@@ -39,13 +42,16 @@
 #include <QLineEdit>
 #include <QLabel>
 #include <QImage>
+#include <QLayout>
 #include <QTableView>
 #include <QDockWidget>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QMenu>
 #include <QPushButton>
+#include <QStyle>
 #include <QTemporaryDir>
 #include <QToolBar>
 #include <QToolButton>
@@ -159,32 +165,84 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
               nullptr) << name;
   }
 
-  auto *strip = dynamic_cast<QtViewportControlStrip *>(
-      ui.main_window()->findChild<QWidget *>(QStringLiteral("viewportControlStrip")));
+  auto *tools = dynamic_cast<QtToolToolbar *>(
+      ui.main_window()->findChild<QToolBar *>(QStringLiteral("toolToolbar")));
   auto *snapping = dynamic_cast<QtSnappingToolbar *>(
       ui.main_window()->findChild<QToolBar *>(QStringLiteral("snappingToolbar")));
   auto *display = dynamic_cast<QtViewportDisplayToolbar *>(
       ui.main_window()->findChild<QToolBar *>(QStringLiteral("viewportDisplayToolbar")));
-  ASSERT_NE(strip, nullptr);
+  ASSERT_NE(tools, nullptr);
   ASSERT_NE(snapping, nullptr);
   ASSERT_NE(display, nullptr);
-  const auto buttons = strip->findChildren<QToolButton *>();
-  ASSERT_EQ(buttons.size(), 8);
+  EXPECT_EQ(ui.main_window()->findChild<QWidget *>(QStringLiteral("viewportControlStrip")), nullptr);
   const auto snapping_actions = snapping->viewport_actions();
   const auto display_actions = display->viewport_actions();
   EXPECT_EQ(display_actions[2], nullptr);
-  qsizetype button_index = 0;
-  for (QAction *action : snapping_actions) {
-    ASSERT_NE(action, nullptr);
-    EXPECT_EQ(buttons[button_index++]->defaultAction(), action);
-  }
-  for (QAction *action : display_actions) {
-    if (action != nullptr) {
-      EXPECT_EQ(buttons[button_index++]->defaultAction(), action);
+  for (const char *pane : {"perspective", "top", "front", "side"}) {
+    SCOPED_TRACE(pane);
+    EXPECT_EQ(ui.main_window()->findChild<QWidget *>(
+                  QStringLiteral("viewportNavigationGizmo_") +
+                  QString::fromUtf8(pane)), nullptr);
+    auto *strip = dynamic_cast<QtViewportControlStrip *>(ui.main_window()->findChild<QWidget *>(
+        QStringLiteral("viewportToolbar_") + QString::fromUtf8(pane)));
+    ASSERT_NE(strip, nullptr);
+    const auto expect_clone = [&](QAction *source) {
+      EXPECT_NE(source, nullptr);
+      if (source == nullptr) return;
+      auto *button = strip->findChild<QToolButton *>(QStringLiteral("viewportStrip_") + source->objectName());
+      ASSERT_NE(button, nullptr);
+      ASSERT_NE(button->defaultAction(), nullptr);
+      EXPECT_NE(button->defaultAction(), source);
+      EXPECT_EQ(button->defaultAction()->objectName(), source->objectName());
+      EXPECT_TRUE(button->defaultAction()->shortcuts().empty());
+    };
+    for (const auto tool : {ViewportToolId::Select, ViewportToolId::Move,
+                            ViewportToolId::Rotate, ViewportToolId::Scale}) {
+      QAction *action = tools->tool_action(tool);
+      expect_clone(action);
+      EXPECT_TRUE(tools->actions().contains(action));
+    }
+    QAction *lasso_source = tools->tool_action(ViewportToolId::LassoSelect);
+    ASSERT_NE(lasso_source, nullptr);
+    EXPECT_TRUE(tools->actions().contains(lasso_source));
+    auto *selection = strip->findChild<QToolButton *>(QStringLiteral("viewportStrip_tool_select"));
+    ASSERT_NE(selection, nullptr);
+    EXPECT_EQ(selection->popupMode(), QToolButton::DelayedPopup);
+    ASSERT_NE(selection->defaultAction()->menu(), nullptr);
+    EXPECT_EQ(selection->defaultAction()->menu()->objectName(),
+              QStringLiteral("viewportSelectionToolMenu_") + QString::fromUtf8(pane));
+    ASSERT_EQ(selection->defaultAction()->menu()->actions().size(), 2);
+    EXPECT_TRUE(selection->defaultAction()->menu()->actions()[0]->text().startsWith(QStringLiteral("Box Select")));
+    EXPECT_TRUE(selection->defaultAction()->menu()->actions()[1]->text().startsWith(QStringLiteral("Lasso")));
+    EXPECT_EQ(selection->defaultAction()->menu()->actions()[0]->objectName(), QStringLiteral("selectionBox"));
+    EXPECT_EQ(selection->defaultAction()->menu()->actions()[1]->objectName(), QStringLiteral("selectionLasso"));
+    for (QAction *choice : selection->defaultAction()->menu()->actions()) {
+      EXPECT_TRUE(choice->shortcuts().empty());
+    }
+    EXPECT_EQ(strip->findChild<QToolButton *>(
+                  QStringLiteral("viewportStrip_") + lasso_source->objectName()), nullptr);
+    auto *local = strip->findChild<QToolButton *>(QStringLiteral("viewportStrip_toggle_transform_space"));
+    auto *backface = strip->findChild<QToolButton *>(QStringLiteral("viewportStrip_backfaceSelection"));
+    ASSERT_NE(local, nullptr);
+    ASSERT_NE(backface, nullptr);
+    EXPECT_EQ(strip->layout()->indexOf(backface), strip->layout()->indexOf(local) + 1);
+    for (QAction *action : snapping_actions) expect_clone(action);
+    for (QAction *action : display_actions) {
+      if (action != nullptr) expect_clone(action);
+    }
+    EXPECT_EQ(strip->findChild<QToolButton *>(QStringLiteral("viewportStrip_viewportMeshGrid")), nullptr);
+    EXPECT_EQ(strip->findChild<QAction *>(QStringLiteral("viewportMeshGrid")), nullptr);
+    auto *camera = strip->findChild<QPushButton *>(QStringLiteral("viewportCamera_") + QString::fromUtf8(pane));
+    auto *shading = strip->findChild<QPushButton *>(QStringLiteral("viewportShading_") + QString::fromUtf8(pane));
+    ASSERT_NE(camera, nullptr);
+    ASSERT_NE(shading, nullptr);
+    ASSERT_NE(camera->menu(), nullptr);
+    ASSERT_NE(shading->menu(), nullptr);
+    EXPECT_NE(camera->menu(), shading->menu());
+    for (QAction *action : shading->menu()->actions()) {
+      EXPECT_FALSE(action->text().startsWith(QStringLiteral("Camera")));
     }
   }
-  EXPECT_EQ(strip->findChild<QToolButton *>(
-                QStringLiteral("viewportStrip_viewportMeshGrid")), nullptr);
 
   int camera_launchers = 0;
   for (QPushButton *button : ui.main_window()->findChildren<QPushButton *>()) {
@@ -373,6 +431,116 @@ TEST_F(PublicReleaseUiTests, MeshInspectorRetainsDoubleSidedWithoutCastShadows) 
   ASSERT_NE(mesh, nullptr);
   EXPECT_EQ(mesh->double_sided, next_double_sided);
   EXPECT_EQ(mesh->cast_shadows, before_shadows);
+}
+
+TEST_F(PublicReleaseUiTests, ObjectMenuKeepsOnlyFlatPublicGroups) {
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  QtUiScaleApplicationController scale_controller(*qApp);
+  SceneSession session;
+  QuaderEditorApi editor{
+      QuaderApiSessionInternalAccess::from_scene_session(session)};
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  QMenuBar menu_bar;
+  QtMainMenu menu;
+  menu.initialize(menu_bar, QtMainMenuContext{
+      .editor = editor, .modeling = session.modeling(),
+      .viewport_settings = viewport_settings, .localization = localization,
+  });
+  auto *object = menu_bar.findChild<QMenu *>(QStringLiteral("menu_object"));
+  ASSERT_NE(object, nullptr);
+  const auto actions = object->actions();
+  ASSERT_FALSE(actions.empty());
+  EXPECT_FALSE(actions.front()->isSeparator());
+  EXPECT_FALSE(actions.back()->isSeparator());
+  QStringList rows;
+  for (auto *action : actions) {
+    EXPECT_EQ(action->menu(), nullptr);
+    rows.append(action->isSeparator() ? QStringLiteral("separator")
+                                     : action->objectName());
+  }
+  EXPECT_EQ(rows, (QStringList{
+      QStringLiteral("command_edit_group"),
+      QStringLiteral("command_edit_ungroup"),
+      QStringLiteral("command_edit_parent_to_active"),
+      QStringLiteral("command_edit_unparent"),
+      QStringLiteral("separator"),
+      QStringLiteral("command_edit_duplicate"),
+  }));
+  EXPECT_TRUE(editor.commands().descriptor(quader_command::kDeleteSelection)
+                  .has_value());
+
+  auto *view = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view"));
+  auto *window = menu_bar.findChild<QMenu *>(QStringLiteral("menu_window"));
+  auto *display = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view_display"));
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(window, nullptr);
+  ASSERT_NE(display, nullptr);
+  const auto view_actions = view->actions();
+  ASSERT_GE(view_actions.size(), 2);
+  EXPECT_EQ(view_actions.front()->objectName(),
+            QStringLiteral("command_viewport_toggle_local_visibility"));
+  EXPECT_TRUE(view_actions[1]->isSeparator());
+  EXPECT_FALSE(display->actions().contains(view_actions.front()));
+  for (const char *name : {"command_scene_hide_selection",
+                           "command_scene_unhide_hidden_objects"}) {
+    auto *action = menu_bar.findChild<QAction *>(QString::fromLatin1(name));
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(view_actions.contains(action));
+    EXPECT_FALSE(actions.contains(action));
+  }
+  for (const char *name : {"command_viewport_toggle_transform_space",
+                           "command_viewport_spawn_window"}) {
+    EXPECT_EQ(menu_bar.findChild<QAction *>(QString::fromLatin1(name)), nullptr);
+  }
+  EXPECT_TRUE(editor.commands()
+                  .descriptor(quader_command::kViewportToggleTransformSpace)
+                  .has_value());
+  EXPECT_TRUE(editor.commands()
+                  .descriptor(quader_command::kViewportSpawnWindow)
+                  .has_value());
+
+  const auto review_menu = [&](QMenu &reviewed, const QString &filename,
+                               int &row_height) {
+    reviewed.setAttribute(Qt::WA_DontShowOnScreen, true);
+    reviewed.popup(QPoint(20, 20));
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(reviewed.isVisible());
+    reviewed.setActiveAction(reviewed.actions().front());
+    row_height = reviewed.actionGeometry(reviewed.actions().front()).height();
+    EXPECT_GE(row_height, scale_controller.metrics().px(28));
+    const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+    if (!directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(directory));
+      QImage image(reviewed.size(), QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      reviewed.render(&image);
+      EXPECT_TRUE(image.save(QDir(directory).filePath(filename)));
+    }
+    reviewed.close();
+    QCoreApplication::processEvents();
+  };
+  const auto review_roots = [&](const QString &suffix) {
+    int row_height = 0;
+    review_menu(*view, QStringLiteral("view-menu-public-") + suffix + ".png",
+                row_height);
+    review_menu(*window, QStringLiteral("window-menu-public-") + suffix + ".png",
+                row_height);
+  };
+  int row_100 = 0;
+  review_menu(*object, QStringLiteral("object-menu-public-100.png"), row_100);
+  review_roots(QStringLiteral("100"));
+  ASSERT_TRUE(scale_controller.apply_factor(2.0F));
+  int row_200 = 0;
+  review_menu(*object, QStringLiteral("object-menu-public-200.png"), row_200);
+  EXPECT_GT(row_200, row_100);
+  review_roots(QStringLiteral("200"));
+  ASSERT_TRUE(scale_controller.apply_factor(1.0F));
+  int row_down = 0;
+  review_menu(*object, QStringLiteral("object-menu-public-scale-down.png"), row_down);
+  EXPECT_EQ(row_down, row_100);
+  review_roots(QStringLiteral("scale-down"));
 }
 
 TEST_F(PublicReleaseUiTests, AdvancedSelectionDisappearsOnlyFromDiscoverySurfaces) {

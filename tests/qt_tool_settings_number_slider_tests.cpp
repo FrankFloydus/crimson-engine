@@ -1942,6 +1942,68 @@ TEST(QtToolSettingsPanelTests,
   panel.unbind();
 }
 
+TEST(QtToolSettingsPanelTests, PassivePaneSettingsCannotAcceptOrCancelAnotherPanesOperation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-pane-settings-lifecycle-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Top).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Perspective).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  const auto serial = editor.tools().active_settings_presentation_origin().serial;
+  ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Top).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  ASSERT_EQ(panel.target_id(), "move");
+  EXPECT_FALSE(panel.prepare_lifecycle_intent(editor, quader::QuaderNativeToolSettingsIntent::Apply));
+  EXPECT_FALSE(panel.prepare_lifecycle_intent(editor, quader::QuaderNativeToolSettingsIntent::Cancel));
+  EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin().serial, serial);
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests, FocusTransferDiscardsQueuedValuesWithoutAcquiringAnotherTool) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-pane-settings-draft-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  auto *repeat = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.u_repeat"));
+  ASSERT_NE(repeat, nullptr);
+  repeat->setValue(7.0);
+  ASSERT_TRUE(panel.numeric_interaction_active());
+  const auto origin = editor.tools().active_settings_presentation_origin();
+  const auto active_revision = editor.tools().active_tool_revision();
+  ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Top).ok());
+  // Timers can fire before the outer frame has moved/rebuilt the panel.
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
+  EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
+  EXPECT_EQ(editor.tools().active_tool_revision(), active_revision);
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin().serial, origin.serial);
+  panel.refresh();
+  EXPECT_FALSE(panel.has_settings());
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Perspective).ok());
+  panel.refresh();
+  EXPECT_EQ(panel.target_id(), "uv_peel");
+  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
+  panel.unbind();
+}
+
 TEST(QtToolSettingsPanelTests,
      StaleChoicesAndLifecycleButtonsCannotChangeAReplacementOperation) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);

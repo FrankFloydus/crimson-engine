@@ -139,8 +139,6 @@ inline constexpr QuaderCommandId kViewportToggleCollisions{
     "viewport.toggle_collisions"};
 inline constexpr QuaderCommandId kViewportToggleInfo{
     "viewport.toggle_info"};
-inline constexpr QuaderCommandId kViewportToggleNavigationGizmo{
-    "viewport.toggle_navigation_gizmo"};
 inline constexpr QuaderCommandId kViewportToggleTextureLock{
     "viewport.toggle_texture_lock"};
 inline constexpr QuaderCommandId kViewportToggleTextureLockScale{
@@ -173,8 +171,6 @@ inline constexpr QuaderCommandId kViewportGridIncrement{
     "viewport.grid.increment"};
 inline constexpr QuaderCommandId kViewportGridDecrement{
     "viewport.grid.decrement"};
-inline constexpr QuaderCommandId kViewportGridReset{
-    "viewport.grid.reset"};
 
 /// Deprecated compatibility spelling. Use kDeleteSelection for new C++ callers.
 inline constexpr QuaderCommandId kModelingDeleteSelection{"edit.delete"};
@@ -495,7 +491,6 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportToggleDimensions,
     kViewportToggleCollisions,
     kViewportToggleInfo,
-    kViewportToggleNavigationGizmo,
     kViewportToggleTextureLock,
     kViewportToggleTextureLockScale,
     kViewportShadingWireframe,
@@ -512,7 +507,6 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportLayoutFourQuad,
     kViewportGridIncrement,
     kViewportGridDecrement,
-    kViewportGridReset,
     kModelingDuplicateMeshes,
     kModelingBridge,
     kModelingExtractFaces,

@@ -561,28 +561,33 @@ void ViewportRenderer::set_shadowing_enabled(bool enabled) {
 }
 
 void ViewportRenderer::set_material_presentation(
-    ViewportMaterialDebugMode mode, bool solid) {
+    ViewportMaterialDebugMode mode, bool solid, bool mesh_grid_visible) {
   if (!release_has_feature(ReleaseFeature::RenderedViewport)) {
     mode = ViewportMaterialDebugMode::None;
   }
+  mesh_grid_visible =
+      mesh_grid_visible && release_has_feature(ReleaseFeature::MeshGrid);
   if (has_material_presentation_ && material_debug_mode_ == mode &&
-      solid_material_presentation_ == solid) {
+      solid_material_presentation_ == solid &&
+      mesh_grid_visible_ == mesh_grid_visible) {
     return;
   }
   material_debug_mode_ = mode;
   solid_material_presentation_ = solid;
+  mesh_grid_visible_ = mesh_grid_visible;
   has_material_presentation_ = true;
   if (view_) {
     view_->setMaterialGlobal(
         0u,
         filament::math::float4{static_cast<float>(mode), solid ? 1.0f : 0.0f,
-                               0.0f, 1.0f});
+                               mesh_grid_visible ? 0.0f : 1.0f, 1.0f});
   }
 }
 
 void ViewportRenderer::set_material_debug_mode(
     ViewportMaterialDebugMode mode) {
-  set_material_presentation(mode, solid_material_presentation_);
+  set_material_presentation(mode, solid_material_presentation_,
+                            mesh_grid_visible_);
 }
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
@@ -611,6 +616,7 @@ void ViewportRenderer::reset_presentation_cache() {
   shadowing_enabled_.reset();
   material_debug_mode_ = ViewportMaterialDebugMode::None;
   solid_material_presentation_ = false;
+  mesh_grid_visible_ = true;
   has_material_presentation_ = false;
 }
 

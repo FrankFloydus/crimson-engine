@@ -924,7 +924,10 @@ DocumentCommandService::select_entities(std::vector<EntityId> entities,
                                          EntityId active,
                                          SceneSelectionApplicationMode mode,
                                          CheckedSelectionPublication
-                                             publication) {
+                                             publication,
+                                         UndoRedoExecuteOptions options,
+                                         std::optional<std::uint64_t>
+                                             expected_history_revision) {
   if (!publication) {
     publication = selection_publication_;
   }
@@ -935,15 +938,26 @@ DocumentCommandService::select_entities(std::vector<EntityId> entities,
     canceled = cancel_active_property_edit();
     if (!canceled.ok) return canceled;
   }
+  if (expected_history_revision.has_value() &&
+      !history_.can_merge_with_latest(options.merge_key,
+                                      *expected_history_revision)) {
+    options.merge_key.clear();
+  }
+  const std::string merge_key = options.merge_key;
   auto result = execute_document_command(history_,
                                   with_checked_selection_publication(
                                       scene_,
                                       std::make_unique<SelectEntitiesCommand>(
                                           scene_, std::move(entities), active,
-                                          mode),
-                                      std::move(publication)));
+                                          mode, merge_key),
+                                      std::move(publication)),
+                                  std::move(options));
   result.changed = result.changed || canceled.changed;
   return result;
+}
+
+std::uint64_t DocumentCommandService::history_revision() const {
+  return history_.revision();
 }
 
 DocumentCommandResult

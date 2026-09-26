@@ -121,7 +121,6 @@ constexpr auto kExcludedCommands = std::to_array<QuaderCommandId>({
     quader_command::kModelingFlipHorizontal,
     quader_command::kModelingFlipVertical,
     quader_command::kModelingUvPeel,
-    quader_command::kToolsActivateLassoSelect,
     quader_command::kToolsActivateMirror,
     quader_command::kToolsActivateCut,
     quader_command::kToolsActivatePoly,
@@ -165,7 +164,8 @@ TEST(PublicReleaseProfile, ExecutableIdentityCatalogAndSettingsArePublic01) {
   EXPECT_FALSE(info.internal_full);
   for (const auto &feature : release_feature_catalog()) {
     SCOPED_TRACE(feature.id);
-    EXPECT_FALSE(editor.feature_available(feature.feature));
+    EXPECT_EQ(editor.feature_available(feature.feature),
+              feature.feature == ReleaseFeature::LassoSelection);
     EXPECT_TRUE(product_release_has_feature(kInternalFullRelease, feature.feature));
   }
   ASSERT_NE(std::getenv("LOCALAPPDATA"), nullptr);
@@ -225,6 +225,7 @@ TEST(PublicReleaseCommands, EveryExcludedCommandIsAbsentAndRejectsWithoutMutatio
   }
   EXPECT_GE(count, kExcludedCommands.size());
   for (const auto command : {quader_command::kToolsActivateKnife,
+                             quader_command::kToolsActivateLassoSelect,
                              quader_command::kToolsActivateMove,
                              quader_command::kToolsActivateRotate,
                              quader_command::kToolsActivateScale,
@@ -238,7 +239,7 @@ TEST(PublicReleaseCommands, DisabledToolActivationPreservesActivePrimitivePrevie
   auto &editor = standalone.editor();
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
   const auto before = capture_command_observable_state(editor);
-  for (const auto tool : {"lasso_select", "mirror", "cut", "poly", "linear_array",
+  for (const auto tool : {"mirror", "cut", "poly", "linear_array",
                           "radial_array", "path_array", "curve", "create_curve",
                           "pivot", "uv_peel"}) {
     SCOPED_TRACE(tool);
@@ -248,6 +249,19 @@ TEST(PublicReleaseCommands, DisabledToolActivationPreservesActivePrimitivePrevie
     EXPECT_FALSE(result.changed());
     expect_unchanged(editor, before);
   }
+}
+
+TEST(PublicReleaseCommands, LassoSelectionIsAvailableThroughCommandsAndTools) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  EXPECT_TRUE(editor.feature_available(ReleaseFeature::LassoSelection));
+  EXPECT_TRUE(editor.tools().can_activate(ViewportToolId::LassoSelect));
+  ASSERT_TRUE(editor.commands().execute(quader_command::kToolsActivateLassoSelect).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "lasso_select");
+  EXPECT_EQ(editor.viewports().preferred_selection_tool(), ViewportToolId::LassoSelect);
+  ASSERT_TRUE(editor.commands().execute(quader_command::kToolsActivateSelect).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LassoSelect).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "lasso_select");
 }
 
 TEST(PublicReleaseCommands, ParentingCommandsArePublicAndSupportMeshesAndGroups) {
@@ -796,12 +810,12 @@ TEST(PublicReleasePresentation, MenusAndToolbarsContainOnlyPublishedControls) {
   EXPECT_TRUE(transform_space->isEnabled());
   EXPECT_EQ(snapping_toolbar.actions().indexOf(transform_space) + 1,
             snapping_toolbar.actions().indexOf(snapping));
-  for (const auto tool : {"lasso_select", "mirror", "cut", "poly", "linear_array",
+  for (const auto tool : {"mirror", "cut", "poly", "linear_array",
                           "radial_array", "path_array", "curve", "pivot"}) {
     EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("tool_%1").arg(tool)), nullptr)
         << tool;
   }
-  for (const auto tool : {"select", "move", "rotate", "scale", "knife"}) {
+  for (const auto tool : {"select", "lasso_select", "move", "rotate", "scale", "knife"}) {
     EXPECT_NE(toolbar.findChild<QAction *>(QStringLiteral("tool_%1").arg(tool)), nullptr)
         << tool;
   }

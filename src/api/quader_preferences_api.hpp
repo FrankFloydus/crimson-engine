@@ -93,8 +93,6 @@ public:
     [[nodiscard]] double rotation_snap_degrees() const;
     QuaderApiVoidResult set_viewport_info_visible(bool visible);
     [[nodiscard]] bool viewport_info_visible() const;
-    QuaderApiVoidResult set_navigation_gizmo_visible(bool visible);
-    [[nodiscard]] bool navigation_gizmo_visible() const;
     QuaderApiVoidResult save();
 
 private:

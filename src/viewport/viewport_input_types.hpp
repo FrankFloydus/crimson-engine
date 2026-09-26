@@ -208,8 +208,9 @@ struct ViewportInputFrame {
   // Retains the exact Settings-resolved button, gesture, and physical edge.
   // The interaction owner uses this instead of assuming a left-button action.
   std::vector<ViewportSemanticPointerEdge> material_transfer_edges;
-  // An unconsumed first left click can wait for any bound depth double-click.
-  bool selection_click_delay_for_double_click = false;
+  // An ordinary first click publishes immediately while retaining a baseline
+  // for a recognized, bound depth double-click.
+  bool selection_click_has_depth_double_click = false;
   // Physical first-click modifiers, before they can change for the double-click.
   ViewportModifiers selection_click_modifiers = {};
   bool cycle_selection_depth_pressed = false;

@@ -43,7 +43,7 @@
 #include "ui/qt_environment_settings_popup.hpp"
 #include "core/release_features.hpp"
 #include "ui/qt_numeric_format.hpp"
-#include "ui/qt_viewport_chrome_layout.hpp"
+#include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_edge_length_hud.hpp"
 #include "ui/qt_viewport_fly_navigation_hud.hpp"
 #include "ui/qt_viewport_pane_activation.hpp"
@@ -77,6 +77,7 @@
 #include <QSizePolicy>
 #include <QStylePainter>
 #include <QStyleOptionButton>
+#include <QFontMetrics>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -117,6 +118,28 @@ protected:
     option.features |= QStyleOptionButton::HasMenu;
     painter.drawControl(QStyle::CE_PushButton, option);
   }
+};
+
+/// Keeps the strip's closed selectors compact while menus retain native metrics.
+class QtViewportCompactMenuButton final : public QPushButton {
+public:
+  using QPushButton::QPushButton;
+
+  void set_metrics(const QtUiScaleMetrics &metrics) {
+    metrics_ = metrics;
+    setFixedHeight(fontMetrics().height() + metrics_.px(4));
+    updateGeometry();
+  }
+
+  QSize sizeHint() const override {
+    return QSize(fontMetrics().horizontalAdvance(text()) + metrics_.px(24),
+                 fontMetrics().height() + metrics_.px(4));
+  }
+
+  QSize minimumSizeHint() const override { return sizeHint(); }
+
+private:
+  QtUiScaleMetrics metrics_;
 };
 
 /** Paints only a masked native border above the viewport's child window. */
@@ -553,9 +576,15 @@ QtViewportPanel::QtViewportPanel(QWidget *parent)
       QStringLiteral("viewportFocusedPaneFrame"));
   focused_pane_frame_->hide();
   connect(qApp, &QApplication::focusChanged, this,
-          [this](QWidget *, QWidget *) { update_focused_pane_indicator(); });
+          [this](QWidget *, QWidget *current) {
+            synchronize_control_focus(current);
+            update_focused_pane_indicator();
+          });
   connect(qApp, &QGuiApplication::focusWindowChanged, this,
-          [this](QWindow *) { update_focused_pane_indicator(); });
+          [this](QWindow *current) {
+            synchronize_control_focus(current);
+            update_focused_pane_indicator();
+          });
   for (std::size_t index = 0; index < split_handles_.size(); ++index) {
     SplitHandleHost &handle = split_handles_[index];
     handle.widget = new QWidget(this);
@@ -618,7 +647,6 @@ void QtViewportPanel::shutdown() {
     return;
   }
   for (Pane &pane_state : panes_) {
-    pane_state.navigation_gizmo->set_camera(nullptr);
     pane_state.edge_length_hud->hide();
     pane_state.surface_container->hide();
     pane_state.surface_presented = false;
@@ -693,8 +721,11 @@ void QtViewportPanel::abandon_interactions() {
   active_tool_revision_valid_ = false;
   set_modal_tool_owns_viewport_snapshot(false);
   for (Pane &pane_state : panes_) {
-    if (pane_state.navigation_gizmo != nullptr) {
-      pane_state.navigation_gizmo->abandon_camera();
+    for (QMenu *menu : {pane_state.camera_menu, pane_state.display_menu,
+                        pane_state.debug_view_menu,
+                        pane_state.selection_action != nullptr
+                            ? pane_state.selection_action->menu() : nullptr}) {
+      if (menu != nullptr) menu->close();
     }
     if (pane_state.surface != nullptr) {
       pane_state.surface->set_interaction_cursor(
@@ -749,10 +780,203 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   }
   workspace_ = &workspace;
   for (Pane &pane_state : panes_) {
-    pane_state.navigation_gizmo->set_camera(
-        &workspace.camera(pane_state.id));
+    pane_state.controls_valid = false;
+    pane_state.control_selection_valid = false;
+    pane_state.idle_gizmo.reset();
   }
   refresh_workspace_layout();
+}
+
+void QtViewportPanel::set_control_actions(const std::vector<QAction *> &actions,
+                                          QAction *lasso_action) {
+  for (Pane &pane_state : panes_) {
+    if (!pane_state.control_actions.empty()) {
+      continue;
+    }
+    for (QAction *source : actions) {
+      if (source == nullptr) {
+        pane_state.toolbar->add_separator();
+        continue;
+      }
+      auto *action = new QAction(pane_state.toolbar);
+      action->setObjectName(source->objectName());
+      action->setCheckable(source->isCheckable());
+      const auto synchronize_metadata = [this, &pane_state, action, source]() {
+        if (action->text() != source->text()) action->setText(source->text());
+        if (action->toolTip() != source->toolTip()) action->setToolTip(source->toolTip());
+        if (action->icon().cacheKey() != source->icon().cacheKey()) action->setIcon(source->icon());
+        if (action->isEnabled() != source->isEnabled()) action->setEnabled(source->isEnabled());
+        if (action->isVisible() != source->isVisible()) action->setVisible(source->isVisible());
+        pane_state.controls_valid = false;
+        sync_pane_actions(pane_state);
+      };
+      connect(source, &QAction::changed, action, synchronize_metadata);
+      connect(action, &QAction::triggered, this,
+              [this, &pane_state, source](bool) {
+                if (source->objectName() == QStringLiteral("tool_select") &&
+                    workspace_ != nullptr) {
+                  const std::size_t index = workspace_->preferred_selection_tool(pane_state.id) ==
+                      ViewportToolId::LassoSelect ? 1u : 0u;
+                  if (const auto &choice = pane_state.selection_choices[index];
+                      choice.source != nullptr) {
+                    dispatch_control_action(pane_state, *choice.source);
+                    return;
+                  }
+                }
+                dispatch_control_action(pane_state, *source);
+              });
+      pane_state.control_actions.push_back({source, action});
+      if (source->objectName() == QStringLiteral("tool_select")) {
+        pane_state.selection_action = action;
+        auto *menu = new QMenu(pane_state.toolbar);
+        menu->setObjectName(QStringLiteral("viewportSelectionToolMenu_%1").arg(
+            QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+        auto *group = new QActionGroup(menu);
+        group->setExclusive(true);
+        const std::array<QAction *, 2> sources{source, lasso_action};
+        for (std::size_t index = 0; index < sources.size(); ++index) {
+          QAction *choice_source = sources[index];
+          if (choice_source == nullptr) continue;
+          auto *choice = new QAction(menu);
+          choice->setObjectName(index == 0u ? QStringLiteral("selectionBox")
+                                           : QStringLiteral("selectionLasso"));
+          choice->setCheckable(true);
+          group->addAction(choice);
+          menu->addAction(choice);
+          pane_state.selection_choices[index] = {choice_source, choice};
+          connect(choice_source, &QAction::changed, choice, [this, &pane_state]() {
+            refresh_selection_tool_actions(pane_state);
+          });
+          connect(choice, &QAction::triggered, this,
+                  [this, &pane_state, choice_source]() {
+                    dispatch_control_action(pane_state, *choice_source);
+                  });
+        }
+        connect(menu, &QMenu::aboutToShow, this, [this, &pane_state]() {
+          request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+          pane_state.controls_valid = false;
+          sync_pane_actions(pane_state);
+        });
+        action->setMenu(menu);
+        refresh_selection_tool_actions(pane_state);
+      }
+      synchronize_metadata();
+      pane_state.toolbar->add_action(*action);
+    }
+    pane_state.controls_valid = false;
+    sync_pane_actions(pane_state);
+  }
+  update_pane_geometry();
+}
+
+void QtViewportPanel::dispatch_control_action(Pane &pane_state, QAction &action) {
+  const auto generation = runtime_binding_generation_;
+  request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+  if (generation != runtime_binding_generation_) return;
+  if (workspace_ != nullptr && workspace_->focused_pane() == pane_state.id &&
+      control_action_requested_) {
+    control_action_requested_(pane_state.id, action);
+  }
+  if (generation != runtime_binding_generation_) return;
+  pane_state.controls_valid = false;
+  sync_pane_actions(pane_state);
+}
+
+void QtViewportPanel::refresh_selection_tool_actions(Pane &pane_state) {
+  for (std::size_t index = 0; index < pane_state.selection_choices.size(); ++index) {
+    const auto &entry = pane_state.selection_choices[index];
+    if (entry.source == nullptr || entry.action == nullptr) continue;
+    const QString label = index == 0u
+        ? localized_display_menu_label(localization_, "viewport.selection.box", "Box Select")
+        : entry.source->text();
+    QString tooltip = entry.source->toolTip();
+    if (tooltip.startsWith(entry.source->text())) {
+      tooltip.replace(0, entry.source->text().size(), label);
+    }
+    QString menu_text = label;
+    if (interaction_editor_ != nullptr) {
+      const auto command = index == 0u ? quader_command::kToolsActivateSelect
+                                      : quader_command::kToolsActivateLassoSelect;
+      const std::string shortcut = interaction_editor_->commands().shortcut_for(command);
+      if (!shortcut.empty()) menu_text += QLatin1Char('\t') + QString::fromStdString(shortcut);
+    }
+    if (entry.action->text() != menu_text) entry.action->setText(menu_text);
+    if (entry.action->toolTip() != tooltip) entry.action->setToolTip(tooltip);
+    if (entry.action->icon().cacheKey() != entry.source->icon().cacheKey())
+      entry.action->setIcon(entry.source->icon());
+    if (entry.action->isEnabled() != entry.source->isEnabled())
+      entry.action->setEnabled(entry.source->isEnabled());
+    if (entry.action->isVisible() != entry.source->isVisible())
+      entry.action->setVisible(entry.source->isVisible());
+  }
+  pane_state.controls_valid = false;
+  sync_pane_actions(pane_state);
+}
+
+void QtViewportPanel::set_control_action_requested_callback(
+    std::function<void(ViewportPaneId, QAction &)> callback) {
+  control_action_requested_ = std::move(callback);
+}
+
+void QtViewportPanel::refresh_control_actions(QuaderEditorApi &editor) {
+  if (interaction_editor_ != &editor) {
+    refresh_keybinding_presentation(editor);
+    for (Pane &pane_state : panes_) pane_state.controls_valid = false;
+  }
+  for (Pane &pane_state : panes_) {
+    sync_pane_actions(pane_state);
+    sync_pane_control_selection(pane_state);
+  }
+}
+
+void QtViewportPanel::sync_pane_actions(Pane &pane_state) {
+  if (workspace_ == nullptr) return;
+  const auto revision = workspace_->control_revision(pane_state.id);
+  if (pane_state.controls_valid && pane_state.controls_revision == revision) return;
+  const ViewportSettings &settings = workspace_->effective_settings(pane_state.id);
+  const ViewportToolId tool = workspace_->selected_tool(pane_state.id);
+  for (const auto &entry : pane_state.control_actions) {
+    const QString name = entry.action->objectName();
+    std::optional<bool> checked;
+    if (name == QStringLiteral("tool_select")) checked =
+        tool == ViewportToolId::Select || tool == ViewportToolId::LassoSelect;
+    else if (name == QStringLiteral("tool_move")) checked = tool == ViewportToolId::Move;
+    else if (name == QStringLiteral("tool_rotate")) checked = tool == ViewportToolId::Rotate;
+    else if (name == QStringLiteral("tool_scale")) checked = tool == ViewportToolId::Scale;
+    else if (name == QStringLiteral("toggle_transform_space"))
+      checked = workspace_->transform_space(pane_state.id) == ViewportTransformSpace::Local;
+    else if (name == QStringLiteral("backfaceSelection"))
+      checked = settings.bool_value(ViewportBoolSettingId::BackfaceSelection);
+    else if (name == QStringLiteral("snappingEnabled")) checked = settings.bool_value(ViewportBoolSettingId::SnappingEnabled);
+    else if (name == QStringLiteral("gridSnapping")) checked = settings.bool_value(ViewportBoolSettingId::GridSnap);
+    else if (name == QStringLiteral("vertexSnapping")) checked = settings.bool_value(ViewportBoolSettingId::VertexSnap);
+    else if (name == QStringLiteral("rotationSnapping")) checked = settings.bool_value(ViewportBoolSettingId::RotationSnap);
+    else if (name == QStringLiteral("viewportGrid")) checked = settings.bool_value(ViewportBoolSettingId::ShowGrid);
+    else if (name == QStringLiteral("viewportGizmos")) checked = settings.bool_value(ViewportBoolSettingId::ShowGizmos);
+    else if (name == QStringLiteral("viewportMeshGrid")) checked = settings.bool_value(ViewportBoolSettingId::ShowMeshGrid);
+    else if (name == QStringLiteral("viewportOverlays")) checked = settings.bool_value(ViewportBoolSettingId::ShowOverlays);
+    if (checked.has_value() && entry.action->isChecked() != *checked) {
+      entry.action->setChecked(*checked);
+    }
+  }
+  const std::size_t preferred_selection =
+      workspace_->preferred_selection_tool(pane_state.id) == ViewportToolId::LassoSelect ? 1u : 0u;
+  for (std::size_t index = 0; index < pane_state.selection_choices.size(); ++index) {
+    const auto &entry = pane_state.selection_choices[index];
+    if (entry.action == nullptr) continue;
+    if (entry.action->isChecked() != (index == preferred_selection))
+      entry.action->setChecked(index == preferred_selection);
+    if (index == preferred_selection && pane_state.selection_action != nullptr) {
+      auto &launcher = *pane_state.selection_action;
+      const QString text = entry.action->text().section(QLatin1Char('\t'), 0, 0);
+      if (launcher.text() != text) launcher.setText(text);
+      if (launcher.toolTip() != entry.action->toolTip()) launcher.setToolTip(entry.action->toolTip());
+      if (launcher.icon().cacheKey() != entry.action->icon().cacheKey()) launcher.setIcon(entry.action->icon());
+      if (launcher.isEnabled() != entry.action->isEnabled()) launcher.setEnabled(entry.action->isEnabled());
+    }
+  }
+  pane_state.controls_revision = revision;
+  pane_state.controls_valid = true;
 }
 
 void QtViewportPanel::set_settings_panel(QtToolSettingsPanel *panel) {
@@ -803,9 +1027,7 @@ void QtViewportPanel::refresh_settings_overlay(QuaderEditorApi &editor) {
       settings_origin_serial_ != origin.serial) {
     settings_target_id_ = target_id;
     settings_origin_serial_ = origin.serial;
-    settings_origin_pane_ =
-        origin.serial != 0 && origin.target_id == target_id
-            ? origin.pane : workspace_->focused_pane();
+    settings_origin_pane_ = origin.pane;
     settings_overlay_geometry_dirty_ = true;
   }
   update_settings_overlay_geometry();
@@ -825,7 +1047,7 @@ void QtViewportPanel::update_settings_overlay_geometry() {
     return;
   }
 
-  ViewportPaneId host_id = *settings_origin_pane_;
+  ViewportPaneId host_id = workspace_->focused_pane();
   if (!pane(host_id).frame_presented) {
     host_id = workspace_->focused_pane();
   }
@@ -854,7 +1076,7 @@ void QtViewportPanel::update_settings_overlay_geometry() {
   if (settings_panel_->parentWidget() != host.frame) {
     settings_panel_->setParent(host.frame);
   }
-  const QRect bounds = host.frame->rect();
+  const QRect bounds = pane_content_rect(host);
   const int inset = std::min({ui_scale_metrics_.px(6),
                               std::max(0, (bounds.width() - 1) / 2),
                               std::max(0, (bounds.height() - 1) / 2)});
@@ -863,7 +1085,8 @@ void QtViewportPanel::update_settings_overlay_geometry() {
                                std::max(1, bounds.width() - 2 * inset));
   const int height = std::clamp(preferred.height(), 1,
                                 std::max(1, bounds.height() - 2 * inset));
-  const QRect geometry{inset, bounds.height() - inset - height, width, height};
+  const QRect geometry{bounds.left() + inset,
+                       bounds.bottom() + 1 - inset - height, width, height};
   if (settings_panel_->geometry() != geometry) {
     settings_panel_->setGeometry(geometry);
   }
@@ -890,17 +1113,14 @@ void QtViewportPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   hide_primitive_feedback();
   context_menu_presenter_.apply_ui_scale(metrics);
   for (Pane &pane_state : panes_) {
-    pane_state.navigation_gizmo->apply_ui_scale(metrics);
     pane_state.fly_navigation_hud->apply_ui_scale(metrics);
     pane_state.edge_length_hud->apply_ui_scale(metrics);
-    pane_state.toolbar->adjustSize();
+    scale_pane_controls(pane_state);
+    pane_state.toolbar->apply_ui_scale(metrics);
     pane_state.overlay_stack_valid = false;
     update_pane_overlay_geometry(pane_state);
   }
-  update_split_handles();
-  update_focused_pane_indicator();
-  settings_overlay_geometry_dirty_ = true;
-  update_settings_overlay_geometry();
+  update_pane_geometry();
 }
 
 float QtViewportPanel::viewport_raster_scale(ViewportPaneId pane_id) const {
@@ -985,6 +1205,7 @@ void QtViewportPanel::refresh_workspace_layout() {
   }
   for (Pane &pane_state : panes_) {
     sync_pane_control_selection(pane_state);
+    sync_pane_actions(pane_state);
   }
   update_focused_pane_indicator();
   update_settings_overlay_geometry();
@@ -1001,9 +1222,11 @@ void QtViewportPanel::process_input(
                           : ViewportProbeClock::time_point{};
   primitive_feedback_input_eligible_ = false;
   pointer_cursor_pane_.reset();
+  gizmo_input_pane_.reset();
   operation_input_context_ = {.viewport_available = false};
   process_viewport_input(editor, document, assets, modeling, default_material,
                          native_tools, point_placement, delta_seconds);
+  refresh_control_hint_context();
   if (primitive_feedback_input_eligible_ && workspace_ != nullptr) {
     Pane &pane_state = pane(interaction_pane_id_);
     present_primitive_feedback(pane_state,
@@ -1177,30 +1400,28 @@ void QtViewportPanel::prepare_viewports(
       viewport_settings_ != nullptr ? *viewport_settings_ : fallback_settings_;
   const float grid_world_size =
       viewport_grid_world_size_for_preset(workspace_->grid_preset());
-  const bool grid_visible =
-      settings.bool_value(ViewportBoolSettingId::ShowGrid);
-  const bool overlays_visible =
-      settings.bool_value(ViewportBoolSettingId::ShowOverlays);
+  const bool any_overlays_visible = std::any_of(
+      active_placements.begin(), active_placements.end(), [&](const auto &placement) {
+        return workspace_->effective_settings(placement.pane_id).bool_value(
+            ViewportBoolSettingId::ShowOverlays);
+      });
   const bool hover_dimensions_visible =
       settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions);
   const bool selection_dimensions_visible =
       settings.bool_value(ViewportBoolSettingId::ShowDimensions);
   const double dimension_font_size_points = static_cast<double>(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize));
-  const bool gizmos_visible =
-      settings.bool_value(ViewportBoolSettingId::ShowGizmos);
   const bool viewport_info_visible =
       settings.bool_value(ViewportBoolSettingId::ShowInfo);
-  const bool navigation_gizmo_visible =
-      editor.preferences().navigation_gizmo_visible();
   const bool instance_edit_context_active =
       editor.modeling().instance_edit_state().active;
   const ViewportPaneId focused_pane = workspace_->focused_pane();
+  const auto &operation_origin = editor.tools().active_settings_presentation_origin();
+  const ViewportPaneId operation_pane = operation_origin.serial != 0u
+      ? operation_origin.pane : interaction_pane_id_;
   for (Pane &pane_state : panes_) {
-    pane_state.navigation_gizmo->set_camera(
-        &workspace_->camera(pane_state.id));
-    pane_state.navigation_gizmo->set_gizmo_visible(
-        navigation_gizmo_visible);
+    const bool overlays_visible = workspace_->effective_settings(pane_state.id)
+        .bool_value(ViewportBoolSettingId::ShowOverlays);
     if ((!viewport_info_visible || pane_state.id != focused_pane) &&
         !pane_state.info_overlay->isHidden()) {
       pane_state.info_overlay->hide();
@@ -1210,7 +1431,7 @@ void QtViewportPanel::prepare_viewports(
         active_box_preview_.ok &&
         active_box_preview_.drag_state == ModelingBoxDragState::Footprint &&
         active_box_preview_.footprint_count >= 2U &&
-        pane_state.id == interaction_pane_id_;
+        pane_state.id == operation_pane;
     if ((!edge_length_hud_enabled_ || !hover_dimensions_visible ||
          !overlays_visible ||
          pane_state.id != interaction_pane_id_ ||
@@ -1231,7 +1452,13 @@ void QtViewportPanel::prepare_viewports(
   const auto &extrusion_handle = native_presentation.extrusion_handle;
   const bool pivot_handle_editing =
       pivot_handle.visible && pivot_handle.editing;
-  render_bridge.update_mesh_surface_grid(grid_world_size, settings);
+  ViewportSettings mesh_grid_settings = settings;
+  mesh_grid_settings.set_bool_value(ViewportBoolSettingId::ShowMeshGrid, std::any_of(
+      active_placements.begin(), active_placements.end(), [&](const auto &placement) {
+        return workspace_->effective_settings(placement.pane_id).bool_value(
+            ViewportBoolSettingId::ShowMeshGrid);
+      }));
+  render_bridge.update_mesh_surface_grid(grid_world_size, mesh_grid_settings);
 
   const ModelingSelectionMode cached_overlay_mode = modeling.selection_mode();
   const auto live_primitive_creation = editor.tools().live_primitive_creation();
@@ -1286,14 +1513,14 @@ void QtViewportPanel::prepare_viewports(
       editor.render(), render_bridge, snapshot_cache,
       QuaderRenderSceneOverlaySyncRequest{
           .selected_object_overlay_visible =
-              overlays_visible && selected_mesh_outline_only,
+              any_overlays_visible && selected_mesh_outline_only,
           .scene_wireframe_layer_mask = wireframe_layer_mask,
           .selected_scene_wire_visible = false,
           .selected_mesh_outline_only = selected_mesh_outline_only,
           .style = persistent_overlay_style,
           .raster_groups = persistent_raster_groups,
           .collision_visible =
-              overlays_visible &&
+              any_overlays_visible &&
               settings.bool_value(ViewportBoolSettingId::ShowCollisions),
           .collision_color = settings.color(ViewportColorSettingId::CollisionFill),
       });
@@ -1306,6 +1533,9 @@ void QtViewportPanel::prepare_viewports(
     }
     const ViewportShadingMode shading =
         workspace_->shading_mode(placement.pane_id);
+    const ViewportSettings &pane_settings = workspace_->effective_settings(placement.pane_id);
+    const bool overlays_visible = pane_settings.bool_value(ViewportBoolSettingId::ShowOverlays);
+    const bool gizmos_visible = pane_settings.bool_value(ViewportBoolSettingId::ShowGizmos);
     const bool point_light_gizmos_visible =
         gizmos_visible && viewport_shading_shows_light_gizmos(shading);
     scene_overlay_requests[viewport_pane_index(placement.pane_id)] =
@@ -1322,10 +1552,16 @@ void QtViewportPanel::prepare_viewports(
   // This O(1) shared snapshot pins the immutable modeling publication across
   // every pane submission in this presentation pass.
   const ModelingVolatileOverlaySnapshot volatile_modeling_overlay =
-      overlays_visible ? modeling.volatile_overlay_snapshot()
+      any_overlays_visible ? modeling.volatile_overlay_snapshot()
                        : ModelingVolatileOverlaySnapshot{};
-  const quader_editor_core::TransformGizmoFrame *transform_gizmo =
+  const quader_editor_core::TransformGizmoFrame *interaction_gizmo =
       interaction_controller_.transform_gizmo_frame();
+  const ViewportInteractionSelectionState gizmo_selection{
+      .summary = editor.selection().summary(),
+      .scene_revision = document.revision(),
+      .asset_revision = assets.revision(),
+      .pivot_revision = native_presentation.selection_pivot_revision,
+  };
   const std::vector<quader_editor_core::SelectionOverlayPoint> &
       transform_snap_points =
           interaction_controller_.transform_gizmo_snap_overlay_points();
@@ -1362,23 +1598,28 @@ void QtViewportPanel::prepare_viewports(
     workspace_->set_pane_render_size(pane_state.id, render_size);
     ViewportWorkspacePaneState &pane_workspace =
         workspace_->pane(pane_state.id);
+    const ViewportSettings &pane_settings = workspace_->effective_settings(pane_state.id);
+    const bool grid_visible = pane_settings.bool_value(ViewportBoolSettingId::ShowGrid);
+    const bool overlays_visible = pane_settings.bool_value(ViewportBoolSettingId::ShowOverlays);
+    const bool gizmos_visible = pane_settings.bool_value(ViewportBoolSettingId::ShowGizmos);
     const ViewportShadingMode shading =
         workspace_->shading_mode(pane_state.id);
     ViewportRenderer &renderer = pane_state.surface->renderer();
     renderer.set_instance_edit_context_active(
-        instance_edit_context_active, settings);
+        instance_edit_context_active, pane_settings);
     renderer.set_material_presentation(
         viewport_material_debug_mode(shading),
-        shading == ViewportShadingMode::Solid);
+        shading == ViewportShadingMode::Solid,
+        pane_settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
 
     const SceneSettings &scene_settings = document.scene_settings();
     pane_workspace.camera.set_clip_planes(scene_settings.camera.near_plane,
                                           scene_settings.camera.far_plane);
     renderer.apply_scene_settings(
-        scene_settings, viewport_shading_uses_scene_lighting(shading), settings);
+        scene_settings, viewport_shading_uses_scene_lighting(shading), pane_settings);
     renderer.update_camera(pane_workspace.camera);
     renderer.update_ground_grid(pane_workspace.camera, grid_world_size,
-                                settings, grid_visible);
+                                pane_settings, grid_visible);
     renderer.set_scene_layer_mask(
         viewport_shading_uses_rendered_materials(shading)
             ? kViewportRenderedSceneLayerMask
@@ -1387,16 +1628,16 @@ void QtViewportPanel::prepare_viewports(
         viewport_shading_uses_scene_lighting(shading));
     renderer.set_scene_visible(shading != ViewportShadingMode::Wireframe);
     const bool tool_overlay_visible =
-        pane_state.id == interaction_pane_id_ &&
+        pane_state.id == operation_pane &&
         active_box_preview_.ok &&
         active_box_preview_.footprint_count >= 2U &&
         active_box_preview_.drag_state == ModelingBoxDragState::Footprint;
     const bool radial_array_center_visible =
         should_show_point_placement_overlay(
             radial_array_center.visible, radial_array_center.locked,
-            pane_state.id == interaction_pane_id_);
+            pane_state.id == operation_pane);
     const bool primitive_creation_visible = gizmos_visible && live_primitive_creation &&
-        pane_state.id == interaction_pane_id_;
+        pane_state.id == operation_pane;
     renderer.set_overlay_visible(should_enable_viewport_overlay_pass({
         .overlays_visible = overlays_visible,
         .gizmos_visible = gizmos_visible,
@@ -1421,8 +1662,33 @@ void QtViewportPanel::prepare_viewports(
         gizmos_visible && viewport_shading_shows_light_gizmos(shading);
     const float pane_viewport_pixel_scale =
         viewport_raster_scale(pane_state.id);
+    const ViewportToolId pane_tool = workspace_->selected_tool(pane_state.id);
+    const bool uses_interaction_gizmo = pane_state.id == operation_pane &&
+        pane_state.id == interaction_pane_id_ &&
+        (gizmo_input_pane_ == pane_state.id ||
+         interaction_controller_.transform_gizmo_pointer_active()) &&
+        editor.tools().pane_owns_executing_tool(pane_state.id) &&
+        input_router_.state().active_tool == pane_tool && interaction_gizmo != nullptr;
+    const auto *transform_gizmo = uses_interaction_gizmo ? interaction_gizmo :
+        pane_state.idle_gizmo.prepare(editor, {
+            .camera = pane_workspace.camera,
+            .settings = pane_settings,
+            .selection_state = gizmo_selection,
+            .tool = pane_tool,
+            .transform_space = editor.viewports().transform_space(pane_state.id),
+            .grid_preset = workspace_->grid_preset(),
+            .raster_scale = pane_viewport_pixel_scale,
+            .transform_preview_revision = modeling.transient_transform_preview_revision(),
+            .pane_settings_revision = workspace_->control_revision(pane_state.id),
+            .source_identity = reinterpret_cast<std::uintptr_t>(&document),
+            .curve_tool = &native_tools.curve_interaction(),
+            .curve_control_route_available = native_presentation.curve_controls_editable,
+        });
+    ViewportToolOverlaySourceRevisions pane_tool_revisions = dynamic_tool_revisions;
+    pane_tool_revisions.active_tool = workspace_->control_revision(pane_state.id);
+    pane_tool_revisions.transform_space = workspace_->transform_space_revision(pane_state.id);
     const PrimitiveCreationControlsFrame *primitive_creation_controls = nullptr;
-    if (pane_state.id == interaction_pane_id_) {
+    if (pane_state.id == operation_pane) {
       primitive_creation_controls = &interaction_controller_.primitive_creation_controls(
           gizmos_visible ? live_primitive_creation : std::nullopt,
           pane_workspace.camera, pane_viewport_pixel_scale);
@@ -1440,17 +1706,17 @@ void QtViewportPanel::prepare_viewports(
             .box_preview = &active_box_preview_,
             .primitive_creation_controls = primitive_creation_controls,
             .transform_gizmo = transform_gizmo,
-            .transform_snap_points = &transform_snap_points,
+            .transform_snap_points = uses_interaction_gizmo ? &transform_snap_points : nullptr,
             .selection_marquee = &selection_marquee,
             .pivot_handle = &pivot_handle,
-            .linear_array_handle = &linear_array_handle,
-            .extrusion_handle = &extrusion_handle,
+            .linear_array_handle = pane_state.id == operation_pane ? &linear_array_handle : nullptr,
+            .extrusion_handle = pane_state.id == operation_pane ? &extrusion_handle : nullptr,
             .radial_array_center = &radial_array_center,
-            .revisions = dynamic_tool_revisions,
-            .interaction_pane = pane_state.id == interaction_pane_id_,
+            .revisions = pane_tool_revisions,
+            .interaction_pane = pane_state.id == operation_pane,
             .tool_overlay_visible = tool_overlay_visible,
             .gizmos_visible = gizmos_visible,
-            .pivot_handle_editing = pivot_handle_editing,
+            .pivot_handle_editing = pane_state.id == operation_pane && pivot_handle_editing,
             .overlays_visible = overlays_visible,
             .radial_array_center_visible = radial_array_center_visible,
         }};
@@ -1500,7 +1766,7 @@ void QtViewportPanel::prepare_viewports(
                 .point_light_gizmos_visible = point_light_gizmos_visible,
                 .selection_dimensions_visible = selection_dimensions_visible,
             },
-            settings);
+            pane_settings);
     pane_state.edge_length_hud->present(
         overlay_submission.edge_hud_frame != nullptr
             ? *overlay_submission.edge_hud_frame
@@ -1572,7 +1838,7 @@ QtViewportPanel::render_viewports(bool account_presentation_frame) {
         // QWidget::createWindowContainer can expose its native child with the
         // rect cached while startup presentation was blocked. Reassert the
         // frame rect once after reveal, before yielding the exposure turn.
-        pane_state.surface_container->setGeometry(pane_state.frame->rect());
+        pane_state.surface_container->setGeometry(pane_content_rect(pane_state));
         pane_state.surface_presented = true;
         pane_state.overlay_stack_valid = false;
       }
@@ -1687,23 +1953,20 @@ bool QtViewportPanel::focus_active_pane() {
 }
 
 QuaderViewportKeybindingContext QtViewportPanel::command_input_context() {
-  const bool navigation_gizmo_active =
-      std::ranges::any_of(panes_, [](const Pane &pane_state) {
-        return pane_state.navigation_gizmo != nullptr &&
-               pane_state.navigation_gizmo->input_locked();
-      });
   const bool active_tool_owns_viewport =
+      workspace_ != nullptr && interaction_editor_ != nullptr &&
+      interaction_editor_->tools().pane_owns_executing_tool(workspace_->focused_pane()) &&
       interaction_controller_.active_tool_owns_viewport(
-          input_router_.state().active_tool);
+          workspace_->selected_tool(workspace_->focused_pane()));
   return {
       .orthographic_view =
           workspace_ != nullptr &&
           workspace_->camera(workspace_->focused_pane()).state().projection ==
               ViewportProjection::Orthographic,
-      .navigation_active = input_router_.navigating() || navigation_gizmo_active,
+      .navigation_active = input_router_.navigating(),
       .fly_navigation_active = input_router_.fly_navigating(),
       .orbit_navigation_active =
-          input_router_.orbit_navigating() || navigation_gizmo_active,
+          input_router_.orbit_navigating(),
       .pan_navigation_active = input_router_.pan_navigating(),
       .modal_tool_active = modal_tool_owns_viewport_snapshot_,
       .active_tool_owns_viewport = active_tool_owns_viewport,
@@ -1858,15 +2121,12 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
         request_pane_focus(pane_id, trigger);
       });
 
-  pane_state.toolbar = new QWidget(pane_state.frame);
+  pane_state.toolbar = new QtViewportControlStrip(pane_state.frame);
   pane_state.toolbar->setObjectName(
       QStringLiteral("viewportToolbar_%1")
           .arg(QString::fromUtf8(
               viewport_pane_stable_id(pane_state.id).data())));
-  pane_state.toolbar->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
   pane_state.toolbar->setAttribute(Qt::WA_NativeWindow);
-  auto *toolbar_layout = new QHBoxLayout(pane_state.toolbar);
-  toolbar_layout->setContentsMargins(0, 0, 0, 0);
 
   if (environment_popup_ != nullptr) {
     pane_state.environment_button =
@@ -1876,17 +2136,27 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
             .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
     connect(pane_state.environment_button, &QPushButton::clicked, this,
             [this, &pane_state]() {
+              request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
               environment_popup_->show_below(*pane_state.environment_button);
             });
-    toolbar_layout->addWidget(pane_state.environment_button);
+    pane_state.environment_overflow_action = new QAction(pane_state.toolbar);
+    connect(pane_state.environment_overflow_action, &QAction::triggered, this,
+            [this, &pane_state]() {
+              request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+              environment_popup_->show_below(*pane_state.toolbar);
+            });
   }
-  pane_state.display_button = new QPushButton(pane_state.toolbar);
+  pane_state.display_button = new QtViewportCompactMenuButton(pane_state.toolbar);
   pane_state.display_button->setObjectName(
       QStringLiteral("viewportShading_%1")
           .arg(QString::fromUtf8(
               viewport_pane_stable_id(pane_state.id).data())));
   pane_state.display_menu = new QMenu(pane_state.display_button);
   pane_state.display_button->setMenu(pane_state.display_menu);
+  connect(pane_state.display_menu, &QMenu::aboutToShow, this,
+          [this, &pane_state]() {
+            request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+          });
 
   auto *display_group = new QActionGroup(pane_state.display_menu);
   display_group->setExclusive(true);
@@ -1917,9 +2187,16 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
             });
   }
 
-  pane_state.display_menu->addSeparator();
-  pane_state.camera_menu = new QMenu(pane_state.display_menu);
-  pane_state.display_menu->addMenu(pane_state.camera_menu);
+  pane_state.camera_button = new QtViewportCompactMenuButton(pane_state.toolbar);
+  pane_state.camera_button->setObjectName(
+      QStringLiteral("viewportCamera_%1")
+          .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  pane_state.camera_menu = new QMenu(pane_state.camera_button);
+  pane_state.camera_button->setMenu(pane_state.camera_menu);
+  connect(pane_state.camera_menu, &QMenu::aboutToShow, this,
+          [this, &pane_state]() {
+            request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+          });
   auto *camera_group = new QActionGroup(pane_state.camera_menu);
   camera_group->setExclusive(true);
   for (std::size_t index = 0; index < kViewportViews.size(); ++index) {
@@ -1939,6 +2216,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   }
 
   if (release_has_feature(ReleaseFeature::RenderedViewport)) {
+    pane_state.display_menu->addSeparator();
     pane_state.debug_view_menu = new QMenu(pane_state.display_menu);
     pane_state.display_menu->addMenu(pane_state.debug_view_menu);
     for (std::size_t index = 0; index < kDebugViewModes.size(); ++index) {
@@ -1958,8 +2236,10 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
     }
   }
 
-  toolbar_layout->addWidget(pane_state.display_button);
-  pane_state.toolbar->adjustSize();
+  pane_state.toolbar->set_trailing_controls(
+      pane_state.camera_button, pane_state.display_button,
+      pane_state.environment_button, pane_state.environment_overflow_action);
+  scale_pane_controls(pane_state);
 
   pane_state.info_overlay = new QLabel(pane_state.frame);
   pane_state.info_overlay->setObjectName(
@@ -1992,16 +2272,6 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   pane_state.edge_length_hud =
       new QtViewportEdgeLengthHud(*pane_state.frame, pane_state.id);
 
-  pane_state.navigation_gizmo =
-      new QtNavigationGizmo(pane_state.id, pane_state.frame);
-  pane_state.navigation_gizmo->set_focus_pane_callback(
-      [this, &pane_state](ViewportPaneId pane_id) {
-        request_pane_focus(pane_id,
-                           ViewportPaneFocusTrigger::PointerPress);
-        interaction_pane_id_ = pane_id;
-        hover_controller_.invalidate();
-        pane_state.navigation_gizmo->raise();
-      });
   update_pane_overlay_geometry(pane_state);
 
   refresh_pane_controls(pane_state);
@@ -2021,6 +2291,20 @@ void QtViewportPanel::refresh_keybinding_presentation(
 }
 
 void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
+  refresh_selection_tool_actions(pane_state);
+  for (const auto &entry : pane_state.control_actions) {
+    if (entry.action->objectName() != QStringLiteral("backfaceSelection")) continue;
+    const QString label = localized_display_menu_label(localization_,
+        "ui.menu.select.toggle_backface_selection", "Toggle Backface Selection");
+    QString tooltip = label;
+    if (interaction_editor_ != nullptr) {
+      const std::string shortcut = interaction_editor_->commands().shortcut_for(
+          quader_command::kSelectToggleBackfaceSelection);
+      if (!shortcut.empty()) tooltip += QStringLiteral(" (%1)").arg(QString::fromStdString(shortcut));
+    }
+    if (entry.action->text() != label) entry.action->setText(label);
+    if (entry.action->toolTip() != tooltip) entry.action->setToolTip(tooltip);
+  }
   if (pane_state.environment_button != nullptr) {
     const bool environment_available =
         release_has_feature(ReleaseFeature::Environment);
@@ -2036,6 +2320,7 @@ void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
       pane_state.environment_button->setText(environment_label);
       pane_state.environment_button->setAccessibleName(environment_label);
       pane_state.environment_button->setToolTip(environment_label);
+      pane_state.environment_overflow_action->setText(environment_label);
     }
   }
   for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
@@ -2060,6 +2345,8 @@ void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
   }
   pane_state.camera_menu->setTitle(localized_display_menu_label(
       localization_, "viewport.display.camera", "Camera"));
+  pane_state.camera_button->setAccessibleName(pane_state.camera_menu->title());
+  pane_state.camera_button->setToolTip(pane_state.camera_menu->title());
   for (std::size_t index = 0; index < kViewportViews.size(); ++index) {
     pane_state.camera_actions[index]->setText(
         localized_view_label(localization_, kViewportViews[index]));
@@ -2077,8 +2364,37 @@ void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
   }
   pane_state.control_selection_valid = false;
   sync_pane_control_selection(pane_state);
-  pane_state.toolbar->adjustSize();
+  scale_pane_controls(pane_state);
   update_pane_overlay_geometry(pane_state);
+}
+
+void QtViewportPanel::scale_pane_controls(Pane &pane_state) {
+  QFont baseline = QApplication::font();
+  const auto *application_style =
+      dynamic_cast<const QtUiScaleProxyStyle *>(QApplication::style());
+  const double application_scale = application_style != nullptr
+      ? application_style->metrics().factor() : 1.0;
+  if (baseline.pointSizeF() > 0.0) {
+    baseline.setPointSizeF(std::max(1.0, baseline.pointSizeF() / application_scale - 2.0));
+  } else if (baseline.pixelSize() > 0) {
+    // Pixel-sized platform fonts need the same point-to-pixel conversion.
+    const double points = baseline.pixelSize() * 72.0 / logicalDpiY() / application_scale;
+    baseline.setPointSizeF(std::max(1.0, points - 2.0));
+  }
+  const QFont compact_font = ui_scale_metrics_.font(baseline);
+  for (QPushButton *button : {pane_state.camera_button, pane_state.display_button}) {
+    button->setFont(compact_font);
+    static_cast<QtViewportCompactMenuButton *>(button)->set_metrics(ui_scale_metrics_);
+    button->menu()->setFont(QApplication::font());
+  }
+  if (pane_state.environment_button != nullptr) {
+    pane_state.environment_button->setFont(compact_font);
+    pane_state.environment_button->setFixedHeight(
+        pane_state.environment_button->fontMetrics().height() + ui_scale_metrics_.px(4));
+  }
+  if (pane_state.debug_view_menu != nullptr) {
+    pane_state.debug_view_menu->setFont(QApplication::font());
+  }
 }
 
 void QtViewportPanel::sync_pane_control_selection(Pane &pane_state) {
@@ -2118,14 +2434,29 @@ void QtViewportPanel::sync_pane_control_selection(Pane &pane_state) {
     }
   }
   const QString display_label = localized_shading_label(localization_, shading);
+  const QString camera_label = localized_view_label(localization_, view);
+  const bool label_changed = pane_state.display_button->text() != display_label ||
+                             pane_state.camera_button->text() != camera_label;
   if (pane_state.display_button->text() != display_label) {
     pane_state.display_button->setText(display_label);
-    pane_state.toolbar->adjustSize();
-    update_pane_overlay_geometry(pane_state);
+  }
+  if (pane_state.camera_button->text() != camera_label) {
+    pane_state.camera_button->setText(camera_label);
   }
   pane_state.presented_view = view;
   pane_state.presented_shading = shading;
   pane_state.control_selection_valid = true;
+  if (label_changed) {
+    pane_state.toolbar->updateGeometry();
+    update_pane_geometry();
+  }
+}
+
+QRect QtViewportPanel::pane_content_rect(const Pane &pane_state) const {
+  const QRect bounds = pane_state.frame->rect();
+  const int header_height = ui_scale_metrics_.px(36);
+  return QRect(0, header_height, bounds.width(),
+               std::max(1, bounds.height() - header_height));
 }
 
 void QtViewportPanel::update_pane_geometry() {
@@ -2134,10 +2465,72 @@ void QtViewportPanel::update_pane_geometry() {
   }
   std::array<bool, kViewportPaneCount> active{};
   std::array<const ViewportPanePlacement *, kViewportPaneCount> placements{};
+  std::vector<ViewportPanePlacement> active_placements =
+      workspace_->active_pane_placements();
+  std::array<QSize, kViewportPaneCount> pane_minima{};
+  QSize required_size = ui_scale_metrics_.size(QSize(300, 200));
+  for (const ViewportPanePlacement &placement : active_placements) {
+    const std::size_t index = viewport_pane_index(placement.pane_id);
+    const QSize strip_minimum = panes_[index].toolbar->minimumSizeHint();
+    pane_minima[index] =
+        QSize(strip_minimum.width(),
+              strip_minimum.height() + ui_scale_metrics_.px(32));
+    required_size = required_size.expandedTo(pane_minima[index]);
+  }
+  struct SplitMinimum {
+    ViewportSplitHandle handle;
+    int before = 0;
+    int after = 0;
+  };
+  std::vector<SplitMinimum> split_minima;
+  for (const ViewportSplitHandle &handle : workspace_->active_split_handles()) {
+    SplitMinimum minimum{handle};
+    const bool vertical = handle.axis == ViewportSplitHandleAxis::Vertical;
+    for (const ViewportPanePlacement &placement : active_placements) {
+      const ViewportNormalizedRect &rect = placement.normalized_rect;
+      const float cross_start = vertical ? rect.y : rect.x;
+      const float cross_end = cross_start + (vertical ? rect.height : rect.width);
+      if (cross_end <= handle.start || cross_start >= handle.end) {
+        continue;
+      }
+      const float start = vertical ? rect.x : rect.y;
+      const float end = start + (vertical ? rect.width : rect.height);
+      const QSize pane_minimum = pane_minima[viewport_pane_index(placement.pane_id)];
+      const int extent = vertical ? pane_minimum.width() : pane_minimum.height();
+      if (std::abs(end - handle.position) < 0.0001f) {
+        minimum.before = std::max(minimum.before, extent);
+      }
+      if (std::abs(start - handle.position) < 0.0001f) {
+        minimum.after = std::max(minimum.after, extent);
+      }
+    }
+    // Sum the two native minima, never divide by the current split ratio.
+    // The owner limits ratios to 15%-85%, which also has to fit either side.
+    const int minimum_extent = std::max({
+        minimum.before + minimum.after,
+        static_cast<int>(std::ceil(minimum.before / ViewportLayoutState::kMaxSplit)),
+        static_cast<int>(std::ceil(minimum.after / (1.0f - ViewportLayoutState::kMinSplit)))});
+    int &required_extent = vertical ? required_size.rwidth() : required_size.rheight();
+    required_extent = std::max(required_extent, minimum_extent);
+    split_minima.push_back(minimum);
+  }
+  if (minimumSize() != required_size) {
+    setMinimumSize(required_size);
+  }
   const int full_width = std::max(1, width());
   const int full_height = std::max(1, height());
-  const std::vector<ViewportPanePlacement> active_placements =
-      workspace_->active_pane_placements();
+  for (const SplitMinimum &minimum : split_minima) {
+    const int extent = minimum.handle.axis == ViewportSplitHandleAxis::Vertical
+                           ? full_width : full_height;
+    const float lower = static_cast<float>(minimum.before) / extent;
+    const float upper = 1.0f - static_cast<float>(minimum.after) / extent;
+    const float position = std::clamp(minimum.handle.position, lower, std::max(lower, upper));
+    if (position != minimum.handle.position) {
+      workspace_->set_split_handle_position(minimum.handle.id, position);
+    }
+  }
+  active_placements = workspace_->active_pane_placements();
+  displayed_placements_ = active_placements;
   for (const ViewportPanePlacement &placement : active_placements) {
     const std::size_t index = viewport_pane_index(placement.pane_id);
     active[index] = true;
@@ -2182,71 +2575,29 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
   if (pane_state.frame == nullptr || pane_state.surface_container == nullptr ||
       pane_state.toolbar == nullptr || pane_state.display_button == nullptr ||
       pane_state.info_overlay == nullptr ||
-      pane_state.navigation_gizmo == nullptr ||
       pane_state.edge_length_hud == nullptr ||
       pane_state.fly_navigation_hud == nullptr) {
     return;
   }
-  const QRect pane_bounds = pane_state.frame->rect();
+  const QRect pane_bounds = pane_content_rect(pane_state);
   if (pane_state.surface_container->geometry() != pane_bounds) {
     pane_state.surface_container->setGeometry(pane_bounds);
   }
   const int overlay_inset = ui_scale_metrics_.px(6);
-  const QSize display_size = pane_state.display_button->sizeHint();
-  const QSize environment_size = pane_state.environment_button != nullptr
-      ? pane_state.environment_button->sizeHint() : QSize(0, 0);
-  const QtViewportChromeLayout chrome = qt_viewport_chrome_layout(
-      pane_state.frame->width(), display_size.width(), overlay_inset,
-      ui_scale_metrics_.px(kQtViewportDisplayMenuMinimumWidth),
-      environment_size.width(), ui_scale_metrics_.px(4));
-  if (pane_state.display_button->minimumWidth() != chrome.menu_width ||
-      pane_state.display_button->maximumWidth() != chrome.menu_width) {
-    pane_state.display_button->setFixedWidth(chrome.menu_width);
-  }
-  if (pane_state.environment_button != nullptr &&
-      (pane_state.environment_button->minimumWidth() != chrome.environment_width ||
-       pane_state.environment_button->maximumWidth() != chrome.environment_width)) {
-    pane_state.environment_button->setFixedWidth(chrome.environment_width);
-  }
-  if (pane_state.toolbar->layout()->spacing() != chrome.menu_spacing) {
-    pane_state.toolbar->layout()->setSpacing(chrome.menu_spacing);
-  }
-  if (pane_state.display_menu->minimumWidth() != chrome.menu_width) {
-    pane_state.display_menu->setMinimumWidth(chrome.menu_width);
-  }
-  const int toolbar_height = std::max({1, display_size.height(), environment_size.height()});
-  const QRect toolbar_geometry{chrome.toolbar_x, overlay_inset,
-                               chrome.toolbar_width, toolbar_height};
+  const QRect toolbar_geometry{0, 0, pane_state.frame->width(), pane_bounds.top()};
   if (pane_state.toolbar->geometry() != toolbar_geometry) {
     pane_state.toolbar->setGeometry(toolbar_geometry);
   }
 
-  const int navigation_gizmo_extent = ui_scale_metrics_.px(96);
-  const int navigation_top =
-      pane_state.toolbar->geometry().bottom() + overlay_inset;
-  const int available_width =
-      std::max(1, pane_state.frame->width() - overlay_inset * 2);
-  const int available_height =
-      std::max(1, pane_state.frame->height() - navigation_top -
-                      overlay_inset);
-  const int navigation_extent =
-      std::min({navigation_gizmo_extent, available_width, available_height});
-  const QRect navigation_geometry{
-      std::max(overlay_inset,
-               pane_state.frame->width() - navigation_extent -
-                   overlay_inset),
-      navigation_top, navigation_extent, navigation_extent};
-  if (pane_state.navigation_gizmo->geometry() != navigation_geometry) {
-    pane_state.navigation_gizmo->setGeometry(navigation_geometry);
-  }
-
   pane_state.fly_navigation_hud->set_bounds(pane_bounds);
 
-  const QSize info_size = pane_state.info_overlay->sizeHint();
+  const QSize info_size = pane_state.info_overlay->sizeHint().boundedTo(
+      QSize(std::max(1, pane_bounds.width() - 2 * overlay_inset),
+            std::max(1, pane_bounds.height() - 2 * overlay_inset)));
   const QRect info_geometry{
       std::max(overlay_inset,
                pane_state.frame->width() - info_size.width() - overlay_inset),
-      std::max(overlay_inset,
+      std::max(pane_bounds.top() + overlay_inset,
                pane_state.frame->height() - info_size.height() -
                    overlay_inset),
       info_size.width(), info_size.height()};
@@ -2257,7 +2608,6 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
   if (!pane_state.overlay_stack_valid) {
     pane_state.edge_length_hud->raise();
     pane_state.toolbar->raise();
-    pane_state.navigation_gizmo->raise();
     pane_state.info_overlay->raise();
     if (!pane_state.primitive_feedback->isHidden()) {
       pane_state.primitive_feedback->raise();
@@ -2280,12 +2630,13 @@ void QtViewportPanel::update_focused_pane_indicator() {
       focused_pane_frame_->hide();
     }
   };
-  if (startup_presentation_blocked_) {
+  if (startup_presentation_blocked_ || external_widget_has_keyboard_focus()) {
     hide_indicator();
     return;
   }
   const ViewportPaneId focused_pane = workspace_->focused_pane();
-  if (!pane_surface_has_keyboard_focus(pane(focused_pane))) {
+  if (!pane_surface_has_keyboard_focus(pane(focused_pane)) &&
+      !pane_controls_have_presentation_focus(pane(focused_pane))) {
     hide_indicator();
     return;
   }
@@ -2299,7 +2650,9 @@ void QtViewportPanel::update_focused_pane_indicator() {
     return;
   }
 
-  const QRect bounds = pane(focused_pane).frame->geometry();
+  const Pane &focused_state = pane(focused_pane);
+  const QRect bounds = pane_content_rect(focused_state).translated(
+      focused_state.frame->pos());
   const bool geometry_changed = focused_pane_frame_->geometry() != bounds;
   const int border_width = std::max(1, ui_scale_metrics_.px(2));
   const bool width_changed = focused_pane_border_width_ != border_width;
@@ -2340,6 +2693,7 @@ void QtViewportPanel::request_pane_focus(
   if (workspace_->focused_pane() != pane_id) {
     (void)workspace_->focus_pane(pane_id);
     update_focused_pane_indicator();
+    update_settings_overlay_geometry();
   }
   if (!decision.focus_native_surface) {
     return;
@@ -2380,6 +2734,73 @@ bool QtViewportPanel::pane_surface_has_keyboard_focus(
           pane_state.surface_container->isAncestorOf(focus_widget));
 }
 
+bool QtViewportPanel::pane_controls_have_presentation_focus(
+    const Pane &pane_state) const {
+  if (QApplication::activeModalWidget() != nullptr ||
+      external_widget_has_keyboard_focus()) return false;
+  if (const QWidget *popup = QApplication::activePopupWidget()) {
+    return qt_viewport_control_strip_ancestor(popup) == pane_state.toolbar;
+  }
+  return qt_viewport_control_strip_ancestor(QApplication::focusWidget()) == pane_state.toolbar ||
+         qt_viewport_control_strip_ancestor(QGuiApplication::focusObject()) == pane_state.toolbar ||
+         (pane_state.toolbar->windowHandle() != nullptr &&
+          QGuiApplication::focusWindow() == pane_state.toolbar->windowHandle());
+}
+
+bool QtViewportPanel::external_widget_has_keyboard_focus() const {
+  const QWidget *focus_widget = QApplication::focusWidget();
+  if (focus_widget == nullptr) return false;
+  const auto *strip = qt_viewport_control_strip_ancestor(focus_widget);
+  for (const Pane &pane_state : panes_) {
+    if (strip == pane_state.toolbar ||
+        focus_widget == pane_state.surface_container ||
+        (pane_state.surface_container != nullptr &&
+         pane_state.surface_container->isAncestorOf(focus_widget))) {
+      return false;
+    }
+  }
+  // Native QWindow focus can lag the QWidget signal. A concrete external
+  // editor wins, while transitions between this viewport's surfaces and
+  // controls may still use the incoming native window to identify the pane.
+  return true;
+}
+
+void QtViewportPanel::synchronize_control_focus(const QObject *object) {
+  if (workspace_ == nullptr || object == nullptr) return;
+  const auto *strip = qt_viewport_control_strip_ancestor(object);
+  for (const Pane &pane_state : panes_) {
+    if (strip == pane_state.toolbar || object == pane_state.toolbar->windowHandle()) {
+      // Chrome remains part of this viewport, without moving keyboard focus
+      // away from the button or menu the user is currently operating.
+      request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+      return;
+    }
+  }
+}
+
+void QtViewportPanel::refresh_control_hint_context() {
+  if (workspace_ == nullptr || pane_interaction_locked()) return;
+  const auto focused = workspace_->focused_pane();
+  if (!pane_controls_have_presentation_focus(pane(focused))) return;
+  const auto &camera = workspace_->camera(focused);
+  const auto &settings = workspace_->effective_settings(focused);
+  const auto modifiers = QGuiApplication::keyboardModifiers();
+  // This is presentation only: chrome focus never fabricates surface input,
+  // acquires a tool, or carries stale hover/gesture hints into a popup.
+  operation_input_context_ = {
+      .viewport_available = true,
+      .orthographic = camera.state().projection == ViewportProjection::Orthographic,
+      .orbit_available = !camera.orthographic_view_locked(),
+      .shift = modifiers.testFlag(Qt::ShiftModifier),
+      .control = modifiers.testFlag(Qt::ControlModifier),
+      .alt = modifiers.testFlag(Qt::AltModifier),
+      .grid_snap_available = viewport_snapping_active(settings),
+      .grid_snap_enabled = settings.bool_value(ViewportBoolSettingId::GridSnap),
+      .angle_snap_available = viewport_snapping_active(settings),
+      .angle_snap_enabled = settings.bool_value(ViewportBoolSettingId::RotationSnap),
+  };
+}
+
 bool QtViewportPanel::pane_interaction_locked() const {
   if (input_router_.navigating() ||
       std::any_of(command_pointer_release_suppression_.begin(),
@@ -2387,6 +2808,8 @@ bool QtViewportPanel::pane_interaction_locked() const {
                   [](const auto &suppression) { return suppression.active(); }) ||
       interaction_controller_.primitive_creation_pointer_active() ||
       interaction_controller_.transform_gizmo_pointer_active() ||
+      interaction_controller_.dragging() ||
+      interaction_controller_.selection_marquee().active ||
       interaction_controller_.point_light_range_pointer_active() ||
       (interaction_native_tools_ != nullptr &&
        interaction_native_tools_->pointer_dragging()) ||
@@ -2395,10 +2818,7 @@ bool QtViewportPanel::pane_interaction_locked() const {
       modal_tool_dragging_) {
     return true;
   }
-  return std::any_of(panes_.begin(), panes_.end(), [](const Pane &pane_state) {
-    return pane_state.navigation_gizmo != nullptr &&
-           pane_state.navigation_gizmo->input_locked();
-  });
+  return false;
 }
 
 void QtViewportPanel::cancel_navigation() {
@@ -2663,21 +3083,7 @@ void QtViewportPanel::draw_viewport_info_overlay(
     pane_state.info_overlay->raise();
   }
   if (text_changed || overlay_was_hidden) {
-    const int overlay_inset = ui_scale_metrics_.px(6);
-    const QSize info_size = pane_state.info_overlay->sizeHint();
-    const QRect geometry{
-        std::max(overlay_inset,
-                 pane_state.frame->width() - info_size.width() -
-                     overlay_inset),
-        std::max(overlay_inset,
-                 pane_state.frame->height() - info_size.height() -
-                     overlay_inset),
-        info_size.width(),
-        info_size.height(),
-    };
-    if (pane_state.info_overlay->geometry() != geometry) {
-      pane_state.info_overlay->setGeometry(geometry);
-    }
+    update_pane_overlay_geometry(pane_state);
   }
 }
 
@@ -2765,7 +3171,7 @@ void QtViewportPanel::process_viewport_input(
   if (runtime_binding_generation_ != input_binding_generation) {
     return;
   }
-  const NativeViewportToolPresentationSnapshot native_presentation =
+  NativeViewportToolPresentationSnapshot native_presentation =
       native_tools.presentation_snapshot();
   sync_active_tool_from_editor(
       editor, modeling, native_tools,
@@ -2801,21 +3207,6 @@ void QtViewportPanel::process_viewport_input(
                               current_tool_status.cut_dragging ||
                               current_tool_status.mirror_dragging;
   modal_tool_dragging_ = modal_dragging;
-  std::optional<ViewportPaneId> navigation_gizmo_locked_pane;
-  bool navigation_gizmo_activity = false;
-  for (Pane &pane_state : panes_) {
-    navigation_gizmo_activity =
-        pane_state.navigation_gizmo->take_interaction_activity() ||
-        navigation_gizmo_activity;
-    if (pane_state.navigation_gizmo->input_locked()) {
-      navigation_gizmo_locked_pane = pane_state.id;
-    }
-  }
-  if (navigation_gizmo_locked_pane.has_value()) {
-    interaction_pane_id_ = *navigation_gizmo_locked_pane;
-  }
-  const bool navigation_gizmo_consumed =
-      navigation_gizmo_locked_pane.has_value() || navigation_gizmo_activity;
   const bool interaction_locked =
       input_router_.navigating() ||
       std::any_of(command_pointer_release_suppression_.begin(),
@@ -2823,11 +3214,13 @@ void QtViewportPanel::process_viewport_input(
                   [](const auto &suppression) { return suppression.active(); }) ||
       interaction_controller_.primitive_creation_pointer_active() ||
       interaction_controller_.transform_gizmo_pointer_active() ||
+      interaction_controller_.dragging() ||
+      interaction_controller_.selection_marquee().active ||
       interaction_controller_.point_light_range_pointer_active() ||
       native_tools.pointer_dragging() ||
       interaction_controller_.material_transfer_pointer_active() ||
       interaction_controller_.context_menu_pointer_active() ||
-      modal_dragging || navigation_gizmo_consumed;
+      modal_dragging;
   std::array<QtViewportInputFrame, kViewportPaneCount> samples;
   for (Pane &pane_state : panes_) {
     const bool routes_locked_interaction =
@@ -2868,10 +3261,13 @@ void QtViewportPanel::process_viewport_input(
     }
     hide_fly_navigation_huds();
     last_fly_navigation_active_ = false;
+    const ViewportTool *executing_tool =
+        find_viewport_tool(editor.tools().active_tool());
     set_modal_tool_owns_viewport_snapshot(
         native_tools.light_creation_active() ||
-        interaction_controller_.active_tool_owns_viewport(
-            input_router_.state().active_tool) ||
+        (executing_tool != nullptr &&
+         interaction_controller_.active_tool_owns_viewport(
+             executing_tool->viewport_tool())) ||
         modeling.modal_tool_owns_viewport());
     return;
   }
@@ -2898,35 +3294,38 @@ void QtViewportPanel::process_viewport_input(
   if (pointer_pressed) {
     interaction_pane_id_ = *input_pane;
   }
+  if (!interaction_locked) {
+    // Presentation follows the pane without activating its selected tool.
+    input_router_.set_active_tool(workspace_->selected_tool(*input_pane));
+  }
+  bool pane_owns_tool = editor.tools().pane_owns_executing_tool(*input_pane);
 
   ViewportInputFrame &input = sample.input;
   if (viewport_frame_diagnostics_enabled() &&
       (input.mouse_delta.x != 0.0f || input.mouse_delta.y != 0.0f)) {
     ++g_viewport_probe.motion_frames;
   }
-  input.navigation_active = input_router_.navigating() ||
-                            navigation_gizmo_locked_pane.has_value();
+  input.navigation_active = input_router_.navigating();
   input.fly_navigation_active = input_router_.fly_navigating();
-  input.orbit_navigation_active = input_router_.orbit_navigating() ||
-                                  navigation_gizmo_locked_pane.has_value();
+  input.orbit_navigation_active = input_router_.orbit_navigating();
   input.pan_navigation_active = input_router_.pan_navigating();
   ViewportModelingToolPortAdapter preview_port_adapter(modeling);
   const ViewportToolPorts preview_ports = preview_port_adapter.ports();
-  const ViewportSettings &viewport_settings = active_viewport_settings();
+  const ViewportSettings &viewport_settings = workspace_->effective_settings(*input_pane);
   const bool resolved_scene_snap_enabled =
       viewport_vertex_snap_radius(viewport_settings) > 0.0f;
   const bool resolved_grid_snap_enabled = viewport_grid_snap_active(
       viewport_settings, input.modifiers.primary);
   input.modal_tool_active =
-      native_tools.light_creation_active() ||
+      pane_owns_tool && (native_tools.light_creation_active() ||
       interaction_controller_.has_active_modal_preview(
           *preview_ports.preview, resolved_grid_snap_enabled) ||
-      modeling.modal_tool_owns_viewport();
+      modeling.modal_tool_owns_viewport());
   input.active_tool_owns_viewport =
-      interaction_controller_.active_tool_owns_viewport(
+      pane_owns_tool && interaction_controller_.active_tool_owns_viewport(
           input_router_.state().active_tool);
   input.active_tool_blocks_focus_shortcuts =
-      interaction_controller_.active_tool_blocks_viewport_focus_shortcuts(
+      pane_owns_tool && interaction_controller_.active_tool_blocks_viewport_focus_shortcuts(
           input_router_.state().active_tool);
   // A pending gizmo click owns pointer routing, but it is not yet an active
   // transform. Keeping those contexts separate preserves deferred depth picks.
@@ -3018,17 +3417,38 @@ void QtViewportPanel::process_viewport_input(
   input.right_pressed = sample.right_pressed;
   input.right_down = sample.right_down;
   input.right_released = sample.right_released;
-  if (active_tool_changed) {
+  const bool pane_edit_start = sample.left_pressed && !input.text_input_active &&
+      !input.navigation_active &&
+      viewport_navigation_press(input.navigation_bindings).action == ViewportInputActionKind::None;
+  if (pane_edit_start && !interaction_locked) {
+    const auto acquired = editor.tools().acquire_pane_tool(*input_pane);
+    if (runtime_binding_generation_ != input_binding_generation) return;
+    if (!acquired.ok()) {
+      notify_command_failure(editor, acquired);
+      return;
+    }
+    if (acquired.changed()) {
+      interaction_controller_.clear_modal_tool_state();
+      interaction_controller_.reset(&editor, native_tools);
+      if (runtime_binding_generation_ != input_binding_generation) return;
+      hover_controller_.invalidate();
+      active_box_preview_ = {};
+      native_presentation = native_tools.presentation_snapshot();
+    }
+    pane_owns_tool = editor.tools().pane_owns_executing_tool(*input_pane);
+  }
+  if (active_tool_changed || pane_edit_start) {
+    pane_owns_tool = editor.tools().pane_owns_executing_tool(*input_pane);
     input.modal_tool_active =
-        native_tools.light_creation_active() ||
+        pane_owns_tool && (native_tools.light_creation_active() ||
         interaction_controller_.has_active_modal_preview(
             *preview_ports.preview, resolved_grid_snap_enabled) ||
-        modeling.modal_tool_owns_viewport();
+        modeling.modal_tool_owns_viewport());
     input.active_tool_owns_viewport =
-        interaction_controller_.active_tool_owns_viewport(
+        pane_owns_tool && interaction_controller_.active_tool_owns_viewport(
             input_router_.state().active_tool);
     input.active_tool_blocks_focus_shortcuts =
-        interaction_controller_.active_tool_blocks_viewport_focus_shortcuts(
+        pane_owns_tool && interaction_controller_.active_tool_blocks_viewport_focus_shortcuts(
             input_router_.state().active_tool);
     set_modal_tool_owns_viewport_snapshot(input.active_tool_owns_viewport ||
                                           input.modal_tool_active);
@@ -3036,7 +3456,7 @@ void QtViewportPanel::process_viewport_input(
 
   // Commands and pending sequences resolve first. The active tool may then
   // claim individual ordered packets before the remaining ones reach zoom.
-  if (!input.navigation_bindings.wheel_events.empty()) {
+  if (pane_owns_tool && !input.navigation_bindings.wheel_events.empty()) {
     std::optional<QuaderApiVoidResult> wheel_failure;
     ViewportBoxToolContext wheel_box;
     wheel_box.live_primitive = [&]() {
@@ -3052,7 +3472,7 @@ void QtViewportPanel::process_viewport_input(
       return result;
     };
     wheel_box.raster_scale = viewport_raster_scale(*input_pane);
-    wheel_box.primitive_controls_visible = editor.preferences().gizmos_visible();
+    wheel_box.primitive_controls_visible = viewport_settings.bool_value(ViewportBoolSettingId::ShowGizmos);
     ViewportToolContext wheel_context{
         .state = input_router_.state(), .camera = camera, .ports = preview_ports,
         .box = &wheel_box,
@@ -3070,7 +3490,7 @@ void QtViewportPanel::process_viewport_input(
          .pointer = {
              .left_clicked = sample.left_pressed, .left_down = sample.left_down,
              .left_released = sample.left_released,
-             .gizmo_consumed = command_pointer_owned || navigation_gizmo_consumed ||
+             .gizmo_consumed = command_pointer_owned ||
                  interaction_controller_.transform_gizmo_pointer_active() ||
                  interaction_controller_.point_light_range_pointer_active() ||
                  native_tools.pointer_dragging() || pane_state.surface->pointer_captured(),
@@ -3325,11 +3745,12 @@ void QtViewportPanel::process_viewport_input(
   }
 
   if (result.tool_activation_requested) {
-    const ViewportTool *active_tool = interaction_controller_.active_tool(
+    const ViewportTool *active_tool = find_viewport_tool(
         input_router_.state().active_tool);
     const bool editor_tool_matches_requested =
         active_tool != nullptr &&
-        editor.tools().active_tool() == active_tool->id();
+        editor.tools().active_tool() == active_tool->id() &&
+        editor.tools().pane_owns_executing_tool(*input_pane);
     if (should_dispatch_viewport_tool_activation({
             .activation_requested = true,
             .tool_changed = result.tool_changed,
@@ -3354,11 +3775,8 @@ void QtViewportPanel::process_viewport_input(
         if (runtime_binding_generation_ != input_binding_generation) {
           return;
         }
-        input_router_.set_active_tool(ViewportToolId::Select);
-        (void)editor.tools().activate(ViewportToolId::Select);
-        if (runtime_binding_generation_ != input_binding_generation) {
-          return;
-        }
+        input_router_.set_active_tool(workspace_->selected_tool(*input_pane));
+        return;
       }
       interaction_controller_.clear_modal_tool_state();
       interaction_controller_.reset(&editor, native_tools);
@@ -3402,10 +3820,9 @@ void QtViewportPanel::process_viewport_input(
   }
 
   const bool suppress_hover_work =
-      input.navigation_active || result.navigation_active || result.camera_changed ||
-      navigation_gizmo_consumed;
+      input.navigation_active || result.navigation_active || result.camera_changed;
   const bool point_lights_pickable =
-      !suppress_hover_work && active_viewport_settings().bool_value(
+      !suppress_hover_work && viewport_settings.bool_value(
                                   ViewportBoolSettingId::ShowGizmos) &&
       viewport_shading_shows_light_gizmos(
           workspace_->shading_mode(*input_pane));
@@ -3442,7 +3859,7 @@ void QtViewportPanel::process_viewport_input(
   ViewportInteractionFrame interaction_frame{
       .input_router = input_router_,
       .camera = camera,
-      .settings = active_viewport_settings(),
+      .settings = viewport_settings,
       .input = input,
       .input_result = result,
       .left_click_local =
@@ -3492,6 +3909,63 @@ void QtViewportPanel::process_viewport_input(
       is_viewport_context_menu_click_gesture(pending_context_menu_request);
   const QVec2 pending_context_menu_local_mouse =
       context_menu_pointer.release_local;
+  if (!editor.tools().pane_owns_executing_tool(*input_pane)) {
+    // Another pane owns the sole modeling session. Camera motion and commands
+    // above remain available; passive focus/hover must not update its preview.
+    last_fly_navigation_active_ = result.fly_cursor_capture_active;
+    for (Pane &candidate : panes_) {
+      candidate.surface->set_pointer_capture(
+          result.fly_cursor_capture_active && candidate.id == *input_pane);
+    }
+    auto &context = operation_input_context_;
+    context.viewport_available = !input.text_input_active;
+    context.orthographic = input.orthographic_view;
+    context.orbit_available = !camera.orthographic_view_locked();
+    context.shift = input.modifiers.shift;
+    context.control = input.modifiers.primary;
+    context.alt = input.modifiers.alt;
+    context.grid_snap_available = viewport_snapping_active(viewport_settings);
+    context.grid_snap_enabled = viewport_settings.bool_value(ViewportBoolSettingId::GridSnap);
+    context.angle_snap_available = context.grid_snap_available;
+    context.angle_snap_enabled = viewport_settings.bool_value(ViewportBoolSettingId::RotationSnap);
+    context.navigation = input_router_.fly_navigating() ? QuaderInputNavigation::Fly
+        : input_router_.orbit_navigating() ? QuaderInputNavigation::Orbit
+        : input_router_.pan_navigating() ? QuaderInputNavigation::Pan
+        : QuaderInputNavigation::None;
+    if (pending_context_menu_click && localization_ != nullptr) {
+      const auto selection = editor.selection().summary();
+      const auto actions = editor.modeling().available_action_set({
+          .surface = QuaderActionSurface::ViewportContextMenu,
+          .modal_tool_owns_viewport = false,
+          .include_disabled = true,
+          .include_hidden = false,
+      });
+      const qreal dpr = std::max<qreal>(pane_state.surface->devicePixelRatio(), 1.0);
+      const QPoint local(static_cast<int>(std::lround(pending_context_menu_local_mouse.x / dpr)),
+                         static_cast<int>(std::lround(pending_context_menu_local_mouse.y / dpr)));
+      context_menu_presenter_.show(
+          *pane_state.surface_container, pane_state.surface->mapToGlobal(local),
+          editor, input_router_, *localization_, actions, selection,
+          selection.has_selection, std::nullopt,
+          {.current_generation = &runtime_binding_generation_,
+           .expected_generation = input_binding_generation});
+    } else if (show_delete_popup) {
+      (void)delete_popup_presenter_.show(
+          *pane_state.surface_container, shortcut_popup_global_point, editor,
+          modeling, input_router_, *localization_,
+          {.current_generation = &runtime_binding_generation_,
+           .expected_generation = input_binding_generation});
+    } else if (show_quick_menu) {
+      (void)quick_menu_presenter_.show(
+          show_add_popup ? QtViewportQuickMenuKind::Add : QtViewportQuickMenuKind::Shading,
+          *pane_state.surface_container, shortcut_popup_global_point,
+          *input_pane, workspace_->shading_mode(*input_pane), editor,
+          input_router_, *localization_,
+          {.current_generation = &runtime_binding_generation_,
+           .expected_generation = input_binding_generation});
+    }
+    return;
+  }
   if ((interaction_frame.active_tool_allows_selection_fallback ||
        native_presentation.curve_controls_editable ||
        native_presentation.path_array_source_picking) &&
@@ -3668,7 +4142,6 @@ void QtViewportPanel::process_viewport_input(
                   {
                       .input = input,
                       .input_result = result,
-                      .navigation_gizmo_consumed = navigation_gizmo_consumed,
                       .suppress_hover_work = suppress_hover_work,
                       .left_pressed = sample.left_pressed,
                        .left_down = sample.left_down,
@@ -3707,6 +4180,7 @@ void QtViewportPanel::process_viewport_input(
     }
   }
   if (native_tool_result.sync_active_tool) {
+    editor.tools().synchronize_pane_tool_after_execution(*input_pane);
     sync_active_tool_from_editor(
         editor, modeling, native_tools,
         {.current_generation = &runtime_binding_generation_,
@@ -3727,6 +4201,9 @@ void QtViewportPanel::process_viewport_input(
       pointer_lifecycle.interaction_selection.summary;
   const ViewportBeforeToolInteractionResult &before_tool =
       pointer_lifecycle.before_tool;
+  if (input.viewport_hovered && !input.text_input_active && !suppress_hover_work) {
+    gizmo_input_pane_ = *input_pane;
+  }
 
   ModelingSelectionSummary hover_selection =
       to_modeling_selection_summary(
@@ -3734,7 +4211,7 @@ void QtViewportPanel::process_viewport_input(
               ? before_tool.selection_after_pending_pick->summary
               : interaction_selection);
   auto make_hover_key = [&](bool gizmo_consumed) {
-    const ViewportSettings &settings = active_viewport_settings();
+    const ViewportSettings &settings = viewport_settings;
     const double vertex_radius =
         settings.float_value(ViewportFloatSettingId::PickVertexRadius);
     const double edge_radius =
@@ -3774,7 +4251,7 @@ void QtViewportPanel::process_viewport_input(
         });
   };
   auto make_tool_event_at = [&](QVec2 mouse_local, bool dragging = false) {
-    const ViewportSettings &settings = active_viewport_settings();
+    const ViewportSettings &settings = viewport_settings;
     const double vertex_radius =
         settings.float_value(ViewportFloatSettingId::PickVertexRadius);
     const double edge_radius =
@@ -3962,7 +4439,7 @@ void QtViewportPanel::process_viewport_input(
     return result;
   };
   box_context.raster_scale = viewport_pixel_scale;
-  box_context.primitive_controls_visible = editor.preferences().gizmos_visible();
+  box_context.primitive_controls_visible = viewport_settings.bool_value(ViewportBoolSettingId::ShowGizmos);
   ViewportPointToolContext point_context;
   point_context.make_event_at = make_tool_event_at;
   point_context.hit_drawn_plane_captured_point =
@@ -3982,7 +4459,7 @@ void QtViewportPanel::process_viewport_input(
       .camera = camera,
       .ports = tool_ports.ports(&tool_commits),
       .document = &document,
-      .settings = &active_viewport_settings(),
+      .settings = &viewport_settings,
       .box = &box_context,
       .point = &point_context,
       .runtime_binding = {.current_generation = &runtime_binding_generation_,
@@ -3992,7 +4469,7 @@ void QtViewportPanel::process_viewport_input(
     input_router_.set_active_tool(tool);
   };
   const bool gizmo_consumed =
-      cancel_consumed || navigation_gizmo_consumed ||
+      cancel_consumed ||
       native_tool_result.consumed ||
       before_tool.gizmo_consumed;
   const std::uint64_t tool_command_revision =
@@ -4043,6 +4520,10 @@ void QtViewportPanel::process_viewport_input(
   if (runtime_binding_generation_ != input_binding_generation) {
     return;
   }
+  if (active_tool_result.active_tool_changed ||
+      active_tool_result.sync_active_tool_from_modeling) {
+    editor.tools().synchronize_pane_tool_after_execution(*input_pane);
+  }
   if (active_tool_result.settings_operation_started) {
     editor.tools().record_active_settings_origin(*input_pane);
     refresh_settings_overlay(editor);
@@ -4087,7 +4568,7 @@ void QtViewportPanel::process_viewport_input(
     const ViewportInteractionFrame context_frame{
         .input_router = input_router_,
         .camera = camera,
-        .settings = active_viewport_settings(),
+        .settings = viewport_settings,
         .input = context_input,
         .input_result = result,
         .right_click_local = pending_context_menu_local_mouse,
@@ -4222,7 +4703,7 @@ void QtViewportPanel::process_viewport_input(
       !input.text_input_active &&
       !input.pointer_interaction_canceled && !result.navigation_active &&
       (input.viewport_hovered || interaction_controller_.primitive_creation_pointer_active()) &&
-      editor.preferences().gizmos_visible() &&
+      viewport_settings.bool_value(ViewportBoolSettingId::ShowGizmos) &&
       !show_context_menu && !show_delete_popup && !show_quick_menu;
 
   auto &hint_context = operation_input_context_;
@@ -4232,9 +4713,6 @@ void QtViewportPanel::process_viewport_input(
       !show_context_menu && !show_delete_popup && !show_quick_menu;
   if (!hint_context.viewport_available) return;
   interaction_controller_.populate_operation_input_context(hint_context, interaction_frame);
-  if (navigation_gizmo_locked_pane) {
-    hint_context.navigation = QuaderInputNavigation::Orbit;
-  }
   if (hint_context.navigation == QuaderInputNavigation::None) {
     native_tools.populate_operation_input_context(hint_context);
     hint_context.pointer_dragging = hint_context.pointer_dragging ||
@@ -4292,11 +4770,6 @@ bool QtViewportPanel::sync_active_tool_from_editor(
     active_box_preview_ = {};
   }
   return changed;
-}
-
-const ViewportSettings &QtViewportPanel::active_viewport_settings() const {
-  return viewport_settings_ != nullptr ? *viewport_settings_
-                                       : fallback_settings_;
 }
 
 void QtViewportPanel::set_pane_view(Pane &pane_state, ViewportView view) {

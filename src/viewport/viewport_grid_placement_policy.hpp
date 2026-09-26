@@ -120,13 +120,41 @@ public:
       const float aspect = std::max(
           0.0001f, static_cast<float>(std::max(1u, viewport_width)) /
                        static_cast<float>(std::max(1u, viewport_height)));
-      const float plane_height = std::max(kViewportGridMinOrthographicSize,
-                                          camera.state().orthographic_size) *
-                                 kViewportGridOrthographicMargin;
+      const float view_height = std::max(kViewportGridMinOrthographicSize,
+                                         camera.state().orthographic_size);
+      const float view_width = view_height * aspect;
+      const ViewportCameraPose pose = camera.pose();
+      const QVec3 forward = normalize(pose.target - pose.eye);
+      const QVec3 right = normalize(cross(forward, pose.up));
+      const QVec3 up = normalize(cross(right, forward));
+      const ViewportGridAxes plane_axes = axes(plane);
+      const QVec3 normal = cross(plane_axes.u_axis, plane_axes.v_axis);
+      const float incidence = dot(forward, normal);
+      // Alt-orbit can retain a rolled Top/Bottom camera. Project its actual
+      // screen rectangle onto the grid, rather than assuming screen width
+      // always follows world X. The dominant plane keeps incidence away from 0.
+      const auto project_direction = [&](QVec3 direction) {
+        return std::fabs(incidence) > 0.000001f
+                   ? direction - forward * (dot(direction, normal) / incidence)
+                   : direction;
+      };
+      const QVec3 horizontal = project_direction(right) * view_width;
+      const QVec3 vertical = project_direction(up) * view_height;
+      const QVec3 span = {
+          std::fabs(horizontal.x) + std::fabs(vertical.x),
+          std::fabs(horizontal.y) + std::fabs(vertical.y),
+          std::fabs(horizontal.z) + std::fabs(vertical.z),
+      };
       if (plane == ViewportGridPlane::YZ) {
-        return {plane_height, plane_height * aspect};
+        return {span.y * kViewportGridOrthographicMargin,
+                span.z * kViewportGridOrthographicMargin};
       }
-      return {plane_height * aspect, plane_height};
+      if (plane == ViewportGridPlane::XY) {
+        return {span.x * kViewportGridOrthographicMargin,
+                span.y * kViewportGridOrthographicMargin};
+      }
+      return {span.x * kViewportGridOrthographicMargin,
+              span.z * kViewportGridOrthographicMargin};
     }
 
     static ViewportGridAxes axes(ViewportGridPlane plane) {
@@ -150,13 +178,29 @@ public:
     }
 
     static QVec3 origin(ViewportGridPlane plane, const ViewportCameraPose& pose) {
+        const ViewportGridAxes plane_axes = axes(plane);
+        const QVec3 normal = cross(plane_axes.u_axis, plane_axes.v_axis);
+        const QVec3 forward = normalize(pose.target - pose.eye);
+        QVec3 point = {0.0f, kViewportGridPlaneOffset, 0.0f};
         if (plane == ViewportGridPlane::YZ) {
-            return {kViewportGridPlaneOffset, pose.eye.y, pose.eye.z};
+            point = {kViewportGridPlaneOffset, 0.0f, 0.0f};
+        } else if (plane == ViewportGridPlane::XY) {
+            point = {0.0f, 0.0f, kViewportGridPlaneOffset};
         }
-        if (plane == ViewportGridPlane::XY) {
-            return {pose.eye.x, pose.eye.y, kViewportGridPlaneOffset};
+        const float incidence = dot(forward, normal);
+        if (std::fabs(incidence) > 0.000001f) {
+          QVec3 center =
+              pose.eye + forward * (dot(point - pose.eye, normal) / incidence);
+          if (plane == ViewportGridPlane::YZ) {
+            center.x = kViewportGridPlaneOffset;
+          } else if (plane == ViewportGridPlane::XY) {
+            center.z = kViewportGridPlaneOffset;
+          } else {
+            center.y = kViewportGridPlaneOffset;
+          }
+          return center;
         }
-        return {pose.eye.x, kViewportGridPlaneOffset, pose.eye.z};
+        return point;
     }
 
     static ViewportGridRotation rotation(ViewportGridPlane plane) {

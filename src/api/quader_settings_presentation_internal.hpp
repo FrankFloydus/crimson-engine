@@ -37,6 +37,13 @@ public:
     }
   }
 
+  /// Records the accepted pane choice only while its captured scene is current.
+  bool record_selected_tool(ViewportToolId tool) const {
+    return current() &&
+        QuaderApiSessionInternalAccess::scene_session(session_)
+            .viewport_workspace().record_selected_tool(pane_, tool);
+  }
+
 private:
   QuaderApiSession session_;
   const SceneSession *scene_ = nullptr;

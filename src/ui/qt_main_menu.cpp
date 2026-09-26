@@ -37,7 +37,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -301,9 +300,6 @@ std::string menu_command_localization_key(QuaderCommandId command_id) {
   if (is(quader_command::kViewportToggleInfo)) {
     return "ui.menu.view.show_info";
   }
-  if (is(quader_command::kViewportToggleNavigationGizmo)) {
-    return "ui.menu.show.navigation_gizmo";
-  }
   if (is(quader_command::kViewportViewPerspective)) {
     return "viewport.view.perspective";
   }
@@ -450,13 +446,6 @@ struct QtMainMenu::Impl {
     std::optional<CommandPresentationDomain> presentation_domain;
   };
 
-  /// Associates a checkable QAction with one viewport boolean setting.
-  struct BoolSettingAction {
-    QAction *action = nullptr;
-    QMenu *owner_menu = nullptr;
-    ViewportBoolSettingId setting = ViewportBoolSettingId::Count;
-  };
-
   /// Associates a QAction with a stable dock-panel identifier.
   struct PanelAction {
     QAction *action = nullptr;
@@ -492,7 +481,6 @@ struct QtMainMenu::Impl {
     }
     top_level_menus.clear();
     command_actions.clear();
-    bool_setting_actions.clear();
     panel_actions.clear();
     tool_actions.clear();
     object_menu = nullptr;
@@ -543,7 +531,6 @@ struct QtMainMenu::Impl {
   QAction *texture_toolbar_action = nullptr;
   QAction *tool_toolbar_action = nullptr;
   std::vector<CommandAction> command_actions;
-  std::vector<BoolSettingAction> bool_setting_actions;
   std::vector<PanelAction> panel_actions;
   std::vector<ToolAction> tool_actions;
 
@@ -621,22 +608,27 @@ struct QtMainMenu::Impl {
       };
     }
     if (same_command(command_id, quader_command::kViewportToggleGrid)) {
-      return
-          [this] { return context.editor.get().preferences().grid_visible(); };
+      return [this] {
+        return context.editor.get().viewports().control(
+            QuaderViewportControl::ShowGrid);
+      };
     }
     if (same_command(command_id, quader_command::kViewportToggleMeshGrid)) {
       return [this] {
-        return context.editor.get().preferences().mesh_grid_visible();
+        return context.editor.get().viewports().control(
+            QuaderViewportControl::ShowMeshGrid);
       };
     }
     if (same_command(command_id, quader_command::kViewportToggleGizmos)) {
       return [this] {
-        return context.editor.get().preferences().gizmos_visible();
+        return context.editor.get().viewports().control(
+            QuaderViewportControl::ShowGizmos);
       };
     }
     if (same_command(command_id, quader_command::kViewportToggleOverlays)) {
       return [this] {
-        return context.editor.get().preferences().overlays_visible();
+        return context.editor.get().viewports().control(
+            QuaderViewportControl::ShowOverlays);
       };
     }
     if (same_command(command_id, quader_command::kViewportToggleDimensions)) {
@@ -652,12 +644,6 @@ struct QtMainMenu::Impl {
     if (same_command(command_id, quader_command::kViewportToggleInfo)) {
       return [this] {
         return context.editor.get().preferences().viewport_info_visible();
-      };
-    }
-    if (same_command(command_id,
-                     quader_command::kViewportToggleNavigationGizmo)) {
-      return [this] {
-        return context.editor.get().preferences().navigation_gizmo_visible();
       };
     }
     if (same_command(command_id, quader_command::kViewportToggleTextureLock)) {
@@ -932,30 +918,6 @@ struct QtMainMenu::Impl {
                                group);
   }
 
-  QAction *add_bool_setting_action(QMenu &menu, ViewportBoolSettingId setting,
-                                   std::string_view key,
-                                   std::string_view fallback) {
-    QAction *action =
-        menu.addAction(qtext(context.localization, key, fallback));
-    action->setObjectName(
-        QStringLiteral("viewportSetting_%1")
-            .arg(QString::fromUtf8(key.data(),
-                                   static_cast<qsizetype>(key.size()))));
-    action->setCheckable(true);
-    QObject::connect(
-        action, &QAction::toggled, connection_context.get(),
-        [this, setting](bool checked) {
-          QDR_PROFILE_SCOPE("Qt main menu dispatch bool setting");
-          if (context.viewport_settings.set_bool_value(setting, checked)) {
-            if (context.viewport_settings_changed) {
-              context.viewport_settings_changed();
-            }
-          }
-        });
-    bool_setting_actions.push_back({action, top_level_owner(menu), setting});
-    return action;
-  }
-
   template <typename Matches>
   void add_arrangement_actions(QMenu &menu, Matches matches) {
     for (const CommandPresentationDescriptor &presentation :
@@ -971,9 +933,12 @@ struct QtMainMenu::Impl {
       if (descriptor == nullptr || !matches(*descriptor)) {
         continue;
       }
+      const auto command =
+          context.editor.get().commands().descriptor(presentation.command_id);
       add_command_action(menu, presentation.command_id,
-                         std::string(descriptor->localization_key),
-                         std::string(descriptor->fallback_label));
+                         std::string(descriptor->keybinding_localization_key),
+                         command.has_value() ? command->label
+                                             : std::string(descriptor->fallback_label));
     }
   }
 
@@ -1137,51 +1102,37 @@ struct QtMainMenu::Impl {
     menu->setObjectName(QStringLiteral("menu_select"));
     (void)add_presented_group(*menu, CommandPresentationDomain::Select,
                               CommandPresentationGroup::Selection);
+    const auto actions = menu->actions();
+    for (qsizetype index = 0; index + 1 < actions.size(); ++index) {
+      const auto &name = actions[index]->objectName();
+      if (name == QStringLiteral("command_edit_clear_selection") ||
+          name == QStringLiteral("command_select_inverse") ||
+          name == QStringLiteral("command_select_edge_ring")) {
+        menu->insertSeparator(actions[index + 1]);
+      }
+    }
   }
 
-  void build_arrangement_submenu(QMenu &parent) {
+  void append_arrangement_groups(QMenu &menu) {
     if (!release_has_feature(ReleaseFeature::Arrangement)) {
       return;
     }
-    QMenu *arrangement_menu = parent.addMenu(
-        qtext(context.localization, "ui.menu.object.arrange", "Arrange"));
-    arrangement_menu->setObjectName(QStringLiteral("menu_object_arrange"));
-    constexpr std::array<
-        std::tuple<QuaderTransformAxis, std::string_view, std::string_view>, 3>
-        kAxes{{
-            {QuaderTransformAxis::X, "ui.menu.align.axis_x", "X"},
-            {QuaderTransformAxis::Y, "ui.menu.align.axis_y", "Y"},
-            {QuaderTransformAxis::Z, "ui.menu.align.axis_z", "Z"},
-        }};
-    for (const auto &[axis, key, fallback] : kAxes) {
-      QMenu *axis_menu =
-          arrangement_menu->addMenu(qtext(context.localization, key, fallback));
-      axis_menu->setObjectName(
-          QStringLiteral("menu_object_align_%1")
-              .arg(QString::fromUtf8(fallback.data()).toLower()));
+    for (const auto axis : {QuaderTransformAxis::X, QuaderTransformAxis::Y,
+                            QuaderTransformAxis::Z}) {
+      if (!menu.actions().isEmpty()) {
+        menu.addSeparator();
+      }
       add_arrangement_actions(
-          *axis_menu, [axis](const QuaderMeshArrangementDescriptor &entry) {
+          menu, [axis](const QuaderMeshArrangementDescriptor &entry) {
             return entry.kind == QuaderMeshArrangementKind::Alignment &&
                    entry.axis == axis;
           });
     }
-    arrangement_menu->addSeparator();
-    for (const auto &[distribution, key, fallback] :
-         {std::tuple{QuaderMeshDistribution::Centers,
-                     std::string_view("ui.menu.align.distribute_centers"),
-                     std::string_view("Distribute Centers")},
-          std::tuple{QuaderMeshDistribution::Gaps,
-                     std::string_view("ui.menu.align.distribute_gaps"),
-                     std::string_view("Distribute Gaps")}}) {
-      QMenu *distribution_menu =
-          arrangement_menu->addMenu(qtext(context.localization, key, fallback));
-      distribution_menu->setObjectName(
-          distribution == QuaderMeshDistribution::Centers
-              ? QStringLiteral("menu_object_distribute_centers")
-              : QStringLiteral("menu_object_distribute_gaps"));
+    for (const auto distribution : {QuaderMeshDistribution::Centers,
+                                    QuaderMeshDistribution::Gaps}) {
+      menu.addSeparator();
       add_arrangement_actions(
-          *distribution_menu,
-          [distribution](const QuaderMeshArrangementDescriptor &entry) {
+          menu, [distribution](const QuaderMeshArrangementDescriptor &entry) {
             return entry.kind == QuaderMeshArrangementKind::Distribution &&
                    entry.distribution == distribution;
           });
@@ -1189,6 +1140,10 @@ struct QtMainMenu::Impl {
   }
 
   void build_create_menu() {
+    if (presented_group_size(CommandPresentationDomain::Create,
+                             CommandPresentationGroup::Creation) == 0u) {
+      return;
+    }
     QMenu *menu = add_top_level_menu("ui.menu.create", "C&reate");
     menu->setObjectName(QStringLiteral("menu_create"));
     (void)add_presented_group(*menu, CommandPresentationDomain::Create,
@@ -1200,46 +1155,21 @@ struct QtMainMenu::Impl {
     object_menu = menu;
     menu->setObjectName(QStringLiteral("menu_object"));
 
-    (void)add_presented_submenu(
-        *menu, "ui.menu.object.instances", "Instances", "menu_object_instances",
-        CommandPresentationDomain::Object, CommandPresentationGroup::Instances);
-    (void)add_presented_submenu(
-        *menu, "ui.menu.object.grouping", "Grouping", "menu_object_grouping",
-        CommandPresentationDomain::Object, CommandPresentationGroup::Grouping);
-    (void)add_presented_submenu(
-        *menu, "ui.menu.object.transform", "Transform", "menu_object_transform",
-        CommandPresentationDomain::Object, CommandPresentationGroup::Transform);
-    QMenu *snapping = menu->addMenu(
-        qtext(context.localization, "ui.menu.object.snapping", "Snapping"));
-    snapping->setObjectName(QStringLiteral("menu_object_snapping"));
-    add_bool_setting_action(*snapping, ViewportBoolSettingId::SnappingEnabled,
-                            "ui.menu.object.snapping.enabled",
-                            "Snapping Enabled")
-        ->setObjectName(QStringLiteral("action_snapping_enabled"));
-    add_bool_setting_action(*snapping, ViewportBoolSettingId::GridSnap,
-                            "ui.menu.edit.snap.grid", "Grid Snap")
-        ->setObjectName(QStringLiteral("action_grid_snap"));
-    add_bool_setting_action(*snapping, ViewportBoolSettingId::VertexSnap,
-                            "ui.menu.edit.snap.vertex", "Vertex Snap")
-        ->setObjectName(QStringLiteral("action_vertex_snap"));
-    add_bool_setting_action(*snapping, ViewportBoolSettingId::RotationSnap,
-                            "ui.menu.object.snapping.rotation", "Rotation Snap")
-        ->setObjectName(QStringLiteral("action_rotation_snap"));
-
-    build_arrangement_submenu(*menu);
-
-    (void)add_presented_submenu(*menu, "ui.menu.object.duplicate",
-                                "Duplicate / Generate", "menu_object_duplicate",
-                                CommandPresentationDomain::Object,
-                                CommandPresentationGroup::Duplication);
+    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
+                                 CommandPresentationGroup::Instances);
+    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
+                                 CommandPresentationGroup::Grouping);
+    append_arrangement_groups(*menu);
+    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
+                                 CommandPresentationGroup::Duplication);
 
     if (release_has_feature(ReleaseFeature::Materials)) {
-      QMenu *materials = menu->addMenu(
-          qtext(context.localization, "ui.menu.object.materials", "Materials"));
-      materials->setObjectName(QStringLiteral("menu_object_materials"));
-      (void)add_presented_group(*materials, CommandPresentationDomain::Object,
+      if (!menu->actions().isEmpty()) {
+        menu->addSeparator();
+      }
+      (void)add_presented_group(*menu, CommandPresentationDomain::Object,
                                 CommandPresentationGroup::Materials);
-      material_find_replace_action = materials->addAction(
+      material_find_replace_action = menu->addAction(
           qtext(context.localization, "ui.menu.object.materials.find_replace",
                 "Find/Replace Materials..."));
       material_find_replace_action->setObjectName(
@@ -1258,12 +1188,6 @@ struct QtMainMenu::Impl {
                        });
 
     }
-    (void)add_presented_submenu(*menu, "ui.menu.object.visibility",
-                                "Visibility", "menu_object_visibility",
-                                CommandPresentationDomain::Object,
-                                CommandPresentationGroup::Visibility);
-    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
-                                 CommandPresentationGroup::Cleanup);
   }
 
   void build_mesh_menu() {
@@ -1387,19 +1311,26 @@ struct QtMainMenu::Impl {
   void build_view_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.view", "V&iew");
     menu->setObjectName(QStringLiteral("menu_view"));
-    (void)add_presented_submenu(*menu, "ui.menu.view.camera",
-                                "Camera / Viewpoint", "menu_view_camera",
-                                CommandPresentationDomain::View,
-                                CommandPresentationGroup::Camera, true);
+    (void)add_presented_actions(
+        *menu, [](const CommandPresentationDescriptor &presentation) {
+          return same_command(presentation.command_id,
+                              quader_command::kViewportToggleLocalVisibility);
+        });
+    (void)append_presented_group(*menu, CommandPresentationDomain::View,
+                                 CommandPresentationGroup::Camera);
+    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
+                                 CommandPresentationGroup::Visibility);
+    menu->addSeparator();
     QMenu *display = menu->addMenu(
         qtext(context.localization, "ui.menu.view.display", "Display"));
     display->setObjectName(QStringLiteral("menu_view_display"));
-    (void)add_presented_group(*display, CommandPresentationDomain::View,
-                              CommandPresentationGroup::Display);
-    (void)add_presented_submenu(*menu, "ui.menu.view.shading", "Shading",
-                                "menu_view_shading",
-                                CommandPresentationDomain::View,
-                                CommandPresentationGroup::Shading, true);
+    (void)add_presented_actions(
+        *display, [](const CommandPresentationDescriptor &presentation) {
+          return presentation.domain == CommandPresentationDomain::View &&
+                 presentation.group == CommandPresentationGroup::Display &&
+                 !same_command(presentation.command_id,
+                               quader_command::kViewportToggleLocalVisibility);
+        });
     (void)add_presented_submenu(
         *menu, "ui.menu.view.grid", "Grid", "menu_view_grid",
         CommandPresentationDomain::View, CommandPresentationGroup::Grid);
@@ -1540,12 +1471,6 @@ struct QtMainMenu::Impl {
     window_menu = menu;
     menu->setObjectName(QStringLiteral("menu_window"));
 
-    if (const CommandPresentationDescriptor *spawn =
-            find_command_presentation(quader_command::kViewportSpawnWindow);
-        spawn != nullptr && has_command_presentation_surface(
-                                *spawn, CommandPresentationSurface::MainMenu)) {
-      (void)add_presented_command_action(*menu, *spawn);
-    }
     if (release_has_feature(ReleaseFeature::Materials)) {
       material_browser_action = menu->addAction(
           qtext(context.localization, "ui.menu.view.material_browser",
@@ -1561,7 +1486,9 @@ struct QtMainMenu::Impl {
                          }
                        });
     }
-    menu->addSeparator();
+    if (!menu->actions().isEmpty()) {
+      menu->addSeparator();
+    }
     build_layout_submenu(*menu);
     build_toolbar_submenu(*menu);
     build_panel_submenu(*menu);
@@ -1575,18 +1502,6 @@ struct QtMainMenu::Impl {
     if (!menu->actions().isEmpty()) {
       menu->addSeparator();
     }
-    QAction *shortcuts = menu->addAction(
-        qtext(context.localization, "ui.menu.help.keyboard_shortcuts",
-              "Keyboard Shortcuts..."));
-    shortcuts->setObjectName(QStringLiteral("action_keyboard_shortcuts"));
-    QObject::connect(
-        shortcuts, &QAction::triggered, connection_context.get(), [this]() {
-          QDR_PROFILE_SCOPE("Qt main menu dispatch presentation action");
-          if (context.show_settings) {
-            context.show_settings();
-          }
-        });
-    menu->addSeparator();
     QAction *about = menu->addAction(
         qtext(context.localization, "ui.menu.help.about", "About Quader"));
     about->setObjectName(QStringLiteral("action_about_quader"));
@@ -1650,17 +1565,6 @@ struct QtMainMenu::Impl {
         if (entry.checked) {
           present_checked(*entry.action, checked);
         }
-      }
-    }
-
-    {
-      QDR_PROFILE_SCOPE("Qt main menu sync bool settings");
-      for (const BoolSettingAction &entry : bool_setting_actions) {
-        if (entry.owner_menu != &menu) {
-          continue;
-        }
-        present_checked(*entry.action,
-                        context.viewport_settings.bool_value(entry.setting));
       }
     }
 
@@ -1750,13 +1654,13 @@ struct QtMainMenu::Impl {
 
     {
       QDR_PROFILE_SCOPE("Qt main menu sync tool actions");
-      std::optional<std::string> active_tool;
+      std::optional<ViewportToolId> selected_tool;
       for (const ToolAction &entry : tool_actions) {
         if (entry.owner_menu != &menu) {
           continue;
         }
-        if (!active_tool.has_value()) {
-          active_tool = context.editor.get().tools().active_tool();
+        if (!selected_tool.has_value()) {
+          selected_tool = context.editor.get().viewports().selected_tool();
         }
         const std::optional<QuaderCommandDescriptor> command =
             context.editor.get().commands().descriptor(entry.command_id);
@@ -1766,7 +1670,7 @@ struct QtMainMenu::Impl {
                      action_text(context.localization, entry.localization_key,
                                  entry.fallback, shortcut));
         present_checked(*entry.action,
-                        *active_tool == viewport_tool_id(entry.tool));
+                        *selected_tool == entry.tool);
         const bool domain_enabled =
             !entry.presentation_domain.has_value() ||
             presentation_domain_matches_selection(
@@ -1806,6 +1710,7 @@ void QtMainMenu::rebuild() {
     impl_->prepare_rebuild();
     impl_->build_file_menu();
     impl_->build_edit_menu();
+    impl_->build_view_menu();
     impl_->build_select_menu();
     impl_->build_create_menu();
     impl_->build_object_menu();
@@ -1814,7 +1719,6 @@ void QtMainMenu::rebuild() {
     impl_->build_edge_menu();
     impl_->build_face_menu();
     impl_->build_uv_menu();
-    impl_->build_view_menu();
     impl_->build_window_menu();
     impl_->build_help_menu();
   }

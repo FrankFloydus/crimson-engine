@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace quader_editor_core {
 
@@ -35,15 +34,6 @@ enum class ViewAxisStepDirection {
   Right,
   Up,
   Down,
-};
-
-/**
- * Enumerates ViewCubeHitKind values used by the modeling layer.
- */
-enum class ViewCubeHitKind {
-  None,
-  Body,
-  Face,
 };
 
 /**
@@ -165,86 +155,6 @@ struct ViewportFrameBoundsInput {
 	double margin = 1.0;
 };
 
-/**
- * Represents a View Cube Face Primitive value used by the modal modeling interaction layer.
- */
-struct ViewCubeFacePrimitive {
-  ViewAxis axis = ViewAxis::X;
-  int sign = 1;
-  double depth = 0.0;
-  quader::QVec2 screen_position;
-  std::vector<quader::QVec2> polygon;
-};
-
-/**
- * Represents a View Cube QAxis Marker Primitive value used by the modal modeling interaction layer.
- */
-struct ViewCubeAxisMarkerPrimitive {
-  ViewAxis axis = ViewAxis::X;
-  int sign = 1;
-  double depth = 0.0;
-  quader::QVec2 screen_position;
-};
-
-/**
- * Represents a View Cube Edge Primitive value used by the modal modeling interaction layer.
- */
-struct ViewCubeEdgePrimitive {
-  ViewAxis axis = ViewAxis::X;
-  double depth = 0.0;
-  quader::QVec3 local_start;
-  quader::QVec3 local_end;
-  quader::QVec2 screen_start;
-  quader::QVec2 screen_end;
-};
-
-/**
- * Represents a View Cube Primitive Input value used by the modal modeling interaction layer.
- */
-struct ViewCubePrimitiveInput {
-	quader_poly::Transform3 camera_transform;
-	quader::QVec2 viewport_size;
-	double widget_size = 76.0;
-	double axis_marker_radius = 8.0;
-	quader::QVec2 margin { 46.0F, 82.0F };
-};
-
-/**
- * Represents a View Cube Primitives value used by the modal modeling interaction layer.
- */
-struct ViewCubePrimitives {
-	bool ok = true;
-	quader::QVec2 screen_position;
-	quader::QVec2 rect_position;
-	quader::QVec2 rect_size;
-	double axis_marker_radius = 8.0;
-	std::vector<ViewCubeFacePrimitive> faces;
-	std::vector<ViewCubeEdgePrimitive> edges;
-	std::vector<ViewCubeEdgePrimitive> axis_edges;
-	std::vector<ViewCubeAxisMarkerPrimitive> axis_markers;
-};
-
-/**
- * Represents a View Cube Pick Input value used by the modal modeling interaction layer.
- */
-struct ViewCubePickInput {
-	ViewCubePrimitiveInput primitives;
-	quader::QVec2 screen_position;
-};
-
-/**
- * Represents a View Cube Hit value used by the modal modeling interaction layer.
- */
-struct ViewCubeHit {
-	bool ok = true;
-	bool hit = false;
-        ViewCubeHitKind kind = ViewCubeHitKind::None;
-        ViewAxis axis = ViewAxis::X;
-        int sign = 1;
-	double depth = 0.0;
-	quader::QVec2 screen_position;
-};
-
 quader::QVec3 viewport_camera_forward(const quader_poly::Transform3& camera_transform);
 quader::QVec3 viewport_camera_right(const quader_poly::Transform3& camera_transform);
 quader::QVec3 viewport_camera_up(const quader_poly::Transform3& camera_transform);
@@ -265,7 +175,7 @@ bool viewport_navigation_is_pan(const ViewportNavigationState& state);
 bool viewport_navigation_is_orbit(const ViewportNavigationState& state);
 bool viewport_navigation_is_fly(const ViewportNavigationState& state);
 bool viewport_navigation_is_fly_camera(const ViewportNavigationState& state, std::uint64_t camera_id);
-bool viewport_navigation_is_active(const ViewportNavigationState& state, bool view_cube_dragging = false);
+bool viewport_navigation_is_active(const ViewportNavigationState& state);
 ViewportNavigationResult viewport_orbit(const ViewportOrbitInput& input);
 ViewportNavigationResult viewport_pan(const ViewportPanInput& input);
 ViewportNavigationResult viewport_zoom(const ViewportZoomInput& input);
@@ -275,8 +185,5 @@ ViewportNavigationResult viewport_fly_move(const ViewportFlyMoveInput& input);
 ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& input);
 ViewportNavigationResult viewport_view_axis(const ViewportCameraState& camera, quader::QVec3 pivot, ViewAxis axis, int sign);
 ViewportNavigationResult viewport_step_view_axis(const ViewportCameraState& camera, quader::QVec3 pivot, ViewAxisStepDirection direction);
-ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& input);
-ViewCubeHit pick_view_cube(const ViewCubePickInput& input);
-bool view_cube_hits_match(const ViewCubeHit& left, const ViewCubeHit& right);
 
 } // namespace quader_editor_core

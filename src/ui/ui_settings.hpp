@@ -45,10 +45,6 @@ public:
 
     bool is_panel_visible(UIPanelId id) const;
     void set_panel_visible(UIPanelId id, bool visible);
-    bool navigation_gizmo_visible() const { return navigation_gizmo_visible_; }
-    void set_navigation_gizmo_visible(bool visible) {
-      navigation_gizmo_visible_ = visible;
-    }
     const std::string& locale() const { return locale_; }
     void set_locale(std::string locale);
     float interface_scale() const { return interface_scale_; }
@@ -79,7 +75,6 @@ public:
     bool layers_visible_ = ui_panel_default_visible(UIPanelId::Layers);
     bool face_texture_visible_ =
         ui_panel_default_visible(UIPanelId::FaceTexture);
-    bool navigation_gizmo_visible_ = true;
 };
 
 } // namespace quader

@@ -72,7 +72,6 @@ public:
 struct ViewportNativeToolInteractionFrame final {
   const ViewportInputFrame &input;
   const ViewportInputResult &input_result;
-  bool navigation_gizmo_consumed = false;
   bool transform_gizmo_consumed = false;
   bool suppress_hover_work = false;
   bool handles_visible = true;

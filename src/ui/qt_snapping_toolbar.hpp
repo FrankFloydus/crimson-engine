@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_viewport_layout_types.hpp"
+
 #include <QString>
 #include <QToolBar>
 
@@ -67,6 +69,10 @@ private:
 
   /// Caches every owner value that can alter retained toolbar presentation.
   struct PresentedState {
+    const QuaderEditorApi *editor = nullptr;
+    ViewportPaneId pane = ViewportPaneId::Perspective;
+    std::uint64_t control_revision = 0;
+    std::uint64_t keybindings_revision = 0;
     int grid_preset = 0;
     double rotation_snap_degrees = 0.0;
     std::array<bool, 4> toggles{};
@@ -77,6 +83,7 @@ private:
   /// Gates command and shortcut queries independently of snapping preferences.
   struct TransformPresentationStamp {
     const QuaderEditorApi *editor = nullptr;
+    ViewportPaneId pane = ViewportPaneId::Perspective;
     std::uint64_t transform_space_revision = 0;
     std::uint64_t keybindings_revision = 0;
 

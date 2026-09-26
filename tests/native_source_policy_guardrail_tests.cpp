@@ -131,6 +131,8 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportFloatSettingId::GridMinorLineSize",
           "ViewportFloatSettingId::GridMajorLineSize",
           "ViewportFloatSettingId::GridAxisLineSize",
+          "ViewportFloatSettingId::Grid2DIntensity",
+          "ViewportFloatSettingId::Grid3DIntensity",
           "ViewportFloatSettingId::DefaultFlyNavigationSpeed",
           "ViewportFloatSettingId::ShadedKeyDirectionX",
           "ViewportFloatSettingId::ShadedKeyDirectionY",
@@ -1095,7 +1097,15 @@ TEST(ViewportCameraTests, FlySpeedSourceUsesHostViewportDefaults) {
   EXPECT_TRUE(source_contains_compact(
       commit_source,
       "case QtSettingsChangeKind::ViewportCommit: "
-      "apply_viewport_settings_to_workspace();"));
+      "(void)save_viewport_settings();"));
+  const std::string save_source = source_slice(
+      ui_source, "bool UISystem::save_viewport_settings()",
+      "void UISystem::");
+  const auto defaults_revision = save_source.find("++viewport_defaults_revision_");
+  const auto apply_defaults = save_source.find("apply_viewport_settings_to_workspace()");
+  ASSERT_NE(defaults_revision, std::string::npos);
+  ASSERT_NE(apply_defaults, std::string::npos);
+  EXPECT_LT(defaults_revision, apply_defaults);
 }
 
 TEST(SceneContentDocumentTests,

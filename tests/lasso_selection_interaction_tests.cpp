@@ -282,14 +282,15 @@ TEST(LassoSelectionInteractionTests,
     const auto front = harness.cube({0.0f, 0.0f, 2.0f});
     const auto back = harness.cube({0.0f, 0.0f, -2.0f});
     harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
-    harness.input.selection_click_delay_for_double_click = depth_double;
+    harness.input.selection_click_has_depth_double_click = depth_double;
     harness.queue_press({400.0f, 300.0f});
     harness.dispatch(true, true, false);
     harness.queue_release({400.0f, 300.0f});
     harness.time_seconds = 10.1;
     harness.dispatch(false, false, true);
     if (depth_double) {
-      EXPECT_TRUE(harness.selected_entities().empty());
+      EXPECT_EQ(harness.selected_entities(),
+                std::vector<quader::EntityId>{front.entity});
       harness.click_count = 2;
       harness.input.cycle_selection_depth_pressed = true;
       harness.queue_press({400.0f, 300.0f});

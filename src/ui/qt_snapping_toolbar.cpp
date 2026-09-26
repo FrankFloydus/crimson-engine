@@ -339,16 +339,21 @@ void QtSnappingToolbar::synchronize(const QuaderEditorApi &editor,
                                     bool force) {
   synchronize_transform_space(editor, force);
 
-  const auto &preferences = editor.preferences();
+  const auto &viewports = editor.viewports();
+  const auto pane = viewports.focused_pane();
   const PresentedState state{
-      .grid_preset = editor.viewports().grid_preset(),
-      .rotation_snap_degrees = preferences.rotation_snap_degrees(),
+      .editor = &editor,
+      .pane = pane,
+      .control_revision = viewports.control_revision(pane),
+      .keybindings_revision = editor.commands().keybindings_revision(),
+      .grid_preset = viewports.grid_preset(),
+      .rotation_snap_degrees = viewports.rotation_snap_degrees(pane),
       .toggles =
           {
-              preferences.snapping_enabled(),
-              preferences.grid_snap_enabled(),
-              preferences.vertex_snap_enabled(),
-              preferences.rotation_snap_enabled(),
+              viewports.control(pane, QuaderViewportControl::SnappingEnabled),
+              viewports.control(pane, QuaderViewportControl::GridSnap),
+              viewports.control(pane, QuaderViewportControl::VertexSnap),
+              viewports.control(pane, QuaderViewportControl::RotationSnap),
           },
   };
   if (!force && presented_state_.has_value() &&
@@ -358,6 +363,8 @@ void QtSnappingToolbar::synchronize(const QuaderEditorApi &editor,
 
   const bool update_grid =
       force || !presented_state_.has_value() ||
+      presented_state_->editor != state.editor ||
+      presented_state_->keybindings_revision != state.keybindings_revision ||
       presented_state_->grid_preset != state.grid_preset;
   const bool update_angle =
       force || !presented_state_.has_value() ||
@@ -417,6 +424,7 @@ void QtSnappingToolbar::synchronize_transform_space(
     const QuaderEditorApi &editor, bool force) {
   const TransformPresentationStamp stamp{
       .editor = &editor,
+      .pane = editor.viewports().focused_pane(),
       .transform_space_revision = editor.viewports().transform_space_revision(),
       .keybindings_revision = editor.commands().keybindings_revision(),
   };

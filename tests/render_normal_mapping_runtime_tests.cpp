@@ -333,6 +333,17 @@ public:
             static_cast<float>((clip.y / clip.w * 0.5 + 0.5) * kGridTargetSize)};
   }
 
+  std::optional<SurfaceGridImage> render_current_grid_view(bool visible) {
+    // Retain the exact same proxy, vertex buffers, and material instances.
+    view_->setMaterialGlobal(
+        0u, filament::math::float4{0.0f, 0.0f, visible ? 0.0f : 1.0f, 1.0f});
+    SurfaceGridImage image;
+    if (!read_surface(&image).has_value()) {
+      return std::nullopt;
+    }
+    return image;
+  }
+
 private:
   std::optional<QVec3> render_surface(
       QVec3 normal, bool mirror_authored_u,
@@ -410,6 +421,10 @@ private:
         0u, filament::math::float4{grid != nullptr ? grid->debug_mode
                                                  : (shaded ? 0.0f : 6.0f),
                                   0.0f, 0.0f, 1.0f});
+    return read_surface(image);
+  }
+
+  std::optional<QVec3> read_surface(SurfaceGridImage *image) {
     for (int frame = 0; frame < 3; ++frame) {
       renderer_->renderStandaloneView(view_);
     }
@@ -668,6 +683,34 @@ void save_grid_capture(const SurfaceGridImage &image, const QString &label) {
   if (!directory.isEmpty()) {
     ASSERT_TRUE(QDir().mkpath(directory));
     ASSERT_TRUE(image.save(QDir(directory).filePath(label + ".png")));
+  }
+}
+
+TEST(RenderSurfaceGridRuntimeTests,
+     PerViewVisibilityDoesNotMutateSharedMeshOrMaterialGrid) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for windowless Vulkan "
+                   "per-view surface-grid readback coverage";
+  }
+  NormalMappingHarness harness;
+  ASSERT_TRUE(harness.initialize(kGridTargetSize));
+  for (const bool shaded : {true, false}) {
+    SCOPED_TRACE(shaded ? "shaded" : "rendered");
+    SurfaceGridOptions grid;
+    grid.albedo = 0.02f;
+    grid.enabled = false;
+    const auto disabled_material = harness.render_grid(shaded, grid);
+    grid.enabled = true;
+    const auto visible = harness.render_grid(shaded, grid);
+    const auto hidden_view = harness.render_current_grid_view(false);
+    const auto restored_view = harness.render_current_grid_view(true);
+    ASSERT_TRUE(disabled_material.has_value());
+    ASSERT_TRUE(visible.has_value());
+    ASSERT_TRUE(hidden_view.has_value());
+    ASSERT_TRUE(restored_view.has_value());
+    EXPECT_GT(grid_neighborhood_contrast(*hidden_view, *visible, 64, 48), 0.04f);
+    EXPECT_LT(image_maximum_difference(*disabled_material, *hidden_view), 0.0001f);
+    EXPECT_LT(image_maximum_difference(*visible, *restored_view), 0.0001f);
   }
 }
 

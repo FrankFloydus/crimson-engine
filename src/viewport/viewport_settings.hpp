@@ -111,6 +111,8 @@ enum class ViewportFloatSettingId {
     InstanceEditContextTintAmount,
     InstanceEditContextDesaturation,
     InstanceEditGridFade,
+    Grid2DIntensity,
+    Grid3DIntensity,
     Count,
 };
 

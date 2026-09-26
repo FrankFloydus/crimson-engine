@@ -136,7 +136,7 @@ TEST(GroundGridMaterialTests,
   ASSERT_NE(unchanged_gate, std::string::npos);
   for (const std::string_view binding : {
            "\"analyticGridEnabled\"", "\"depthBiasAmount\"",
-           "\"analyticLineThickness\""}) {
+           "\"analyticLineThickness\"", "\"gridIntensity\""}) {
     const std::size_t binding_start = source.find(binding);
     ASSERT_NE(binding_start, std::string::npos) << binding;
     EXPECT_LT(unchanged_gate, binding_start) << binding;
@@ -191,12 +191,13 @@ TEST(GroundGridMaterialTests,
   EXPECT_EQ(source.find("sampler2d"), std::string::npos);
 
   const std::string orthographic = source_slice(
-      fragment, "} else {", "alpha = clamp(alpha,");
+      fragment, "} else {", "alpha = clamp(alpha * materialParams.gridIntensity,");
   EXPECT_NE(orthographic.find("length(coords - cameraCoords)"),
             std::string::npos);
   EXPECT_NE(orthographic.find("distanceFade * edgeFade"), std::string::npos);
   EXPECT_NE(orthographic.find("alpha *= fade"), std::string::npos);
-  EXPECT_TRUE(source_contains_compact(fragment, "alpha = clamp(alpha, 0.0, 1.0)"));
+  EXPECT_TRUE(source_contains_compact(
+      fragment, "alpha = clamp(alpha * materialParams.gridIntensity, 0.0, 1.0)"));
 }
 
 TEST(GroundGridMaterialTests,
@@ -734,11 +735,12 @@ TEST(QuaderMeshMaterialTests,
   EXPECT_TRUE(source_contains_compact(
       renderer_source,
       "if (has_material_presentation_ && material_debug_mode_ == mode && "
-      "solid_material_presentation_ == solid) { return; }"));
+      "solid_material_presentation_ == solid && "
+      "mesh_grid_visible_ == mesh_grid_visible) { return; }"));
   EXPECT_TRUE(source_contains_compact(
       renderer_source,
       "float4{static_cast<float>(mode), solid ? 1.0f : 0.0f, "
-      "0.0f, 1.0f}"));
+      "mesh_grid_visible ? 0.0f : 1.0f, 1.0f}"));
   EXPECT_EQ(count_occurrences(renderer_source, "view_->setMaterialGlobal("),
             1u)
       << "debug and Solid state must be composed into one cached view global";
@@ -1973,7 +1975,7 @@ TEST(SceneRenderBridgeTests,
   const std::size_t preview_sync = viewport_source.find(
       "QuaderRenderApiRuntimeAccess::sync_tool_previews");
   const std::size_t material_sync = viewport_source.find(
-      "render_bridge.update_mesh_surface_grid(grid_world_size, settings)");
+      "render_bridge.update_mesh_surface_grid(grid_world_size, mesh_grid_settings)");
   ASSERT_NE(preview_sync, std::string::npos);
   ASSERT_NE(material_sync, std::string::npos);
   EXPECT_LT(preview_sync, material_sync)
@@ -2677,7 +2679,7 @@ TEST(ViewportRendererTests,
       "bool rendered_mode, const ViewportSettings &viewport_settings);"));
   EXPECT_TRUE(source_contains_compact(
       viewport_panel, "renderer.apply_scene_settings(scene_settings, "
-                      "viewport_shading_uses_scene_lighting(shading), settings)"));
+                      "viewport_shading_uses_scene_lighting(shading), pane_settings)"));
   EXPECT_NE(renderer.find("if (rendered_mode)"), std::string::npos);
   EXPECT_NE(renderer.find("environment.clear_color.x"), std::string::npos);
   EXPECT_NE(renderer.find("ViewportColorSettingId::Background"),
@@ -3513,8 +3515,13 @@ TEST(ViewportRendererTests,
       "const bool recent_stats_sample=pane_cache_hit&&"));
   EXPECT_NE(viewport_info_source.find("kViewportInfoTextInterval"),
             std::string::npos);
-  EXPECT_EQ(viewport_info_source.find("update_pane_overlay_geometry("),
-            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      viewport_info_source,
+      "if (text_changed || overlay_was_hidden) { "
+      "update_pane_overlay_geometry(pane_state); }"));
+  EXPECT_EQ(count_occurrences(viewport_info_source,
+                              "update_pane_overlay_geometry("), 1u)
+      << "native overlay geometry may refresh only after text or visibility changes";
   EXPECT_TRUE(source_contains_compact(
       viewport_info_stats_header,
       "ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot("
@@ -3614,7 +3621,17 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_EQ(viewport_panel_source.find("setStyleSheet("), std::string::npos);
   EXPECT_EQ(viewport_panel_source.find("setPalette("), std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("setFont("), std::string::npos);
+  const std::size_t control_font_begin = viewport_panel_source.find(
+      "void QtViewportPanel::scale_pane_controls(");
+  const std::size_t control_font_end = viewport_panel_source.find(
+      "void QtViewportPanel::sync_pane_control_selection(", control_font_begin);
+  ASSERT_NE(control_font_begin, std::string::npos);
+  ASSERT_NE(control_font_end, std::string::npos);
+  const std::string outside_control_font =
+      viewport_panel_source.substr(0, control_font_begin) +
+      viewport_panel_source.substr(control_font_end);
+  EXPECT_EQ(outside_control_font.find("setFont("), std::string::npos)
+      << "only the compact strip controls override the inherited platform font";
   EXPECT_EQ(viewport_panel_source.find("ImGui::"), std::string::npos);
 }
 
@@ -3740,10 +3757,24 @@ TEST(ViewportRendererTests,
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "renderer.update_ground_grid(pane_workspace.camera, "
-      "grid_world_size, settings, grid_visible)"));
+      "grid_world_size, pane_settings, grid_visible)"));
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "render_bridge.update_mesh_surface_grid(grid_world_size, settings)"));
+      "render_bridge.update_mesh_surface_grid(grid_world_size, mesh_grid_settings)"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "mesh_grid_settings.set_bool_value(ViewportBoolSettingId::ShowMeshGrid, "
+      "std::any_of(active_placements.begin(), active_placements.end(), "
+      "[&](const auto &placement) { return "
+      "workspace_->effective_settings(placement.pane_id).bool_value("
+      "ViewportBoolSettingId::ShowMeshGrid); }))"))
+      << "shared material preparation must retain the grid needed by any pane";
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "renderer.set_material_presentation(viewport_material_debug_mode(shading), "
+      "shading == ViewportShadingMode::Solid, "
+      "pane_settings.bool_value(ViewportBoolSettingId::ShowMeshGrid))"))
+      << "each view independently gates the shared mesh-grid material";
   EXPECT_TRUE(source_contains_compact(
       scene_bridge_source,
       "mesh_cache_.update_surface_grid(grid_world_spacing, settings)"));
@@ -3767,7 +3798,7 @@ TEST(ViewportRendererTests,
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "const bool tool_overlay_visible = pane_state.id == "
-      "interaction_pane_id_ && active_box_preview_.ok && "
+      "operation_pane && active_box_preview_.ok && "
       "active_box_preview_.footprint_count >= 2U && "
       "active_box_preview_.drag_state == ModelingBoxDragState::Footprint"));
   EXPECT_NE(viewport_panel_source.find(
