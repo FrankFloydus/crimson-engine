@@ -493,13 +493,17 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_as(SceneSessionId id) {
     return status_for(impl_->status_session(), false, false,
                       "Scene Save As dialog is unavailable.");
   }
-  const std::optional<std::filesystem::path> selected =
+  const QuaderSceneSavePathResult selected =
       impl_->hooks.choose_save_scene_as_path(id);
-  if (!selected.has_value()) {
+  if (!selected.error_message.empty()) {
+    return status_for(impl_->status_session(), false, false,
+                      selected.error_message);
+  }
+  if (!selected.path.has_value()) {
     return status_for(impl_->status_session(), true, false,
                       "Scene Save As canceled.");
   }
-  return save_as_native_path(id, *selected);
+  return save_as_native_path(id, *selected.path);
 }
 
 QuaderApiVoidResult QuaderSceneDocumentsApi::save_as_native_path(
@@ -535,11 +539,21 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_as_native_path(
     }
     return status_for(session, true, true, "Scene saved.");
   }
+  if (std::any_of(path.begin(), path.end(),
+                  [](const std::filesystem::path &component) {
+                    return component == "..";
+                  })) {
+    return status_for(impl_->status_session(), false, false,
+                      "Scene Save As paths must not contain '..' components. "
+                      "Choose a file in the current project's Scenes folder "
+                      "or one of its subfolders.");
+  }
   const std::optional<ProjectRelativePath> relative =
       impl_->relative_dialog_path(path);
   if (!relative.has_value()) {
     return status_for(impl_->status_session(), false, false,
-                      "Scene files must remain inside the project.");
+                      "Scene files must be saved in the current project's "
+                      "Scenes folder or one of its subfolders.");
   }
   return save_as(id, *relative);
 }
@@ -548,8 +562,19 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_all() {
   if (impl_->project_session == nullptr) {
     return save_active();
   }
+  const std::vector<QuaderSceneDocumentInfo> scenes = open_scenes();
+  for (const QuaderSceneDocumentInfo &scene : scenes) {
+    if (!scene.dirty || !scene.path.has_value()) {
+      continue;
+    }
+    const ProjectSessionResult preflight =
+        impl_->project_session->preflight_save(scene.session_id);
+    if (!preflight.ok) {
+      return result_status(impl_->status_session(), preflight);
+    }
+  }
   bool saved_any = false;
-  for (const QuaderSceneDocumentInfo &scene : open_scenes()) {
+  for (const QuaderSceneDocumentInfo &scene : scenes) {
     if (!scene.dirty) {
       continue;
     }

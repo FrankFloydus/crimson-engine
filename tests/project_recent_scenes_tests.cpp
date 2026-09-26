@@ -287,9 +287,9 @@ TEST_F(ProjectRecentScenesTests, CanceledReplacementAndSavePickerPreserveWorkspa
   auto decision = QuaderDirtySceneDecision::Cancel;
   editor_.scene_documents().set_runtime_hooks({
       .choose_save_scene_as_path = [&save_pickers](SceneSessionId)
-          -> std::optional<std::filesystem::path> {
+          -> QuaderSceneSavePathResult {
         ++save_pickers;
-        return std::nullopt;
+        return {};
       },
       .confirm_dirty_scene = [&prompts, &decision](const QuaderSceneDocumentInfo &,
                                                  std::string_view action) {

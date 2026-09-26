@@ -72,6 +72,7 @@ class QtOperationInputHints;
 class QtStatusMessage;
 class QtUnsavedConfirmationDialog;
 class QtViewportPanel;
+class QtViewportControlStrip;
 class QtProjectHomePage;
 class QtSceneWorkspace;
 class QtSelectionToolbar;
@@ -271,6 +272,7 @@ private:
   QtTextureToolbar *texture_toolbar_ = nullptr;
   QtToolToolbar *tool_toolbar_ = nullptr;
   QtViewportPanel *viewport_panel_ = nullptr;
+  QtViewportControlStrip *viewport_control_strip_ = nullptr;
   OutlinerPanel *outliner_panel_ = nullptr;
   InspectorPanel *inspector_panel_ = nullptr;
   LayerPanel *layer_panel_ = nullptr;

@@ -1746,15 +1746,6 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_NE(hud.find("!font_size_valid_ ||"), std::string::npos);
   EXPECT_NE(hud.find("font.setPointSizeF(point_size)"),
             std::string::npos);
-  EXPECT_NE(hud.find(":/quader/fonts/HomeVideo-Regular.ttf"),
-            std::string::npos);
-  EXPECT_NE(hud.find("Q_INIT_RESOURCE(quader_dimension_fonts)"),
-            std::string::npos);
-  EXPECT_NE(hud.find("QFontDatabase::addApplicationFont("),
-            std::string::npos);
-  EXPECT_NE(hud.find("QFont::NoAntialias | QFont::NoFontMerging"),
-            std::string::npos);
-  EXPECT_NE(hud.find("QFont::PreferFullHinting"), std::string::npos);
   EXPECT_NE(hud.find("tightBoundingRect(text)"), std::string::npos);
   EXPECT_NE(hud.find("painter.drawText("), std::string::npos);
   EXPECT_NE(

@@ -161,6 +161,41 @@ TEST(PlatformFileDialogTests, GrowsTooSmallSelectionBuffersSafely) {
           .has_value());
 }
 
+#if defined(_WIN32)
+TEST(PlatformFileDialogTests, SceneSaveRejectsUnavailableStartingFolder) {
+  quader::PlatformFileDialogOptions options;
+  options.initial_file_name = L"Untitled.qdr";
+  auto result = quader::platform_save_scene_file_dialog(options);
+  EXPECT_FALSE(result.path.has_value());
+  EXPECT_NE(result.error_message.find("Scenes"), std::string::npos);
+
+  options.initial_directory = unique_test_directory(L"quader-missing-scenes");
+  ASSERT_FALSE(std::filesystem::exists(options.initial_directory));
+  result = quader::platform_save_scene_file_dialog(options);
+  EXPECT_FALSE(result.path.has_value());
+  EXPECT_NE(result.error_message.find("Scenes"), std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(options.initial_directory));
+}
+
+TEST(PlatformFileDialogTests, SceneSaveRejectsFileAsStartingFolder) {
+  const std::filesystem::path root =
+      unique_test_directory(L"quader-blocked-scenes");
+  std::filesystem::create_directories(root);
+  const std::filesystem::path blocked = root / L"Scenes";
+  {
+    std::ofstream stream(blocked);
+    stream << "unchanged";
+  }
+  const auto result = quader::platform_save_scene_file_dialog(
+      {.initial_directory = blocked, .initial_file_name = L"Untitled.qdr"});
+  EXPECT_FALSE(result.path.has_value());
+  EXPECT_NE(result.error_message.find("Scenes"), std::string::npos);
+  EXPECT_EQ(read_text_file(blocked), "unchanged");
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+}
+#endif
+
 TEST(FatalErrorHandlerTests, BuildsDeterministicArtifactNamesAndReportText) {
   const quader::FatalArtifactPaths paths = quader::make_fatal_artifact_paths(
       std::filesystem::path("reports"), "20260717-102030", 42U, 7U, true);

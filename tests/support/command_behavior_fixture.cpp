@@ -667,9 +667,9 @@ private:
                 },
             .choose_save_scene_as_path =
                 [this](SceneSessionId)
-                    -> std::optional<std::filesystem::path> {
+                    -> QuaderSceneSavePathResult {
                   ++external_calls_;
-                  return scene_save_path_;
+                  return {.path = scene_save_path_};
                 },
             .confirm_dirty_scene =
                 [this](const QuaderSceneDocumentInfo &, std::string_view) {

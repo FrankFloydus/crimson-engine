@@ -24,6 +24,9 @@
 #include "ui/qt_command_palette.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_viewport_control_strip.hpp"
+#include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/ui_context.hpp"
 #include "viewport/viewport_settings.hpp"
 #include "ui/ui_settings.hpp"
@@ -45,6 +48,7 @@
 #include <QPushButton>
 #include <QTemporaryDir>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeWidget>
 
 #include <filesystem>
@@ -154,6 +158,33 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
     EXPECT_EQ(ui.main_window()->findChild<QWidget *>(QString::fromUtf8(name)),
               nullptr) << name;
   }
+
+  auto *strip = dynamic_cast<QtViewportControlStrip *>(
+      ui.main_window()->findChild<QWidget *>(QStringLiteral("viewportControlStrip")));
+  auto *snapping = dynamic_cast<QtSnappingToolbar *>(
+      ui.main_window()->findChild<QToolBar *>(QStringLiteral("snappingToolbar")));
+  auto *display = dynamic_cast<QtViewportDisplayToolbar *>(
+      ui.main_window()->findChild<QToolBar *>(QStringLiteral("viewportDisplayToolbar")));
+  ASSERT_NE(strip, nullptr);
+  ASSERT_NE(snapping, nullptr);
+  ASSERT_NE(display, nullptr);
+  const auto buttons = strip->findChildren<QToolButton *>();
+  ASSERT_EQ(buttons.size(), 8);
+  const auto snapping_actions = snapping->viewport_actions();
+  const auto display_actions = display->viewport_actions();
+  EXPECT_EQ(display_actions[2], nullptr);
+  qsizetype button_index = 0;
+  for (QAction *action : snapping_actions) {
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(buttons[button_index++]->defaultAction(), action);
+  }
+  for (QAction *action : display_actions) {
+    if (action != nullptr) {
+      EXPECT_EQ(buttons[button_index++]->defaultAction(), action);
+    }
+  }
+  EXPECT_EQ(strip->findChild<QToolButton *>(
+                QStringLiteral("viewportStrip_viewportMeshGrid")), nullptr);
 
   int camera_launchers = 0;
   for (QPushButton *button : ui.main_window()->findChildren<QPushButton *>()) {

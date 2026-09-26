@@ -112,6 +112,11 @@ QtViewportDisplayToolbar::QtViewportDisplayToolbar(QWidget *parent)
   }
 }
 
+std::array<QAction *, 4> QtViewportDisplayToolbar::viewport_actions() const {
+  return {display_actions_[0].action, display_actions_[1].action,
+          display_actions_[2].action, display_actions_[3].action};
+}
+
 void QtViewportDisplayToolbar::apply_ui_scale(
     const QtUiScaleMetrics &metrics) {
   constexpr QSize kToolbarIconSize(32, 32);

@@ -1674,7 +1674,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(button_presentation, "element != CE_ToolBar");
   expect_contains(button_presentation,
                   "toolbar->orientation() == Qt::Horizontal");
-  expect_contains(button_presentation, "toolbar.setStyle(presentation)");
+  expect_contains(button_presentation, "host.setStyle(presentation)");
+  expect_contains(button_presentation,
+                  "static_cast<QWidget &>(toolbar)");
   expect_contains(main_window, "QMainWindow::paintEvent(event)");
   expect_contains(main_window, "content->geometry().top() - extent");
   expect_contains(main_window, "palette().brush(QPalette::Midlight)");
@@ -1744,9 +1746,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "QStringLiteral(\" [%1]\")");
   expect_contains(toolbar,
                   "configure_native_toolbar_button_face(*this, *entry.action,");
-  expect_contains(button_presentation, "button->setAutoRaise(false)");
   expect_contains(button_presentation,
-                  "button->setAttribute(Qt::WA_Hover, true)");
+                  "configure_native_toolbar_button_face(*button, action, presentation)");
+  expect_contains(button_presentation, "button.setAutoRaise(false)");
+  expect_contains(button_presentation,
+                  "button.setAttribute(Qt::WA_Hover, true)");
   expect_contains(button_presentation,
                   "face.palette.color(color_group, QPalette::Highlight)");
   expect_contains(button_presentation,
@@ -1759,8 +1763,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(button_presentation, "return QPalette::Disabled");
   expect_missing(button_presentation, "kToolbarAccentRgb");
   expect_contains(button_presentation, "face.state.setFlag(State_On, false)");
-  expect_contains(button_presentation, "button->setMinimumSize(40, 40)");
-  expect_contains(button_presentation, "button->setFocusPolicy(Qt::StrongFocus)");
+  expect_contains(button_presentation, "button.setMinimumSize(40, 40)");
+  expect_contains(button_presentation, "button.setFocusPolicy(Qt::StrongFocus)");
   expect_contains(button_presentation, "setAccessibleDescription");
   expect_missing(button_presentation, "setDown(");
   expect_contains(menu_header, "selection_toolbar_visible");
@@ -1827,7 +1831,9 @@ TEST(UiLayoutGuardrailTests,
                   "command_id_for_tool_activation(entry.tool_id)");
   expect_contains(toolbar,
                   "configure_native_toolbar_button_face(*this, *entry.action,");
-  expect_contains(button_presentation, "button->setAutoRaise(false)");
+  expect_contains(button_presentation,
+                  "configure_native_toolbar_button_face(*button, action, presentation)");
+  expect_contains(button_presentation, "button.setAutoRaise(false)");
   expect_contains(button_presentation, "kHoverHighlightMix");
   expect_contains(button_presentation,
                   "QPen outline(accent, keyboard_focused ? 2.0 : 1.0)");

@@ -44,6 +44,11 @@ file except through prior written authorization from Francesco Di Blasi.
 - Scene color previews publish through the existing property-preview checkpoint and record history
   only on acceptance. Material color previews remain drafts; scene saves and inactive-tab closure
   must not cancel the material picker. Preserve saved material texture identity during live tint edits.
+- `ProjectSession` validates authored save destinations inside the project's physical `Scenes` tree
+  before settling previews. Both Save All entry points preflight known destinations and individual
+  saves revalidate them. Keep this restriction out of the general QDR writer: recovery, standalone
+  embedding and material maintenance retain their separate contracts. See the
+  [save rejection tests](../../tests/project_session_workspace_tests.cpp).
 - Material folder deletion rewrites saved scenes from disk and resident bindings separately. Keep
   unrelated drafts, selection and history intact; permanent deleted UUIDs resolve through the manifest.
   Recover `.quader/material-deletions` journals before opening catalogs or scenes, rejecting links,

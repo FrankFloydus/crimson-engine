@@ -38,6 +38,9 @@ public:
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor, bool force = false);
 
+  /** Shares transform-space and master/grid/vertex/rotation snap actions. */
+  [[nodiscard]] std::array<QAction *, 5> viewport_actions() const;
+
   void set_transform_space_toggle_requested_callback(
       std::function<void()> callback);
   void set_grid_preset_requested_callback(std::function<void(int)> callback);

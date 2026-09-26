@@ -252,6 +252,13 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
   }
 }
 
+std::array<QAction *, 5> QtSnappingToolbar::viewport_actions() const {
+  return {transform_space_action_, toggle_actions_[SnappingEnabled].action,
+          toggle_actions_[GridSnapping].action,
+          toggle_actions_[VertexSnapping].action,
+          toggle_actions_[RotationSnapping].action};
+}
+
 void QtSnappingToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   constexpr QSize kToolbarIconSize(32, 32);
   const QSize scaled_icon_size = metrics.size(kToolbarIconSize);

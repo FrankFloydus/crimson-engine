@@ -39,6 +39,7 @@
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
+#include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
@@ -103,12 +104,14 @@
 #include <QStyleOption>
 #include <QStyleOptionViewItem>
 #include <QTableView>
+#include <QTabBar>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeView>
 #include <QTreeWidgetItemIterator>
+#include <QVBoxLayout>
 
 #include <array>
 #include <chrono>
@@ -1371,6 +1374,513 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
+     ViewportStripSharesActionsAndDispatchesEachUserIntentOnce) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-strip-actions-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtSnappingToolbar snapping;
+  quader::QtViewportDisplayToolbar display;
+  quader::QtViewportControlStrip strip;
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources/locales", "en-US"));
+  snapping.set_localization(localization);
+  display.set_localization(localization);
+  const auto snap_actions = snapping.viewport_actions();
+  const auto display_actions = display.viewport_actions();
+  std::vector<QAction *> actions;
+  actions.insert(actions.end(), snap_actions.begin(), snap_actions.end());
+  actions.insert(actions.end(), display_actions.begin(), display_actions.end());
+  for (QAction *action : actions) {
+    ASSERT_NE(action, nullptr);
+    strip.add_action(*action);
+  }
+  const auto button_for = [](QWidget &host, QAction *action) -> QToolButton * {
+    for (QToolButton *button : host.findChildren<QToolButton *>()) {
+      if (button->defaultAction() == action) {
+        return button;
+      }
+    }
+    return nullptr;
+  };
+  ASSERT_EQ(strip.findChildren<QToolButton *>().size(), 9);
+  EXPECT_TRUE(strip.findChildren<QComboBox *>().empty());
+  EXPECT_TRUE(strip.findChildren<QDoubleSpinBox *>().empty());
+  EXPECT_EQ(snapping.findChildren<QComboBox *>().size(), 2);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  std::array<bool, 8> values{};
+  std::array<int, 8> preference_writes{};
+  const auto set_value = [&](std::size_t index, bool value) {
+    ++preference_writes[index];
+    const bool changed = values[index] != value;
+    values[index] = value;
+    return quader::QuaderApiVoidResult{
+        .ok = true, .changed = changed,
+        .mutation_kind = quader::QuaderMutationKind::Runtime};
+  };
+  editor.preferences().set_runtime_hooks({
+      .snapping_enabled = [&] { return values[0]; },
+      .set_snapping_enabled = [&](bool value) { return set_value(0, value); },
+      .grid_visible = [&] { return values[4]; },
+      .set_grid_visible = [&](bool value) { return set_value(4, value); },
+      .gizmos_visible = [&] { return values[5]; },
+      .set_gizmos_visible = [&](bool value) { return set_value(5, value); },
+      .mesh_grid_visible = [&] { return values[6]; },
+      .set_mesh_grid_visible = [&](bool value) { return set_value(6, value); },
+      .overlays_visible = [&] { return values[7]; },
+      .set_overlays_visible = [&](bool value) { return set_value(7, value); },
+      .grid_snap_enabled = [&] { return values[1]; },
+      .set_grid_snap_enabled = [&](bool value) { return set_value(1, value); },
+      .vertex_snap_enabled = [&] { return values[2]; },
+      .set_vertex_snap_enabled = [&](bool value) { return set_value(2, value); },
+      .rotation_snap_enabled = [&] { return values[3]; },
+      .set_rotation_snap_enabled = [&](bool value) { return set_value(3, value); },
+  });
+  int transform_requests = 0;
+  int display_requests = 0;
+  snapping.set_transform_space_toggle_requested_callback([&] {
+    ++transform_requests;
+    EXPECT_TRUE(editor.commands().execute(
+        quader::quader_command::kViewportToggleTransformSpace).ok());
+  });
+  snapping.set_snapping_enabled_requested_callback([&](bool value) {
+    EXPECT_TRUE(editor.preferences().set_snapping_enabled(value).ok());
+  });
+  snapping.set_grid_snap_enabled_requested_callback([&](bool value) {
+    EXPECT_TRUE(editor.preferences().set_grid_snap_enabled(value).ok());
+  });
+  snapping.set_vertex_snap_enabled_requested_callback([&](bool value) {
+    EXPECT_TRUE(editor.preferences().set_vertex_snap_enabled(value).ok());
+  });
+  snapping.set_rotation_snap_enabled_requested_callback([&](bool value) {
+    EXPECT_TRUE(editor.preferences().set_rotation_snap_enabled(value).ok());
+  });
+  display.set_command_requested_callback([&](quader::QuaderCommandId command) {
+    ++display_requests;
+    EXPECT_TRUE(editor.commands().execute(command).ok());
+  });
+  const auto synchronize = [&] {
+    snapping.synchronize(editor);
+    display.synchronize(editor);
+  };
+  synchronize();
+  for (std::size_t index = 0; index < actions.size(); ++index) {
+    SCOPED_TRACE(index);
+    QAction *action = actions[index];
+    QToolButton *strip_button = button_for(strip, action);
+    QToolButton *top_button = button_for(
+        index < snap_actions.size() ? static_cast<QWidget &>(snapping)
+                                    : static_cast<QWidget &>(display), action);
+    ASSERT_NE(strip_button, nullptr);
+    ASSERT_NE(top_button, nullptr);
+    ASSERT_NE(strip_button, top_button);
+    const bool initial = action->isChecked();
+    strip_button->click();
+    synchronize();
+    EXPECT_EQ(action->isChecked(), !initial);
+    EXPECT_EQ(top_button->isChecked(), !initial);
+    EXPECT_EQ(strip_button->isChecked(), !initial);
+    top_button->click();
+    synchronize();
+    EXPECT_EQ(action->isChecked(), initial);
+    EXPECT_EQ(strip_button->isChecked(), initial);
+    EXPECT_EQ(top_button->isChecked(), initial);
+    if (index != 0) {
+      EXPECT_EQ(preference_writes[index - 1], 2);
+    }
+    action->setEnabled(false);
+    EXPECT_FALSE(strip_button->isEnabled());
+    EXPECT_FALSE(top_button->isEnabled());
+    strip_button->click();
+    EXPECT_EQ(action->isChecked(), initial);
+    action->setEnabled(true);
+  }
+  EXPECT_EQ(transform_requests, 2);
+  EXPECT_EQ(display_requests, 8);
+  EXPECT_EQ(preference_writes, (std::array<int, 8>{2, 2, 2, 2, 2, 2, 2, 2}));
+
+  values.fill(true);
+  ASSERT_TRUE(editor.viewports().set_transform_space(
+      quader::QuaderTransformSpace::Local).ok());
+  synchronize();
+  for (std::size_t index = 0; index < actions.size(); ++index) {
+    EXPECT_TRUE(button_for(strip, actions[index])->isChecked());
+    EXPECT_TRUE(button_for(
+        index < snap_actions.size() ? static_cast<QWidget &>(snapping)
+                                    : static_cast<QWidget &>(display),
+        actions[index])->isChecked());
+  }
+
+  const QString english_text = snap_actions[0]->text();
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  snapping.set_localization(localization);
+  display.set_localization(localization);
+  synchronize();
+  EXPECT_NE(snap_actions[0]->text(), english_text);
+  for (QAction *action : actions) {
+    auto *button = button_for(strip, action);
+    ASSERT_NE(button, nullptr);
+    EXPECT_EQ(button->accessibleName(), action->text());
+    EXPECT_EQ(button->accessibleDescription(), action->toolTip());
+    EXPECT_EQ(button->toolTip(), action->toolTip());
+  }
+  int changed_signals = 0;
+  for (QAction *action : actions) {
+    QObject::connect(action, &QAction::changed, &strip,
+                     [&] { ++changed_signals; });
+  }
+  for (int frame = 0; frame != 12; ++frame) {
+    synchronize();
+  }
+  EXPECT_EQ(changed_signals, 0);
+  EXPECT_EQ(transform_requests, 2);
+  EXPECT_EQ(display_requests, 8);
+  EXPECT_EQ(preference_writes, (std::array<int, 8>{2, 2, 2, 2, 2, 2, 2, 2}));
+}
+
+TEST(QtProjectWorkspaceTests,
+     ViewportStripKeepsNativeButtonsReadableAcrossScaleWidthAndPalette) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-strip-presentation-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+  const QPalette native_palette = application.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application);
+  quader::QtSnappingToolbar snapping;
+  quader::QtViewportDisplayToolbar display;
+  quader::QtSceneWorkspace workspace;
+  workspace.setAttribute(Qt::WA_DontShowOnScreen, true);
+  quader::QtViewportControlStrip strip;
+  auto *viewport_container = new QWidget;
+  auto *viewport_layout = new QVBoxLayout(viewport_container);
+  viewport_layout->setContentsMargins(0, 0, 0, 0);
+  viewport_layout->setSpacing(0);
+  viewport_layout->addWidget(&strip);
+  viewport_layout->addStretch(1);
+  workspace.set_viewport_widget(viewport_container);
+  ASSERT_TRUE(workspace.set_scene_tabs(
+      {{.session_id = 1, .name = QStringLiteral("Courtyard")},
+       {.session_id = 2, .name = QStringLiteral("Interior")}}, 1));
+  auto *tabs_row = workspace.findChild<QWidget *>(
+      QStringLiteral("sceneWorkspace.tabsRow"));
+  ASSERT_NE(tabs_row, nullptr);
+  std::vector<QAction *> actions;
+  for (QAction *action : snapping.viewport_actions()) {
+    ASSERT_NE(action, nullptr);
+    strip.add_action(*action);
+    actions.push_back(action);
+    if (actions.size() == 1) {
+      strip.add_separator();
+    }
+  }
+  strip.add_separator();
+  for (QAction *action : display.viewport_actions()) {
+    ASSERT_NE(action, nullptr);
+    strip.add_action(*action);
+    actions.push_back(action);
+  }
+  const QDir icon_directory(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
+  const std::array<const char *, 9> icon_names{
+      "tool_transform_local.png", "snapping_master.png", "snapping_grid.png",
+      "snapping_vertex.png", "snapping_rotation.png", "viewport_grid.png",
+      "viewport_gizmos.png", "viewport_mesh_grid.png", "viewport_overlays.png"};
+  for (std::size_t index = 0; index < actions.size(); ++index) {
+    const auto icon = quader::qt_multiresolution_icon(
+        icon_directory.filePath(QString::fromUtf8(icon_names[index])));
+    ASSERT_FALSE(icon.isNull());
+    actions[index]->setIcon(icon);
+  }
+  actions[1]->setChecked(true);
+  actions[5]->setEnabled(false);
+  workspace.show();
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+  const auto buttons = strip.findChildren<QToolButton *>();
+  ASSERT_EQ(buttons.size(), 9);
+  const auto settle_layout = [&] {
+    for (int pass = 0; pass != 4; ++pass) {
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      application.processEvents();
+      workspace.layout()->activate();
+      viewport_layout->activate();
+      strip.layout()->activate();
+    }
+  };
+  const auto review = [&](const QString &suffix) {
+    settle_layout();
+    const auto &metrics = scale_controller.metrics();
+    const QPoint strip_origin = strip.mapTo(&workspace, QPoint());
+    EXPECT_EQ(tabs_row->mapTo(&workspace, tabs_row->rect().bottomLeft()).y() + 1,
+              strip_origin.y());
+    EXPECT_EQ(strip.width(), workspace.width());
+    EXPECT_EQ(strip.height(), metrics.px(36));
+    EXPECT_EQ(workspace.findChild<QToolButton *>(
+                  QStringLiteral("sceneWorkspace.newScene")), nullptr);
+    for (QToolButton *button : buttons) {
+      SCOPED_TRACE(button->defaultAction()->objectName().toStdString());
+      EXPECT_TRUE(button->isVisible());
+      EXPECT_TRUE(strip.rect().contains(button->geometry()));
+      EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+      EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
+      EXPECT_FALSE(button->autoRaise());
+      EXPECT_TRUE(button->testAttribute(Qt::WA_Hover));
+      EXPECT_EQ(button->accessibleName(), button->defaultAction()->text());
+      EXPECT_EQ(button->size(), metrics.size(QSize(28, 28)));
+      EXPECT_EQ(button->iconSize(), metrics.size(QSize(24, 24)));
+      EXPECT_EQ(button->geometry().top(), metrics.px(4));
+      EXPECT_EQ(strip.height() - button->geometry().bottom() - 1, metrics.px(4));
+    }
+    for (qsizetype index = 1; index < buttons.size(); ++index) {
+      EXPECT_FALSE(buttons[index - 1]->geometry().intersects(
+          buttons[index]->geometry()));
+    }
+    const QRect chrome_rect(0, 0, workspace.width(),
+                            strip_origin.y() + strip.height());
+    const QImage chrome = workspace.grab(chrome_rect).toImage();
+    const auto pixel_at = [&](QPoint point) {
+      const qreal ratio = chrome.devicePixelRatio();
+      return chrome.pixelColor(
+          static_cast<int>((point.x() + 0.5) * ratio),
+          static_cast<int>((point.y() + 0.5) * ratio));
+    };
+    QStyleOption tab_surface;
+    tab_surface.palette = workspace.tab_bar().palette();
+    if (quader::qt_application_style_active(&tab_surface)) {
+      const QRect selected_tab = workspace.tab_bar().tabRect(
+          workspace.tab_bar().currentIndex());
+      int tab_content_height = workspace.tab_bar().fontMetrics().height();
+      for (const auto side : {QTabBar::LeftSide, QTabBar::RightSide}) {
+        if (auto *button = workspace.tab_bar().tabButton(
+                workspace.tab_bar().currentIndex(), side)) {
+          tab_content_height = std::max(tab_content_height, button->height());
+        }
+      }
+      EXPECT_EQ(selected_tab.height(), tab_content_height + metrics.px(4));
+      const QPoint selected_bottom = workspace.tab_bar().mapTo(
+          &workspace, QPoint(selected_tab.center().x(), selected_tab.bottom()));
+      const QColor surface = strip.palette().color(QPalette::AlternateBase);
+      EXPECT_EQ(pixel_at(selected_bottom), surface)
+          << "the selected tab must meet the strip without an accent underline";
+      EXPECT_EQ(pixel_at(QPoint(selected_bottom.x(), strip_origin.y())), surface);
+      const int blank_x = workspace.layoutDirection() == Qt::RightToLeft
+                              ? metrics.px(4)
+                              : tabs_row->width() - metrics.px(4);
+      EXPECT_EQ(pixel_at(tabs_row->mapTo(
+                    &workspace, QPoint(blank_x, tabs_row->height() / 2))),
+                tabs_row->palette().color(QPalette::Window));
+      EXPECT_NE(tabs_row->palette().color(QPalette::Window), surface);
+    }
+    if (!review_directory.isEmpty()) {
+      EXPECT_TRUE(chrome.save(QDir(review_directory).filePath(
+          QStringLiteral("viewport-strip-%1.png").arg(suffix))));
+    }
+  };
+  QSize base_button_size;
+  int cycle = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    SCOPED_TRACE(factor);
+    scale_controller.apply_factor(factor);
+    const auto &metrics = scale_controller.metrics();
+    workspace.apply_ui_scale(metrics);
+    strip.apply_ui_scale(metrics);
+    settle_layout();
+    workspace.resize(metrics.px(360), metrics.px(180));
+    review(QStringLiteral("%1-%2-narrow").arg(qRound(factor * 100)).arg(cycle));
+    EXPECT_EQ(strip.width(), metrics.px(360));
+    if (cycle == 0) {
+      base_button_size = buttons[0]->size();
+    } else if (cycle == 1) {
+      EXPECT_EQ(buttons[0]->size(), base_button_size * 2);
+    } else {
+      EXPECT_EQ(buttons[0]->size(), base_button_size);
+    }
+    workspace.resize(metrics.px(1200), metrics.px(180));
+    review(QStringLiteral("%1-%2-wide").arg(qRound(factor * 100)).arg(cycle++));
+  }
+  ASSERT_TRUE(workspace.set_scene_tabs(
+      {{.session_id = 1, .name = QStringLiteral("Courtyard")}}, 1));
+  workspace.resize(1200, 180);
+  review(QStringLiteral("single-tab"));
+  ASSERT_TRUE(workspace.set_scene_tabs(
+      {{.session_id = 1, .name = QStringLiteral("Courtyard")},
+       {.session_id = 2, .name = QStringLiteral("Interior")}}, 1));
+  workspace.resize(360, 180);
+  workspace.setLayoutDirection(Qt::RightToLeft);
+  review(QStringLiteral("rtl"));
+  EXPECT_GT(buttons.front()->x(), buttons.back()->x());
+  workspace.setLayoutDirection(Qt::LeftToRight);
+  workspace.layout()->activate();
+  strip.layout()->activate();
+  application.processEvents();
+  QApplication::setActiveWindow(&workspace);
+  buttons[0]->setFocus(Qt::TabFocusReason);
+  ASSERT_TRUE(buttons[0]->hasFocus());
+  send_key(*buttons[0], Qt::Key_Right);
+  ASSERT_TRUE(buttons[1]->hasFocus());
+  int keyboard_triggers = 0;
+  QObject::connect(actions[1], &QAction::triggered, &strip,
+                   [&] { ++keyboard_triggers; });
+  const bool checked_before_keyboard = actions[1]->isChecked();
+  send_key(*buttons[1], Qt::Key_Space);
+  EXPECT_EQ(keyboard_triggers, 1);
+  EXPECT_EQ(actions[1]->isChecked(), !checked_before_keyboard);
+  review(QStringLiteral("keyboard-focus"));
+  QStyleOption option;
+  option.palette = strip.palette();
+  EXPECT_TRUE(quader::qt_application_style_active(&option));
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  review(QStringLiteral("native-high-contrast"));
+  option.palette = strip.palette();
+  EXPECT_FALSE(quader::qt_application_style_active(&option));
+  EXPECT_EQ(strip.palette().color(QPalette::Window),
+            QApplication::palette().color(QPalette::Window));
+  QPalette light = native_palette;
+  light.setColor(QPalette::Window, Qt::white);
+  light.setColor(QPalette::Button, QColor(240, 240, 240));
+  light.setColor(QPalette::ButtonText, Qt::black);
+  workspace.setPalette(light);
+  review(QStringLiteral("explicit-light-palette"));
+  option.palette = strip.palette();
+  EXPECT_FALSE(quader::qt_application_style_active(&option));
+}
+
+TEST(QtProjectWorkspaceTests,
+     ViewportStripStaysBelowSceneTabsWhenToolbarsHideAndLayoutsRestore) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-viewport-strip-workspace-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-viewport-strip-workspace-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  auto *window = ui.main_window();
+  ASSERT_NE(window, nullptr);
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto &scene = project.fallback_scene();
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+  auto *workspace = dynamic_cast<quader::QtSceneWorkspace *>(
+      window->findChild<QWidget *>(QStringLiteral("sceneWorkspace")));
+  auto *container = window->findChild<QWidget *>(
+      QStringLiteral("sceneViewportContainer"));
+  auto *strip = dynamic_cast<quader::QtViewportControlStrip *>(
+      window->findChild<QWidget *>(QStringLiteral("viewportControlStrip")));
+  auto *viewport = dynamic_cast<quader::QtViewportPanel *>(
+      window->findChild<QWidget *>(QStringLiteral("viewportWorkspace")));
+  auto *snapping = dynamic_cast<quader::QtSnappingToolbar *>(
+      window->findChild<QToolBar *>(QStringLiteral("snappingToolbar")));
+  auto *display = dynamic_cast<quader::QtViewportDisplayToolbar *>(
+      window->findChild<QToolBar *>(QStringLiteral("viewportDisplayToolbar")));
+  ASSERT_NE(workspace, nullptr);
+  ASSERT_NE(container, nullptr);
+  ASSERT_NE(strip, nullptr);
+  ASSERT_NE(viewport, nullptr);
+  ASSERT_NE(snapping, nullptr);
+  ASSERT_NE(display, nullptr);
+  // This headless fixture bypasses GPU workspace startup, including its first
+  // toolbar refresh. Adopt the bound preferences before simulating a click.
+  snapping->synchronize(editor, true);
+  display->synchronize(editor, true);
+  EXPECT_EQ(workspace->viewport_widget(), container);
+  EXPECT_EQ(strip->parentWidget(), container);
+  EXPECT_EQ(viewport->parentWidget(), container);
+  EXPECT_EQ(dynamic_cast<QToolBar *>(strip), nullptr);
+  EXPECT_EQ(dynamic_cast<QDockWidget *>(strip), nullptr);
+  ASSERT_NE(container->layout(), nullptr);
+  EXPECT_EQ(container->layout()->contentsMargins(), QMargins());
+  EXPECT_EQ(container->layout()->spacing(), 0);
+  EXPECT_EQ(container->layout()->itemAt(0)->widget(), strip);
+  EXPECT_EQ(container->layout()->itemAt(1)->widget(), viewport);
+  ASSERT_TRUE(workspace->set_scene_tabs(
+      {{.session_id = 1, .name = QStringLiteral("Viewport controls")}}, 1));
+  auto *stack = qobject_cast<QStackedWidget *>(window->centralWidget());
+  ASSERT_NE(stack, nullptr);
+  stack->setCurrentWidget(workspace);
+  window->resize(1800, 1000);
+  window->show();
+  const auto saved_layout = window->saveState();
+  for (QToolBar *toolbar : window->findChildren<QToolBar *>()) {
+    toolbar->hide();
+  }
+  const auto settle = [&] {
+    for (int pass = 0; pass != 5; ++pass) {
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      application.processEvents();
+    }
+  };
+  settle();
+  ASSERT_TRUE(strip->isVisible());
+  EXPECT_TRUE(snapping->isHidden());
+  EXPECT_TRUE(display->isHidden());
+  const auto snap_actions = snapping->viewport_actions();
+  const auto display_actions = display->viewport_actions();
+  std::vector<QAction *> expected_actions(snap_actions.begin(), snap_actions.end());
+  expected_actions.insert(expected_actions.end(),
+                          display_actions.begin(), display_actions.end());
+  const auto buttons = strip->findChildren<QToolButton *>();
+  ASSERT_EQ(buttons.size(), static_cast<qsizetype>(expected_actions.size()));
+  for (qsizetype index = 0; index < buttons.size(); ++index) {
+    EXPECT_EQ(buttons[index]->defaultAction(), expected_actions[index]);
+  }
+  const bool snapping_before = editor.preferences().snapping_enabled();
+  buttons[1]->click();
+  EXPECT_EQ(editor.preferences().snapping_enabled(), !snapping_before);
+  const bool grid_before = editor.preferences().grid_visible();
+  buttons[5]->click();
+  EXPECT_EQ(editor.preferences().grid_visible(), !grid_before);
+  for (const auto layout : {quader::ViewportLayoutId::Single,
+                            quader::ViewportLayoutId::FourQuad,
+                            quader::ViewportLayoutId::TwoVertical}) {
+    ASSERT_TRUE(editor.viewports().set_layout(layout).ok());
+    viewport->refresh_workspace_layout();
+    settle();
+    EXPECT_TRUE(strip->isVisible());
+    EXPECT_EQ(strip->geometry().left(), 0);
+    EXPECT_EQ(strip->width(), container->width());
+    EXPECT_EQ(strip->geometry().bottom() + 1, viewport->geometry().top());
+    EXPECT_LT(workspace->tab_bar().mapToGlobal(
+                  workspace->tab_bar().rect().bottomLeft()).y(),
+              strip->mapToGlobal(QPoint()).y());
+  }
+  ASSERT_TRUE(window->restoreState(saved_layout));
+  settle();
+  EXPECT_TRUE(strip->isVisible());
+  EXPECT_EQ(strip->parentWidget(), container);
+  EXPECT_EQ(strip->findChildren<QToolButton *>(), buttons);
+  EXPECT_NE(snapping->findChild<QComboBox *>(QStringLiteral("snappingGridSizeCombo")),
+            nullptr);
+  EXPECT_NE(snapping->findChild<QComboBox *>(QStringLiteral("snappingAngleCombo")),
+            nullptr);
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
      TextureToolbarKeepsIndependentLocksAndUnchangedRefreshCheap) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -2529,13 +3039,15 @@ TEST(QtProjectWorkspaceTests,
   workspace.set_instance_edit_breadcrumb(std::nullopt);
   EXPECT_TRUE(breadcrumb_bar->isHidden());
 
-  auto *new_scene = workspace.findChild<QToolButton *>(
-      QStringLiteral("sceneWorkspace.newScene"));
+  EXPECT_EQ(workspace.findChild<QToolButton *>(
+                QStringLiteral("sceneWorkspace.newScene")), nullptr);
+  EXPECT_TRUE(workspace.set_scene_tabs({}));
+  auto *new_scene = workspace.findChild<QPushButton *>(
+      QStringLiteral("sceneWorkspace.empty.newScene"));
   ASSERT_NE(new_scene, nullptr);
   new_scene->click();
   EXPECT_EQ(new_scene_requests, 1);
 
-  EXPECT_TRUE(workspace.set_scene_tabs({}));
   auto *open_scene = workspace.findChild<QPushButton *>(
       QStringLiteral("sceneWorkspace.empty.openScene"));
   ASSERT_NE(open_scene, nullptr);

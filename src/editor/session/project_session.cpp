@@ -100,6 +100,22 @@ bool has_qdr_extension(const ProjectRelativePath &path) {
          ".qdr";
 }
 
+ProjectIoResult<std::filesystem::path> resolve_authored_scene_save_path(
+    const ProjectFileSystem &file_system, const ProjectRelativePath &path) {
+  static const ProjectRelativePath kScenesDirectory =
+      ProjectRelativePath::parse_portable("Scenes").take_value();
+  auto resolved =
+      file_system.resolve_for_write_in_directory(path, kScenesDirectory);
+  if (!resolved.ok()) {
+    return ProjectIoResult<std::filesystem::path>::failure(
+        resolved.error().code,
+        "Scene files must be saved in the current project's Scenes folder or "
+        "one of its subfolders. " + resolved.error().message,
+        resolved.error().path);
+  }
+  return resolved;
+}
+
 /// Projects resident saved tabs into manifest-restorable workspace state.
 struct PersistedWorkspaceState final {
   std::vector<ProjectRelativePath> open_paths;
@@ -988,6 +1004,25 @@ ProjectSessionResult ProjectSession::activate(SceneSessionId id) {
   return success(true, "Active scene changed.", id);
 }
 
+ProjectSessionResult ProjectSession::preflight_save(SceneSessionId id) const {
+  const OpenSceneSession *scene = find(id);
+  if (scene == nullptr) {
+    return failure("Scene tab is closed or stale.");
+  }
+  if (!scene->path.has_value()) {
+    return failure("Unsaved scene requires Save As.");
+  }
+  if (!workspace_) {
+    return failure("No project is open.");
+  }
+  ProjectIoResult<std::filesystem::path> absolute =
+      resolve_authored_scene_save_path(workspace_->file_system, *scene->path);
+  if (!absolute.ok()) {
+    return failure(absolute.error().message);
+  }
+  return success(false, {}, id);
+}
+
 ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   OpenSceneSession *scene = find(id);
   if (scene == nullptr) {
@@ -999,13 +1034,13 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   if (!workspace_) {
     return failure("No project is open.");
   }
-  if (!cancel_transient_state(*scene)) {
-    return failure("Commit or cancel the active preview before saving.");
-  }
   ProjectIoResult<std::filesystem::path> absolute =
-      workspace_->file_system.resolve_for_write(*scene->path);
+      resolve_authored_scene_save_path(workspace_->file_system, *scene->path);
   if (!absolute.ok()) {
     return failure(absolute.error().message);
+  }
+  if (!cancel_transient_state(*scene)) {
+    return failure("Commit or cancel the active preview before saving.");
   }
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
   SceneWriteSnapshotResult snapshot = scene_write_snapshot(
@@ -1051,10 +1086,12 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
     return failure("Save As requires a project-relative .qdr path.");
   }
   if (is_project_autosave_path(path)) {
-    return failure("Recovery storage is reserved for automatic scene copies.");
+    return failure("Recovery storage is reserved for automatic scene copies. "
+                   "Save the scene in the current project's Scenes folder or "
+                   "one of its subfolders.");
   }
   ProjectIoResult<std::filesystem::path> absolute =
-      workspace_->file_system.resolve_for_write(path);
+      resolve_authored_scene_save_path(workspace_->file_system, path);
   if (!absolute.ok()) {
     return failure(absolute.error().message);
   }
@@ -1381,8 +1418,15 @@ ProjectSessionResult ProjectSession::save_all() {
   bool changed = false;
   std::vector<std::string> warnings;
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
-    if (scene && scene->dirty() && !scene->path.has_value()) {
+    if (!scene || !scene->dirty()) {
+      continue;
+    }
+    if (!scene->path.has_value()) {
       return failure("Save All requires paths for every dirty scene.");
+    }
+    ProjectSessionResult preflight = preflight_save(scene->session_id);
+    if (!preflight.ok) {
+      return preflight;
     }
   }
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {

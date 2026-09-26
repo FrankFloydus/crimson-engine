@@ -270,6 +270,293 @@ TEST(ProjectFileSystem, RejectsPortableCaseCollisionsAndLinkEscapes) {
   }
 }
 
+TEST(ProjectFileSystem, ScopedWritesAllowExistingAndNewFilesAtAnyDepth) {
+  ScopedProjectTestDirectory temporary("scoped-writes");
+  const std::filesystem::path scenes = temporary.path() / "Scenes";
+  ASSERT_TRUE(std::filesystem::create_directory(scenes));
+  const auto opened = ProjectFileSystem::open(temporary.path());
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  const ProjectFileSystem &files = opened.value();
+  const auto directory = ProjectRelativePath::parse("Scenes");
+  ASSERT_TRUE(directory.ok());
+
+  write_text_file(scenes / "Existing.qdr", "QDRB");
+  for (const char *name : {"Scenes/Existing.qdr", "Scenes/New.qdr"}) {
+    const auto path = ProjectRelativePath::parse(name);
+    ASSERT_TRUE(path.ok());
+    const auto resolved =
+        files.resolve_for_write_in_directory(path.value(), directory.value());
+    ASSERT_TRUE(resolved.ok()) << resolved.error().message;
+    EXPECT_EQ(resolved.value(), files.root() / path.value().native_path());
+  }
+
+  std::filesystem::path nested = "Scenes";
+  for (std::size_t level = 0u; level < 16u; ++level) {
+    nested /= "L" + std::to_string(level);
+  }
+  ASSERT_TRUE(std::filesystem::create_directories(files.root() / nested));
+  const auto path = ProjectRelativePath::parse(nested / "Deep.qdr");
+  ASSERT_TRUE(path.ok());
+  const auto resolved =
+      files.resolve_for_write_in_directory(path.value(), directory.value());
+  ASSERT_TRUE(resolved.ok()) << resolved.error().message;
+  EXPECT_EQ(resolved.value(), files.root() / nested / "Deep.qdr");
+  EXPECT_FALSE(std::filesystem::exists(resolved.value()));
+
+  const auto nested_directory = ProjectRelativePath::parse("Scenes/L0/L1");
+  ASSERT_TRUE(nested_directory.ok());
+  EXPECT_TRUE(files.resolve_for_write_in_directory(path.value(),
+                                                   nested_directory.value())
+                  .ok());
+}
+
+TEST(ProjectFileSystem, ScopedWritesRequireStrictComponentContainment) {
+  ScopedProjectTestDirectory temporary("scoped-boundary");
+  for (const char *folder : {"Scenes", "ScenesBackup", "Materials"}) {
+    ASSERT_TRUE(std::filesystem::create_directory(temporary.path() / folder));
+  }
+  const auto opened = ProjectFileSystem::open(temporary.path());
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  const ProjectFileSystem &files = opened.value();
+  const auto directory = ProjectRelativePath::parse("Scenes");
+  ASSERT_TRUE(directory.ok());
+
+  for (const char *name :
+       {"Root.qdr", "ScenesBackup/Room.qdr", "Materials/Room.qdr"}) {
+    const auto path = ProjectRelativePath::parse(name);
+    ASSERT_TRUE(path.ok());
+    EXPECT_TRUE(files.resolve_for_write(path.value()).ok());
+    const auto rejected =
+        files.resolve_for_write_in_directory(path.value(), directory.value());
+    ASSERT_FALSE(rejected.ok()) << name;
+    EXPECT_EQ(rejected.error().code, ProjectIoErrorCode::PathOutsideProject);
+  }
+
+  EXPECT_FALSE(files.resolve_for_write_in_directory(directory.value(),
+                                                   directory.value())
+                   .ok());
+  const auto invalid =
+      files.resolve_for_write_in_directory({}, directory.value());
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code, ProjectIoErrorCode::InvalidRelativePath);
+  for (const char *name :
+       {".", "Scenes/../Root.qdr", "Scenes/Sub/../../Root.qdr"}) {
+    EXPECT_FALSE(ProjectRelativePath::parse(name).ok()) << name;
+  }
+}
+
+TEST(ProjectFileSystem, ScopedWritesRequireExistingParentsAndExactEntryCase) {
+  ScopedProjectTestDirectory temporary("scoped-write-case");
+  ASSERT_TRUE(std::filesystem::create_directories(temporary.path() / "Scenes" /
+                                                 "Floor"));
+  const auto opened = ProjectFileSystem::open(temporary.path());
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  const ProjectFileSystem &files = opened.value();
+  const auto directory = ProjectRelativePath::parse("Scenes");
+  ASSERT_TRUE(directory.ok());
+  write_text_file(files.root() / "Scenes" / "Floor" / "Room.qdr", "QDRB");
+
+  for (const char *name : {"scenes/Floor/Room.qdr", "Scenes/floor/Room.qdr",
+                           "Scenes/Floor/room.qdr"}) {
+    const auto path = ProjectRelativePath::parse(name);
+    ASSERT_TRUE(path.ok());
+    const auto rejected =
+        files.resolve_for_write_in_directory(path.value(), directory.value());
+    ASSERT_FALSE(rejected.ok()) << name;
+    EXPECT_EQ(rejected.error().code, ProjectIoErrorCode::PathCaseCollision);
+  }
+
+  const auto existing = ProjectRelativePath::parse("Scenes/Floor/Room.qdr");
+  const auto wrong_directory = ProjectRelativePath::parse("scenes");
+  ASSERT_TRUE(existing.ok());
+  ASSERT_TRUE(wrong_directory.ok());
+  const auto rejected_directory = files.resolve_for_write_in_directory(
+      existing.value(), wrong_directory.value());
+  ASSERT_FALSE(rejected_directory.ok());
+  EXPECT_EQ(rejected_directory.error().code,
+            ProjectIoErrorCode::PathCaseCollision);
+
+  const auto missing = ProjectRelativePath::parse("Scenes/Missing/Room.qdr");
+  ASSERT_TRUE(missing.ok());
+  const auto rejected_parent =
+      files.resolve_for_write_in_directory(missing.value(), directory.value());
+  ASSERT_FALSE(rejected_parent.ok());
+  EXPECT_EQ(rejected_parent.error().code, ProjectIoErrorCode::DirectoryNotFound);
+  EXPECT_FALSE(std::filesystem::exists(files.root() / "Scenes" / "Missing"));
+
+  const auto folder = ProjectRelativePath::parse("Scenes/Floor");
+  ASSERT_TRUE(folder.ok());
+  const auto rejected_file =
+      files.resolve_for_write_in_directory(folder.value(), directory.value());
+  ASSERT_FALSE(rejected_file.ok());
+  EXPECT_EQ(rejected_file.error().code, ProjectIoErrorCode::FileNotRegular);
+}
+
+TEST(ProjectFileSystem, ScopedWritesRejectNestedLinksOutsideRequestedDirectory) {
+  ScopedProjectTestDirectory temporary("scoped-link-escape");
+  const std::filesystem::path project_root = temporary.path() / "Project";
+  ASSERT_TRUE(std::filesystem::create_directories(project_root / "Scenes"));
+  ASSERT_TRUE(std::filesystem::create_directory(project_root / "Assets"));
+  ASSERT_TRUE(std::filesystem::create_directory(project_root / "ScenesBackup"));
+  ASSERT_TRUE(std::filesystem::create_directory(temporary.path() / "Outside"));
+  const auto opened = ProjectFileSystem::open(project_root);
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  const ProjectFileSystem &files = opened.value();
+  const auto directory = ProjectRelativePath::parse("Scenes");
+  ASSERT_TRUE(directory.ok());
+
+  const std::array<std::filesystem::path, 3> targets{
+      project_root / "Assets", project_root / "ScenesBackup",
+      temporary.path() / "Outside"};
+  for (std::size_t index = 0u; index < targets.size(); ++index) {
+    const std::string link_name = "Link" + std::to_string(index);
+    std::error_code error;
+    std::filesystem::create_directory_symlink(
+        targets[index], files.root() / "Scenes" / link_name, error);
+    if (error && index == 0u) {
+      GTEST_SKIP() << "Directory links unavailable: " << error.message();
+    }
+    ASSERT_FALSE(error) << error.message();
+    const auto path =
+        ProjectRelativePath::parse("Scenes/" + link_name + "/Room.qdr");
+    ASSERT_TRUE(path.ok());
+    if (index < 2u) {
+      EXPECT_TRUE(files.resolve_for_write(path.value()).ok());
+    }
+    const auto rejected =
+        files.resolve_for_write_in_directory(path.value(), directory.value());
+    ASSERT_FALSE(rejected.ok()) << targets[index].string();
+    EXPECT_EQ(rejected.error().code, ProjectIoErrorCode::SymlinkEscape);
+  }
+
+  write_text_file(files.root() / "Assets" / "Existing.qdr", "QDRB");
+  std::error_code error;
+  std::filesystem::create_symlink(files.root() / "Assets" / "Existing.qdr",
+                                  files.root() / "Scenes" / "Alias.qdr", error);
+  ASSERT_FALSE(error) << error.message();
+  const auto file_alias = ProjectRelativePath::parse("Scenes/Alias.qdr");
+  ASSERT_TRUE(file_alias.ok());
+  const auto rejected_file = files.resolve_for_write_in_directory(
+      file_alias.value(), directory.value());
+  ASSERT_FALSE(rejected_file.ok());
+  EXPECT_EQ(rejected_file.error().code, ProjectIoErrorCode::SymlinkEscape);
+}
+
+TEST(ProjectFileSystem, ScopedWritesRejectRedirectedAllowedDirectory) {
+  ScopedProjectTestDirectory temporary("scoped-root-link");
+  for (const bool outside_project : {false, true}) {
+    const std::filesystem::path project_root =
+        temporary.path() / (outside_project ? "External" : "Internal");
+    ASSERT_TRUE(std::filesystem::create_directory(project_root));
+    const std::filesystem::path target =
+        outside_project ? temporary.path() / "Outside" : project_root / "Other";
+    ASSERT_TRUE(std::filesystem::create_directory(target));
+    std::error_code error;
+    std::filesystem::create_directory_symlink(target, project_root / "Scenes",
+                                              error);
+    if (error && !outside_project) {
+      GTEST_SKIP() << "Directory links unavailable: " << error.message();
+    }
+    ASSERT_FALSE(error) << error.message();
+    const auto opened = ProjectFileSystem::open(project_root);
+    ASSERT_TRUE(opened.ok()) << opened.error().message;
+    const auto directory = ProjectRelativePath::parse("Scenes");
+    const auto path = ProjectRelativePath::parse("Scenes/Room.qdr");
+    ASSERT_TRUE(directory.ok());
+    ASSERT_TRUE(path.ok());
+    if (!outside_project) {
+      EXPECT_TRUE(opened.value().resolve_for_write(path.value()).ok());
+    }
+    const auto rejected = opened.value().resolve_for_write_in_directory(
+        path.value(), directory.value());
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ProjectIoErrorCode::SymlinkEscape);
+  }
+}
+
+TEST(ProjectFileSystem, ScopedWritesRejectLinksToCaseDistinctSiblingDirectories) {
+  ScopedProjectTestDirectory temporary("scoped-case-distinct-link");
+  const std::filesystem::path scenes = temporary.path() / "Scenes";
+  const std::filesystem::path sibling = temporary.path() / "scenes";
+  ASSERT_TRUE(std::filesystem::create_directory(scenes));
+  std::error_code error;
+  const bool created_sibling = std::filesystem::create_directory(sibling, error);
+  ASSERT_FALSE(error) << error.message();
+  if (!created_sibling) {
+    GTEST_SKIP() << "The temporary directory does not support case-distinct "
+                   "sibling folders.";
+  }
+  ASSERT_FALSE(std::filesystem::equivalent(scenes, sibling));
+  std::filesystem::create_directory_symlink(sibling, scenes / "External", error);
+  if (error) {
+    GTEST_SKIP() << "Directory links unavailable: " << error.message();
+  }
+
+  const auto opened = ProjectFileSystem::open(temporary.path());
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  const auto directory = ProjectRelativePath::parse("Scenes");
+  const auto path = ProjectRelativePath::parse("Scenes/External/Room.qdr");
+  ASSERT_TRUE(directory.ok());
+  ASSERT_TRUE(path.ok());
+  EXPECT_TRUE(opened.value().resolve_for_write(path.value()).ok());
+  const auto rejected = opened.value().resolve_for_write_in_directory(
+      path.value(), directory.value());
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().code, ProjectIoErrorCode::SymlinkEscape);
+  EXPECT_FALSE(std::filesystem::exists(sibling / "Room.qdr"));
+}
+
+TEST(ProjectFileSystem, ScopedWritesAllowInternalLinksAndAliasedProjectRoots) {
+  ScopedProjectTestDirectory temporary("scoped-valid-links");
+  const std::filesystem::path project_root = temporary.path() / "Project";
+  ASSERT_TRUE(std::filesystem::create_directories(project_root / "Scenes" /
+                                                 "Nested" / "Deeper"));
+  std::error_code error;
+  std::filesystem::create_directory_symlink(
+      project_root / "Scenes" / "Nested", project_root / "Scenes" / "Internal",
+      error);
+  if (error) {
+    GTEST_SKIP() << "Directory links unavailable: " << error.message();
+  }
+  const std::filesystem::path project_alias = temporary.path() / "ProjectAlias";
+  std::filesystem::create_directory_symlink(project_root, project_alias, error);
+  ASSERT_FALSE(error) << error.message();
+  std::filesystem::create_directory_symlink(
+      project_root / "Scenes", project_root / "SceneAlias", error);
+  ASSERT_FALSE(error) << error.message();
+
+  const auto opened = ProjectFileSystem::open(project_alias);
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  const ProjectFileSystem &files = opened.value();
+  EXPECT_TRUE(std::filesystem::equivalent(files.root(), project_root));
+  const auto directory = ProjectRelativePath::parse("Scenes");
+  ASSERT_TRUE(directory.ok());
+  for (const char *name :
+       {"Scenes/Room.qdr", "Scenes/Internal/Deeper/Room.qdr"}) {
+    const auto path = ProjectRelativePath::parse(name);
+    ASSERT_TRUE(path.ok());
+    const auto resolved =
+        files.resolve_for_write_in_directory(path.value(), directory.value());
+    ASSERT_TRUE(resolved.ok()) << resolved.error().message;
+    EXPECT_EQ(resolved.value(), files.root() / path.value().native_path());
+
+    const auto converted =
+        files.relative_from_absolute(project_alias / path.value().native_path());
+    ASSERT_TRUE(converted.ok()) << converted.error().message;
+    EXPECT_TRUE(files.resolve_for_write_in_directory(converted.value(),
+                                                     directory.value())
+                    .ok());
+  }
+
+  const auto outside_alias = ProjectRelativePath::parse("SceneAlias/Room.qdr");
+  ASSERT_TRUE(outside_alias.ok());
+  EXPECT_TRUE(files.resolve_for_write(outside_alias.value()).ok());
+  const auto rejected = files.resolve_for_write_in_directory(
+      outside_alias.value(), directory.value());
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().code, ProjectIoErrorCode::PathOutsideProject);
+}
+
 #ifdef _WIN32
 TEST(ProjectFileSystem, ConvertsShortRootAliasesForExistingAndUnsavedScenes) {
   ScopedProjectTestDirectory temporary("short-root-alias");

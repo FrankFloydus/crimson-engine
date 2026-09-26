@@ -27,7 +27,6 @@
 #include <QDir>
 #include <QEnterEvent>
 #include <QEvent>
-#include <QFile>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QFontInfo>
@@ -394,17 +393,13 @@ TEST_F(QtViewportEdgeLengthHudTests,
                                   std::ceil(label_->width() * raster_dpr))),
                   std::max(1, static_cast<int>(
                                   std::ceil(label_->height() * raster_dpr)))));
-  EXPECT_TRUE(QFile::exists(
-      QStringLiteral(":/quader/fonts/HomeVideo-Regular.ttf")));
-  EXPECT_EQ(QFontInfo(label_->font()).family(), QStringLiteral("Home Video"));
+  const QFont application_font = QApplication::font();
+  EXPECT_EQ(QFontInfo(label_->font()).family(),
+            QFontInfo(application_font).family());
   EXPECT_DOUBLE_EQ(label_->font().pointSizeF(), 12.0);
-  const unsigned int style_strategy =
-      static_cast<unsigned int>(label_->font().styleStrategy());
-  EXPECT_NE(style_strategy & static_cast<unsigned int>(QFont::NoAntialias),
-            0U);
-  EXPECT_NE(style_strategy & static_cast<unsigned int>(QFont::NoFontMerging),
-            0U);
-  EXPECT_EQ(label_->font().hintingPreference(), QFont::PreferFullHinting);
+  EXPECT_EQ(label_->font().styleStrategy(), application_font.styleStrategy());
+  EXPECT_EQ(label_->font().hintingPreference(),
+            application_font.hintingPreference());
   EXPECT_TRUE(label_->testAttribute(Qt::WA_NativeWindow));
   EXPECT_TRUE(label_->testAttribute(Qt::WA_TransparentForMouseEvents));
   EXPECT_EQ(label_->focusPolicy(), Qt::NoFocus);
@@ -449,7 +444,7 @@ TEST_F(QtViewportEdgeLengthHudTests,
   EXPECT_GT(opaque_white_pixels, 8)
       << "The glyph must contain a substantial bright opaque core.";
   EXPECT_EQ(blended_or_colored_pixels, 0)
-      << "Pixel-font labels must contain only exact opaque black or white; "
+      << "Dimension labels must contain only exact opaque black or white; "
          "gray antialiasing fringes make them blurry over the viewport. "
       << "First unexpected RGBA pixel: ("
       << first_blended_or_colored_pixel.red() << ", "
@@ -485,7 +480,7 @@ TEST_F(QtViewportEdgeLengthHudTests,
       }
     }
     EXPECT_EQ(scaled_non_binary_pixels, 0)
-        << "Nearest-neighbor pixel-font output must stay binary at a "
+        << "Nearest-neighbor dimension output must stay binary at a "
         << scale << "x device scale.";
   }
 }

@@ -1731,9 +1731,9 @@ TEST(EditorApiTests, SceneSaveCommandUsesRuntimePathHookForUnsavedScene) {
       quader::QuaderSceneDocumentsRuntimeHooks{
       .choose_save_scene_as_path =
           [&](quader::SceneSessionId)
-              -> std::optional<std::filesystem::path> {
+              -> quader::QuaderSceneSavePathResult {
         ++save_path_requests;
-        return path;
+        return {.path = path};
       },
   });
 

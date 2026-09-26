@@ -19,6 +19,7 @@
 #include <QTabBar>
 #include <QToolBar>
 #include <QToolButton>
+#include <QVariant>
 
 #include <algorithm>
 
@@ -470,11 +471,23 @@ bool qt_draw_application_control(
       return false;
     }
     const bool selected = option->state.testFlag(QStyle::State_Selected);
-    const QColor fill = selected || hovered(*option)
-                            ? surface_color(*option, false)
-                            : color(*option, QPalette::Window);
-    painter->fillRect(option->rect, fill);
-    if (selected) {
+    const bool connected_surface =
+        tab->shape == QTabBar::RoundedNorth && widget != nullptr &&
+        widget->property(kQtConnectedTabSurfaceProperty).toBool();
+    const QColor fill =
+        selected && connected_surface
+            ? color(*option, QPalette::AlternateBase)
+            : selected || hovered(*option)
+                  ? surface_color(*option, false)
+                  : color(*option, QPalette::Window);
+    QRect surface = option->rect;
+    if (selected && connected_surface) {
+      // Native tab geometry may reserve a base overlap. Fill through that
+      // space so the selected tab joins the shared content surface below.
+      surface.setBottom(widget->rect().bottom());
+    }
+    painter->fillRect(surface, fill);
+    if (selected && !connected_surface) {
       const QRectF bounds(option->rect);
       const qreal width = std::max(hairline(*painter), metrics.px(2.0));
       QRectF stripe;

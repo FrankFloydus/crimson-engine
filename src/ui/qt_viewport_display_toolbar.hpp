@@ -35,6 +35,8 @@ public:
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor, bool force = false);
+  /** Shares display actions in toolbar order; excluded actions remain null. */
+  [[nodiscard]] std::array<QAction *, 4> viewport_actions() const;
   void set_command_requested_callback(
       std::function<void(QuaderCommandId)> callback);
 

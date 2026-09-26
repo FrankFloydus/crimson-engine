@@ -138,7 +138,6 @@ private:
   QtSceneWorkspaceLabels labels_ = QtSceneWorkspaceLabels::defaults();
   std::vector<QtSceneTabItem> scenes_;
   QTabBar *tab_bar_ = nullptr;
-  QToolButton *new_scene_button_ = nullptr;
   QWidget *instance_edit_bar_ = nullptr;
   QHBoxLayout *instance_edit_layout_ = nullptr;
   QToolButton *instance_scene_crumb_ = nullptr;

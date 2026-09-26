@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace quader {
@@ -23,6 +24,12 @@ struct PlatformFileDialogOptions {
   std::filesystem::path initial_file_name;
 };
 
+/// Distinguishes cancellation from failure to open or read a native dialog.
+struct PlatformFileDialogResult {
+  std::optional<std::filesystem::path> path;
+  std::string error_message;
+};
+
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_open_project_file_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
@@ -34,7 +41,8 @@ platform_open_scene_file_dialog(const PlatformFileDialogOptions &options);
 /// Always starts in the supplied recovery folder, ignoring remembered folders.
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_open_scene_recovery_file_dialog(const PlatformFileDialogOptions &options);
-[[nodiscard]] std::optional<std::filesystem::path>
+/// Requires the supplied starting folder; remembered locations never replace it.
+[[nodiscard]] PlatformFileDialogResult
 platform_save_scene_file_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_open_material_file_dialog(const PlatformFileDialogOptions &options);

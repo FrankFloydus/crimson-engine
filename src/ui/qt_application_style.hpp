@@ -12,6 +12,10 @@ namespace quader {
 
 class QtUiScaleMetrics;
 
+/** Opts a north tab bar into a selected surface joined to the row below it. */
+inline constexpr char kQtConnectedTabSurfaceProperty[] =
+    "quaderConnectedTabSurface";
+
 /** Paint-only adapters shared by the application and local Fusion proxies. */
 [[nodiscard]] bool qt_application_style_active(const QStyleOption *option);
 

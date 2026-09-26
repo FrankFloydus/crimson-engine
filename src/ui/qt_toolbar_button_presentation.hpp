@@ -11,6 +11,8 @@
 
 class QAction;
 class QToolBar;
+class QToolButton;
+class QWidget;
 
 namespace quader {
 
@@ -21,16 +23,21 @@ class QtUiScaleMetrics;
 qt_toolbar_button_color_group(QStyle::State state);
 
 /**
- * Creates one toolbar-scoped Fusion presentation shared by its action buttons.
- * Install it after adding the toolbar actions so it outlives their widgets.
+ * Creates one host-scoped Fusion presentation shared by its action buttons.
+ * Install it after creating the buttons so it outlives their widgets.
  */
+QStyle &install_native_toolbar_button_presentation(QWidget &host);
 QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar);
 
 /** Gives one action native interaction states and accessible presentation. */
+void configure_native_toolbar_button_face(QToolButton &button, QAction &action,
+                                          QStyle &presentation);
 void configure_native_toolbar_button_face(QToolBar &toolbar, QAction &action,
                                           QStyle &presentation);
 
 /** Recomputes one action button's logical hit target from 100% constants. */
+void apply_native_toolbar_button_face_ui_scale(
+    QToolButton &button, const QtUiScaleMetrics &metrics);
 void apply_native_toolbar_button_face_ui_scale(
     QToolBar &toolbar, QAction &action, const QtUiScaleMetrics &metrics);
 

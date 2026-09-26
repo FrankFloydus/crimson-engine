@@ -25,6 +25,7 @@
 #include <cderr.h>
 #include <commdlg.h>
 #include <shobjidl.h>
+#include <wrl/client.h>
 #endif
 
 namespace quader {
@@ -297,22 +298,80 @@ platform_open_scene_recovery_file_dialog(const PlatformFileDialogOptions &option
 #endif
 }
 
-std::optional<std::filesystem::path>
+PlatformFileDialogResult
 platform_save_scene_file_dialog(const PlatformFileDialogOptions &options) {
 #if defined(_WIN32)
-  std::vector<wchar_t> buffer = path_buffer(options.initial_file_name);
-  const std::wstring initial_directory = options.initial_directory.wstring();
-  OPENFILENAMEW dialog = base_open_file_name(
-      options, buffer, initial_directory, kSceneFileFilter,
-      kSceneDefaultExtension);
-  dialog.Flags |= OFN_OVERWRITEPROMPT;
-  if (GetSaveFileNameW(&dialog) == FALSE) {
-    return std::nullopt;
+  std::error_code error;
+  if (options.initial_directory.empty() ||
+      !std::filesystem::is_directory(options.initial_directory, error) || error) {
+    return {.error_message =
+                "Cannot open the scene save dialog: the project's Scenes "
+                "folder is unavailable."};
   }
-  return std::filesystem::path(buffer.data());
+
+  const HRESULT initialized =
+      CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) {
+    return {.error_message = "Cannot initialize the scene save dialog."};
+  }
+  // Release the dialog and its shell items before balancing COM initialization.
+  struct ApartmentScope {
+    bool initialized;
+    ~ApartmentScope() {
+      if (initialized) {
+        CoUninitialize();
+      }
+    }
+  } apartment{SUCCEEDED(initialized)};
+  Microsoft::WRL::ComPtr<IFileSaveDialog> dialog;
+  if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr,
+                              CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) {
+    return {.error_message = "Cannot create the scene save dialog."};
+  }
+
+  FILEOPENDIALOGOPTIONS flags = {};
+  constexpr COMDLG_FILTERSPEC kFilters[] = {
+      {L"Quader Scenes (*.qdr)", L"*.qdr"}, {L"All Files (*.*)", L"*.*"}};
+  const std::wstring filename = options.initial_file_name.filename().wstring();
+  if (FAILED(dialog->GetOptions(&flags)) ||
+      FAILED(dialog->SetOptions(flags | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
+                                 FOS_NOCHANGEDIR | FOS_OVERWRITEPROMPT)) ||
+      FAILED(dialog->SetFileTypes(2, kFilters)) ||
+      FAILED(dialog->SetFileTypeIndex(1)) ||
+      FAILED(dialog->SetDefaultExtension(kSceneDefaultExtension)) ||
+      (!filename.empty() && FAILED(dialog->SetFileName(filename.c_str())))) {
+    return {.error_message = "Cannot configure the scene save dialog."};
+  }
+
+  Microsoft::WRL::ComPtr<IShellItem> initial;
+  if (FAILED(SHCreateItemFromParsingName(options.initial_directory.c_str(),
+                                        nullptr, IID_PPV_ARGS(&initial))) ||
+      FAILED(dialog->SetFolder(initial.Get()))) {
+    return {.error_message =
+                "Cannot open the scene save dialog in the project's Scenes "
+                "folder."};
+  }
+  const HRESULT shown =
+      dialog->Show(static_cast<HWND>(options.owner_window_handle));
+  if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+    return {};
+  }
+  if (FAILED(shown)) {
+    return {.error_message = "The scene save dialog could not be opened."};
+  }
+
+  Microsoft::WRL::ComPtr<IShellItem> selected;
+  PWSTR native_path = nullptr;
+  if (FAILED(dialog->GetResult(&selected)) ||
+      FAILED(selected->GetDisplayName(SIGDN_FILESYSPATH, &native_path))) {
+    return {.error_message = "Cannot read the selected scene save destination."};
+  }
+  const std::filesystem::path path(native_path);
+  CoTaskMemFree(native_path);
+  return {.path = path};
 #else
   (void)options;
-  return std::nullopt;
+  return {.error_message = "Native scene save dialogs are unavailable."};
 #endif
 }
 

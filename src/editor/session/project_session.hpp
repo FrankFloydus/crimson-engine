@@ -91,6 +91,8 @@ public:
   [[nodiscard]] ProjectSessionResult new_scene();
   [[nodiscard]] ProjectSessionResult open_scene(ProjectRelativePath path);
   [[nodiscard]] ProjectSessionResult activate(SceneSessionId id);
+  /// Validates a saved scene destination without settling previews or writing.
+  [[nodiscard]] ProjectSessionResult preflight_save(SceneSessionId id) const;
   [[nodiscard]] ProjectSessionResult save(SceneSessionId id);
   [[nodiscard]] ProjectSessionResult save_as(SceneSessionId id,
                                              ProjectRelativePath path);

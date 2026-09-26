@@ -6,9 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_scene_workspace.hpp"
 
+#include "ui/qt_application_style.hpp"
+
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPalette>
 #include <QPushButton>
 #include <QSet>
 #include <QSignalBlocker>
@@ -173,14 +176,17 @@ QtSceneWorkspace::QtSceneWorkspace(QWidget *parent) : QWidget(parent) {
 
   auto *tabs_row = new QWidget(this);
   tabs_row->setObjectName(QStringLiteral("sceneWorkspace.tabsRow"));
+  tabs_row->setBackgroundRole(QPalette::Window);
+  tabs_row->setAutoFillBackground(true);
   auto *tabs_layout = new QHBoxLayout(tabs_row);
   tabs_layout->setContentsMargins(0, 0, 0, 0);
   tabs_layout->setSpacing(0);
 
   tab_bar_ = new QTabBar(tabs_row);
   tab_bar_->setObjectName(QStringLiteral("sceneWorkspace.tabs"));
+  tab_bar_->setProperty(kQtConnectedTabSurfaceProperty, true);
   tab_bar_->setDocumentMode(true);
-  tab_bar_->setDrawBase(true);
+  tab_bar_->setDrawBase(false);
   tab_bar_->setTabsClosable(true);
   tab_bar_->setMovable(false);
   tab_bar_->setExpanding(false);
@@ -188,12 +194,6 @@ QtSceneWorkspace::QtSceneWorkspace(QWidget *parent) : QWidget(parent) {
   tab_bar_->setUsesScrollButtons(true);
   tabs_layout->addWidget(tab_bar_, 1);
 
-  new_scene_button_ = new QToolButton(tabs_row);
-  new_scene_button_->setObjectName(
-      QStringLiteral("sceneWorkspace.newScene"));
-  new_scene_button_->setText(QStringLiteral("+"));
-  new_scene_button_->setAutoRaise(true);
-  tabs_layout->addWidget(new_scene_button_);
   root_layout->addWidget(tabs_row);
 
   instance_edit_bar_ = new QWidget(this);
@@ -272,8 +272,6 @@ QtSceneWorkspace::QtSceneWorkspace(QWidget *parent) : QWidget(parent) {
       new_scene_requested_();
     }
   };
-  QObject::connect(new_scene_button_, &QToolButton::clicked, this,
-                   dispatch_new_scene);
   QObject::connect(empty_new_scene_button_, &QPushButton::clicked, this,
                    dispatch_new_scene);
   QObject::connect(empty_open_scene_button_, &QPushButton::clicked, this,
@@ -483,8 +481,6 @@ void QtSceneWorkspace::rebuild_tabs(
 }
 
 void QtSceneWorkspace::refresh_labels() {
-  new_scene_button_->setToolTip(labels_.new_scene);
-  new_scene_button_->setAccessibleName(labels_.new_scene);
   empty_title_label_->setText(labels_.empty_title);
   empty_description_label_->setText(labels_.empty_description);
   empty_new_scene_button_->setText(labels_.new_scene);

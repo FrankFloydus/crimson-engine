@@ -43,6 +43,12 @@ bool path_is_within(const std::filesystem::path &candidate,
   return true;
 }
 
+bool path_is_strictly_within(const std::filesystem::path &candidate,
+                           const std::filesystem::path &directory) {
+  return path_is_within(candidate, directory) &&
+         !path_is_within(directory, candidate);
+}
+
 std::string filesystem_error_message(std::string_view action,
                                      const std::error_code &error) {
   if (!error) {
@@ -209,6 +215,46 @@ ProjectFileSystem::resolve_for_write(const ProjectRelativePath &path) const {
     return ProjectIoResult<std::filesystem::path>::failure(
         ProjectIoErrorCode::IoFailure,
         filesystem_error_message("Could not inspect project output path", error),
+        resolved.value());
+  }
+  return resolved;
+}
+
+ProjectIoResult<std::filesystem::path>
+ProjectFileSystem::resolve_for_write_in_directory(
+    const ProjectRelativePath &path,
+    const ProjectRelativePath &directory) const {
+  ProjectIoResult<std::filesystem::path> resolved = resolve_for_write(path);
+  if (!resolved.ok()) {
+    return resolved;
+  }
+  const ProjectIoResult<std::filesystem::path> allowed_directory =
+      resolve(directory);
+  if (!allowed_directory.ok()) {
+    return allowed_directory;
+  }
+  if (!path_is_strictly_within(path.native_path(), directory.native_path())) {
+    return ProjectIoResult<std::filesystem::path>::failure(
+        ProjectIoErrorCode::PathOutsideProject,
+        "Project output path must be inside the requested directory.",
+        resolved.value());
+  }
+
+  const ProjectIoResult<std::filesystem::path> physical =
+      resolve_physical_location(path);
+  if (!physical.ok()) {
+    return physical;
+  }
+  // Canonical physical names must remain distinct even when a directory
+  // supports separate entries whose names differ only by case.
+  const auto [directory_part, physical_part] = std::mismatch(
+      allowed_directory.value().begin(), allowed_directory.value().end(),
+      physical.value().begin(), physical.value().end());
+  if (directory_part != allowed_directory.value().end() ||
+      physical_part == physical.value().end()) {
+    return ProjectIoResult<std::filesystem::path>::failure(
+        ProjectIoErrorCode::SymlinkEscape,
+        "Project output path resolves outside the requested directory.",
         resolved.value());
   }
   return resolved;

@@ -53,10 +53,16 @@ enum class QuaderDirtySceneDecision {
   Cancel,
 };
 
+/// Distinguishes a selected Save As path, cancellation, and dialog failure.
+struct QuaderSceneSavePathResult final {
+  std::optional<std::filesystem::path> path;
+  std::string error_message;
+};
+
 /// Supplies native dialog and confirmation hooks to the scene API.
 struct QuaderSceneDocumentsRuntimeHooks final {
   std::function<std::optional<std::filesystem::path>()> choose_open_scene_path;
-  std::function<std::optional<std::filesystem::path>(SceneSessionId)>
+  std::function<QuaderSceneSavePathResult(SceneSessionId)>
       choose_save_scene_as_path;
   std::function<QuaderDirtySceneDecision(const QuaderSceneDocumentInfo &,
                                          std::string_view action_id)>

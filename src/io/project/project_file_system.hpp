@@ -67,6 +67,16 @@ public:
   resolve_for_write(const ProjectRelativePath &path) const;
 
   /**
+   * Resolves a writable file strictly inside the requested directory, both by
+   * path components and physical location. The directory boundary stays under
+   * the canonical project root even if the directory itself is a link.
+   * Requires an existing parent folder and never creates directories.
+   */
+  [[nodiscard]] ProjectIoResult<std::filesystem::path>
+  resolve_for_write_in_directory(const ProjectRelativePath &path,
+                                 const ProjectRelativePath &directory) const;
+
+  /**
    * Resolves the physical target after following in-project symlinks and
    * junctions. The final entry does not need to exist.
    */

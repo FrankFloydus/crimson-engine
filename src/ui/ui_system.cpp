@@ -58,6 +58,7 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_unsaved_confirmation_dialog.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
+#include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -87,6 +88,7 @@
 #include <QStackedWidget>
 #include <QStringList>
 #include <QTimer>
+#include <QVBoxLayout>
 #include <QWidget>
 #include <QWindow>
 
@@ -517,10 +519,30 @@ bool UISystem::initialize(RenderSystem &render_system,
   central_stack_->setObjectName(QStringLiteral("mainCentralStack"));
   project_home_page_ = new QtProjectHomePage(central_stack_);
   scene_workspace_ = new QtSceneWorkspace(central_stack_);
-  viewport_panel_ = new QtViewportPanel(scene_workspace_);
+  auto *viewport_container = new QWidget(scene_workspace_);
+  viewport_container->setObjectName(QStringLiteral("sceneViewportContainer"));
+  auto *viewport_layout = new QVBoxLayout(viewport_container);
+  viewport_layout->setContentsMargins(0, 0, 0, 0);
+  viewport_layout->setSpacing(0);
+  viewport_control_strip_ = new QtViewportControlStrip(viewport_container);
+  const auto snapping_actions = snapping_toolbar_->viewport_actions();
+  viewport_control_strip_->add_action(*snapping_actions.front());
+  viewport_control_strip_->add_separator();
+  for (std::size_t index = 1; index < snapping_actions.size(); ++index) {
+    viewport_control_strip_->add_action(*snapping_actions[index]);
+  }
+  viewport_control_strip_->add_separator();
+  for (auto *action : viewport_display_toolbar_->viewport_actions()) {
+    if (action != nullptr) {
+      viewport_control_strip_->add_action(*action);
+    }
+  }
+  viewport_layout->addWidget(viewport_control_strip_);
+  viewport_panel_ = new QtViewportPanel(viewport_container);
   viewport_panel_->set_viewport_settings(viewport_settings_);
   viewport_panel_->set_localization(localization_);
-  scene_workspace_->set_viewport_widget(viewport_panel_);
+  viewport_layout->addWidget(viewport_panel_, 1);
+  scene_workspace_->set_viewport_widget(viewport_container);
   central_stack_->addWidget(project_home_page_);
   central_stack_->addWidget(scene_workspace_);
   central_stack_->setCurrentWidget(project_home_page_);
@@ -3012,6 +3034,7 @@ void UISystem::shutdown() {
   startup_presentation_started_ = {};
   startup_expected_maximized_ = false;
   viewport_panel_ = nullptr;
+  viewport_control_strip_ = nullptr;
   central_stack_ = nullptr;
   project_home_page_ = nullptr;
   scene_workspace_ = nullptr;
@@ -5318,6 +5341,9 @@ void UISystem::apply_ui_scale_to_retained_surfaces(
   }
   if (viewport_display_toolbar_ != nullptr) {
     viewport_display_toolbar_->apply_ui_scale(metrics);
+  }
+  if (viewport_control_strip_ != nullptr) {
+    viewport_control_strip_->apply_ui_scale(metrics);
   }
   if (texture_toolbar_ != nullptr) {
     texture_toolbar_->apply_ui_scale(metrics);

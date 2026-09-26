@@ -236,7 +236,6 @@ scene_file_dialog_options(void *owner_window_handle,
   }
   if (scene->path.has_value()) {
     const std::filesystem::path relative = scene->path->native_path();
-    options.initial_directory = project.root() / relative.parent_path();
     options.initial_file_name = relative.filename();
   } else {
     options.initial_file_name =
@@ -362,10 +361,12 @@ bool App::initialize(QApplication &application,
                     break;
                   }
                 }
-                return platform_save_scene_file_dialog(
-                    scene_file_dialog_options(
+                const PlatformFileDialogResult result =
+                    platform_save_scene_file_dialog(scene_file_dialog_options(
                         ui_.native_window_handle(), editor_->project(),
                         selected.has_value() ? &*selected : nullptr));
+                return QuaderSceneSavePathResult{
+                    .path = result.path, .error_message = result.error_message};
               },
           .confirm_dirty_scene =
               [this](const QuaderSceneDocumentInfo &scene,

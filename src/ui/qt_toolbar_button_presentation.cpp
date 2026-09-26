@@ -214,10 +214,30 @@ QPalette::ColorGroup qt_toolbar_button_color_group(QStyle::State state) {
                                                : QPalette::Inactive;
 }
 
-QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar) {
-  auto *presentation = new QtToolbarButtonPresentationStyle(&toolbar);
-  toolbar.setStyle(presentation);
+QStyle &install_native_toolbar_button_presentation(QWidget &host) {
+  auto *presentation = new QtToolbarButtonPresentationStyle(&host);
+  host.setStyle(presentation);
   return *presentation;
+}
+
+QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar) {
+  return install_native_toolbar_button_presentation(
+      static_cast<QWidget &>(toolbar));
+}
+
+void configure_native_toolbar_button_face(QToolButton &button, QAction &action,
+                                          QStyle &presentation) {
+  button.setStyle(&presentation);
+  button.setAutoRaise(false);
+  button.setAttribute(Qt::WA_Hover, true);
+  button.setMouseTracking(true);
+  button.setFocusPolicy(Qt::StrongFocus);
+  button.setMinimumSize(40, 40);
+  synchronize_accessibility(button, action);
+  QObject::connect(&action, &QAction::changed, &button, [&button, &action]() {
+    synchronize_accessibility(button, action);
+    button.update();
+  });
 }
 
 void configure_native_toolbar_button_face(QToolBar &toolbar, QAction &action,
@@ -228,17 +248,29 @@ void configure_native_toolbar_button_face(QToolBar &toolbar, QAction &action,
     return;
   }
 
-  button->setStyle(&presentation);
-  button->setAutoRaise(false);
-  button->setAttribute(Qt::WA_Hover, true);
-  button->setMouseTracking(true);
-  button->setFocusPolicy(Qt::StrongFocus);
-  button->setMinimumSize(40, 40);
-  synchronize_accessibility(*button, action);
-  QObject::connect(&action, &QAction::changed, button, [button, &action]() {
-    synchronize_accessibility(*button, action);
-    button->update();
-  });
+  configure_native_toolbar_button_face(*button, action, presentation);
+}
+
+void apply_native_toolbar_button_face_ui_scale(
+    QToolButton &button, const QtUiScaleMetrics &metrics) {
+  bool presentation_changed = false;
+  if (auto *presentation =
+          dynamic_cast<QtToolbarButtonPresentationStyle *>(button.style());
+      presentation != nullptr) {
+    presentation_changed = presentation->set_ui_scale(metrics);
+  }
+
+  constexpr QSize kButtonMinimumSize(40, 40);
+  const QSize scaled_minimum = metrics.size(kButtonMinimumSize);
+  bool minimum_changed = false;
+  if (button.minimumSize() != scaled_minimum) {
+    button.setMinimumSize(scaled_minimum);
+    minimum_changed = true;
+  }
+  if (presentation_changed || minimum_changed) {
+    button.updateGeometry();
+    button.update();
+  }
 }
 
 void apply_native_toolbar_button_face_ui_scale(
@@ -249,24 +281,7 @@ void apply_native_toolbar_button_face_ui_scale(
     return;
   }
 
-  bool presentation_changed = false;
-  if (auto *presentation =
-          dynamic_cast<QtToolbarButtonPresentationStyle *>(button->style());
-      presentation != nullptr) {
-    presentation_changed = presentation->set_ui_scale(metrics);
-  }
-
-  constexpr QSize kButtonMinimumSize(40, 40);
-  const QSize scaled_minimum = metrics.size(kButtonMinimumSize);
-  bool minimum_changed = false;
-  if (button->minimumSize() != scaled_minimum) {
-    button->setMinimumSize(scaled_minimum);
-    minimum_changed = true;
-  }
-  if (presentation_changed || minimum_changed) {
-    button->updateGeometry();
-    button->update();
-  }
+  apply_native_toolbar_button_face_ui_scale(*button, metrics);
 }
 
 } // namespace quader

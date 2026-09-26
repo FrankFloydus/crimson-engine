@@ -1121,6 +1121,293 @@ TEST(ProjectSessionWorkspace,
 }
 
 TEST(ProjectSessionWorkspace,
+     RejectedSaveAsDestinationsPreserveLivePreviewAndPublishedState) {
+  ScopedProjectSessionDirectory temporary("scene-save-scope");
+  const auto recents_path = temporary.path() / "recent-scenes.json";
+  ProjectSession project(recents_path);
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto object = create_saved_transition_curve(project, editor);
+  ASSERT_TRUE(editor.scene().rename(object.entity, "Unsaved Curve Name").ok());
+  OpenSceneSession *scene = project.active_scene();
+  ASSERT_NE(scene, nullptr);
+  ASSERT_TRUE(scene->dirty());
+  ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+  CurveToolService &curve = scene->session->curve();
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  ASSERT_TRUE(select_and_begin_curve_control_drag(
+      curve, {.point = curve.preview_state().document->points()[0].id}));
+  ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+  const auto preview = *curve.preview_state().document;
+  const auto stamp = scene->session->content_revision_stamp();
+  const auto identity = scene->scene_id;
+  const auto path = scene->path;
+  ASSERT_TRUE(path.has_value());
+  const auto name = scene->display_name;
+  const auto generation = project.activation_generation();
+  const auto manifest = ProjectManifestStore::serialize(*project.manifest());
+  const auto manifest_bytes = read_file_bytes(project.manifest_path());
+  const auto scene_bytes = read_file_bytes(project.root() / path->native_path());
+  const auto recent_bytes = read_file_bytes(recents_path);
+  const auto bridge_path = project.root() / ".quader/bridge/scenes" /
+                           (std::string(identity.str()) + ".json");
+  const auto bridge_bytes = read_file_bytes(bridge_path);
+  int saved_events = 0;
+  const auto subscription = editor.events().subscribe(
+      quader_event::kSceneSaved, [&](const QuaderEvent &) { ++saved_events; });
+  ASSERT_TRUE(subscription.valid());
+  const auto expect_unchanged = [&] {
+    EXPECT_EQ(project.active_scene(), scene);
+    EXPECT_EQ(project.activation_generation(), generation);
+    EXPECT_EQ(scene->scene_id, identity);
+    EXPECT_EQ(scene->path, path);
+    EXPECT_EQ(scene->display_name, name);
+    EXPECT_TRUE(scene->dirty());
+    EXPECT_EQ(scene->session->content_revision_stamp(), stamp);
+    EXPECT_TRUE(curve.active());
+    EXPECT_TRUE(curve.dragging());
+    EXPECT_TRUE(scene->session->modeling().curve_document_preview_active());
+    ASSERT_TRUE(curve.preview_state().document.has_value());
+    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(preview));
+    EXPECT_EQ(ProjectManifestStore::serialize(*project.manifest()), manifest);
+    EXPECT_EQ(read_file_bytes(project.manifest_path()), manifest_bytes);
+    EXPECT_EQ(read_file_bytes(project.root() / path->native_path()), scene_bytes);
+    EXPECT_EQ(read_file_bytes(recents_path), recent_bytes);
+    EXPECT_EQ(read_file_bytes(bridge_path), bridge_bytes);
+    EXPECT_EQ(saved_events, 0);
+  };
+
+  for (const std::string_view destination :
+       {"Root.qdr", "Materials/Rejected.qdr", ".quader/Rejected.qdr",
+        "Scenes2/Rejected.qdr"}) {
+    SCOPED_TRACE(destination);
+    const auto relative = project_path(destination);
+    const auto absolute = project.root() / relative.native_path();
+    std::filesystem::create_directories(absolute.parent_path());
+    {
+      std::ofstream existing(absolute, std::ios::binary);
+      ASSERT_TRUE(existing.is_open());
+      existing << "Preserve existing destination bytes";
+    }
+    const auto destination_bytes = read_file_bytes(absolute);
+    editor.scene_documents().set_runtime_hooks({
+        .choose_save_scene_as_path = [absolute](SceneSessionId) {
+          return QuaderSceneSavePathResult{.path = absolute};
+        },
+    });
+    for (int route = 0; route < 4; ++route) {
+      SCOPED_TRACE(route);
+      if (route == 0) {
+        const auto rejected = project.save_as(scene->session_id, relative);
+        EXPECT_FALSE(rejected.ok);
+        EXPECT_FALSE(rejected.changed);
+        EXPECT_NE(rejected.message.find("Scenes"), std::string::npos);
+      } else {
+        const auto rejected = route == 1
+            ? editor.scene_documents().save_as(scene->session_id, relative)
+            : route == 2
+                ? editor.scene_documents().save_as_native_path(
+                      scene->session_id, absolute)
+                : editor.scene_documents().save_as(scene->session_id);
+        EXPECT_FALSE(rejected.ok());
+        EXPECT_FALSE(rejected.changed());
+        EXPECT_NE(rejected.error_message().find("Scenes"), std::string::npos);
+      }
+      expect_unchanged();
+      EXPECT_EQ(project.manifest()->find_scene(relative), nullptr);
+      EXPECT_EQ(read_file_bytes(absolute), destination_bytes);
+    }
+  }
+
+  const std::array native_destinations{
+      project.root() / "Scenes/../Scenes/Rejected.qdr",
+      temporary.make_empty_child("OtherProject") / "Scenes/Rejected.qdr"};
+  for (const auto &absolute : native_destinations) {
+    SCOPED_TRACE(absolute.string());
+    std::filesystem::create_directories(absolute.parent_path());
+    {
+      std::ofstream existing(absolute, std::ios::binary);
+      ASSERT_TRUE(existing.is_open());
+      existing << "Preserve native destination bytes";
+    }
+    const auto destination_bytes = read_file_bytes(absolute);
+    editor.scene_documents().set_runtime_hooks({
+        .choose_save_scene_as_path = [absolute](SceneSessionId) {
+          return QuaderSceneSavePathResult{.path = absolute};
+        },
+    });
+    for (const bool use_dialog : {false, true}) {
+      SCOPED_TRACE(use_dialog);
+      const auto rejected = use_dialog
+          ? editor.scene_documents().save_as(scene->session_id)
+          : editor.scene_documents().save_as_native_path(scene->session_id, absolute);
+      EXPECT_FALSE(rejected.ok());
+      EXPECT_FALSE(rejected.changed());
+      EXPECT_NE(rejected.error_message().find("Scenes"), std::string::npos);
+      expect_unchanged();
+      EXPECT_EQ(read_file_bytes(absolute), destination_bytes);
+    }
+  }
+}
+
+TEST(ProjectSessionWorkspace, SaveAsAcceptsDeeplyNestedScenesDestinations) {
+  ScopedProjectSessionDirectory temporary("nested-scene-save");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto tab = project.active_scene_id();
+  const auto relative = project_path("Scenes/Chapter/Maps/Interior/Room.qdr");
+  const auto absolute = project.root() / relative.native_path();
+  std::filesystem::create_directories(absolute.parent_path());
+  const auto saved = editor.scene_documents().save_as_native_path(tab, absolute);
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  ASSERT_NE(project.find(tab), nullptr);
+  EXPECT_EQ(project.find(tab)->path, relative);
+  EXPECT_FALSE(project.find(tab)->dirty());
+  ASSERT_NE(project.manifest()->find_scene(relative), nullptr);
+  const auto document = QdrDocumentReader::read_project_document(absolute);
+  ASSERT_TRUE(document.ok) << document.message;
+  EXPECT_EQ(SceneId::from_bytes(document.scene_uuid), project.find(tab)->scene_id);
+}
+
+TEST(ProjectSessionWorkspace,
+     LegacySceneOutsideScenesOpensButRequiresSaveAsBeforeSavingOrDirtyClose) {
+  ScopedProjectSessionDirectory temporary("legacy-scene-save-scope");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto object = create_saved_transition_curve(project, editor);
+  const auto original_path = project_path("Scenes/Source.qdr");
+  const auto legacy_path = project_path("Legacy.qdr");
+  const auto legacy_absolute = project.root() / legacy_path.native_path();
+  std::filesystem::copy_file(project.root() / original_path.native_path(),
+                             legacy_absolute);
+  const auto opened = editor.scene_documents().open(legacy_path);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  OpenSceneSession *legacy = project.find(opened.value());
+  ASSERT_NE(legacy, nullptr);
+  ASSERT_TRUE(editor.scene().rename(object.entity, "Legacy Unsaved Edit").ok());
+  ASSERT_TRUE(editor.selection().select_object(object.entity).ok());
+  ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+  CurveToolService &curve = legacy->session->curve();
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  ASSERT_TRUE(select_and_begin_curve_control_drag(
+      curve, {.point = curve.preview_state().document->points()[0].id}));
+  ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+  const auto preview = *curve.preview_state().document;
+  const auto identity = legacy->scene_id;
+  const auto stamp = legacy->session->content_revision_stamp();
+  const auto bytes = read_file_bytes(legacy_absolute);
+  const auto manifest = ProjectManifestStore::serialize(*project.manifest());
+  int prompts = 0;
+  editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene = [&](const QuaderSceneDocumentInfo &,
+                                 std::string_view action_id) {
+        EXPECT_EQ(action_id, "scene.close");
+        ++prompts;
+        return QuaderDirtySceneDecision::Save;
+      },
+  });
+  for (int route = 0; route < 4; ++route) {
+    SCOPED_TRACE(route);
+    if (route < 2) {
+      const auto rejected = route == 0 ? project.preflight_save(opened.value())
+                                       : project.save(opened.value());
+      EXPECT_FALSE(rejected.ok);
+      EXPECT_FALSE(rejected.changed);
+    } else {
+      const auto rejected = route == 2
+          ? editor.scene_documents().save(opened.value())
+          : editor.scene_documents().close(opened.value());
+      EXPECT_FALSE(rejected.ok());
+      EXPECT_FALSE(rejected.changed());
+    }
+    EXPECT_TRUE(curve.active());
+    EXPECT_TRUE(curve.dragging());
+    EXPECT_TRUE(legacy->session->modeling().curve_document_preview_active());
+    ASSERT_TRUE(curve.preview_state().document.has_value());
+    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(preview));
+  }
+  EXPECT_EQ(prompts, 1);
+  EXPECT_EQ(project.active_scene(), legacy);
+  EXPECT_EQ(legacy->scene_id, identity);
+  EXPECT_EQ(legacy->path, legacy_path);
+  EXPECT_TRUE(legacy->dirty());
+  EXPECT_EQ(legacy->session->content_revision_stamp(), stamp);
+  EXPECT_EQ(read_file_bytes(legacy_absolute), bytes);
+  EXPECT_EQ(ProjectManifestStore::serialize(*project.manifest()), manifest);
+
+  const auto destination = project_path("Scenes/Migrated.qdr");
+  const auto migrated = editor.scene_documents().save_as(opened.value(), destination);
+  ASSERT_TRUE(migrated.ok()) << migrated.error_message();
+  EXPECT_EQ(legacy->path, destination);
+  EXPECT_NE(legacy->scene_id, identity);
+  EXPECT_FALSE(legacy->dirty());
+  EXPECT_EQ(read_file_bytes(legacy_absolute), bytes);
+  EXPECT_TRUE(editor.scene_documents().close(opened.value()).ok());
+  EXPECT_EQ(prompts, 1);
+}
+
+TEST(ProjectSessionWorkspace,
+     SaveAllPreflightsLegacyDestinationsBeforeEarlierWritesOrUnsavedPrompts) {
+  for (int route = 0; route < 3; ++route) {
+    SCOPED_TRACE(route);
+    ScopedProjectSessionDirectory temporary("save-all-scene-scope");
+    ProjectSession project;
+    QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+    const auto first_id = project.active_scene_id();
+    const auto first_path = project_path("Scenes/First.qdr");
+    ASSERT_TRUE(project.save_as(first_id, first_path).ok);
+    const auto first_absolute = project.root() / first_path.native_path();
+    const auto legacy_path = project_path("Legacy.qdr");
+    std::filesystem::copy_file(first_absolute,
+                               project.root() / legacy_path.native_path());
+    ASSERT_TRUE(editor.scene().create_entity({.name = "First Unsaved Edit"}).ok());
+    if (route != 0) {
+      ASSERT_TRUE(editor.scene_documents().new_scene().ok());
+      ASSERT_TRUE(editor.scene().create_entity({.name = "Unsaved Tab"}).ok());
+    }
+    const auto legacy = editor.scene_documents().open(legacy_path);
+    ASSERT_TRUE(legacy.ok()) << legacy.error_message();
+    ASSERT_TRUE(editor.scene().create_entity({.name = "Legacy Unsaved Edit"}).ok());
+    const auto first_bytes = read_file_bytes(first_absolute);
+    const auto legacy_bytes = read_file_bytes(project.root() / legacy_path.native_path());
+    const auto manifest_bytes = read_file_bytes(project.manifest_path());
+    const auto bridge_path = project.root() / ".quader/bridge/scenes" /
+        (std::string(project.find(first_id)->scene_id.str()) + ".json");
+    const auto bridge_bytes = read_file_bytes(bridge_path);
+    int prompts = 0;
+    editor.scene_documents().set_runtime_hooks({
+        .choose_save_scene_as_path = [&](SceneSessionId) {
+          ++prompts;
+          return QuaderSceneSavePathResult{
+              .path = project.root() / "Scenes/PreviouslyUnsaved.qdr"};
+        },
+    });
+    if (route == 0) {
+      const auto rejected = project.save_all();
+      EXPECT_FALSE(rejected.ok);
+      EXPECT_FALSE(rejected.changed);
+    } else {
+      const auto rejected = route == 1
+          ? editor.scene_documents().save_all()
+          : editor.commands().execute(quader_command::kSceneDocumentSaveAll);
+      EXPECT_FALSE(rejected.ok());
+      EXPECT_FALSE(rejected.changed());
+    }
+    EXPECT_EQ(prompts, 0);
+    EXPECT_TRUE(project.find(first_id)->dirty());
+    EXPECT_TRUE(project.find(legacy.value())->dirty());
+    EXPECT_EQ(read_file_bytes(first_absolute), first_bytes);
+    EXPECT_EQ(read_file_bytes(project.root() / legacy_path.native_path()), legacy_bytes);
+    EXPECT_EQ(read_file_bytes(project.manifest_path()), manifest_bytes);
+    EXPECT_EQ(read_file_bytes(bridge_path), bridge_bytes);
+    EXPECT_FALSE(std::filesystem::exists(project.root() / "Scenes/PreviouslyUnsaved.qdr"));
+  }
+}
+
+TEST(ProjectSessionWorkspace,
      SavedSceneMeshesRemainPickSelectableAfterClosingAndReopeningTab) {
   ScopedProjectSessionDirectory temporary("reopened-mesh-selection");
   ProjectSession project;
@@ -1780,6 +2067,81 @@ TEST(ProjectSessionWorkspace,
 }
 
 TEST(ProjectSessionWorkspace,
+     SaveDialogSetupFailurePreservesUnsavedSceneAndLivePreview) {
+  ScopedProjectSessionDirectory temporary("scene-save-dialog-failure");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  ASSERT_TRUE(editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+      .name = "Unsaved Curve",
+  }).ok());
+  OpenSceneSession *scene = project.active_scene();
+  ASSERT_NE(scene, nullptr);
+  ASSERT_TRUE(scene->dirty());
+  ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+  CurveToolService &curve = scene->session->curve();
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  ASSERT_TRUE(select_and_begin_curve_control_drag(
+      curve, {.point = curve.preview_state().document->points()[0].id}));
+  ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+  const auto preview = *curve.preview_state().document;
+  const auto identity = scene->scene_id;
+  const auto stamp = scene->session->content_revision_stamp();
+  const auto generation = project.activation_generation();
+  const auto manifest = ProjectManifestStore::serialize(*project.manifest());
+  const auto manifest_bytes = read_file_bytes(project.manifest_path());
+  constexpr std::string_view kDialogError =
+      "Could not create the scene Save As dialog.";
+  int path_requests = 0;
+  int close_prompts = 0;
+  editor.scene_documents().set_runtime_hooks({
+      .choose_save_scene_as_path = [&](SceneSessionId id) {
+        EXPECT_EQ(id, scene->session_id);
+        ++path_requests;
+        return QuaderSceneSavePathResult{.error_message = std::string(kDialogError)};
+      },
+      .confirm_dirty_scene = [&](const QuaderSceneDocumentInfo &,
+                                 std::string_view action_id) {
+        EXPECT_EQ(action_id, "scene.close");
+        ++close_prompts;
+        return QuaderDirtySceneDecision::Save;
+      },
+  });
+  for (int route = 0; route < 4; ++route) {
+    SCOPED_TRACE(route);
+    const auto rejected = route == 0
+        ? editor.scene_documents().save_as(scene->session_id)
+        : route == 1
+            ? editor.scene_documents().save(scene->session_id)
+            : route == 2
+                ? editor.scene_documents().close(scene->session_id)
+                : editor.scene_documents().save_all();
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(rejected.error_message(), kDialogError);
+    EXPECT_EQ(path_requests, route + 1);
+    EXPECT_EQ(project.active_scene(), scene);
+    EXPECT_EQ(project.open_scenes().size(), 1u);
+    EXPECT_EQ(project.activation_generation(), generation);
+    EXPECT_EQ(scene->scene_id, identity);
+    EXPECT_FALSE(scene->path.has_value());
+    EXPECT_TRUE(scene->dirty());
+    EXPECT_EQ(scene->session->content_revision_stamp(), stamp);
+    EXPECT_TRUE(curve.active());
+    EXPECT_TRUE(curve.dragging());
+    EXPECT_TRUE(scene->session->modeling().curve_document_preview_active());
+    ASSERT_TRUE(curve.preview_state().document.has_value());
+    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(preview));
+    EXPECT_EQ(ProjectManifestStore::serialize(*project.manifest()), manifest);
+    EXPECT_EQ(read_file_bytes(project.manifest_path()), manifest_bytes);
+    EXPECT_TRUE(std::filesystem::is_empty(project.root() / "Scenes"));
+  }
+  EXPECT_EQ(close_prompts, 1);
+}
+
+TEST(ProjectSessionWorkspace,
      CanceledSaveAsAfterSaveDecisionKeepsDirtySceneTabOpen) {
   ScopedProjectSessionDirectory temporary("scene-close-save-as-cancel");
   ProjectSession project;
@@ -1799,9 +2161,9 @@ TEST(ProjectSessionWorkspace,
   editor.scene_documents().set_runtime_hooks({
       .choose_save_scene_as_path =
           [&save_path_requests](SceneSessionId)
-              -> std::optional<std::filesystem::path> {
+              -> QuaderSceneSavePathResult {
             ++save_path_requests;
-            return std::nullopt;
+            return {};
           },
       .confirm_dirty_scene =
           [](const QuaderSceneDocumentInfo &, std::string_view action_id) {
@@ -1841,9 +2203,9 @@ TEST(ProjectSessionWorkspace,
   editor.scene_documents().set_runtime_hooks({
       .choose_save_scene_as_path =
           [&save_path_requests](SceneSessionId)
-              -> std::optional<std::filesystem::path> {
+              -> QuaderSceneSavePathResult {
             ++save_path_requests;
-            return std::nullopt;
+            return {};
           },
   });
 
@@ -1894,9 +2256,9 @@ TEST(ProjectSessionWorkspace,
   editor.scene_documents().set_runtime_hooks({
       .choose_save_scene_as_path =
           [&save_path_requests](SceneSessionId)
-              -> std::optional<std::filesystem::path> {
+              -> QuaderSceneSavePathResult {
             ++save_path_requests;
-            return std::nullopt;
+            return {};
           },
       .confirm_dirty_scene =
           [](const QuaderSceneDocumentInfo &, std::string_view action_id) {

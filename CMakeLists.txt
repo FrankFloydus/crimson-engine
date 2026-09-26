@@ -999,6 +999,7 @@ add_library(quader_ui STATIC
     src/ui/qt_snapping_toolbar.cpp
     src/ui/qt_tool_toolbar.cpp
     src/ui/qt_viewport_display_toolbar.cpp
+    src/ui/qt_viewport_control_strip.cpp
     src/ui/qt_texture_toolbar.cpp
     src/ui/qt_toolbar_button_presentation.cpp
     src/ui/qt_ui_scale_metrics.cpp

@@ -21,6 +21,7 @@
 #include <QStyleOption>
 #include <QStyleFactory>
 #include <QThread>
+#include <QVariant>
 #include <QWidget>
 
 #include <algorithm>
@@ -218,6 +219,14 @@ void QtUiScaleProxyStyle::set_metrics(
 int QtUiScaleProxyStyle::pixelMetric(PixelMetric metric,
                                      const QStyleOption *option,
                                      const QWidget *widget) const {
+  if (metric == PM_TabBarTabVSpace && widget != nullptr &&
+      widget->property(kQtConnectedTabSurfaceProperty).toBool()) {
+    QStyleOption tab_option;
+    tab_option.initFrom(widget);
+    if (qt_application_style_active(option != nullptr ? option : &tab_option)) {
+      return metrics_.px(4);
+    }
+  }
   if (widget != nullptr &&
       (qobject_cast<const QDockWidget *>(widget) != nullptr ||
        qobject_cast<const QDockWidget *>(widget->parentWidget()) != nullptr)) {

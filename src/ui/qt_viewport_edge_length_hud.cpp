@@ -16,14 +16,13 @@
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_layout.hpp"
 
+#include <QApplication>
 #include <QByteArray>
 #include <QBitmap>
 #include <QColor>
-#include <QCoreApplication>
 #include <QEvent>
 #include <QFrame>
 #include <QFont>
-#include <QFontDatabase>
 #include <QFontMetrics>
 #include <QImage>
 #include <QLabel>
@@ -31,11 +30,8 @@
 #include <QPainter>
 #include <QPalette>
 #include <QPointF>
-#include <QPointer>
 #include <QRegion>
-#include <QResource>
 #include <QSizePolicy>
-#include <QStringList>
 #include <QVariant>
 #include <QWidget>
 
@@ -46,12 +42,6 @@
 #include <span>
 #include <string_view>
 
-// Q_INIT_RESOURCE must remain in the global namespace so its generated symbol
-// is resolved from the static quader_ui resource object.
-static void initialize_quader_dimension_font_resource() {
-  Q_INIT_RESOURCE(quader_dimension_fonts);
-}
-
 namespace quader {
 namespace {
 
@@ -61,50 +51,9 @@ constexpr int kDimensionOutlinePaddingPixels = 2;
 constexpr double kDefaultDimensionFontSizePoints = 12.0;
 constexpr double kMinimumDimensionFontSizePoints = 6.0;
 constexpr double kMaximumDimensionFontSizePoints = 24.0;
-constexpr auto kDimensionFontResourcePath =
-    ":/quader/fonts/HomeVideo-Regular.ttf";
-constexpr auto kDimensionFontFallbackFamily = "Home Video";
-
-struct DimensionFontRegistration final {
-  QPointer<QCoreApplication> application;
-  QString family;
-};
-
-const QString &dimension_font_family() {
-  static const bool kResourceInitialized = [] {
-    initialize_quader_dimension_font_resource();
-    return true;
-  }();
-  (void)kResourceInitialized;
-
-  static DimensionFontRegistration registration;
-  QCoreApplication *application = QCoreApplication::instance();
-  if (registration.application == application &&
-      !registration.family.isEmpty()) {
-    return registration.family;
-  }
-
-  registration.application = application;
-  registration.family = QString::fromLatin1(kDimensionFontFallbackFamily);
-  const int font_id = QFontDatabase::addApplicationFont(
-      QString::fromLatin1(kDimensionFontResourcePath));
-  if (font_id < 0) {
-    return registration.family;
-  }
-  const QStringList families =
-      QFontDatabase::applicationFontFamilies(font_id);
-  if (!families.isEmpty()) {
-    registration.family = families.front();
-  }
-  return registration.family;
-}
-
 QFont dimension_font(double point_size) {
-  QFont font{dimension_font_family()};
+  QFont font = QApplication::font();
   font.setPointSizeF(point_size);
-  font.setStyleStrategy(static_cast<QFont::StyleStrategy>(
-      QFont::NoAntialias | QFont::NoFontMerging));
-  font.setHintingPreference(QFont::PreferFullHinting);
   return font;
 }
 
