@@ -92,7 +92,7 @@ public:
         const RenderMeshAssetSnapshot &mesh, filament::Material &material,
         std::span<const QMat4> world_transforms,
         const RenderInstanceBounds &world_bounds, std::uint32_t color,
-        std::uint16_t blend_order);
+        std::uint16_t blend_order, bool active_selected);
     /// Shares position-only triangle soup buffers across collision instances.
     MeshRenderableProxy create_collision_shape_fill(
         std::shared_ptr<const MeshCollisionGeometryPayload> geometry,

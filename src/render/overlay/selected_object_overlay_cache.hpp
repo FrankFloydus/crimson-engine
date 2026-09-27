@@ -9,6 +9,7 @@
 #include "core/types.hpp"
 #include "math/types/qvec3.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/overlay/overlay_face_fill_composition.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -74,6 +75,7 @@ public:
         filament::MaterialInstance *material_instance = nullptr;
         std::uint32_t vertex_count = 0;
         std::uint32_t index_count = 0;
+        OverlayFaceFillPass face_fill_pass = OverlayFaceFillPass::Color;
     };
 
     /**
@@ -90,6 +92,7 @@ public:
         AssetId mesh_id = kInvalidAssetId;
         std::uint64_t mesh_revision = 0;
         std::uint32_t face_color = 0;
+        OverlayFaceFillClass face_fill_class = OverlayFaceFillClass::None;
         std::vector<Proxy> face_proxies;
     };
 

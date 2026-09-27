@@ -7,6 +7,7 @@
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
+#include "render/overlay/overlay_face_fill_composition.hpp"
 #include "render/overlay/viewport_selection_dimension_geometry.hpp"
 #include "render/overlay/viewport_overlay_dash.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -2196,6 +2197,90 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   request.selection_dimension_preview_curves = curve_previews;
   ++request.tool_preview_overlay_revision;
   expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 1, 0}, {7, 3, 1});
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     FaceFillPrioritiesRemainPaneLocalAndReuseUnchangedSourceFrames) {
+  ViewportOverlayFrame selected;
+  selected.triangles.push_back({
+      .layer = ViewportOverlayLayer::SelectedVisibleFace,
+      .a = {-1, -1, -2}, .b = {1, -1, -2}, .c = {0, 1, -2},
+      .style_role = ViewportOverlayStyleRole::SelectionFace,
+      .source = ViewportOverlaySource::ComponentSelection});
+  StaticSelectionFrameProvider selection(selected);
+  StaticDynamicToolFrameProvider tools({});
+  std::array<ViewportOverlayFrame, 2> hover;
+  hover[0].triangles.push_back(selected.triangles.front());
+  hover[0].triangles.front().layer = ViewportOverlayLayer::HoverFace;
+  hover[0].triangles.front().style_role = ViewportOverlayStyleRole::HoverFace;
+  hover[0].triangles.front().source = ViewportOverlaySource::Hover;
+  std::array<std::uint64_t, 2> revisions{1u, 1u};
+  RenderOverlaySelectionSnapshot scene;
+  CurveToolPreviewState curve;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  std::array<RecordingOverlayTarget, 2> targets;
+  auto settings = ViewportSettings::defaults();
+  for (const auto color : {ViewportColorSettingId::SelectionFace,
+                           ViewportColorSettingId::HoverFace,
+                           ViewportColorSettingId::RemoveSelectionFace}) {
+    ASSERT_TRUE(settings.set_color(color, {0.25f, 0.5f, 0.75f, 0.3f}));
+  }
+  const auto submit = [&](std::size_t pane) {
+    auto request = submission_request(selection, scene, hover[pane], curve);
+    request.viewport_index = pane;
+    request.camera.projection = ViewportOverlayProjection::Perspective;
+    request.selection_source.selection_context = ViewportOverlaySelectionContext::Face;
+    request.style_selection_context = ViewportOverlaySelectionContext::Face;
+    request.volatile_modeling_source.publication_revision = revisions[pane];
+    request.dynamic_tool_frame_provider = &tools;
+    request.dynamic_tool_source = {
+        .source_identity = reinterpret_cast<std::uintptr_t>(&tools),
+        .publication_revision = 1u};
+    return coordinator.submit(request, settings, targets[pane]);
+  };
+  for (std::size_t pane = 0u; pane < targets.size(); ++pane) {
+    ASSERT_TRUE(submit(pane).persistent_submitted);
+    const auto plan = OverlayRenderableBuilder::build_layer(
+        targets[pane].persistent_frame, {}, ViewportOverlayLayer::SelectedVisibleFace);
+    ASSERT_EQ(plan.face_fill_batches.size(), 2u);
+    for (const auto &batch : plan.face_fill_batches) {
+      EXPECT_EQ(batch.state.face_fill_class, OverlayFaceFillClass::Selection);
+    }
+  }
+  ASSERT_EQ(targets[0].dynamic_frame.triangles.size(), 1u);
+  ASSERT_EQ(targets[0].persistent_frame.triangles.size(), 1u);
+  EXPECT_EQ(targets[0].dynamic_frame.triangles.front().color,
+            targets[0].persistent_frame.triangles.front().color);
+  EXPECT_TRUE(targets[1].dynamic_frame.triangles.empty());
+  const auto builds = selection.build_count;
+  const auto work = coordinator.work_counters();
+  for (int frame = 0; frame < 8; ++frame) {
+    for (std::size_t pane = 0u; pane < targets.size(); ++pane) {
+      EXPECT_TRUE(submit(pane).camera_only);
+    }
+  }
+  EXPECT_EQ(selection.build_count, builds);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count);
+
+  const auto old_color = targets[0].dynamic_frame.triangles.front().color;
+  hover[0].triangles.front().style_role = ViewportOverlayStyleRole::RemoveSelectionFace;
+  ++revisions[0];
+  const auto changed = submit(0u);
+  EXPECT_TRUE(changed.dynamic_submitted);
+  EXPECT_FALSE(changed.persistent_submitted);
+  EXPECT_EQ(targets[0].dynamic_frame.triangles.front().color, old_color);
+  const auto remove_plan = OverlayRenderableBuilder::build_layer(
+      targets[0].dynamic_frame, {}, ViewportOverlayLayer::HoverFace);
+  ASSERT_EQ(remove_plan.face_fill_batches.size(), 2u);
+  for (const auto &batch : remove_plan.face_fill_batches) {
+    EXPECT_EQ(batch.state.face_fill_class, OverlayFaceFillClass::RemoveSelection);
+  }
+  EXPECT_TRUE(submit(1u).camera_only);
+  EXPECT_TRUE(targets[1].dynamic_frame.triangles.empty());
+  EXPECT_EQ(selection.build_count, builds);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count + 1u);
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,

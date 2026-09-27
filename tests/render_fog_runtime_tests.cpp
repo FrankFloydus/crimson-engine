@@ -91,6 +91,7 @@ public:
     renderer_ = engine_->createRenderer();
     swapchain_ = engine_->createSwapChain(
         width_, height_, filament::SwapChain::CONFIG_READABLE |
+            filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER |
             (srgb ? filament::SwapChain::CONFIG_SRGB_COLORSPACE : 0u));
     // The windowless fixture has no QCoreApplication. Test main records the
     // actual executable directory before any temporary Qt test applications.
@@ -108,6 +109,7 @@ public:
     materials_.bind_scene({.scene_session_id = 1u});
     factory_.initialize(*engine_, *scene_, materials_);
     viewport_.initialize(*engine_, *scene_, registry_, library_.ground_grid(),
+                          library_.overlay_stencil_reset(),
                           viewport_grid_layer_mask(0u),
                           srgb ? ViewportRenderSurface::SrgbSwapchain
                                : ViewportRenderSurface::Swapchain);

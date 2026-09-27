@@ -10,6 +10,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
+#include "render/overlay/overlay_face_fill_composition.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -54,6 +55,8 @@ struct OverlayRenderState {
   OverlayDepthFunc depth_func = OverlayDepthFunc::Always;
   OverlayCullingMode culling_mode = OverlayCullingMode::None;
   OverlayTransparencyMode transparency_mode = OverlayTransparencyMode::Default;
+  OverlayFaceFillClass face_fill_class = OverlayFaceFillClass::None;
+  OverlayFaceFillPass face_fill_pass = OverlayFaceFillPass::Color;
   float polygon_offset_scale = 0.0f;
   float polygon_offset_constant = 0.0f;
   std::uint16_t blend_order = 0;

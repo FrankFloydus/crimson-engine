@@ -90,8 +90,9 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height,
       viewport_render_target_capacity_for_size(viewport_width_);
   const std::uint32_t capacity_height =
       viewport_render_target_capacity_for_size(viewport_height_);
+  const bool stencil_enabled = view->isStencilBufferEnabled();
   if (render_target_ && capacity_width == width_ &&
-      capacity_height == height_) {
+      capacity_height == height_ && stencil_enabled_ == stencil_enabled) {
     if (sample_color_space_ != sample_color_space) {
       sample_color_space_ = sample_color_space;
       texture_registry_->update_texture(texture_handle_, color_texture_,
@@ -106,6 +107,7 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height,
   width_ = capacity_width;
   height_ = capacity_height;
   sample_color_space_ = sample_color_space;
+  stencil_enabled_ = stencil_enabled;
 
   using Texture = filament::Texture;
   LOG_INFO("Allocating viewport render target {}x{} for viewport {}x{}", width_,
@@ -127,8 +129,13 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height,
                                      .width(width_)
                                      .height(height_)
                                      .levels(1)
-                                     .usage(Texture::Usage::DEPTH_ATTACHMENT)
-                                     .format(Texture::InternalFormat::DEPTH24)
+                                     .usage(stencil_enabled_
+                                                ? Texture::Usage::DEPTH_ATTACHMENT |
+                                                      Texture::Usage::STENCIL_ATTACHMENT
+                                                : Texture::Usage::DEPTH_ATTACHMENT)
+                                     .format(stencil_enabled_
+                                                 ? Texture::InternalFormat::DEPTH32F_STENCIL8
+                                                 : Texture::InternalFormat::DEPTH24)
                                      .build(*engine_);
   if (creation_guard.depth_texture == nullptr) {
     return;

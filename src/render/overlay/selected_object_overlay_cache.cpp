@@ -94,7 +94,8 @@ to_filament_transparency_mode(OverlayTransparencyMode transparency_mode) {
 }
 
 void configure_overlay_material(filament::MaterialInstance &material,
-                                const OverlayRenderState &state) {
+                                const OverlayRenderState &state,
+                                bool stencil_enabled) {
   material.setColorWrite(state.color_write);
   material.setDepthWrite(state.depth_write);
   material.setDepthCulling(state.depth_culling);
@@ -104,6 +105,8 @@ void configure_overlay_material(filament::MaterialInstance &material,
       to_filament_transparency_mode(state.transparency_mode));
   material.setPolygonOffset(state.polygon_offset_scale,
                             state.polygon_offset_constant);
+  apply_overlay_face_fill_stencil(material, state.face_fill_class,
+                                  state.face_fill_pass, stencil_enabled);
 }
 
 const RenderOverlayMeshSnapshot *find_overlay_mesh_snapshot(
@@ -197,6 +200,7 @@ create_proxy(filament::Engine &engine, filament::Scene &scene,
   proxy.entity = utils::EntityManager::get().create();
   proxy.vertex_count = static_cast<std::uint32_t>(vertices.size());
   proxy.index_count = static_cast<std::uint32_t>(indices.size());
+  proxy.face_fill_pass = state.face_fill_pass;
   proxy.material_instance = material.createInstance();
   configure_material(*proxy.material_instance);
 
@@ -239,7 +243,8 @@ SelectedObjectOverlayCache::Proxy::Proxy(Proxy &&other) noexcept
       index_buffer(std::exchange(other.index_buffer, nullptr)),
       material_instance(std::exchange(other.material_instance, nullptr)),
       vertex_count(std::exchange(other.vertex_count, 0u)),
-      index_count(std::exchange(other.index_count, 0u)) {
+      index_count(std::exchange(other.index_count, 0u)),
+      face_fill_pass(other.face_fill_pass) {
   other.entity.clear();
 }
 
@@ -254,6 +259,7 @@ SelectedObjectOverlayCache::Proxy& SelectedObjectOverlayCache::Proxy::operator=(
     material_instance = std::exchange(other.material_instance, nullptr);
     vertex_count = std::exchange(other.vertex_count, 0u);
     index_count = std::exchange(other.index_count, 0u);
+    face_fill_pass = other.face_fill_pass;
     return *this;
 }
 
@@ -424,6 +430,10 @@ SelectedObjectOverlayCache::create_entry(
   entry.mesh_revision = mesh.mesh_revision;
   entry.face_color = mesh.active_selected ? style.active_selection_face_color
                                           : style.selection_face_color;
+  entry.face_fill_class = visible_overlay_face_fill_class(
+      mesh.active_selected ? OverlayFaceFillClass::ActiveSelection
+                           : OverlayFaceFillClass::Selection,
+      entry.face_color);
   entry.transform_root = utils::EntityManager::get().create();
   filament::TransformManager &transforms = engine_->getTransformManager();
   transforms.create(entry.transform_root);
@@ -443,31 +453,41 @@ SelectedObjectOverlayCache::create_entry(
          }) {
       const std::uint16_t blend_order =
           static_cast<std::uint16_t>(viewport_overlay_draw_order(layer) * 64);
-      const OverlayRenderState color_state =
-          OverlayRenderableBuilder::make_state(
-              layer, ViewportOverlayGeometryKind::Triangles, blend_order);
-      entry.face_proxies.push_back(create_proxy(
-          *engine_, *scene_, *face_fill_material_, parent_transform,
-          face_vertices, face_indices, bounds, color_state, layer_mask,
-          [](filament::VertexBuffer::Builder &builder) {
-            builder
-                .attribute(filament::VertexAttribute::POSITION, 0,
-                           AttributeType::FLOAT3,
-                           offsetof(OverlayFaceFillVertex, position),
-                           sizeof(OverlayFaceFillVertex))
-                .attribute(filament::VertexAttribute::UV0, 0,
-                           AttributeType::FLOAT2,
-                           offsetof(OverlayFaceFillVertex, uv),
-                           sizeof(OverlayFaceFillVertex))
-                .attribute(filament::VertexAttribute::COLOR, 0,
-                           AttributeType::UBYTE4,
-                           offsetof(OverlayFaceFillVertex, color),
-                           sizeof(OverlayFaceFillVertex))
-                .normalized(filament::VertexAttribute::COLOR);
-          },
-          [&color_state](filament::MaterialInstance &material) {
-            configure_overlay_material(material, color_state);
-          }));
+      for (const OverlayFaceFillPass pass : {OverlayFaceFillPass::Mask,
+                                             OverlayFaceFillPass::Color}) {
+        OverlayRenderState state = OverlayRenderableBuilder::make_state(
+            layer, ViewportOverlayGeometryKind::Triangles, blend_order);
+        state.face_fill_class = entry.face_fill_class;
+        state.face_fill_pass = pass;
+        if (pass == OverlayFaceFillPass::Mask) {
+          state.color_write = false;
+          state.blend_order = overlay_face_fill_mask_blend_order();
+        }
+        entry.face_proxies.push_back(create_proxy(
+            *engine_, *scene_, *face_fill_material_, parent_transform,
+            face_vertices, face_indices, bounds, state, layer_mask,
+            [](filament::VertexBuffer::Builder &builder) {
+              builder
+                  .attribute(filament::VertexAttribute::POSITION, 0,
+                             AttributeType::FLOAT3,
+                             offsetof(OverlayFaceFillVertex, position),
+                             sizeof(OverlayFaceFillVertex))
+                  .attribute(filament::VertexAttribute::UV0, 0,
+                             AttributeType::FLOAT2,
+                             offsetof(OverlayFaceFillVertex, uv),
+                             sizeof(OverlayFaceFillVertex))
+                  .attribute(filament::VertexAttribute::COLOR, 0,
+                             AttributeType::UBYTE4,
+                             offsetof(OverlayFaceFillVertex, color),
+                             sizeof(OverlayFaceFillVertex))
+                  .normalized(filament::VertexAttribute::COLOR);
+            },
+            [this, &state](filament::MaterialInstance &material) {
+              configure_overlay_material(
+                  material, state,
+                  engine_->getBackend() == filament::Engine::Backend::VULKAN);
+            }));
+      }
     }
   }
 
@@ -480,15 +500,31 @@ void SelectedObjectOverlayCache::update_entry_face_color(
     const ViewportPersistentOverlayStyleSnapshot &style) {
   const auto color = mesh.active_selected ? style.active_selection_face_color
                                           : style.selection_face_color;
-  if (entry.face_color == color) return;
-  const auto vertices = selected_face_vertices(mesh.vertices, color);
+  const OverlayFaceFillClass fill_class = visible_overlay_face_fill_class(
+      mesh.active_selected ? OverlayFaceFillClass::ActiveSelection
+                           : OverlayFaceFillClass::Selection,
+      color);
+  const bool color_changed = entry.face_color != color;
+  const bool class_changed = entry.face_fill_class != fill_class;
+  if (!color_changed && !class_changed) {
+    return;
+  }
+  const auto vertices = color_changed
+                            ? selected_face_vertices(mesh.vertices, color)
+                            : std::vector<OverlayFaceFillVertex>{};
   for (const auto &proxy : entry.face_proxies) {
-    if (proxy.vertex_buffer != nullptr) {
+    if (color_changed && proxy.vertex_buffer != nullptr) {
       proxy.vertex_buffer->setBufferAt(
           *engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
     }
+    if (class_changed && proxy.material_instance != nullptr) {
+      apply_overlay_face_fill_stencil(
+          *proxy.material_instance, fill_class, proxy.face_fill_pass,
+          engine_->getBackend() == filament::Engine::Backend::VULKAN);
+    }
   }
   entry.face_color = color;
+  entry.face_fill_class = fill_class;
 }
 
 void SelectedObjectOverlayCache::destroy_entry(Entry &entry) {

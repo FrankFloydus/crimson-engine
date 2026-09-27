@@ -498,6 +498,7 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
        {"quader_modeling_sdk_curves", "quader_modeling_sdk_polygon",
         "quader_modeling_sdk_qdr_document"}},
       {"quader_overlay_icon_material", {}},
+      {"overlay_stencil_reset_material", {}},
       {"quader_overlay_line_material", {}},
       {"quader_overlay_point_material", {}},
       {"quader_fatal_diagnostics", {}},

@@ -28,6 +28,14 @@ file except through prior written authorization from Francesco Di Blasi.
 - Overlay order, colors, depth, widths, and points belong to overlay policy/style resolvers. Keep
   persistent and volatile overlay streams separate; do not restore UI wire fallbacks or raw
   Filament line/point shortcuts.
+- Vulkan face tints share the stencil policy in `overlay/overlay_face_fill_composition.*`:
+  coverage chooses hover/removal over active over ordinary selection, then consumes one
+  authored-alpha tint per pixel. Zero-alpha fills neither claim nor consume coverage.
+  Never write scene depth from these masks/fills. Reset the
+  reserved stencil bits for each pane/pass, including retained offscreen targets; preserve
+  component outlines and real occlusion. The pinned SDK cannot attach custom-target stencil
+  on OpenGL, so non-Vulkan backends retain the previous fill path. Native and offscreen pixel
+  regressions live in `tests/selection_overlay_runtime_tests.cpp`.
 - Collision display has an independent retained snapshot/cache; it follows mesh collision metadata,
   visibility, and precise tool-preview suppression. Selection and camera changes must not derive
   or upload collision geometry; tint changes update uniforms only.

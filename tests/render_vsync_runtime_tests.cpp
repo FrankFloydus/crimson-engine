@@ -487,7 +487,8 @@ public:
     scene_ = engine_->createScene();
     renderer_ = engine_->createRenderer();
     swapchain_ = engine_->createSwapChain(
-        kWidth, kHeight, filament::SwapChain::CONFIG_READABLE);
+        kWidth, kHeight, filament::SwapChain::CONFIG_READABLE |
+                            filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
     if (!scene_ || !renderer_ || !swapchain_ ||
         !materials_.initialize(*engine_, resources)) return false;
     solid_color_texture_ = create_test_solid_color_texture(*engine_);
@@ -501,6 +502,7 @@ public:
         materials_.overlay_point(), materials_.overlay_icon(),
         *solid_color_texture_, resources);
     view_.initialize(*engine_, *scene_, registry_, materials_.ground_grid(),
+                     materials_.overlay_stencil_reset(),
                      viewport_grid_layer_mask(0u),
                      ViewportRenderSurface::Swapchain);
     camera_.set_viewport_size(kWidth, kHeight);

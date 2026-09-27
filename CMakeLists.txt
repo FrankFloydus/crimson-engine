@@ -774,6 +774,7 @@ quader_register_filament_material(quader_selected_object_line_material resources
 quader_register_filament_material(quader_edit_wire_line_material resources/materials/quader_edit_wire_line.mat quader_edit_wire_line)
 quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
 quader_register_filament_material(quader_overlay_icon_material resources/materials/quader_overlay_icon.mat quader_overlay_icon)
+quader_register_filament_material(overlay_stencil_reset_material resources/materials/overlay_stencil_reset.mat overlay_stencil_reset)
 quader_register_filament_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
 # DbgHelp must run outside the failing process and without Quader/Tracy state.
@@ -845,6 +846,8 @@ add_library(quader_render STATIC
     src/render/overlay/render_overlay_snapshot.cpp
     src/render/overlay/render_overlay_collision_snapshot.cpp
     src/render/overlay/overlay_renderable_builder.cpp
+    src/render/overlay/overlay_face_fill_composition.cpp
+    src/render/overlay/overlay_stencil_reset.cpp
     src/render/overlay/overlay_renderable_cache.cpp
     src/render/overlay/instanced_wire_render_backend.cpp
     src/render/overlay/instance_selection_overlay_cache.cpp

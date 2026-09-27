@@ -7,6 +7,7 @@
 #pragma once
 
 #include "render/instance_edit_style.hpp"
+#include "render/overlay/overlay_stencil_reset.hpp"
 #include "render/texture_registry.hpp"
 #include "render/viewport_grid_renderer.hpp"
 #include "render/viewport_render_target.hpp"
@@ -66,6 +67,7 @@ public:
     initialize(filament::Engine &engine, filament::Scene &scene,
                TextureRegistry &texture_registry,
                filament::Material &ground_grid_material,
+               filament::Material &overlay_stencil_reset_material,
                std::uint8_t grid_layer_mask,
                ViewportRenderSurface surface = ViewportRenderSurface::Texture);
     void shutdown();
@@ -123,6 +125,7 @@ public:
     utils::Entity camera_entity_;
     utils::Entity overlay_camera_entity_;
     ViewportGridRenderer grid_renderer_;
+    OverlayStencilReset overlay_stencil_reset_;
     ViewportRenderPassCoordinator render_pass_coordinator_;
     ViewportRenderTarget render_target_;
     ViewportRenderTarget overlay_render_target_;

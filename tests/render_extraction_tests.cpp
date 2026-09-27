@@ -43,6 +43,7 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
+#include "render/overlay/overlay_face_fill_composition.hpp"
 #include "render/overlay/instance_selection_overlay_cache.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
@@ -7022,16 +7023,19 @@ TEST(OverlayFaceFillBuilderTests, PreservesFaceTintWithoutWritingDepth) {
         frame, test_overlay_camera(),
         ViewportOverlayLayer::SelectedVisibleFace);
 
-    ASSERT_EQ(plan.face_fill_batches.size(), 1u);
-    EXPECT_EQ(plan.face_fill_batches[0].mesh.vertices.size(), 3u);
-    EXPECT_EQ(plan.face_fill_batches[0].mesh.indices.size(), 3u);
-    EXPECT_FALSE(plan.face_fill_batches[0].state.depth_write);
-    EXPECT_TRUE(plan.face_fill_batches[0].state.color_write);
-    EXPECT_TRUE(plan.face_fill_batches[0].state.depth_culling);
-    EXPECT_EQ(plan.face_fill_batches[0].state.depth_func,
-              OverlayDepthFunc::GreaterOrEqual);
-    EXPECT_EQ(plan.face_fill_batches[0].mesh.vertices[0].color,
-              rgba8_srgb_to_linear(rgba8(255, 172, 31, 8)));
+    ASSERT_EQ(plan.face_fill_batches.size(), 2u);
+    for (const auto &batch : plan.face_fill_batches) {
+      EXPECT_EQ(batch.mesh.vertices.size(), 3u);
+      EXPECT_EQ(batch.mesh.indices.size(), 3u);
+      EXPECT_FALSE(batch.state.depth_write);
+      EXPECT_EQ(batch.state.color_write,
+                batch.state.face_fill_pass == OverlayFaceFillPass::Color);
+      EXPECT_TRUE(batch.state.depth_culling);
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+      EXPECT_EQ(batch.state.face_fill_class, OverlayFaceFillClass::Selection);
+      EXPECT_EQ(batch.mesh.vertices[0].color,
+                rgba8_srgb_to_linear(rgba8(255, 172, 31, 8)));
+    }
 }
 
 TEST(OverlayFaceFillBuilderTests,
@@ -7058,20 +7062,188 @@ TEST(OverlayFaceFillBuilderTests,
             OverlayRenderableBuilder::build_layer(frame, test_overlay_camera(),
                                                   layer);
 
-        ASSERT_EQ(plan.face_fill_batches.size(), 1u);
-        const OverlayFaceFillBatch &batch = plan.face_fill_batches.front();
-        EXPECT_FALSE(batch.state.depth_write);
-        EXPECT_TRUE(batch.state.color_write);
-        EXPECT_TRUE(batch.state.depth_culling);
-        EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
-        EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
-        EXPECT_EQ(batch.state.transparency_mode,
-                  OverlayTransparencyMode::TwoPassesTwoSides);
-        EXPECT_EQ(batch.state.blend_order,
-                  viewport_overlay_draw_order(layer) * 64u);
-        EXPECT_EQ(batch.mesh.vertices[0].color,
-                  rgba8_srgb_to_linear(rgba8(31, 255, 102, 22)));
+        ASSERT_EQ(plan.face_fill_batches.size(), 2u);
+        EXPECT_EQ(plan.face_fill_batches.front().state.face_fill_pass,
+                  OverlayFaceFillPass::Mask);
+        EXPECT_EQ(plan.face_fill_batches.back().state.face_fill_pass,
+                  OverlayFaceFillPass::Color);
+        for (const auto &batch : plan.face_fill_batches) {
+          const bool mask = batch.state.face_fill_pass == OverlayFaceFillPass::Mask;
+          EXPECT_FALSE(batch.state.depth_write);
+          EXPECT_EQ(batch.state.color_write, !mask);
+          EXPECT_TRUE(batch.state.depth_culling);
+          EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+          EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
+          EXPECT_EQ(batch.state.transparency_mode,
+                    OverlayTransparencyMode::TwoPassesTwoSides);
+          EXPECT_EQ(batch.state.blend_order,
+                    mask ? 1u : viewport_overlay_draw_order(layer) * 64u);
+          EXPECT_EQ(batch.mesh.vertices[0].color,
+                    rgba8_srgb_to_linear(rgba8(31, 255, 102, 22)));
+        }
     }
+}
+
+TEST(OverlayFaceFillBuilderTests,
+     EqualColorsKeepSemanticPrioritiesAndAllMasksPrecedeEveryColorStream) {
+  const std::array roles{
+      ViewportOverlayStyleRole::SelectionFace,
+      ViewportOverlayStyleRole::ActiveSelectionFace,
+      ViewportOverlayStyleRole::HoverFace,
+      ViewportOverlayStyleRole::FacePlaneHoverFace,
+      ViewportOverlayStyleRole::RemoveSelectionFace};
+  const std::array priorities{
+      OverlayFaceFillClass::Selection, OverlayFaceFillClass::ActiveSelection,
+      OverlayFaceFillClass::Hover, OverlayFaceFillClass::FacePlaneHover,
+      OverlayFaceFillClass::RemoveSelection};
+  constexpr auto kColor = rgba8(63, 127, 191, 70);
+  std::uint16_t last_mask = 0u;
+  auto first_color = std::numeric_limits<std::uint16_t>::max();
+  for (const auto layer : {ViewportOverlayLayer::SelectedVisibleFace,
+                           ViewportOverlayLayer::HoverFace}) {
+    ViewportOverlayFrame frame;
+    // Reverse priority and vary world depth: neither input order, depth nor
+    // equal user colors may collapse the semantic winner classes together.
+    for (std::size_t index = roles.size(); index > 0u; --index) {
+      const float z = -static_cast<float>(index);
+      frame.triangles.push_back({.layer = layer,
+          .a = {-1, -1, z}, .b = {1, -1, z}, .c = {0, 1, z},
+          .color = kColor, .style_role = roles[index - 1u]});
+    }
+    // These are the persistent and dynamic cache blend-order reservations.
+    for (const std::uint16_t bias : {0u, 32u}) {
+      const auto plan = OverlayRenderableBuilder::build_layer(
+          frame, test_overlay_camera(), layer, nullptr, bias);
+      ASSERT_EQ(plan.face_fill_batches.size(), roles.size() * 2u);
+      for (std::size_t index = 0u; index < priorities.size(); ++index) {
+        const auto &mask = plan.face_fill_batches[index * 2u];
+        const auto &tint = plan.face_fill_batches[index * 2u + 1u];
+        EXPECT_EQ(mask.state.face_fill_class, priorities[index]);
+        EXPECT_EQ(tint.state.face_fill_class, priorities[index]);
+        EXPECT_EQ(mask.state.face_fill_pass, OverlayFaceFillPass::Mask);
+        EXPECT_EQ(tint.state.face_fill_pass, OverlayFaceFillPass::Color);
+        EXPECT_FALSE(mask.state.color_write);
+        EXPECT_TRUE(tint.state.color_write);
+        EXPECT_FALSE(mask.state.depth_write);
+        EXPECT_FALSE(tint.state.depth_write);
+        EXPECT_TRUE(mask.state.depth_culling);
+        EXPECT_TRUE(tint.state.depth_culling);
+        EXPECT_EQ(mask.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+        EXPECT_EQ(tint.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+        ASSERT_EQ(mask.mesh.vertices.size(), 3u);
+        ASSERT_EQ(tint.mesh.vertices.size(), 3u);
+        EXPECT_EQ(mask.mesh.vertices.front().color, rgba8_srgb_to_linear(kColor));
+        EXPECT_EQ(tint.mesh.vertices.front().color, rgba8_srgb_to_linear(kColor));
+        last_mask = std::max(last_mask, mask.state.blend_order);
+        first_color = std::min(first_color, tint.state.blend_order);
+      }
+    }
+  }
+  EXPECT_LT(last_mask, first_color);
+}
+
+TEST(OverlayFaceFillBuilderTests,
+     BothPassesRetainTransformBindingsAndSemanticChangesInvalidateCachedPlans) {
+  ViewportOverlayFrame frame;
+  frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::HoverFace,
+      .a = {-1, -1, -2}, .b = {1, -1, -2}, .c = {0, 1, -2},
+      .color = rgba8(63, 127, 191, 70),
+      .style_role = ViewportOverlayStyleRole::HoverFace,
+      .source = ViewportOverlaySource::Hover,
+      .element = {.object_id = 42, .vertex_id = 11, .edge_a = 12, .edge_b = 13}});
+  const auto layer = ViewportOverlayLayer::HoverFace;
+  const auto camera = test_overlay_camera();
+  const auto initial_signature =
+      OverlayRenderableBuilder::layer_build_signature(frame, camera, layer);
+  auto moved_camera = camera;
+  moved_camera.eye.x += 10.0f;
+  EXPECT_EQ(OverlayRenderableBuilder::layer_build_signature(frame, moved_camera, layer),
+            initial_signature);
+  const auto plan = OverlayRenderableBuilder::build_layer(frame, camera, layer);
+  ASSERT_EQ(plan.face_fill_batches.size(), 2u);
+  for (const auto &batch : plan.face_fill_batches) {
+    ASSERT_EQ(batch.mesh.position_stream_bindings.size(), 3u);
+    EXPECT_EQ(batch.mesh.indices, (std::vector<std::uint32_t>{0u, 1u, 2u}));
+    for (std::size_t index = 0u; index < 3u; ++index) {
+      const auto &binding = batch.mesh.position_stream_bindings[index];
+      EXPECT_EQ(binding.object_id, 42);
+      EXPECT_EQ(binding.vertex_id, 11 + static_cast<int>(index));
+      EXPECT_EQ(binding.first_vertex, index);
+      EXPECT_EQ(binding.vertex_count, 1u);
+      EXPECT_EQ(binding.stream, OverlayPositionStream::Primary);
+      EXPECT_FLOAT_EQ(binding.base_position.x, batch.mesh.vertices[index].position.x);
+      EXPECT_FLOAT_EQ(binding.base_position.y, batch.mesh.vertices[index].position.y);
+      EXPECT_FLOAT_EQ(binding.base_position.z, batch.mesh.vertices[index].position.z);
+    }
+  }
+  frame.triangles.front().style_role = ViewportOverlayStyleRole::RemoveSelectionFace;
+  EXPECT_NE(OverlayRenderableBuilder::layer_build_signature(frame, camera, layer),
+            initial_signature);
+  const auto remove = OverlayRenderableBuilder::build_layer(frame, camera, layer);
+  ASSERT_EQ(remove.face_fill_batches.size(), 2u);
+  for (const auto &batch : remove.face_fill_batches) {
+    EXPECT_EQ(batch.state.face_fill_class, OverlayFaceFillClass::RemoveSelection);
+    EXPECT_EQ(batch.mesh.indices, plan.face_fill_batches.front().mesh.indices);
+    EXPECT_EQ(batch.mesh.vertices.front().color,
+              plan.face_fill_batches.front().mesh.vertices.front().color);
+  }
+}
+
+TEST(OverlayFaceFillBuilderTests,
+     TransparentHoverCannotClaimSelectionCoverageAndOpacityRestoresItsMask) {
+  ViewportOverlayFrame frame;
+  frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::SelectedVisibleFace,
+      .a = {-1, -1, -2}, .b = {1, -1, -2}, .c = {0, 1, -2},
+      .color = rgba8(63, 127, 191, 70),
+      .style_role = ViewportOverlayStyleRole::SelectionFace});
+  frame.triangles.push_back(frame.triangles.front());
+  auto &hover = frame.triangles.back();
+  hover.layer = ViewportOverlayLayer::HoverFace;
+  hover.style_role = ViewportOverlayStyleRole::HoverFace;
+  hover.color = rgba8(63, 127, 191, 0);
+  const auto camera = test_overlay_camera();
+  const auto selected_layer = ViewportOverlayLayer::SelectedVisibleFace;
+  const auto hover_layer = ViewportOverlayLayer::HoverFace;
+  const auto selection_signature =
+      OverlayRenderableBuilder::layer_build_signature(frame, camera, selected_layer);
+  const auto transparent_signature =
+      OverlayRenderableBuilder::layer_build_signature(frame, camera, hover_layer);
+  const auto selection = OverlayRenderableBuilder::build_layer(frame, camera, selected_layer);
+  ASSERT_EQ(selection.face_fill_batches.size(), 2u);
+  EXPECT_EQ(selection.face_fill_batches.front().state.face_fill_class,
+            OverlayFaceFillClass::Selection);
+  EXPECT_EQ(selection.face_fill_batches.front().state.face_fill_pass,
+            OverlayFaceFillPass::Mask);
+  const auto transparent = OverlayRenderableBuilder::build_layer(frame, camera, hover_layer);
+  ASSERT_EQ(transparent.face_fill_batches.size(), 1u);
+  const auto &batch = transparent.face_fill_batches.front();
+  // None disables stencil for this color pass, so invisible hover cannot
+  // consume coverage belonging to the selected face beneath it.
+  EXPECT_EQ(batch.state.face_fill_class, OverlayFaceFillClass::None);
+  EXPECT_EQ(batch.state.face_fill_pass, OverlayFaceFillPass::Color);
+  EXPECT_TRUE(batch.state.color_write);
+  EXPECT_FALSE(batch.state.depth_write);
+  ASSERT_EQ(batch.mesh.vertices.size(), 3u);
+  EXPECT_EQ(batch.mesh.vertices.front().color >> 24u, 0u);
+
+  hover.color = rgba8(63, 127, 191, 1);
+  EXPECT_NE(OverlayRenderableBuilder::layer_build_signature(frame, camera, hover_layer),
+            transparent_signature);
+  EXPECT_EQ(OverlayRenderableBuilder::layer_build_signature(frame, camera, selected_layer),
+            selection_signature);
+  const auto visible = OverlayRenderableBuilder::build_layer(frame, camera, hover_layer);
+  ASSERT_EQ(visible.face_fill_batches.size(), 2u);
+  EXPECT_EQ(visible.face_fill_batches.front().state.face_fill_pass,
+            OverlayFaceFillPass::Mask);
+  EXPECT_FALSE(visible.face_fill_batches.front().state.color_write);
+  EXPECT_EQ(visible.face_fill_batches.back().state.face_fill_pass,
+            OverlayFaceFillPass::Color);
+  for (const auto &pass : visible.face_fill_batches) {
+    EXPECT_EQ(pass.state.face_fill_class, OverlayFaceFillClass::Hover);
+    EXPECT_EQ(pass.mesh.vertices.front().color >> 24u, 1u);
+  }
 }
 
 TEST(OverlayFaceFillBuilderTests,

@@ -1022,6 +1022,9 @@ void OverlayProxyFactory::configure_overlay_material(
       to_filament_transparency_mode(state.transparency_mode));
   material.setPolygonOffset(state.polygon_offset_scale,
                             state.polygon_offset_constant);
+  apply_overlay_face_fill_stencil(
+      material, state.face_fill_class, state.face_fill_pass,
+      engine_->getBackend() == filament::Engine::Backend::VULKAN);
 }
 
 void OverlayProxyFactory::load_icon_textures(

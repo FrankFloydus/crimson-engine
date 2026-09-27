@@ -15,6 +15,7 @@
 #include "render/material_binding_service.hpp"
 #include "render/mesh_quad_uv_interpolation.hpp"
 #include "render/mesh_surface_grid_projection.hpp"
+#include "render/overlay/overlay_face_fill_composition.hpp"
 #include "render/render_signature_builder.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -1344,7 +1345,7 @@ MeshRenderableProxy MeshRenderableFactory::create_instance_selection_fill(
     const RenderMeshAssetSnapshot &mesh, filament::Material &material,
     std::span<const QMat4> world_transforms,
     const RenderInstanceBounds &world_bounds, std::uint32_t color,
-    std::uint16_t blend_order) {
+    std::uint16_t blend_order, bool active_selected) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   if (!initialized() || world_transforms.empty() || !mesh.renderable() ||
@@ -1361,17 +1362,73 @@ MeshRenderableProxy MeshRenderableFactory::create_instance_selection_fill(
   }
 
   const float inverse_byte = 1.0f / 255.0f;
-  const ViewportSettingColor fill_color{
-      static_cast<float>(color & 0xffu) * inverse_byte,
-      static_cast<float>((color >> 8u) & 0xffu) * inverse_byte,
-      static_cast<float>((color >> 16u) & 0xffu) * inverse_byte,
+  const filament::math::float4 fill_color{
+      srgb_to_linear(static_cast<float>(color & 0xffu) * inverse_byte),
+      srgb_to_linear(static_cast<float>((color >> 8u) & 0xffu) * inverse_byte),
+      srgb_to_linear(static_cast<float>((color >> 16u) & 0xffu) * inverse_byte),
       static_cast<float>((color >> 24u) & 0xffu) * inverse_byte,
   };
-  if (!initialize_instance_overlay_fill(proxy, material, world_transforms,
-                                        world_bounds, fill_color,
-                                        blend_order)) {
+  const OverlayFaceFillClass fill_class = visible_overlay_face_fill_class(
+      active_selected ? OverlayFaceFillClass::ActiveSelection
+                      : OverlayFaceFillClass::Selection,
+      color);
+  const bool stencil_enabled =
+      engine_->getBackend() == filament::Engine::Backend::VULKAN;
+  for (const OverlayFaceFillPass pass :
+       {OverlayFaceFillPass::Mask, OverlayFaceFillPass::Color}) {
+    filament::MaterialInstance *fill = material.createInstance();
+    if (fill == nullptr) {
+      return proxy;
+    }
+    proxy.material_instances.push_back(fill);
+    fill->setParameter("fillColor", fill_color);
+    fill->setColorWrite(pass == OverlayFaceFillPass::Color);
+    fill->setDepthWrite(false);
+    fill->setDepthCulling(true);
+    fill->setDepthFunc(filament::MaterialInstance::DepthFunc::GE);
+    fill->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+    fill->setTransparencyMode(
+        filament::MaterialInstance::TransparencyMode::TWO_PASSES_TWO_SIDES);
+    fill->setPolygonOffset(-1.0f, -1.0f);
+    apply_overlay_face_fill_stencil(*fill, fill_class, pass, stencil_enabled);
+  }
+
+  std::vector<filament::math::mat4f> transforms;
+  transforms.reserve(world_transforms.size());
+  for (const QMat4 &transform : world_transforms) {
+    transforms.push_back(make_transform(transform));
+  }
+  proxy.instance_buffer =
+      filament::InstanceBuffer::Builder(transforms.size())
+          .localTransforms(transforms.data())
+          .build(*engine_);
+  if (proxy.instance_buffer == nullptr) {
     return proxy;
   }
+  // Both passes share the retained geometry and the same occurrence transforms.
+  filament::RenderableManager::Builder builder(2u);
+  for (std::size_t primitive = 0u; primitive < 2u; ++primitive) {
+    builder.geometry(primitive,
+                     filament::RenderableManager::PrimitiveType::TRIANGLES,
+                     proxy.vertex_buffer, proxy.index_buffer, 0u,
+                     proxy.index_count)
+        .material(primitive, proxy.material_instances[primitive])
+        .blendOrder(primitive, primitive == 0u
+            ? overlay_face_fill_mask_blend_order() : blend_order)
+        .globalBlendOrderEnabled(primitive, true);
+  }
+  const filament::RenderableManager::Builder::Result result =
+      builder.instances(transforms.size(), proxy.instance_buffer)
+          .boundingBox(filament_bounds(world_bounds))
+          .layerMask(kViewportAllLayerMask, kViewportOverlayLayerMask)
+          .channel(kViewportDefaultRenderableChannel)
+          .castShadows(false)
+          .receiveShadows(false)
+          .build(*engine_, proxy.entity);
+  if (result != filament::RenderableManager::Builder::Success) {
+    return proxy;
+  }
+  engine_->getTransformManager().create(proxy.entity);
   scene_->addEntity(proxy.entity);
   creation_guard.mark_scene_added();
   creation_guard.release();

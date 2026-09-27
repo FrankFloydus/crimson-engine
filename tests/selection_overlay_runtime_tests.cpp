@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include <backend/PixelBufferDescriptor.h>
+#include <filament/RenderTarget.h>
 #include <filament/SwapChain.h>
 
 #include <QCoreApplication>
@@ -100,7 +101,8 @@ public:
   }
 
   bool initialize(float wall_min_z = -0.02f,
-                  bool create_visibility_wall = true) {
+                  bool create_visibility_wall = true,
+                  ViewportRenderSurface surface = ViewportRenderSurface::Swapchain) {
     const std::filesystem::path resources(
         QCoreApplication::applicationDirPath().toStdWString());
     engine_ = filament::Engine::create(filament::Engine::Backend::VULKAN);
@@ -108,7 +110,8 @@ public:
     scene_ = engine_->createScene();
     renderer_ = engine_->createRenderer();
     swapchain_ = engine_->createSwapChain(
-        kWidth, kHeight, filament::SwapChain::CONFIG_READABLE);
+        kWidth, kHeight, filament::SwapChain::CONFIG_READABLE |
+                            filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
     if (!scene_ || !renderer_ || !swapchain_ ||
         !materials_.initialize(*engine_, resources)) return false;
     solid_color_texture_ = create_test_solid_color_texture(*engine_);
@@ -120,9 +123,10 @@ public:
         materials_.selected_object_line(), materials_.edit_wire_line(),
         materials_.overlay_point(), materials_.overlay_icon(),
         *solid_color_texture_, resources);
+    surface_ = surface;
     view_.initialize(*engine_, *scene_, registry_, materials_.ground_grid(),
-                     viewport_grid_layer_mask(0u),
-                     ViewportRenderSurface::Swapchain);
+                     materials_.overlay_stencil_reset(),
+                     viewport_grid_layer_mask(0u), surface_);
     camera_.set_viewport_size(kWidth, kHeight);
     camera_.set_view_direction({0.0f, 0.0f, -1.0f});
     camera_.set_clip_planes(0.001f, 200.0f);
@@ -382,6 +386,81 @@ public:
     return pixel;
   }
 
+  bool create_overlapping_face_fill_sample() {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    quader_poly::Document document;
+    const auto quad = [&](float min_x, float max_x, float min_y, float max_y,
+                          float z, bool front_facing) {
+      std::array vertices{
+          quader_poly::add_vertex(document, {min_x, min_y, z}),
+          quader_poly::add_vertex(document, {max_x, min_y, z}),
+          quader_poly::add_vertex(document, {max_x, max_y, z}),
+          quader_poly::add_vertex(document, {min_x, max_y, z})};
+      if (!front_facing) std::swap(vertices[1], vertices[3]);
+      (void)quader_poly::add_face(document, vertices);
+    };
+    // Back-facing source surfaces leave both overlays visible at the shared
+    // pixels. Face 3 keeps faces 1 and 2 non-active without entering the image.
+    quad(-1.0f, 0.3f, -0.65f, 0.65f, 0.0f, false);
+    quad(-0.3f, 1.0f, -0.65f, 0.65f, 0.0f, false);
+    quad(10.0f, 11.0f, 0.0f, 0.5f, 0.0f, false);
+    // This unselected opaque surface must still block every tint behind it.
+    quad(-0.2f, 0.2f, 0.2f, 0.5f, 0.25f, true);
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Overlapping component face fill regression"});
+    if (!object.ok() || !editor.selection().set_mode(QuaderSelectionMode::Face).ok()) {
+      return false;
+    }
+    face_fill_object_ = object.value();
+    if (!camera_.restore_perspective_pose({
+            .eye = {0.0f, 0.0f, 3.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}})) {
+      return false;
+    }
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  bool set_overlapping_face_selection(const std::vector<QuaderElementId> &faces,
+                                      QuaderElementId active, bool hover_first = false) {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    if (!editor.selection().clear_hover().ok() ||
+        !editor.selection().select_components({
+            .object = face_fill_object_,
+            .kind = QuaderComponentKind::Face,
+            .faces = faces,
+            .active = {.object = face_fill_object_,
+                       .kind = QuaderComponentKind::Face,
+                       .face = active},
+        }).ok()) return false;
+    return !hover_first || editor.selection().hover_face(face_fill_object_, 1).ok();
+  }
+
+  QVec2 overlapping_face_fill_probe_pixel(bool occluded) const {
+    const QVec3 world = occluded ? QVec3{0.0f, 0.35f, 0.25f}
+                                : QVec3{0.0f, -0.25f, 0.0f};
+    auto pixel = camera_.project_world_point(world).position;
+    pixel.y = static_cast<float>(view_.height() - 1u) - pixel.y;
+    return pixel;
+  }
+
+  void resize_face_fill_sample(std::uint32_t width, std::uint32_t height) {
+    camera_.set_viewport_size(width, height);
+    view_.resize(width, height);
+    view_.update_camera(camera_);
+  }
+
+  bool pan_face_fill_camera(float x) {
+    if (!camera_.restore_perspective_pose({
+            .eye = {x, 0.0f, 3.0f}, .target = {x, 0.0f, 0.0f},
+            .up = {0.0f, 1.0f, 0.0f}})) return false;
+    view_.update_camera(camera_);
+    return true;
+  }
+
   ModelingToolRayEvent edge_loop_event(float y) const {
     const auto projected = camera_.project_world_point({1.0f, y, 0.0f});
     const auto ray = camera_.ray_from_viewport_point(projected.position);
@@ -412,7 +491,8 @@ public:
   }
 
   bool present_component_sample(ViewportOverlaySelectionContext context,
-                                float scale = 1.0f) {
+                                float scale = 1.0f,
+                                const ViewportSettings &settings = ViewportSettings::defaults()) {
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session_));
     if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok()) {
@@ -423,7 +503,8 @@ public:
     last_submission_ = bridge_.submit_viewport_overlay(
         {.layer_mask = viewport_grid_layer_mask(0u),
          .raster_scale = scale,
-         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .camera = ViewportCameraAdapter::overlay_camera(
+             camera_, {static_cast<float>(view_.width()), static_cast<float>(view_.height())}),
          .selection_source = {
              .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
              .content_revision = modeling.content_revision(),
@@ -441,7 +522,7 @@ public:
          .style_selection_context = context,
          .overlays_visible = true,
          .selection_dimensions_visible = false},
-        ViewportSettings::defaults());
+        settings);
     return true;
   }
 
@@ -507,7 +588,7 @@ public:
     return true;
   }
 
-  bool create_active_selection_sample(bool groups) {
+  bool create_active_selection_sample(bool groups, bool instances = false) {
     QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session_));
     for (std::size_t index = 0; index < active_entities_.size(); ++index) {
       const float center = index == 0 ? -1.25f : 1.25f;
@@ -520,6 +601,11 @@ public:
         const auto group = editor.scene().create_empty();
         if (!group.ok() || !editor.scene().reparent(object.value().entity, group.value().id).ok()) return false;
         active_entities_[index] = group.value().id;
+      } else if (instances) {
+        if (!editor.selection().select_object(object.value()).ok()) return false;
+        const auto instance = editor.modeling().create_instance_from_selection();
+        if (!instance.ok()) return false;
+        active_entities_[index] = instance.value().occurrence.root.id;
       }
     }
     if (!editor.selection().set_mode(groups ? QuaderSelectionMode::Group : QuaderSelectionMode::Object).ok()) return false;
@@ -530,9 +616,23 @@ public:
     return true;
   }
 
-  bool present_active_selection_sample(bool groups, std::size_t active, float scale) {
+  std::array<QVec2, 2> active_face_pixels() const {
+    std::array<QVec2, 2> pixels;
+    for (std::size_t index = 0; index < pixels.size(); ++index) {
+      const float center = index == 0 ? -1.25f : 1.25f;
+      pixels[index] = camera_.project_world_point({center, 0.0f, 0.4f}).position;
+      pixels[index].y = static_cast<float>(kHeight - 1u) - pixels[index].y;
+    }
+    return pixels;
+  }
+
+  bool present_active_selection_sample(bool groups, std::size_t active, float scale,
+                                       bool selected = true) {
     QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session_));
-    if (!editor.selection().select_objects(active_entities_, active_entities_[active]).ok() ||
+    const auto selection = selected
+        ? editor.selection().select_objects(active_entities_, active_entities_[active])
+        : editor.selection().clear();
+    if (!selection.ok() ||
         !QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok()) return false;
     const auto settings = ViewportSettings::defaults();
     const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings, scale);
@@ -593,6 +693,19 @@ public:
   }
 
   QImage capture() {
+    const auto destroy_target = [this](filament::RenderTarget *target) {
+      if (target != nullptr) engine_->destroy(target);
+    };
+    std::unique_ptr<filament::RenderTarget, decltype(destroy_target)>
+        texture_read_target(nullptr, destroy_target);
+    if (surface_ == ViewportRenderSurface::Texture) {
+      auto *texture = registry_.texture(view_.overlay_texture_handle());
+      if (texture == nullptr) return {};
+      texture_read_target.reset(filament::RenderTarget::Builder()
+                                    .texture(filament::RenderTarget::AttachmentPoint::COLOR, texture)
+                                    .build(*engine_));
+      if (!texture_read_target) return {};
+    }
     for (int frame = 0; frame < 5; ++frame) {
       if (!begin_frame()) return {};
       view_.render(*renderer_);
@@ -601,10 +714,11 @@ public:
     if (!begin_frame()) return {};
     view_.render(*renderer_);
     auto readback = std::make_shared<Readback>();
+    const auto width = view_.width();
+    const auto height = view_.height();
+    readback->bytes.resize(static_cast<std::size_t>(width) * height * 4u);
     auto *owner = new std::shared_ptr<Readback>(readback);
-    renderer_->readPixels(
-        0, 0, kWidth, kHeight,
-        filament::backend::PixelBufferDescriptor(
+    filament::backend::PixelBufferDescriptor descriptor(
             readback->bytes.data(), readback->bytes.size(),
             filament::backend::PixelDataFormat::RGBA,
             filament::backend::PixelDataType::UBYTE,
@@ -612,7 +726,13 @@ public:
               auto *holder = static_cast<std::shared_ptr<Readback> *>(user);
               (*holder)->complete.store(true, std::memory_order_release);
               delete holder;
-            }, owner));
+            }, owner);
+    if (texture_read_target) {
+      renderer_->readPixels(texture_read_target.get(), 0, 0, width, height,
+                            std::move(descriptor));
+    } else {
+      renderer_->readPixels(0, 0, width, height, std::move(descriptor));
+    }
     renderer_->endFrame();
     for (int attempt = 0; attempt < 10 &&
          !readback->complete.load(std::memory_order_acquire); ++attempt) {
@@ -620,7 +740,7 @@ public:
       engine_->pumpMessageQueues();
     }
     if (!readback->complete.load(std::memory_order_acquire)) return {};
-    return QImage(readback->bytes.data(), kWidth, kHeight,
+    return QImage(readback->bytes.data(), width, height,
                    QImage::Format_RGBA8888).mirrored(false, true);
   }
 
@@ -657,7 +777,7 @@ private:
 
   /** Retains CPU bytes until Filament invokes its asynchronous release callback. */
   struct Readback final {
-    std::array<unsigned char, kWidth * kHeight * 4> bytes{};
+    std::vector<unsigned char> bytes;
     std::atomic<bool> complete = false;
   };
 
@@ -677,6 +797,7 @@ private:
   }
 
   SceneSession session_;
+  ViewportRenderSurface surface_ = ViewportRenderSurface::Swapchain;
   QuaderModelingObjectRef face_fill_object_;
   std::array<EntityId, 2> active_entities_{};
   RenderOverlaySnapshotCache active_snapshots_;
@@ -1020,6 +1141,203 @@ TEST(SelectionOverlayRuntimeTests,
 }
 
 TEST(SelectionOverlayRuntimeTests,
+     VulkanOverlappingFaceFillsApplyOneAlphaAtWinningSelectionPriority) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-overlapping-face-fill-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  const auto patch = [](const QImage &image, QVec2 center) {
+    return image.copy(int(center.x) - 2, int(center.y) - 2, 5, 5);
+  };
+  struct FaceFillCase {
+    const char *label;
+    std::vector<QuaderElementId> faces;
+    QuaderElementId active;
+    bool hover;
+    std::optional<std::size_t> single_fill_reference;
+  };
+  const std::array<FaceFillCase, 8> cases{{
+      {"clear", {3}, 3, false, std::nullopt},
+      {"ordinary_single", {1, 3}, 3, false, std::nullopt},
+      {"ordinary_overlap", {1, 2, 3}, 3, false, 1u},
+      {"active_single", {1}, 1, false, std::nullopt},
+      {"active_overlap", {1, 2}, 1, false, 3u},
+      {"hover_single", {1, 3}, 3, true, std::nullopt},
+      {"hover_overlap", {1, 2, 3}, 3, true, 5u},
+      {"hover_active_overlap", {1, 2}, 1, true, 5u},
+  }};
+  constexpr std::array<std::pair<float, const char *>, 3> kScales{{
+      {1.0f, "100"}, {2.0f, "200"}, {1.0f, "scale_down_100"}}};
+  for (const auto surface : {ViewportRenderSurface::Swapchain, ViewportRenderSurface::Texture}) {
+    const bool texture_surface = surface == ViewportRenderSurface::Texture;
+    const auto surface_label = texture_surface ? QStringLiteral("texture") : QStringLiteral("native");
+    SCOPED_TRACE(surface_label.toStdString());
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false, surface));
+    ASSERT_TRUE(harness.create_overlapping_face_fill_sample());
+    QImage default_ordinary_patch;
+    QImage default_active_overlap;
+    QImage default_hover_overlap;
+    for (const bool custom_alpha : {false, true}) {
+      SCOPED_TRACE(custom_alpha ? "custom alpha" : "default alpha");
+      auto settings = ViewportSettings::defaults();
+      if (custom_alpha) {
+        auto selection = settings.color(ViewportColorSettingId::SelectionFace);
+        auto hover = settings.color(ViewportColorSettingId::HoverFace);
+        selection.a = 0.25f;
+        hover.a = 0.4f;
+        ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace, selection));
+        ASSERT_TRUE(settings.set_color(ViewportColorSettingId::HoverFace, hover));
+      }
+      std::array<QImage, 8> at_100_percent;
+      for (const auto &[scale, scale_label] : kScales) {
+        SCOPED_TRACE(scale_label);
+        if (texture_surface) {
+          harness.resize_face_fill_sample(
+              static_cast<std::uint32_t>(SelectionOverlayRuntimeHarness::kWidth * scale),
+              static_cast<std::uint32_t>(SelectionOverlayRuntimeHarness::kHeight * scale));
+        }
+        const auto tint_pixel = harness.overlapping_face_fill_probe_pixel(false);
+        const auto occluded_pixel = harness.overlapping_face_fill_probe_pixel(true);
+        std::array<QImage, 8> samples;
+        for (std::size_t index = 0; index < cases.size(); ++index) {
+          const auto &sample = cases[index];
+          SCOPED_TRACE(sample.label);
+          ASSERT_TRUE(harness.set_overlapping_face_selection(
+              sample.faces, sample.active, sample.hover));
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, scale, settings));
+          QImage &image = samples[index];
+          image = harness.capture();
+          ASSERT_FALSE(image.isNull());
+          const QString path = QDir(directory).filePath(
+              QStringLiteral("face_union_%1_%2_%3_%4.png")
+                  .arg(surface_label, custom_alpha ? QStringLiteral("custom") : QStringLiteral("default"),
+                       QString::fromLatin1(scale_label), QString::fromLatin1(sample.label)));
+          ASSERT_TRUE(image.save(path));
+          const QColor tint = image.pixelColor(int(tint_pixel.x), int(tint_pixel.y));
+          std::cout << "Face union GPU " << sample.label << " tint_rgba="
+                    << tint.red() << ',' << tint.green() << ',' << tint.blue()
+                    << ',' << tint.alpha()
+                    << ", png=" << path.toStdString() << '\n';
+          if (texture_surface) {
+            // The offscreen target is transparent outside overlays, so its
+            // alpha directly proves that the winning fill was applied once.
+            const float expected_alpha = index == 0u ? 0.0f
+                : settings.color(sample.hover ? ViewportColorSettingId::HoverFace
+                                              : ViewportColorSettingId::SelectionFace).a;
+            EXPECT_NEAR(tint.alpha(), std::lround(expected_alpha * 255.0f), 1);
+          }
+          if (sample.single_fill_reference) {
+            EXPECT_EQ(patch(image, tint_pixel),
+                      patch(samples[*sample.single_fill_reference], tint_pixel))
+                << "Overlap must resolve to one authored-alpha fill of the winning class.";
+          }
+          EXPECT_EQ(patch(image, occluded_pixel), patch(samples[0], occluded_pixel))
+              << "A genuine front-facing source surface must occlude every fill class.";
+          if (at_100_percent[index].isNull()) {
+            at_100_percent[index] = image;
+          } else if (scale == 1.0f) {
+            EXPECT_EQ(image, at_100_percent[index])
+                << "Scale-down must restore the same fill, source wires, and outlines.";
+          }
+          const auto builds = harness.selection_frame_builds();
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, scale, settings));
+          EXPECT_EQ(harness.selection_frame_builds(), builds);
+          EXPECT_FALSE(harness.last_submission().persistent_submitted);
+          EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+          if (texture_surface) {
+            EXPECT_EQ(harness.capture(), image)
+                << "The custom target must clear its stencil mask on every unchanged frame.";
+          }
+        }
+        EXPECT_NE(patch(samples[1], tint_pixel), patch(samples[0], tint_pixel))
+            << "The ordinary-selection reference must contain a visible fill.";
+        EXPECT_NE(patch(samples[3], tint_pixel), patch(samples[1], tint_pixel))
+            << "Active selection must retain its distinct fill color.";
+        EXPECT_NE(patch(samples[5], tint_pixel), patch(samples[1], tint_pixel))
+            << "The hover reference must retain its own fill color and alpha.";
+        if (!custom_alpha && scale == 1.0f && default_active_overlap.isNull()) {
+          default_active_overlap = samples[4];
+          default_hover_overlap = samples[7];
+        }
+        if (default_ordinary_patch.isNull()) {
+          default_ordinary_patch = patch(samples[1], tint_pixel);
+        } else if (custom_alpha) {
+          EXPECT_NE(patch(samples[1], tint_pixel), default_ordinary_patch)
+              << "The authored selection alpha must remain configurable.";
+        }
+        if (texture_surface) {
+          ASSERT_TRUE(harness.pan_face_fill_camera(0.15f));
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, scale, settings));
+          const QImage panned = harness.capture();
+          ASSERT_FALSE(panned.isNull());
+          EXPECT_NE(panned, samples.back());
+          EXPECT_EQ(patch(panned, harness.overlapping_face_fill_probe_pixel(false)),
+                    patch(samples.back(), tint_pixel))
+              << "Camera motion must not inherit a previous frame's stencil coverage.";
+          EXPECT_EQ(patch(panned, harness.overlapping_face_fill_probe_pixel(true)),
+                    patch(samples[0], occluded_pixel));
+          ASSERT_TRUE(panned.save(QDir(directory).filePath(
+              QStringLiteral("face_union_texture_%1_%2_camera_pan.png")
+                  .arg(custom_alpha ? QStringLiteral("custom") : QStringLiteral("default"),
+                       QString::fromLatin1(scale_label)))));
+          ASSERT_TRUE(harness.pan_face_fill_camera(0.0f));
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, scale, settings));
+          EXPECT_EQ(harness.capture(), samples.back())
+              << "Restoring the camera must restore the complete offscreen overlay.";
+        }
+      }
+    }
+    const auto tint_pixel = harness.overlapping_face_fill_probe_pixel(false);
+    const auto occluded_pixel = harness.overlapping_face_fill_probe_pixel(true);
+    for (const bool transparent_hover : {true, false}) {
+      SCOPED_TRACE(transparent_hover ? "transparent hover" : "transparent selection");
+      auto settings = ViewportSettings::defaults();
+      const auto transparent_setting = transparent_hover
+          ? ViewportColorSettingId::HoverFace : ViewportColorSettingId::SelectionFace;
+      auto transparent_color = settings.color(transparent_setting);
+      transparent_color.a = 0.0f;
+      ASSERT_TRUE(settings.set_color(transparent_setting, transparent_color));
+      ASSERT_TRUE(harness.set_overlapping_face_selection({1, 2}, 1, true));
+      ASSERT_TRUE(harness.present_component_sample(
+          ViewportOverlaySelectionContext::Face, 1.0f, settings));
+      const QImage image = harness.capture();
+      ASSERT_FALSE(image.isNull());
+      const auto &reference = transparent_hover ? default_active_overlap : default_hover_overlap;
+      EXPECT_EQ(patch(image, tint_pixel), patch(reference, tint_pixel))
+          << "A zero-alpha class must leave the underlying visible fill unchanged.";
+      EXPECT_EQ(patch(image, occluded_pixel), patch(reference, occluded_pixel));
+      ASSERT_TRUE(image.save(QDir(directory).filePath(
+          QStringLiteral("face_union_%1_zero_%2.png")
+              .arg(surface_label, transparent_hover ? QStringLiteral("hover")
+                                                    : QStringLiteral("selection")))));
+      const auto builds = harness.selection_frame_builds();
+      ASSERT_TRUE(harness.present_component_sample(
+          ViewportOverlaySelectionContext::Face, 1.0f, settings));
+      EXPECT_EQ(harness.selection_frame_builds(), builds);
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      EXPECT_EQ(harness.capture(), image);
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
      VulkanWireframeShowsSelectedBackVerticesAndSolidRestoresOcclusion) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
       QStringLiteral("1")) {
@@ -1303,7 +1621,7 @@ TEST(SelectionOverlayRuntimeTests,
   }
 }
 
-TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsAndGroupsSwitchBrightnessAt100And200Percent) {
+TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsGroupsAndInstancesSwitchBrightnessAt100And200Percent) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
     GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
   }
@@ -1317,13 +1635,25 @@ TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsAndGroupsSwitchBrightnessA
   if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
       QStringLiteral("../active_selection_visual"));
   ASSERT_TRUE(QDir().mkpath(directory));
-  for (const bool groups : {false, true}) {
+  for (const int variant : {0, 1, 2}) {
+    const bool groups = variant == 1;
+    const bool instances = variant == 2;
+    const QString label = groups ? QStringLiteral("groups")
+        : instances ? QStringLiteral("instances") : QStringLiteral("objects");
+    SCOPED_TRACE(label.toStdString());
     SelectionOverlayRuntimeHarness harness;
     ASSERT_TRUE(harness.initialize(0.0f, false));
-    ASSERT_TRUE(harness.create_active_selection_sample(groups));
+    ASSERT_TRUE(harness.create_active_selection_sample(groups, instances));
     for (const float scale : {1.0f, 2.0f}) {
       const QString stem = QStringLiteral("active-%1-%2")
-          .arg(groups ? QStringLiteral("groups") : QStringLiteral("objects")).arg(int(scale * 100));
+          .arg(label).arg(int(scale * 100));
+      QImage unselected;
+      if (instances) {
+        ASSERT_TRUE(harness.present_active_selection_sample(false, 0u, scale, false));
+        unselected = harness.capture();
+        ASSERT_FALSE(unselected.isNull());
+        ASSERT_TRUE(unselected.save(QDir(directory).filePath(stem + QStringLiteral("-unselected.png"))));
+      }
       ASSERT_TRUE(harness.present_active_selection_sample(groups, 0u, scale));
       const QImage left_active = harness.capture();
       ASSERT_FALSE(left_active.isNull());
@@ -1348,6 +1678,28 @@ TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsAndGroupsSwitchBrightnessA
       EXPECT_GT(changed[1], 8);
       EXPECT_LT(brightness_delta[0], 0) << "The previous active boundary must dim.";
       EXPECT_GT(brightness_delta[1], 0) << "The new active boundary must brighten.";
+      if (instances) {
+        const auto pixels = harness.active_face_pixels();
+        const auto face_brightness = [](const QImage &image, QVec2 pixel) {
+          int total = 0;
+          for (int y = int(pixel.y) - 2; y <= int(pixel.y) + 2; ++y) {
+            for (int x = int(pixel.x) - 2; x <= int(pixel.x) + 2; ++x) {
+              const QColor color = image.pixelColor(x, y);
+              total += color.red() + color.green() + color.blue();
+            }
+          }
+          return total;
+        };
+        for (const auto pixel : pixels) {
+          EXPECT_NE(face_brightness(left_active, pixel), face_brightness(unselected, pixel))
+              << "Selected instance faces must contain an actual fill away from their outlines.";
+          EXPECT_NE(face_brightness(right_active, pixel), face_brightness(unselected, pixel));
+        }
+        EXPECT_GT(face_brightness(left_active, pixels[0]), face_brightness(right_active, pixels[0]))
+            << "The previous active instance face interior must dim.";
+        EXPECT_LT(face_brightness(left_active, pixels[1]), face_brightness(right_active, pixels[1]))
+            << "The new active instance face interior must brighten.";
+      }
       ASSERT_TRUE(harness.present_active_selection_sample(groups, 1u, scale));
       EXPECT_FALSE(harness.last_submission().persistent_submitted);
       EXPECT_FALSE(harness.last_submission().dynamic_submitted);

@@ -56,6 +56,8 @@ bool FilamentMaterialLibrary::initialize(
     LOG_INFO("Loading ground grid material");
     ground_grid_material_ =
         load(material_dir / std::string(kGroundGridMaterialFile));
+    overlay_stencil_reset_material_ =
+        load(material_dir / std::string(kOverlayStencilResetMaterialFile));
   } catch (const std::exception &error) {
     LOG_ERROR("Material load failed: {}", error.what());
     shutdown();
@@ -80,6 +82,7 @@ void FilamentMaterialLibrary::shutdown() {
     destroy(overlay_point_material_);
     destroy(overlay_icon_material_);
     destroy(ground_grid_material_);
+    destroy(overlay_stencil_reset_material_);
     engine_ = nullptr;
 }
 

@@ -536,7 +536,8 @@ bool InstanceSelectionOverlayCache::rebuild(
             ? viewport_active_selection_color(kOverlayInstanceSelectionFillColor)
             : kOverlayInstanceSelectionFillColor,
         static_cast<std::uint16_t>(viewport_overlay_draw_order(
-            ViewportOverlayLayer::SelectedVisibleFace) * 64));
+            ViewportOverlayLayer::SelectedVisibleFace) * 64),
+        record->active_selected);
     if (!proxy.entity || proxy.instance_buffer == nullptr) {
       mesh_factory_->destroy(proxy);
       for (MeshRenderableProxy &created : new_fills) {

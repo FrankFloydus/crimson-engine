@@ -121,7 +121,8 @@ swap_chain_flags_for(filament::Engine &engine,
                      SwapChainPresentationColorSpace color_space,
                      bool vsync_enabled) {
   const std::uint64_t presentation_flags =
-      vsync_enabled ? 0u : filament::SwapChain::CONFIG_UNSYNCHRONIZED;
+      (vsync_enabled ? 0u : filament::SwapChain::CONFIG_UNSYNCHRONIZED) |
+      filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER;
   switch (color_space) {
   case SwapChainPresentationColorSpace::Native:
     return presentation_flags;
@@ -716,6 +717,7 @@ void RenderSystem::initialize_viewport_renderer(
 
   viewport_renderer.initialize(*engine_, *scene_, texture_registry_,
                                material_library_.ground_grid(),
+                               material_library_.overlay_stencil_reset(),
                                grid_layer_mask, surface);
 }
 

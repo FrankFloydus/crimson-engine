@@ -1,0 +1,16 @@
+material {
+    name : OverlayStencilReset,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : false,
+    doubleSided : true,
+    vertexDomain : device
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(0.0);
+    }
+}

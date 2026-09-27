@@ -131,7 +131,8 @@ public:
     scene_ = engine_->createScene();
     renderer_ = engine_->createRenderer();
     swapchain_ = engine_->createSwapChain(640u, 480u,
-                                         filament::SwapChain::CONFIG_READABLE);
+                                         filament::SwapChain::CONFIG_READABLE |
+                                             filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
     if (!scene_ || !renderer_ || !swapchain_ ||
         !materials_.initialize(*engine_, resources)) return false;
     const std::array<std::byte, 4u> gray{
@@ -145,6 +146,7 @@ public:
         materials_.edit_wire_line(), materials_.overlay_point(),
         materials_.overlay_icon(), *neutral_, resources);
     view_.initialize(*engine_, *scene_, registry_, materials_.ground_grid(),
+                     materials_.overlay_stencil_reset(),
                      viewport_grid_layer_mask(0u), ViewportRenderSurface::Swapchain);
     camera_.set_viewport_size(640.0F, 480.0F);
     camera_.focus_origin(4.0F);

@@ -17,6 +17,7 @@
 #include <quader/modeling/neutral/geometry/bvh.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -381,15 +382,54 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
       static_cast<std::uint16_t>(viewport_overlay_draw_order(layer) * 64u +
                                  blend_order_bias);
   if (overlay_layer_can_build_face_fill(layer)) {
-    OverlayFaceFillMesh face_fill_mesh = [&]() {
-      QDR_PROFILE_SCOPE("Overlay build face fill mesh");
-      return OverlayFaceFillBuilder::build_layer(frame, layer);
-    }();
-    if (!face_fill_mesh.empty()) {
+    QDR_PROFILE_SCOPE("Overlay build face fill mesh");
+    constexpr std::size_t kClassCount =
+        static_cast<std::size_t>(OverlayFaceFillClass::RemoveSelection) + 1u;
+    std::array<std::size_t, kClassCount> triangle_counts{};
+    for (const ViewportOverlayTriangle &triangle : frame.triangles) {
+      if (triangle.layer == layer) {
+        ++triangle_counts[static_cast<std::size_t>(
+            overlay_face_fill_class(triangle))];
+      }
+    }
+    std::array<OverlayFaceFillMesh, kClassCount> meshes;
+    for (std::size_t index = 0u; index < kClassCount; ++index) {
+      meshes[index].vertices.reserve(triangle_counts[index] * 3u);
+      meshes[index].indices.reserve(triangle_counts[index] * 3u);
+    }
+    for (const ViewportOverlayTriangle &triangle : frame.triangles) {
+      if (triangle.layer == layer) {
+        OverlayFaceFillBuilder::append_triangle(
+            meshes[static_cast<std::size_t>(overlay_face_fill_class(triangle))],
+            triangle);
+      }
+    }
+    for (std::size_t index = 0u; index < kClassCount; ++index) {
+      OverlayFaceFillMesh &mesh = meshes[index];
+      if (mesh.vertices.empty()) {
+        continue;
+      }
+      for (std::uint32_t vertex = 0u; vertex < mesh.vertices.size(); ++vertex) {
+        mesh.indices.push_back(vertex);
+      }
+      const auto fill_class = static_cast<OverlayFaceFillClass>(index);
+      OverlayRenderState color_state = make_state(
+          layer, ViewportOverlayGeometryKind::Triangles, blend_order++);
+      color_state.face_fill_class = fill_class;
+      if (fill_class != OverlayFaceFillClass::None) {
+        OverlayRenderState mask_state = color_state;
+        mask_state.color_write = false;
+        mask_state.face_fill_pass = OverlayFaceFillPass::Mask;
+        mask_state.blend_order =
+            overlay_face_fill_mask_blend_order(blend_order_bias);
+        plan.face_fill_batches.push_back({
+            .mesh = mesh,
+            .state = mask_state,
+        });
+      }
       plan.face_fill_batches.push_back({
-          .mesh = std::move(face_fill_mesh),
-          .state = make_state(layer, ViewportOverlayGeometryKind::Triangles,
-                              blend_order++),
+          .mesh = std::move(mesh),
+          .state = color_state,
       });
     }
   }

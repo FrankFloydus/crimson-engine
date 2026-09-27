@@ -65,6 +65,7 @@ public:
     std::uint32_t height_ = 1;
     std::uint32_t viewport_width_ = 1;
     std::uint32_t viewport_height_ = 1;
+    bool stencil_enabled_ = false;
 };
 
 } // namespace quader

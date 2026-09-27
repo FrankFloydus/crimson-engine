@@ -177,6 +177,7 @@ void ViewportRenderer::initialize(filament::Engine &engine,
                                   filament::Scene &scene,
                                   TextureRegistry &texture_registry,
                                   filament::Material &ground_grid_material,
+                                  filament::Material &overlay_stencil_reset_material,
                                   std::uint8_t grid_layer_mask,
                                   ViewportRenderSurface surface) {
   reset_presentation_cache();
@@ -203,6 +204,16 @@ void ViewportRenderer::initialize(filament::Engine &engine,
   overlay_view_->setName("Main Viewport Overlays");
   overlay_view_->setScene(scene_);
   overlay_view_->setPostProcessingEnabled(false);
+  // The pinned SDK attaches custom-target stencil only on Vulkan. Other
+  // backends retain their depth-tested face fill path.
+  const bool stencil_enabled =
+      engine.getBackend() == filament::Engine::Backend::VULKAN;
+  overlay_view_->setStencilBufferEnabled(stencil_enabled);
+  if (stencil_enabled) {
+    overlay_stencil_reset_.initialize(engine, scene,
+                                      overlay_stencil_reset_material,
+                                      resolved_grid_layer_mask);
+  }
   overlay_view_->setAntiAliasing(filament::AntiAliasing::NONE);
   overlay_view_->setDithering(filament::Dithering::NONE);
   overlay_view_->setShadowingEnabled(false);
@@ -233,6 +244,7 @@ void ViewportRenderer::shutdown() {
     render_target_.shutdown();
     overlay_render_target_.shutdown();
     grid_renderer_.shutdown();
+    overlay_stencil_reset_.shutdown();
     if (view_) {
         view_->setColorGrading(nullptr);
     }
