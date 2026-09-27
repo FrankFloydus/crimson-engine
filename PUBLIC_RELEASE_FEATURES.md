@@ -73,9 +73,9 @@ Solid retains its existing flat-color appearance; Shaded displays the material t
   - Environment selection, background/color, intensity and rotation controls.
   - Fog controls and environment/fog color previews.
   - Post-processing controls, including exposure-related rendering settings.
-- [ ] **Camera settings dropdown (UI only)** — `ReleaseFeature::CameraSettings`
+- [ ] **Camera clipping controls (UI only)** — `ReleaseFeature::CameraSettings`
   - Near/Far clipping controls in the Environment popup's Camera section.
-  - The separate Camera view selector remains available.
+  - The separate Camera view selector and pane-strip Camera Settings popup for current Fly Speed remain available.
   - Camera clipping values and programmatic clipping updates remain supported.
 - [ ] **Mesh Cast Shadow control (UI only)** — `ReleaseFeature::CastShadows`
   - Cast Shadow in the mesh inspector's Lighting section.
@@ -87,6 +87,10 @@ environment resources and default-material shaders remain implementation support
 Every viewport has its own control strip, Camera and Shading selectors, selected tool,
 transform space, snapping, and grid/gizmo/overlay visibility. Grid spacing and appearance
 remain shared. The single Tool Settings panel follows the focused viewport.
+The Viewport Layout icon after Shading changes the shared arrangement. The following
+Camera Settings icon adjusts only that pane's current Fly Speed, leaving the saved
+default/reset speed unchanged. These controls are public; the main Tools toolbar
+retains creation/modeling tools while selection and transform launchers stay in pane strips.
 
 **2D Grid Intensity** and **3D Grid Intensity** are public, shared appearance
 preferences for orthographic and perspective construction grids respectively. Both

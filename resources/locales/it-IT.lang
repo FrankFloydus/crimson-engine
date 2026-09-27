@@ -1057,6 +1057,9 @@ ui.viewport.info.draw_calls=Draw call
 ui.viewport.info.unavailable=--
 
 viewport.layout.single.label=Pannello singolo
+viewport.display.layout=Disposizione viste
+viewport.display.camera_settings=Impostazioni camera
+viewport.display.fly_speed=Velocità di volo
 viewport.layout.two_horizontal.label=Due viste orizzontali
 viewport.layout.two_vertical.label=Due viste verticali
 viewport.layout.three_primary_right.label=Tre viste, principale a destra

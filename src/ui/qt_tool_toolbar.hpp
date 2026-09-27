@@ -37,6 +37,7 @@ class QtToolToolbar final : public QToolBar {
 public:
   explicit QtToolToolbar(QWidget *parent = nullptr);
 
+  /// Returns the retained source, including tools presented only in pane strips.
   [[nodiscard]] QAction *tool_action(ViewportToolId tool) const;
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void set_localization(const LocalizationService &localization);

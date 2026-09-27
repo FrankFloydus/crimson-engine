@@ -801,15 +801,20 @@ TEST(PublicReleasePresentation, MenusAndToolbarsContainOnlyPublishedControls) {
             nullptr);
   QtSnappingToolbar snapping_toolbar;
   snapping_toolbar.synchronize(editor);
-  auto *transform_space = snapping_toolbar.findChild<QAction *>(
-      QStringLiteral("toggle_transform_space"));
-  auto *snapping = snapping_toolbar.findChild<QAction *>(
-      QStringLiteral("snappingEnabled"));
-  ASSERT_NE(transform_space, nullptr);
-  ASSERT_NE(snapping, nullptr);
-  EXPECT_TRUE(transform_space->isEnabled());
-  EXPECT_EQ(snapping_toolbar.actions().indexOf(transform_space) + 1,
-            snapping_toolbar.actions().indexOf(snapping));
+  for (QAction *action : snapping_toolbar.viewport_actions()) {
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->parent(), &snapping_toolbar);
+    EXPECT_TRUE(action->isEnabled());
+    EXPECT_TRUE(action->isVisible());
+    EXPECT_TRUE(action->isCheckable());
+    EXPECT_FALSE(snapping_toolbar.actions().contains(action));
+    EXPECT_EQ(snapping_toolbar.widgetForAction(action), nullptr);
+  }
+  ASSERT_EQ(snapping_toolbar.actions().size(), 4);
+  for (QAction *action : snapping_toolbar.actions()) {
+    EXPECT_FALSE(action->isSeparator());
+    EXPECT_FALSE(action->isCheckable());
+  }
   for (const auto tool : {"mirror", "cut", "poly", "linear_array",
                           "radial_array", "path_array", "curve", "pivot"}) {
     EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("tool_%1").arg(tool)), nullptr)

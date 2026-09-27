@@ -17,6 +17,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -261,6 +262,78 @@ quader_editor_core::PickObjectBounds pick_bounds_for_object(const quader_editor_
 		bounds.max.z = std::max(bounds.max.z, vertex.position.z);
 	}
 	return bounds;
+}
+
+quader_editor_core::PickScreenContext component_pick_screen_context() {
+  quader_editor_core::PickScreenContext context;
+  context.camera.viewport_size = {800.0F, 800.0F};
+  context.camera.fov_degrees = 90.0;
+  context.screen_position = {400.0F, 400.0F};
+  context.vertex_radius_pixels = 6.0;
+  context.edge_radius_pixels = 6.0;
+  return context;
+}
+
+void expect_same_component_hit(
+    const quader_editor_core::PickHitRecord &actual,
+    const quader_editor_core::PickHitRecord &expected) {
+  EXPECT_EQ(actual.object_id, expected.object_id);
+  EXPECT_EQ(actual.kind, expected.kind);
+  EXPECT_EQ(actual.vertex_id, expected.vertex_id);
+  EXPECT_EQ(actual.edge, expected.edge);
+  EXPECT_NEAR(actual.local_position.x, expected.local_position.x, 0.00001F);
+  EXPECT_NEAR(actual.local_position.y, expected.local_position.y, 0.00001F);
+  EXPECT_NEAR(actual.local_position.z, expected.local_position.z, 0.00001F);
+  EXPECT_NEAR(actual.pick_distance, expected.pick_distance, 0.00001F);
+  EXPECT_NEAR(actual.ray_distance, expected.ray_distance, 0.00001F);
+}
+
+void expect_single_component_pick_queries(
+    const std::vector<quader_editor_core::PolygonObject> &objects,
+    const quader_editor_core::PickRequest &request,
+    std::span<const quader_editor_core::PickObjectBounds> bounds,
+    std::span<const quader_editor_core::PickObjectTransform> transforms,
+    const std::optional<quader_editor_core::PickHitRecord> &expected) {
+  const auto geometry = quader_editor_core::build_pick_face_geometry(objects);
+  const std::array priority{
+      request.options.mode == quader_poly::SelectionMode::Vertex
+          ? quader_editor_core::SelectionMode::Vertex
+          : quader_editor_core::SelectionMode::Edge};
+  for (const bool cached : std::array{false, true}) {
+    SCOPED_TRACE(cached ? "cached" : "uncached");
+    const auto query_bounds = cached ? bounds : decltype(bounds){};
+    const auto query_geometry =
+        cached ? std::span<const quader_editor_core::PickObjectFaceGeometry>{geometry}
+               : std::span<const quader_editor_core::PickObjectFaceGeometry>{};
+    std::vector nearest_hits{
+        quader_editor_core::pick_nearest(
+            objects, request, query_bounds, query_geometry, transforms),
+        quader_editor_core::pick_nearest_priority(
+            objects, request, priority, query_bounds, query_geometry, transforms)};
+    if (!cached && transforms.empty()) {
+      nearest_hits.push_back(quader_editor_core::pick_nearest(objects, request));
+    }
+    for (std::size_t index = 0; index < nearest_hits.size(); ++index) {
+      SCOPED_TRACE(index);
+      EXPECT_EQ(nearest_hits[index].has_value(), expected.has_value());
+      if (nearest_hits[index].has_value() && expected.has_value()) {
+        expect_same_component_hit(*nearest_hits[index], *expected);
+      }
+    }
+    const auto all = quader_editor_core::pick_all(
+        objects, request, query_bounds, query_geometry, transforms);
+    EXPECT_EQ(all.size(), expected.has_value() ? 1U : 0U);
+    if (!all.empty() && expected.has_value()) {
+      expect_same_component_hit(all.front(), *expected);
+    }
+    if (!cached && transforms.empty()) {
+      const auto direct = quader_editor_core::pick_all(objects, request);
+      EXPECT_EQ(direct.size(), expected.has_value() ? 1U : 0U);
+      if (!direct.empty() && expected.has_value()) {
+        expect_same_component_hit(direct.front(), *expected);
+      }
+    }
+  }
 }
 
 quader_editor_core::PickHitRecord face_hit(int object_id, quader_poly::ElementId face_id, float ray_distance)
@@ -1869,6 +1942,446 @@ TEST(QdrModelingRuntimePickingTests,
   EXPECT_EQ(hits[0].kind, quader_poly::ElementKind::Edge);
   EXPECT_EQ(hits[0].edge, boundary);
   EXPECT_FLOAT_EQ(hits[0].ray_distance, 1.5F);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     TransformedVertexPickingRejectsCandidatesOutsideWorldRadius) {
+  quader_editor_core::PolygonObject object;
+  object.id = 7;
+  const auto a = quader_poly::add_vertex(object.document, {0.0F, 0.0F, 5.0F});
+  const auto b = quader_poly::add_vertex(object.document, {1.0F, 0.0F, 5.0F});
+  const auto c = quader_poly::add_vertex(object.document, {0.0F, 1.0F, 5.0F});
+  ASSERT_NE(quader_poly::add_face(object.document, std::array{a, c, b}),
+            quader_poly::kInvalidElementId);
+  const std::array transforms{scaled_pick_transform(7, 10.0F, 0.1F, 1.0F)};
+  const std::array bounds{quader_editor_core::PickObjectBounds{
+      .object_id = 7, .empty = false,
+      .min = {0.0F, 0.0F, 5.0F}, .max = {10.0F, 0.1F, 5.0F}}};
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.3, 0.3, false);
+  options.mode = quader_poly::SelectionMode::Vertex;
+  // C is nearest locally, but every vertex is at least three world units away.
+  expect_single_component_pick_queries(
+      {object}, {.ray = {{3.0F, 0.06F, 0.0F}, {0.0F, 0.0F, 1.0F}},
+                 .options = options},
+      bounds, transforms, std::nullopt);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     TransformedVertexPickingChoosesValidWorldCandidateBeforeLocalWinner) {
+  quader_editor_core::PolygonObject object;
+  object.id = 7;
+  (void)quader_poly::add_vertex(object.document, {0.02F, 0.0F, 5.0F});
+  const auto valid =
+      quader_poly::add_vertex(object.document, {0.0F, 0.5F, 5.0F});
+  const std::array transforms{scaled_pick_transform(7, 10.0F, 0.1F, 1.0F)};
+  const std::array bounds{quader_editor_core::PickObjectBounds{
+      .object_id = 7, .empty = false,
+      .min = {0.0F, 0.0F, 5.0F}, .max = {0.2F, 0.05F, 5.0F}}};
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.1, 0.1, false);
+  options.mode = quader_poly::SelectionMode::Vertex;
+  // Local distances .02 and .5 become world distances .2 and .05.
+  const quader_editor_core::PickHitRecord expected{
+      .hit = true, .object_id = 7, .kind = quader_poly::ElementKind::Vertex,
+      .vertex_id = valid, .local_position = {0.0F, 0.05F, 5.0F},
+      .ray_distance = 5.0F, .pick_distance = 0.05F};
+  expect_single_component_pick_queries(
+      {object}, {.ray = {{0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 2.0F}},
+                 .options = options},
+      bounds, transforms, expected);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     TransformedEdgePickingChoosesValidWorldCandidateBeforeLocalWinner) {
+  auto object = single_quad_object(7, false);
+  for (auto &vertex : object.document.edit().vertices) {
+    vertex.position = {vertex.position.x, 0.02F, vertex.position.y};
+  }
+  const std::array valid_vertices{
+      quader_poly::add_vertex(object.document, {-1.0F, -1.0F, 0.5F}),
+      quader_poly::add_vertex(object.document, {1.0F, -1.0F, 0.5F}),
+      quader_poly::add_vertex(object.document, {1.0F, 1.0F, 0.5F}),
+      quader_poly::add_vertex(object.document, {-1.0F, 1.0F, 0.5F}),
+  };
+  ASSERT_NE(quader_poly::add_face(object.document, valid_vertices),
+            quader_poly::kInvalidElementId);
+  const std::array transforms{scaled_pick_transform(7, -2.0F, 10.0F, 0.1F)};
+  const std::array bounds{quader_editor_core::PickObjectBounds{
+      .object_id = 7, .empty = false,
+      .min = {-2.0F, -10.0F, -0.1F}, .max = {2.0F, 10.0F, 0.1F}}};
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.1, 0.1, true);
+  options.mode = quader_poly::SelectionMode::Edge;
+  const quader_editor_core::PickHitRecord expected{
+      .hit = true, .object_id = 7, .kind = quader_poly::ElementKind::Edge,
+      .edge = quader_poly::make_edge(valid_vertices[1], valid_vertices[2]),
+      .local_position = {-2.0F, 0.0F, 0.05F},
+      .ray_distance = 6.0F, .pick_distance = 0.05F};
+  expect_single_component_pick_queries(
+      {object}, {.ray = {{-8.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}},
+                 .options = options},
+      bounds, transforms, expected);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     RotatedNonuniformVertexPickingUsesWorldRadiusAndBounds) {
+  quader_editor_core::PolygonObject object;
+  object.id = 7;
+  const auto vertex =
+      quader_poly::add_vertex(object.document, {1.9F, 0.0F, 5.0F});
+  const float diagonal = std::sqrt(0.5F);
+  auto transform = scaled_pick_transform(7, 0.1F, 1.0F, 1.0F);
+  transform.world_from_object.values[0] = 0.1F * diagonal;
+  transform.world_from_object.values[1] = 0.1F * diagonal;
+  transform.world_from_object.values[4] = -diagonal;
+  transform.world_from_object.values[5] = diagonal;
+  transform.object_from_world.values[0] = 10.0F * diagonal;
+  transform.object_from_world.values[1] = -diagonal;
+  transform.object_from_world.values[4] = 10.0F * diagonal;
+  transform.object_from_world.values[5] = diagonal;
+  const std::array transforms{transform};
+  const quader::QVec3 world_position{0.19F * diagonal, 0.19F * diagonal, 5.0F};
+  const std::array bounds{quader_editor_core::PickObjectBounds{
+      .object_id = 7, .empty = false,
+      .min = world_position, .max = world_position}};
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.2, 0.2, false);
+  options.mode = quader_poly::SelectionMode::Vertex;
+  const quader_editor_core::PickHitRecord expected{
+      .hit = true, .object_id = 7, .kind = quader_poly::ElementKind::Vertex,
+      .vertex_id = vertex, .local_position = world_position,
+      .ray_distance = 5.0F, .pick_distance = 0.19F};
+  // The world radius reaches this vertex even though max inverse-column
+  // scaling produces a local radius of only 1.4213 for a local distance of 1.9.
+  expect_single_component_pick_queries(
+      {object}, {.ray = {{0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}},
+                 .options = options},
+      bounds, transforms, expected);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ShearedAndReflectedComponentPickingMatchesBakedWorldGeometry) {
+  const auto object = single_quad_object(7, false);
+  for (const float reflection : std::array{1.0F, -1.0F}) {
+    SCOPED_TRACE(reflection);
+    auto transform = scaled_pick_transform(7, reflection * 0.25F, 2.0F, 1.0F);
+    transform.world_from_object.values[4] = reflection * 1.5F;
+    transform.world_from_object.values[12] = 0.4F;
+    transform.world_from_object.values[13] = -0.3F;
+    transform.world_from_object.values[14] = 5.0F;
+    transform.object_from_world.values[4] = -3.0F;
+    transform.object_from_world.values[12] = -1.6F * reflection - 0.9F;
+    transform.object_from_world.values[13] = 0.15F;
+    transform.object_from_world.values[14] = -5.0F;
+    const std::array transforms{transform};
+    auto baked = object;
+    for (auto &vertex : baked.document.edit().vertices) {
+      const auto p = vertex.position;
+      vertex.position = {reflection * (0.25F * p.x + 1.5F * p.y) + 0.4F,
+                         2.0F * p.y - 0.3F, p.z + 5.0F};
+    }
+    const std::array bounds{pick_bounds_for_object(baked)};
+    for (const auto mode : std::array{quader_poly::SelectionMode::Vertex,
+                                      quader_poly::SelectionMode::Edge}) {
+      SCOPED_TRACE(mode == quader_poly::SelectionMode::Vertex ? "vertex" : "edge");
+      auto options = quader_editor_core::selection_pick_options_from_radii(
+          0.1, 0.1, false);
+      options.mode = mode;
+      const bool vertex_mode = mode == quader_poly::SelectionMode::Vertex;
+      const quader::QVec3 target{
+          reflection * (vertex_mode ? -1.75F : -1.5F) + 0.4F, -2.3F, 5.0F};
+      const quader_editor_core::PickRequest request{
+          .ray = {{target.x, target.y - 0.08F, target.z + 5.0F * reflection},
+                  {0.0F, 0.0F, -2.0F * reflection}},
+          .options = options};
+      const auto expected = quader_editor_core::pick_nearest({baked}, request);
+      ASSERT_TRUE(expected.has_value());
+      EXPECT_EQ(expected->kind, vertex_mode ? quader_poly::ElementKind::Vertex
+                                           : quader_poly::ElementKind::Edge);
+      EXPECT_NEAR(expected->local_position.x, target.x, 0.00001F);
+      EXPECT_NEAR(expected->local_position.y, target.y, 0.00001F);
+      EXPECT_NEAR(expected->pick_distance, 0.08F, 0.00001F);
+      EXPECT_NEAR(expected->ray_distance, 5.0F, 0.00001F);
+      expect_single_component_pick_queries({object}, request, bounds, transforms,
+                                           expected);
+    }
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     CachedComponentPickingBreaksEqualDepthTiesByWorldDistance) {
+  quader_editor_core::PolygonObject farther;
+  farther.id = 7;
+  (void)quader_poly::add_vertex(farther.document, {0.2F, 0.0F, 5.0F});
+  quader_editor_core::PolygonObject closer;
+  closer.id = 8;
+  const auto vertex =
+      quader_poly::add_vertex(closer.document, {0.05F, 0.0F, 5.0F});
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.3, 0.3, false);
+  options.mode = quader_poly::SelectionMode::Vertex;
+  const quader_editor_core::PickRequest request{
+      .ray = {{0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}}, .options = options};
+  const std::array priority{quader_editor_core::SelectionMode::Vertex};
+  for (const bool reversed : std::array{false, true}) {
+    SCOPED_TRACE(reversed);
+    const std::vector objects = reversed ? std::vector{closer, farther}
+                                         : std::vector{farther, closer};
+    const std::array bounds{pick_bounds_for_object(objects[0]),
+                            pick_bounds_for_object(objects[1])};
+    const auto geometry = quader_editor_core::build_pick_face_geometry(objects);
+    const std::array nearest_hits{
+        quader_editor_core::pick_nearest(objects, request),
+        quader_editor_core::pick_nearest(objects, request, bounds, geometry),
+        quader_editor_core::pick_nearest_priority(objects, request, priority,
+                                                 bounds, geometry)};
+    for (const auto &hit : nearest_hits) {
+      ASSERT_TRUE(hit.has_value());
+      EXPECT_EQ(hit->object_id, closer.id);
+      EXPECT_EQ(hit->vertex_id, vertex);
+      EXPECT_FLOAT_EQ(hit->pick_distance, 0.05F);
+      EXPECT_FLOAT_EQ(hit->ray_distance, 5.0F);
+    }
+    for (const auto &hits :
+         {quader_editor_core::pick_all(objects, request),
+          quader_editor_core::pick_all(objects, request, bounds, geometry)}) {
+      ASSERT_EQ(hits.size(), 2U);
+      EXPECT_EQ(hits[0].object_id, closer.id);
+      EXPECT_EQ(hits[1].object_id, farther.id);
+    }
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ScreenComponentRadiusStaysInPixelsAcrossZoomAndDepth) {
+  for (const auto projection :
+       std::array{quader_editor_core::CameraProjection::Orthographic,
+                  quader_editor_core::CameraProjection::Perspective}) {
+    SCOPED_TRACE(projection == quader_editor_core::CameraProjection::Orthographic
+                     ? "orthographic" : "perspective");
+    for (const float scale : std::array{1.0F, 1000.0F}) {
+      SCOPED_TRACE(scale);
+      auto screen = component_pick_screen_context();
+      screen.camera.projection = projection;
+      screen.camera.orthographic_size = scale == 1.0F ? 10.0 : 1000.0;
+      const bool perspective =
+          projection == quader_editor_core::CameraProjection::Perspective;
+      const float depth = perspective ? scale : 5.0F;
+      const float extent = perspective ? depth * 0.2F
+          : static_cast<float>(screen.camera.orthographic_size) * 0.2F;
+      for (const auto mode : std::array{quader_poly::SelectionMode::Vertex,
+                                       quader_poly::SelectionMode::Edge}) {
+        SCOPED_TRACE(mode == quader_poly::SelectionMode::Vertex ? "vertex" : "edge");
+        quader_editor_core::PolygonObject object;
+        object.id = 7;
+        quader_editor_core::PickHitRecord expected{
+            .hit = true, .object_id = 7, .local_position = {0.0F, 0.0F, -depth},
+            .pick_distance = 5.0F};
+        if (mode == quader_poly::SelectionMode::Vertex) {
+          expected.kind = quader_poly::ElementKind::Vertex;
+          expected.vertex_id = quader_poly::add_vertex(
+              object.document, expected.local_position);
+        } else {
+          expected.kind = quader_poly::ElementKind::Edge;
+          const auto a = quader_poly::add_vertex(object.document, {-extent, 0.0F, -depth});
+          const auto b = quader_poly::add_vertex(object.document, {extent, 0.0F, -depth});
+          const auto c = quader_poly::add_vertex(object.document, {0.0F, -extent, -depth});
+          ASSERT_NE(quader_poly::add_face(object.document, std::array{a, c, b}),
+                    quader_poly::kInvalidElementId);
+          expected.edge = quader_poly::make_edge(a, b);
+        }
+        const std::array bounds{pick_bounds_for_object(object)};
+        for (const float pixel_offset : std::array{5.0F, 7.0F}) {
+          SCOPED_TRACE(pixel_offset);
+          screen.screen_position = {400.0F, 400.0F - pixel_offset};
+          quader_poly::PickOptions options;
+          options.mode = mode;
+          options.pick_backfaces = false;
+          // Both acceptance and rejection must ignore camera-less world radii.
+          options.vertex_radius = pixel_offset < 6.0F ? 0.00001F : 10000.0F;
+          options.edge_radius = options.vertex_radius;
+          const quader_editor_core::PickRequest request{
+              .ray = quader_editor_core::ray_from_viewport_screen_point(
+                  screen.camera, screen.screen_position),
+              .options = options, .screen_context = screen};
+          // This candidate projects to the center, so its own ray depth is
+          // exactly depth even when the cursor ray is offset from it.
+          expected.ray_distance = depth;
+          expect_single_component_pick_queries(
+              {object}, request, bounds, {},
+              pixel_offset < 6.0F ? std::optional{expected} : std::nullopt);
+        }
+      }
+    }
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ScreenEdgeHitUsesPerspectiveCorrectWorldInterpolation) {
+  quader_editor_core::PolygonObject object;
+  object.id = 7;
+  const auto a = quader_poly::add_vertex(object.document, {-0.5F, 0.0F, -1.0F});
+  const auto b = quader_poly::add_vertex(object.document, {5.0F, 0.0F, -10.0F});
+  const auto c = quader_poly::add_vertex(object.document, {0.0F, -3.0F, -5.0F});
+  ASSERT_NE(quader_poly::add_face(object.document, std::array{a, c, b}),
+            quader_poly::kInvalidElementId);
+  auto screen = component_pick_screen_context();
+  screen.screen_position = {400.0F, 395.0F};
+  quader_poly::PickOptions options;
+  options.mode = quader_poly::SelectionMode::Edge;
+  options.pick_backfaces = false;
+  const quader_editor_core::PickRequest request{
+      .ray = quader_editor_core::ray_from_viewport_screen_point(
+          screen.camera, screen.screen_position),
+      .options = options, .screen_context = screen};
+  // Screen endpoints are (200,400) and (600,400). Their projected midpoint
+  // is 1/11 along the world segment, rather than its geometric midpoint.
+  const quader::QVec3 position{0.0F, 0.0F, -20.0F / 11.0F};
+  const quader_editor_core::PickHitRecord expected{
+      .hit = true, .object_id = 7, .kind = quader_poly::ElementKind::Edge,
+      .edge = quader_poly::make_edge(a, b), .local_position = position,
+      .ray_distance = quader::length(position),
+      .pick_distance = 5.0F};
+  const std::array bounds{pick_bounds_for_object(object)};
+  expect_single_component_pick_queries({object}, request, bounds, {}, expected);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ScreenEdgeCrossingCameraClipsBeforeProjectingAndInterpolating) {
+  quader_editor_core::PolygonObject object;
+  object.id = 7;
+  const auto a = quader_poly::add_vertex(object.document, {-0.1F, 0.0F, 1.0F});
+  const auto b = quader_poly::add_vertex(object.document, {0.2F, 0.0F, -1.0F});
+  const auto c = quader_poly::add_vertex(object.document, {0.0F, -1.0F, -1.0F});
+  ASSERT_NE(quader_poly::add_face(object.document, std::array{a, b, c}),
+            quader_poly::kInvalidElementId);
+  auto screen = component_pick_screen_context();
+  screen.near_plane = 0.1;
+  screen.screen_position = {550.0F, 395.0F};
+  quader_poly::PickOptions options;
+  options.mode = quader_poly::SelectionMode::Edge;
+  options.pick_backfaces = false;
+  const quader_editor_core::PickRequest request{
+      .ray = quader_editor_core::ray_from_viewport_screen_point(
+          screen.camera, screen.screen_position),
+      .options = options, .screen_context = screen};
+  // The visible AB portion projects from (660,400) to (480,400). The hit
+  // lies 11/18 along the original world edge, after the near-plane crossing.
+  const quader::QVec3 position{1.0F / 12.0F, 0.0F, -2.0F / 9.0F};
+  const quader_editor_core::PickHitRecord expected{
+      .hit = true, .object_id = 7, .kind = quader_poly::ElementKind::Edge,
+      .edge = quader_poly::make_edge(a, b), .local_position = position,
+      .ray_distance = quader::length(position),
+      .pick_distance = 5.0F};
+  const std::array bounds{pick_bounds_for_object(object)};
+  expect_single_component_pick_queries({object}, request, bounds, {}, expected);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ScreenComponentClippingExcludesInvisibleOccludersAndFarCandidates) {
+  auto front = single_quad_object(7, false);
+  for (auto &vertex : front.document.edit().vertices) {
+    vertex.position.z = -0.5F;
+  }
+  quader_editor_core::PolygonObject rear;
+  rear.id = 8;
+  const auto vertex = quader_poly::add_vertex(rear.document, {0.0F, 0.0F, -2.0F});
+  auto screen = component_pick_screen_context();
+  screen.near_plane = 1.0;
+  screen.far_plane = 10.0;
+  quader_poly::PickOptions options;
+  options.mode = quader_poly::SelectionMode::Vertex;
+  options.pick_backfaces = false;
+  quader_editor_core::PickRequest request{
+      .ray = quader_editor_core::ray_from_viewport_screen_point(
+          screen.camera, screen.screen_position),
+      .options = options, .screen_context = screen};
+  const quader_editor_core::PickHitRecord expected{
+      .hit = true, .object_id = 8, .kind = quader_poly::ElementKind::Vertex,
+      .vertex_id = vertex, .local_position = {0.0F, 0.0F, -2.0F},
+      .ray_distance = 2.0F, .pick_distance = 0.0F};
+  const std::array bounds{pick_bounds_for_object(front), pick_bounds_for_object(rear)};
+  expect_single_component_pick_queries({front, rear}, request, bounds, {}, expected);
+  request.screen_context->near_plane = 0.1;
+  expect_single_component_pick_queries({front, rear}, request, bounds, {}, std::nullopt);
+  request.screen_context->near_plane = 1.0;
+  rear.document.edit().vertices.front().position.z = -11.0F;
+  const std::array far_bounds{pick_bounds_for_object(rear)};
+  expect_single_component_pick_queries({rear}, request, far_bounds, {}, std::nullopt);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ScreenComponentPickingHonorsBackfacePolicy) {
+  auto object = single_quad_object(7, true);
+  for (auto &vertex : object.document.edit().vertices) {
+    vertex.position.z = -5.0F;
+  }
+  const std::array bounds{pick_bounds_for_object(object)};
+  for (const auto mode : std::array{quader_poly::SelectionMode::Vertex,
+                                   quader_poly::SelectionMode::Edge}) {
+    auto screen = component_pick_screen_context();
+    const quader::QVec3 position{
+        mode == quader_poly::SelectionMode::Vertex ? -1.0F : 0.0F, -1.0F, -5.0F};
+    ASSERT_TRUE(quader_editor_core::project_viewport_point(
+        screen.camera, position, screen.screen_position));
+    quader_poly::PickOptions options;
+    options.mode = mode;
+    options.pick_backfaces = false;
+    quader_editor_core::PickRequest request{
+        .ray = quader_editor_core::ray_from_viewport_screen_point(
+            screen.camera, screen.screen_position),
+        .options = options, .screen_context = screen};
+    expect_single_component_pick_queries({object}, request, bounds, {}, std::nullopt);
+    request.options.pick_backfaces = true;
+    quader_editor_core::PickHitRecord expected{
+        .hit = true, .object_id = 7, .local_position = position,
+        .ray_distance = quader::length(position),
+        .pick_distance = 0.0F};
+    if (mode == quader_poly::SelectionMode::Vertex) {
+      expected.kind = quader_poly::ElementKind::Vertex;
+      expected.vertex_id = object.document.vertices[0].id;
+    } else {
+      expected.kind = quader_poly::ElementKind::Edge;
+      expected.edge = quader_poly::make_edge(object.document.vertices[0].id,
+                                            object.document.vertices[1].id);
+    }
+    expect_single_component_pick_queries({object}, request, bounds, {}, expected);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ScreenVertexPickingUsesCandidateRayAtWideFieldOfView) {
+  quader_editor_core::PolygonObject object;
+  object.id = 7;
+  const quader::QVec3 position{-5.0F, 0.0F, -1.0F};
+  const auto vertex = quader_poly::add_vertex(object.document, position);
+  auto screen = component_pick_screen_context();
+  screen.camera.viewport_size = {800.0F, 600.0F};
+  screen.camera.fov_degrees = 179.0;
+  screen.vertex_radius_pixels = 32.0;
+  ASSERT_TRUE(quader_editor_core::project_viewport_point(
+      screen.camera, {5.0F, 0.0F, -1.0F}, screen.screen_position));
+  quader::QVec2 projected;
+  ASSERT_TRUE(quader_editor_core::project_viewport_point(
+      screen.camera, position, projected));
+  quader_poly::PickOptions options;
+  options.mode = quader_poly::SelectionMode::Vertex;
+  const quader_editor_core::PickRequest request{
+      .ray = quader_editor_core::ray_from_viewport_screen_point(
+          screen.camera, screen.screen_position),
+      .options = options, .screen_context = screen};
+  // Both points are visible and about 26 pixels apart, even though this
+  // vertex lies behind the plane perpendicular to the cursor ray.
+  ASSERT_LT(quader::dot(position, request.ray.direction), 0.0F);
+  const quader_editor_core::PickHitRecord expected{
+      .hit = true, .object_id = 7, .kind = quader_poly::ElementKind::Vertex,
+      .vertex_id = vertex, .local_position = position,
+      .ray_distance = std::sqrt(26.0F),
+      .pick_distance = std::abs(projected.x - screen.screen_position.x)};
+  ASSERT_LT(expected.pick_distance, screen.vertex_radius_pixels);
+  const std::array bounds{pick_bounds_for_object(object)};
+  expect_single_component_pick_queries({object}, request, bounds, {}, expected);
 }
 
 TEST(QdrModelingRuntimePickingTests,

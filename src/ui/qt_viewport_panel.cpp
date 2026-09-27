@@ -43,6 +43,7 @@
 #include "ui/qt_environment_settings_popup.hpp"
 #include "core/release_features.hpp"
 #include "ui/qt_numeric_format.hpp"
+#include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_edge_length_hud.hpp"
 #include "ui/qt_viewport_fly_navigation_hud.hpp"
@@ -54,6 +55,7 @@
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_input_types.hpp"
 #include "viewport/viewport_layout.hpp"
+#include "viewport/viewport_navigation_defaults.hpp"
 #include "viewport/viewport_pixel_scale.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -65,6 +67,7 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QLocale>
 #include <QPalette>
 #include <QPainter>
@@ -74,9 +77,14 @@
 #include <QPoint>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScreen>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <QSizePolicy>
 #include <QStylePainter>
 #include <QStyleOptionButton>
+#include <QStyleOptionToolButton>
+#include <QToolButton>
 #include <QFontMetrics>
 #include <QVBoxLayout>
 #include <QWindow>
@@ -97,9 +105,170 @@
 #include <vector>
 
 namespace quader {
+
+/// Retained native popup editing only the linked pane's current fly speed.
+class QtViewportCameraSettingsPopup final : public QFrame {
+public:
+  explicit QtViewportCameraSettingsPopup(QWidget *parent) : QFrame(parent) {
+    setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
+    setFrameShape(QFrame::StyledPanel);
+    setBackgroundRole(QPalette::AlternateBase);
+    setAutoFillBackground(true);
+    layout_ = new QVBoxLayout(this);
+    auto *row = new QHBoxLayout;
+    label_ = new QLabel(this);
+    value_ = new QLabel(this);
+    row->addWidget(label_);
+    row->addStretch();
+    row->addWidget(value_);
+    layout_->addLayout(row);
+    slider_ = new QSlider(Qt::Horizontal, this);
+    slider_->setRange(static_cast<int>(kMinimumViewportFlyNavigationSpeed),
+                      static_cast<int>(kMaximumViewportFlyNavigationSpeed));
+    slider_->setSingleStep(1);
+    slider_->setPageStep(10);
+    slider_->setTracking(true);
+    label_->setBuddy(slider_);
+    layout_->addWidget(slider_);
+    setFocusProxy(slider_);
+  }
+
+  QSlider &slider() const { return *slider_; }
+  QLabel &value_label() const { return *value_; }
+
+  void set_label(const QString &label) {
+    label_->setText(label);
+    slider_->setAccessibleName(label);
+    speed_valid_ = false;
+  }
+
+  void set_speed(double speed) {
+    const int slider_value = static_cast<int>(std::lround(speed));
+    if (speed_valid_ && speed_ == speed && slider_->value() == slider_value) return;
+    speed_ = speed;
+    speed_valid_ = true;
+    const QSignalBlocker blocker(slider_);
+    slider_->setValue(slider_value);
+    value_->setText(qt_format_number(speed, locale()));
+  }
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    setFont(QApplication::font());
+    layout_->setContentsMargins(metrics.margins(QMargins(12, 10, 12, 10)));
+    layout_->setSpacing(metrics.px(6));
+    slider_->setMinimumWidth(metrics.px(220));
+    layout_->invalidate();
+    adjustSize();
+  }
+
+  void show_below(QWidget &anchor) {
+    adjustSize();
+    QPoint position = anchor.mapToGlobal(QPoint(0, anchor.height()));
+    if (layoutDirection() == Qt::RightToLeft) {
+      position.rx() += anchor.width() - width();
+    }
+    if (QScreen *screen = anchor.screen()) {
+      const QRect bounds = screen->availableGeometry();
+      position.setX(std::clamp(position.x(), bounds.left(),
+          std::max(bounds.left(), bounds.right() - width() + 1)));
+      position.setY(std::clamp(position.y(), bounds.top(),
+          std::max(bounds.top(), bounds.bottom() - height() + 1)));
+    }
+    move(position);
+    show();
+    slider_->setFocus(Qt::PopupFocusReason);
+  }
+
+protected:
+  void keyPressEvent(QKeyEvent *event) override {
+    if (event->key() == Qt::Key_Escape) {
+      close();
+      event->accept();
+      return;
+    }
+    QFrame::keyPressEvent(event);
+  }
+
+private:
+  QVBoxLayout *layout_ = nullptr;
+  QLabel *label_ = nullptr;
+  QLabel *value_ = nullptr;
+  QSlider *slider_ = nullptr;
+  double speed_ = 0.0;
+  bool speed_valid_ = false;
+};
+
 namespace {
 
 using ViewportProbeClock = std::chrono::steady_clock;
+
+/// Native toolbar interaction with palette-aware neutral viewport chrome.
+class QtViewportChromeButton final : public QToolButton {
+public:
+  enum class Glyph { Layout, Camera };
+  QtViewportChromeButton(Glyph glyph, QWidget *parent)
+      : QToolButton(parent), glyph_(glyph) {
+    auto *action = new QAction(this);
+    setDefaultAction(action);
+    setToolButtonStyle(Qt::ToolButtonIconOnly);
+    configure_native_toolbar_button_face(*this, *action, *parent->style());
+  }
+
+  void apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    apply_native_toolbar_button_face_ui_scale(*this, metrics);
+    setFixedSize(metrics.size(QSize(28, 28)));
+    glyph_size_ = metrics.px(16);
+    update();
+  }
+
+  QSize sizeHint() const override { return minimumSize(); }
+  QSize minimumSizeHint() const override { return minimumSize(); }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QStylePainter painter(this);
+    QStyleOptionToolButton option;
+    initStyleOption(&option);
+    option.text.clear();
+    option.features &= ~(QStyleOptionToolButton::HasMenu |
+                         QStyleOptionToolButton::MenuButtonPopup);
+    painter.drawComplexControl(QStyle::CC_ToolButton, option);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.translate((width() - glyph_size_) / 2.0,
+                      (height() - glyph_size_) / 2.0);
+    painter.scale(glyph_size_ / 16.0, glyph_size_ / 16.0);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(option.palette.color(
+        qt_toolbar_button_color_group(option.state), QPalette::ButtonText),
+        1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    if (glyph_ == Glyph::Layout) {
+      painter.drawRect(QRectF(2.0, 2.0, 12.0, 12.0));
+    } else {
+      painter.drawRoundedRect(QRectF(1.5, 5.0, 13.0, 9.0), 1.2, 1.2);
+      painter.drawPolyline(QPolygonF{{4.0, 5.0}, {5.0, 2.5},
+                                     {10.5, 2.5}, {11.5, 5.0}});
+      painter.drawEllipse(QPointF(8.0, 9.5), 2.7, 2.7);
+    }
+  }
+
+private:
+  Glyph glyph_;
+  int glyph_size_ = 16;
+};
+
+QuaderCommandId layout_command_id(ViewportLayoutId layout) {
+  switch (layout) {
+  case ViewportLayoutId::Single: return quader_command::kViewportLayoutSingle;
+  case ViewportLayoutId::TwoHorizontal: return quader_command::kViewportLayoutTwoHorizontal;
+  case ViewportLayoutId::TwoVertical: return quader_command::kViewportLayoutTwoVertical;
+  case ViewportLayoutId::ThreePrimaryRight: return quader_command::kViewportLayoutThreePrimaryRight;
+  case ViewportLayoutId::ThreePrimaryLeft: return quader_command::kViewportLayoutThreePrimaryLeft;
+  case ViewportLayoutId::ThreePrimaryBottom: return quader_command::kViewportLayoutThreePrimaryBottom;
+  case ViewportLayoutId::ThreePrimaryTop: return quader_command::kViewportLayoutThreePrimaryTop;
+  case ViewportLayoutId::FourQuad: return quader_command::kViewportLayoutFourQuad;
+  }
+  return quader_command::kViewportLayoutSingle;
+}
 
 /// Uses native menu-button chrome while opening a retained settings window.
 class QtEnvironmentLauncherButton final : public QPushButton {
@@ -259,11 +428,6 @@ bool viewport_frame_diagnostics_enabled() {
   static const bool kEnabled =
       std::getenv("QUADER_FRAME_DIAGNOSTICS") != nullptr;
   return kEnabled;
-}
-
-double viewport_component_pick_radius_pixels(double preference_radius) {
-  constexpr double kPixelsPerPreferenceUnit = 40.0;
-  return std::clamp(preference_radius * kPixelsPerPreferenceUnit, 2.0, 32.0);
 }
 
 constexpr double kKnifeEdgeStartMinimumRadiusLogicalPixels = 8.0;
@@ -641,6 +805,10 @@ void QtViewportPanel::shutdown() {
   }
   interaction_editor_ = nullptr;
   interaction_native_tools_ = nullptr;
+  for (Pane &pane_state : panes_) {
+    pane_state.camera_settings_popup->close();
+    pane_state.layout_menu->close();
+  }
   active_tool_revision_valid_ = false;
   cancel_navigation();
   if (render_system_ == nullptr) {
@@ -722,11 +890,12 @@ void QtViewportPanel::abandon_interactions() {
   set_modal_tool_owns_viewport_snapshot(false);
   for (Pane &pane_state : panes_) {
     for (QMenu *menu : {pane_state.camera_menu, pane_state.display_menu,
-                        pane_state.debug_view_menu,
+                        pane_state.debug_view_menu, pane_state.layout_menu,
                         pane_state.selection_action != nullptr
                             ? pane_state.selection_action->menu() : nullptr}) {
       if (menu != nullptr) menu->close();
     }
+    pane_state.camera_settings_popup->close();
     if (pane_state.surface != nullptr) {
       pane_state.surface->set_interaction_cursor(
           ViewportPointerCursor::Default);
@@ -755,6 +924,10 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   interaction_controller_.cancel_pending_material_interaction();
   interaction_controller_.cancel_pending_selection_click();
   if (workspace_ != &workspace) {
+    for (Pane &pane_state : panes_) {
+      pane_state.camera_settings_popup->close();
+      pane_state.layout_menu->close();
+    }
     abandon_settings_overlay();
     hide_primitive_feedback();
     cancel_navigation();
@@ -2236,9 +2409,102 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
     }
   }
 
+  pane_state.layout_button = new QtViewportChromeButton(
+      QtViewportChromeButton::Glyph::Layout, pane_state.toolbar);
+  pane_state.layout_button->setObjectName(QStringLiteral("viewportLayout_%1")
+      .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  pane_state.layout_menu = new QMenu(pane_state.layout_button);
+  pane_state.layout_menu->setObjectName(QStringLiteral("viewportLayoutMenu_%1")
+      .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  pane_state.layout_button->setMenu(pane_state.layout_menu);
+  pane_state.layout_button->setPopupMode(QToolButton::InstantPopup);
+  connect(pane_state.layout_menu, &QMenu::aboutToShow, this,
+      [this, &pane_state]() {
+        request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+        pane_state.layout_menu_generation = runtime_binding_generation_;
+        pane_state.control_selection_valid = false;
+        sync_pane_control_selection(pane_state);
+        const auto &layouts = viewport_layout_options();
+        for (std::size_t index = 0; index < layouts.size(); ++index) {
+          QAction *action = pane_state.layout_actions[index];
+          const auto descriptor = interaction_editor_ != nullptr
+              ? interaction_editor_->commands().descriptor(layout_command_id(layouts[index].id))
+              : std::optional<QuaderCommandDescriptor>{};
+          QString text = action->text().section(QLatin1Char('\t'), 0, 0);
+          if (descriptor.has_value() && !descriptor->shortcut.empty()) {
+            text += QLatin1Char('\t');
+            text += QString::fromStdString(descriptor->shortcut);
+          }
+          if (action->text() != text) action->setText(text);
+          const bool enabled = descriptor.has_value() && descriptor->enabled;
+          if (action->isEnabled() != enabled) action->setEnabled(enabled);
+        }
+      });
+  auto *layout_group = new QActionGroup(pane_state.layout_menu);
+  layout_group->setExclusive(true);
+  const auto &layouts = viewport_layout_options();
+  for (std::size_t index = 0; index < layouts.size(); ++index) {
+    const auto layout = layouts[index].id;
+    QAction *action = pane_state.layout_menu->addAction(QString());
+    action->setObjectName(QStringLiteral("layout_%1")
+        .arg(QString::fromUtf8(viewport_layout_stable_id(layout).data())));
+    action->setCheckable(true);
+    layout_group->addAction(action);
+    pane_state.layout_actions[index] = action;
+    connect(action, &QAction::triggered, this, [this, &pane_state, layout]() {
+      const auto generation = pane_state.layout_menu_generation;
+      if (generation != runtime_binding_generation_ || interaction_editor_ == nullptr ||
+          workspace_ == nullptr) return;
+      request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+      if (workspace_->focused_pane() != pane_state.id) return;
+      (void)interaction_editor_->commands().execute(layout_command_id(layout));
+      if (generation != runtime_binding_generation_) return;
+      pane_state.control_selection_valid = false;
+      refresh_workspace_layout();
+    });
+  }
+
+  pane_state.camera_settings_button = new QtViewportChromeButton(
+      QtViewportChromeButton::Glyph::Camera, pane_state.toolbar);
+  pane_state.camera_settings_button->setObjectName(
+      QStringLiteral("viewportCameraSettings_%1")
+          .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  pane_state.camera_settings_popup =
+      new QtViewportCameraSettingsPopup(pane_state.camera_settings_button);
+  pane_state.camera_settings_popup->setObjectName(
+      QStringLiteral("viewportCameraSettingsPopup_%1")
+          .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  pane_state.camera_settings_popup->slider().setObjectName(
+      QStringLiteral("viewportFlySpeed_%1")
+          .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  pane_state.camera_settings_popup->value_label().setObjectName(
+      QStringLiteral("viewportFlySpeedValue_%1")
+          .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
+  connect(pane_state.camera_settings_button, &QToolButton::clicked, this,
+      [this, &pane_state]() {
+        if (interaction_editor_ == nullptr || workspace_ == nullptr) return;
+        request_pane_focus(pane_state.id, ViewportPaneFocusTrigger::FocusIn);
+        if (workspace_->focused_pane() != pane_state.id) return;
+        pane_state.camera_settings_generation = runtime_binding_generation_;
+        pane_state.camera_settings_popup->set_speed(
+            interaction_editor_->viewports().fly_navigation_speed(pane_state.id));
+        pane_state.camera_settings_popup->show_below(*pane_state.camera_settings_button);
+      });
+  connect(&pane_state.camera_settings_popup->slider(), &QSlider::valueChanged, this,
+      [this, &pane_state](int value) {
+        const auto generation = pane_state.camera_settings_generation;
+        if (generation != runtime_binding_generation_ || interaction_editor_ == nullptr ||
+            workspace_ == nullptr || !pane_state.camera_settings_popup->isVisible()) return;
+        (void)interaction_editor_->viewports().set_fly_navigation_speed(pane_state.id, value);
+        if (generation != runtime_binding_generation_) return;
+        pane_state.camera_settings_popup->set_speed(
+            interaction_editor_->viewports().fly_navigation_speed(pane_state.id));
+      });
+
   pane_state.toolbar->set_trailing_controls(
       pane_state.camera_button, pane_state.display_button,
-      pane_state.environment_button, pane_state.environment_overflow_action);
+      pane_state.environment_button, pane_state.environment_overflow_action,
+      pane_state.layout_button, pane_state.camera_settings_button);
   scale_pane_controls(pane_state);
 
   pane_state.info_overlay = new QLabel(pane_state.frame);
@@ -2347,6 +2613,28 @@ void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
       localization_, "viewport.display.camera", "Camera"));
   pane_state.camera_button->setAccessibleName(pane_state.camera_menu->title());
   pane_state.camera_button->setToolTip(pane_state.camera_menu->title());
+  const auto &layouts = viewport_layout_options();
+  for (std::size_t index = 0; index < layouts.size(); ++index) {
+    const auto &layout = layouts[index];
+    const std::string key = "viewport.layout." +
+        std::string(viewport_layout_stable_id(layout.id)) + ".label";
+    const QString label = localization_ != nullptr
+        ? QString::fromStdString(localization_->text(key, layout.label))
+        : QString::fromUtf8(layout.label.data(), static_cast<qsizetype>(layout.label.size()));
+    pane_state.layout_actions[index]->setText(label);
+  }
+  const QString layout_label = localized_display_menu_label(localization_,
+      "viewport.display.layout", "Viewport Layout");
+  pane_state.layout_button->defaultAction()->setText(layout_label);
+  pane_state.layout_button->defaultAction()->setToolTip(layout_label);
+  pane_state.layout_menu->setTitle(layout_label);
+  const QString settings_label = localized_display_menu_label(localization_,
+      "viewport.display.camera_settings", "Camera Settings");
+  pane_state.camera_settings_button->defaultAction()->setText(settings_label);
+  pane_state.camera_settings_button->defaultAction()->setToolTip(settings_label);
+  pane_state.camera_settings_popup->setWindowTitle(settings_label);
+  pane_state.camera_settings_popup->set_label(localized_display_menu_label(localization_,
+      "viewport.display.fly_speed", "Fly Speed"));
   for (std::size_t index = 0; index < kViewportViews.size(); ++index) {
     pane_state.camera_actions[index]->setText(
         localized_view_label(localization_, kViewportViews[index]));
@@ -2369,6 +2657,11 @@ void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
 }
 
 void QtViewportPanel::scale_pane_controls(Pane &pane_state) {
+  for (QToolButton *button : {pane_state.layout_button, pane_state.camera_settings_button}) {
+    static_cast<QtViewportChromeButton *>(button)->apply_ui_scale(ui_scale_metrics_);
+  }
+  pane_state.layout_menu->setFont(QApplication::font());
+  pane_state.camera_settings_popup->apply_ui_scale(ui_scale_metrics_);
   QFont baseline = QApplication::font();
   const auto *application_style =
       dynamic_cast<const QtUiScaleProxyStyle *>(QApplication::style());
@@ -2404,10 +2697,22 @@ void QtViewportPanel::sync_pane_control_selection(Pane &pane_state) {
   const ViewportView view = workspace_->view(pane_state.id);
   const ViewportShadingMode shading =
       workspace_->shading_mode(pane_state.id);
+  const ViewportLayoutId layout = workspace_->layout();
+  if (interaction_editor_ != nullptr && pane_state.camera_settings_popup->isVisible()) {
+    pane_state.camera_settings_popup->set_speed(
+        interaction_editor_->viewports().fly_navigation_speed(pane_state.id));
+  }
   if (pane_state.control_selection_valid &&
       pane_state.presented_view == view &&
-      pane_state.presented_shading == shading) {
+      pane_state.presented_shading == shading && pane_state.presented_layout == layout) {
     return;
+  }
+  const auto &layouts = viewport_layout_options();
+  for (std::size_t index = 0; index < layouts.size(); ++index) {
+    const bool selected = layouts[index].id == layout;
+    if (pane_state.layout_actions[index]->isChecked() != selected) {
+      pane_state.layout_actions[index]->setChecked(selected);
+    }
   }
   for (std::size_t index = 0; index < kViewportViews.size(); ++index) {
     const bool selected = kViewportViews[index] == view;
@@ -2445,6 +2750,7 @@ void QtViewportPanel::sync_pane_control_selection(Pane &pane_state) {
   }
   pane_state.presented_view = view;
   pane_state.presented_shading = shading;
+  pane_state.presented_layout = layout;
   pane_state.control_selection_valid = true;
   if (label_changed) {
     pane_state.toolbar->updateGeometry();
@@ -2543,6 +2849,10 @@ void QtViewportPanel::update_pane_geometry() {
             visible && !startup_presentation_blocked_;
         if (panes_[index].frame_presented == should_present) {
           return;
+        }
+        if (!should_present) {
+          panes_[index].camera_settings_popup->close();
+          panes_[index].layout_menu->close();
         }
         panes_[index].frame->setVisible(should_present);
         panes_[index].frame_presented = should_present;

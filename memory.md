@@ -227,6 +227,17 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   after successful restoration without exiting the tool; failure compensation preserves transient
   state. Shared cancellation reports actual tool changes instead of assuming every modal
   cancellation returns to Select.
+- Insert Edge Loop acquisition, retained hover, and dragging share the projected cursor factor,
+  including edges crossing the camera plane; grid snapping remains measured along the world edge.
+  Preview vertices are deduplicated by authored edge identity and use the normal hover-vertex
+  presentation. Clear, commit, and cancel must retire both lines and points in retained submission.
+  See [loop input tests](tests/qt_input_adapter_tests.cpp) and
+  [retained submission tests](tests/viewport_overlay_submission_coordinator_tests.cpp).
+- Native point selection carries a screen aperture and camera clip range; ray-only API requests
+  retain world-distance tolerances. Transformed component candidates must be measured in world
+  space before ranking, never with one scalar inverse-scale approximation. Runtime pick records
+  already return world positions in the historical `local_position` field when occurrence
+  transforms are supplied; adapters must not transform them a second time.
 
 Owners: [publication transaction](src/editor/modeling/services/modeling_host_publication_transaction.cpp),
 [object bindings](src/editor/modeling/runtime/modeling_object_binding_registry.cpp).
@@ -302,7 +313,7 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
   Disabling the separate scene wire cache alone cannot hide or fade those edges. The overlay
   style context targets the live object in both retained selection and volatile hover streams;
   its identity participates in style invalidation. Disable the separate selected-object fill
-  cache during creation and remove targeted hover/selection triangles, including their depth masks.
+  cache during creation and remove targeted hover/selection triangles.
   Guide loops use `ToolPreviewLine`, below the `ToolHandle` triangles, so neither guides nor mesh
   edges can paint over the dots and +/- glyphs.
 
@@ -314,6 +325,12 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 
 ## Component picking and sticky selection
 
+- Selection and hover fills must test against scene depth without writing it. A two-sided
+  backface highlight must not become an occluder for otherwise visible editing wires or vertices.
+  Keep authored alpha, two-sided color rendering, and normal solid-surface occlusion; do not
+  repair this with global draw-on-top wires. See the face-fill builder coverage in
+  [render extraction tests](tests/render_extraction_tests.cpp) and the actual Vulkan
+  [selection overlay tests](tests/selection_overlay_runtime_tests.cpp).
 - Native Object/Group selection uses a depth-tested camera silhouette in place of the semantic
   full-mesh wire used by modeling/tool consumers. Object selection retains its face fill;
   submission removes internal selection edges.
@@ -414,6 +431,10 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   including single/maximized panes; see [focus indicator tests](tests/qt_viewport_focus_indicator_tests.cpp).
 - Knife resolves each accepted segment on a shared existing face, rebasing from the last accepted
   point. Host hits/misses are authoritative; a second differently configured picker breaks locality.
+  Stroke partitioning follows the source face's winding to retain bounded cells. An exterior walk
+  can visit every placed boundary vertex while omitting all requested cuts; vertex coverage alone
+  must not choose the partition. See the repeated-boundary regressions in
+  [Knife stroke tests](tests/modeling_domain/operation/qdr_document_operation_knife_stroke_tests.cpp).
 - Radial placement hover must not require keyboard focus after toolbar activation. Retain the
   last valid center during UI editing/navigation, but resolve the queued press position again
   before locking placement; an invalid click cannot lock the retained preview. A placement click

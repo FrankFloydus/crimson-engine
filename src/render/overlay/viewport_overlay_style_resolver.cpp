@@ -129,8 +129,8 @@ void ViewportOverlayStyleResolver::apply_from(
     const float raster_scale =
         viewport_overlay_sanitized_raster_scale(context.raster_scale);
     if (context.construction_object_id >= 0) {
-      // Remove the records rather than making them transparent: selection and
-      // hover fills also write depth masks that can obscure other overlays.
+      // The construction preview owns this object's fill; omit redundant
+      // selection and hover geometry from the submitted overlay.
       const auto first = frame.triangles.begin() +
                          static_cast<std::ptrdiff_t>(range.triangle_begin);
       frame.triangles.erase(
@@ -148,9 +148,9 @@ void ViewportOverlayStyleResolver::apply_from(
     }
     if (context.projection == ViewportOverlayProjection::Orthographic &&
         !settings.bool_value(ViewportBoolSettingId::BackfaceSelection)) {
-      // Orthographic hover is outline-only here: transparent triangles would
-      // still stamp overlay depth. Perspective hover, selected faces, and tool
-      // face-plane previews keep their fills regardless of the picking preference.
+      // Preserve outline-only orthographic hover when backface selection is off.
+      // Perspective hover, selected faces, and tool face-plane previews retain
+      // their fills regardless of the picking preference.
       const auto first = frame.triangles.begin() +
                          static_cast<std::ptrdiff_t>(range.triangle_begin);
       frame.triangles.erase(

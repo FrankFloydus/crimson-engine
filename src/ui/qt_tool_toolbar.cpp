@@ -156,16 +156,23 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     if (!release_allows_tool(tool_id)) {
       continue;
     }
-    if (spec.separator_before) {
-      addSeparator();
-    }
+    const bool pane_only = spec.tool == ViewportToolId::Select ||
+                           spec.tool == ViewportToolId::LassoSelect ||
+                           spec.tool == ViewportToolId::Move ||
+                           spec.tool == ViewportToolId::Rotate ||
+                           spec.tool == ViewportToolId::Scale;
     const std::string_view fallback = viewport_tool_label(spec.tool);
     const QIcon icon =
         spec.tool == ViewportToolId::Curve
             ? curve_tool_icon(palette())
             : qt_multiresolution_icon(QString::fromUtf8(spec.icon_path));
-    QAction *action = addAction(icon,
-                                QString::fromUtf8(fallback.data()));
+    QAction *action = new QAction(icon, QString::fromUtf8(fallback.data()), this);
+    if (!pane_only) {
+      if (spec.separator_before && !actions().empty()) {
+        addSeparator();
+      }
+      addAction(action);
+    }
     action->setObjectName(
         QStringLiteral("tool_%1").arg(QString::fromUtf8(tool_id.data())));
     action->setCheckable(true);

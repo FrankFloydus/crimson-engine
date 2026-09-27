@@ -28,6 +28,7 @@
 #include <QStyleFactory>
 #include <QStyleOption>
 #include <QTabBar>
+#include <QToolBar>
 #include <QToolButton>
 
 #include <algorithm>
@@ -337,6 +338,54 @@ TEST_F(QtApplicationStyleTests,
     for (std::size_t second = first + 1; second < images.size(); ++second) {
       EXPECT_NE(images[first], images[second])
           << "states " << first << " and " << second;
+    }
+  }
+}
+
+TEST_F(QtApplicationStyleTests,
+       ToggleToolButtonsKeepPointerFocusQuietAndKeyboardFocusVisible) {
+  quader::QtUiScaleProxyStyle style;
+  QToolBar toolbar;
+  QWidget pane_strip;
+  QToolButton toolbar_button(&toolbar);
+  QToolButton pane_button(&pane_strip);
+  for (QToolButton *button : {&toolbar_button, &pane_button}) {
+    button->setCheckable(true);
+    button->setAutoRaise(false);
+    button->setFocusPolicy(Qt::StrongFocus);
+  }
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    const quader::QtUiScaleMetrics metrics(factor);
+    style.set_metrics(metrics);
+    for (QToolButton *button : {&toolbar_button, &pane_button}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "scale=" << factor << " toolbar="
+                   << (button == &toolbar_button));
+      const auto render = [&](QStyle::State state) {
+        QStyleOptionToolButton option;
+        option.initFrom(button);
+        option.rect = QRect(QPoint{}, metrics.size(QSize(28, 28)));
+        option.state = state;
+        option.subControls = QStyle::SC_ToolButton;
+        QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        style.drawComplexControl(QStyle::CC_ToolButton, &option, &painter,
+                                 button);
+        return image;
+      };
+      const QStyle::State idle = kEnabledState | QStyle::State_Raised;
+      for (const QStyle::State interaction :
+           {QStyle::State{}, QStyle::State(QStyle::State_MouseOver),
+            QStyle::State(QStyle::State_On)}) {
+        EXPECT_EQ(render(idle | interaction),
+                  render(idle | interaction | QStyle::State_HasFocus));
+      }
+      EXPECT_NE(render(idle),
+                render(idle | QStyle::State_HasFocus |
+                       QStyle::State_KeyboardFocusChange));
+      EXPECT_NE(render(idle), render(idle | QStyle::State_On));
+      EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
     }
   }
 }

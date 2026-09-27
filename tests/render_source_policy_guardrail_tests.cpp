@@ -1858,7 +1858,7 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
       selected, ".instance_edit_style = {}"));
 }
 
-TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
+TEST(SceneRenderBridgeTests, AppliesSharedOverlayStateThroughProxyFactory) {
   const std::string bridge_source =
       read_source_file("src/render/scene_render_bridge.cpp");
   const std::string builder_source =
@@ -1868,9 +1868,6 @@ TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
   const std::string tool_preview_cache_source =
       read_source_file("src/render/tool_preview_renderable_cache.cpp");
 
-  EXPECT_NE(builder_source.find(
-                "viewport_overlay_layer_uses_depth_stamped_face_fill"),
-            std::string::npos);
   EXPECT_NE(proxy_factory_source.find("setColorWrite(state.color_write)"),
             std::string::npos);
   EXPECT_NE(proxy_factory_source.find("setDepthWrite(state.depth_write)"),
@@ -3627,11 +3624,17 @@ TEST(ViewportRendererTests,
       "void QtViewportPanel::sync_pane_control_selection(", control_font_begin);
   ASSERT_NE(control_font_begin, std::string::npos);
   ASSERT_NE(control_font_end, std::string::npos);
-  const std::string outside_control_font =
+  std::string outside_control_font =
       viewport_panel_source.substr(0, control_font_begin) +
       viewport_panel_source.substr(control_font_end);
+  // The retained camera popup restores the normal application font on scaling.
+  constexpr std::string_view kPopupFontReset = "setFont(QApplication::font());";
+  const std::size_t popup_font_reset_position =
+      outside_control_font.find(kPopupFontReset);
+  ASSERT_NE(popup_font_reset_position, std::string::npos);
+  outside_control_font.erase(popup_font_reset_position, kPopupFontReset.size());
   EXPECT_EQ(outside_control_font.find("setFont("), std::string::npos)
-      << "only the compact strip controls override the inherited platform font";
+      << "only the compact strip controls may customize the application font";
   EXPECT_EQ(viewport_panel_source.find("ImGui::"), std::string::npos);
 }
 

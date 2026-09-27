@@ -441,39 +441,11 @@ SelectedObjectOverlayCache::create_entry(
              ViewportOverlayLayer::SelectedXrayFace,
              ViewportOverlayLayer::SelectedFaceMask,
          }) {
-      std::uint16_t blend_order =
+      const std::uint16_t blend_order =
           static_cast<std::uint16_t>(viewport_overlay_draw_order(layer) * 64);
-      const OverlayRenderState depth_state =
-          OverlayRenderableBuilder::make_state(
-              layer, ViewportOverlayGeometryKind::Triangles, blend_order++,
-              true, false);
-      entry.face_proxies.push_back(create_proxy(
-          *engine_, *scene_, *face_fill_material_, parent_transform,
-          face_vertices, face_indices, bounds, depth_state, layer_mask,
-          [](filament::VertexBuffer::Builder &builder) {
-            builder
-                .attribute(filament::VertexAttribute::POSITION, 0,
-                           AttributeType::FLOAT3,
-                           offsetof(OverlayFaceFillVertex, position),
-                           sizeof(OverlayFaceFillVertex))
-                .attribute(filament::VertexAttribute::UV0, 0,
-                           AttributeType::FLOAT2,
-                           offsetof(OverlayFaceFillVertex, uv),
-                           sizeof(OverlayFaceFillVertex))
-                .attribute(filament::VertexAttribute::COLOR, 0,
-                           AttributeType::UBYTE4,
-                           offsetof(OverlayFaceFillVertex, color),
-                           sizeof(OverlayFaceFillVertex))
-                .normalized(filament::VertexAttribute::COLOR);
-          },
-          [&depth_state](filament::MaterialInstance &material) {
-            configure_overlay_material(material, depth_state);
-          }));
-
       const OverlayRenderState color_state =
           OverlayRenderableBuilder::make_state(
-              layer, ViewportOverlayGeometryKind::Triangles, blend_order++,
-              false, true);
+              layer, ViewportOverlayGeometryKind::Triangles, blend_order);
       entry.face_proxies.push_back(create_proxy(
           *engine_, *scene_, *face_fill_material_, parent_transform,
           face_vertices, face_indices, bounds, color_state, layer_mask,

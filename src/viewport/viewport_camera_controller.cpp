@@ -780,6 +780,19 @@ void ViewportCameraController::adjust_fly_speed(float wheel_steps) {
             kMaximumViewportFlyNavigationSpeed);
 }
 
+bool ViewportCameraController::set_fly_speed(float speed) {
+  if (!std::isfinite(speed) || speed <= 0.0f) {
+    return false;
+  }
+  const float clamped = std::clamp(speed, kMinimumViewportFlyNavigationSpeed,
+                                  kMaximumViewportFlyNavigationSpeed);
+  if (fly_speed_ == clamped) {
+    return false;
+  }
+  fly_speed_ = clamped;
+  return true;
+}
+
 bool ViewportCameraController::set_default_fly_speed(float speed) {
   const float sanitized = viewport_sanitize_fly_navigation_speed(speed);
   if (std::abs(default_fly_speed_ - sanitized) <= 0.0001f) {

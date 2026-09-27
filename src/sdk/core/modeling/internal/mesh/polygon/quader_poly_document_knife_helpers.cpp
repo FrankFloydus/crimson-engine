@@ -1448,24 +1448,14 @@ std::vector<std::vector<ElementId>> knife_partition_face_loops(
     std::span<const Edge> cut_edges,
     int dropped_axis)
 {
-    std::vector<std::vector<ElementId>> previous_loops =
-        knife_partition_face_loops_for_turn(document, face, cut_edges, dropped_axis, true);
-    std::vector<std::vector<ElementId>> next_loops =
-        knife_partition_face_loops_for_turn(document, face, cut_edges, dropped_axis, false);
-    if (previous_loops.empty()) {
-        return next_loops;
-    }
-    if (next_loops.empty()) {
-        return previous_loops;
-    }
-
-    const std::set<ElementId> required_vertices = knife_required_cut_vertices(face, cut_edges);
-    const std::size_t previous_coverage = knife_loop_vertex_coverage(previous_loops, required_vertices);
-    const std::size_t next_coverage = knife_loop_vertex_coverage(next_loops, required_vertices);
-    if (next_coverage > previous_coverage) {
-        return next_loops;
-    }
-    return previous_loops;
+    const double source_area = knife_signed_area_2d(
+        knife_face_projected_loop(document, face, dropped_axis));
+    // Neighbors are ordered counterclockwise. Follow the turn that keeps the
+    // bounded cells in the source winding; the opposite walk admits the outer
+    // perimeter instead. That perimeter can contain every placed boundary
+    // vertex without containing any of the requested cut edges.
+    return knife_partition_face_loops_for_turn(
+        document, face, cut_edges, dropped_axis, source_area > 0.0);
 }
 
 std::vector<std::vector<ElementId>> knife_partition_face_loops_with_repairs(

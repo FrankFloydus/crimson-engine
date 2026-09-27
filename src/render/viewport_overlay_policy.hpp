@@ -39,7 +39,6 @@ enum class ViewportOverlayDepthMode {
 struct ViewportOverlayLayerPolicy {
     ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire;
     int draw_order = 0;
-    bool depth_stamped_face_fill = false;
     bool writes_transient_hover_suppression_mask = false;
     bool suppressed_by_transient_hover = false;
 };
@@ -203,10 +202,6 @@ inline constexpr float kViewportOverlayRasterScaleMaximum =
     kViewportPixelScaleMaximum;
 float viewport_overlay_sanitized_raster_scale(float raster_scale);
 int viewport_overlay_draw_order(ViewportOverlayLayer layer);
-bool viewport_overlay_layer_uses_depth_stamped_face_fill(
-    ViewportOverlayLayer layer);
-bool viewport_overlay_layer_uses_depth_only_face_fill(
-    ViewportOverlayLayer layer);
 bool viewport_overlay_triangle_is_two_sided(ViewportOverlayLayer layer);
 bool viewport_overlay_line_draws_on_top(ViewportOverlayLayer layer);
 bool viewport_overlay_point_draws_on_top(ViewportOverlayLayer layer);

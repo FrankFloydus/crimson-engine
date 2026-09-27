@@ -91,6 +91,13 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewStoresSeedA
 	EXPECT_TRUE(state.edge.b == edge.b);
 	EXPECT_NEAR(state.factor, 0.5F, 0.0001);
 	EXPECT_FALSE(state.preview_lines.empty());
+	ASSERT_EQ(state.preview_points.size(), 4U);
+	for (const auto& point : state.preview_points) {
+		EXPECT_EQ(point.layer, quader_editor_core::SelectionOverlayLayer::HoverVertex);
+		EXPECT_EQ(point.color_abgr, quader_editor_core::selection_overlay_style_token(
+			quader_editor_core::SelectionOverlayStyleRole::HoverVertex));
+		EXPECT_EQ(point.object_id, 3);
+	}
 	EXPECT_TRUE(quader_editor_core::insert_edge_loop_tool_has_seed(state));
 	EXPECT_TRUE(hover.candidate_object_id == 3);
 }
@@ -129,6 +136,7 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopLockedSeedRejectsL
 	EXPECT_TRUE(state.object_id == 3);
 	EXPECT_TRUE(state.edge == quader_poly::make_edge(edge.a, edge.b));
 	EXPECT_TRUE(state.preview_lines.empty());
+	EXPECT_TRUE(state.preview_points.empty());
 	EXPECT_TRUE(hover.object_id == 3);
         EXPECT_TRUE(hover.kind == quader_editor_core::SelectionHoverKind::Edge);
 
@@ -138,6 +146,7 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopLockedSeedRejectsL
 		state, objects, hover, ray, edge_length, true, true));
 	EXPECT_NEAR(state.factor, 0.5F, 0.0001);
 	EXPECT_FALSE(state.preview_lines.empty());
+	EXPECT_EQ(state.preview_points.size(), 4U);
 }
 
 TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopResetCanPreserveActiveOwnershipThroughRuntimeHelper) {
@@ -148,15 +157,51 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopResetCanPreserveAc
 	runtime.insert_edge_loop.dragging = true;
 	runtime.insert_edge_loop.object_id = 3;
 	runtime.insert_edge_loop.preview_lines.push_back({});
+	runtime.insert_edge_loop.preview_points.push_back({});
 
 	quader_editor_core::reset_editor_runtime_insert_edge_loop_state(runtime, true);
 	EXPECT_TRUE(runtime.insert_edge_loop.active);
 	EXPECT_FALSE(runtime.insert_edge_loop.dragging);
 	EXPECT_TRUE(runtime.insert_edge_loop.object_id == -1);
 	EXPECT_TRUE(runtime.insert_edge_loop.preview_lines.empty());
+	EXPECT_TRUE(runtime.insert_edge_loop.preview_points.empty());
 
 	quader_editor_core::reset_editor_runtime_insert_edge_loop_state(runtime, false);
 	EXPECT_FALSE(runtime.insert_edge_loop.active);
+}
+
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests,
+     PreviewMarkersMoveWithFactorAndClearForInvalidOrRemovedObjects) {
+	quader_editor_core::PolygonObject object;
+	object.id = 3;
+	object.document = quader_poly::make_cube({});
+	const auto& face = object.document.faces.front();
+	const auto edge = quader_poly::make_edge(face.vertices[0], face.vertices[1]);
+	std::vector<quader_editor_core::PolygonObject> objects { object };
+	quader_editor_core::InsertEdgeLoopToolState state;
+	quader_editor_core::SelectionHoverState hover;
+	ASSERT_TRUE(quader_editor_core::set_insert_edge_loop_preview(
+		state, objects, hover, object.id, edge, 0.25F, true));
+	ASSERT_EQ(state.preview_points.size(), 4U);
+	const auto initial = state.preview_points;
+	ASSERT_TRUE(quader_editor_core::set_insert_edge_loop_preview(
+		state, objects, hover, object.id, edge, 0.75F, true));
+	ASSERT_EQ(state.preview_points.size(), initial.size());
+	for (std::size_t index = 0U; index < initial.size(); ++index) {
+		EXPECT_GT(quader::length(state.preview_points[index].position - initial[index].position), 0.5F);
+	}
+
+	EXPECT_FALSE(quader_editor_core::set_insert_edge_loop_preview(
+		state, objects, hover, 99, edge, 0.5F, true));
+	EXPECT_TRUE(state.preview_lines.empty());
+	EXPECT_TRUE(state.preview_points.empty());
+	ASSERT_TRUE(quader_editor_core::set_insert_edge_loop_preview(
+		state, objects, hover, object.id, edge, 0.5F, true));
+	objects.clear();
+	EXPECT_FALSE(quader_editor_core::update_insert_edge_loop_drag_factor(
+		objects, state, hover, {}, 1.0, false));
+	EXPECT_TRUE(state.preview_lines.empty());
+	EXPECT_TRUE(state.preview_points.empty());
 }
 
 TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopRuntimeHelpersPublishDragStateAndPromoteHoverCandidates) {

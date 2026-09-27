@@ -16,7 +16,6 @@
 #include "editor/metadata/command_presentation_catalog.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
-#include "viewport/viewport_layout.hpp"
 
 #include <QAction>
 #include <QActionGroup>
@@ -72,47 +71,8 @@ std::string stable_object_suffix(std::string_view value) {
   return result;
 }
 
-std::string layout_localization_key(ViewportLayoutId layout) {
-  std::string key = "viewport.layout.";
-  key.append(viewport_layout_stable_id(layout));
-  key.append(".label");
-  return key;
-}
-
 bool same_command(QuaderCommandId left, QuaderCommandId right) noexcept {
   return left.string() == right.string();
-}
-
-std::optional<ViewportLayoutId> layout_for_command(QuaderCommandId command_id) {
-  if (same_command(command_id, quader_command::kViewportLayoutSingle)) {
-    return ViewportLayoutId::Single;
-  }
-  if (same_command(command_id, quader_command::kViewportLayoutTwoHorizontal)) {
-    return ViewportLayoutId::TwoHorizontal;
-  }
-  if (same_command(command_id, quader_command::kViewportLayoutTwoVertical)) {
-    return ViewportLayoutId::TwoVertical;
-  }
-  if (same_command(command_id, quader_command::kViewportLayoutFourQuad)) {
-    return ViewportLayoutId::FourQuad;
-  }
-  if (same_command(command_id,
-                   quader_command::kViewportLayoutThreePrimaryRight)) {
-    return ViewportLayoutId::ThreePrimaryRight;
-  }
-  if (same_command(command_id,
-                   quader_command::kViewportLayoutThreePrimaryLeft)) {
-    return ViewportLayoutId::ThreePrimaryLeft;
-  }
-  if (same_command(command_id,
-                   quader_command::kViewportLayoutThreePrimaryBottom)) {
-    return ViewportLayoutId::ThreePrimaryBottom;
-  }
-  if (same_command(command_id,
-                   quader_command::kViewportLayoutThreePrimaryTop)) {
-    return ViewportLayoutId::ThreePrimaryTop;
-  }
-  return std::nullopt;
 }
 
 std::string tool_localization_key(const Tool &tool) {
@@ -1434,38 +1394,6 @@ struct QtMainMenu::Impl {
     }
   }
 
-  void build_layout_submenu(QMenu &parent) {
-    QMenu *menu = parent.addMenu(qtext(
-        context.localization, "ui.menu.window.layout", "Viewport Layout"));
-    menu->setObjectName(QStringLiteral("menu_window_layout"));
-    auto *group = new QActionGroup(menu);
-    group->setExclusive(true);
-    for (const CommandPresentationDescriptor &presentation :
-         command_presentation_catalog()) {
-      if (presentation.domain != CommandPresentationDomain::Window ||
-          presentation.group != CommandPresentationGroup::Layout ||
-          !has_command_presentation_surface(
-              presentation, CommandPresentationSurface::MainMenu)) {
-        continue;
-      }
-      const std::optional<ViewportLayoutId> layout =
-          layout_for_command(presentation.command_id);
-      if (!layout.has_value()) {
-        continue;
-      }
-      QAction *action = add_command_action(
-          *menu, presentation.command_id, layout_localization_key(*layout),
-          std::string(viewport_layout_label(*layout)), [this, layout] {
-            return context.editor.get().viewports().layout() == *layout;
-          });
-      action->setObjectName(
-          QStringLiteral("layout_%1")
-              .arg(QString::fromUtf8(
-                  viewport_layout_stable_id(*layout).data())));
-      group->addAction(action);
-    }
-  }
-
   void build_window_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.window", "&Window");
     window_menu = menu;
@@ -1489,7 +1417,6 @@ struct QtMainMenu::Impl {
     if (!menu->actions().isEmpty()) {
       menu->addSeparator();
     }
-    build_layout_submenu(*menu);
     build_toolbar_submenu(*menu);
     build_panel_submenu(*menu);
   }

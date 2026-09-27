@@ -7008,7 +7008,7 @@ TEST(OverlayCameraProjectorTests,
   EXPECT_FLOAT_EQ(projected.device.w, 1.0f);
 }
 
-TEST(OverlayFaceFillBuilderTests, CreatesDepthStampedFaceFillPasses) {
+TEST(OverlayFaceFillBuilderTests, PreservesFaceTintWithoutWritingDepth) {
     ViewportOverlayFrame frame;
     frame.triangles.push_back({
             .layer = ViewportOverlayLayer::SelectedVisibleFace,
@@ -7022,22 +7022,20 @@ TEST(OverlayFaceFillBuilderTests, CreatesDepthStampedFaceFillPasses) {
         frame, test_overlay_camera(),
         ViewportOverlayLayer::SelectedVisibleFace);
 
-    ASSERT_EQ(plan.face_fill_batches.size(), 2u);
+    ASSERT_EQ(plan.face_fill_batches.size(), 1u);
     EXPECT_EQ(plan.face_fill_batches[0].mesh.vertices.size(), 3u);
     EXPECT_EQ(plan.face_fill_batches[0].mesh.indices.size(), 3u);
-    EXPECT_TRUE(plan.face_fill_batches[0].state.depth_write);
-    EXPECT_FALSE(plan.face_fill_batches[0].state.color_write);
+    EXPECT_FALSE(plan.face_fill_batches[0].state.depth_write);
+    EXPECT_TRUE(plan.face_fill_batches[0].state.color_write);
+    EXPECT_TRUE(plan.face_fill_batches[0].state.depth_culling);
     EXPECT_EQ(plan.face_fill_batches[0].state.depth_func,
               OverlayDepthFunc::GreaterOrEqual);
-    EXPECT_FALSE(plan.face_fill_batches[1].state.depth_write);
-    EXPECT_TRUE(plan.face_fill_batches[1].state.color_write);
-    EXPECT_EQ(plan.face_fill_batches[1].state.depth_func,
-              OverlayDepthFunc::Equal);
-    EXPECT_EQ(plan.face_fill_batches[1].mesh.vertices[0].color,
+    EXPECT_EQ(plan.face_fill_batches[0].mesh.vertices[0].color,
               rgba8_srgb_to_linear(rgba8(255, 172, 31, 8)));
 }
 
-TEST(OverlayFaceFillBuilderTests, SelectedAndHoverFaceFillsRenderTwoSided) {
+TEST(OverlayFaceFillBuilderTests,
+     SelectedAndHoverFaceFillsReadSceneDepthAndRenderTwoSided) {
     const std::array<ViewportOverlayLayer, 4u> layers{{
             ViewportOverlayLayer::SelectedVisibleFace,
             ViewportOverlayLayer::SelectedFaceMask,
@@ -7060,21 +7058,97 @@ TEST(OverlayFaceFillBuilderTests, SelectedAndHoverFaceFillsRenderTwoSided) {
             OverlayRenderableBuilder::build_layer(frame, test_overlay_camera(),
                                                   layer);
 
-        ASSERT_EQ(plan.face_fill_batches.size(), 2u);
-        EXPECT_TRUE(plan.face_fill_batches[0].state.depth_write);
-        EXPECT_FALSE(plan.face_fill_batches[0].state.color_write);
-        EXPECT_EQ(plan.face_fill_batches[0].state.depth_func,
-                  OverlayDepthFunc::GreaterOrEqual);
-        EXPECT_FALSE(plan.face_fill_batches[1].state.depth_write);
-        EXPECT_TRUE(plan.face_fill_batches[1].state.color_write);
-        EXPECT_EQ(plan.face_fill_batches[1].state.depth_func,
-                  OverlayDepthFunc::Equal);
-        for (const OverlayFaceFillBatch &batch : plan.face_fill_batches) {
-          EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
-          EXPECT_EQ(batch.state.transparency_mode,
-                    OverlayTransparencyMode::TwoPassesTwoSides);
-        }
+        ASSERT_EQ(plan.face_fill_batches.size(), 1u);
+        const OverlayFaceFillBatch &batch = plan.face_fill_batches.front();
+        EXPECT_FALSE(batch.state.depth_write);
+        EXPECT_TRUE(batch.state.color_write);
+        EXPECT_TRUE(batch.state.depth_culling);
+        EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+        EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
+        EXPECT_EQ(batch.state.transparency_mode,
+                  OverlayTransparencyMode::TwoPassesTwoSides);
+        EXPECT_EQ(batch.state.blend_order,
+                  viewport_overlay_draw_order(layer) * 64u);
+        EXPECT_EQ(batch.mesh.vertices[0].color,
+                  rgba8_srgb_to_linear(rgba8(31, 255, 102, 22)));
     }
+}
+
+TEST(OverlayFaceFillBuilderTests,
+     HighlightedFacesPreserveDepthTestedComponentLayers) {
+  ViewportOverlayFrame frame;
+  for (const ViewportOverlayLayer layer : {
+           ViewportOverlayLayer::SelectedVisibleFace,
+           ViewportOverlayLayer::SelectedFaceMask,
+           ViewportOverlayLayer::SelectedXrayFace,
+           ViewportOverlayLayer::HoverFace,
+       }) {
+    frame.triangles.push_back({
+        .layer = layer,
+        .a = {-1.0f, -1.0f, -1.0f},
+        .b = {0.0f, 1.0f, -1.0f},
+        .c = {1.0f, -1.0f, -1.0f},
+        .color = rgba8(31, 255, 102, 22),
+    });
+  }
+
+  // The foreground face is a translucent highlight, while component wires
+  // and vertices behind it still depend on the real scene's depth.
+  for (const ViewportOverlayLayer layer : {
+           ViewportOverlayLayer::SourceWire,
+           ViewportOverlayLayer::SelectedFaceEdge,
+           ViewportOverlayLayer::SelectedEdge,
+           ViewportOverlayLayer::HoverFaceEdge,
+           ViewportOverlayLayer::HoverEdge,
+       }) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    frame.lines.push_back({
+        .layer = layer,
+        .start = {-0.25f, 0.0f, -2.0f},
+        .end = {0.25f, 0.0f, -2.0f},
+        .color = kOverlaySourceWireColor,
+        .width_pixels = 2.0f,
+        .source = ViewportOverlaySource::ComponentSelection,
+    });
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), layer);
+    ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+    const OverlayEditWireBatch &batch = plan.edit_wire_batches.front();
+    EXPECT_FALSE(batch.mesh.empty());
+    EXPECT_FALSE(batch.state.depth_write);
+    EXPECT_TRUE(batch.state.depth_culling);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+    EXPECT_GT(batch.state.blend_order,
+              viewport_overlay_draw_order(ViewportOverlayLayer::HoverFace) *
+                  64u);
+  }
+
+  for (const ViewportOverlayLayer layer : {
+           ViewportOverlayLayer::UnselectedVertex,
+           ViewportOverlayLayer::SelectedVertex,
+           ViewportOverlayLayer::HoverVertex,
+       }) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    frame.points.push_back({
+        .layer = layer,
+        .position = {0.0f, 0.0f, -2.0f},
+        .color = kOverlayVertexColor,
+        .size_pixels = 6.0f,
+        .source = ViewportOverlaySource::ComponentSelection,
+        .outline_growth_pixels = 0.0f,
+    });
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), layer);
+    ASSERT_EQ(plan.point_batches.size(), 1u);
+    const OverlayPointBatch &batch = plan.point_batches.front();
+    EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+    EXPECT_FALSE(batch.state.depth_write);
+    EXPECT_TRUE(batch.state.depth_culling);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+    EXPECT_GT(batch.state.blend_order,
+              viewport_overlay_draw_order(ViewportOverlayLayer::HoverFace) *
+                  64u);
+  }
 }
 
 TEST(OverlayFaceFillBuilderTests, SourceWireDepthStampDoesNotRenderDepthPass) {

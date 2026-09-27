@@ -80,17 +80,16 @@ bool overlay_layer_can_build_icons(ViewportOverlayLayer layer) {
 
 OverlayRenderState make_state_with_depth_mode(
     ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind,
-    std::uint16_t blend_order, ViewportOverlayDepthMode depth_mode,
-    bool depth_stamp = false, bool face_color_pass = false) {
+    std::uint16_t blend_order, ViewportOverlayDepthMode depth_mode) {
   const bool draw_on_top = depth_mode == ViewportOverlayDepthMode::DrawOnTop;
   OverlayRenderState state;
-  state.depth_write = depth_stamp;
-  state.color_write = !depth_stamp;
-  state.depth_culling = depth_stamp || face_color_pass || !draw_on_top;
-  state.depth_func = depth_stamp       ? OverlayDepthFunc::GreaterOrEqual
-                     : face_color_pass ? OverlayDepthFunc::Equal
-                     : draw_on_top     ? OverlayDepthFunc::Always
-                                       : OverlayDepthFunc::GreaterOrEqual;
+  // Highlights consume scene depth without turning a culled face into an
+  // occluder for the component wires and points drawn after it.
+  state.depth_write = false;
+  state.color_write = true;
+  state.depth_culling = !draw_on_top;
+  state.depth_func = draw_on_top ? OverlayDepthFunc::Always
+                                : OverlayDepthFunc::GreaterOrEqual;
   const bool two_sided_triangle =
       kind == ViewportOverlayGeometryKind::Triangles &&
       viewport_overlay_triangle_is_two_sided(layer);
@@ -350,10 +349,9 @@ std::uint64_t OverlayRenderableBuilder::layer_build_signature(
 
 OverlayRenderState OverlayRenderableBuilder::make_state(
     ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind,
-    std::uint16_t blend_order, bool depth_stamp, bool face_color_pass) {
+    std::uint16_t blend_order) {
   return make_state_with_depth_mode(
-      layer, kind, blend_order, viewport_overlay_depth_mode(layer, kind),
-      depth_stamp, face_color_pass);
+      layer, kind, blend_order, viewport_overlay_depth_mode(layer, kind));
 }
 
 OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
@@ -365,9 +363,8 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
   const ViewportOverlayCamera sanitized_camera =
       OverlayCameraProjector::sanitized_camera(camera);
   if (layer == ViewportOverlayLayer::SourceWireDepthStamp) {
-    // Compatibility metadata only. Scene and moving-preview overlay-depth
-    // companions own visibility; this triangle stream neither renders nor
-    // drives camera-dependent CPU filtering.
+    // Point-visibility metadata only; this triangle stream adds no GPU pass.
+    // Scene and moving-preview overlay-depth companions own GPU occlusion.
     return plan;
   }
 
@@ -389,30 +386,11 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
       return OverlayFaceFillBuilder::build_layer(frame, layer);
     }();
     if (!face_fill_mesh.empty()) {
-      if (viewport_overlay_layer_uses_depth_only_face_fill(layer)) {
-        plan.face_fill_batches.push_back({
-            .mesh = std::move(face_fill_mesh),
-            .state = make_state(layer, ViewportOverlayGeometryKind::Triangles,
-                                blend_order++, true, false),
-        });
-      } else if (viewport_overlay_layer_uses_depth_stamped_face_fill(layer)) {
-        plan.face_fill_batches.push_back({
-            .mesh = face_fill_mesh,
-            .state = make_state(layer, ViewportOverlayGeometryKind::Triangles,
-                                blend_order++, true, false),
-        });
-        plan.face_fill_batches.push_back({
-            .mesh = std::move(face_fill_mesh),
-            .state = make_state(layer, ViewportOverlayGeometryKind::Triangles,
-                                blend_order++, false, true),
-        });
-      } else {
-        plan.face_fill_batches.push_back({
-            .mesh = std::move(face_fill_mesh),
-            .state = make_state(layer, ViewportOverlayGeometryKind::Triangles,
-                                blend_order++),
-        });
-      }
+      plan.face_fill_batches.push_back({
+          .mesh = std::move(face_fill_mesh),
+          .state = make_state(layer, ViewportOverlayGeometryKind::Triangles,
+                              blend_order++),
+      });
     }
   }
 

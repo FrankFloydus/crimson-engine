@@ -774,7 +774,7 @@ ModelingViewportCamera test_orthographic_viewport_camera() {
   };
 }
 
-ModelingToolRayEvent test_knife_screen_event(
+ModelingToolRayEvent test_tool_screen_event(
     ModelingViewportCamera camera, QVec3 world_target,
     float vertical_screen_offset, double edge_radius_pixels = 8.0) {
   const quader_editor_core::ViewportCameraState runtime_camera =
@@ -2447,14 +2447,13 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
       viewport_overlay_depth_tested(ViewportOverlayLayer::PointLightGizmo,
                                     ViewportOverlayGeometryKind::Icons));
 
-  EXPECT_TRUE(viewport_overlay_layer_uses_depth_stamped_face_fill(
-      ViewportOverlayLayer::SelectedVisibleFace));
-  EXPECT_TRUE(viewport_overlay_layer_uses_depth_stamped_face_fill(
-      ViewportOverlayLayer::SelectedXrayFace));
-  EXPECT_TRUE(viewport_overlay_layer_uses_depth_stamped_face_fill(
-      ViewportOverlayLayer::SelectedFaceMask));
-  EXPECT_TRUE(viewport_overlay_layer_uses_depth_stamped_face_fill(
-      ViewportOverlayLayer::HoverFace));
+  for (const auto layer : {ViewportOverlayLayer::SelectedVisibleFace,
+                           ViewportOverlayLayer::SelectedXrayFace,
+                           ViewportOverlayLayer::SelectedFaceMask,
+                           ViewportOverlayLayer::HoverFace}) {
+    EXPECT_TRUE(viewport_overlay_depth_tested(
+        layer, ViewportOverlayGeometryKind::Triangles));
+  }
   EXPECT_TRUE(viewport_overlay_triangle_is_two_sided(
       ViewportOverlayLayer::SelectedVisibleFace));
   EXPECT_TRUE(viewport_overlay_triangle_is_two_sided(
@@ -2463,8 +2462,6 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
       ViewportOverlayLayer::SelectedFaceMask));
   EXPECT_TRUE(
       viewport_overlay_triangle_is_two_sided(ViewportOverlayLayer::HoverFace));
-  EXPECT_FALSE(viewport_overlay_layer_uses_depth_only_face_fill(
-      ViewportOverlayLayer::SourceWireDepthStamp));
   EXPECT_FALSE(viewport_overlay_triangle_is_two_sided(
       ViewportOverlayLayer::SourceWireDepthStamp));
 
@@ -4267,6 +4264,284 @@ TEST(ViewportSceneHitPolicyTests,
   ASSERT_EQ(hits.size(), 2u);
   EXPECT_EQ(hits[0].kind, ViewportSceneHitKind::CurveControl);
   EXPECT_EQ(hits[1].kind, ViewportSceneHitKind::Billboard);
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     PointHitsTraverseOnlyVisibleCameraDepthsBeforeSurfaceArbitration) {
+  for (const bool orthographic : {false, true}) {
+    for (const QVec2 pointer : {QVec2{400.0f, 300.0f},
+                               QVec2{760.0f, 100.0f}}) {
+      SCOPED_TRACE(orthographic);
+      SCOPED_TRACE(pointer.x);
+      ViewportCameraController camera;
+      camera.set_viewport_size(800.0f, 600.0f);
+      camera.focus_origin(8.0f);
+      camera.set_view_direction({0.0f, 0.0f, -1.0f});
+      if (orthographic) {
+        camera.view_axis(ViewportViewAxis::Z, 1);
+      }
+      camera.set_clip_planes(2.0f, 6.0f);
+      const ViewportCameraBasis basis = ViewportCameraAdapter::basis(camera);
+      const ViewportRay ray = camera.ray_from_viewport_point(pointer);
+      const auto point_at_depth = [&](float depth) {
+        return ray.origin + ray.direction *
+            ((depth - dot(ray.origin - basis.eye, basis.forward)) /
+             dot(ray.direction, basis.forward));
+      };
+      SceneSession session;
+      SceneSurfaceQuery surfaces(session.scene(), session.assets(),
+                                  session.viewport_local_visibility());
+      const auto add_surfaces = [&](std::initializer_list<float> depths) {
+        MeshAsset mesh;
+        mesh.name = "Camera depth pick surfaces";
+        auto &geometry = mesh.edit_geometry();
+        for (const float depth : depths) {
+          const QVec3 center = point_at_depth(depth);
+          const auto first = static_cast<std::uint32_t>(geometry.vertices.size());
+          for (const QVec3 position : {
+                   center - basis.right * 2.0f - basis.up * 2.0f,
+                   center + basis.right * 2.0f - basis.up * 2.0f,
+                   center + basis.up * 2.0f}) {
+            geometry.vertices.push_back({.position = position,
+                                         .normal = basis.forward * -1.0f});
+          }
+          geometry.indices.insert(geometry.indices.end(),
+                                  {first, first + 1u, first + 2u});
+        }
+        const AssetId asset = session.assets().add_mesh(std::move(mesh));
+        const EntityId entity = session.scene().create_entity(
+            "Camera depth pick surfaces", EntityKind::Mesh);
+        EXPECT_TRUE(session.scene().set_mesh(entity, {.mesh = asset}));
+        return entity;
+      };
+      // A clipped first triangle must not hide a valid later triangle of the
+      // same participant. The off-center near hit is beyond distance 2, and
+      // the far visible hit is beyond distance 6 in perspective.
+      const EntityId near_and_visible = add_surfaces({1.8f, 3.5f});
+      const EntityId visible_behind = add_surfaces({5.5f});
+      const EntityId beyond_far = add_surfaces({7.0f});
+      const SceneSurfaceQuerySnapshot snapshot = surfaces.snapshot();
+
+      const auto ordinary = collect_viewport_scene_point_hits({
+          .camera = camera,
+          .local_mouse = pointer,
+          .scene_surfaces = &snapshot,
+          .select_backfaces = false,
+          .collect_all_mesh_surfaces = true,
+      });
+      ASSERT_EQ(ordinary.size(), 1u);
+      EXPECT_EQ(ordinary.front().entity, near_and_visible);
+      EXPECT_EQ(std::get<ViewportSceneMeshHit>(ordinary.front().source)
+                    .primitive_index, 1u);
+      EXPECT_TRUE(camera.project_world_point(ordinary.front().world_position).visible);
+
+      const auto through_depth = collect_viewport_scene_point_hits({
+          .camera = camera,
+          .local_mouse = pointer,
+          .scene_surfaces = &snapshot,
+          .select_backfaces = false,
+          .include_occluded = true,
+          .collect_all_mesh_surfaces = true,
+      });
+      ASSERT_EQ(through_depth.size(), 2u);
+      EXPECT_EQ(through_depth[0].entity, near_and_visible);
+      EXPECT_EQ(through_depth[1].entity, visible_behind);
+      EXPECT_NE(through_depth[1].entity, beyond_far);
+      EXPECT_LT(through_depth[0].ray_distance, through_depth[1].ray_distance);
+
+      const std::array billboards{ViewportSceneBillboardPickCandidate{
+          .entity = 1000u,
+          .position = point_at_depth(3.0f),
+          .size_pixels = 18.0f,
+      }};
+      const auto winner = resolve_viewport_scene_point_hit({
+          .camera = camera,
+          .local_mouse = pointer,
+          .billboards = billboards,
+          .scene_surfaces = &snapshot,
+          .select_backfaces = false,
+      });
+      ASSERT_TRUE(winner.has_value());
+      EXPECT_EQ(winner->kind, ViewportSceneHitKind::Billboard);
+
+      // Camera-independent API rays retain their unrestricted surface range.
+      const auto ray_hit = resolve_viewport_scene_ray_hit({
+          .ray = {.origin = ray.origin, .direction = ray.direction},
+          .scene_surfaces = &snapshot,
+          .select_backfaces = false,
+      });
+      ASSERT_TRUE(ray_hit.has_value());
+      EXPECT_EQ(std::get<ViewportSceneMeshHit>(ray_hit->source).primitive_index, 0u);
+    }
+  }
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     ResolvedPointTargetsRespectClipDepthWithAndWithoutWorldPositions) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(8.0f);
+  camera.set_view_direction({0.0f, 0.0f, -1.0f});
+  camera.set_clip_planes(2.0f, 6.0f);
+  const QVec2 pointer{760.0f, 100.0f};
+  const ViewportRay ray = camera.ray_from_viewport_point(pointer);
+  const QVec3 forward = ViewportCameraAdapter::basis(camera).forward;
+  for (const ModelingActiveSelectionKind kind : {
+           ModelingActiveSelectionKind::Object,
+           ModelingActiveSelectionKind::Vertex,
+           ModelingActiveSelectionKind::Edge,
+           ModelingActiveSelectionKind::Face}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    for (const bool world_positions : {false, true}) {
+      SCOPED_TRACE(world_positions);
+      std::vector<ResolvedSelectionHit> resolved;
+      for (const float depth : {1.8f, 5.5f, 7.0f}) {
+        const double distance = depth / dot(ray.direction, forward);
+        resolved.push_back({
+            .target = {
+                .domain = kind == ModelingActiveSelectionKind::Object
+                              ? ResolvedSelectionDomain::SceneEntity
+                              : ResolvedSelectionDomain::ModelingComponent,
+                .entity = 12u,
+                .modeling_object_id = 7,
+                .component_kind = kind,
+                .vertex = 0,
+                .edge_a = 0,
+                .edge_b = 1,
+                .face = 0,
+            },
+            .ray_distance = distance,
+            .world_position = world_positions
+                ? std::optional<QVec3>{ray.origin + ray.direction *
+                                                       static_cast<float>(distance)}
+                : std::nullopt,
+        });
+      }
+      const auto hits = collect_viewport_scene_point_hits({
+          .camera = camera,
+          .local_mouse = pointer,
+          .resolved_selection_hits = resolved,
+          .include_mesh_surfaces = false,
+          .include_occluded = true,
+      });
+      ASSERT_EQ(hits.size(), 1u);
+      EXPECT_DOUBLE_EQ(hits.front().ray_distance, resolved[1].ray_distance);
+    }
+  }
+}
+
+TEST(ViewportSceneHitPolicyTests,
+     RadiusComponentsUseTheirOwnRayForSceneOcclusion) {
+  for (const bool orthographic : {false, true}) {
+    for (const ModelingActiveSelectionKind kind : {
+             ModelingActiveSelectionKind::Vertex,
+             ModelingActiveSelectionKind::Edge}) {
+      for (const bool locked : {false, true}) {
+        SCOPED_TRACE(orthographic);
+        SCOPED_TRACE(static_cast<int>(kind));
+        SCOPED_TRACE(locked);
+        ViewportCameraController camera;
+        camera.set_viewport_size(800.0f, 600.0f);
+        camera.focus_origin(8.0f);
+        camera.set_view_direction({0.0f, 0.0f, -1.0f});
+        if (orthographic) {
+          camera.view_axis(ViewportViewAxis::Z, 1);
+        }
+        camera.set_clip_planes(2.0f, 6.0f);
+        const ViewportCameraBasis basis = ViewportCameraAdapter::basis(camera);
+        const auto point_at_depth = [&](QVec2 pixel, float depth) {
+          const ViewportRay ray = camera.ray_from_viewport_point(pixel);
+          return ray.origin + ray.direction *
+              ((depth - dot(ray.origin - basis.eye, basis.forward)) /
+               dot(ray.direction, basis.forward));
+        };
+        SceneSession session;
+        SceneSurfaceQuery surfaces(session.scene(), session.assets(),
+                                    session.viewport_local_visibility());
+        const auto add_wall = [&](float left, float right, float depth) {
+          MeshAsset mesh;
+          mesh.name = "Component silhouette occluder";
+          auto &geometry = mesh.edit_geometry();
+          for (const QVec2 pixel : {
+                   QVec2{left, 320.0f}, QVec2{right, 320.0f},
+                   QVec2{right, 280.0f}, QVec2{left, 280.0f}}) {
+            geometry.vertices.push_back({
+                .position = point_at_depth(pixel, depth),
+                .normal = basis.forward * -1.0f,
+            });
+          }
+          geometry.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+          const AssetId asset = session.assets().add_mesh(std::move(mesh));
+          const EntityId wall = session.scene().create_entity(
+              "Component silhouette occluder", EntityKind::Mesh);
+          EXPECT_TRUE(session.scene().set_mesh(wall, {.mesh = asset}));
+          if (locked) {
+            EXPECT_TRUE(session.scene().set_locked(wall, true));
+          } else {
+            EXPECT_TRUE(session.scene().set_selectable(wall, false));
+          }
+          return wall;
+        };
+        const EntityId cursor_wall = add_wall(380.0f, 402.0f, 3.0f);
+        const EntityId candidate_wall = add_wall(403.0f, 406.0f, 3.0f);
+        ASSERT_TRUE(session.scene().set_visible(candidate_wall, false));
+        const QVec3 candidate_position = point_at_depth({404.0f, 300.0f}, 5.0f);
+        const ViewportRay candidate_ray =
+            camera.ray_from_viewport_point({404.0f, 300.0f});
+        std::array resolved{ResolvedSelectionHit{
+            .target = {
+                .domain = ResolvedSelectionDomain::ModelingComponent,
+                .entity = 1000u,
+                .modeling_object_id = 7,
+                .component_kind = kind,
+                .vertex = 0,
+                .edge_a = 0,
+                .edge_b = 1,
+            },
+            .ray_distance = dot(candidate_position - candidate_ray.origin,
+                                candidate_ray.direction),
+            .pick_distance_pixels = 4.0,
+            .world_position = candidate_position,
+        }};
+        const auto collect = [&](bool include_occluded = false,
+                                 std::span<const EntityId> excluded = {}) {
+          const SceneSurfaceQuerySnapshot snapshot = surfaces.snapshot();
+          return collect_viewport_scene_point_hits({
+              .camera = camera,
+              .local_mouse = {400.0f, 300.0f},
+              .scene_surfaces = &snapshot,
+              .resolved_selection_hits = resolved,
+              .excluded_entities = excluded,
+              .include_mesh_surfaces = false,
+              .include_occluded = include_occluded,
+          });
+        };
+
+        // The pointer is on a foreground wall, but the radius candidate is
+        // visible beside its silhouette. Unsupported hits keep cursor policy.
+        EXPECT_EQ(collect().size(), 1u);
+        resolved.front().world_position.reset();
+        EXPECT_TRUE(collect().empty());
+        resolved.front().world_position = candidate_position;
+        resolved.front().target.component_kind = ModelingActiveSelectionKind::Face;
+        EXPECT_TRUE(collect().empty());
+        resolved.front().target.component_kind = kind;
+
+        // Conversely, a clear pointer ray does not make a covered candidate
+        // visible. Locked and nonselectable meshes still contribute depth.
+        ASSERT_TRUE(session.scene().set_visible(cursor_wall, false));
+        ASSERT_TRUE(session.scene().set_visible(candidate_wall, true));
+        EXPECT_TRUE(collect().empty());
+        EXPECT_EQ(collect(true).size(), 1u);
+        const std::array excluded{candidate_wall};
+        EXPECT_EQ(collect(false, excluded).size(), 1u);
+
+        ASSERT_TRUE(session.scene().set_visible(candidate_wall, false));
+        (void)add_wall(403.0f, 406.0f, 1.0f);
+        EXPECT_EQ(collect().size(), 1u);
+      }
+    }
+  }
 }
 
 TEST(RadialArrayLayoutTests,
@@ -8592,6 +8867,33 @@ TEST(ViewportCameraTests,
   EXPECT_FLOAT_EQ(camera.fly_speed(), 25.0f);
 }
 
+TEST(ViewportCameraTests, CurrentFlySpeedSetterSharesWheelAndResetState) {
+  ViewportCameraController camera;
+  ASSERT_TRUE(camera.set_default_fly_speed(40.0f));
+  ASSERT_TRUE(camera.set_fly_speed(12.5f));
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 12.5f);
+  EXPECT_FLOAT_EQ(camera.default_fly_speed(), 40.0f);
+  EXPECT_FALSE(camera.set_fly_speed(12.5f));
+  camera.adjust_fly_speed(2.0f);
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 14.5f);
+  ASSERT_TRUE(camera.set_default_fly_speed(30.0f));
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 14.5f);
+  camera.reset_fly_speed();
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 30.0f);
+
+  EXPECT_FALSE(camera.set_fly_speed(0.0f));
+  EXPECT_FALSE(camera.set_fly_speed(-2.0f));
+  EXPECT_FALSE(camera.set_fly_speed(std::numeric_limits<float>::quiet_NaN()));
+  EXPECT_FALSE(camera.set_fly_speed(std::numeric_limits<float>::infinity()));
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 30.0f);
+  ASSERT_TRUE(camera.set_fly_speed(0.5f));
+  EXPECT_FLOAT_EQ(camera.fly_speed(), kMinimumViewportFlyNavigationSpeed);
+  ASSERT_TRUE(camera.set_fly_speed(std::numeric_limits<float>::max()));
+  EXPECT_FLOAT_EQ(camera.fly_speed(), kMaximumViewportFlyNavigationSpeed);
+  EXPECT_FALSE(camera.set_fly_speed(std::numeric_limits<float>::max()));
+  EXPECT_FLOAT_EQ(camera.default_fly_speed(), 30.0f);
+}
+
 TEST(ViewportWorkspaceServiceTests,
      FlyDefaultPropagatesToEveryCurrentFutureAndRestoredCamera) {
   ViewportWorkspaceService workspace;
@@ -8614,11 +8916,22 @@ TEST(ViewportWorkspaceServiceTests,
   EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).fly_speed(),
                   30.0f);
 
+  ASSERT_TRUE(workspace.camera(ViewportPaneId::Perspective).set_fly_speed(12.25f));
   ASSERT_TRUE(
       workspace.set_view(ViewportPaneId::Perspective, ViewportView::Top));
   EXPECT_FLOAT_EQ(
       workspace.camera(ViewportPaneId::Perspective).default_fly_speed(),
       30.0f);
+  EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).fly_speed(),
+                  12.25f);
+  ASSERT_TRUE(workspace.set_view(ViewportPaneId::Perspective,
+                                 ViewportView::Perspective));
+  EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).fly_speed(),
+                  12.25f);
+  EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).default_fly_speed(),
+                  30.0f);
+  EXPECT_FLOAT_EQ(workspace.default_fly_speed(), 30.0f);
+  workspace.camera(ViewportPaneId::Perspective).reset_fly_speed();
   EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).fly_speed(),
                   30.0f);
   ViewportWorkspaceAuxiliaryViewportState &auxiliary =
@@ -19407,6 +19720,46 @@ TEST(ModelingSessionServiceTests, CreatesBoxThroughRuntimeWhenAvailable) {
             result.object.modeling_object_id);
 }
 
+TEST(ModelingSessionServiceTests, SelectionHitsApplyOccurrenceTransformExactlyOnce) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+      .name = "Transformed selection hit"});
+  ASSERT_TRUE(box.ok);
+  TransformComponent transform;
+  transform.position = {4, 1, 2};
+  transform.scale = {2, 3, 0.5f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+  const auto world = scene.world_transform_matrix(box.object.entity);
+  for (const auto mode : {ModelingSelectionMode::Object, ModelingSelectionMode::Face,
+                          ModelingSelectionMode::Edge, ModelingSelectionMode::Vertex}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(service.set_selection_mode(mode).ok);
+    const QVec3 local = mode == ModelingSelectionMode::Vertex ? QVec3{1, 1, 1}
+        : mode == ModelingSelectionMode::Edge ? QVec3{1, 0, 1} : QVec3{0, 0, 1};
+    const QVec3 expected = transform_point(world, local);
+    const ModelingPickSelectRequest request{
+        .ray = {.origin = expected + QVec3{0, 0, 5}, .direction = {0, 0, -1}},
+        .vertex_radius = 0.01, .edge_radius = 0.01};
+    for (int repeat = 0; repeat < 2; ++repeat) {
+      const auto hit = service.query_selection_hit(request);
+      ASSERT_TRUE(hit.has_value());
+      EXPECT_EQ(hit->entity, box.object.entity);
+      ASSERT_TRUE(hit->world_position.has_value());
+      expect_vec3_near(*hit->world_position, expected);
+      EXPECT_NEAR(hit->ray_distance, 5.0, 0.0001);
+    }
+    if (mode == ModelingSelectionMode::Object) {
+      const auto depth_hits = service.query_selection_depth_hits(request);
+      ASSERT_FALSE(depth_hits.empty());
+      ASSERT_TRUE(depth_hits.front().world_position.has_value());
+      expect_vec3_near(*depth_hits.front().world_position, expected);
+    }
+  }
+}
+
 TEST(ModelingSessionServiceTests, InsertEdgeLoopDragCommitsMesh) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -19642,6 +19995,286 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     InsertEdgeLoopPerspectiveCursorProjectionSurvivesOffsetsAndMatchesCommit) {
+  for (const bool snap_enabled : {false, true}) {
+    SCOPED_TRACE(snap_enabled);
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    quader_poly::Document document;
+    const QVec3 start{0.1f, 0.0f, -2.0f};
+    const QVec3 end{0.8f, 0.0f, -8.0f};
+    const QVec3 across{0.0f, -2.0f, 0.0f};
+    const auto a = quader_poly::add_vertex(document, start);
+    const auto b = quader_poly::add_vertex(document, end);
+    const auto c = quader_poly::add_vertex(document, end + across);
+    const auto d = quader_poly::add_vertex(document, start + across);
+    ASSERT_NE(quader_poly::add_face(document, std::array{a, d, c, b}),
+              quader_poly::kInvalidElementId);
+    const auto mesh = service.create_mesh({
+        .document = std::move(document),
+        .name = "Perspective Edge Loop Cursor",
+    });
+    ASSERT_TRUE(mesh.ok) << mesh.message;
+    ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+
+    auto camera = test_orthographic_viewport_camera();
+    camera.orthographic = false;
+    camera.origin = {};
+    camera.viewport_size = {800.0f, 600.0f};
+    // At these endpoint depths, t=0.2 projects to the screen midpoint.
+    const QVec3 cursor_target = start + (end - start) * 0.2f;
+    constexpr double kGridSize = 2.1;
+    const float expected_factor = snap_enabled
+        ? static_cast<float>(kGridSize) / length(end - start)
+        : 0.2f;
+    const QVec3 expected = start + (end - start) * expected_factor;
+    const auto event_at = [&](float offset) {
+      auto event = test_tool_screen_event(camera, cursor_target, offset);
+      event.snap_enabled = snap_enabled;
+      event.grid_size = kGridSize;
+      return event;
+    };
+    const auto expect_preview = [&] {
+      ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+      const auto snapshot = service.volatile_overlay_snapshot();
+      ASSERT_NE(snapshot.frame, nullptr);
+      EXPECT_TRUE(std::ranges::any_of(snapshot.frame->lines,
+          [&](const ViewportOverlayLine &line) {
+            return (length_squared(line.start - expected) < 0.000001f &&
+                    length_squared(line.end - (expected + across)) < 0.000001f) ||
+                   (length_squared(line.end - expected) < 0.000001f &&
+                    length_squared(line.start - (expected + across)) < 0.000001f);
+          }));
+    };
+
+    // Initial acquisition uses pixels even when the world pick radius is tiny.
+    ASSERT_TRUE(service.update_insert_edge_loop_hover(event_at(-6.0f)).ok);
+    expect_preview();
+    // Crossing the eight-pixel acquisition boundary keeps the same seed metric.
+    for (const float offset : {-10.0f, -6.0f, 0.0f, 6.0f, -10.0f}) {
+      SCOPED_TRACE(offset);
+      ASSERT_TRUE(service.update_insert_edge_loop_hover(event_at(offset)).ok);
+      expect_preview();
+    }
+    ASSERT_TRUE(service.begin_insert_edge_loop_drag(event_at(-10.0f)).ok);
+    expect_preview();
+    for (const float offset : {-6.0f, 6.0f, -10.0f}) {
+      ASSERT_TRUE(service.update_insert_edge_loop_drag(event_at(offset)).ok);
+      expect_preview();
+    }
+    const auto committed = service.commit_insert_edge_loop_drag();
+    ASSERT_TRUE(committed.ok) << committed.message;
+    ASSERT_TRUE(committed.changed);
+    EXPECT_FALSE(service.tool_status().insert_edge_loop_has_preview);
+    const auto compiled = service.compile_object_mesh(mesh.object.modeling_object_id);
+    ASSERT_TRUE(compiled.has_value());
+    for (const QVec3 position : {expected, expected + across}) {
+      EXPECT_TRUE(std::ranges::any_of(compiled->geometry().vertices,
+          [position](const MeshVertex &vertex) {
+            return length_squared(vertex.position - position) < 0.000001f;
+          }));
+    }
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     InsertEdgeLoopClipsCameraCrossingEdgeAndPreservesOriginalFactor) {
+  for (const bool reverse_vertex_order : {false, true}) {
+    SCOPED_TRACE(reverse_vertex_order);
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    quader_poly::Document document;
+    const QVec3 start{-0.5f, 0.0f, 1.0f};
+    const QVec3 end{1.0f, 0.0f, -5.0f};
+    const QVec3 across{0.0f, -2.0f, 0.0f};
+    const auto a = quader_poly::add_vertex(document, reverse_vertex_order ? end : start);
+    const auto b = quader_poly::add_vertex(document, reverse_vertex_order ? start : end);
+    const auto c = quader_poly::add_vertex(document, end + across);
+    const auto d = quader_poly::add_vertex(document, start + across);
+    ASSERT_NE(quader_poly::add_face(document,
+                  reverse_vertex_order ? std::array{b, d, c, a}
+                                       : std::array{a, d, c, b}),
+              quader_poly::kInvalidElementId);
+    const auto mesh = service.create_mesh({
+        .document = std::move(document),
+        .name = "Camera Crossing Edge Loop",
+    });
+    ASSERT_TRUE(mesh.ok) << mesh.message;
+    ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+    auto camera = test_orthographic_viewport_camera();
+    camera.orthographic = false;
+    camera.origin = {};
+    camera.viewport_size = {800.0f, 600.0f};
+    const auto event_at = [&](float factor, float offset) {
+      return test_tool_screen_event(camera, start + (end - start) * factor, offset);
+    };
+    const auto expect_preview_at = [&](float factor) {
+      ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+      const QVec3 expected = start + (end - start) * factor;
+      const auto frame = service.volatile_overlay_snapshot();
+      ASSERT_NE(frame.frame, nullptr);
+      EXPECT_TRUE(std::ranges::any_of(frame.frame->lines,
+          [&](const ViewportOverlayLine &line) {
+            return (length_squared(line.start - expected) < 0.000001f &&
+                    length_squared(line.end - (expected + across)) < 0.000001f) ||
+                   (length_squared(line.end - expected) < 0.000001f &&
+                    length_squared(line.start - (expected + across)) < 0.000001f);
+          }));
+    };
+    // One endpoint is behind the eye; the visible edge still accepts hover.
+    ASSERT_TRUE(service.update_insert_edge_loop_hover(event_at(0.75f, -6.0f)).ok);
+    expect_preview_at(0.75f);
+    ASSERT_TRUE(service.update_insert_edge_loop_hover(event_at(0.75f, -10.0f)).ok);
+    expect_preview_at(0.75f);
+    ASSERT_TRUE(service.begin_insert_edge_loop_drag(event_at(0.75f, -10.0f)).ok);
+    ASSERT_TRUE(service.update_insert_edge_loop_drag(event_at(0.65f, -6.0f)).ok);
+    expect_preview_at(0.65f);
+    const auto committed = service.commit_insert_edge_loop_drag();
+    ASSERT_TRUE(committed.ok) << committed.message;
+    ASSERT_TRUE(committed.changed);
+    const auto compiled = service.compile_object_mesh(mesh.object.modeling_object_id);
+    ASSERT_TRUE(compiled.has_value());
+    const QVec3 expected = start + (end - start) * 0.65f;
+    EXPECT_TRUE(std::ranges::any_of(compiled->geometry().vertices,
+        [expected](const MeshVertex &vertex) {
+          return length_squared(vertex.position - expected) < 0.000001f;
+        }));
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     InsertEdgeLoopScreenPickerKeepsQuadTargetBesideTriangleEdge) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  quader_poly::Document document;
+  const auto a = quader_poly::add_vertex(document, {-1.0f, 0.0f, 0.0f});
+  const auto b = quader_poly::add_vertex(document, {1.0f, 0.0f, 0.0f});
+  const auto c = quader_poly::add_vertex(document, {1.0f, -1.0f, 0.0f});
+  const auto d = quader_poly::add_vertex(document, {-1.0f, -1.0f, 0.0f});
+  ASSERT_NE(quader_poly::add_face(document, std::array{a, d, c, b}),
+            quader_poly::kInvalidElementId);
+  const auto e = quader_poly::add_vertex(document, {-0.5f, 0.03f, 0.0f});
+  const auto f = quader_poly::add_vertex(document, {0.5f, 0.03f, 0.0f});
+  const auto g = quader_poly::add_vertex(document, {0.0f, 0.5f, 0.0f});
+  ASSERT_NE(quader_poly::add_face(document, std::array{e, f, g}),
+            quader_poly::kInvalidElementId);
+  const auto mesh = service.create_mesh({
+      .document = std::move(document),
+      .name = "Quad Beside Triangle Loop Target",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+  auto camera = test_orthographic_viewport_camera();
+  camera.viewport_size = {800.0f, 600.0f};
+  camera.orthographic_size = 4.0;
+  const auto on_quad = test_tool_screen_event(camera, {}, 0.0f);
+  const auto on_triangle = test_tool_screen_event(camera, {0.0f, 0.03f, 0.0f}, 0.0f);
+  // The triangle is directly under the cursor; the valid quad is 4.5 pixels away.
+  for (const auto &event : {on_triangle, on_quad, on_triangle, on_quad}) {
+    ASSERT_TRUE(service.update_insert_edge_loop_hover(event).ok);
+    ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+    const auto frame = service.volatile_overlay_snapshot();
+    ASSERT_NE(frame.frame, nullptr);
+    EXPECT_TRUE(std::ranges::any_of(frame.frame->lines,
+        [](const ViewportOverlayLine &line) {
+          const QVec3 opposite{0.0f, -1.0f, 0.0f};
+          return (length_squared(line.start) < 0.000001f &&
+                  length_squared(line.end - opposite) < 0.000001f) ||
+                 (length_squared(line.end) < 0.000001f &&
+                  length_squared(line.start - opposite) < 0.000001f);
+        }));
+  }
+  ASSERT_TRUE(service.begin_insert_edge_loop_drag(on_triangle).ok);
+  const auto committed = service.commit_insert_edge_loop_drag();
+  ASSERT_TRUE(committed.ok) << committed.message;
+  EXPECT_TRUE(committed.changed);
+  const auto compiled = service.compile_object_mesh(mesh.object.modeling_object_id);
+  ASSERT_TRUE(compiled.has_value());
+  EXPECT_TRUE(std::ranges::any_of(compiled->geometry().vertices,
+      [](const MeshVertex &vertex) {
+        return length_squared(vertex.position) < 0.000001f;
+      }));
+}
+
+TEST(ModelingSessionServiceTests,
+     InsertEdgeLoopScreenPickerRejectsOccludedAndBehindCameraEdges) {
+  for (const bool behind_camera : {false, true}) {
+    SCOPED_TRACE(behind_camera);
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const float depth = behind_camera ? 5.0f : -5.0f;
+    ASSERT_TRUE(service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, depth - 1.0f},
+                   .max = {1.0f, 1.0f, depth + 1.0f}},
+        .name = "Hidden Edge Loop Target",
+    }).ok);
+    if (!behind_camera) {
+      ASSERT_TRUE(service.create_box_from_bounds({
+          .bounds = {.min = {-5.0f, -5.0f, -3.0f},
+                     .max = {5.0f, 5.0f, -2.0f}},
+          .name = "Edge Loop Occluder",
+      }).ok);
+    }
+    ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+    auto camera = test_orthographic_viewport_camera();
+    camera.orthographic = false;
+    camera.origin = {};
+    camera.viewport_size = {800.0f, 600.0f};
+    const auto event = test_tool_screen_event(camera, {0.0f, -1.0f, -4.0f}, 6.0f);
+    ASSERT_TRUE(service.update_insert_edge_loop_hover(event).ok);
+    EXPECT_FALSE(service.tool_status().insert_edge_loop_has_preview);
+    ASSERT_TRUE(service.begin_insert_edge_loop_drag(event).ok);
+    EXPECT_FALSE(service.tool_status().insert_edge_loop_dragging);
+    EXPECT_FALSE(service.commit_insert_edge_loop_drag().ok);
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     InsertEdgeLoopRetainedScreenSeedHidesBehindCameraAndRestores) {
+  for (const bool dragging : {false, true}) {
+    SCOPED_TRACE(dragging);
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    ASSERT_TRUE(service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -6.0f},
+                   .max = {1.0f, 1.0f, -4.0f}},
+        .name = "Retained Edge Loop Camera",
+    }).ok);
+    ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+    auto camera = test_orthographic_viewport_camera();
+    camera.orthographic = false;
+    camera.origin = {};
+    camera.viewport_size = {800.0f, 600.0f};
+    auto event = test_tool_screen_event(camera, {0.0f, -1.0f, -4.0f}, 6.0f);
+    ASSERT_TRUE((dragging ? service.begin_insert_edge_loop_drag(event)
+                         : service.update_insert_edge_loop_hover(event)).ok);
+    ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+    const auto before = service.volatile_overlay_snapshot();
+    event.camera.origin.z = -10.0f;
+    const auto ray = quader_editor_core::ray_from_viewport_screen_point(
+        modeling_runtime_camera(event.camera), event.screen_position);
+    event.ray = {.origin = ray.origin, .direction = ray.direction};
+    const auto hidden = dragging ? service.update_insert_edge_loop_drag(event)
+                                 : service.update_insert_edge_loop_hover(event);
+    ASSERT_TRUE(hidden.ok) << hidden.message;
+    EXPECT_TRUE(hidden.changed);
+    EXPECT_FALSE(service.tool_status().insert_edge_loop_has_preview);
+    const auto hidden_snapshot = service.volatile_overlay_snapshot();
+    EXPECT_GT(hidden_snapshot.source.publication_revision,
+              before.source.publication_revision);
+    event = test_tool_screen_event(camera, {0.0f, -1.0f, -4.0f}, 6.0f);
+    ASSERT_TRUE((dragging ? service.update_insert_edge_loop_drag(event)
+                         : service.update_insert_edge_loop_hover(event)).ok);
+    EXPECT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+  }
+}
+
+TEST(ModelingSessionServiceTests,
      InsertEdgeLoopPublishesPreviewRemovalAndRestoration) {
   for (const bool dragging : {false, true}) {
     SCOPED_TRACE(dragging);
@@ -19723,7 +20356,7 @@ TEST(ModelingSessionServiceTests,
   ModelingViewportCamera camera = test_orthographic_viewport_camera();
   camera.viewport_size = {800.0f, 600.0f};
   const ModelingCommandResult hover = service.update_knife_hover(
-      test_knife_screen_event(camera, {0.0f, -1.0f, 1.0f}, 4.0f));
+      test_tool_screen_event(camera, {0.0f, -1.0f, 1.0f}, 4.0f));
   ASSERT_TRUE(hover.ok) << hover.message;
   ASSERT_TRUE(service.tool_status().knife_has_current);
 
@@ -19912,7 +20545,7 @@ TEST(ModelingSessionServiceTests,
   camera.viewport_size = {800.0f, 600.0f};
   camera.orthographic_size = 4.0;
   ModelingToolRayEvent event =
-      test_knife_screen_event(camera, raw_world, 4.0f);
+      test_tool_screen_event(camera, raw_world, 4.0f);
   event.grid_size = 0.5;
   event.vertex_radius = 0.001;
   event.edge_radius = 0.12;
@@ -20223,7 +20856,7 @@ TEST(ModelingSessionServiceTests,
                            std::to_string(camera.orthographic_size)
                      : std::string("perspective z=") +
                            std::to_string(camera.origin.z));
-    const ModelingToolRayEvent valid_event = test_knife_screen_event(
+    const ModelingToolRayEvent valid_event = test_tool_screen_event(
         camera, {0.0f, -1.0f, 1.0f}, 6.0f);
     command = service.update_knife_hover(valid_event);
     ASSERT_TRUE(command.ok) << command.message;
@@ -20237,7 +20870,7 @@ TEST(ModelingSessionServiceTests,
     EXPECT_TRUE(service.tool_status().knife_has_current);
     EXPECT_TRUE(has_tool_marker());
 
-    const ModelingToolRayEvent miss_event = test_knife_screen_event(
+    const ModelingToolRayEvent miss_event = test_tool_screen_event(
         camera, {0.0f, -1.0f, 1.0f}, 10.0f);
     command = service.update_knife_hover(miss_event);
     ASSERT_TRUE(command.ok) << command.message;
@@ -20252,7 +20885,7 @@ TEST(ModelingSessionServiceTests,
     EXPECT_FALSE(has_tool_marker());
   }
 
-  const ModelingToolRayEvent valid_again = test_knife_screen_event(
+  const ModelingToolRayEvent valid_again = test_tool_screen_event(
       near_perspective, {0.0f, -1.0f, 1.0f}, 6.0f);
   command = service.update_knife_hover(valid_again);
   ASSERT_TRUE(command.ok) << command.message;
@@ -20307,7 +20940,7 @@ TEST(ModelingSessionServiceTests,
                            std::to_string(camera.orthographic_size)
                      : std::string("perspective z=") +
                            std::to_string(camera.origin.z));
-    const ModelingToolRayEvent valid_event = test_knife_screen_event(
+    const ModelingToolRayEvent valid_event = test_tool_screen_event(
         camera, {0.0f, -1.0f, 1.0f}, 6.0f);
     command = service.update_knife_hover(valid_event);
     ASSERT_TRUE(command.ok) << command.message;
@@ -20322,7 +20955,7 @@ TEST(ModelingSessionServiceTests,
                      ViewportOverlayDepthMode::DrawOnTop;
         }));
 
-    const ModelingToolRayEvent miss_event = test_knife_screen_event(
+    const ModelingToolRayEvent miss_event = test_tool_screen_event(
         camera, {0.0f, -1.0f, 1.0f}, 10.0f);
     command = service.update_knife_hover(miss_event);
     ASSERT_TRUE(command.ok) << command.message;
@@ -20358,7 +20991,7 @@ TEST(ModelingSessionServiceTests,
 
   const QVec3 far_interior_edge{0.0f, -1.0f, -1.0f};
   ModelingToolRayEvent edge_event =
-      test_knife_screen_event(camera, far_interior_edge, 3.0f);
+      test_tool_screen_event(camera, far_interior_edge, 3.0f);
   ASSERT_GT(edge_event.vertex_screen_radius, 0.0);
   ASSERT_GT(edge_event.edge_screen_radius, 0.0);
 
@@ -20386,7 +21019,7 @@ TEST(ModelingSessionServiceTests,
 
   const QVec3 far_interior_face{0.0f, 0.0f, -1.0f};
   ModelingToolRayEvent face_event =
-      test_knife_screen_event(camera, far_interior_face, 0.0f);
+      test_tool_screen_event(camera, far_interior_face, 0.0f);
   command = service.update_knife_hover(face_event);
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
@@ -20443,7 +21076,7 @@ TEST(ModelingSessionServiceTests,
   camera.viewport_size = {800.0f, 600.0f};
   camera.orthographic_size = 4.0;
   ModelingToolRayEvent event =
-      test_knife_screen_event(camera, {0.0f, 0.0f, 0.0f}, 3.0f);
+      test_tool_screen_event(camera, {0.0f, 0.0f, 0.0f}, 3.0f);
   event.screen_position.x += 4.0f;
   const quader_editor_core::ViewportCameraState runtime_camera =
       modeling_runtime_camera(camera);

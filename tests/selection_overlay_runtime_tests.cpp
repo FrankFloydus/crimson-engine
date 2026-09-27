@@ -303,6 +303,148 @@ public:
   ExtrudeToolService &extrusion() { return session_.extrude(); }
   std::size_t undo_count() const { return session_.history().undo_count(); }
 
+  bool create_edge_loop_sample() {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    quader_poly::Document document;
+    const std::array vertices{
+        quader_poly::add_vertex(document, {-1.0f, -0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {1.0f, -0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {1.0f, 0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {-1.0f, 0.75f, 0.0f})};
+    (void)quader_poly::add_face(document, vertices);
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Edge loop preview vertex pixel regression"});
+    if (!object.ok() || !modeling().activate_viewport_tool(
+                            ModelingViewportTool::InsertEdgeLoop).ok) return false;
+    camera_.view_axis(ViewportViewAxis::Z, 1);
+    camera_.focus_origin(3.0f);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  ModelingSessionService &modeling() { return session_.modeling(); }
+
+  bool create_face_fill_depth_sample(bool front_facing) {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    quader_poly::Document document;
+    std::array near_vertices{
+        quader_poly::add_vertex(document, {-1.0f, -0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {1.0f, -0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {1.0f, 0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {-1.0f, 0.75f, 0.0f})};
+    if (!front_facing) std::swap(near_vertices[1], near_vertices[3]);
+    (void)quader_poly::add_face(document, near_vertices);
+    const std::array rear_vertices{
+        quader_poly::add_vertex(document, {-0.6f, -0.35f, -0.25f}),
+        quader_poly::add_vertex(document, {0.6f, -0.35f, -0.25f}),
+        quader_poly::add_vertex(document, {0.0f, 0.35f, -0.25f})};
+    (void)quader_poly::add_face(document, rear_vertices);
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Culled face fill depth regression"});
+    if (!object.ok() || !editor.selection().set_mode(QuaderSelectionMode::Face).ok()) {
+      return false;
+    }
+    face_fill_object_ = object.value();
+    if (!camera_.restore_perspective_pose({
+            .eye = {0.0f, 0.0f, 3.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}})) {
+      return false;
+    }
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  bool set_face_fill_hover(bool hovered) {
+    if (!hovered) return modeling().clear_selection_hover().ok;
+    const auto result = modeling().update_selection_hover({
+        .ray = {.origin = {0.0f, 0.0f, 3.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+        .select_backfaces = true,
+    });
+    return result.ok && modeling().selection_hover_summary().target.face_id == 1;
+  }
+
+  bool select_near_face_fill() {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    return editor.selection().select_face(face_fill_object_, 1).ok();
+  }
+
+  QVec2 face_fill_probe_pixel(bool rear_wire) const {
+    const QVec3 world = rear_wire ? QVec3{0.0f, -0.35f, -0.25f}
+                                 : QVec3{0.75f, 0.25f, 0.0f};
+    auto pixel = camera_.project_world_point(world).position;
+    pixel.y = static_cast<float>(kHeight - 1u) - pixel.y;
+    return pixel;
+  }
+
+  ModelingToolRayEvent edge_loop_event(float y) const {
+    const auto projected = camera_.project_world_point({1.0f, y, 0.0f});
+    const auto ray = camera_.ray_from_viewport_point(projected.position);
+    return {
+        .screen_position = projected.position,
+        .ray = {.origin = ray.origin, .direction = ray.direction},
+        .camera = ViewportCameraAdapter::modeling_camera(camera_, {kWidth, kHeight}),
+        .grid_size = 0.5,
+        .edge_radius = 0.05,
+        .snap_enabled = true,
+    };
+  }
+
+  std::array<QVec2, 3> edge_loop_pixels(float y) const {
+    std::array<QVec2, 3> pixels;
+    // Probe the two expected split-edge vertices and the connector midpoint.
+    // These positions come from the fixture, independently of retained frames.
+    for (std::size_t index = 0; index < pixels.size(); ++index) {
+      const float x = index == 0 ? -1.0f : index == 1 ? 1.0f : 0.0f;
+      pixels[index] = camera_.project_world_point({x, y, 0.0f}).position;
+      pixels[index].y = static_cast<float>(kHeight - 1u) - pixels[index].y;
+    }
+    return pixels;
+  }
+
+  bool present_edge_loop_sample(float scale = 1.0f) {
+    return present_component_sample(ViewportOverlaySelectionContext::Edge, scale);
+  }
+
+  bool present_component_sample(ViewportOverlaySelectionContext context,
+                                float scale = 1.0f) {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok()) {
+      return false;
+    }
+    const auto &modeling = session_.modeling();
+    const auto volatile_overlay = modeling.volatile_overlay_snapshot();
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u),
+         .raster_scale = scale,
+         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .selection_source = {
+             .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+             .content_revision = modeling.content_revision(),
+             .selection_revision = modeling.selection_revision(),
+             .scene_revision = session_.scene().revision(),
+             .asset_revision = session_.assets().revision(),
+             .overlay_signature = modeling.selection_overlay_signature(),
+             .selection_context = context},
+         .selection_frame_provider = this,
+         .volatile_modeling_overlay_frame = volatile_overlay.frame.get(),
+         .volatile_modeling_source = {
+             .source_identity = volatile_overlay.source.source_identity,
+             .publication_revision = volatile_overlay.source.publication_revision},
+         .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = context,
+         .overlays_visible = true,
+         .selection_dimensions_visible = false},
+        ViewportSettings::defaults());
+    return true;
+  }
+
   bool create_dimension_sample(bool tilted) {
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session_));
@@ -535,6 +677,7 @@ private:
   }
 
   SceneSession session_;
+  QuaderModelingObjectRef face_fill_object_;
   std::array<EntityId, 2> active_entities_{};
   RenderOverlaySnapshotCache active_snapshots_;
   filament::Engine *engine_ = nullptr;
@@ -627,6 +770,253 @@ int yellow_pixels(const QImage &image, QVec2 center) {
     }
   }
   return count;
+}
+
+int loop_preview_green_pixels(const QImage &image, QVec2 center,
+                              bool vertex_fill_only) {
+  int count = 0;
+  for (int y = int(center.y) - 10; y <= int(center.y) + 10; ++y) {
+    for (int x = int(center.x) - 10; x <= int(center.x) + 10; ++x) {
+      if (x < 0 || y < 0 || x >= image.width() || y >= image.height()) continue;
+      const QColor pixel = image.pixelColor(x, y);
+      if (pixel.green() > 150 && pixel.green() > pixel.red() + 80 &&
+          pixel.green() > pixel.blue() + 80 &&
+          (!vertex_fill_only || pixel.blue() > pixel.red())) ++count;
+    }
+  }
+  return count;
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanEdgeLoopPreviewVerticesFollowHoverScaleCancelAndCommit) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-edge-loop-preview-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.create_edge_loop_sample());
+  auto &modeling = harness.modeling();
+  const auto first_pixels = harness.edge_loop_pixels(-0.25f);
+  const auto moved_pixels = harness.edge_loop_pixels(0.25f);
+  const auto save = [&](const QImage &image, const char *phase) {
+    const QString path = QDir(directory).filePath(
+        QStringLiteral("edge_loop_%1.png").arg(QString::fromLatin1(phase)));
+    EXPECT_TRUE(image.save(path));
+    std::cout << "Edge loop preview GPU png=" << path.toStdString() << '\n';
+  };
+  const auto expect_visible = [&](const QImage &image,
+                                const std::array<QVec2, 3> &pixels) {
+    // HoverVertex fill has blue > red; HoverWire has red > blue. Color-space
+    // conversion changes channel magnitudes, but preserves this ordering and
+    // distinguishes the actual glyph from the line ending at the same pixel.
+    for (std::size_t vertex = 0; vertex < 2; ++vertex) {
+      EXPECT_GE(loop_preview_green_pixels(image, pixels[vertex], true), 9)
+          << "Each split edge must show the standard hover vertex glyph.";
+    }
+    EXPECT_GE(loop_preview_green_pixels(image, pixels[2], false), 9)
+        << "The preview connector must remain visible between its vertices.";
+  };
+  const auto expect_removed = [&](const QImage &image,
+                                const std::array<QVec2, 3> &pixels) {
+    for (std::size_t vertex = 0; vertex < 2; ++vertex) {
+      EXPECT_EQ(loop_preview_green_pixels(image, pixels[vertex], true), 0)
+          << "The previous split-edge vertex must leave no retained glyph.";
+    }
+    EXPECT_EQ(loop_preview_green_pixels(image, pixels[2], false), 0)
+        << "The previous loop connector must leave no retained green line.";
+  };
+
+  ASSERT_TRUE(modeling.update_insert_edge_loop_hover(harness.edge_loop_event(-0.25f)).ok);
+  ASSERT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
+  const auto preview = modeling.volatile_overlay_snapshot();
+  ASSERT_NE(preview.frame, nullptr);
+  ASSERT_EQ(preview.frame->points.size(), 2u);
+  for (const auto &point : preview.frame->points) {
+    EXPECT_EQ(point.layer, ViewportOverlayLayer::HoverVertex);
+    EXPECT_EQ(point.style_role, ViewportOverlayStyleRole::HoverVertex);
+    EXPECT_EQ(point.source, ViewportOverlaySource::Tool);
+  }
+  QImage at_100_percent;
+  int vertex_pixels_at_100 = 0;
+  for (const auto &[scale, phase] :
+       std::array<std::pair<float, const char *>, 3>{{
+           {1.0f, "hover_100"}, {2.0f, "hover_200"}, {1.0f, "hover_scale_down_100"}}}) {
+    SCOPED_TRACE(phase);
+    ASSERT_TRUE(harness.present_edge_loop_sample(scale));
+    const QImage image = harness.capture();
+    ASSERT_FALSE(image.isNull());
+    save(image, phase);
+    expect_visible(image, first_pixels);
+    const int vertex_pixels = loop_preview_green_pixels(image, first_pixels[0], true);
+    if (at_100_percent.isNull()) {
+      at_100_percent = image;
+      vertex_pixels_at_100 = vertex_pixels;
+    } else if (scale == 2.0f) {
+      EXPECT_GT(vertex_pixels, vertex_pixels_at_100 * 2)
+          << "Vertex glyphs must use the shared raster scale.";
+    } else {
+      EXPECT_EQ(image, at_100_percent)
+          << "Scaling down must restore the original vertex and line size.";
+    }
+    const auto builds = harness.selection_frame_builds();
+    ASSERT_TRUE(harness.present_edge_loop_sample(scale));
+    EXPECT_EQ(harness.selection_frame_builds(), builds);
+    EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+  }
+
+  ASSERT_TRUE(modeling.update_insert_edge_loop_hover(harness.edge_loop_event(0.25f)).ok);
+  ASSERT_TRUE(harness.present_edge_loop_sample());
+  const QImage moved = harness.capture();
+  ASSERT_FALSE(moved.isNull());
+  save(moved, "hover_moved");
+  expect_visible(moved, moved_pixels);
+  expect_removed(moved, first_pixels);
+
+  // The last grid step lands on the existing endpoint and has no valid split.
+  ASSERT_TRUE(modeling.update_insert_edge_loop_hover(harness.edge_loop_event(0.74f)).ok);
+  ASSERT_FALSE(modeling.tool_status().insert_edge_loop_has_preview);
+  ASSERT_TRUE(harness.present_edge_loop_sample());
+  const QImage invalid_hover = harness.capture();
+  ASSERT_FALSE(invalid_hover.isNull());
+  save(invalid_hover, "hover_endpoint");
+  expect_removed(invalid_hover, moved_pixels);
+
+  ASSERT_TRUE(modeling.update_insert_edge_loop_hover(harness.edge_loop_event(0.25f)).ok);
+  ASSERT_TRUE(harness.present_edge_loop_sample());
+  expect_visible(harness.capture(), moved_pixels);
+  ASSERT_TRUE(modeling.cancel_active_modal_tool(false).ok);
+  ASSERT_TRUE(harness.present_edge_loop_sample());
+  const QImage canceled = harness.capture();
+  ASSERT_FALSE(canceled.isNull());
+  save(canceled, "canceled");
+  expect_removed(canceled, moved_pixels);
+
+  ASSERT_TRUE(modeling.begin_insert_edge_loop_drag(harness.edge_loop_event(-0.25f)).ok);
+  ASSERT_TRUE(harness.present_edge_loop_sample());
+  expect_visible(harness.capture(), first_pixels);
+  ASSERT_TRUE(modeling.commit_insert_edge_loop_drag().ok);
+  ASSERT_FALSE(modeling.tool_status().insert_edge_loop_has_preview);
+  ASSERT_TRUE(harness.present_edge_loop_sample());
+  const QImage committed = harness.capture();
+  ASSERT_FALSE(committed.isNull());
+  save(committed, "committed");
+  expect_removed(committed, first_pixels);
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanBackFacingFaceTintsPreserveRearWiresAndFrontFacesStillOcclude) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-face-fill-depth-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  constexpr std::array<std::pair<float, const char *>, 3> kScales{{
+      {1.0f, "100"}, {2.0f, "200"}, {1.0f, "scale_down_100"}}};
+  for (const bool front_facing : {false, true}) {
+    SCOPED_TRACE(front_facing ? "front-facing surface" : "culled back-facing surface");
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_face_fill_depth_sample(front_facing));
+    const auto rear_wire_pixel = harness.face_fill_probe_pixel(true);
+    const auto tint_pixel = harness.face_fill_probe_pixel(false);
+    const auto save = [&](const QImage &image, const char *scale, const char *phase) {
+      const QString path = QDir(directory).filePath(
+          QStringLiteral("face_fill_%1_%2_%3.png")
+              .arg(front_facing ? QStringLiteral("front") : QStringLiteral("back"),
+                   QString::fromLatin1(scale), QString::fromLatin1(phase)));
+      EXPECT_TRUE(image.save(path));
+      std::cout << "Face fill GPU rear_cyan=" << cyan_pixels(image, rear_wire_pixel)
+                << ", png=" << path.toStdString() << '\n';
+    };
+    const auto expect_rear_wire_visibility = [&](const QImage &image) {
+      if (front_facing) {
+        EXPECT_EQ(cyan_pixels(image, rear_wire_pixel), 0)
+            << "The genuine front-facing source surface must still occlude rear wires.";
+      } else {
+        EXPECT_GE(cyan_pixels(image, rear_wire_pixel), 3)
+            << "A translucent tint on a culled face must not occlude the rear source wire.";
+      }
+    };
+    const auto expect_retained = [&](float scale) {
+      const auto builds = harness.selection_frame_builds();
+      EXPECT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, scale));
+      EXPECT_EQ(harness.selection_frame_builds(), builds);
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    };
+    QImage clear_at_100;
+    for (const auto &[scale, label] : kScales) {
+      SCOPED_TRACE(label);
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, scale));
+      const QImage clear = harness.capture();
+      ASSERT_FALSE(clear.isNull());
+      save(clear, label, "clear");
+      expect_rear_wire_visibility(clear);
+      expect_retained(scale);
+      if (clear_at_100.isNull()) clear_at_100 = clear;
+      else if (scale == 1.0f) EXPECT_EQ(clear, clear_at_100);
+
+      ASSERT_TRUE(harness.set_face_fill_hover(true));
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, scale));
+      const QImage hovered = harness.capture();
+      ASSERT_FALSE(hovered.isNull());
+      save(hovered, label, "hovered");
+      expect_rear_wire_visibility(hovered);
+      EXPECT_NE(hovered.pixel(int(tint_pixel.x), int(tint_pixel.y)),
+                clear.pixel(int(tint_pixel.x), int(tint_pixel.y)))
+          << "The two-sided translucent hover fill must remain visible.";
+      expect_retained(scale);
+
+      ASSERT_TRUE(harness.set_face_fill_hover(false));
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, scale));
+      const QImage restored = harness.capture();
+      ASSERT_FALSE(restored.isNull());
+      save(restored, label, "hover_left");
+      EXPECT_EQ(restored, clear) << "Leaving the face must retire its tint and hover outline.";
+      expect_rear_wire_visibility(restored);
+      expect_retained(scale);
+    }
+
+    ASSERT_TRUE(harness.select_near_face_fill());
+    QImage selected_at_100;
+    for (const auto &[scale, label] : kScales) {
+      SCOPED_TRACE(label);
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, scale));
+      const QImage selected = harness.capture();
+      ASSERT_FALSE(selected.isNull());
+      save(selected, label, "selected");
+      expect_rear_wire_visibility(selected);
+      EXPECT_NE(selected.pixel(int(tint_pixel.x), int(tint_pixel.y)),
+                clear_at_100.pixel(int(tint_pixel.x), int(tint_pixel.y)))
+          << "The two-sided translucent selected-face fill must remain visible.";
+      expect_retained(scale);
+      if (selected_at_100.isNull()) selected_at_100 = selected;
+      else if (scale == 1.0f) EXPECT_EQ(selected, selected_at_100);
+    }
+  }
 }
 
 TEST(SelectionOverlayRuntimeTests,

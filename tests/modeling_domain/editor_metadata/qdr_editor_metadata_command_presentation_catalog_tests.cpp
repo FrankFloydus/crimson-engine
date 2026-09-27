@@ -326,8 +326,10 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
       quader::quader_command::kViewportLayoutThreePrimaryRight);
   EXPECT_EQ(layout.domain, CommandPresentationDomain::Window);
   EXPECT_EQ(layout.group, CommandPresentationGroup::Layout);
-  EXPECT_TRUE(quader::has_command_presentation_surface(
+  EXPECT_FALSE(quader::has_command_presentation_surface(
       layout, CommandPresentationSurface::MainMenu));
+  EXPECT_TRUE(quader::has_command_presentation_surface(
+      layout, CommandPresentationSurface::CommandPalette));
 
   const CommandPresentationDescriptor &search = require_presentation(
       quader::quader_command::kUiSearchCommands);

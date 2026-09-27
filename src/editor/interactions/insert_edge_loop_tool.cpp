@@ -67,6 +67,17 @@ InsertEdgeLoopPreview build_preview(const std::vector<PolygonObject>& objects, i
               object_id,
           });
         }
+	const SelectionOverlayStyle style;
+	preview.points.reserve(overlay.points.size());
+	for (const quader_poly::OverlayPoint& point : overlay.points) {
+		preview.points.push_back({
+			SelectionOverlayLayer::HoverVertex,
+			point.position,
+			style.hover_vertex_color_abgr,
+			style.vertex_point_size_pixels + style.selected_hover_point_growth_pixels,
+			object_id,
+		});
+	}
 	preview.valid = !preview.lines.empty();
 	if (!preview.valid) {
 		preview.message = "Edge loop insertion needs at least one quad face.";
@@ -101,6 +112,7 @@ void clear_preview(
 	state.edge = quader_poly::make_edge(edge.a, edge.b);
 	state.factor = std::clamp(factor, 0.01F, 0.99F);
 	state.preview_lines.clear();
+	state.preview_points.clear();
 
 	hover.object_id = object_id;
         hover.kind = SelectionHoverKind::Edge;
@@ -127,6 +139,7 @@ bool set_preview(
 	state.edge = quader_poly::make_edge(edge.a, edge.b);
 	state.factor = std::clamp(factor, 0.01F, 0.99F);
 	state.preview_lines = preview.valid ? preview.lines : std::vector<SelectionOverlayLine> {};
+	state.preview_points = preview.valid ? preview.points : std::vector<SelectionOverlayPoint> {};
 
 	hover.object_id = object_id;
         hover.kind = SelectionHoverKind::Edge;
@@ -300,6 +313,7 @@ bool update_insert_edge_loop_drag_factor(
 	const int object_index = object_index_by_id(objects, state.object_id);
 	if (object_index < 0) {
 		state.preview_lines.clear();
+		state.preview_points.clear();
 		return false;
 	}
 

@@ -920,6 +920,15 @@ OverlayData build_edge_loop_preview(const Document& document, Edge edge, float f
 
     const std::vector<EdgeLoopFaceSplit> splits = collect_edge_loop_splits(document, edge);
     overlay.lines.reserve(splits.size());
+    overlay.points.reserve(splits.size() + 1U);
+    std::set<std::pair<ElementId, ElementId>> preview_edges;
+    const auto append_split_point = [&](Edge split_edge, quader::QVec3 position) {
+        const Edge canonical = make_edge(split_edge.a, split_edge.b);
+        if (preview_edges.emplace(canonical.a, canonical.b).second) {
+            overlay.points.push_back({position, style.loop_preview_color,
+                                      style.vertex_size_pixels});
+        }
+    };
     for (const EdgeLoopFaceSplit& split : splits) {
         const Face* face = find_face(document, split.face_id);
         if (face == nullptr || face->vertices.size() != 4) {
@@ -933,8 +942,6 @@ OverlayData build_edge_loop_preview(const Document& document, Edge edge, float f
 
         const std::size_t i0 = *edge_index;
         const std::size_t i1 = (i0 + 1U) % 4U;
-        const std::size_t i2 = (i0 + 2U) % 4U;
-        const std::size_t i3 = (i0 + 3U) % 4U;
         const Edge face_entry = directed_face_edge(*face, i0);
         const Edge entry = same_directed_edge(split.entry_edge, face_entry) ? face_entry : Edge { face->vertices[i1], face->vertices[i0] };
         const Edge opposite = oriented_loop_opposite_edge(*face, i0, entry);
@@ -950,6 +957,8 @@ OverlayData build_edge_loop_preview(const Document& document, Edge edge, float f
             style.loop_preview_color,
             style.loop_preview_width_pixels,
         });
+        append_split_point(entry, *entry_position);
+        append_split_point(opposite, *opposite_position);
     }
 
     return overlay;

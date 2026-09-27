@@ -14939,6 +14939,58 @@ TEST(EditorApiTests, GroupModeRightClickPickSelectsGroupBeforeContextDelete) {
     EXPECT_FALSE(harness.editor.query().entity(right.value().entity).has_value());
 }
 
+TEST(EditorApiTests, PaneFlyNavigationSpeedUsesCameraStateWithoutChangingDefaultsOrHistory) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  auto &viewports = editor.viewports();
+  const auto revisions = editor.query().revisions();
+  const auto history = editor.history().snapshot();
+  auto perspective = viewports.main();
+  auto top = viewports.pane(quader::ViewportPaneId::Top);
+  const auto top_control_revision = top.control_revision();
+  EXPECT_DOUBLE_EQ(viewports.fly_navigation_speed(), 25.0);
+  ASSERT_TRUE(perspective.set_fly_navigation_speed(42.5).changed());
+  EXPECT_FALSE(perspective.set_fly_navigation_speed(42.5).changed());
+  EXPECT_DOUBLE_EQ(perspective.fly_navigation_speed(), 42.5);
+  EXPECT_DOUBLE_EQ(top.fly_navigation_speed(), 25.0);
+
+  ASSERT_TRUE(viewports.set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  ASSERT_TRUE(top.focus().changed());
+  ASSERT_TRUE(viewports.set_fly_navigation_speed(12.25).changed());
+  EXPECT_DOUBLE_EQ(viewports.fly_navigation_speed(), 12.25);
+  EXPECT_DOUBLE_EQ(perspective.fly_navigation_speed(), 42.5);
+  ASSERT_TRUE(viewports.set_layout(quader::ViewportLayoutId::Single).changed());
+  EXPECT_DOUBLE_EQ(top.fly_navigation_speed(), 12.25);
+  ASSERT_TRUE(viewports.set_layout(quader::ViewportLayoutId::FourQuad).changed());
+  EXPECT_DOUBLE_EQ(top.fly_navigation_speed(), 12.25);
+
+  ASSERT_TRUE(top.set_view(quader::ViewportView::Front).changed());
+  EXPECT_DOUBLE_EQ(top.fly_navigation_speed(), 12.25);
+  EXPECT_DOUBLE_EQ(perspective.fly_navigation_speed(), 42.5);
+  ASSERT_TRUE(top.set_view(quader::ViewportView::Perspective).changed());
+  EXPECT_DOUBLE_EQ(top.fly_navigation_speed(), 12.25);
+
+  for (const double invalid : {0.0, -1.0,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity()}) {
+    EXPECT_FALSE(top.set_fly_navigation_speed(invalid).ok());
+    EXPECT_DOUBLE_EQ(top.fly_navigation_speed(), 12.25);
+  }
+  EXPECT_FALSE(viewports.set_fly_navigation_speed(
+      static_cast<quader::ViewportPaneId>(99), 12.0).ok());
+  ASSERT_TRUE(top.set_fly_navigation_speed(0.5).changed());
+  EXPECT_DOUBLE_EQ(top.fly_navigation_speed(), 1.0);
+  ASSERT_TRUE(top.set_fly_navigation_speed(std::numeric_limits<double>::max()).changed());
+  EXPECT_DOUBLE_EQ(top.fly_navigation_speed(), 1000.0);
+  EXPECT_FALSE(top.set_fly_navigation_speed(std::numeric_limits<double>::max()).changed());
+  EXPECT_EQ(editor.query().revisions().scene_revision, revisions.scene_revision);
+  EXPECT_EQ(editor.query().revisions().modeling_content_revision,
+            revisions.modeling_content_revision);
+  EXPECT_EQ(editor.history().snapshot().can_undo, history.can_undo);
+  EXPECT_EQ(editor.history().snapshot().can_redo, history.can_redo);
+  EXPECT_EQ(top.control_revision(), top_control_revision);
+}
+
 TEST(EditorApiTests, PaneControlHandlesTargetOnlyTheirPaneAndRejectInvalidChanges) {
   quader::QuaderViewportApi viewports;
   auto perspective = viewports.main();
@@ -15004,6 +15056,8 @@ TEST(EditorApiTests, PaneControlStateFollowsTheBoundSceneWorkspace) {
   quader::ViewportWorkspaceService first;
   quader::ViewportWorkspaceService second;
   quader::QuaderViewportApiRuntimeAccess::bind_scene_workspace(viewports, first);
+  ASSERT_TRUE(viewports.set_fly_navigation_speed(quader::ViewportPaneId::Top,
+                                                 72.5).changed());
   ASSERT_TRUE(viewports.set_control(quader::ViewportPaneId::Top,
                                     quader::QuaderViewportControl::GridSnap, false).changed());
   ASSERT_TRUE(viewports.record_selected_tool(quader::ViewportPaneId::Top,
@@ -15012,6 +15066,8 @@ TEST(EditorApiTests, PaneControlStateFollowsTheBoundSceneWorkspace) {
                                             quader::ViewportToolId::Move).changed());
   const auto revision = viewports.control_revision(quader::ViewportPaneId::Top);
   quader::QuaderViewportApiRuntimeAccess::bind_scene_workspace(viewports, second);
+  EXPECT_DOUBLE_EQ(viewports.fly_navigation_speed(quader::ViewportPaneId::Top),
+                   25.0);
   EXPECT_EQ(viewports.selected_tool(quader::ViewportPaneId::Top),
             quader::ViewportToolId::Select);
   EXPECT_EQ(viewports.preferred_selection_tool(quader::ViewportPaneId::Top),
@@ -15019,6 +15075,8 @@ TEST(EditorApiTests, PaneControlStateFollowsTheBoundSceneWorkspace) {
   EXPECT_FALSE(viewports.control_overridden(quader::ViewportPaneId::Top,
                                            quader::QuaderViewportControl::GridSnap));
   quader::QuaderViewportApiRuntimeAccess::bind_scene_workspace(viewports, first);
+  EXPECT_DOUBLE_EQ(viewports.fly_navigation_speed(quader::ViewportPaneId::Top),
+                   72.5);
   EXPECT_EQ(viewports.selected_tool(quader::ViewportPaneId::Top),
             quader::ViewportToolId::Move);
   EXPECT_EQ(viewports.preferred_selection_tool(quader::ViewportPaneId::Top),

@@ -29,7 +29,7 @@ class QuaderEditorApi;
 class QtUiScaleMetrics;
 
 /**
- * Presents retained transform-space, grid and snapping controls in one toolbar.
+ * Presents grid and angle fields and retains pane-control source actions.
  * Preference, viewport, command, and keybinding truth remain public API owned.
  */
 class QtSnappingToolbar final : public QToolBar {

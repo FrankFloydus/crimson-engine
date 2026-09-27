@@ -26,8 +26,6 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSize>
-#include <QStyle>
-#include <QToolButton>
 
 #include <array>
 #include <cstddef>
@@ -173,12 +171,11 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
   }
   angle_label_->setBuddy(angle_combo_);
   addWidget(angle_combo_);
-  addSeparator();
 
-  transform_space_action_ = addAction(
+  transform_space_action_ = new QAction(
       qt_multiresolution_icon(
           QStringLiteral(":/quader/icons/tool_transform_local.png")),
-      QStringLiteral("Local Transforms"));
+      QStringLiteral("Local Transforms"), this);
   transform_space_action_->setObjectName(
       QStringLiteral("toggle_transform_space"));
   transform_space_action_->setCheckable(true);
@@ -214,10 +211,10 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
 
   for (std::size_t index = 0; index < kToggleSpecs.size(); ++index) {
     const ToggleSpec &spec = kToggleSpecs[index];
-    QAction *action = addAction(
+    QAction *action = new QAction(
         qt_multiresolution_icon(QString::fromUtf8(spec.icon_path)),
         QString::fromUtf8(spec.fallback.data(),
-                          static_cast<qsizetype>(spec.fallback.size())));
+                          static_cast<qsizetype>(spec.fallback.size())), this);
     action->setObjectName(QString::fromUtf8(spec.object_name));
     action->setCheckable(true);
     QObject::connect(action, &QAction::triggered, this,
@@ -234,22 +231,7 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
     };
   }
 
-  QStyle &button_presentation =
-      install_native_toolbar_button_presentation(*this);
-  configure_native_toolbar_button_face(
-      *this, *transform_space_action_, button_presentation);
-  if (auto *button =
-          qobject_cast<QToolButton *>(widgetForAction(transform_space_action_))) {
-    button->setFixedHeight(kTopToolbarButtonHeight);
-  }
-  for (const ToggleAction &entry : toggle_actions_) {
-    configure_native_toolbar_button_face(*this, *entry.action,
-                                         button_presentation);
-    if (auto *button =
-            qobject_cast<QToolButton *>(widgetForAction(entry.action))) {
-      button->setFixedHeight(kTopToolbarButtonHeight);
-    }
-  }
+  install_native_toolbar_button_presentation(*this);
 }
 
 std::array<QAction *, 5> QtSnappingToolbar::viewport_actions() const {
@@ -260,6 +242,7 @@ std::array<QAction *, 5> QtSnappingToolbar::viewport_actions() const {
 }
 
 void QtSnappingToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
+  apply_native_toolbar_presentation_ui_scale(*this, metrics);
   constexpr QSize kToolbarIconSize(32, 32);
   const QSize scaled_icon_size = metrics.size(kToolbarIconSize);
   if (iconSize() != scaled_icon_size) {
@@ -274,25 +257,6 @@ void QtSnappingToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   if (angle_combo_->minimumHeight() != scaled_control_height ||
       angle_combo_->maximumHeight() != scaled_control_height) {
     angle_combo_->setFixedHeight(scaled_control_height);
-  }
-  apply_native_toolbar_button_face_ui_scale(
-      *this, *transform_space_action_, metrics);
-  if (auto *button =
-          qobject_cast<QToolButton *>(widgetForAction(transform_space_action_));
-      button != nullptr &&
-      (button->minimumHeight() != scaled_control_height ||
-       button->maximumHeight() != scaled_control_height)) {
-    button->setFixedHeight(scaled_control_height);
-  }
-  for (const ToggleAction &entry : toggle_actions_) {
-    apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
-    if (auto *button =
-            qobject_cast<QToolButton *>(widgetForAction(entry.action));
-        button != nullptr &&
-        (button->minimumHeight() != scaled_control_height ||
-         button->maximumHeight() != scaled_control_height)) {
-      button->setFixedHeight(scaled_control_height);
-    }
   }
 }
 

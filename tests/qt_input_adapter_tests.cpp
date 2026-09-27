@@ -2625,6 +2625,264 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     StationaryOrthographicHoverRechecksScreenToleranceWhenOnlyZoomChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-stationary-screen-pick-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  ASSERT_TRUE(context.editor.modeling().create_box(
+      {.min = {0.5f, -2, -1}, .max = {4, 2, 1}}, "Stationary pick input box").ok());
+  ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Select).ok());
+  ASSERT_TRUE(context.editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(context.editor.selection().clear().ok());
+  ASSERT_TRUE(context.editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  context.camera.focus_origin(24.0f);
+  context.process();
+  const auto center = context.surface->render_size_pixels() * 0.5f;
+  const auto original_ray = context.camera.ray_from_viewport_point(center);
+  const auto distance_pixels = [&] {
+    const auto edge = context.camera.project_world_point({0.5f, 0, 1});
+    return std::hypot(edge.position.x - center.x, edge.position.y - center.y) /
+           context.surface->devicePixelRatio();
+  };
+  ASSERT_GT(distance_pixels(), 8.0);
+  EXPECT_EQ(context.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+  int zoom_steps = 0;
+  while (distance_pixels() > 6.0 && zoom_steps < 30) {
+    context.camera.scroll(-1.0f);
+    ++zoom_steps;
+  }
+  ASSERT_LE(distance_pixels(), 6.0);
+  const auto zoomed_ray = context.camera.ray_from_viewport_point(center);
+  EXPECT_NEAR(quader::length(zoomed_ray.origin - original_ray.origin), 0.0f, 0.00001f);
+  EXPECT_NEAR(quader::length(zoomed_ray.direction - original_ray.direction), 0.0f, 0.00001f);
+  // No mouse event: camera projection alone must invalidate the hover gate.
+  context.process();
+  EXPECT_EQ(context.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::Edge);
+  context.camera.scroll(static_cast<float>(zoom_steps));
+  ASSERT_GT(distance_pixels(), 8.0);
+  context.process();
+  EXPECT_EQ(context.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ComponentHoverAndClickSharePixelToleranceAcrossZoomAndUiScale) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-component-screen-pick-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge}) {
+    for (const float distance : {30.0f, 100.0f}) {
+      for (const float ui_scale : {1.0f, 2.0f}) {
+        SCOPED_TRACE(static_cast<int>(mode));
+        SCOPED_TRACE(distance);
+        SCOPED_TRACE(ui_scale);
+        NavigationPanelTestContext context;
+        ASSERT_NE(context.surface, nullptr);
+        const auto box = context.editor.modeling().create_box(
+            {.min = {-4, -4, -4}, .max = {4, 4, 4}}, "Screen pick input box");
+        ASSERT_TRUE(box.ok()) << box.error_message();
+        ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Select).ok());
+        ASSERT_TRUE(context.editor.selection().set_mode(mode).ok());
+        ASSERT_TRUE(context.editor.selection().clear().ok());
+        ASSERT_TRUE(context.editor.selection().clear_hover().ok());
+        context.panel.apply_ui_scale(quader::QtUiScaleMetrics{ui_scale, 1u});
+        context.surface->resize(800, 600);
+        ASSERT_TRUE(context.camera.restore_perspective_pose(
+            {.eye = {0, 0, distance}, .target = {}, .up = {0, 1, 0}}));
+        context.process();
+        const bool vertex_mode = mode == quader::QuaderSelectionMode::Vertex;
+        const auto kind = vertex_mode ? quader::QuaderActiveSelectionKind::Vertex
+                                      : quader::QuaderActiveSelectionKind::Edge;
+        const auto target = context.camera.project_world_point(
+            vertex_mode ? quader::QVec3{4, 4, 4} : quader::QVec3{4, 0, 4});
+        ASSERT_TRUE(target.visible);
+        const auto local_at = [&](float offset) {
+          const qreal dpr = context.surface->devicePixelRatio();
+          return QPointF{target.position.x / dpr + offset * ui_scale,
+                         target.position.y / dpr -
+                             (vertex_mode ? offset * ui_scale : 0.0f)};
+        };
+        // Both offsets are outside the mesh silhouette: body fallback cannot
+        // turn a missed component into an apparently successful selection.
+        context.mouse(QEvent::MouseMove, local_at(20.0f), Qt::NoButton, Qt::NoButton);
+        context.process();
+        EXPECT_EQ(context.editor.selection().hover_summary().target.kind,
+                  quader::QuaderActiveSelectionKind::None);
+        const QPointF inside = local_at(6.0f);
+        context.mouse(QEvent::MouseMove, inside, Qt::NoButton, Qt::NoButton);
+        context.process();
+        const auto hovered = context.editor.selection().hover_summary().target;
+        ASSERT_EQ(hovered.kind, kind);
+        ASSERT_EQ(hovered.object_id, box.value().modeling_object_id);
+        EXPECT_FALSE(context.editor.selection().summary().has_selection);
+        context.mouse(QEvent::MouseButtonPress, inside, Qt::LeftButton, Qt::LeftButton);
+        context.mouse(QEvent::MouseButtonRelease, inside, Qt::LeftButton, Qt::NoButton);
+        context.process();
+        const auto selected = context.editor.selection().summary();
+        EXPECT_EQ(selected.active_kind, kind);
+        EXPECT_EQ(selected.active_object_id, hovered.object_id);
+        if (vertex_mode) {
+          EXPECT_EQ(selected.selected_vertex_count, 1u);
+          EXPECT_EQ(selected.active_vertex_id, hovered.vertex_id);
+        } else {
+          EXPECT_EQ(selected.selected_edge_count, 1u);
+          EXPECT_EQ(selected.active_edge_a, hovered.edge_a);
+          EXPECT_EQ(selected.active_edge_b, hovered.edge_b);
+        }
+      }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PerspectiveEdgeLoopTracksSurfacePixelsAndPaneSnappingAcrossHeaderScales) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-perspective-edge-loop-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const float ui_scale : {1.0f, 2.0f}) {
+    for (const bool snap_enabled : {false, true}) {
+      SCOPED_TRACE(ui_scale);
+      SCOPED_TRACE(snap_enabled);
+      quader::SceneSession session;
+      quader::QuaderEditorApi editor(
+          quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+      const auto box = editor.modeling().create_box(
+          {.min = {-1, -1, -5}, .max = {1, 1, 5}}, "Perspective loop input box");
+      ASSERT_TRUE(box.ok()) << box.error_message();
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      // Keep the foreshortened seed separate from the transverse end-cap
+      // edges, including within the larger 200% picking aperture.
+      ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::TwoHorizontal).ok());
+      constexpr auto kPaneId = quader::ViewportPaneId::Top;
+      ASSERT_TRUE(editor.viewports().set_view(kPaneId, quader::ViewportView::Perspective).ok());
+      ASSERT_TRUE(editor.viewports().focus_pane(kPaneId).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::InsertEdgeLoop).ok());
+      ASSERT_TRUE(editor.viewports().set_grid_preset(5).ok());
+      ASSERT_FLOAT_EQ(quader::viewport_grid_world_size_for_preset(5), 0.5f);
+
+      quader::QtViewportPanel panel;
+      panel.resize(1400, 1000);
+      panel.attach_workspace(session.viewport_workspace());
+      panel.apply_ui_scale(quader::QtUiScaleMetrics{ui_scale, 1u});
+      panel.refresh_workspace_layout();
+      ASSERT_TRUE(editor.viewports().set_control(
+          kPaneId, quader::QuaderViewportControl::SnappingEnabled, true).ok());
+      ASSERT_TRUE(editor.viewports().set_control(
+          kPaneId, quader::QuaderViewportControl::GridSnap, snap_enabled).ok());
+      ASSERT_TRUE(editor.viewports().set_control(
+          quader::ViewportPaneId::Perspective,
+          quader::QuaderViewportControl::GridSnap, !snap_enabled).ok());
+      auto *surface = panel.surface(kPaneId);
+      auto *container = panel.findChild<QWidget *>(
+          QStringLiteral("viewportSurfaceContainer_top"));
+      auto *header = panel.findChild<QWidget *>(QStringLiteral("viewportToolbar_top"));
+      ASSERT_NE(surface, nullptr);
+      ASSERT_NE(container, nullptr);
+      ASSERT_NE(header, nullptr);
+      ASSERT_GT(header->height(), 0);
+      ASSERT_EQ(container->y(), header->height());
+      ASSERT_EQ(container->height(), container->parentWidget()->height() - header->height());
+      // The hidden host has no native resize delivery; retain its actual
+      // header-excluding content size when feeding the production adapter.
+      surface->resize(container->size());
+      auto &camera = session.viewport_workspace().camera(kPaneId);
+      ASSERT_TRUE(camera.restore_perspective_pose(
+          {.eye = {2, 3, 8}, .target = {}, .up = {0, 1, 0}}));
+      const QPointF center{surface->width() * 0.5, surface->height() * 0.5};
+      QEnterEvent enter(center, center, QPointF(surface->mapToGlobal(center.toPoint())));
+      QFocusEvent focus(QEvent::FocusIn);
+      QApplication::sendEvent(surface, &enter);
+      QApplication::sendEvent(surface, &focus);
+      const auto process = [&] {
+        panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                            session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+      };
+      process();
+      EXPECT_FLOAT_EQ(camera.viewport_size().x, surface->render_size_pixels().x);
+      EXPECT_FLOAT_EQ(camera.viewport_size().y, surface->render_size_pixels().y);
+      const auto near_end = camera.project_world_point({1, 1, 5});
+      const auto far_end = camera.project_world_point({1, 1, -5});
+      const auto target = camera.project_world_point({1, 1, 0.37f});
+      ASSERT_TRUE(near_end.visible);
+      ASSERT_TRUE(far_end.visible);
+      ASSERT_TRUE(target.visible);
+      ASSERT_GT(far_end.depth, near_end.depth * 2.0f);
+      const auto edge_delta = near_end.position - far_end.position;
+      const float edge_length = std::hypot(edge_delta.x, edge_delta.y);
+      ASSERT_GT(edge_length, 1.0f);
+      const quader::QVec2 perpendicular{-edge_delta.y / edge_length,
+                                        edge_delta.x / edge_length};
+      const auto mouse = [&](QEvent::Type type, float offset, Qt::MouseButtons held) {
+        const auto pixels = target.position + perpendicular *
+            (offset * ui_scale * static_cast<float>(surface->devicePixelRatio()));
+        const QPointF local{pixels.x / surface->devicePixelRatio(),
+                            pixels.y / surface->devicePixelRatio()};
+        QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
+                         type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                         held, Qt::NoModifier);
+        QApplication::sendEvent(surface, &event);
+      };
+      const float expected_z = snap_enabled ? 0.5f : 0.37f;
+      const auto expect_preview = [&] {
+        ASSERT_TRUE(session.modeling().tool_status().insert_edge_loop_has_preview);
+        const auto frame = session.modeling().volatile_overlay_frame();
+        std::size_t loop_lines = 0u;
+        for (const auto &line : frame.lines) {
+          if (std::abs(line.start.z) >= 4.99f || std::abs(line.end.z) >= 4.99f) {
+            continue;
+          }
+          ++loop_lines;
+          EXPECT_NEAR(line.start.z, expected_z, 0.0002f);
+          EXPECT_NEAR(line.end.z, expected_z, 0.0002f);
+        }
+        EXPECT_EQ(loop_lines, 4u);
+      };
+      session.history().clear();
+      // Default edge picking allows eight design pixels. Start off the edge
+      // and cross it repeatedly without changing the projected loop position.
+      for (const float offset : {6.0f, -6.0f, 3.0f, -3.0f, 6.0f}) {
+        SCOPED_TRACE(offset);
+        mouse(QEvent::MouseMove, offset, Qt::NoButton);
+        process();
+        expect_preview();
+      }
+      EXPECT_EQ(session.history().undo_count(), 0u);
+      mouse(QEvent::MouseButtonPress, 6.0f, Qt::LeftButton);
+      process();
+      EXPECT_EQ(session.history().undo_count(), 1u);
+      mouse(QEvent::MouseButtonRelease, 6.0f, Qt::NoButton);
+      process();
+      EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_dragging);
+      EXPECT_EQ(session.history().undo_count(), 1u);
+      const auto *mesh = session.assets().mesh(box.value().mesh);
+      ASSERT_NE(mesh, nullptr);
+      ASSERT_NE(mesh->authored_polygon_document, nullptr);
+      const auto &vertices = mesh->authored_polygon_document->vertices;
+      ASSERT_EQ(vertices.size(), 12u);
+      EXPECT_EQ(std::count_if(vertices.begin(), vertices.end(),
+                             [&](const auto &vertex) {
+                               return std::abs(vertex.position.z - expected_z) < 0.0002f;
+                             }), 4);
+      EXPECT_EQ(editor.viewports().control(quader::ViewportPaneId::Perspective,
+                                           quader::QuaderViewportControl::GridSnap),
+                !snap_enabled);
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      RadialToolbarPreviewLocksOnClickAndWaitsForSettingsApply) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

@@ -15,16 +15,20 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/runtime/selection_types.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
+#include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 
 #include "viewport/viewport_settings.hpp"
 #include "assets/asset_registry.hpp"
 #include "scene/scene_document.hpp"
+
+#include <quader/modeling/neutral/polygon/document_topology.hpp>
 
 #include <gtest/gtest.h>
 
@@ -290,6 +294,276 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   EXPECT_FALSE(result.selection_source_refreshed);
   expect_visibility(false);
   EXPECT_EQ(selection_provider.build_count, initial_builds);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     InsertEdgeLoopVerticesReachRetainedSubmissionAndClearWithoutStaleGeometry) {
+  SceneDocument document;
+  AssetRegistry assets;
+  ModelingSessionService modeling(document, assets);
+  ASSERT_TRUE(modeling.create_box_from_bounds({
+      .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+      .name = "Loop preview submission"}).ok);
+  ASSERT_TRUE(modeling.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+  ModelingToolRayEvent event{
+      .ray = {.origin = {1, 0, 5}, .direction = {0, 0, -1}},
+      .grid_size = 0.5, .edge_radius = 0.2, .snap_enabled = true};
+  ASSERT_TRUE(modeling.begin_insert_edge_loop_drag(event).ok);
+  ASSERT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
+
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  StaticSelectionFrameProvider selection({});
+  StaticDynamicToolFrameProvider tools({});
+  RenderOverlaySelectionSnapshot scene;
+  CurveToolPreviewState curve;
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::VertexSize, 9.0f));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::HoverVertexGrowth, 2.0f));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::VertexOutlineSize, 1.5f));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::HoverVertex,
+                                {0.2f, 0.8f, 0.4f, 0.75f}));
+  const auto submit = [&](float scale = 1.0f) {
+    const auto snapshot = modeling.volatile_overlay_snapshot();
+    auto request = submission_request(selection, scene, *snapshot.frame, curve);
+    request.volatile_modeling_source = {
+        .source_identity = snapshot.source.source_identity,
+        .publication_revision = snapshot.source.publication_revision};
+    request.dynamic_tool_frame_provider = &tools;
+    request.dynamic_tool_source = {
+        .source_identity = reinterpret_cast<std::uintptr_t>(&tools),
+        .publication_revision = 1u};
+    request.raster_scale = scale;
+    return coordinator.submit(request, settings, target);
+  };
+  const auto expect_loop = [&](float y, float scale) {
+    ASSERT_EQ(target.dynamic_frame.points.size(), 4u);
+    for (const auto &point : target.dynamic_frame.points) {
+      EXPECT_EQ(point.source, ViewportOverlaySource::Tool);
+      EXPECT_EQ(point.layer, ViewportOverlayLayer::HoverVertex);
+      EXPECT_EQ(point.style_role, ViewportOverlayStyleRole::HoverVertex);
+      EXPECT_NEAR(point.position.y, y, 0.0001f);
+      EXPECT_FLOAT_EQ(point.size_pixels, 11.0f * scale);
+      ASSERT_TRUE(point.outline_growth_pixels.has_value());
+      EXPECT_FLOAT_EQ(*point.outline_growth_pixels, 1.5f * scale);
+      EXPECT_GT(point.color >> 24u, 180u);
+      EXPECT_LT(point.color >> 24u, 200u);
+    }
+    EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines,
+        [](const auto &line) { return line.source == ViewportOverlaySource::Tool; }), 4);
+    const auto plan = OverlayRenderableBuilder::build_layer(
+        target.dynamic_frame,
+        {.eye = {0, 0, 5}, .forward = {0, 0, -1},
+         .right = {1, 0, 0}, .up = {0, 1, 0}, .viewport_size = {800, 600}},
+        ViewportOverlayLayer::HoverVertex);
+    ASSERT_EQ(plan.point_batches.size(), 2u);
+    for (const auto &batch : plan.point_batches) {
+      // Source depth stamps may prune the two rear glyphs before GPU submission.
+      // Both front glyphs must survive in each standard outline/fill pass.
+      EXPECT_GE(batch.mesh.vertices.size(), 8u);
+      EXPECT_LE(batch.mesh.vertices.size(), 16u);
+      for (const float x : {-1.0f, 1.0f}) {
+        EXPECT_EQ(std::ranges::count_if(batch.mesh.vertices, [&](const auto &vertex) {
+          return std::abs(vertex.center.x - x) < 0.0001f &&
+                 std::abs(vertex.center.y - y) < 0.0001f &&
+                 std::abs(vertex.center.z - 1.0f) < 0.0001f;
+        }), 4);
+      }
+      EXPECT_TRUE(batch.state.depth_culling);
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+      EXPECT_FLOAT_EQ(batch.depth_bias, kOverlayPointDepthBias);
+    }
+  };
+  ASSERT_TRUE(submit().dynamic_submitted);
+  expect_loop(0.0f, 1.0f);
+  const auto cache = modeling.volatile_overlay_cache_stats();
+  const auto work = coordinator.work_counters();
+  const int submissions = target.dynamic_submit_count;
+  for (int frame = 0; frame < 8; ++frame) EXPECT_TRUE(submit().camera_only);
+  EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, cache.build_count);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count);
+  EXPECT_EQ(target.dynamic_submit_count, submissions);
+  ASSERT_TRUE(submit(2.0f).dynamic_submitted);
+  expect_loop(0.0f, 2.0f);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  expect_loop(0.0f, 1.0f);
+  EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, cache.build_count);
+
+  event.ray.origin.y = 0.5f;
+  ASSERT_TRUE(modeling.update_insert_edge_loop_drag(event).ok);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  expect_loop(0.5f, 1.0f);
+  event.ray.origin.y = 0.95f;
+  ASSERT_TRUE(modeling.update_insert_edge_loop_drag(event).ok);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  EXPECT_TRUE(target.dynamic_frame.points.empty());
+  EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines,
+      [](const auto &line) { return line.source == ViewportOverlaySource::Tool; }));
+  EXPECT_TRUE(submit().camera_only);
+
+  event.ray.origin.y = 0.0f;
+  ASSERT_TRUE(modeling.update_insert_edge_loop_drag(event).ok);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  expect_loop(0.0f, 1.0f);
+  ASSERT_TRUE(modeling.commit_insert_edge_loop_drag().ok);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  EXPECT_TRUE(target.dynamic_frame.points.empty());
+  EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines,
+      [](const auto &line) { return line.source == ViewportOverlaySource::Tool; }));
+  EXPECT_TRUE(submit().camera_only);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     KnifeBoundaryZigzagRetainsEverySegmentAndCommitsOneUndoableSplit) {
+  // Opposite box faces exercise both projected polygon windings. Every point
+  // touches the original face perimeter, including the two intermediate bends.
+  for (const float side : {1.0f, -1.0f}) {
+    SCOPED_TRACE(side);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    auto &modeling = session.modeling();
+    const auto box = modeling.create_box_from_bounds({
+        .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+        .name = "Knife zigzag submission"});
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Knife).ok());
+    session.history().clear();
+    session.mark_clean();
+    const auto authored = [&] {
+      return session.assets().mesh(session.scene().mesh(box.object.entity)->mesh)
+          ->authored_polygon_document;
+    };
+    const auto before = authored();
+    ASSERT_NE(before, nullptr);
+    ASSERT_EQ(before->faces.size(), 6u);
+    const auto content_revision = modeling.content_revision();
+    const auto history_revision = session.history().revision();
+    const std::array<QVec3, 4> points{{
+        {-0.75f, 1.0f, side}, {-0.25f, -1.0f, side},
+        {0.25f, 1.0f, side}, {0.75f, -1.0f, side}}};
+    const auto same_position = [](const auto &left, const auto &right) {
+      return std::abs(left.x - right.x) < 0.0001f &&
+             std::abs(left.y - right.y) < 0.0001f &&
+             std::abs(left.z - right.z) < 0.0001f;
+    };
+
+    ViewportOverlaySubmissionCoordinator coordinator;
+    RecordingOverlayTarget target;
+    StaticSelectionFrameProvider selection({});
+    StaticDynamicToolFrameProvider tools({});
+    RenderOverlaySelectionSnapshot scene;
+    CurveToolPreviewState curve;
+    const auto settings = ViewportSettings::defaults();
+    const auto submit = [&] {
+      const auto snapshot = modeling.volatile_overlay_snapshot();
+      auto request = submission_request(selection, scene, *snapshot.frame, curve);
+      request.volatile_modeling_source = {
+          .source_identity = snapshot.source.source_identity,
+          .publication_revision = snapshot.source.publication_revision};
+      request.dynamic_tool_frame_provider = &tools;
+      request.dynamic_tool_source = {
+          .source_identity = reinterpret_cast<std::uintptr_t>(&tools),
+          .publication_revision = 1u};
+      return coordinator.submit(request, settings, target);
+    };
+    const auto is_knife_line = [](const auto &line) {
+      return line.source == ViewportOverlaySource::Tool &&
+             line.layer == ViewportOverlayLayer::ToolPreviewLine;
+    };
+    const auto is_knife_point = [](const auto &point) {
+      return point.source == ViewportOverlaySource::Tool &&
+             point.layer == ViewportOverlayLayer::ToolHandle;
+    };
+    for (std::size_t index = 0; index < points.size(); ++index) {
+      SCOPED_TRACE(index);
+      const auto accepted = modeling.accept_knife_point({
+          .screen_position = {400.0f + side * points[index].x * 150.0f,
+                              300.0f - points[index].y * 150.0f},
+          .ray = {.origin = {points[index].x, points[index].y, side * 6.0f},
+                  .direction = {0, 0, -side}},
+          .camera = {.orthographic = true,
+                     .origin = {0, 0, side * 6.0f},
+                     .x_axis = {side, 0, 0}, .y_axis = {0, 1, 0},
+                     .z_axis = {0, 0, side}, .viewport_size = {800, 600},
+                     .orthographic_size = 4.0},
+          .grid_size = 0.5, .vertex_radius = 0.001, .edge_radius = 0.01,
+          .snap_enabled = false});
+      ASSERT_TRUE(accepted.ok) << accepted.message;
+      ASSERT_TRUE(accepted.changed);
+      ASSERT_TRUE(submit().dynamic_submitted);
+      EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, is_knife_line), index);
+      EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.points, is_knife_point), index + 1u);
+      for (std::size_t segment = 0; segment < index; ++segment) {
+        EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, [&](const auto &line) {
+          return is_knife_line(line) && same_position(line.start, points[segment]) &&
+                 same_position(line.end, points[segment + 1u]);
+        }), 1);
+      }
+      for (std::size_t point = 0; point <= index; ++point) {
+        EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.points, [&](const auto &value) {
+          return is_knife_point(value) && same_position(value.position, points[point]);
+        }), 1);
+      }
+      EXPECT_TRUE(quader_poly::has_same_geometry(*authored(), *before));
+      EXPECT_EQ(modeling.content_revision(), content_revision);
+      EXPECT_EQ(session.history().revision(), history_revision);
+      EXPECT_EQ(session.history().undo_count(), 0u);
+      EXPECT_FALSE(session.dirty());
+    }
+    ASSERT_TRUE(modeling.tool_status().knife_can_commit);
+    const auto cache = modeling.volatile_overlay_cache_stats();
+    const auto work = coordinator.work_counters();
+    const int submissions = target.dynamic_submit_count;
+    for (int frame = 0; frame < 8; ++frame) EXPECT_TRUE(submit().camera_only);
+    EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, cache.build_count);
+    EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+              work.dynamic_source_compose_count);
+    EXPECT_EQ(target.dynamic_submit_count, submissions);
+
+    // This production port invokes commit_knife_tool inside the native history
+    // command, exactly as finalizing the viewport point sequence does.
+    ViewportModelingToolCommitAdapter commit(editor.tools());
+    const auto committed = commit.commit_knife_tool();
+    ASSERT_TRUE(committed.ok) << committed.message;
+    ASSERT_TRUE(committed.changed);
+    const auto after = authored();
+    ASSERT_NE(after, nullptr);
+    ASSERT_EQ(after->faces.size(), 9u);
+    EXPECT_EQ(after->vertices.size(), before->vertices.size() + points.size());
+    for (std::size_t segment = 0; segment + 1u < points.size(); ++segment) {
+      int incident_faces = 0;
+      for (const auto &face : after->faces) {
+        for (std::size_t corner = 0; corner < face.vertices.size(); ++corner) {
+          const auto *a = quader_poly::find_vertex(*after, face.vertices[corner]);
+          const auto *b = quader_poly::find_vertex(
+              *after, face.vertices[(corner + 1u) % face.vertices.size()]);
+          ASSERT_NE(a, nullptr);
+          ASSERT_NE(b, nullptr);
+          if ((same_position(a->position, points[segment]) &&
+               same_position(b->position, points[segment + 1u])) ||
+              (same_position(b->position, points[segment]) &&
+               same_position(a->position, points[segment + 1u]))) ++incident_faces;
+        }
+      }
+      EXPECT_EQ(incident_faces, 2);
+    }
+    EXPECT_EQ(session.history().undo_count(), 1u);
+    EXPECT_EQ(modeling.tool_status().active_tool, ModelingViewportTool::Select);
+    ASSERT_TRUE(submit().dynamic_submitted);
+    EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, is_knife_line), 0);
+    EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.points, is_knife_point), 0);
+    EXPECT_TRUE(submit().camera_only);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(quader_poly::has_same_geometry(*authored(), *before));
+    EXPECT_EQ(session.history().undo_count(), 0u);
+    EXPECT_EQ(session.history().redo_count(), 1u);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(quader_poly::has_same_geometry(*authored(), *after));
+    EXPECT_EQ(session.history().undo_count(), 1u);
+    EXPECT_EQ(session.history().redo_count(), 0u);
+  }
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,

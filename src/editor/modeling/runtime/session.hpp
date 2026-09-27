@@ -7,6 +7,7 @@
 #pragma once
 
 #include <editor/interactions/tool_identity.hpp>
+#include <editor/interactions/viewport_projection.hpp>
 #include <editor/modeling/operations/operation_schema.hpp>
 #include <editor/modeling/runtime/cow_polygon_document.hpp>
 #include <editor/modeling/runtime/selection_types.hpp>
@@ -126,6 +127,7 @@ struct InsertEdgeLoopPreview {
   quader_poly::Edge edge;
   float factor = 0.5F;
   std::vector<SelectionOverlayLine> lines;
+  std::vector<SelectionOverlayPoint> points;
   std::string message;
 };
 
@@ -140,6 +142,7 @@ struct InsertEdgeLoopToolState {
   quader_poly::Edge edge;
   float factor = 0.5F;
   std::vector<SelectionOverlayLine> preview_lines;
+  std::vector<SelectionOverlayPoint> preview_points;
 };
 
 /**
@@ -252,13 +255,22 @@ struct PolyToolResult {
   std::string message;
 };
 
-/**
- * Stores the Pick Request data contract used by the modeling runtime domain.
- */
+/** Native viewport metric; camera-less modeling picks retain world radii. */
+struct PickScreenContext {
+  ViewportCameraState camera;
+  quader::QVec2 screen_position{};
+  double vertex_radius_pixels = 0.0;
+  double edge_radius_pixels = 0.0;
+  double near_plane = 0.01;
+  double far_plane = 1000000.0;
+};
+
+/** Stores the Pick Request data contract used by the modeling runtime domain. */
 struct PickRequest {
   quader_poly::Ray ray;
   quader_poly::PickOptions options;
   int target_object_id = -1;
+  std::optional<PickScreenContext> screen_context;
 };
 
 struct PickCycleState;
@@ -324,6 +336,8 @@ struct PickHitRecord {
   quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
   quader_poly::Edge edge;
   quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+  /// Historical names: both values are world-space when occurrence transforms
+  /// participate in the query, otherwise they match the supplied document.
   quader::QVec3 local_position;
   quader::QVec3 local_normal;
   float ray_distance = 0.0F;

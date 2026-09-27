@@ -113,6 +113,19 @@ ModelingPickSelectRequest make_pick_select_request(
                             camera, camera.viewport_size()),
                         world_ray.origin)
               : 0.0,
+      .screen_context = ModelingScreenPickContext{
+          .camera = ViewportCameraAdapter::modeling_camera(
+              camera, camera.viewport_size()),
+          .screen_position = local_mouse,
+          .vertex_radius_pixels = viewport_component_pick_radius_pixels(
+              settings.float_value(ViewportFloatSettingId::PickVertexRadius)) *
+              viewport_sanitized_pixel_scale(frame.viewport_pixel_scale),
+          .edge_radius_pixels = viewport_component_pick_radius_pixels(
+              settings.float_value(ViewportFloatSettingId::PickEdgeRadius)) *
+              viewport_sanitized_pixel_scale(frame.viewport_pixel_scale),
+          .near_plane = camera.state().near_plane,
+          .far_plane = camera.state().far_plane,
+      },
   };
 }
 

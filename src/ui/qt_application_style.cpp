@@ -224,19 +224,25 @@ bool qt_draw_application_primitive(
   case QStyle::PE_PanelButtonCommand:
   case QStyle::PE_PanelButtonTool: {
     const auto *button = qstyleoption_cast<const QStyleOptionButton *>(option);
+    const auto *tool_button = qobject_cast<const QToolButton *>(widget);
     const bool toolbar_button =
-        qobject_cast<const QToolButton *>(widget) != nullptr &&
+        tool_button != nullptr &&
         qobject_cast<const QToolBar *>(widget->parentWidget()) != nullptr;
+    QStyleOption face = menu_glyph_option(*option, widget);
+    if (tool_button != nullptr && tool_button->isCheckable() &&
+        !face.state.testFlag(QStyle::State_KeyboardFocusChange)) {
+      face.state.setFlag(QStyle::State_HasFocus, false);
+    }
     const bool flat = option->state.testFlag(QStyle::State_AutoRaise) ||
                       toolbar_button ||
                       (button != nullptr &&
                        button->features.testFlag(QStyleOptionButton::Flat));
-    if (flat && !hovered(*option) && !focused(*option) &&
+    if (flat && !hovered(face) && !focused(face) &&
         !option->state.testFlag(QStyle::State_On) &&
         !option->state.testFlag(QStyle::State_Sunken)) {
       return true;
     }
-    draw_surface(*painter, menu_glyph_option(*option, widget), metrics, false,
+    draw_surface(*painter, face, metrics, false,
                   button != nullptr && button->features.testFlag(
                                            QStyleOptionButton::DefaultButton));
     return true;

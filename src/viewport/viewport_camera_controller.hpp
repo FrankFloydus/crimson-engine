@@ -149,6 +149,7 @@ public:
     void update_drag_delta(QVec2 delta, ViewportDragMode mode);
     void fly_move(QVec3 local_direction, float delta_seconds);
     void adjust_fly_speed(float wheel_steps);
+    bool set_fly_speed(float speed);
     bool set_default_fly_speed(float speed);
     void reset_fly_speed();
     /// Applies scene-authored clips while retaining any same-framing safety

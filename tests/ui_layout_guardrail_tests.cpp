@@ -1652,8 +1652,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source, "ui_panel_localization_key(id)");
   expect_contains(menu, "QStringLiteral(\"command_%1\")");
   expect_contains(menu, "QStringLiteral(\"panel_%1\")");
-  expect_contains(menu, "QStringLiteral(\"layout_%1\")");
-  expect_contains(menu, "viewport_layout_stable_id(*layout)");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1793,7 +1791,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "setIconSize(QSize(32, 32))");
   expect_contains(toolbar, "Qt::ToolButtonIconOnly");
   expect_contains(toolbar, "action_group->setExclusive(true)");
-  expect_contains(toolbar, "if (spec.separator_before)");
+  expect_contains(toolbar, "if (spec.separator_before && !actions().empty())");
   expect_contains(toolbar, "addSeparator()");
   expect_contains(toolbar, "{ViewportToolId::CreatePrimitive,");
   expect_contains(toolbar, "tool_create_box.png\", true");
@@ -1936,8 +1934,6 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(toolbar,
                   "install_native_toolbar_button_presentation(*this)");
-  expect_contains(toolbar,
-                  "configure_native_toolbar_button_face(*this, *entry.action,");
   expect_missing(toolbar, "setStyleSheet(");
   expect_missing(toolbar, "setPalette(");
   expect_missing(toolbar, "QPainter");
@@ -2319,7 +2315,6 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
       read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
-  const std::string menu = read_source_file("src/ui/qt_main_menu.cpp");
 
   expect_contains(layout_types, "enum class ViewportLayoutId");
   for (std::string_view layout_id :
@@ -2345,21 +2340,6 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
   expect_contains(panel, "panes_[index].frame->setVisible(");
   expect_contains(panel, "visible && !startup_presentation_blocked_");
   expect_contains(panel, "active[index] = true");
-  expect_contains(menu, "layout_for_command(presentation.command_id)");
-  for (std::string_view command : {
-           "kViewportLayoutSingle", "kViewportLayoutTwoVertical",
-           "kViewportLayoutTwoHorizontal",
-           "kViewportLayoutThreePrimaryRight",
-           "kViewportLayoutThreePrimaryLeft",
-           "kViewportLayoutThreePrimaryBottom",
-           "kViewportLayoutThreePrimaryTop", "kViewportLayoutFourQuad"}) {
-    expect_contains(menu, command);
-  }
-  expect_contains(menu, "context.editor.get().commands().execute(");
-  expect_contains(menu,
-                  "context.editor.get().commands().descriptor(entry.command_id)");
-  expect_missing(menu,
-                 "context.editor.get().viewports().set_layout(layout)");
 }
 
 TEST(UiLayoutGuardrailTests,

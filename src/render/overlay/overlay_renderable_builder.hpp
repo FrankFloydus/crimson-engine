@@ -152,9 +152,7 @@ public:
 
   static OverlayRenderState make_state(ViewportOverlayLayer layer,
                                        ViewportOverlayGeometryKind kind,
-                                       std::uint16_t blend_order,
-                                       bool depth_stamp = false,
-                                       bool face_color_pass = false);
+                                       std::uint16_t blend_order);
 
   static OverlayLayerBuildPlan
   build_layer(const ViewportOverlayFrame &frame,

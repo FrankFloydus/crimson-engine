@@ -2715,8 +2715,8 @@ TEST(ProgrammaticApiGuardrailTests,
       std::string::npos);
 
   const std::string find_replace_action = source_slice(
-      main_menu, "material_find_replace_action = materials->addAction(",
-      "(void)add_presented_submenu(*menu, \"ui.menu.object.visibility\"");
+      main_menu, "material_find_replace_action = menu->addAction(",
+      "void build_mesh_menu()");
   ASSERT_FALSE(find_replace_action.empty());
   EXPECT_NE(find_replace_action.find(
                 "ui.menu.object.materials.find_replace"),

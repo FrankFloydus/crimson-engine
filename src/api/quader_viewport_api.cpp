@@ -10,9 +10,11 @@
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
+#include "viewport/viewport_navigation_defaults.hpp"
 #include "viewport/viewport_shading_mode_conversions.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <cmath>
 #include <utility>
@@ -184,6 +186,33 @@ QuaderApiVoidResult QuaderViewportApi::set_rotation_snap_degrees(
     return unavailable("The rotation snap angle must be finite and positive.");
   }
   return runtime_status(impl_->workspace->set_rotation_snap_degrees(pane, degrees));
+}
+
+double QuaderViewportApi::fly_navigation_speed() const {
+  return fly_navigation_speed(focused_pane());
+}
+
+double QuaderViewportApi::fly_navigation_speed(ViewportPaneId pane) const {
+  return impl_->workspace->camera(pane).fly_speed();
+}
+
+QuaderApiVoidResult QuaderViewportApi::set_fly_navigation_speed(double speed) {
+  return set_fly_navigation_speed(focused_pane(), speed);
+}
+
+QuaderApiVoidResult QuaderViewportApi::set_fly_navigation_speed(
+    ViewportPaneId pane, double speed) {
+  if (!valid_pane(pane)) {
+    return unavailable("The requested viewport pane is not valid.");
+  }
+  if (!std::isfinite(speed) || speed <= 0.0) {
+    return unavailable("The fly navigation speed must be finite and positive.");
+  }
+  const double clamped = std::clamp(
+      speed, static_cast<double>(kMinimumViewportFlyNavigationSpeed),
+      static_cast<double>(kMaximumViewportFlyNavigationSpeed));
+  return runtime_status(impl_->workspace->camera(pane).set_fly_speed(
+      static_cast<float>(clamped)));
 }
 
 std::uint64_t QuaderViewportApi::control_revision() const {
@@ -430,6 +459,14 @@ double QuaderViewportHandle::rotation_snap_degrees() const {
 QuaderApiVoidResult
 QuaderViewportHandle::set_rotation_snap_degrees(double degrees) {
   return viewports_.set_rotation_snap_degrees(pane_, degrees);
+}
+
+double QuaderViewportHandle::fly_navigation_speed() const {
+  return viewports_.fly_navigation_speed(pane_);
+}
+
+QuaderApiVoidResult QuaderViewportHandle::set_fly_navigation_speed(double speed) {
+  return viewports_.set_fly_navigation_speed(pane_, speed);
 }
 
 QuaderTransformSpace QuaderViewportHandle::transform_space() const {

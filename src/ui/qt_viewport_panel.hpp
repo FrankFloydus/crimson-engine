@@ -47,6 +47,7 @@ class QLabel;
 class QMenu;
 class QMouseEvent;
 class QPushButton;
+class QToolButton;
 
 namespace quader {
 
@@ -58,6 +59,7 @@ class QuaderEditorApi;
 class QtToolSettingsPanel;
 class QtEnvironmentSettingsPopup;
 class QtViewportControlStrip;
+class QtViewportCameraSettingsPopup;
 struct QuaderViewportKeybindingContext;
 class RenderOverlaySnapshotCache;
 class QtViewportEdgeLengthHud;
@@ -179,6 +181,13 @@ private:
     QtViewportControlStrip *toolbar = nullptr;
     QPushButton *display_button = nullptr;
     QPushButton *camera_button = nullptr;
+    QToolButton *layout_button = nullptr;
+    QMenu *layout_menu = nullptr;
+    std::array<QAction *, 8> layout_actions = {};
+    QToolButton *camera_settings_button = nullptr;
+    QtViewportCameraSettingsPopup *camera_settings_popup = nullptr;
+    std::uint64_t camera_settings_generation = 0u;
+    std::uint64_t layout_menu_generation = 0u;
     QPushButton *environment_button = nullptr;
     QAction *environment_overflow_action = nullptr;
     QMenu *display_menu = nullptr;
@@ -200,6 +209,7 @@ private:
     QWidget *surface_container = nullptr;
     ViewportView presented_view = ViewportView::Perspective;
     ViewportShadingMode presented_shading = ViewportShadingMode::Shaded;
+    ViewportLayoutId presented_layout = ViewportLayoutId::Single;
     bool control_selection_valid = false;
     bool frame_presented = false;
     bool surface_presented = false;

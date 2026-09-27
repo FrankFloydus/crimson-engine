@@ -178,6 +178,7 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
   const auto snapping_actions = snapping->viewport_actions();
   const auto display_actions = display->viewport_actions();
   EXPECT_EQ(display_actions[2], nullptr);
+  EXPECT_FALSE(release_has_feature(ReleaseFeature::CameraSettings));
   for (const char *pane : {"perspective", "top", "front", "side"}) {
     SCOPED_TRACE(pane);
     EXPECT_EQ(ui.main_window()->findChild<QWidget *>(
@@ -186,6 +187,16 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
     auto *strip = dynamic_cast<QtViewportControlStrip *>(ui.main_window()->findChild<QWidget *>(
         QStringLiteral("viewportToolbar_") + QString::fromUtf8(pane)));
     ASSERT_NE(strip, nullptr);
+    auto *layout = strip->findChild<QToolButton *>(
+        QStringLiteral("viewportLayout_") + QString::fromUtf8(pane));
+    auto *camera_settings = strip->findChild<QToolButton *>(
+        QStringLiteral("viewportCameraSettings_") + QString::fromUtf8(pane));
+    ASSERT_NE(layout, nullptr);
+    ASSERT_NE(camera_settings, nullptr);
+    EXPECT_TRUE(layout->isEnabled());
+    EXPECT_TRUE(camera_settings->isEnabled());
+    ASSERT_NE(layout->menu(), nullptr);
+    EXPECT_EQ(layout->menu()->actions().size(), 8);
     const auto expect_clone = [&](QAction *source) {
       EXPECT_NE(source, nullptr);
       if (source == nullptr) return;
@@ -200,11 +211,15 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
                             ViewportToolId::Rotate, ViewportToolId::Scale}) {
       QAction *action = tools->tool_action(tool);
       expect_clone(action);
-      EXPECT_TRUE(tools->actions().contains(action));
+      EXPECT_FALSE(tools->actions().contains(action));
+      EXPECT_EQ(tools->widgetForAction(action), nullptr);
+      EXPECT_TRUE(action->isVisible());
     }
     QAction *lasso_source = tools->tool_action(ViewportToolId::LassoSelect);
     ASSERT_NE(lasso_source, nullptr);
-    EXPECT_TRUE(tools->actions().contains(lasso_source));
+    EXPECT_FALSE(tools->actions().contains(lasso_source));
+    EXPECT_EQ(tools->widgetForAction(lasso_source), nullptr);
+    EXPECT_TRUE(lasso_source->isVisible());
     auto *selection = strip->findChild<QToolButton *>(QStringLiteral("viewportStrip_tool_select"));
     ASSERT_NE(selection, nullptr);
     EXPECT_EQ(selection->popupMode(), QToolButton::DelayedPopup);
@@ -476,6 +491,8 @@ TEST_F(PublicReleaseUiTests, ObjectMenuKeepsOnlyFlatPublicGroups) {
   auto *display = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view_display"));
   ASSERT_NE(view, nullptr);
   ASSERT_NE(window, nullptr);
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_window_layout")),
+            nullptr);
   ASSERT_NE(display, nullptr);
   const auto view_actions = view->actions();
   ASSERT_GE(view_actions.size(), 2);

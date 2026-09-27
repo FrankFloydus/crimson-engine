@@ -1057,6 +1057,9 @@ ui.viewport.info.draw_calls=Draw Calls
 ui.viewport.info.unavailable=--
 
 viewport.layout.single.label=Single Pane
+viewport.display.layout=Viewport Layout
+viewport.display.camera_settings=Camera Settings
+viewport.display.fly_speed=Fly Speed
 viewport.layout.two_horizontal.label=Two Views, Horizontal
 viewport.layout.two_vertical.label=Two Views, Vertical
 viewport.layout.three_primary_right.label=Three Views, Primary Right

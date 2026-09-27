@@ -16,6 +16,13 @@ namespace quader {
 inline constexpr float kViewportPixelScaleMinimum = 0.5f;
 inline constexpr float kViewportPixelScaleMaximum = 15.0f;
 
+/** Converts the persisted component tolerance into its logical-pixel aperture. */
+[[nodiscard]] inline double
+viewport_component_pick_radius_pixels(double preference_radius) noexcept {
+  constexpr double kPixelsPerPreferenceUnit = 40.0;
+  return std::clamp(preference_radius * kPixelsPerPreferenceUnit, 2.0, 32.0);
+}
+
 /** Keeps screen-space presentation scale finite and bounded at owner seams. */
 [[nodiscard]] inline float
 viewport_sanitized_pixel_scale(float viewport_pixel_scale) noexcept {

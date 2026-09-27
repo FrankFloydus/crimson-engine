@@ -693,6 +693,20 @@ TEST(QtProjectWorkspaceTests,
   quader::QtSelectionToolbar selection_toolbar;
   quader::QtToolToolbar tool_toolbar;
   quader::QtSnappingToolbar snapping_toolbar;
+  for (const auto tool : {quader::ViewportToolId::Select,
+                          quader::ViewportToolId::LassoSelect,
+                          quader::ViewportToolId::Move,
+                          quader::ViewportToolId::Rotate,
+                          quader::ViewportToolId::Scale}) {
+    QAction *source = tool_toolbar.tool_action(tool);
+    ASSERT_NE(source, nullptr);
+    EXPECT_EQ(source->parent(), &tool_toolbar);
+    EXPECT_FALSE(tool_toolbar.actions().contains(source));
+    EXPECT_EQ(tool_toolbar.widgetForAction(source), nullptr);
+    EXPECT_TRUE(source->isVisible());
+    EXPECT_TRUE(source->isCheckable());
+    EXPECT_TRUE(source->shortcuts().isEmpty());
+  }
   const QPalette theme =
       quader::qt_obsidian_application_palette(application.palette());
   selection_toolbar.setPalette(theme);
@@ -701,7 +715,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 18);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 13);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
        selection_toolbar.findChildren<QToolButton *>()) {
@@ -721,7 +735,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 18);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 13);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin * 2);
@@ -732,7 +746,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 18);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 13);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin);
@@ -904,7 +918,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(toolbar.isAreaAllowed(Qt::BottomToolBarArea));
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 5);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 0);
 
   host.addToolBar(Qt::TopToolBarArea, &toolbar);
   EXPECT_EQ(host.toolBarArea(&toolbar), Qt::TopToolBarArea);
@@ -920,21 +934,41 @@ TEST(QtProjectWorkspaceTests,
       QStringLiteral("snappingAngleCombo"));
   ASSERT_NE(grid_combo, nullptr);
   ASSERT_NE(angle_combo, nullptr);
+  const auto mounted_actions = toolbar.actions();
+  ASSERT_EQ(mounted_actions.size(), 4);
+  EXPECT_EQ(toolbar.widgetForAction(mounted_actions[0]),
+            toolbar.findChild<QLabel *>(QStringLiteral("snappingGridSizeLabel")));
+  EXPECT_EQ(toolbar.widgetForAction(mounted_actions[1]), grid_combo);
+  EXPECT_EQ(toolbar.widgetForAction(mounted_actions[2]),
+            toolbar.findChild<QLabel *>(QStringLiteral("snappingAngleLabel")));
+  EXPECT_EQ(toolbar.widgetForAction(mounted_actions[3]), angle_combo);
+  for (QAction *action : mounted_actions) {
+    EXPECT_FALSE(action->isSeparator());
+    EXPECT_FALSE(action->isCheckable());
+  }
   EXPECT_EQ(grid_combo->minimumHeight(), 30);
   EXPECT_EQ(grid_combo->maximumHeight(), 30);
   EXPECT_EQ(angle_combo->minimumHeight(), 30);
   EXPECT_EQ(angle_combo->maximumHeight(), 30);
+  const int baseline_button_margin = toolbar.style()->pixelMetric(
+      QStyle::PM_ButtonMargin, nullptr, &toolbar);
 
   toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
   EXPECT_EQ(toolbar.iconSize(), QSize(64, 64));
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 5);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 0);
+  EXPECT_EQ(toolbar.style()->pixelMetric(QStyle::PM_ButtonMargin, nullptr,
+                                        &toolbar),
+            baseline_button_margin * 2);
   EXPECT_EQ(grid_combo->minimumHeight(), 60);
   EXPECT_EQ(grid_combo->maximumHeight(), 60);
   EXPECT_EQ(angle_combo->minimumHeight(), 60);
   EXPECT_EQ(angle_combo->maximumHeight(), 60);
   toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 5);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 0);
+  EXPECT_EQ(toolbar.style()->pixelMetric(QStyle::PM_ButtonMargin, nullptr,
+                                        &toolbar),
+            baseline_button_margin);
   EXPECT_EQ(grid_combo->minimumHeight(), 30);
   EXPECT_EQ(grid_combo->maximumHeight(), 30);
 
@@ -973,16 +1007,22 @@ TEST(QtProjectWorkspaceTests,
                   QString::number(kExpectedAngles[index], 'g', 15)));
   }
 
-  auto *transform_space = toolbar.findChild<QAction *>(
-      QStringLiteral("toggle_transform_space"));
-  ASSERT_NE(transform_space, nullptr);
-  std::vector<QAction *> toggle_actions;
-  for (QAction *action : toolbar.actions()) {
-    if (action->isCheckable() && action != transform_space) {
-      toggle_actions.push_back(action);
-    }
+  const auto viewport_actions = toolbar.viewport_actions();
+  for (QAction *action : viewport_actions) {
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->parent(), &toolbar);
+    EXPECT_TRUE(action->isVisible());
+    EXPECT_TRUE(action->isCheckable());
+    EXPECT_TRUE(action->shortcuts().isEmpty());
+    EXPECT_FALSE(toolbar.actions().contains(action));
+    EXPECT_EQ(toolbar.widgetForAction(action), nullptr);
   }
-  ASSERT_EQ(toggle_actions.size(), 4u);
+  QAction *transform_space = viewport_actions[0];
+  EXPECT_EQ(transform_space->objectName(),
+            QStringLiteral("toggle_transform_space"));
+  const std::array<QAction *, 4> toggle_actions{
+      viewport_actions[1], viewport_actions[2], viewport_actions[3],
+      viewport_actions[4]};
   const std::array<QString, 4> expected_action_names{
       QStringLiteral("snappingEnabled"),
       QStringLiteral("gridSnapping"),
@@ -1002,10 +1042,6 @@ TEST(QtProjectWorkspaceTests,
     EXPECT_EQ(toggle_actions[index]->toolTip(),
               expected_action_labels[index]);
   }
-  EXPECT_EQ(toolbar.actions().indexOf(transform_space) + 1,
-            toolbar.actions().indexOf(toggle_actions.front()))
-      << "Local Transforms belongs immediately before the snapping icons";
-
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -1162,27 +1198,15 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(grid_requests, 1);
   EXPECT_EQ(angle_requests, 1);
   EXPECT_EQ(toggle_requests, (std::array<int, 4>{1, 1, 1, 1}));
+  EXPECT_EQ(toolbar.viewport_actions(), viewport_actions);
+  EXPECT_EQ(toolbar.actions(), mounted_actions);
 
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
   if (!review_directory.isEmpty()) {
     ASSERT_TRUE(QDir().mkpath(review_directory));
-    // The app embeds these resources; the test host loads the same shipped
-    // artwork from source so the optional capture shows actual toolbar icons.
-    const QDir icon_directory(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
-    const std::array<const char *, 5> icon_names{
-        "tool_transform_local.png", "snapping_master.png", "snapping_grid.png",
-        "snapping_vertex.png", "snapping_rotation.png"};
-    const std::array<QAction *, 5> icon_actions{
-        transform_space, toggle_actions[0], toggle_actions[1], toggle_actions[2],
-        toggle_actions[3]};
-    for (std::size_t index = 0; index < icon_actions.size(); ++index) {
-      const QIcon icon = quader::qt_multiresolution_icon(
-          icon_directory.filePath(QString::fromUtf8(icon_names[index])));
-      ASSERT_FALSE(icon.isNull());
-      icon_actions[index]->setIcon(icon);
-    }
     quader::apply_qt_obsidian_application_theme(application.palette());
     quader::QtUiScaleApplicationController scale_controller(application);
+    int cycle = 0;
     for (const float factor : {1.0F, 2.0F, 1.0F}) {
       scale_controller.apply_factor(factor);
       const auto &metrics = scale_controller.metrics();
@@ -1206,8 +1230,9 @@ TEST(QtProjectWorkspaceTests,
       image.fill(Qt::transparent);
       toolbar.render(&image);
       EXPECT_TRUE(image.save(QDir(review_directory).filePath(
-          QStringLiteral("transform-snapping-toolbar-%1.png")
-              .arg(qRound(factor * 100.0F)))));
+          QStringLiteral("snapping-fields-toolbar-%1-%2.png")
+              .arg(qRound(factor * 100.0F))
+              .arg(cycle++))));
     }
   }
 }
@@ -1496,25 +1521,37 @@ TEST(QtProjectWorkspaceTests,
         index < snap_actions.size() ? static_cast<QWidget &>(snapping)
                                     : static_cast<QWidget &>(display), action);
     ASSERT_NE(strip_button, nullptr);
-    ASSERT_NE(top_button, nullptr);
-    ASSERT_NE(strip_button, top_button);
+    if (index < snap_actions.size()) {
+      EXPECT_EQ(top_button, nullptr);
+    } else {
+      ASSERT_NE(top_button, nullptr);
+      EXPECT_NE(strip_button, top_button);
+    }
     const bool initial = action->isChecked();
     strip_button->click();
     synchronize();
     EXPECT_EQ(action->isChecked(), !initial);
-    EXPECT_EQ(top_button->isChecked(), !initial);
     EXPECT_EQ(strip_button->isChecked(), !initial);
-    top_button->click();
+    if (top_button != nullptr) {
+      EXPECT_EQ(top_button->isChecked(), !initial);
+      top_button->click();
+    } else {
+      action->trigger();
+    }
     synchronize();
     EXPECT_EQ(action->isChecked(), initial);
     EXPECT_EQ(strip_button->isChecked(), initial);
-    EXPECT_EQ(top_button->isChecked(), initial);
+    if (top_button != nullptr) {
+      EXPECT_EQ(top_button->isChecked(), initial);
+    }
     if (index != 0) {
       EXPECT_EQ(preference_writes[index - 1], 0);
     }
     action->setEnabled(false);
     EXPECT_FALSE(strip_button->isEnabled());
-    EXPECT_FALSE(top_button->isEnabled());
+    if (top_button != nullptr) {
+      EXPECT_FALSE(top_button->isEnabled());
+    }
     strip_button->click();
     EXPECT_EQ(action->isChecked(), initial);
     action->setEnabled(true);
@@ -1531,10 +1568,11 @@ TEST(QtProjectWorkspaceTests,
   synchronize();
   for (std::size_t index = 0; index < actions.size(); ++index) {
     EXPECT_TRUE(button_for(strip, actions[index])->isChecked());
-    EXPECT_TRUE(button_for(
-        index < snap_actions.size() ? static_cast<QWidget &>(snapping)
-                                    : static_cast<QWidget &>(display),
-        actions[index])->isChecked());
+    if (index < snap_actions.size()) {
+      EXPECT_EQ(button_for(snapping, actions[index]), nullptr);
+    } else {
+      EXPECT_TRUE(button_for(display, actions[index])->isChecked());
+    }
   }
 
   const QString english_text = snap_actions[0]->text();
@@ -1773,6 +1811,53 @@ TEST(QtProjectWorkspaceTests,
           QStringLiteral("viewport-strip-%1.png").arg(suffix))));
     }
   };
+  QAction *snap_action = actions[5];
+  QToolButton *snap_button = buttons[5];
+  ASSERT_EQ(snap_action->actionGroup(), nullptr);
+  ASSERT_FALSE(snap_button->autoExclusive());
+  int snap_triggers = 0;
+  QObject::connect(snap_action, &QAction::triggered, &strip,
+                   [&] { ++snap_triggers; });
+  const auto review_snap_interaction = [&](const QString &suffix) {
+    settle_layout();
+    ASSERT_TRUE(snap_button->isVisible());
+    QApplication::setActiveWindow(&workspace);
+    // Directly delivered mouse events do not acquire native window focus.
+    // This presentation fixture starts with pointer focus on the toggle;
+    // the real pane's action handler still owns any viewport focus handback.
+    snap_button->setFocus(Qt::MouseFocusReason);
+    ASSERT_TRUE(snap_button->hasFocus());
+    snap_action->setChecked(true);
+    const int triggers_before = snap_triggers;
+    click_widget(*snap_button, snap_button->rect().center());
+    EXPECT_EQ(snap_triggers, triggers_before + 1);
+    EXPECT_FALSE(snap_action->isChecked());
+    EXPECT_FALSE(snap_button->isChecked());
+    EXPECT_TRUE(snap_button->hasFocus());
+    EXPECT_EQ(snap_button->focusPolicy(), Qt::StrongFocus);
+    EXPECT_FALSE(workspace.testAttribute(Qt::WA_KeyboardFocusChange));
+    review(suffix + QStringLiteral("-pointer-toggle-off"));
+
+    buttons[0]->setFocus(Qt::TabFocusReason);
+    snap_button->setFocus(Qt::ShortcutFocusReason);
+    ASSERT_TRUE(snap_button->hasFocus());
+    EXPECT_FALSE(snap_button->isChecked());
+    EXPECT_TRUE(workspace.testAttribute(Qt::WA_KeyboardFocusChange));
+    review(suffix + QStringLiteral("-keyboard-focus"));
+    send_key(*snap_button, Qt::Key_Space);
+    EXPECT_EQ(snap_triggers, triggers_before + 2);
+    EXPECT_TRUE(snap_action->isChecked());
+    EXPECT_TRUE(snap_button->isChecked());
+    EXPECT_TRUE(workspace.testAttribute(Qt::WA_KeyboardFocusChange));
+    click_widget(*snap_button, snap_button->rect().center());
+    EXPECT_EQ(snap_triggers, triggers_before + 3);
+    EXPECT_FALSE(snap_action->isChecked());
+    EXPECT_FALSE(snap_button->isChecked());
+    EXPECT_TRUE(snap_button->hasFocus());
+    EXPECT_EQ(snap_button->focusPolicy(), Qt::StrongFocus);
+    EXPECT_FALSE(workspace.testAttribute(Qt::WA_KeyboardFocusChange));
+    review(suffix + QStringLiteral("-keyboard-then-pointer-toggle-off"));
+  };
   QSize base_button_size;
   int cycle = 0;
   for (const float factor : {1.0F, 2.0F, 1.0F}) {
@@ -1803,7 +1888,10 @@ TEST(QtProjectWorkspaceTests,
       EXPECT_EQ(buttons[0]->size(), base_button_size);
     }
     workspace.resize(metrics.px(1200), metrics.px(180));
-    review(QStringLiteral("%1-%2-wide").arg(qRound(factor * 100)).arg(cycle++));
+    const QString suffix =
+        QStringLiteral("%1-%2").arg(qRound(factor * 100)).arg(cycle++);
+    review(suffix + QStringLiteral("-wide"));
+    review_snap_interaction(suffix);
   }
   ASSERT_TRUE(workspace.set_scene_tabs(
       {{.session_id = 1, .name = QStringLiteral("Courtyard")}}, 1));
@@ -1839,6 +1927,9 @@ TEST(QtProjectWorkspaceTests,
   quader::apply_qt_application_theme_for_contrast_preference(
       native_palette, Qt::ContrastPreference::HighContrast);
   review(QStringLiteral("native-high-contrast"));
+  workspace.resize(1200, 180);
+  review_snap_interaction(QStringLiteral("native-high-contrast"));
+  workspace.resize(480, 180);
   option.palette = strip.palette();
   EXPECT_FALSE(quader::qt_application_style_active(&option));
   EXPECT_EQ(strip.palette().color(QPalette::Window),

@@ -86,6 +86,8 @@ QtViewportControlStrip::~QtViewportControlStrip() {
   delete environment_.data();
   delete camera_.data();
   delete shading_.data();
+  delete layout_control_.data();
+  delete camera_settings_.data();
 }
 
 void QtViewportControlStrip::add_action(QAction &action) {
@@ -123,9 +125,9 @@ void QtViewportControlStrip::add_separator() {
 
 void QtViewportControlStrip::set_trailing_controls(
     QWidget *camera, QWidget *shading, QWidget *environment,
-    QAction *environment_overflow) {
+    QAction *environment_overflow, QWidget *layout, QWidget *camera_settings) {
   for (QWidget *control : {environment_.data(), camera_.data(),
-                           shading_.data()}) {
+                           shading_.data(), layout_control_.data(), camera_settings_.data()}) {
     if (control != nullptr) {
       layout_->removeWidget(control);
       control->hide();
@@ -136,9 +138,11 @@ void QtViewportControlStrip::set_trailing_controls(
   }
   camera_ = camera;
   shading_ = shading;
+  layout_control_ = layout;
+  camera_settings_ = camera_settings;
   environment_ = environment;
   environment_overflow_ = environment_overflow;
-  for (QWidget *control : {environment, camera, shading}) {
+  for (QWidget *control : {environment, camera, shading, layout, camera_settings}) {
     if (control != nullptr) {
       layout_->addWidget(control, 0, Qt::AlignVCenter);
       control->show();
@@ -192,7 +196,7 @@ QSize QtViewportControlStrip::sizeHint() const {
     }
   }
   for (const QWidget *control : {environment_.data(), camera_.data(),
-                                 shading_.data()}) {
+                                 shading_.data(), layout_control_.data(), camera_settings_.data()}) {
     if (control != nullptr) {
       width += control_width(control);
       ++count;
@@ -204,7 +208,8 @@ QSize QtViewportControlStrip::sizeHint() const {
 QSize QtViewportControlStrip::minimumSizeHint() const {
   int width = metrics_.px(8);
   int count = 0;
-  for (const QWidget *control : {camera_.data(), shading_.data()}) {
+  for (const QWidget *control : {camera_.data(), shading_.data(),
+                                layout_control_.data(), camera_settings_.data()}) {
     if (control != nullptr) {
       width += control_width(control, true);
       ++count;
@@ -303,7 +308,8 @@ void QtViewportControlStrip::update_overflow() {
     action_width += entry_width(index) + (action_width != 0 ? spacing : 0);
   }
   int trailing_width = 0;
-  for (QWidget *control : {camera_.data(), shading_.data()}) {
+  for (QWidget *control : {camera_.data(), shading_.data(),
+                          layout_control_.data(), camera_settings_.data()}) {
     if (control != nullptr) {
       trailing_width += control_width(control) +
                         (trailing_width != 0 ? spacing : 0);
@@ -417,6 +423,8 @@ void QtViewportControlStrip::update_overflow() {
   append_tab_stop(environment_);
   append_tab_stop(camera_);
   append_tab_stop(shading_);
+  append_tab_stop(layout_control_);
+  append_tab_stop(camera_settings_);
   layout_->activate();
   updating_overflow_ = false;
 }

@@ -166,7 +166,7 @@ TEST_F(QtFileMenuTests, CompactMenusKeepFocusCommandsDirectlyUnderView) {
   EXPECT_TRUE(actions[5]->isSeparator());
   for (const char *removed : {"menu_view_viewpoint", "menu_view_camera",
                               "menu_view_shading", "menu_object_transform",
-                              "menu_object_snapping"}) {
+                              "menu_object_snapping", "menu_window_layout"}) {
     EXPECT_EQ(menu_bar_->findChild<QMenu *>(QString::fromLatin1(removed)),
               nullptr) << removed;
   }

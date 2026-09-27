@@ -6140,8 +6140,11 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
                   .empty());
   auto *two_vertical =
       menu_bar.findChild<QAction *>(QStringLiteral("layout_two_vertical"));
-  ASSERT_NE(two_vertical, nullptr);
-  EXPECT_TRUE(two_vertical->text().contains(QStringLiteral("\tCtrl+2")));
+  EXPECT_EQ(two_vertical, nullptr);
+  EXPECT_EQ(menu_bar.findChild<QMenu *>(QStringLiteral("menu_window_layout")),
+            nullptr);
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader_command::kViewportLayoutTwoVertical), "Ctrl+2");
   auto *local_visibility_action = menu_bar.findChild<QAction *>(
       QStringLiteral("command_viewport_toggle_local_visibility"));
   ASSERT_NE(local_visibility_action, nullptr);
@@ -6202,7 +6205,8 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   menu.refresh();
   EXPECT_EQ(editor.commands().shortcut_for(
                 quader_command::kToolsActivatePivot), "Ctrl+Alt+P");
-  EXPECT_TRUE(two_vertical->text().contains(QStringLiteral("\tCtrl+Alt+2")));
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader_command::kViewportLayoutTwoVertical), "Ctrl+Alt+2");
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
   ASSERT_TRUE(editor.commands()
@@ -6212,7 +6216,9 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   EXPECT_TRUE(editor.commands().last_status()->ok());
   EXPECT_EQ(editor.tools().active_tool(), "pivot");
 
-  two_vertical->trigger();
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader_command::kViewportLayoutTwoVertical)
+                  .ok());
   EXPECT_EQ(editor.viewports().layout(), ViewportLayoutId::TwoVertical);
 
   ASSERT_TRUE(editor.tools().activate("select").ok());

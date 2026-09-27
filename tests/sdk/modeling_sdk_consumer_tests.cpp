@@ -4415,6 +4415,143 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
+     ModelingApiKnifeZigzagPartitionsEitherWindingInOneUndoStep) {
+  for (const bool reversed : std::array{false, true}) {
+    SCOPED_TRACE(reversed);
+    const std::array vertices{make_id<VertexTag>(1U), make_id<VertexTag>(2U),
+                              make_id<VertexTag>(3U), make_id<VertexTag>(4U)};
+    const FaceId face = make_id<FaceTag>(1U);
+    AuthoredTopology topology;
+    topology.vertices = {{vertices[0], {-1.0F, -1.0F, 0.0F}},
+                         {vertices[1], {1.0F, -1.0F, 0.0F}},
+                         {vertices[2], {1.0F, 1.0F, 0.0F}},
+                         {vertices[3], {-1.0F, 1.0F, 0.0F}}};
+    topology.faces = {{
+        .id = face,
+        .vertices = {vertices.begin(), vertices.end()},
+        .uvs = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}},
+        .material_slot = 7U,
+        .shading = AuthoredSurfaceShading::Flat,
+        .texture_transform = {.scale = {2.0F, 0.5F},
+                              .shift_uv = {0.125F, -0.25F},
+                              .rotation_degrees = 17.0F},
+    }};
+    topology.next_vertex_id = 5U;
+    topology.next_face_id = 2U;
+    if (reversed) {
+      std::ranges::reverse(topology.faces.front().vertices);
+      std::ranges::reverse(topology.faces.front().uvs);
+    }
+    auto document = PolygonDocument::from_authored_topology(topology);
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    ModelingApi quader = ModelingApi::create();
+    MeshHandle mesh = quader.add_document(std::move(document).value(), "Knife Zigzag");
+    ASSERT_TRUE(mesh.valid());
+    ASSERT_TRUE(mesh.faces().all().replace().success);
+    const auto source = deserialize_qdr_document(quader.io().serialize_qdr(mesh.id()));
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_EQ(source.value().objects.size(), 1U);
+
+    const EdgeKey top = make_edge_key(vertices[2], vertices[3]);
+    const EdgeKey bottom = make_edge_key(vertices[0], vertices[1]);
+    const KnifeStrokeOptions stroke{
+        .points = {
+            {.kind = KnifeTargetKind::ExistingEdge, .edge = top,
+             .edge_factor = 0.875F, .face = face, .position = {-0.75F, 1.0F, 0.0F}},
+            {.kind = KnifeTargetKind::ExistingEdge, .edge = bottom,
+             .edge_factor = 0.375F, .face = face, .position = {-0.25F, -1.0F, 0.0F}},
+            {.kind = KnifeTargetKind::ExistingEdge, .edge = top,
+             .edge_factor = 0.375F, .face = face, .position = {0.25F, 1.0F, 0.0F}},
+            {.kind = KnifeTargetKind::ExistingEdge, .edge = bottom,
+             .edge_factor = 0.875F, .face = face, .position = {0.75F, -1.0F, 0.0F}},
+        },
+        .segments = {{0U, 1U}, {1U, 2U}, {2U, 3U}},
+    };
+    const OperationReceipt cut = quader.operations().knife_stroke(stroke);
+    ASSERT_TRUE(cut.success) << cut.error.message;
+    ASSERT_TRUE(cut.changed);
+    const auto candidate = deserialize_qdr_document(quader.io().serialize_qdr(mesh.id()));
+    ASSERT_TRUE(candidate.ok()) << candidate.error_message();
+    ASSERT_EQ(candidate.value().objects.size(), 1U);
+    const PolygonDocument &cut_document = candidate.value().objects.front().document;
+    ASSERT_TRUE(cut_document.validate().ok());
+    const auto cut_topology = cut_document.authored_topology();
+    ASSERT_TRUE(cut_topology.ok()) << cut_topology.error_message();
+    EXPECT_EQ(cut_topology.value().vertices.size(), 8U);
+    ASSERT_EQ(cut_topology.value().faces.size(), 4U);
+    for (const auto &piece : cut_topology.value().faces) {
+      EXPECT_EQ(piece.material_slot, 7U);
+      EXPECT_EQ(piece.shading, topology.faces.front().shading);
+      EXPECT_EQ(piece.texture_transform, topology.faces.front().texture_transform);
+      ASSERT_EQ(piece.uvs.size(), piece.vertices.size());
+      for (std::size_t corner = 0; corner < piece.vertices.size(); ++corner) {
+        const auto vertex = std::ranges::find(cut_topology.value().vertices,
+                                              piece.vertices[corner],
+                                              &AuthoredTopologyVertex::id);
+        ASSERT_NE(vertex, cut_topology.value().vertices.end());
+        EXPECT_FLOAT_EQ(piece.uvs[corner].x, (vertex->position.x + 1.0F) * 0.5F);
+        EXPECT_FLOAT_EQ(piece.uvs[corner].y, (vertex->position.y + 1.0F) * 0.5F);
+      }
+    }
+
+    const auto expect_document_restored = [&](const PolygonDocument &expected) {
+      const auto decoded = deserialize_qdr_document(quader.io().serialize_qdr(mesh.id()));
+      ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+      ASSERT_EQ(decoded.value().objects.size(), 1U);
+      const auto &actual = decoded.value().objects.front().document;
+      const auto actual_topology = actual.authored_topology();
+      auto expected_topology = expected.authored_topology();
+      ASSERT_TRUE(actual_topology.ok());
+      ASSERT_TRUE(expected_topology.ok());
+      // Undo restores every authored value while retaining issued identity ranges.
+      EXPECT_GE(actual_topology.value().next_vertex_id, expected_topology.value().next_vertex_id);
+      EXPECT_GE(actual_topology.value().next_face_id, expected_topology.value().next_face_id);
+      expected_topology.value().next_vertex_id = actual_topology.value().next_vertex_id;
+      expected_topology.value().next_face_id = actual_topology.value().next_face_id;
+      const auto expected_document = PolygonDocument::from_authored_topology(expected_topology.value());
+      ASSERT_TRUE(expected_document.ok());
+      const auto actual_bytes = serialize_qdr_authored_topology(actual);
+      const auto expected_bytes = serialize_qdr_authored_topology(expected_document.value());
+      ASSERT_TRUE(actual_bytes.ok());
+      ASSERT_TRUE(expected_bytes.ok());
+      EXPECT_EQ(actual_bytes.value(), expected_bytes.value());
+      EXPECT_EQ(actual.selection().kind, expected.selection().kind);
+      EXPECT_EQ(actual.selection().vertices, expected.selection().vertices);
+      EXPECT_EQ(actual.selection().edges, expected.selection().edges);
+      EXPECT_EQ(actual.selection().faces, expected.selection().faces);
+      EXPECT_EQ(actual.selection().has_active, expected.selection().has_active);
+      EXPECT_EQ(actual.selection().active_vertex, expected.selection().active_vertex);
+      EXPECT_EQ(actual.selection().active_edge, expected.selection().active_edge);
+      EXPECT_EQ(actual.selection().active_face, expected.selection().active_face);
+    };
+    const auto expect_failed_followup_preserves_state = [&] {
+      const auto before = quader.io().serialize_qdr(mesh.id());
+      const RevisionStamp revisions = quader.revisions();
+      const bool can_undo = quader.can_undo();
+      const bool can_redo = quader.can_redo();
+      KnifeStrokeOptions invalid = stroke;
+      invalid.segments.push_back({0U, 99U});
+      const auto failed = quader.checked().operations().knife_stroke(invalid);
+      EXPECT_FALSE(failed.ok());
+      EXPECT_EQ(quader.io().serialize_qdr(mesh.id()), before);
+      EXPECT_EQ(quader.revisions().content, revisions.content);
+      EXPECT_EQ(quader.revisions().selection, revisions.selection);
+      EXPECT_EQ(quader.revisions().scene, revisions.scene);
+      EXPECT_EQ(quader.revisions().assets, revisions.assets);
+      EXPECT_EQ(quader.can_undo(), can_undo);
+      EXPECT_EQ(quader.can_redo(), can_redo);
+    };
+    expect_failed_followup_preserves_state();
+    ASSERT_TRUE(quader.undo().success);
+    expect_document_restored(source.value().objects.front().document);
+    ASSERT_TRUE(quader.can_redo());
+    expect_failed_followup_preserves_state();
+    ASSERT_TRUE(quader.redo().success);
+    expect_document_restored(cut_document);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
      ModelingApiKnifeToolCommitsResolvedTargetSegments) {
   ModelingApi quader = ModelingApi::create();
   MeshHandle mesh = quader.create_box({.name = "Knife Tool Source"});

@@ -29,6 +29,10 @@ qt_toolbar_button_color_group(QStyle::State state);
 QStyle &install_native_toolbar_button_presentation(QWidget &host);
 QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar);
 
+/** Updates host chrome and inherited control metrics without action buttons. */
+void apply_native_toolbar_presentation_ui_scale(
+    QWidget &host, const QtUiScaleMetrics &metrics);
+
 /** Gives one action native interaction states and accessible presentation. */
 void configure_native_toolbar_button_face(QToolButton &button, QAction &action,
                                           QStyle &presentation);

@@ -37,7 +37,9 @@ public:
   void add_separator();
   void set_trailing_controls(QWidget *camera, QWidget *shading,
                              QWidget *environment = nullptr,
-                             QAction *environment_overflow = nullptr);
+                             QAction *environment_overflow = nullptr,
+                             QWidget *layout = nullptr,
+                             QWidget *camera_settings = nullptr);
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   [[nodiscard]] QSize sizeHint() const override;
   [[nodiscard]] QSize minimumSizeHint() const override;
@@ -67,6 +69,8 @@ private:
   std::vector<QWidget *> separators_;
   QPointer<QWidget> camera_;
   QPointer<QWidget> shading_;
+  QPointer<QWidget> layout_control_;
+  QPointer<QWidget> camera_settings_;
   QPointer<QWidget> environment_;
   QPointer<QAction> environment_overflow_;
   QToolButton *overflow_button_ = nullptr;

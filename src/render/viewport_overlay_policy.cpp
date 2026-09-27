@@ -24,20 +24,6 @@ int viewport_overlay_draw_order(ViewportOverlayLayer layer) {
   return static_cast<int>(kViewportOverlayDrawOrder.size());
 }
 
-bool viewport_overlay_layer_uses_depth_stamped_face_fill(
-    ViewportOverlayLayer layer) {
-  return layer == ViewportOverlayLayer::SelectedVisibleFace ||
-         layer == ViewportOverlayLayer::SelectedXrayFace ||
-         layer == ViewportOverlayLayer::SelectedFaceMask ||
-         layer == ViewportOverlayLayer::HoverFace;
-}
-
-bool viewport_overlay_layer_uses_depth_only_face_fill(
-    ViewportOverlayLayer layer) {
-  (void)layer;
-  return false;
-}
-
 bool viewport_overlay_triangle_is_two_sided(ViewportOverlayLayer layer) {
   return layer == ViewportOverlayLayer::SelectedVisibleFace ||
          layer == ViewportOverlayLayer::SelectedXrayFace ||
@@ -177,8 +163,6 @@ viewport_overlay_layer_policy(ViewportOverlayLayer layer) {
   return {
       .layer = layer,
       .draw_order = viewport_overlay_draw_order(layer),
-      .depth_stamped_face_fill =
-          viewport_overlay_layer_uses_depth_stamped_face_fill(layer),
       .writes_transient_hover_suppression_mask =
           viewport_overlay_layer_writes_transient_hover_suppression_mask(layer),
       .suppressed_by_transient_hover =

@@ -288,8 +288,10 @@ bool ViewportWorkspaceService::set_view(ViewportPaneId pane_id,
         view != ViewportView::Perspective)) {
     return false;
   }
+  const float current_fly_speed = pane_state.camera.fly_speed();
   reset_viewport_camera_for_view(pane_state.camera, view);
   (void)pane_state.camera.set_default_fly_speed(default_fly_speed_);
+  (void)pane_state.camera.set_fly_speed(current_fly_speed);
   return true;
 }
 

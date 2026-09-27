@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "operation_validation_test_helpers.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <optional>
@@ -79,6 +80,11 @@ void expect_nonquad_path_preview_stops_after_quad(std::size_t non_quad_side_coun
 		preview.lines.front().start, { 0.5F, 0.0F, 0.0F }));
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(
 		preview.lines.front().end, { 0.5F, 1.0F, 0.0F }));
+	ASSERT_EQ(preview.points.size(), 2U);
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(
+		preview.points[0].position, preview.lines.front().start));
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(
+		preview.points[1].position, preview.lines.front().end));
 }
 
 void expect_nonquad_path_commit_splits_quad(std::size_t non_quad_side_count) {
@@ -442,6 +448,52 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopTraversesAClosedCube
         EXPECT_TRUE(selection.edges.size() == 4U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     PreviewMarkersMatchDistinctCommittedVerticesAcrossOpenAndClosedLoops) {
+	for (const bool closed_loop : { false, true }) {
+		const Document source = closed_loop ? make_cube({}) : make_quad_grid(1U, 3U).document;
+		const Face& face = source.faces.front();
+		const Edge seed = make_edge(face.vertices[0], face.vertices[1]);
+		for (const float factor : { 0.25F, 0.5F, 0.75F }) {
+			SCOPED_TRACE(closed_loop);
+			SCOPED_TRACE(factor);
+			const OverlayData preview = build_edge_loop_preview(source, seed, factor);
+			ASSERT_EQ(preview.lines.size(), closed_loop ? 4U : 3U);
+			ASSERT_EQ(preview.points.size(), 4U);
+			Document committed = source;
+			Selection selection = qdr_test::edge_selection({ seed }, seed);
+			const OperationResult result = insert_edge_loop(committed, selection, factor);
+			ASSERT_TRUE(result.changed) << result.message;
+			ASSERT_EQ(committed.vertices.size() - source.vertices.size(), preview.points.size());
+			for (const OverlayPoint& point : preview.points) {
+				EXPECT_EQ(std::ranges::count_if(committed.vertices, [&](const Vertex& vertex) {
+					return find_vertex(source, vertex.id) == nullptr &&
+					       qdr_test::vec_nearly_equal(vertex.position, point.position);
+				}), 1);
+				EXPECT_EQ(std::ranges::count_if(preview.points, [&](const OverlayPoint& other) {
+					return qdr_test::vec_nearly_equal(other.position, point.position);
+				}), 1);
+			}
+		}
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     PreviewMarkerDeduplicationUsesAuthoredEdgeIdentityAtCoincidentPositions) {
+	QuadGridFixture fixture = make_quad_grid(1U, 2U);
+	for (const std::size_t column : { 0U, 1U }) {
+		find_vertex(fixture.document, fixture.vertex(column, 2U))->position =
+			find_vertex(fixture.document, fixture.vertex(column, 0U))->position;
+	}
+	const Edge seed = make_edge(fixture.vertex(0U, 0U), fixture.vertex(1U, 0U));
+	const OverlayData preview = build_edge_loop_preview(fixture.document, seed, 0.25F);
+	ASSERT_EQ(preview.lines.size(), 2U);
+	ASSERT_EQ(preview.points.size(), 3U);
+	EXPECT_EQ(std::ranges::count_if(preview.points, [](const OverlayPoint& point) {
+		return qdr_test::vec_nearly_equal(point.position, { 0.25F, 0.0F, 0.0F });
+	}), 2);
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests, LoopInsertionPreservesSeparateChartsAtASharedEdge) {

@@ -11,6 +11,7 @@
 
 #include <QAction>
 #include <QColor>
+#include <QEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QProxyStyle>
@@ -41,6 +42,20 @@ public:
       : QProxyStyle(QStringLiteral("fusion")) {
     setObjectName(QStringLiteral("quaderToolbarButtonPresentation"));
     setParent(parent);
+  }
+
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    auto *button = qobject_cast<QToolButton *>(watched);
+    if (button != nullptr && button->isCheckable() &&
+        (event->type() == QEvent::MouseButtonPress ||
+         event->type() == QEvent::KeyPress)) {
+      // Qt keeps this flag when the already focused button is clicked.
+      // Change its focus cue without transferring the real keyboard focus.
+      button->window()->setAttribute(Qt::WA_KeyboardFocusChange,
+                                    event->type() == QEvent::KeyPress);
+      button->update();
+    }
+    return QProxyStyle::eventFilter(watched, event);
   }
 
   bool set_ui_scale(const QtUiScaleMetrics &metrics) {
@@ -225,9 +240,20 @@ QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar) {
       static_cast<QWidget &>(toolbar));
 }
 
+void apply_native_toolbar_presentation_ui_scale(
+    QWidget &host, const QtUiScaleMetrics &metrics) {
+  if (auto *presentation =
+          dynamic_cast<QtToolbarButtonPresentationStyle *>(host.style());
+      presentation != nullptr && presentation->set_ui_scale(metrics)) {
+    host.updateGeometry();
+    host.update();
+  }
+}
+
 void configure_native_toolbar_button_face(QToolButton &button, QAction &action,
                                           QStyle &presentation) {
   button.setStyle(&presentation);
+  button.installEventFilter(&presentation);
   button.setAutoRaise(false);
   button.setAttribute(Qt::WA_Hover, true);
   button.setMouseTracking(true);

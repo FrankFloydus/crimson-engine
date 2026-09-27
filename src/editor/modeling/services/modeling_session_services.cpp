@@ -530,6 +530,23 @@ pick_options_from_request(const ModelingPickSelectRequest &request) {
       request.vertex_radius, request.edge_radius, request.select_backfaces);
 }
 
+/// Camera-less API requests keep their authored world-space pick tolerances.
+std::optional<quader_editor_core::PickScreenContext>
+pick_screen_context_from_request(const ModelingPickSelectRequest &request) {
+  if (!request.screen_context.has_value()) {
+    return std::nullopt;
+  }
+  const ModelingScreenPickContext &context = *request.screen_context;
+  return quader_editor_core::PickScreenContext{
+      .camera = modeling_runtime_camera(context.camera),
+      .screen_position = context.screen_position,
+      .vertex_radius_pixels = context.vertex_radius_pixels,
+      .edge_radius_pixels = context.edge_radius_pixels,
+      .near_plane = context.near_plane,
+      .far_plane = context.far_plane,
+  };
+}
+
 quader_editor_core::SelectionEditOperation
 to_runtime_selection_edit(ModelingSelectionEdit edit) {
   switch (edit) {
@@ -1549,6 +1566,7 @@ std::optional<int> ModelingSelectionService::pick_object_id(
           quader_editor_core::PickRequest{
               .ray = to_runtime_ray(request.ray),
               .options = pick_options,
+              .screen_context = pick_screen_context_from_request(request),
           },
           cached_pick_object_bounds(session, scene, object_registry),
           cached_local_pick_face_geometry(session, scene, object_registry,
@@ -1581,7 +1599,9 @@ ModelingSelectionService::pick_selection_hit(
   }
   return quader_editor_core::pick_nearest(
       cached_local_picking_objects(session, scene, object_registry),
-      {.ray = to_runtime_ray(request.ray), .options = pick_options},
+      {.ray = to_runtime_ray(request.ray),
+       .options = pick_options,
+       .screen_context = pick_screen_context_from_request(request)},
       cached_pick_object_bounds(session, scene, object_registry),
       cached_local_pick_face_geometry(session, scene, object_registry,
                                       pick_options),
@@ -1598,7 +1618,9 @@ ModelingSelectionService::pick_selection_depth_hits(
   pick_options.mode = quader_poly::SelectionMode::Face;
   return quader_editor_core::pick_mesh_depth_hits(
       cached_local_picking_objects(session, scene, object_registry),
-      {.ray = to_runtime_ray(request.ray), .options = pick_options},
+      {.ray = to_runtime_ray(request.ray),
+       .options = pick_options,
+       .screen_context = pick_screen_context_from_request(request)},
       cached_pick_object_bounds(session, scene, object_registry),
       cached_local_pick_face_geometry(session, scene, object_registry,
                                       pick_options),
@@ -3719,6 +3741,8 @@ ModelingOverlayService::selection_overlay_current_frame(
             runtime.insert_edge_loop_state();
         frame.lines.insert(frame.lines.end(), insert_loop.preview_lines.begin(),
                            insert_loop.preview_lines.end());
+        frame.points.insert(frame.points.end(), insert_loop.preview_points.begin(),
+                            insert_loop.preview_points.end());
 
         const quader_editor_core::PolyToolState& poly = runtime.poly_state();
         frame.lines.insert(frame.lines.end(), poly.preview_lines.begin(), poly.preview_lines.end());
@@ -3894,12 +3918,19 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
         instance_edit_scope, entity_visible);
   }
 
-  quader_editor_core::SelectionOverlayFrame runtime_tool_frame;
   const quader_editor_core::InsertEdgeLoopToolState &insert_loop =
       runtime.insert_edge_loop_state();
-  runtime_tool_frame.lines.insert(runtime_tool_frame.lines.end(),
-                                  insert_loop.preview_lines.begin(),
-                                  insert_loop.preview_lines.end());
+  SelectionOverlayProjection::append_projected_overlay_lines(
+      frame, insert_loop.preview_lines, object_registry, scene,
+      ViewportOverlayLayer::HoverEdge,
+      ViewportOverlayStyleRole::HoverWire, ViewportOverlaySource::Tool,
+      instance_edit_scope, entity_visible);
+  SelectionOverlayProjection::append_projected_overlay_points(
+      frame, insert_loop.preview_points, object_registry, scene,
+      ViewportOverlayLayer::HoverVertex,
+      ViewportOverlayStyleRole::HoverVertex, ViewportOverlaySource::Tool,
+      instance_edit_scope, entity_visible);
+  quader_editor_core::SelectionOverlayFrame runtime_tool_frame;
   const quader_editor_core::PolyToolState &poly = runtime.poly_state();
   runtime_tool_frame.lines.insert(runtime_tool_frame.lines.end(),
                                   poly.preview_lines.begin(),

@@ -215,9 +215,56 @@ struct SelectionIdentityKey final {
   return found != excluded.end() && *found == key;
 }
 
+/// Limits a normalized world ray to the camera's visible forward-depth slab.
+struct SceneHitRayInterval final {
+  float minimum = 0.0f;
+  float maximum = std::numeric_limits<float>::infinity();
+};
+
+[[nodiscard]] std::optional<SceneHitRayInterval> camera_ray_interval(
+    const ViewportSceneProjectionCamera &camera, const ViewportRay &ray) {
+  const auto &transform = camera.runtime_camera().transform;
+  QVec3 forward = normalize(transform.z_axis * -1.0f);
+  if (length(forward) <= 1.0e-6f) {
+    forward = {0.0f, 0.0f, -1.0f};
+  }
+  const double origin_depth = dot(ray.origin - transform.origin, forward);
+  const double depth_per_distance = dot(ray.direction, forward);
+  if (!std::isfinite(origin_depth) || !std::isfinite(depth_per_distance) ||
+      depth_per_distance <= 0.0) {
+    return std::nullopt;
+  }
+  // Perspective rays away from the viewport center travel farther than their
+  // forward depth; orthographic rays may start away from the camera's eye.
+  const double near_distance =
+      (camera.near_plane() - origin_depth) / depth_per_distance;
+  const double far_distance =
+      (camera.far_plane() - origin_depth) / depth_per_distance;
+  SceneHitRayInterval interval{
+      .minimum = static_cast<float>(std::max(near_distance, 0.0)),
+      .maximum = static_cast<float>(far_distance),
+  };
+  // Surface traversal uses inclusive bounds, while point projection excludes
+  // the clip planes themselves. Round inward before traversing any primitive.
+  if (interval.minimum <= near_distance) {
+    interval.minimum = std::nextafter(
+        interval.minimum, std::numeric_limits<float>::infinity());
+  }
+  if (interval.maximum >= far_distance) {
+    interval.maximum = std::nextafter(
+        interval.maximum, -std::numeric_limits<float>::infinity());
+  }
+  if (!std::isfinite(interval.minimum) ||
+      interval.maximum < interval.minimum) {
+    return std::nullopt;
+  }
+  return interval;
+}
+
 [[nodiscard]] std::optional<SceneSurfaceHit> render_surface_hit(
     const SceneSurfaceQuerySnapshot *scene_surfaces, const ViewportRay &ray,
     SceneSurfaceQueryScratch *scratch,
+    SceneHitRayInterval interval = {},
     std::span<const EntityId> excluded_entities = {},
     std::span<const ViewportSceneOccurrenceExclusion>
         excluded_occurrences = {}) {
@@ -231,6 +278,8 @@ struct SelectionIdentityKey final {
       {
           .world_origin = ray.origin,
           .world_direction = ray.direction,
+          .min_distance = interval.minimum,
+          .max_distance = interval.maximum,
           .include_backfaces = false,
           .eligibility = SceneSurfaceEligibility::RenderVisible,
           .excluded_entities = excluded_entities,
@@ -378,6 +427,7 @@ visible_resolved_marquee_candidate(
 
 void append_mesh_hits(const SceneSurfaceQuerySnapshot *scene_surfaces,
                       const ViewportRay &ray,
+                      SceneHitRayInterval interval,
                       std::optional<double> visible_surface_distance,
                       bool collect_all, bool select_backfaces,
                       std::span<const EntityId> excluded_entities,
@@ -391,14 +441,16 @@ void append_mesh_hits(const SceneSurfaceQuerySnapshot *scene_surfaces,
   SceneSurfaceRaycastRequest request{
       .world_origin = ray.origin,
       .world_direction = ray.direction,
+      .min_distance = interval.minimum,
+      .max_distance = interval.maximum,
       .include_backfaces = select_backfaces,
       .eligibility = SceneSurfaceEligibility::SelectableUnlocked,
       .excluded_entities = excluded_entities,
       .excluded_occurrences = excluded_occurrences,
   };
   if (visible_surface_distance.has_value()) {
-    request.max_distance = static_cast<float>(
-        *visible_surface_distance + kViewportSurfaceOcclusionTolerance);
+    request.max_distance = std::min(request.max_distance, static_cast<float>(
+        *visible_surface_distance + kViewportSurfaceOcclusionTolerance));
   }
   std::vector<SceneSurfaceParticipantId> excluded;
   do {
@@ -538,8 +590,23 @@ void append_resolved_selection_hits(
     std::vector<ViewportSceneHitCandidate> &hits,
     std::span<const EntityId> excluded_entities = {},
     std::span<const ViewportSceneOccurrenceExclusion>
-        excluded_occurrences = {}) {
+        excluded_occurrences = {},
+    const ViewportSceneProjectionCamera *camera = nullptr,
+    SceneHitRayInterval interval = {},
+    const SceneSurfaceQuerySnapshot *scene_surfaces = nullptr,
+    SceneSurfaceQueryScratch *surface_scratch = nullptr) {
   for (const ResolvedSelectionHit &hit : resolved_hits) {
+    const std::optional<ViewportScreenPoint> projected =
+        camera != nullptr && hit.world_position.has_value()
+            ? std::optional{camera->project_world_point(*hit.world_position)}
+            : std::nullopt;
+    if (camera != nullptr &&
+        (projected.has_value()
+             ? !projected->visible
+             : hit.ray_distance < interval.minimum ||
+                   hit.ray_distance > interval.maximum)) {
+      continue;
+    }
     const EntityId occurrence =
         hit.target.source_occurrence != kInvalidEntityId
             ? hit.target.source_occurrence
@@ -551,9 +618,31 @@ void append_resolved_selection_hits(
       continue;
     }
 
+    std::optional<SceneSurfaceHit> occluding_surface = visible_surface_hit;
+    double candidate_distance = hit.ray_distance;
+    const bool radius_component =
+        hit.target.domain == ResolvedSelectionDomain::ModelingComponent &&
+        (hit.target.component_kind == ModelingActiveSelectionKind::Vertex ||
+         hit.target.component_kind == ModelingActiveSelectionKind::Edge);
+    if (radius_component && projected.has_value() &&
+        scene_surfaces != nullptr && surface_scratch != nullptr) {
+      // Screen-radius candidates can lie beside the cursor's foreground
+      // silhouette. Test all scene occluders along the candidate's own ray.
+      const ViewportRay candidate_ray =
+          camera->ray_from_viewport_point(projected->position);
+      const auto candidate_interval = camera_ray_interval(*camera, candidate_ray);
+      if (!candidate_interval.has_value()) {
+        continue;
+      }
+      candidate_distance = dot(*hit.world_position - candidate_ray.origin,
+                               candidate_ray.direction);
+      occluding_surface = render_surface_hit(
+          scene_surfaces, candidate_ray, surface_scratch, *candidate_interval,
+          excluded_entities, excluded_occurrences);
+    }
     const bool depth_visible =
-        !visible_surface_hit.has_value() ||
-        depth_is_visible(hit.ray_distance, visible_surface_hit->distance);
+        !occluding_surface.has_value() ||
+        depth_is_visible(candidate_distance, occluding_surface->distance);
     if (!depth_visible) {
       // The modeling owner has already tested component visibility against
       // exact incident topology. A radius hit beside an edge can place its
@@ -561,7 +650,7 @@ void append_resolved_selection_hits(
       // reject it a second time when that surface is the exact same geometry
       // occurrence. Distinct objects and distinct instances remain occluders.
       const SceneSurfaceParticipantId &surface =
-          visible_surface_hit->participant;
+          occluding_surface->participant;
       const bool same_modeling_participant =
           hit.target.domain == ResolvedSelectionDomain::ModelingComponent &&
           hit.target.entity != kInvalidEntityId &&
@@ -716,10 +805,16 @@ collect_viewport_scene_point_hits(const ViewportScenePointHitQuery &query) {
     return hits;
   }
   ray.direction = ray.direction / direction_length;
+  const ViewportSceneProjectionCamera projection_camera{query.camera};
+  const auto interval = camera_ray_interval(projection_camera, ray);
+  if (!interval.has_value()) {
+    return hits;
+  }
   const std::optional<SceneSurfaceHit> visible_surface_hit =
       query.include_occluded
           ? std::nullopt
           : render_surface_hit(query.scene_surfaces, ray, surface_scratch,
+                               *interval,
                                query.excluded_entities,
                                query.excluded_occurrences);
   const std::optional<double> visible_surface_distance =
@@ -727,7 +822,8 @@ collect_viewport_scene_point_hits(const ViewportScenePointHitQuery &query) {
           ? std::optional<double>{visible_surface_hit->distance}
           : std::nullopt;
   if (query.include_mesh_surfaces) {
-    append_mesh_hits(query.scene_surfaces, ray, visible_surface_distance,
+    append_mesh_hits(query.scene_surfaces, ray, *interval,
+                     visible_surface_distance,
                      query.collect_all_mesh_surfaces, query.select_backfaces,
                      query.excluded_entities, query.excluded_occurrences,
                      surface_scratch, hits);
@@ -738,7 +834,11 @@ collect_viewport_scene_point_hits(const ViewportScenePointHitQuery &query) {
   append_resolved_selection_hits(query.resolved_selection_hits,
                                  visible_surface_hit, hits,
                                  query.excluded_entities,
-                                 query.excluded_occurrences);
+                                 query.excluded_occurrences,
+                                 &projection_camera, *interval,
+                                 query.include_occluded ? nullptr
+                                                        : query.scene_surfaces,
+                                 surface_scratch);
   return hits;
 }
 
@@ -776,7 +876,7 @@ collect_viewport_scene_ray_hits(const ViewportSceneRayHitQuery &query) {
           ? std::optional<double>{visible_surface_hit->distance}
           : std::nullopt;
   if (query.include_mesh_surfaces) {
-    append_mesh_hits(query.scene_surfaces, ray, visible_surface_distance,
+    append_mesh_hits(query.scene_surfaces, ray, {}, visible_surface_distance,
                      query.collect_all_mesh_surfaces, query.select_backfaces,
                      {}, {}, surface_scratch, hits);
   }

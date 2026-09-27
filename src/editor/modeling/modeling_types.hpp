@@ -488,6 +488,16 @@ struct ModelingDirectHoverRequest {
   bool face_plane_hover = false;
 };
 
+/// Optional viewport aperture; positions and radii share physical-pixel units.
+struct ModelingScreenPickContext {
+  ModelingViewportCamera camera;
+  QVec2 screen_position = {};
+  double vertex_radius_pixels = 0.0;
+  double edge_radius_pixels = 0.0;
+  double near_plane = 0.01;
+  double far_plane = 1000000.0;
+};
+
 /**
  * Stores the Modeling Pick Select Request data contract used by the modeling
  * domain.
@@ -507,6 +517,7 @@ struct ModelingPickSelectRequest {
   bool select_backfaces = true;
   bool cycle_depth = false;
   double cycle_origin_tolerance = 0.0;
+  std::optional<ModelingScreenPickContext> screen_context;
 
   [[nodiscard]] ModelingEdgeSelectionTraversal
   edge_traversal_requested(ModelingSelectionMode mode) const noexcept {

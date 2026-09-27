@@ -60,6 +60,10 @@ public:
     QuaderApiVoidResult set_rotation_snap_degrees(double degrees);
     QuaderApiVoidResult set_rotation_snap_degrees(ViewportPaneId pane,
                                                   double degrees);
+    [[nodiscard]] double fly_navigation_speed() const;
+    [[nodiscard]] double fly_navigation_speed(ViewportPaneId pane) const;
+    QuaderApiVoidResult set_fly_navigation_speed(double speed);
+    QuaderApiVoidResult set_fly_navigation_speed(ViewportPaneId pane, double speed);
     [[nodiscard]] std::uint64_t control_revision() const;
     [[nodiscard]] std::uint64_t control_revision(ViewportPaneId pane) const;
 
@@ -145,6 +149,8 @@ public:
     QuaderApiVoidResult set_control(QuaderViewportControl control, bool enabled);
     [[nodiscard]] double rotation_snap_degrees() const;
     QuaderApiVoidResult set_rotation_snap_degrees(double degrees);
+    [[nodiscard]] double fly_navigation_speed() const;
+    QuaderApiVoidResult set_fly_navigation_speed(double speed);
     [[nodiscard]] QuaderTransformSpace transform_space() const;
     QuaderApiVoidResult set_transform_space(QuaderTransformSpace space);
     [[nodiscard]] std::uint64_t control_revision() const;
