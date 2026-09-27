@@ -28,6 +28,10 @@ file except through prior written authorization from Francesco Di Blasi.
 - Overlay order, colors, depth, widths, and points belong to overlay policy/style resolvers. Keep
   persistent and volatile overlay streams separate; do not restore UI wire fallbacks or raw
   Filament line/point shortcuts.
+- Selected object/group silhouette ribbons share geometry between complementary visible and
+  occluded depth passes; the hidden pass scales authored alpha without changing component
+  visibility. Keep both material instances synchronized through retained camera/style updates
+  and destroy them together. Line bias must remain bounded in view space across camera distances.
 - Vulkan face tints share the stencil policy in `overlay/overlay_face_fill_composition.*`:
   coverage chooses hover/removal over active over ordinary selection, then consumes one
   authored-alpha tint per pixel. Zero-alpha fills neither claim nor consume coverage.

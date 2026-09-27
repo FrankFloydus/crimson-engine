@@ -6714,6 +6714,157 @@ TEST(OverlayLineMeshBuilderTests,
   EXPECT_FALSE(draw_on_top.state.depth_culling);
 }
 
+TEST(OverlayLineMeshBuilderTests,
+     ObjectSilhouettesShareGeometryForComplementaryVisibleAndOccludedPasses) {
+  for (const std::uint8_t alpha : {std::uint8_t{255}, std::uint8_t{93},
+                                  std::uint8_t{0}}) {
+    SCOPED_TRACE(static_cast<int>(alpha));
+    ViewportOverlayFrame frame;
+    const auto color = rgba8(170, 90, 220, alpha);
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::SelectedEdge,
+        .start = {-0.5f, 0.0f, -4.0f},
+        .end = {0.0f, 0.0f, -4.0f},
+        .color = color,
+        .width_pixels = 2.0f,
+        .source = ViewportOverlaySource::MeshOutline,
+    });
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::SelectedEdge,
+        .start = {0.0f, 0.0f, -4.0f},
+        .end = {0.5f, 0.0f, -4.0f},
+        .color = viewport_active_selection_color(color),
+        .width_pixels = 2.0f,
+        .source = ViewportOverlaySource::MeshOutline,
+    });
+
+    const auto plan = OverlayRenderableBuilder::build_layer(
+        frame, test_perspective_overlay_camera(),
+        ViewportOverlayLayer::SelectedEdge);
+
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    const auto &batch = plan.line_batches.front();
+    ASSERT_EQ(batch.mesh.vertices.size(), 8u);
+    EXPECT_EQ(batch.mesh.indices.size(), 12u);
+    EXPECT_EQ(batch.mesh.vertices[0].color, rgba8_srgb_to_linear(color));
+    EXPECT_EQ(batch.mesh.vertices[4].color,
+              rgba8_srgb_to_linear(viewport_active_selection_color(color)));
+    ASSERT_TRUE(batch.occluded_state.has_value());
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+    EXPECT_EQ(batch.occluded_state->depth_func, OverlayDepthFunc::Less);
+    EXPECT_TRUE(batch.state.depth_culling);
+    EXPECT_TRUE(batch.occluded_state->depth_culling);
+    EXPECT_FALSE(batch.state.depth_write);
+    EXPECT_FALSE(batch.occluded_state->depth_write);
+    EXPECT_TRUE(batch.state.color_write);
+    EXPECT_TRUE(batch.occluded_state->color_write);
+    EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::Visible);
+    EXPECT_EQ(batch.occluded_state->silhouette_pass,
+              OverlaySilhouettePass::Occluded);
+    EXPECT_EQ(batch.state.face_fill_class, OverlayFaceFillClass::None);
+    EXPECT_EQ(batch.occluded_state->face_fill_class, OverlayFaceFillClass::None);
+    EXPECT_FLOAT_EQ(batch.occluded_alpha_multiplier, 0.5f);
+    EXPECT_LT(batch.state.blend_order, batch.occluded_state->blend_order);
+    EXPECT_TRUE(plan.edit_wire_batches.empty());
+  }
+}
+
+TEST(OverlayLineMeshBuilderTests,
+     OccludedSilhouettesRemainSeparateFromSameWidthComponentAndGenericLines) {
+  ViewportOverlayFrame frame;
+  for (const auto source : {ViewportOverlaySource::MeshOutline,
+                            ViewportOverlaySource::ComponentSelection,
+                            ViewportOverlaySource::Selection,
+                            ViewportOverlaySource::External}) {
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::SelectedEdge,
+        .start = {-0.5f, 0.0f, -4.0f},
+        .end = {0.5f, 0.0f, -4.0f},
+        .color = rgba8(190, 115, 240, 137),
+        .width_pixels = 2.0f,
+        .source = source,
+    });
+  }
+  auto wide_outline = frame.lines.front();
+  wide_outline.width_pixels = 3.0f;
+  frame.lines.push_back(wide_outline);
+
+  const auto plan = OverlayRenderableBuilder::build_layer(
+      frame, test_perspective_overlay_camera(),
+      ViewportOverlayLayer::SelectedEdge);
+
+  ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+  EXPECT_EQ(plan.edit_wire_batches.front().mesh.vertices.size(), 4u);
+  EXPECT_EQ(plan.edit_wire_batches.front().state.depth_func,
+            OverlayDepthFunc::GreaterOrEqual);
+  EXPECT_TRUE(plan.edit_wire_batches.front().state.depth_culling);
+  EXPECT_EQ(plan.edit_wire_batches.front().state.silhouette_pass,
+            OverlaySilhouettePass::None);
+  ASSERT_EQ(plan.line_batches.size(), 3u);
+  std::uint16_t last_visible_order = 0u;
+  std::uint16_t first_occluded_order =
+      std::numeric_limits<std::uint16_t>::max();
+  std::size_t outlines = 0u;
+  for (const auto &batch : plan.line_batches) {
+    if (batch.occluded_state) {
+      ++outlines;
+      EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+      EXPECT_EQ(batch.occluded_state->depth_func, OverlayDepthFunc::Less);
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+      EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::Visible);
+      EXPECT_EQ(batch.occluded_state->silhouette_pass,
+                OverlaySilhouettePass::Occluded);
+      last_visible_order = std::max(last_visible_order,
+                                    batch.state.blend_order);
+      first_occluded_order = std::min(first_occluded_order,
+                                      batch.occluded_state->blend_order);
+    } else {
+      EXPECT_EQ(batch.mesh.vertices.size(), 8u);
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
+      EXPECT_FALSE(batch.state.depth_culling);
+      EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::None);
+    }
+  }
+  EXPECT_EQ(outlines, 2u);
+  EXPECT_LT(last_visible_order, first_occluded_order);
+}
+
+TEST(OverlayLineMeshBuilderTests,
+     OccludedSilhouettesDoNotMergeWithOtherDepthTestedLines) {
+  ViewportOverlayFrame frame;
+  for (const auto source : {ViewportOverlaySource::MeshOutline,
+                            ViewportOverlaySource::ComponentSelection,
+                            ViewportOverlaySource::Selection,
+                            ViewportOverlaySource::Tool}) {
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::OpenEdge,
+        .start = {-0.5f, 0.0f, -4.0f},
+        .end = {0.5f, 0.0f, -4.0f},
+        .width_pixels = 2.0f,
+        .source = source,
+    });
+  }
+
+  const auto plan = OverlayRenderableBuilder::build_layer(
+      frame, test_perspective_overlay_camera(), ViewportOverlayLayer::OpenEdge);
+
+  ASSERT_EQ(plan.line_batches.size(), 2u);
+  EXPECT_TRUE(plan.edit_wire_batches.empty());
+  std::size_t outlines = 0u;
+  for (const auto &batch : plan.line_batches) {
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+    if (batch.occluded_state) {
+      ++outlines;
+      EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+      EXPECT_EQ(batch.occluded_state->depth_func, OverlayDepthFunc::Less);
+    } else {
+      EXPECT_EQ(batch.mesh.vertices.size(), 12u);
+      EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::None);
+    }
+  }
+  EXPECT_EQ(outlines, 1u);
+}
+
 TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsRemainInactiveForVisibility) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
@@ -7486,6 +7637,81 @@ TEST(OverlayPointMeshBuilderTests,
     EXPECT_FLOAT_EQ(plan.point_batches.front().depth_bias,
                     kOverlayPointDepthBias);
     EXPECT_TRUE(plan.point_batches.front().state.depth_culling);
+  }
+}
+
+TEST(OverlayPointMeshBuilderTests,
+     ClippedSourceFacesDoNotHideVertexMarkersBeyondTheCameraNearPlane) {
+  for (const auto projection : {ViewportOverlayProjection::Perspective,
+                                ViewportOverlayProjection::Orthographic}) {
+    SCOPED_TRACE(static_cast<int>(projection));
+    for (const auto layer : {ViewportOverlayLayer::UnselectedVertex,
+                             ViewportOverlayLayer::SelectedVertex,
+                             ViewportOverlayLayer::HoverVertex}) {
+      SCOPED_TRACE(static_cast<int>(layer));
+      auto camera = test_perspective_overlay_camera();
+      camera.eye = {7.0f, -3.0f, 2.0f};
+      camera.forward = {0.0f, 0.0f, -2.0f};
+      camera.projection = projection;
+      camera.orthographic_size = 4.0f;
+      camera.near_plane = 2.0f;
+      ViewportOverlayFrame frame;
+      frame.points.push_back({
+          .layer = layer,
+          .position = camera.eye + QVec3{3.0f, 0.25f, -4.0f},
+          .color = rgba8(255, 211, 31, 255),
+          .size_pixels = 6.0f,
+          .source = ViewportOverlaySource::ComponentSelection,
+          .element = {.object_id = 1, .vertex_id = 1},
+          .outline_growth_pixels = 0.0f,
+      });
+      const auto add_occluder = [&](float view_depth) {
+        append_source_wire_depth_stamp_quad(
+            frame, 1, camera.eye + QVec3{-5.0f, -5.0f, -view_depth},
+            camera.eye + QVec3{5.0f, -5.0f, -view_depth},
+            camera.eye + QVec3{5.0f, 5.0f, -view_depth},
+            camera.eye + QVec3{-5.0f, 5.0f, -view_depth}, false);
+      };
+      // The off-axis perspective ray hits this face more than two units from
+      // the eye, but its view depth is still before the two-unit near plane.
+      add_occluder(1.9f);
+      auto plan = OverlayRenderableBuilder::build_layer(frame, camera, layer);
+      ASSERT_EQ(plan.point_batches.size(), 1u);
+      EXPECT_EQ(point_mesh_vertex_count(plan), 4u);
+      EXPECT_EQ(plan.point_batches.front().state.depth_func,
+                OverlayDepthFunc::GreaterOrEqual);
+      EXPECT_TRUE(plan.point_batches.front().state.depth_culling);
+
+      auto unclipped_camera = camera;
+      unclipped_camera.near_plane = 1.0f;
+      EXPECT_NE(OverlayRenderableBuilder::layer_build_signature(frame, camera,
+                                                                 layer),
+                OverlayRenderableBuilder::layer_build_signature(
+                    frame, unclipped_camera, layer));
+      EXPECT_TRUE(OverlayRenderableBuilder::build_layer(
+                      frame, unclipped_camera, layer).point_batches.empty());
+
+      // Discarding a clipped hit must not discard a second valid occluder.
+      const auto visible_signature =
+          OverlayRenderableBuilder::layer_build_signature(frame, camera, layer);
+      const auto tool_signature = OverlayRenderableBuilder::layer_build_signature(
+          frame, camera, ViewportOverlayLayer::ToolHandle);
+      add_occluder(2.1f);
+      EXPECT_NE(OverlayRenderableBuilder::layer_build_signature(frame, camera,
+                                                                 layer),
+                visible_signature);
+      EXPECT_EQ(OverlayRenderableBuilder::layer_build_signature(
+                    frame, camera, ViewportOverlayLayer::ToolHandle),
+                tool_signature);
+      EXPECT_TRUE(OverlayRenderableBuilder::build_layer(frame, camera, layer)
+                      .point_batches.empty());
+      frame.triangles.clear();
+      EXPECT_NE(OverlayRenderableBuilder::layer_build_signature(frame, camera,
+                                                                 layer),
+                visible_signature);
+      EXPECT_EQ(point_mesh_vertex_count(OverlayRenderableBuilder::build_layer(
+                    frame, camera, layer)), 4u);
+    }
   }
 }
 

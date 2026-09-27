@@ -1364,6 +1364,31 @@ ModelingTransformDragService::apply_transform_drag_preview(
           context.runtime.transform_drag_state(), input.grid_size);
     }();
     if (!portable_result.ok) {
+      if (drag_before_update.operation ==
+              quader_editor_core::TransformDragOperation::Transform &&
+          !scene_transform_drag_service_.preview_active() &&
+          context.port.portable_modeling_preview_active()) {
+        // A collapsed face or other invalid candidate rejects one mouse sample,
+        // not the drag. Reapply the accepted transform through the same owner:
+        // transient position preparation may have touched more than one mesh
+        // before a later participant failed validation.
+        context.runtime.set_transform_drag_state(drag_before_update);
+        const ModelingCommandResult restored =
+            context.port.update_portable_transform_preview(drag_before_update,
+                                                           input.grid_size);
+        if (restored.ok) {
+          ModelingTransformDragPreview rejected =
+              transform_drag_preview(context, false);
+          rejected.ok = false;
+          rejected.message = portable_result.message.empty()
+                                 ? "Could not update portable transform preview."
+                                 : portable_result.message;
+          return rejected;
+        }
+        return fail_after_cancel(
+            portable_result.message + "; accepted preview restoration failed: " +
+            restored.message);
+      }
       return fail_after_cancel(
           portable_result.message.empty()
               ? "Could not update portable transform preview."

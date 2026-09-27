@@ -47,7 +47,11 @@ vertex {
         }
 
         vec2 corner = material.uv0 - vec2(0.5);
-        vec2 offsetPixels = corner * max(materialParams.pointSize, 1.0);
+        float pointSize = max(materialParams.pointSize, 1.0);
+        // Reserve half a physical pixel outside circular markers for coverage.
+        // Square vertex markers retain their original quad and hard boundary.
+        float quadSize = pointSize + (materialParams.innerRadius > 0.0 ? 1.0 : 0.0);
+        vec2 offsetPixels = corner * quadSize;
         vec2 offsetDevice = offsetPixels * getResolution().zw * 2.0;
         float reciprocalW = 1.0 / max(abs(centerClip.w), 0.000001);
         highp vec3 centerDevice = centerClip.xyz * reciprocalW;
@@ -77,7 +81,7 @@ vertex {
 
         material.clipSpaceTransform = mat4(1.0);
         material.clipSpaceTransform[3] = finalDevice;
-        material.pointUv = float4(material.uv0, 0.0, 0.0);
+        material.pointUv = vec4(corner * (quadSize / pointSize) + vec2(0.5), 0.0, 0.0);
     }
 }
 
@@ -87,15 +91,17 @@ fragment {
 
         vec4 color = getColor();
         if (materialParams.innerRadius > 0.0) {
-            float2 centered = variable_pointUv.xy - 0.5;
-            float distanceFromCenter = length(centered);
-            if (distanceFromCenter > 0.5) {
+            float pointSize = max(materialParams.pointSize, 1.0);
+            float distancePixels = length(variable_pointUv.xy - vec2(0.5)) * pointSize;
+            float outerRadiusPixels = pointSize * 0.5;
+            float innerRadiusPixels = saturate(materialParams.innerRadius) * outerRadiusPixels;
+            float outerCoverage = saturate(outerRadiusPixels + 0.5 - distancePixels);
+            float innerCoverage = saturate(innerRadiusPixels + 0.5 - distancePixels);
+            float coverage = max(outerCoverage - innerCoverage, 0.0);
+            if (coverage <= 0.0) {
                 discard;
             }
-            float innerRadius = saturate(materialParams.innerRadius) * 0.5;
-            if (distanceFromCenter < innerRadius) {
-                discard;
-            }
+            color.a *= coverage;
         }
 
         material.baseColor = vec4(color.rgb * color.a, color.a);

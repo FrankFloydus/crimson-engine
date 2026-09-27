@@ -13,6 +13,7 @@
 #include "render/overlay/overlay_face_fill_composition.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace quader {
@@ -25,6 +26,7 @@ class OverlayDepthStampPointVisibilityFilter;
 enum class OverlayDepthFunc {
     Always,
     Equal,
+    Less,
     GreaterOrEqual,
 };
 
@@ -57,6 +59,7 @@ struct OverlayRenderState {
   OverlayTransparencyMode transparency_mode = OverlayTransparencyMode::Default;
   OverlayFaceFillClass face_fill_class = OverlayFaceFillClass::None;
   OverlayFaceFillPass face_fill_pass = OverlayFaceFillPass::Color;
+  OverlaySilhouettePass silhouette_pass = OverlaySilhouettePass::None;
   float polygon_offset_scale = 0.0f;
   float polygon_offset_constant = 0.0f;
   std::uint16_t blend_order = 0;
@@ -76,6 +79,11 @@ struct OverlayFaceFillBatch {
 struct OverlayLineBatch {
     OverlayLineMesh mesh;
     OverlayRenderState state;
+    // Object silhouettes share their geometry with a subdued, complementary
+    // depth pass. Component wires never acquire this companion.
+    std::optional<OverlayRenderState> occluded_state;
+    float occluded_alpha_multiplier =
+        kOverlayOccludedSilhouetteAlphaMultiplier;
     float width_pixels = 1.0f;
     float depth_bias = 0.0f;
     float near_plane = 0.05f;
@@ -171,6 +179,7 @@ private:
       float width_pixels = 0.0f;
       ViewportOverlayDepthMode depth_mode =
           ViewportOverlayDepthMode::DepthTested;
+      bool object_silhouette = false;
     };
 
     /**

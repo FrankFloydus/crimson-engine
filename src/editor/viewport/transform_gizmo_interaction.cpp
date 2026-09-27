@@ -1228,7 +1228,9 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
               "Transform drag update failed: {}",
               preview.message.empty() ? "Update failed." : preview.message);
         }
-        if (preview.ok) {
+        if (preview.ok || (preview.value().active && !preview.changed())) {
+          // A rejected sample can retain the last valid geometry and gesture.
+          // Do not retry that unchanged pointer position on every frame.
           last_drag_update_signature_ = update_signature;
         }
         if (preview.ok && preview.value().active) {

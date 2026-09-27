@@ -15,6 +15,7 @@
 #include "editor/tools/extrude_tool_service.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/overlay/instance_selection_overlay_cache.hpp"
+#include "render/overlay/overlay_renderable_cache.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_mesh_outline_cache.hpp"
@@ -28,6 +29,7 @@
 #include "ui/qt_viewport_panel.hpp"
 #include "support/command_behavior_contract.hpp"
 #include "support/command_behavior_fixture.hpp"
+#include "support/modeling_test_events.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -603,6 +605,187 @@ TEST(SelectedMeshOutlinePresentationTests,
   EXPECT_EQ(submitted_wires(), original_wires);
   EXPECT_EQ(session.history().undo_count(), history_count);
   ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
+     RejectedFaceCollapseKeepsRetainedWiresAndAllowsDragRecovery) {
+  for (const bool cancel : {false, true}) {
+    SCOPED_TRACE(cancel);
+    ExtrudeOutlineHarness harness;
+    auto &modeling = harness.session.modeling();
+    const auto created = harness.editor.modeling().create_box(
+        {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+        "Retained face drag");
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    harness.object = created.value();
+    const auto *binding = harness.session.scene().mesh(harness.object.entity);
+    ASSERT_NE(binding, nullptr);
+    const auto *asset = harness.session.assets().mesh(binding->mesh);
+    ASSERT_NE(asset, nullptr);
+    ASSERT_NE(asset->authored_polygon_document, nullptr);
+    const auto &document = *asset->authored_polygon_document;
+    const auto face = std::ranges::find_if(document.faces, [&](const auto &item) {
+      return std::ranges::all_of(item.vertices, [&](auto id) {
+        const auto *vertex = quader_poly::find_vertex(document, id);
+        return vertex != nullptr && vertex->position.x == 1.0F;
+      });
+    });
+    ASSERT_NE(face, document.faces.end());
+    ASSERT_TRUE(harness.editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(harness.editor.selection().select_faces(
+        harness.object, {static_cast<QuaderElementId>(face->id)}).ok());
+
+    SceneRenderBridge bridge;
+    OverlayRenderableCache overlay_cache;
+    std::vector<RenderToolPreviewMeshRecord> published;
+    std::size_t publications = 0u;
+    const QuaderRenderApiRuntimeAccess::ToolPreviewPublisher publisher =
+        [&](std::vector<RenderToolPreviewMeshRecord> records) {
+          ++publications;
+          published = std::move(records);
+          (void)overlay_cache.set_transform_position_streams(published);
+          return ToolPreviewSubmissionResult::Published;
+        };
+    const auto sync_preview = [&] {
+      return QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          harness.editor.render(), bridge, publisher);
+    };
+    const auto submit = [&] {
+      EXPECT_TRUE(sync_preview().ok());
+      const auto result = harness.submit();
+      if (result.persistent_submitted) {
+        (void)overlay_cache.set_overlay_frame(harness.target.persistent, {});
+      }
+      return result;
+    };
+    // Plain transforms deliberately retain semantic baseline coordinates. The
+    // backend deforms their generated bindings using the independently retained
+    // packed preview stream, so verify those two actual published inputs together.
+    const auto wires = [&] {
+      std::vector<std::array<float, 4u>> positions;
+      for (const auto layer : {ViewportOverlayLayer::SourceWire,
+                              ViewportOverlayLayer::SelectedFaceEdge}) {
+        const auto plan = OverlayRenderableBuilder::build_layer(
+            harness.target.persistent, {}, layer);
+        EXPECT_FALSE(plan.edit_wire_batches.empty());
+        for (const auto &batch : plan.edit_wire_batches) {
+          EXPECT_FALSE(batch.mesh.position_stream_bindings.empty());
+          for (const auto &binding : batch.mesh.position_stream_bindings) {
+            EXPECT_EQ(binding.object_id, harness.object.modeling_object_id);
+            EXPECT_GE(binding.vertex_id, 0);
+            EXPECT_GT(binding.vertex_count, 0u);
+            EXPECT_LE(binding.first_vertex + binding.vertex_count,
+                      batch.mesh.vertices.size());
+            QVec3 position{binding.base_position.x, binding.base_position.y,
+                           binding.base_position.z};
+            for (const auto &preview : published) {
+              if (preview.source_object_id != binding.object_id) continue;
+              EXPECT_TRUE(preview.dynamic_positions);
+              EXPECT_NE(preview.layout_key, 0u);
+              EXPECT_NE(preview.dynamic_position_payload, nullptr);
+              if (!preview.dynamic_position_payload) continue;
+              const auto &vertices = preview.mesh.geometry().vertices;
+              const auto found = std::ranges::find(
+                  vertices, static_cast<std::uint32_t>(binding.vertex_id),
+                  &MeshVertex::source_vertex_id);
+              EXPECT_NE(found, vertices.end());
+              if (found == vertices.end()) continue;
+              const auto index = static_cast<std::size_t>(found - vertices.begin());
+              EXPECT_LT(index, preview.dynamic_position_payload->size());
+              if (index >= preview.dynamic_position_payload->size()) continue;
+              position = transform_point(
+                  preview.transform, (*preview.dynamic_position_payload)[index]);
+            }
+            positions.push_back({static_cast<float>(layer), position.x,
+                                 position.y, position.z});
+          }
+        }
+      }
+      return positions;
+    };
+    const auto expect_face_position = [&](float x) {
+      std::size_t selected_edges = 0u;
+      std::size_t source_edges = 0u;
+      for (const auto &position : wires()) {
+        if (position[0] == static_cast<float>(ViewportOverlayLayer::SelectedFaceEdge)) {
+          ++selected_edges;
+          EXPECT_FLOAT_EQ(position[1], x);
+        } else {
+          ++source_edges;
+          EXPECT_TRUE(position[1] == -1.0F || position[1] == x)
+              << "Stale source wire endpoint at " << position[1];
+        }
+      }
+      EXPECT_GT(selected_edges, 0u);
+      EXPECT_GT(source_edges, 0u);
+    };
+    const auto expect_unchanged = [&] {
+      const auto count = publications;
+      for (int frame = 0; frame < 5; ++frame) {
+        ASSERT_TRUE(sync_preview().ok());
+        EXPECT_FALSE(overlay_cache.set_transform_position_streams(published));
+      }
+      EXPECT_EQ(publications, count);
+      ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
+    };
+    ASSERT_TRUE(submit().persistent_submitted);
+    expect_face_position(1.0F);
+    auto begin = test::x_move_drag_begin({
+        .pivot = {1.0F, 0.0F, 0.0F}, .grid_snap_enabled = false});
+    begin.ray.origin.x = 1.0F;
+    begin.vertex_snap_radius = 0.0;
+    ASSERT_TRUE(modeling.begin_transform_drag(begin).ok);
+    const auto drag_to = [&](float x) {
+      auto update = test::x_move_drag_update((x - 1.0F) * 60.0F);
+      // The drag retains its axis even when the pointer leaves the box silhouette.
+      update.screen_position.y = 180.0F;
+      update.ray.origin = {x, 3.0F, 5.0F};
+      update.grid_snap_enabled = false;
+      update.vertex_snap_radius = 0.0;
+      return modeling.update_transform_drag(update);
+    };
+    const auto durable = harness.source_stamp();
+    for (const float x : {0.5F, 0.0F}) {
+      ASSERT_TRUE(drag_to(x).ok);
+      ASSERT_TRUE(submit().persistent_submitted);
+      ASSERT_EQ(published.size(), 1u);
+      expect_face_position(x);
+      const auto stamp = harness.source_stamp();
+      EXPECT_EQ(stamp.content_revision, durable.content_revision);
+      EXPECT_EQ(stamp.scene_revision, durable.scene_revision);
+      EXPECT_EQ(stamp.asset_revision, durable.asset_revision);
+      ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+    }
+    const auto accepted_wires = wires();
+    for (int sample = 0; sample < 2; ++sample) {
+      const auto rejected = drag_to(-1.0F);
+      ASSERT_FALSE(rejected.ok);
+      ASSERT_TRUE(modeling.transform_drag_active());
+      (void)submit();
+      ASSERT_EQ(published.size(), 1u);
+      EXPECT_EQ(wires(), accepted_wires);
+      expect_face_position(0.0F);
+      ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+    }
+    if (cancel) {
+      ASSERT_TRUE(modeling.cancel_transform_drag().ok);
+      ASSERT_TRUE(submit().persistent_submitted);
+      EXPECT_TRUE(published.empty());
+      expect_face_position(1.0F);
+    } else {
+      ASSERT_TRUE(drag_to(-0.5F).ok);
+      ASSERT_TRUE(submit().persistent_submitted);
+      expect_face_position(-0.5F);
+      EXPECT_NE(wires(), accepted_wires);
+      ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+      ASSERT_TRUE(modeling.commit_transform_drag(harness.session.history()).ok);
+      (void)submit();
+      EXPECT_TRUE(published.empty());
+      expect_face_position(-0.5F);
+    }
+    ASSERT_FALSE(modeling.transform_drag_active());
+    ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+  }
 }
 
 TEST(SelectedMeshOutlinePresentationTests,

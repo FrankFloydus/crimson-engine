@@ -42,6 +42,7 @@
 #include <QImage>
 #include <QRect>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -281,6 +282,51 @@ public:
          .style_selection_context = ViewportOverlaySelectionContext::Vertex,
          .overlays_visible = true,
          .wireframe_pane = wireframe},
+        ViewportSettings::defaults());
+  }
+
+  bool prepare_overlay_audit_camera(float distance, ViewportProjection projection,
+                                    float near_plane = 0.001f) {
+    camera_.view_axis(ViewportViewAxis::Z, 1);
+    camera_.focus_origin(distance);
+    if (projection == ViewportProjection::Perspective &&
+        !camera_.restore_perspective_pose({
+            .eye = {0.0f, 0.0f, distance}, .target = {},
+            .up = {0.0f, 1.0f, 0.0f}})) return false;
+    camera_.set_clip_planes(near_plane, 200.0f);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  QVec3 overlay_audit_world_point(QVec2 image_pixel, float z) const {
+    image_pixel.y = static_cast<float>(kHeight - 1u) - image_pixel.y;
+    return point_at_plane(image_pixel, z);
+  }
+
+  void set_overlay_audit_frame(ViewportOverlayFrame frame) {
+    overlay_audit_frame_.frame = std::move(frame);
+    ++revision_;
+  }
+
+  static void append_overlay_audit_occluder(ViewportOverlayFrame &frame, float z) {
+    append_box_depth_stamps(frame, z - 0.001f, z, false);
+  }
+
+  void present_overlay_audit_frame(float raster_scale = 1.0f,
+      ViewportOverlaySelectionContext context = ViewportOverlaySelectionContext::Object) {
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u),
+         .raster_scale = raster_scale,
+         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .selection_source = {.source_identity = 108u,
+                              .selection_revision = revision_},
+         .selection_frame_provider = &overlay_audit_frame_,
+         .scene_selection_mode = context == ViewportOverlaySelectionContext::Vertex
+             ? RenderOverlaySelectionMode::Component : RenderOverlaySelectionMode::Object,
+         .style_selection_context = context,
+         .overlays_visible = true,
+         .selection_dimensions_visible = false},
         ViewportSettings::defaults());
   }
 
@@ -1115,6 +1161,7 @@ private:
   ViewportRenderer view_;
   ViewportCameraController camera_;
   SelectionRuntimeFrame selected_vertex_frame_;
+  SelectionRuntimeFrame overlay_audit_frame_;
   ViewportOverlaySubmissionResult last_submission_;
   std::uint64_t revision_ = 0;
   mutable std::uint64_t selection_frame_builds_ = 0;
@@ -1130,6 +1177,288 @@ int cyan_pixels(const QImage &image, QVec2 center) {
     }
   }
   return count;
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanObjectSilhouetteDepthBiasAndOcclusionAt100And200Percent) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-outline-composition-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath())
+      .absoluteFilePath(QStringLiteral("../overlay_audit_visual"));
+  ASSERT_TRUE(QDir().mkpath(directory));
+  // Compare with normal overlay draws over the same backdrop. This also works
+  // when the readable surface's transfer function differs from its image tag.
+  const auto expect_same_color = [](QColor actual, QColor reference) {
+    EXPECT_NEAR(actual.red(), reference.red(), 1);
+    EXPECT_NEAR(actual.green(), reference.green(), 1);
+    EXPECT_NEAR(actual.blue(), reference.blue(), 1);
+  };
+  const auto ordinary = rgba8(245, 85, 30, 192);
+  const auto active = ViewportOverlayStyleResolver::active_selection_color(ordinary);
+  for (const auto surface : {ViewportRenderSurface::Swapchain, ViewportRenderSurface::Texture}) {
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(-0.02f, true, surface));
+    for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+      for (const float distance : {0.15f, 2.0f, 80.0f}) {
+        ASSERT_TRUE(harness.prepare_overlay_audit_camera(distance, projection));
+        for (const auto &[scale, label] : std::array<std::pair<float, const char *>, 3>{{
+                 {1.0f, "100"}, {2.0f, "200"}, {1.0f, "down"}}}) {
+          const QString stem = QStringLiteral("silhouette-%1-%2-%3-%4")
+              .arg(surface == ViewportRenderSurface::Swapchain ? "swapchain" : "texture")
+              .arg(projection == ViewportProjection::Perspective ? "perspective" : "orthographic")
+              .arg(distance).arg(label);
+          SCOPED_TRACE(stem.toStdString());
+          harness.set_overlay_audit_frame({});
+          harness.present_overlay_audit_frame(scale);
+          const QImage base = harness.capture();
+          ASSERT_FALSE(base.isNull());
+          ViewportOverlayFrame frame;
+          const auto line = [&](QVec2 a, float a_z, QVec2 b, float b_z,
+                                std::uint32_t color, ViewportOverlayLayer layer,
+                                ViewportOverlaySource source = ViewportOverlaySource::MeshOutline) {
+            frame.lines.push_back({
+                .layer = layer,
+                .start = harness.overlay_audit_world_point(a, a_z),
+                .end = harness.overlay_audit_world_point(b, b_z),
+                .color = color, .width_pixels = 4.0f,
+                .style_role = ViewportOverlayStyleRole::ExplicitColor,
+                .source = source});
+          };
+          const std::array colors{ordinary, active, rgba8(245, 85, 30), rgba8(210, 135, 245, 160)};
+          for (std::size_t row = 0; row < colors.size(); ++row) {
+            const float y = 80.0f + 70.0f * static_cast<float>(row);
+            const auto layer = row == 3u ? ViewportOverlayLayer::GroupBounds : ViewportOverlayLayer::SelectedEdge;
+            line({80, y}, 0.0f, {280, y}, 0.0f, colors[row], layer);
+            line({360, y}, -0.1f, {560, y}, -0.1f, colors[row], layer);
+            const auto half_alpha = (colors[row] & 0x00ffffffu) |
+                                    (((colors[row] >> 24u) / 2u) << 24u);
+            line({80, y + 20}, 0.0f, {280, y + 20}, 0.0f, colors[row],
+                 ViewportOverlayLayer::ToolHandle, ViewportOverlaySource::Tool);
+            line({360, y + 20}, 0.0f, {560, y + 20}, 0.0f, half_alpha,
+                 ViewportOverlayLayer::ToolHandle, ViewportOverlaySource::Tool);
+          }
+          // Equal visible spans must remain equal when one has a differently
+          // colored hidden silhouette underneath, including their AA fringe.
+          line({80, 360}, 0.0f, {280, 360}, 0.0f, active, ViewportOverlayLayer::SelectedEdge);
+          line({360, 360}, -0.1f, {560, 360}, -0.1f, ordinary, ViewportOverlayLayer::SelectedEdge);
+          line({360, 360}, 0.0f, {560, 360}, 0.0f, active, ViewportOverlayLayer::SelectedEdge);
+          line({80, 420}, 0.0f, {280, 420}, 0.0f, rgba8(40, 225, 255),
+               ViewportOverlayLayer::SelectedEdge, ViewportOverlaySource::ComponentSelection);
+          line({360, 420}, -0.1f, {560, 420}, -0.1f, rgba8(40, 225, 255),
+               ViewportOverlayLayer::SelectedEdge, ViewportOverlaySource::ComponentSelection);
+          // This span changes depth substantially along its screen projection.
+          // Neither its near endpoint nor its interior may be pulled through the wall.
+          line({80, 455}, -0.1f, {560, 455}, -2.0f, ordinary, ViewportOverlayLayer::SelectedEdge);
+          harness.set_overlay_audit_frame(std::move(frame));
+          harness.present_overlay_audit_frame(scale);
+          const QImage image = harness.capture();
+          ASSERT_FALSE(image.isNull());
+          ASSERT_TRUE(image.save(QDir(directory).filePath(stem + QStringLiteral(".png"))));
+          for (int row = 0; row < 4; ++row) {
+            const int y = 80 + 70 * row;
+            EXPECT_NE(image.pixelColor(180, y), base.pixelColor(180, y));
+            expect_same_color(image.pixelColor(180, y), image.pixelColor(180, y + 20));
+            expect_same_color(image.pixelColor(460, y), image.pixelColor(460, y + 20));
+          }
+          EXPECT_GT(image.pixelColor(180, 150).green(), image.pixelColor(180, 80).green());
+          EXPECT_LT(image.pixelColor(180, 80).red(), image.pixelColor(180, 220).red());
+          for (int dy = -int(4 * scale); dy <= int(4 * scale); ++dy) {
+            EXPECT_EQ(image.pixelColor(180, 360 + dy), image.pixelColor(460, 360 + dy))
+                << "Hidden silhouettes must not add a second tint under visible coverage.";
+          }
+          EXPECT_GT(cyan_pixels(image, {180, 420}), 0);
+          EXPECT_EQ(image.pixelColor(460, 420), base.pixelColor(460, 420))
+              << "The silhouette companion must not give component edges X-ray visibility.";
+          for (const int x : {100, 320, 540}) {
+            expect_same_color(image.pixelColor(x, 455), image.pixelColor(460, 100));
+          }
+          const auto resources = harness.render_diagnostics();
+          harness.present_overlay_audit_frame(scale);
+          EXPECT_FALSE(harness.last_submission().persistent_submitted);
+          EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+          EXPECT_EQ(harness.render_diagnostics().gpu_geometry_upload_count,
+                    resources.gpu_geometry_upload_count);
+          EXPECT_EQ(harness.capture(), image);
+
+          // A formerly visible span becomes entirely occluded at the same screen
+          // location. A retained custom render target must clear its coverage bit
+          // before the hidden companion renders the next frame.
+          frame = {};
+          line({80, 360}, -0.1f, {280, 360}, -0.1f, active, ViewportOverlayLayer::SelectedEdge);
+          const auto half_active = (active & 0x00ffffffu) | (((active >> 24u) / 2u) << 24u);
+          line({80, 380}, 0.0f, {280, 380}, 0.0f, half_active,
+               ViewportOverlayLayer::ToolHandle, ViewportOverlaySource::Tool);
+          harness.set_overlay_audit_frame(std::move(frame));
+          harness.present_overlay_audit_frame(scale);
+          const auto became_hidden = harness.capture();
+          ASSERT_FALSE(became_hidden.isNull());
+          expect_same_color(became_hidden.pixelColor(180, 360), became_hidden.pixelColor(180, 380));
+          EXPECT_NE(became_hidden.pixelColor(180, 360), base.pixelColor(180, 360));
+          ASSERT_TRUE(became_hidden.save(QDir(directory).filePath(stem + QStringLiteral("-became-hidden.png"))));
+          harness.present_overlay_audit_frame(scale);
+          EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+          EXPECT_EQ(harness.capture(), became_hidden);
+        }
+      }
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanPointVisibilityIgnoresNearClippedOccluders) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-near-clipped-vertices-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath())
+      .absoluteFilePath(QStringLiteral("../overlay_audit_visual"));
+  ASSERT_TRUE(QDir().mkpath(directory));
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.0f, projection, 0.1f));
+    for (const float scale : {1.0f, 2.0f}) {
+      for (const bool clipped : {true, false}) {
+        const QString stem = QStringLiteral("near-clip-%1-%2-%3")
+            .arg(projection == ViewportProjection::Perspective ? "perspective" : "orthographic")
+            .arg(int(scale * 100)).arg(clipped ? "clipped" : "visible-occluder");
+        SCOPED_TRACE(stem.toStdString());
+        // The off-axis ray reaches this clipped plane beyond a ray distance of
+        // 0.1, exercising near/cos(angle), not just a fixed near-ray distance.
+        const float z = clipped ? 0.905f : 0.8f;
+        ViewportOverlayFrame frame;
+        // Closed outward stamps exercise ordinary component visibility without
+        // an open sheet's ambiguous inside-out orientation classification.
+        harness.append_overlay_audit_occluder(frame, z);
+        for (const int x : {320, 560}) {
+          frame.points.push_back({
+              .layer = ViewportOverlayLayer::UnselectedVertex,
+              .position = harness.overlay_audit_world_point({float(x), 240}, 0.5f),
+              .color = rgba8(40, 225, 255), .size_pixels = 9.0f,
+              .style_role = ViewportOverlayStyleRole::ExplicitColor,
+              .source = ViewportOverlaySource::ComponentSelection,
+              .element = {.object_id = 1, .vertex_id = x}});
+        }
+        harness.set_overlay_audit_frame(std::move(frame));
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        const QImage image = harness.capture();
+        ASSERT_FALSE(image.isNull());
+        ASSERT_TRUE(image.save(QDir(directory).filePath(stem + QStringLiteral(".png"))));
+        for (const int x : {320, 560}) {
+          if (clipped) EXPECT_GE(cyan_pixels(image, {float(x), 240}), 9);
+          else EXPECT_EQ(cyan_pixels(image, {float(x), 240}), 0);
+        }
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      }
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanOverlayLineEndsAndPointRingsHaveAnalyticCoverage) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-overlay-analytic-coverage-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.prepare_overlay_audit_camera(2.0f, ViewportProjection::Perspective));
+  harness.set_overlay_audit_frame({});
+  harness.present_overlay_audit_frame();
+  const QImage background = harness.capture();
+  ASSERT_FALSE(background.isNull());
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath())
+      .absoluteFilePath(QStringLiteral("../overlay_audit_visual"));
+  ASSERT_TRUE(QDir().mkpath(directory));
+  QImage initial;
+  for (const auto &[scale, label] : std::array<std::pair<float, const char *>, 3>{{
+           {1.0f, "100"}, {2.0f, "200"}, {1.0f, "down"}}}) {
+    SCOPED_TRACE(label);
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::ToolHandle,
+        .start = harness.overlay_audit_world_point({90.25f, 110.25f}, 0.0f),
+        .end = harness.overlay_audit_world_point({220.25f, 170.25f}, 0.0f),
+        .color = rgba8(255, 255, 255), .width_pixels = 6.0f,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool});
+    frame.points = {
+        {.layer = ViewportOverlayLayer::SnapTargetVertex,
+         .position = harness.overlay_audit_world_point({440.25f, 120.25f}, 0.0f),
+         .color = rgba8(255, 255, 255), .size_pixels = 20.0f,
+         .style_role = ViewportOverlayStyleRole::ExplicitColor, .source = ViewportOverlaySource::Tool},
+        {.layer = ViewportOverlayLayer::UnselectedVertex,
+         .position = harness.overlay_audit_world_point({540.25f, 120.25f}, 0.0f),
+         .color = rgba8(255, 255, 255), .size_pixels = 10.0f,
+         .style_role = ViewportOverlayStyleRole::ExplicitColor, .source = ViewportOverlaySource::Tool}};
+    harness.set_overlay_audit_frame(std::move(frame));
+    harness.present_overlay_audit_frame(scale);
+    const QImage image = harness.capture();
+    ASSERT_FALSE(image.isNull());
+    ASSERT_TRUE(image.save(QDir(directory).filePath(
+        QStringLiteral("analytic-coverage-%1.png").arg(label))));
+    int cap_partial = 0;
+    const float dx = 130.0f / std::hypot(130.0f, 60.0f);
+    const float dy = 60.0f / std::hypot(130.0f, 60.0f);
+    for (int y = 95; y < 125; ++y) {
+      for (int x = 75; x < 105; ++x) {
+        const float px = x + 0.5f - 90.25f;
+        const float py = y + 0.5f - 110.25f;
+        const float along = px * dx + py * dy;
+        const float across = -px * dy + py * dx;
+        const int intensity = image.pixelColor(x, y).red();
+        const int backdrop = background.pixelColor(x, y).red();
+        if (std::abs(along + 3.0f * scale) < 1.5f &&
+            std::abs(across) < 3.0f * scale - 1.25f &&
+            intensity > backdrop + 2 && intensity < 240) ++cap_partial;
+      }
+    }
+    EXPECT_GE(cap_partial, 2) << "End caps need analytic coverage away from the feathered sides.";
+    int inner_partial = 0;
+    int outer_partial = 0;
+    int solid_ring = 0;
+    const float radius = 10.0f * scale;
+    for (int y = 96; y < 145; ++y) {
+      for (int x = 416; x < 465; ++x) {
+        const float radius_at_pixel = std::hypot(x + 0.5f - 440.25f, y + 0.5f - 120.25f);
+        const int intensity = image.pixelColor(x, y).red();
+        if (intensity > background.pixelColor(x, y).red() + 2 && intensity < 240) {
+          if (std::abs(radius_at_pixel - radius * 0.62f) < 1.5f) ++inner_partial;
+          if (std::abs(radius_at_pixel - radius) < 1.5f) ++outer_partial;
+        }
+        if (intensity > 245) ++solid_ring;
+      }
+    }
+    EXPECT_GE(inner_partial, 6);
+    EXPECT_GE(outer_partial, 8);
+    EXPECT_GT(solid_ring, 12);
+    EXPECT_EQ(image.pixelColor(440, 120), background.pixelColor(440, 120))
+        << "Snap rings keep a hollow center.";
+    EXPECT_GT(image.pixelColor(540, 120).red(), 245);
+    EXPECT_GT(image.pixelColor(540 + int(3 * scale), 120 + int(3 * scale)).red(), 245)
+        << "Ordinary vertex squares retain their opaque corners.";
+    if (initial.isNull()) initial = image;
+    else if (scale == 1.0f) EXPECT_EQ(image, initial);
+    harness.present_overlay_audit_frame(scale);
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    EXPECT_EQ(harness.capture(), image);
+  }
 }
 
 TEST(SelectionOverlayRuntimeTests,

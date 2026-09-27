@@ -31,29 +31,34 @@ material {
         {
             type : float,
             name : depthBias
+        },
+        {
+            type : float,
+            name : alphaMultiplier
         }
     ]
 }
 
 vertex {
-    highp vec4 clippedEndpoint(highp vec4 startView, highp vec4 endView, bool startEndpoint, float nearZ) {
+    bool clipLineToNearPlane(inout highp vec4 startView, inout highp vec4 endView, float nearZ) {
         bool startBehind = startView.z > nearZ;
         bool endBehind = endView.z > nearZ;
         if (startBehind && endBehind) {
-            return vec4(1000000.0, 1000000.0, 0.0, 1.0);
+            return false;
         }
         if (startBehind != endBehind) {
             float denominator = endView.z - startView.z;
             float t = abs(denominator) > 0.000001 ? (nearZ - startView.z) / denominator : 0.0;
             t = clamp(t, 0.0, 1.0);
             highp vec4 clipped = mix(startView, endView, t);
+            clipped.z = nearZ;
             if (startBehind) {
                 startView = clipped;
             } else {
                 endView = clipped;
             }
         }
-        return getClipFromViewMatrix() * (startEndpoint ? startView : endView);
+        return true;
     }
 
     void materialVertex(inout MaterialVertexInputs material) {
@@ -68,16 +73,19 @@ vertex {
         bool startEndpoint = control.z < 0.5;
         float nearPlane = max(materialParams.nearPlane, 0.0001);
         float nearZ = -nearPlane;
-        highp vec4 clipStart = clippedEndpoint(startView, endView, true, nearZ);
-        highp vec4 clipEnd = clippedEndpoint(startView, endView, false, nearZ);
+        bool lineVisible = clipLineToNearPlane(startView, endView, nearZ);
+        highp vec4 clipStart = lineVisible ? getClipFromViewMatrix() * startView :
+                vec4(1000000.0, 1000000.0, 0.0, 1.0);
+        highp vec4 clipEnd = lineVisible ? getClipFromViewMatrix() * endView : clipStart;
         highp vec4 baseClip = startEndpoint ? clipStart : clipEnd;
 
         vec2 resolution = max(getResolution().xy, vec2(1.0));
         vec2 startNdc = clipStart.xy / max(abs(clipStart.w), 0.000001);
         vec2 endNdc = clipEnd.xy / max(abs(clipEnd.w), 0.000001);
-        vec2 directionPixels = (endNdc - startNdc) * resolution;
+        vec2 directionPixels = (endNdc - startNdc) * resolution * 0.5;
         float directionLength = length(directionPixels);
-        vec2 direction = directionLength > 0.000001 ? directionPixels / directionLength : vec2(1.0, 0.0);
+        bool endOn = directionLength <= 0.0001;
+        vec2 direction = !endOn ? directionPixels / directionLength : vec2(1.0, 0.0);
         vec2 normal = vec2(-direction.y, direction.x);
 
         float sideDistance = (max(materialParams.lineWidth, 1.0) + max(materialParams.featherPixels, 0.0)) * 0.5;
@@ -89,33 +97,57 @@ vertex {
         // DEVICE-domain vertices are remapped by Filament from OpenGL NDC Z
         // to reversed depth. Convert clipFromView's already-reversed depth
         // back to OpenGL NDC so that remap happens exactly once.
-        float deviceDepth = 1.0 - 2.0 * baseDevice.z;
-        float deviceOffset = max(materialParams.depthBias, 0.0) * nearPlane * 0.0025;
-        deviceDepth = max(-1.0, deviceDepth - deviceOffset);
+        float startDepth = clipStart.z / max(abs(clipStart.w), 0.000001);
+        float endDepth = clipEnd.z / max(abs(clipEnd.w), 0.000001);
+        // Cap vertices sit beyond the original endpoints. Extend the depth
+        // plane by that same screen-space distance so the interior retains
+        // its original projected depth instead of stretching over the caps.
+        float ribbonDepth = endOn ? max(startDepth, endDepth) :
+                baseDevice.z + cap * sideDistance * (endDepth - startDepth) / directionLength;
+        float deviceDepth = 1.0 - 2.0 * ribbonDepth;
+        // Use a fixed view-space pull, bounded by the previous maximum. One
+        // conservative offset for both endpoints is intentional: DEVICE
+        // ribbons interpolate depth linearly on screen, so different endpoint
+        // offsets could overtake occluders along a long slanted segment.
+        float depthBiasUnits = max(materialParams.depthBias, 0.0);
+        highp vec4 farView = startView.z < endView.z ? startView : endView;
+        highp vec4 farClip = getClipFromViewMatrix() * farView;
+        highp vec4 biasedView = farView;
+        biasedView.z = min(farView.z + 0.04 * depthBiasUnits, nearZ);
+        highp vec4 biasedClip = getClipFromViewMatrix() * biasedView;
+        float farDepth = farClip.z / max(abs(farClip.w), 0.000001);
+        float biasedDepth = biasedClip.z / max(abs(biasedClip.w), 0.000001);
+        float legacyMaximumPull = depthBiasUnits * nearPlane * 0.0025;
+        float deviceOffset = min(legacyMaximumPull, max(0.0, 2.0 * (biasedDepth - farDepth)));
+        // Let the hardware clip extrapolated caps at the near/far planes.
+        // Clamping individual vertices here would bend the interior depth
+        // plane again, particularly when an endpoint was near-clipped.
+        deviceDepth -= deviceOffset;
         highp vec4 finalDevice = vec4(baseDevice.xy + offsetDevice,
                                      deviceDepth, 1.0);
 
         material.clipSpaceTransform = mat4(1.0);
         material.clipSpaceTransform[3] = finalDevice;
-        material.lineDistancePixels = vec4(side * sideDistance, 0.0, 0.0, 0.0);
+        float halfLengthPixels = directionLength * 0.5;
+        material.lineDistancePixels = vec4(side * sideDistance,
+                cap * (halfLengthPixels + sideDistance), halfLengthPixels, 0.0);
     }
 }
 
 fragment {
+    #include "overlay_line_coverage.glsl"
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        float lineWidth = max(materialParams.lineWidth, 1.0);
-        float smoothWidth = max(materialParams.featherPixels, 0.0);
-        float alphaScale = 1.0;
-        if (smoothWidth <= 0.0001) {
-            alphaScale = step(abs(variable_lineDistancePixels.x), lineWidth * 0.5);
-        } else {
-            alphaScale = saturate((lineWidth + smoothWidth) * 0.5 - abs(variable_lineDistancePixels.x));
-        }
+        float alphaScale = overlayLineCoverage(variable_lineDistancePixels.xyz,
+                materialParams.lineWidth, materialParams.featherPixels);
 
         vec4 color = getColor();
-        color.a *= alphaScale;
+        color.a *= alphaScale * saturate(materialParams.alphaMultiplier);
+        if (color.a <= 0.0) {
+            discard;
+        }
         material.baseColor = vec4(color.rgb * color.a, color.a);
     }
 }

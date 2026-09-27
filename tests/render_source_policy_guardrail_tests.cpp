@@ -1106,7 +1106,7 @@ TEST(OverlayMaterialTests,
   EXPECT_NE(line_source.find("name : depthBias"), std::string::npos);
   EXPECT_NE(line_source.find("getResolution()"), std::string::npos);
   EXPECT_NE(line_source.find(
-                "return vec4(1000000.0, 1000000.0, 0.0, 1.0)"),
+                "vec4(1000000.0, 1000000.0, 0.0, 1.0)"),
             std::string::npos);
   EXPECT_NE(line_source.find("variable_lineDistancePixels.x"),
             std::string::npos);
@@ -1139,11 +1139,11 @@ TEST(OverlayMaterialTests,
   EXPECT_NE(point_source.find("materialParams.innerRadius"), std::string::npos);
   const std::size_t inner_radius_guard =
       point_source.find("if (materialParams.innerRadius > 0.0)");
-  const std::size_t outer_circle_discard =
-      point_source.find("if (distanceFromCenter > 0.5)");
-  ASSERT_NE(outer_circle_discard, std::string::npos);
+  const std::size_t ring_coverage =
+      point_source.find("color.a *= coverage");
+  ASSERT_NE(ring_coverage, std::string::npos);
   ASSERT_NE(inner_radius_guard, std::string::npos);
-  EXPECT_LT(inner_radius_guard, outer_circle_discard);
+  EXPECT_LT(inner_radius_guard, ring_coverage);
 
   EXPECT_NE(icon_source.find("vertexDomain : device"), std::string::npos);
   EXPECT_NE(icon_source.find("requires : [\n        uv0,\n        color"),
@@ -4053,7 +4053,7 @@ TEST(RenderProxyLifecycleTests,
   EXPECT_NE(overlay_factory_source.find("void append_overlay_proxy("),
             std::string::npos);
   EXPECT_EQ(count_occurrences(overlay_factory_source,
-                              "filament::RenderableManager::Builder(1)"),
+                              "filament::RenderableManager::Builder renderable_builder("),
             1u);
   EXPECT_EQ(
       count_occurrences(overlay_factory_source, "scene.addEntity(entity)"), 1u);

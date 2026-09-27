@@ -233,6 +233,7 @@ private:
     QVec3 origin;
     QVec3 direction;
     float target_distance = 0.0f;
+    float clip_distance = camera.near_plane;
     if (camera.projection == ViewportOverlayProjection::Orthographic) {
       target_distance = dot(point - camera.eye, forward);
       if (target_distance <= 0.0001f) {
@@ -248,16 +249,23 @@ private:
       }
       origin = camera.eye;
       direction = to_point / target_distance;
+      const float forward_fraction = dot(direction, forward);
+      if (forward_fraction <= kOverlayVisibilityEpsilon) {
+        return true;
+      }
+      // The near plane is perpendicular to the camera, not to this pixel's
+      // ray. At the viewport edge its ray distance exceeds near_plane.
+      clip_distance /= forward_fraction;
     }
 
     const float occlusion_tolerance =
         std::max(0.015f, target_distance * 0.0005f);
     const float max_distance = target_distance - occlusion_tolerance;
-    if (max_distance <= 0.0001f) {
+    if (max_distance <= clip_distance) {
       return true;
     }
     quader_geometry::QTriangleBvhQueryOptions<float> options;
-    options.min_distance = 0.0001f;
+    options.min_distance = clip_distance;
     options.max_distance = max_distance;
     options.intersection_epsilon = kOverlayVisibilityEpsilon;
     return !stamps.bvh.any_hit(
@@ -328,6 +336,13 @@ std::uint64_t OverlayRenderableBuilder::layer_build_signature(
     const ViewportOverlayCamera &camera, ViewportOverlayLayer layer) {
   RenderSignatureBuilder signature;
   signature.add_value(layer_signature(signatures, layer));
+  if (overlay_layer_uses_depth_stamp_point_visibility(layer)) {
+    // Filtered point geometry also depends on other faces of its source mesh.
+    // Keep that dependency when stamps move, appear, or disappear while the
+    // point positions and camera stay unchanged.
+    signature.add_value(layer_signature(
+        signatures, ViewportOverlayLayer::SourceWireDepthStamp));
+  }
   if (layer_build_depends_on_camera(layer)) {
     const ViewportOverlayCamera sanitized =
         OverlayCameraProjector::sanitized_camera(camera);
@@ -490,6 +505,16 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     }
     const std::vector<LineBatchKey> line_keys =
         line_batch_keys(generic_lines, layer);
+    // Visible contour draws claim stencil coverage before hidden contours,
+    // including when authored widths partition them into multiple batches.
+    std::uint16_t visible_blend_order = blend_order;
+    std::uint16_t occluded_blend_order = static_cast<std::uint16_t>(
+        blend_order + line_keys.size());
+    blend_order = static_cast<std::uint16_t>(
+        occluded_blend_order + std::count_if(
+            line_keys.begin(), line_keys.end(), [](const LineBatchKey &key) {
+              return key.object_silhouette;
+            }));
     for (const LineBatchKey &key : line_keys) {
       QDR_PROFILE_SCOPE("Overlay build line batch");
       std::vector<const ViewportOverlayLine *> batch_lines;
@@ -497,7 +522,9 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
       for (const ViewportOverlayLine *line : generic_lines) {
         if (viewport_overlay_line_width_pixels(layer, line->width_pixels) !=
                 key.width_pixels ||
-            viewport_overlay_depth_mode(*line) != key.depth_mode) {
+            viewport_overlay_depth_mode(*line) != key.depth_mode ||
+            (line->source == ViewportOverlaySource::MeshOutline) !=
+                key.object_silhouette) {
           continue;
         }
         batch_lines.push_back(line);
@@ -509,11 +536,21 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
       if (mesh.empty()) {
         continue;
       }
+      OverlayRenderState state = make_state_with_depth_mode(
+          layer, ViewportOverlayGeometryKind::Lines, visible_blend_order++,
+          key.depth_mode);
+      std::optional<OverlayRenderState> occluded_state;
+      if (key.object_silhouette) {
+        state.silhouette_pass = OverlaySilhouettePass::Visible;
+        occluded_state = state;
+        occluded_state->depth_func = OverlayDepthFunc::Less;
+        occluded_state->silhouette_pass = OverlaySilhouettePass::Occluded;
+        occluded_state->blend_order = occluded_blend_order++;
+      }
       plan.line_batches.push_back({
           .mesh = std::move(mesh),
-          .state = make_state_with_depth_mode(
-              layer, ViewportOverlayGeometryKind::Lines, blend_order++,
-              key.depth_mode),
+          .state = state,
+          .occluded_state = occluded_state,
           .width_pixels = key.width_pixels,
           .depth_bias = depth_bias,
           .near_plane = sanitized_camera.near_plane,
@@ -607,11 +644,14 @@ OverlayRenderableBuilder::line_batch_keys(
         .width_pixels =
             viewport_overlay_line_width_pixels(layer, line->width_pixels),
         .depth_mode = viewport_overlay_depth_mode(*line),
+        .object_silhouette =
+            line->source == ViewportOverlaySource::MeshOutline,
     };
     const auto existing = std::find_if(
         keys.begin(), keys.end(), [&](const LineBatchKey &candidate) {
           return candidate.width_pixels == key.width_pixels &&
-                 candidate.depth_mode == key.depth_mode;
+                 candidate.depth_mode == key.depth_mode &&
+                 candidate.object_silhouette == key.object_silhouette;
         });
     if (existing == keys.end()) {
       keys.push_back(key);

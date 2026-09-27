@@ -21,7 +21,7 @@ class VertexBuffer;
 
 namespace quader {
 
-/** Owns one retained fullscreen reset of the pane's face-fill stencil bits. */
+/** Owns one retained fullscreen reset of the pane's overlay stencil bits. */
 class OverlayStencilReset final {
 public:
   OverlayStencilReset() = default;

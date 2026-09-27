@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -263,6 +264,8 @@ to_filament_depth_func(OverlayDepthFunc depth_func) {
     return filament::MaterialInstance::DepthFunc::A;
   case OverlayDepthFunc::Equal:
     return filament::MaterialInstance::DepthFunc::E;
+  case OverlayDepthFunc::Less:
+    return filament::MaterialInstance::DepthFunc::L;
   case OverlayDepthFunc::GreaterOrEqual:
     return filament::MaterialInstance::DepthFunc::GE;
   }
@@ -293,6 +296,20 @@ to_filament_transparency_mode(OverlayTransparencyMode transparency_mode) {
   return filament::MaterialInstance::TransparencyMode::DEFAULT;
 }
 
+std::pair<std::uint16_t, std::uint16_t>
+line_blend_orders(const OverlayLineBatch &batch, bool visible_mask_supported) {
+  const std::uint16_t visible = batch.state.blend_order;
+  const std::uint16_t occluded = batch.occluded_state
+                                   ? batch.occluded_state->blend_order
+                                   : visible;
+  // Without stencil, draw visible contours last so hidden contours cannot
+  // cover an opaque active outline. Translucent overlap remains a fallback
+  // limitation; Vulkan instead excludes hidden coverage through stencil.
+  return !visible_mask_supported && batch.occluded_state
+             ? std::pair{occluded, visible}
+             : std::pair{visible, occluded};
+}
+
 void destroy_overlay_proxy_resources(filament::Engine &engine,
                                      filament::Scene *scene,
                                      OverlayRenderableProxy &proxy,
@@ -307,6 +324,10 @@ void destroy_overlay_proxy_resources(filament::Engine &engine,
   if (proxy.material_instance) {
     engine.destroy(proxy.material_instance);
     proxy.material_instance = nullptr;
+  }
+  if (proxy.occluded_material_instance) {
+    engine.destroy(proxy.occluded_material_instance);
+    proxy.occluded_material_instance = nullptr;
   }
   if (proxy.vertex_buffer) {
     engine.destroy(proxy.vertex_buffer);
@@ -323,7 +344,8 @@ void destroy_overlay_proxy_resources(filament::Engine &engine,
 }
 
 template <typename Vertex, typename ConfigureAttributes,
-          typename ConfigureMaterial>
+          typename ConfigureMaterial,
+          typename ConfigureOccludedMaterial = std::nullptr_t>
 void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
                           filament::Material &material,
                           const OverlayMesh<Vertex> &mesh,
@@ -332,7 +354,10 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
                           std::uint8_t layer_mask,
                           std::vector<OverlayRenderableProxy> &proxies,
                           ConfigureAttributes configure_attributes,
-                          ConfigureMaterial configure_material) {
+                          ConfigureMaterial configure_material,
+                          const OverlayRenderState *occluded_state = nullptr,
+                          ConfigureOccludedMaterial configure_occluded_material =
+                              nullptr) {
   if (mesh.vertices.empty() || mesh.indices.empty()) {
     return;
   }
@@ -365,6 +390,12 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
   OverlayProxyCreationGuard creation_guard(engine, scene, proxy);
   proxy.material_instance = material.createInstance();
   configure_material(*proxy.material_instance);
+  if constexpr (!std::is_same_v<ConfigureOccludedMaterial, std::nullptr_t>) {
+    if (occluded_state != nullptr) {
+      proxy.occluded_material_instance = material.createInstance();
+      configure_occluded_material(*proxy.occluded_material_instance);
+    }
+  }
 
   filament::VertexBuffer::Builder vertex_builder;
   const std::uint8_t buffer_count =
@@ -402,7 +433,9 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
   proxy.index_buffer->setBuffer(
       engine, FilamentBufferDescriptorFactory::vector(mesh.indices));
 
-  filament::RenderableManager::Builder(1)
+  filament::RenderableManager::Builder renderable_builder(
+      proxy.occluded_material_instance != nullptr ? 2u : 1u);
+  renderable_builder
       .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                 proxy.vertex_buffer, proxy.index_buffer)
       .material(0, proxy.material_instance)
@@ -412,8 +445,16 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
       .boundingBox(overlay_mesh_bounds())
       .culling(false)
       .castShadows(false)
-      .receiveShadows(false)
-      .build(engine, entity);
+      .receiveShadows(false);
+  if (proxy.occluded_material_instance != nullptr) {
+    renderable_builder
+        .geometry(1u, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                  proxy.vertex_buffer, proxy.index_buffer)
+        .material(1u, proxy.occluded_material_instance)
+        .blendOrder(1u, occluded_state->blend_order)
+        .globalBlendOrderEnabled(1u, true);
+  }
+  renderable_builder.build(engine, entity);
   scene.addEntity(entity);
   creation_guard.mark_scene_added();
   proxies.push_back(std::move(proxy));
@@ -614,6 +655,8 @@ bool OverlayProxyFactory::update_layer_proxies(
       continue;
     }
     if (index >= proxies.size() ||
+        (proxies[index].occluded_material_instance != nullptr) !=
+            batch.occluded_state.has_value() ||
         !proxy_can_update_mesh(proxies[index++],
                                OverlayRenderableProxyKind::Line, batch.mesh)) {
       return false;
@@ -700,6 +743,11 @@ void OverlayProxyFactory::update_camera_state(
     }
     switch (proxy.kind) {
     case OverlayRenderableProxyKind::Line:
+      if (proxy.occluded_material_instance != nullptr) {
+        proxy.occluded_material_instance->setParameter("nearPlane",
+                                                        camera.near_plane);
+      }
+      [[fallthrough]];
     case OverlayRenderableProxyKind::Point:
       material->setParameter("nearPlane", camera.near_plane);
       break;
@@ -796,9 +844,18 @@ void OverlayProxyFactory::create_line_proxy(
     return;
   }
 
+  const auto [visible_order, occluded_order] = line_blend_orders(
+      batch, engine_->getBackend() == filament::Engine::Backend::VULKAN);
+  OverlayRenderState visible_state = batch.state;
+  visible_state.blend_order = visible_order;
+  std::optional<OverlayRenderState> occluded_state = batch.occluded_state;
+  if (occluded_state) {
+    occluded_state->blend_order = occluded_order;
+  }
+
   append_overlay_proxy(
       *engine_, *scene_, *overlay_line_material_, batch.mesh,
-      OverlayRenderableProxyKind::Line, batch.state,
+      OverlayRenderableProxyKind::Line, visible_state,
       layer_mask, proxies,
       [](filament::VertexBuffer::Builder &builder) {
         builder
@@ -827,6 +884,17 @@ void OverlayProxyFactory::create_line_proxy(
         material.setParameter("featherPixels", kOverlayLineFeatherPixels);
         material.setParameter("nearPlane", batch.near_plane);
         material.setParameter("depthBias", batch.depth_bias);
+        material.setParameter("alphaMultiplier", 1.0f);
+      },
+      occluded_state ? &*occluded_state : nullptr,
+      [this, &batch](filament::MaterialInstance &material) {
+        configure_overlay_material(material, *batch.occluded_state);
+        material.setParameter("lineWidth", batch.width_pixels);
+        material.setParameter("featherPixels", kOverlayLineFeatherPixels);
+        material.setParameter("nearPlane", batch.near_plane);
+        material.setParameter("depthBias", batch.depth_bias);
+        material.setParameter("alphaMultiplier",
+                              batch.occluded_alpha_multiplier);
       });
 }
 
@@ -966,6 +1034,27 @@ void OverlayProxyFactory::update_line_proxy(OverlayRenderableProxy &proxy,
                                         kOverlayLineFeatherPixels);
   proxy.material_instance->setParameter("nearPlane", batch.near_plane);
   proxy.material_instance->setParameter("depthBias", batch.depth_bias);
+  proxy.material_instance->setParameter("alphaMultiplier", 1.0f);
+  if (proxy.occluded_material_instance != nullptr && batch.occluded_state) {
+    filament::MaterialInstance &material = *proxy.occluded_material_instance;
+    configure_overlay_material(material, *batch.occluded_state);
+    material.setParameter("lineWidth", batch.width_pixels);
+    material.setParameter("featherPixels", kOverlayLineFeatherPixels);
+    material.setParameter("nearPlane", batch.near_plane);
+    material.setParameter("depthBias", batch.depth_bias);
+    material.setParameter("alphaMultiplier", batch.occluded_alpha_multiplier);
+  }
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance instance =
+      renderables.getInstance(to_filament_entity(proxy.entity_id));
+  if (instance) {
+    const auto [visible_order, occluded_order] = line_blend_orders(
+        batch, engine_->getBackend() == filament::Engine::Backend::VULKAN);
+    renderables.setBlendOrderAt(instance, 0u, visible_order);
+    if (batch.occluded_state) {
+      renderables.setBlendOrderAt(instance, 1u, occluded_order);
+    }
+  }
 }
 
 void OverlayProxyFactory::update_edit_wire_proxy(
@@ -1025,6 +1114,13 @@ void OverlayProxyFactory::configure_overlay_material(
   apply_overlay_face_fill_stencil(
       material, state.face_fill_class, state.face_fill_pass,
       engine_->getBackend() == filament::Engine::Backend::VULKAN);
+  if (state.silhouette_pass != OverlaySilhouettePass::None) {
+    // The paired depth passes remain available on the fallback backend, but
+    // its custom targets cannot provide stencil-based visible precedence.
+    apply_overlay_silhouette_stencil(
+        material, state.silhouette_pass,
+        engine_->getBackend() == filament::Engine::Backend::VULKAN);
+  }
 }
 
 void OverlayProxyFactory::load_icon_textures(

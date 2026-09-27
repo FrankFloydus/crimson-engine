@@ -15,7 +15,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -82,6 +84,102 @@ protected:
     ASSERT_NEAR(updated.move_delta.x, 1.0F, 0.00001F);
   }
 
+  void create_box_face() {
+    const auto created = modeling_.create_box_from_bounds({
+        .bounds = {.min = {-1.0F, -1.0F, -1.0F},
+                   .max = {1.0F, 1.0F, 1.0F}},
+        .name = "Face Drag Rejection",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    object_ = created.object;
+    const auto authored = document();
+    for (const auto &face : authored.faces) {
+      if (std::ranges::all_of(face.vertices, [&](auto id) {
+            const auto *vertex = quader_poly::find_vertex(authored, id);
+            return vertex != nullptr && vertex->position.x == 1.0F;
+          })) {
+        face_ = face.id;
+        box_face_vertices_ = face.vertices;
+        break;
+      }
+    }
+    ASSERT_EQ(box_face_vertices_.size(), 4U);
+    const auto selected = modeling_.set_component_selection({
+        .modeling_object_id = object_.modeling_object_id,
+        .mode = ModelingSelectionMode::Face,
+        .faces = {static_cast<int>(face_)},
+        .active_kind = ModelingActiveSelectionKind::Face,
+        .active_face = static_cast<int>(face_),
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+  }
+
+  void begin_box_face_drag() {
+    auto request = test::x_move_drag_begin({
+        .pivot = {1.0F, 0.0F, 0.0F},
+        .grid_snap_enabled = false,
+    });
+    request.ray.origin.x = 1.0F;
+    request.vertex_snap_radius = 0.0;
+    const auto begun = modeling_.begin_transform_drag(request);
+    ASSERT_TRUE(begun.ok) << begun.message;
+  }
+
+  [[nodiscard]] ModelingTransformDragPreview drag_box_face_to(float x) {
+    auto request = test::x_move_drag_update((x - 1.0F) * 60.0F);
+    // The pointer is outside the box silhouette but still in the viewport.
+    // An acquired axis drag must not depend on hitting that moving mesh again.
+    request.screen_position.y = 180.0F;
+    request.ray.origin = {x, 3.0F, 5.0F};
+    request.grid_snap_enabled = false;
+    request.vertex_snap_radius = 0.0;
+    return modeling_.update_transform_drag(request);
+  }
+
+  void expect_box_face_position(float x, bool preview) {
+    const auto selected = modeling_.export_selection();
+    ASSERT_EQ(selected.objects.size(), 1U);
+    ASSERT_EQ(selected.objects.front().selected_faces.size(), 1U);
+    EXPECT_EQ(selected.objects.front().selected_faces.front().id, face_);
+    EXPECT_EQ(modeling_.selection_mode(), ModelingSelectionMode::Face);
+    const auto moved_vertex = [&](auto id) {
+      return std::ranges::find(box_face_vertices_, id) != box_face_vertices_.end();
+    };
+    if (preview) {
+      const auto meshes = modeling_.tool_preview_meshes();
+      ASSERT_EQ(meshes.size(), 1U);
+      const auto &mesh = meshes.front();
+      ASSERT_EQ(mesh.source_entity, object_.entity);
+      ASSERT_TRUE(mesh.suppress_source);
+      const auto &vertices = mesh.mesh.geometry().vertices;
+      ASSERT_FALSE(vertices.empty());
+      if (mesh.dynamic_position_payload) {
+        ASSERT_EQ(mesh.dynamic_position_payload->size(), vertices.size());
+      }
+      std::size_t moved_corners = 0U;
+      for (std::size_t index = 0; index < vertices.size(); ++index) {
+        const auto &vertex = vertices[index];
+        const QVec3 position = mesh.dynamic_position_payload
+            ? (*mesh.dynamic_position_payload)[index]
+            : vertex.position;
+        const bool moved = moved_vertex(vertex.source_vertex_id);
+        if (moved) ++moved_corners;
+        EXPECT_FLOAT_EQ(position.x, moved ? x : -1.0F);
+        EXPECT_FLOAT_EQ(position.y, vertex.position.y);
+        EXPECT_FLOAT_EQ(position.z, vertex.position.z);
+      }
+      EXPECT_GT(moved_corners, 0U);
+    } else {
+      EXPECT_TRUE(modeling_.tool_preview_meshes().empty());
+      const auto authored = document();
+      ASSERT_EQ(authored.vertices.size(), 8U);
+      ASSERT_EQ(authored.faces.size(), 6U);
+      for (const auto &vertex : authored.vertices) {
+        EXPECT_FLOAT_EQ(vertex.position.x, moved_vertex(vertex.id) ? x : -1.0F);
+      }
+    }
+  }
+
   [[nodiscard]] quader_poly::Document document() const {
     const auto *binding = scene_.mesh(object_.entity);
     if (binding == nullptr) {
@@ -105,7 +203,188 @@ protected:
   quader_poly::ElementId target_ = quader_poly::kInvalidElementId;
   quader_poly::ElementId edge_end_ = quader_poly::kInvalidElementId;
   quader_poly::ElementId face_ = quader_poly::kInvalidElementId;
+  std::vector<quader_poly::ElementId> box_face_vertices_;
 };
+
+TEST_F(MoveAutoMergeTests,
+       RejectedFaceCollapseKeepsLastPreviewAndDragCanContinueCommitAndUndo) {
+  create_box_face();
+  for (const bool auto_merge : {false, true}) {
+    SCOPED_TRACE(auto_merge);
+    set_auto_merge(auto_merge);
+    begin_box_face_drag();
+    const auto scene_revision = scene_.revision();
+    const auto asset_revision = assets_.revision();
+    const auto moved = drag_box_face_to(0.0F);
+    ASSERT_TRUE(moved.ok) << moved.message;
+    EXPECT_FLOAT_EQ(moved.move_delta.x, -1.0F);
+    expect_box_face_position(0.0F, true);
+
+    // The opposite face is x=-1: this sample collapses all four sidewalls.
+    // Repeated rejected samples must retain the accepted half-width box.
+    for (int sample = 0; sample < 2; ++sample) {
+      const auto rejected = drag_box_face_to(-1.0F);
+      EXPECT_FALSE(rejected.ok);
+      EXPECT_FALSE(rejected.changed);
+      EXPECT_TRUE(rejected.active);
+      EXPECT_FALSE(rejected.message.empty());
+      ASSERT_TRUE(modeling_.transform_drag_active());
+      expect_box_face_position(0.0F, true);
+      EXPECT_EQ(scene_.revision(), scene_revision);
+      EXPECT_EQ(assets_.revision(), asset_revision);
+      EXPECT_EQ(history_.undo_count(), 0U);
+    }
+
+    const auto continued = drag_box_face_to(-0.5F);
+    ASSERT_TRUE(continued.ok) << continued.message;
+    EXPECT_FLOAT_EQ(continued.move_delta.x, -1.5F);
+    expect_box_face_position(-0.5F, true);
+    const auto committed = modeling_.commit_transform_drag(history_);
+    ASSERT_TRUE(committed.ok) << committed.message;
+    ASSERT_TRUE(committed.changed);
+    EXPECT_FALSE(modeling_.transform_drag_active());
+    EXPECT_EQ(history_.undo_count(), 1U);
+    expect_box_face_position(-0.5F, false);
+    ASSERT_TRUE(history_.undo().ok);
+    expect_box_face_position(1.0F, false);
+    ASSERT_TRUE(history_.redo().ok);
+    expect_box_face_position(-0.5F, false);
+    ASSERT_TRUE(history_.undo().ok);
+    history_.clear();
+  }
+}
+
+TEST_F(MoveAutoMergeTests, RejectedFaceCollapseStillAllowsExplicitCancellation) {
+  create_box_face();
+  for (const bool auto_merge : {false, true}) {
+    SCOPED_TRACE(auto_merge);
+    set_auto_merge(auto_merge);
+    begin_box_face_drag();
+    const auto moved = drag_box_face_to(0.0F);
+    ASSERT_TRUE(moved.ok) << moved.message;
+    const auto rejected = drag_box_face_to(-1.0F);
+    EXPECT_FALSE(rejected.ok);
+    ASSERT_TRUE(modeling_.transform_drag_active());
+    expect_box_face_position(0.0F, true);
+    const auto canceled = modeling_.cancel_transform_drag();
+    ASSERT_TRUE(canceled.ok) << canceled.message;
+    EXPECT_FALSE(modeling_.transform_drag_active());
+    EXPECT_EQ(history_.undo_count(), 0U);
+    expect_box_face_position(1.0F, false);
+  }
+}
+
+TEST_F(MoveAutoMergeTests, ReleaseAfterRejectedFaceCollapseCommitsLastValidSample) {
+  create_box_face();
+  for (const bool auto_merge : {false, true}) {
+    SCOPED_TRACE(auto_merge);
+    set_auto_merge(auto_merge);
+    begin_box_face_drag();
+    const auto moved = drag_box_face_to(0.0F);
+    ASSERT_TRUE(moved.ok) << moved.message;
+    const auto rejected = drag_box_face_to(-1.0F);
+    EXPECT_FALSE(rejected.ok);
+    ASSERT_TRUE(modeling_.transform_drag_active());
+    expect_box_face_position(0.0F, true);
+
+    // Mouse release accepts the retained candidate without another valid move.
+    const auto committed = modeling_.commit_transform_drag(history_);
+    ASSERT_TRUE(committed.ok) << committed.message;
+    EXPECT_TRUE(committed.changed);
+    EXPECT_FALSE(modeling_.transform_drag_active());
+    EXPECT_EQ(history_.undo_count(), 1U);
+    expect_box_face_position(0.0F, false);
+    ASSERT_TRUE(history_.undo().ok);
+    expect_box_face_position(1.0F, false);
+    ASSERT_TRUE(history_.redo().ok);
+    expect_box_face_position(0.0F, false);
+    ASSERT_TRUE(history_.undo().ok);
+    history_.clear();
+  }
+}
+
+TEST_F(MoveAutoMergeTests, FaceCollapseRestoresEarlierParticipantPreviewBeforeRelease) {
+  // This independent face precedes the box in the portable participant order.
+  // Its candidate can advance before the later box rejects its collapsed walls.
+  quader_poly::Document other_document;
+  const auto a = quader_poly::add_vertex(other_document, {5.0F, -1.0F, -1.0F});
+  const auto b = quader_poly::add_vertex(other_document, {5.0F, 1.0F, -1.0F});
+  const auto c = quader_poly::add_vertex(other_document, {5.0F, 0.0F, 1.0F});
+  const auto other_face = quader_poly::add_face(other_document, std::array{a, b, c});
+  ASSERT_NE(other_face, quader_poly::kInvalidElementId);
+  const auto other = modeling_.create_mesh({
+      .document = std::move(other_document), .name = "Earlier Face Participant"});
+  ASSERT_TRUE(other.ok) << other.message;
+  create_box_face();
+  const std::array<ModelingComponentSelectionRequest, 2> selections{
+      ModelingComponentSelectionRequest{
+          .modeling_object_id = other.object.modeling_object_id,
+          .mode = ModelingSelectionMode::Face,
+          .faces = {static_cast<int>(other_face)}},
+      ModelingComponentSelectionRequest{
+          .modeling_object_id = object_.modeling_object_id,
+          .mode = ModelingSelectionMode::Face,
+          .faces = {static_cast<int>(face_)}}};
+  ASSERT_TRUE(modeling_.set_component_selections(selections).ok);
+  set_auto_merge(false);
+  begin_box_face_drag();
+  const auto scene_revision = scene_.revision();
+  const auto asset_revision = assets_.revision();
+  const auto moved = drag_box_face_to(0.0F);
+  ASSERT_TRUE(moved.ok) << moved.message;
+  const auto rejected = drag_box_face_to(-1.0F);
+  EXPECT_FALSE(rejected.ok);
+  ASSERT_TRUE(modeling_.transform_drag_active());
+  EXPECT_EQ(scene_.revision(), scene_revision);
+  EXPECT_EQ(assets_.revision(), asset_revision);
+
+  const auto meshes = modeling_.tool_preview_meshes();
+  ASSERT_EQ(meshes.size(), 2U);
+  for (const auto &mesh : meshes) {
+    const bool is_box = mesh.source_entity == object_.entity;
+    ASSERT_TRUE(is_box || mesh.source_entity == other.object.entity);
+    const auto &vertices = mesh.mesh.geometry().vertices;
+    ASSERT_FALSE(vertices.empty());
+    if (mesh.dynamic_position_payload) {
+      ASSERT_EQ(mesh.dynamic_position_payload->size(), vertices.size());
+    }
+    for (std::size_t index = 0; index < vertices.size(); ++index) {
+      const auto &vertex = vertices[index];
+      const auto position = mesh.dynamic_position_payload
+          ? (*mesh.dynamic_position_payload)[index]
+          : vertex.position;
+      const bool moved_box_vertex = std::ranges::find(
+          box_face_vertices_, vertex.source_vertex_id) != box_face_vertices_.end();
+      EXPECT_FLOAT_EQ(position.x, is_box ? (moved_box_vertex ? 0.0F : -1.0F) : 4.0F);
+    }
+  }
+
+  const auto expect_committed_positions = [&](float box_x, float other_x) {
+    const auto selected = modeling_.export_selection();
+    ASSERT_EQ(selected.objects.size(), 2U);
+    EXPECT_EQ(modeling_.selection_summary().selected_face_count, 2U);
+    for (const auto &object : selected.objects) {
+      const auto mesh = modeling_.compile_object_mesh(object.modeling_object_id);
+      ASSERT_TRUE(mesh.has_value());
+      ASSERT_NE(mesh->authored_polygon_document, nullptr);
+      const bool is_box = object.modeling_object_id == object_.modeling_object_id;
+      for (const auto &vertex : mesh->authored_polygon_document->vertices) {
+        const bool moved_box_vertex = std::ranges::find(
+            box_face_vertices_, vertex.id) != box_face_vertices_.end();
+        EXPECT_FLOAT_EQ(vertex.position.x,
+                        is_box ? (moved_box_vertex ? box_x : -1.0F) : other_x);
+      }
+    }
+  };
+  const auto committed = modeling_.commit_transform_drag(history_);
+  ASSERT_TRUE(committed.ok) << committed.message;
+  EXPECT_EQ(history_.undo_count(), 1U);
+  expect_committed_positions(0.0F, 4.0F);
+  ASSERT_TRUE(history_.undo().ok);
+  expect_committed_positions(1.0F, 5.0F);
+  ASSERT_TRUE(history_.redo().ok);
+  expect_committed_positions(0.0F, 4.0F);
+}
 
 TEST_F(MoveAutoMergeTests, MoveAndWeldCommitAsOneUndoStepAndPreserveTarget) {
   create(1.0F);

@@ -63,6 +63,8 @@ to_filament_depth_func(OverlayDepthFunc depth_func) {
     return filament::MaterialInstance::DepthFunc::A;
   case OverlayDepthFunc::Equal:
     return filament::MaterialInstance::DepthFunc::E;
+  case OverlayDepthFunc::Less:
+    return filament::MaterialInstance::DepthFunc::L;
   case OverlayDepthFunc::GreaterOrEqual:
     return filament::MaterialInstance::DepthFunc::GE;
   }

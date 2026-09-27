@@ -122,8 +122,8 @@ void OverlayStencilReset::initialize(filament::Engine &engine,
   instance.setStencilWrite(true);
   instance.setStencilCompareFunction(MaterialInstance::StencilCompareFunc::A);
   instance.setStencilReferenceValue(0u);
-  instance.setStencilReadMask(kOverlayFaceFillStencilMask);
-  instance.setStencilWriteMask(kOverlayFaceFillStencilMask);
+  instance.setStencilReadMask(kOverlayCompositionStencilMask);
+  instance.setStencilWriteMask(kOverlayCompositionStencilMask);
   instance.setStencilOpStencilFail(MaterialInstance::StencilOperation::KEEP);
   instance.setStencilOpDepthFail(MaterialInstance::StencilOperation::KEEP);
   instance.setStencilOpDepthStencilPass(MaterialInstance::StencilOperation::ZERO);

@@ -169,6 +169,12 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   Cancel. Coverage includes `ExtrudeToolServiceTests.SwitchingToolsAcceptsPendingExtrusionAsOneUndoStep`,
   `PaneFocusRetainsPendingWorkUntilAnotherPaneAcquiresItsTool`, and
   `UnavailableActivationDoesNotAcceptPendingExtrusion` in `tests/extrude_tool_service_tests.cpp`.
+- Rejected component-transform samples (for example a box face collapsing onto its opposite)
+  retain the last accepted preview and active drag. Restore all transient participants through
+  the existing preview owner; release commits that accepted shape, while explicit Cancel restores
+  the baseline. Cache the rejected pointer signature so idle frames do not retry it. Protect both
+  geometry/history and submitted wires in [move tests](tests/move_auto_merge_tests.cpp) and
+  [retained presentation tests](tests/selected_mesh_outline_presentation_tests.cpp).
 - Dedicated Extrusion activation starts a pending preview; releasing a viewport drag ends
   pointer input but retains that preview with Apply enabled. Apply accepts it, while
   Escape/Cancel restores its source and preserves existing undo/redo.
@@ -359,8 +365,13 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   repair this with global draw-on-top wires. See the face-fill builder coverage in
   [render extraction tests](tests/render_extraction_tests.cpp) and the actual Vulkan
   [selection overlay tests](tests/selection_overlay_runtime_tests.cpp).
-- Native Object/Group selection uses a depth-tested camera silhouette in place of the semantic
-  full-mesh wire used by modeling/tool consumers. Object selection retains its face fill;
+- Native Object/Group selection uses a camera silhouette in place of the semantic
+  full-mesh wire used by modeling/tool consumers. Visible and occluded fragments use complementary
+  depth comparisons over shared ribbon buffers; only occluded silhouette fragments receive half
+  the authored alpha. Vulkan reserves a separate stencil bit so visible contours suppress hidden
+  contours at the same pixel; other backends draw hidden contours first. Component editing wires
+  never inherit this hidden-object treatment.
+  Object selection retains its face fill;
   submission removes internal selection edges.
   Persistent scene and instance wire backends also honor `selected_mesh_outline_only`. Live primitive
   creation retains its faint topology, and component modes retain their editing wires. The shared
@@ -414,6 +425,12 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   occlusion. Wireframe panes remove source-face CPU occlusion metadata only from submitted copies;
   shared sources and solid panes retain it. Shading switches invalidate both overlay streams without
   rebuilding semantic sources or changing the distance-safe point shader bias.
+  CPU source-face occlusion starts at the camera near plane, including the off-axis perspective
+  ray distance, so clipped faces cannot suppress otherwise visible markers. Filtered point batch
+  signatures include the source-face stamp signature: changing an occluder must refresh visibility
+  even when points and camera stay unchanged. Generic silhouette
+  ribbon bias is also bounded in view space; a constant device-depth pull leaks through distant
+  occluders.
   Coverage: `OverlayPointMeshBuilderTests.InwardRoomVertex*` in
   [render extraction](tests/render_extraction_tests.cpp).
 - Inversion is XOR over the host-resolved eligible universe. Excluded components keep their state,

@@ -44,6 +44,8 @@ struct OverlayRenderableProxy {
           vertex_buffer(std::exchange(other.vertex_buffer, nullptr)),
           index_buffer(std::exchange(other.index_buffer, nullptr)),
           material_instance(std::exchange(other.material_instance, nullptr)),
+          occluded_material_instance(
+              std::exchange(other.occluded_material_instance, nullptr)),
           kind(std::exchange(other.kind, OverlayRenderableProxyKind::Unknown)),
           vertex_count(std::exchange(other.vertex_count, 0u)),
           index_count(std::exchange(other.index_count, 0u)),
@@ -60,6 +62,8 @@ struct OverlayRenderableProxy {
     filament::VertexBuffer *vertex_buffer = nullptr;
     filament::IndexBuffer *index_buffer = nullptr;
     filament::MaterialInstance *material_instance = nullptr;
+    // Optional second draw over the same buffers, used by object silhouettes.
+    filament::MaterialInstance *occluded_material_instance = nullptr;
     OverlayRenderableProxyKind kind = OverlayRenderableProxyKind::Unknown;
     std::uint32_t vertex_count = 0;
     std::uint32_t index_count = 0;

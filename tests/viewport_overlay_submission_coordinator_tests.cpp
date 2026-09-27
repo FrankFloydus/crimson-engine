@@ -299,6 +299,82 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
+     NearPlaneChangesRefreshVertexVisibilityWithoutRecomposingSelection) {
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  ViewportOverlayFrame selection;
+  selection.triangles.push_back({
+      .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+      .a = {-4.0f, -4.0f, -1.9f},
+      .b = {4.0f, -4.0f, -1.9f},
+      .c = {0.0f, 4.0f, -1.9f},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 1},
+  });
+  selection.points.push_back({
+      .layer = ViewportOverlayLayer::SelectedVertex,
+      .position = {2.0f, 0.0f, -4.0f},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 1, .vertex_id = 1},
+  });
+  StaticSelectionFrameProvider selection_provider{selection};
+  StaticDynamicToolFrameProvider tool_provider({});
+  ViewportOverlayFrame volatile_modeling;
+  RenderOverlaySelectionSnapshot scene;
+  CurveToolPreviewState curve;
+  auto request = submission_request(selection_provider, scene, volatile_modeling,
+                                    curve);
+  request.camera = {
+      .eye = {0.0f, 0.0f, 0.0f},
+      .forward = {0.0f, 0.0f, -1.0f},
+      .right = {1.0f, 0.0f, 0.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .projection = ViewportOverlayProjection::Perspective,
+      .near_plane = 1.0f,
+  };
+  request.style_selection_context = ViewportOverlaySelectionContext::Vertex;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Vertex;
+  request.dynamic_tool_frame_provider = &tool_provider;
+  request.dynamic_tool_source.source_identity =
+      reinterpret_cast<std::uintptr_t>(&tool_provider);
+  request.scene_overlay_requested = false;
+  const auto point_plan = [&]() {
+    return OverlayRenderableBuilder::build_layer(
+        target.persistent_frame, target.last_camera,
+        ViewportOverlayLayer::SelectedVertex);
+  };
+  ASSERT_TRUE(coordinator.submit(request, settings, target).persistent_submitted);
+  EXPECT_TRUE(point_plan().point_batches.empty());
+  const auto work = coordinator.work_counters();
+  const auto persistent_submissions = target.persistent_submit_count;
+  const auto builds = selection_provider.build_count;
+
+  for (const float near_plane : {2.0f, 1.0f, 2.0f}) {
+    request.camera.near_plane = near_plane;
+    const auto result = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(result.camera_only);
+    EXPECT_FALSE(result.persistent_submitted);
+    EXPECT_FALSE(result.selection_source_refreshed);
+    const auto plan = point_plan();
+    EXPECT_EQ(plan.point_batches.empty(), near_plane < 1.9f);
+    for (const auto &batch : plan.point_batches) {
+      EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+      EXPECT_TRUE(batch.state.depth_culling);
+    }
+  }
+  for (int frame = 0; frame < 8; ++frame) {
+    EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  }
+  EXPECT_EQ(selection_provider.build_count, builds);
+  EXPECT_EQ(target.persistent_submit_count, persistent_submissions);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
      InsertEdgeLoopVerticesReachRetainedSubmissionAndClearWithoutStaleGeometry) {
   SceneDocument document;
   AssetRegistry assets;

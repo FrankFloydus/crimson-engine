@@ -212,7 +212,7 @@ void seed_outline_boxes(SceneSession &session, std::span<const OutlineBox> boxes
   }
 }
 
-TEST(SelectedMeshOutlineCacheTests, SubdividedBoxHasOnlySilhouetteAndDepthTestedEdges) {
+TEST(SelectedMeshOutlineCacheTests, SubdividedBoxHasOnlySilhouetteWithComplementaryDepthPasses) {
   SceneSession session;
   create_shape(session, PrimitiveCreationKind::Box);
   auto snapshot = build_render_overlay_selected_object_snapshot(session.scene(), session.assets(), true);
@@ -239,6 +239,15 @@ TEST(SelectedMeshOutlineCacheTests, SubdividedBoxHasOnlySilhouetteAndDepthTested
   for (const auto &batch : plan.line_batches) {
     EXPECT_TRUE(batch.state.depth_culling);
     EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+    ASSERT_TRUE(batch.occluded_state.has_value());
+    EXPECT_TRUE(batch.occluded_state->depth_culling);
+    EXPECT_EQ(batch.occluded_state->depth_func, OverlayDepthFunc::Less);
+    EXPECT_FALSE(batch.occluded_state->depth_write);
+    EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::Visible);
+    EXPECT_EQ(batch.occluded_state->silhouette_pass,
+              OverlaySilhouettePass::Occluded);
+    EXPECT_LT(batch.state.blend_order, batch.occluded_state->blend_order);
+    EXPECT_FLOAT_EQ(batch.occluded_alpha_multiplier, 0.5f);
   }
 }
 
@@ -740,6 +749,25 @@ TEST(SelectedMeshOutlineCacheTests, SubmissionRetainsFillAndControlsWithNoIntern
   for (const auto &line : target.dynamic.lines) {
     EXPECT_EQ(line.source, ViewportOverlaySource::MeshOutline);
   }
+  const auto expect_silhouette_passes = [&]() {
+    const auto plan = OverlayRenderableBuilder::build_layer(
+        target.dynamic, request.camera, ViewportOverlayLayer::SelectedEdge);
+    ASSERT_FALSE(plan.line_batches.empty());
+    std::size_t vertex_count = 0u;
+    for (const auto &batch : plan.line_batches) {
+      vertex_count += batch.mesh.vertices.size();
+      ASSERT_TRUE(batch.occluded_state.has_value());
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+      EXPECT_EQ(batch.occluded_state->depth_func, OverlayDepthFunc::Less);
+      EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::Visible);
+      EXPECT_EQ(batch.occluded_state->silhouette_pass,
+                OverlaySilhouettePass::Occluded);
+      EXPECT_LT(batch.state.blend_order, batch.occluded_state->blend_order);
+      EXPECT_FLOAT_EQ(batch.occluded_alpha_multiplier, 0.5f);
+    }
+    EXPECT_EQ(vertex_count, target.dynamic.lines.size() * 4u);
+  };
+  expect_silhouette_passes();
   const auto work = coordinator.work_counters();
   for (int i = 0; i < 30; ++i) EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
   EXPECT_EQ(provider.builds, 1);
@@ -749,6 +777,7 @@ TEST(SelectedMeshOutlineCacheTests, SubmissionRetainsFillAndControlsWithNoIntern
   EXPECT_FALSE(moved.persistent_submitted);
   EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count, work.dynamic_source_compose_count);
   EXPECT_EQ(provider.builds, 1);
+  expect_silhouette_passes();
   request.raster_scale = 2;
   (void)coordinator.submit(request, settings, target);
   EXPECT_NEAR(target.dynamic.lines.front().width_pixels,

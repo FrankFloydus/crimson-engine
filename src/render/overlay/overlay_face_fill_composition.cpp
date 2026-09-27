@@ -77,4 +77,26 @@ void apply_overlay_face_fill_stencil(filament::MaterialInstance &material,
                    : mask_pass ? Operation::REPLACE : Operation::INVERT);
 }
 
+void apply_overlay_silhouette_stencil(filament::MaterialInstance &material,
+                                     OverlaySilhouettePass pass,
+                                     bool enabled) {
+  using Compare = filament::MaterialInstance::StencilCompareFunc;
+  using Operation = filament::MaterialInstance::StencilOperation;
+  const bool uses_stencil = enabled && pass != OverlaySilhouettePass::None;
+  const bool visible = uses_stencil && pass == OverlaySilhouettePass::Visible;
+  material.setStencilWrite(visible);
+  material.setStencilCompareFunction(
+      !uses_stencil || visible ? Compare::A : Compare::E);
+  material.setStencilReferenceValue(
+      visible ? kOverlaySilhouetteVisibleStencilMask : 0u);
+  material.setStencilReadMask(
+      uses_stencil ? kOverlaySilhouetteVisibleStencilMask : 0u);
+  material.setStencilWriteMask(
+      visible ? kOverlaySilhouetteVisibleStencilMask : 0u);
+  material.setStencilOpStencilFail(Operation::KEEP);
+  material.setStencilOpDepthFail(Operation::KEEP);
+  material.setStencilOpDepthStencilPass(visible ? Operation::REPLACE
+                                               : Operation::KEEP);
+}
+
 } // namespace quader

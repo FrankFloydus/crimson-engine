@@ -11264,6 +11264,107 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     RejectedFaceGizmoSampleRetainsGestureAndDoesNotRetryUnchangedFrames) {
+  ViewportInteractionHarness harness;
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  harness.input.orthographic_view = true;
+  harness.settings.set_bool_value(quader::ViewportBoolSettingId::GridSnap, true);
+  harness.settings.set_bool_value(quader::ViewportBoolSettingId::VertexSnap, false);
+  const auto box = create_unit_box(harness);
+  const auto authored = [&]() -> const quader_poly::Document & {
+    return *harness.session.assets()
+                .mesh(harness.session.scene().mesh(box.entity)->mesh)
+                ->authored_polygon_document;
+  };
+  quader::QuaderElementId face_id = 0;
+  for (const auto &face : authored().faces) {
+    if (std::all_of(face.vertices.begin(), face.vertices.end(), [&](auto id) {
+          const auto *vertex = quader_poly::find_vertex(authored(), id);
+          return vertex != nullptr && vertex->position.x == 1.0f;
+        })) {
+      face_id = face.id;
+      break;
+    }
+  }
+  ASSERT_NE(face_id, 0u);
+  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(harness.editor.selection().select_face(box, face_id).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+  auto &modeling = harness.session.modeling();
+  auto settings = modeling.interaction_settings();
+  settings.move_auto_merge_vertices = false;
+  ASSERT_TRUE(modeling.set_interaction_settings(settings).ok);
+  const auto undo_before = harness.session.history().undo_count();
+  (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+  const auto *gizmo = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(gizmo, nullptr);
+  const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(axis, nullptr);
+  const auto start = axis->screen_tip;
+  const auto one_unit = harness.camera.project_world_point({1.0f, 0.0f, 0.0f}).position -
+                        harness.camera.project_world_point({0.0f, 0.0f, 0.0f}).position;
+  const auto move_to = [&](quader::QVec2 position, bool pressed, bool released) {
+    harness.input.mouse_local = position;
+    harness.input.mouse_screen = position;
+    return harness.controller.handle_before_active_tool(
+        harness.editor, harness.frame(pressed, !released, released, start));
+  };
+  const auto expect_preview_right_edge = [&]() {
+    const auto meshes = modeling.tool_preview_meshes();
+    ASSERT_EQ(meshes.size(), 1u);
+    float right_edge = -std::numeric_limits<float>::infinity();
+    const auto &mesh = meshes.front();
+    for (std::size_t index = 0; index < mesh.mesh.geometry().vertices.size(); ++index) {
+      const auto position = mesh.dynamic_position_payload
+          ? (*mesh.dynamic_position_payload)[index]
+          : mesh.mesh.geometry().vertices[index].position;
+      right_edge = std::max(right_edge, position.x);
+    }
+    EXPECT_FLOAT_EQ(right_edge, 0.0f);
+  };
+
+  ASSERT_TRUE(move_to(start, true, false).gizmo_consumed);
+  // Leave the box silhouette without leaving the viewport or the held axis.
+  const auto outside = quader::QVec2{0.0f, 100.0f};
+  ASSERT_TRUE(move_to(start - one_unit + outside, false, false).gizmo_consumed);
+  ASSERT_TRUE(harness.controller.dragging());
+  expect_preview_right_edge();
+  const auto rejected = start - one_unit * 2.0f + outside;
+  ASSERT_TRUE(move_to(rejected, false, false).gizmo_consumed);
+  ASSERT_TRUE(harness.controller.dragging());
+  ASSERT_TRUE(modeling.transform_drag_active());
+  expect_preview_right_edge();
+  const auto revision = modeling.transient_transform_preview_revision();
+  const auto work = modeling.modeling_sdk_projection_stats_for_tests();
+  for (int frame = 0; frame < 3; ++frame) {
+    ASSERT_TRUE(move_to(rejected, false, false).gizmo_consumed);
+    EXPECT_TRUE(harness.controller.dragging());
+    EXPECT_EQ(modeling.transient_transform_preview_revision(), revision);
+    const auto unchanged_work = modeling.modeling_sdk_projection_stats_for_tests();
+    EXPECT_EQ(unchanged_work.preview_publication_count, work.preview_publication_count);
+    EXPECT_EQ(unchanged_work.mesh_compile_count, work.mesh_compile_count);
+  }
+  EXPECT_EQ(harness.session.history().undo_count(), undo_before);
+  ASSERT_TRUE(move_to(rejected, false, true).gizmo_consumed);
+  EXPECT_FALSE(harness.controller.dragging());
+  EXPECT_FALSE(modeling.transform_drag_active());
+  EXPECT_EQ(harness.session.history().undo_count(), undo_before + 1u);
+  const auto right_edge = [&]() {
+    float result = -std::numeric_limits<float>::infinity();
+    for (const auto &vertex : authored().vertices) result = std::max(result, vertex.position.x);
+    return result;
+  };
+  EXPECT_FLOAT_EQ(right_edge(), 0.0f);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FLOAT_EQ(right_edge(), 1.0f);
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  EXPECT_FLOAT_EQ(right_edge(), 0.0f);
+}
+
+TEST(ViewportInteractionControllerTests,
      ShiftRotateGizmoDragExtrudesSelectedFace) {
     ViewportInteractionHarness harness;
     const quader::QuaderModelingObjectRef box = create_unit_box(harness);

@@ -79,7 +79,7 @@ vertex {
         vec2 resolution = max(getResolution().xy, vec2(1.0));
         vec2 startNdc = clipStart.xy / max(abs(clipStart.w), 0.000001);
         vec2 endNdc = clipEnd.xy / max(abs(clipEnd.w), 0.000001);
-        vec2 directionPixels = (endNdc - startNdc) * resolution;
+        vec2 directionPixels = (endNdc - startNdc) * resolution * 0.5;
         float directionLength = length(directionPixels);
         vec2 direction = directionLength > 0.000001 ? directionPixels / directionLength : vec2(1.0, 0.0);
         vec2 normal = vec2(-direction.y, direction.x);
@@ -105,29 +105,30 @@ vertex {
         // device depth after materialVertex. getClipFromViewMatrix() already
         // yields reversed [0, 1] depth, so convert it back to the GL-domain
         // value produced by the former CPU OverlayCameraProjector first.
-        float deviceDepth = 1.0 - 2.0 * baseDevice.z;
-        deviceDepth = max(-1.0, deviceDepth + deviceOffset);
+        // Apply the small bias before converting back toward GL depth near
+        // 1.0. Adding it afterward can round it away entirely for distant
+        // edges, leaving even a line on its own surface behind scene depth.
+        float biasedReversedDepth = min(1.0, baseDevice.z - deviceOffset * 0.5);
+        float deviceDepth = 1.0 - 2.0 * biasedReversedDepth;
         highp vec4 finalDevice = vec4(baseDevice.xy + offsetDevice,
                                      deviceDepth, 1.0);
 
         material.clipSpaceTransform = mat4(1.0);
         material.clipSpaceTransform[3] = finalDevice;
-        material.lineDistancePixels = vec4(side * sideDistance, 0.0, 0.0, 0.0);
+        float halfLengthPixels = directionLength * 0.5;
+        material.lineDistancePixels = vec4(side * sideDistance,
+                cap * (halfLengthPixels + sideDistance), halfLengthPixels, 0.0);
     }
 }
 
 fragment {
+    #include "overlay_line_coverage.glsl"
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        float lineWidth = max(materialParams.lineWidth, 1.0);
-        float smoothWidth = max(materialParams.featherPixels, 0.0);
-        float alphaScale = 1.0;
-        if (smoothWidth <= 0.0001) {
-            alphaScale = step(abs(variable_lineDistancePixels.x), lineWidth * 0.5);
-        } else {
-            alphaScale = saturate((lineWidth + smoothWidth) * 0.5 - abs(variable_lineDistancePixels.x));
-        }
+        float alphaScale = overlayLineCoverage(variable_lineDistancePixels.xyz,
+                materialParams.lineWidth, materialParams.featherPixels);
 
         vec4 color = getColor();
         color.a *= alphaScale;
