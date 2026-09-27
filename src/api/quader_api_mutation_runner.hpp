@@ -101,7 +101,7 @@ private:
   [[nodiscard]] QuaderApiVoidResult
   status_from(ModelingCommandResult result, QuaderMutationKind kind,
               std::string_view fallback_message = {});
-  [[nodiscard]] ModelingCommandResult cancel_active_tool_or_preview_for_undo();
+  [[nodiscard]] CommandResult settle_pending_operations();
   [[nodiscard]] SceneSession &scene_session() const;
   [[nodiscard]] EditorHistoryService &history() const;
   [[nodiscard]] EditorCommandService editor_commands() const;

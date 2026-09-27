@@ -4345,11 +4345,11 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_FALSE(hints->isHidden());
   EXPECT_EQ(announcements, 7);
 
+  QElapsedTimer elapsed;
+  elapsed.start();
   const auto expiring_failure = editor.commands().execute(
       quader::quader_command::kModelingCombineFaces);
   ASSERT_FALSE(expiring_failure.ok());
-  QElapsedTimer elapsed;
-  elapsed.start();
   ui.refresh({}, {});
   ASSERT_TRUE(message->is_error());
   ASSERT_FALSE(message->isHidden());
@@ -4358,31 +4358,22 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_DOUBLE_EQ(opacity->opacity(), 1.0);
   EXPECT_EQ(announcements, 8);
   const auto expiring_revision = editor.commands().last_status_revision();
-  // Exercise command failure expiry on the real clock. Frame refreshes and a
-  // locale change must not extend its hold or interrupt its fade.
+  // Keep the five-second hold on the real clock. Qt's thread-local animation
+  // timer outlives the QApplications recreated by this suite, so step the fade
+  // explicitly after the real timeout instead of depending on its retained clock.
   QEventLoop expiry_loop;
-  bool observed_fade = false;
   int hold_timeouts = 0;
-  QObject::connect(hold_timer, &QTimer::timeout, &expiry_loop,
-                   [&] { ++hold_timeouts; });
+  QObject::connect(hold_timer, &QTimer::timeout, &expiry_loop, [&] {
+    ++hold_timeouts;
+    expiry_loop.quit();
+  });
   QTimer expiry_observer;
   expiry_observer.setInterval(25);
   QObject::connect(&expiry_observer, &QTimer::timeout, &expiry_loop, [&] {
-    if (message->isHidden()) {
-      EXPECT_FALSE(hints->isHidden())
-          << "expiry must restore hints without waiting for another app frame";
-      expiry_loop.quit();
-      return;
-    }
     ui.refresh({}, {});
     if (elapsed.elapsed() < 4900) {
       EXPECT_DOUBLE_EQ(opacity->opacity(), 1.0);
       EXPECT_FALSE(message->isHidden());
-    }
-    if (opacity->opacity() > 0.0 && opacity->opacity() < 1.0) {
-      observed_fade = true;
-      EXPECT_GE(elapsed.elapsed(), 5000);
-      EXPECT_TRUE(hints->isHidden());
     }
   });
   QTimer locale_change;
@@ -4400,7 +4391,7 @@ TEST(QtProjectWorkspaceTests,
   expiry_deadline.setSingleShot(true);
   QObject::connect(&expiry_deadline, &QTimer::timeout, &expiry_loop, [&] {
     ADD_FAILURE()
-        << "the diagnostic did not expire within its notification timeout; elapsed="
+        << "the diagnostic hold did not expire within its notification timeout; elapsed="
         << elapsed.elapsed() << ", hold timeouts=" << hold_timeouts
         << ", timer active=" << hold_timer->isActive()
         << ", remaining=" << hold_timer->remainingTime()
@@ -4415,12 +4406,31 @@ TEST(QtProjectWorkspaceTests,
   expiry_observer.stop();
   locale_change.stop();
   expiry_deadline.stop();
-  EXPECT_TRUE(observed_fade);
+  ASSERT_EQ(hold_timeouts, 1);
+  EXPECT_EQ(hold_timer->interval(), 5000);
   EXPECT_GE(elapsed.elapsed(), 5000);
+  EXPECT_FALSE(hold_timer->isActive());
+  ASSERT_EQ(fade->state(), QAbstractAnimation::Running);
+  EXPECT_EQ(fade->duration(), 200);
+  EXPECT_TRUE(opacity->isEnabled());
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(hints->isHidden());
+  fade->setCurrentTime(fade->duration() / 2);
+  EXPECT_NEAR(opacity->opacity(), 0.5, 0.01);
+  for (int frame = 0; frame < 8; ++frame) {
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(fade->state(), QAbstractAnimation::Running);
+  EXPECT_EQ(fade->currentTime(), fade->duration() / 2);
+  EXPECT_NEAR(opacity->opacity(), 0.5, 0.01);
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_TRUE(hints->isHidden());
+  fade->setCurrentTime(fade->duration());
   EXPECT_TRUE(message->text().isEmpty());
   EXPECT_TRUE(message->isHidden());
   EXPECT_FALSE(message->is_error());
-  EXPECT_FALSE(hints->isHidden());
+  EXPECT_FALSE(hints->isHidden())
+      << "expiry must restore hints without waiting for another app frame";
   EXPECT_EQ(announcements, 8);
   EXPECT_EQ(editor.commands().last_status_revision(), expiring_revision);
   ASSERT_TRUE(editor.preferences().set_locale("en-US").ok());

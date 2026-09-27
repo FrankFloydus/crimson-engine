@@ -120,33 +120,6 @@ viewport_pane_focus_decision(const ViewportPaneFocusRequest &request) {
   };
 }
 
-/// Supplies modal-tool state used to decide whether an outside pointer event cancels it.
-struct ViewportExternalPointerCancelRequest {
-  bool external_pointer_event = false;
-  bool modal_tool_owns_viewport = false;
-  bool persistent_native_tool_active = false;
-  bool navigation_active = false;
-  bool left_button_release_only = false;
-  bool insert_edge_loop_dragging = false;
-  bool cut_dragging = false;
-  bool mirror_dragging = false;
-};
-
-[[nodiscard]] constexpr bool should_cancel_modal_tool_for_external_pointer(
-    const ViewportExternalPointerCancelRequest &request) {
-  if (!request.external_pointer_event ||
-      !request.modal_tool_owns_viewport ||
-      request.persistent_native_tool_active ||
-      request.navigation_active) {
-    return false;
-  }
-  if (!request.left_button_release_only) {
-    return true;
-  }
-  return !request.insert_edge_loop_dragging && !request.cut_dragging &&
-         !request.mirror_dragging;
-}
-
 /// Supplies router and editor state for a tool-activation dispatch decision.
 struct ViewportToolActivationDispatchRequest {
   bool activation_requested = false;

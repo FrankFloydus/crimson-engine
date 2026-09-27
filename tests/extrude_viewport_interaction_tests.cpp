@@ -527,7 +527,7 @@ TEST(ExtrudeViewportInteractionTests, EscapeCancelsOnlyDragAndReservesItsRelease
   EXPECT_FALSE(harness.session.extrude().active());
 }
 
-TEST(ExtrudeViewportInteractionTests, PendingDragBlocksToolSwitchUntilCancellation) {
+TEST(ExtrudeViewportInteractionTests, ToolSwitchAcceptsPendingDragAfterExplicitCancelRestoresPriorDrag) {
   ExtrudePointerHarness harness;
   harness.prepare_faces();
   ASSERT_TRUE(harness.session.extrude().begin_drag().ok);
@@ -535,14 +535,22 @@ TEST(ExtrudeViewportInteractionTests, PendingDragBlocksToolSwitchUntilCancellati
   ASSERT_TRUE(harness.session.native_tools().cancel_active().ok);
   EXPECT_TRUE(harness.session.extrude().active());
   EXPECT_FALSE(harness.session.extrude().dragging());
+  const auto before = harness.editor.query().compiled_object_mesh(harness.object);
+  ASSERT_TRUE(before.has_value());
+  const auto steps = harness.session.history().undo_count();
   ASSERT_TRUE(harness.session.extrude().begin_drag().ok);
-  EXPECT_FALSE(harness.editor.tools().activate(ViewportToolId::Move).ok());
-  EXPECT_TRUE(harness.session.extrude().active());
-  EXPECT_TRUE(harness.session.extrude().dragging());
-  ASSERT_TRUE(harness.session.native_tools().cancel_active().ok);
+  ASSERT_TRUE(harness.session.extrude().update_drag(3.0).ok);
+  const auto authored = harness.editor.query().compiled_object_mesh(harness.object);
+  ASSERT_TRUE(authored.has_value());
   ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::Move).ok());
   EXPECT_FALSE(harness.session.extrude().active());
   EXPECT_FALSE(harness.session.extrude().dragging());
+  expect_extrude_mesh_geometry(
+      *harness.editor.query().compiled_object_mesh(harness.object), *authored);
+  EXPECT_EQ(harness.session.history().undo_count(), steps + 1u);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  expect_extrude_mesh_geometry(
+      *harness.editor.query().compiled_object_mesh(harness.object), *before);
 }
 
 TEST(ExtrudeViewportInteractionTests,
@@ -1399,7 +1407,7 @@ TEST(ExtrudeViewportInteractionTests, ControllerRetainsDeferredDoubleClickProven
   EXPECT_FLOAT_EQ(released.before_tool.selection_click_local.y, harness.press.y);
 }
 
-TEST(ExtrudeViewportInteractionTests, FailedReleaseUpdateRestoresSourceInsteadOfCommittingOldPreview) {
+TEST(ExtrudeViewportInteractionTests, FailedReleaseUpdateRetainsTheLastValidPendingPreview) {
   ExtrudePointerHarness harness;
   harness.prepare_faces();
   const auto before = harness.editor.query().mesh(harness.object.mesh);
@@ -1408,19 +1416,28 @@ TEST(ExtrudeViewportInteractionTests, FailedReleaseUpdateRestoresSourceInsteadOf
   harness.move();
   ASSERT_TRUE(harness.frame(false, true, false).command_result.ok);
   ASSERT_TRUE(harness.session.extrude().dragging());
+  const auto accepted = harness.editor.query().compiled_object_mesh(harness.object);
+  ASSERT_TRUE(accepted.has_value());
+  const double accepted_amount = harness.session.extrude().amount();
   harness.input.mouse_local = {std::numeric_limits<float>::quiet_NaN(),
                                std::numeric_limits<float>::quiet_NaN()};
   const auto released = harness.frame(false, false, true);
   EXPECT_FALSE(released.command_result.ok);
   EXPECT_FALSE(harness.session.extrude().dragging());
   EXPECT_TRUE(harness.session.extrude().active());
-  EXPECT_EQ(harness.session.extrude().amount(), 0.0);
+  EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), accepted_amount);
+  EXPECT_TRUE(harness.session.extrude().preview_active());
+  const auto current = harness.editor.query().compiled_object_mesh(harness.object);
+  ASSERT_TRUE(current.has_value());
+  expect_extrude_mesh_geometry(*current, *accepted);
+  ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
   EXPECT_EQ(harness.editor.query().mesh(harness.object.mesh)->index_count,
             before->index_count);
 }
 
 TEST(ExtrudeViewportInteractionTests,
-     InvalidFiniteSampleRetainsPreviewUntilReleaseAndIsNotRetriedUnchanged) {
+     InvalidFiniteSampleRetainsPreviewAfterReleaseAndIsNotRetriedUnchanged) {
   ExtrudePointerHarness harness;
   harness.prepare_faces();
   ASSERT_TRUE(harness.editor.scene().set_transform(
@@ -1457,11 +1474,17 @@ TEST(ExtrudeViewportInteractionTests,
   EXPECT_TRUE(harness.session.extrude().active());
   current = harness.editor.query().compiled_object_mesh(harness.object);
   ASSERT_TRUE(current.has_value());
+  expect_extrude_mesh_geometry(*current, *accepted);
+  EXPECT_TRUE(harness.session.extrude().preview_active());
+  ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  current = harness.editor.query().compiled_object_mesh(harness.object);
+  ASSERT_TRUE(current.has_value());
   expect_extrude_mesh_geometry(*current, *source);
 }
 
-TEST(ExtrudeViewportInteractionTests, InterruptedDragRestoresGeometryAndKeepsToolArmed) {
-  for (int interruption = 0; interruption < 4; ++interruption) {
+TEST(ExtrudeViewportInteractionTests, InterruptedDragRetainsGeometryAndFocusAloneKeepsGesture) {
+  for (int interruption = 0; interruption < 5; ++interruption) {
     SCOPED_TRACE(interruption);
     ExtrudePointerHarness harness;
     harness.prepare_faces();
@@ -1471,13 +1494,34 @@ TEST(ExtrudeViewportInteractionTests, InterruptedDragRestoresGeometryAndKeepsToo
     harness.move();
     ASSERT_TRUE(harness.frame(false, true, false).command_result.ok);
     ASSERT_TRUE(harness.session.extrude().dragging());
+    const auto accepted = harness.editor.query().compiled_object_mesh(harness.object);
+    ASSERT_TRUE(accepted.has_value());
+    const double accepted_amount = harness.session.extrude().amount();
+    const auto history_before = harness.session.history().undo_count();
     harness.input.navigation_active = interruption == 0;
     harness.input.viewport_focused = interruption != 1;
     harness.input.text_input_active = interruption == 2;
+    harness.input.pointer_interaction_canceled = interruption == 4;
     const bool held = interruption != 3;
+    harness.move_by({300.0f, 300.0f});
     EXPECT_TRUE(harness.frame(false, held, false).consumed);
+    if (interruption == 1) {
+      EXPECT_TRUE(harness.session.extrude().dragging());
+      EXPECT_EQ(harness.session.history().undo_count(), history_before);
+      EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), accepted_amount);
+      EXPECT_TRUE(harness.frame(false, false, true).consumed);
+    }
     EXPECT_FALSE(harness.session.extrude().dragging());
     EXPECT_TRUE(harness.session.extrude().active());
+    EXPECT_TRUE(harness.session.extrude().preview_active());
+    EXPECT_DOUBLE_EQ(harness.session.extrude().amount(), accepted_amount);
+    const auto current = harness.editor.query().compiled_object_mesh(harness.object);
+    ASSERT_TRUE(current.has_value());
+    expect_extrude_mesh_geometry(*current, *accepted);
+    EXPECT_EQ(harness.session.history().undo_count(), history_before);
+    ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok());
+    EXPECT_EQ(harness.session.history().undo_count(), history_before + 1u);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
     EXPECT_EQ(harness.editor.query().mesh(harness.object.mesh)->index_count,
               before->index_count);
   }

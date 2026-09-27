@@ -1177,6 +1177,25 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_EQ(document.albedo, accepted_color);
   EXPECT_EQ(button->swatch_color(), accepted_color);
   EXPECT_TRUE(document.dirty);
+
+  const QColor close_color(45, 85, 125);
+  bool close_observed_accepted_color = false;
+  window->set_close_request_handler([&]() {
+    close_observed_accepted_color = document.albedo == close_color &&
+                                    !finishes.empty() && finishes.back();
+    return true;
+  });
+  QTimer::singleShot(0, window, [&]() {
+    auto *dialog = window->findChild<QColorDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    dialog->setCurrentColor(close_color);
+    EXPECT_TRUE(window->close());
+  });
+  button->click();
+  EXPECT_TRUE(close_observed_accepted_color);
+  ASSERT_EQ(finishes.size(), 3u);
+  EXPECT_TRUE(finishes.back());
+  EXPECT_EQ(document.albedo, close_color);
 }
 
 TEST(QtStandardMaterialEditorWindowTests,

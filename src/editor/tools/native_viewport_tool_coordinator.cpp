@@ -27,6 +27,17 @@
 namespace quader {
 namespace {
 
+class NativeSettlementGuard final {
+public:
+  explicit NativeSettlementGuard(bool &active)
+      : active_(active), previous_(std::exchange(active, true)) {}
+  ~NativeSettlementGuard() { active_ = previous_; }
+
+private:
+  bool &active_;
+  bool previous_;
+};
+
 class CurveViewportInteractionAdapter final
     : public ViewportCurveInteractionPort {
 public:
@@ -79,11 +90,13 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
     LightCreationToolService &light_creation,
     EditorSelectionService &selection, ModelingSessionService &modeling,
     CurveToolService &curve, UvPeelToolService &uv_peel,
-    ExtrudeToolService &extrude)
+    ExtrudeToolService &extrude,
+    std::function<CommandResult(MaterialReference)> settle_modeling)
     : pivot_(pivot), linear_array_(linear_array), radial_array_(radial_array),
       path_array_(path_array), primitives_(primitives),
       light_creation_(light_creation), selection_(selection),
       modeling_(modeling), curve_(curve), uv_peel_(uv_peel), extrude_(extrude),
+      settle_modeling_(std::move(settle_modeling)),
       curve_interaction_(
           std::make_unique<CurveViewportInteractionAdapter>(curve_)) {
   // Registration order preserves commit/cancel precedence. active_priority
@@ -134,6 +147,7 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
                                   : std::move(applied.message)),
         };
       },
+      .settle = [&] { return curve_.finish(); },
       .cancel = [&] { return curve_.cancel(); },
       .reset = [&] { (void)curve_.cancel(); },
   });
@@ -156,6 +170,7 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       },
       .activate = [&](double) { return primitives_.activate(); },
       .commit = [&] { return primitives_.apply(); },
+      .settle = [&] { return primitives_.finish(); },
       .cancel = [&] { return primitives_.cancel(); },
       .reset = [&] { (void)primitives_.cancel(); },
       .local_history = ViewportNativeToolHistoryAdapter{
@@ -197,6 +212,7 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
         return radial_array_.activate(grid_size);
       },
       .commit = [&] { return radial_array_.apply(); },
+      .settle = [&] { return radial_array_.finish(); },
       .cancel = [&] { return radial_array_.cancel(); },
       .reset = [&] { (void)radial_array_.cancel(); },
   });
@@ -209,8 +225,12 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .commit_domain = ViewportNativeToolCommitDomain::Document,
       .can_activate = [&] { return path_array_.can_activate(); },
       .active = [&] { return path_array_.active(); },
-      .pending = [&] { return path_array_.has_session(); },
-      .pending_history_preview = [&] { return path_array_.has_session(); },
+      .pending = [&] {
+        return path_array_.has_session() && !path_array_.commit_in_progress();
+      },
+      .pending_history_preview = [&] {
+        return path_array_.has_session() && !path_array_.commit_in_progress();
+      },
       .blocks_modeling_content_mutation =
           [&] { return path_array_.blocks_modeling_content_mutation(); },
       .blocks_document_mutation =
@@ -219,6 +239,10 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
           },
       .activate = [&](double) { return path_array_.activate(); },
       .commit = [&] { return path_array_.apply(); },
+      .settle = [&] {
+        return path_array_.stage() == PathArrayToolStage::AwaitingSource
+                   ? path_array_.cancel() : path_array_.apply();
+      },
       .cancel = [&] { return path_array_.cancel(); },
       .reset = [&] { (void)path_array_.cancel(); },
   });
@@ -267,6 +291,12 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .blocks_document_mutation = [&](EntityId) { return uv_peel_.active(); },
       .activate = [&](double) { return uv_peel_.activate(); },
       .commit = [&] { return uv_peel_.apply(); },
+      .settle = [&] {
+        // An empty guide selection has no authored UV draft to accept.
+        return !uv_peel_.preview_valid() &&
+                       modeling_.selection_summary().selected_edge_count == 0u
+                   ? uv_peel_.cancel() : uv_peel_.apply();
+      },
       .cancel = [&] { return uv_peel_.cancel(); },
       .reset = [&] { (void)uv_peel_.cancel(); },
   });
@@ -282,6 +312,15 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .blocks_document_mutation = [&](EntityId) { return extrude_.preview_active(); },
       .activate = [&](double) { return extrude_.activate_preview(); },
       .commit = [&] { return extrude_.commit_preview(); },
+      .settle = [&] {
+        CommandResult committed = extrude_.commit_preview();
+        if (!committed.ok) {
+          return committed;
+        }
+        CommandResult exited = extrude_.cancel();
+        exited.changed = exited.changed || committed.changed;
+        return exited;
+      },
       .cancel = [&] { return extrude_.cancel(); },
       .reset = [&] { (void)extrude_.cancel(); },
   });
@@ -297,9 +336,6 @@ bool NativeViewportToolCoordinator::handles(std::string_view tool_id) const {
 bool NativeViewportToolCoordinator::can_activate(
     std::string_view tool_id) const {
   if (!release_allows_tool(tool_id)) {
-    return false;
-  }
-  if (extrude_.preview_active() && tool_id != kExtrudeToolId) {
     return false;
   }
   return runtime_.can_activate_native_lifecycle(tool_id);
@@ -489,16 +525,18 @@ CommandResult NativeViewportToolCoordinator::activate(
   if (!release_allows_tool(tool_id)) {
     return command_invalid_result(release_feature_unavailable_message());
   }
-  if (extrude_.preview_active() && tool_id != kExtrudeToolId) {
-    return command_invalid_result(
-        "Apply or cancel the extrusion before changing tools.");
-  }
   if (tool_id == kExtrudeToolId && extrude_.active()) {
     return extrude_.activate_preview();
   }
+  if (tool_id == kExtrudeToolId) {
+    const CommandResult preflight = extrude_.preflight_activation(extrude_.mode());
+    if (!preflight.ok) {
+      return preflight;
+    }
+  }
   return runtime_.activate_native_lifecycle(
       tool_id, grid_world_size,
-      [&] { return cancel_competing_state_for_tool_activation(); });
+      [&] { return settle_competing_state_for_tool_activation(); });
 }
 
 CommandResult NativeViewportToolCoordinator::activate_extrude(
@@ -509,7 +547,11 @@ CommandResult NativeViewportToolCoordinator::activate_extrude(
   if (extrude_.active()) {
     return extrude_.activate_preview(mode);
   }
-  const CommandResult canceled = cancel_competing_state_for_tool_activation();
+  const CommandResult preflight = extrude_.preflight_activation(mode);
+  if (!preflight.ok) {
+    return preflight;
+  }
+  const CommandResult canceled = settle_competing_state_for_tool_activation();
   if (!canceled.ok) {
     return canceled;
   }
@@ -527,7 +569,7 @@ CommandResult NativeViewportToolCoordinator::begin_light_creation(
     return command_unchanged_result();
   }
   const CommandResult canceled =
-      cancel_competing_state_for_tool_activation();
+      settle_competing_state_for_tool_activation();
   if (!canceled.ok) {
     return canceled;
   }
@@ -543,14 +585,48 @@ CommandResult NativeViewportToolCoordinator::complete_active_light_creation(
 
 CommandResult
 NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
-  if (extrude_.preview_active()) {
-    return command_invalid_result(
-        "Apply or cancel the extrusion before changing tools.");
+  // Compatibility entry point: moving to another tool accepts authored work.
+  return settle_competing_state_for_tool_activation();
+}
+
+CommandResult
+NativeViewportToolCoordinator::settle_competing_state_for_tool_activation() {
+  return settle_transient_state();
+}
+
+CommandResult NativeViewportToolCoordinator::settle_transient_state() {
+  if (settling_transient_state_) {
+    return command_unchanged_result();
   }
-  return cancel_transient_state();
+  NativeSettlementGuard guard(settling_transient_state_);
+
+  // Native tools own their preview history (notably Extrude and UV Peel).
+  // Let them publish before considering remaining generic modeling state.
+  CommandResult result = runtime_.settle_native_lifecycles();
+  if (!result.ok) {
+    return result;
+  }
+  const CommandResult modeling_settled = settle_modeling_(creation_material_);
+  result.changed = result.changed || modeling_settled.changed;
+  if (!modeling_settled.ok) {
+    return {.ok = false, .changed = result.changed,
+            .message = modeling_settled.message};
+  }
+  if (const auto operation = light_creation_.active_operation()) {
+    const CommandResult completed = light_creation_.complete(*operation);
+    result.changed = result.changed || completed.changed;
+    if (!completed.ok) {
+      return {.ok = false, .changed = result.changed,
+              .message = completed.message};
+    }
+  }
+  interaction_.clear_drag_state();
+  extrude_interaction_.clear_drag_state();
+  return result;
 }
 
 CommandResult NativeViewportToolCoordinator::cancel_transient_state() {
+  NativeSettlementGuard guard(settling_transient_state_);
   const ModelingCommandResult modeling_cancel =
       modeling_.cancel_competing_state_for_native_tool_activation();
   if (!modeling_cancel.ok) {
@@ -588,6 +664,7 @@ CommandResult NativeViewportToolCoordinator::cancel_transient_state() {
 }
 
 CommandResult NativeViewportToolCoordinator::commit_active() {
+  NativeSettlementGuard guard(settling_transient_state_);
   const CommandResult result = runtime_.commit_active_native_lifecycle();
   if (result.ok) {
     interaction_.clear_drag_state();
@@ -597,14 +674,17 @@ CommandResult NativeViewportToolCoordinator::commit_active() {
 }
 
 CommandResult NativeViewportToolCoordinator::undo_active() {
+  NativeSettlementGuard guard(settling_transient_state_);
   return runtime_.undo_active_native_lifecycle();
 }
 
 CommandResult NativeViewportToolCoordinator::redo_active() {
+  NativeSettlementGuard guard(settling_transient_state_);
   return runtime_.redo_active_native_lifecycle();
 }
 
 CommandResult NativeViewportToolCoordinator::cancel_active() {
+  NativeSettlementGuard guard(settling_transient_state_);
   if (extrude_.dragging()) {
     const CommandResult result = extrude_.cancel_drag();
     if (result.ok) {

@@ -76,8 +76,9 @@ Read `viewport_keybinding_context()` and the registration context helpers before
 Ordinary editor panels supply `editorFocus`; the Outliner supplies `outlinerFocus` while hovered
 or focused. Registered editor commands, including tool activation, plus selection-mode and grid-preset bindings
 use the same compiled mappings and user overrides across these panels. A panel dispatches the public
-command or typed owner intent immediately. Selection-mode changes cancel active previews through the
-selection API before publishing the new mode, while
+command or typed owner intent immediately. Selection-mode changes and selection edits that leave the
+current operation accept valid pending work through its existing owner before publishing the new
+selection state. Compatible in-tool selection edits retain the owner's live-preview behavior, while
 viewport pointer, navigation, and popup targets retain their semantic router. Explicit focused-control
 keys such as item-view Ctrl+A, arrows, and activation retain local ownership; item-view type-ahead
 search runs only when no editor command matches. Text/delegate editors retain editing input except
@@ -132,9 +133,14 @@ Apply settles the focused numeric draft before committing; Cancel discards it be
 focus loss can publish it. Keep user remaps, deliberate unassignments, sequence ownership,
 and popup input ownership intact. Test physical key press/release through the production
 viewport and settings adapters, not only the button's API call.
-Resolve operation-preview completion through its canonical Apply/Cancel commands;
-reinterpreting an unrelated viewport action as completion bypasses remapping and
-deliberate unassignment.
+Explicit operation completion resolves through canonical Apply/Cancel commands and preserves their
+remapping and deliberate unassignment. Implicit tool, selection, save, and scene transitions call
+the same acceptance owners directly; they do not synthesize an Apply key or fall back to Cancel.
+A meaningful draft that cannot be accepted rejects the transition without changing the draft,
+selection, tool, or pane ownership. An untouched starter exits without creating geometry or history.
+Repeated activation of the same tool in the same pane preserves its operation; pane focus alone
+does not accept or cancel it. Undo accepts valid pending work before undoing it so Redo can restore
+that result; native tool-local history, including primitive creation, retains its own semantics.
 Preferences and the floating material usage filter resolve their Apply/Cancel controls
 through the same canonical bindings. Free-text fields, shortcut capture, and nested
 dialogs keep their input; the scoped dialog adapter owns its multi-key prefixes while
@@ -143,7 +149,8 @@ its button, and the embedded material filter retains its immediate checkbox beha
 The persistent Extrude tool reserves Escape even while idle: it exits the tool and
 keeps accepted geometry and selected caps. E captures preselected faces in a pending
 extrusion at the last accepted Amount (initially zero); when activated without faces, the first face selection starts
-that pending operation. Its source selection stays locked until Apply or Cancel.
+that pending operation. Its source selection stays locked while editing that operation; a selection
+or tool transition accepts it before changing the source.
 Escape or the settings Cancel button restores its source without recording
 history. Releasing a viewport drag leaves the extrusion pending and enables Apply;
 Apply accepts it once and retains Amount without starting another preview. A new pointer drag
@@ -155,6 +162,8 @@ The yellow disk stays visible during dragging. The disk, selected-face dragging 
 Amount edit only the pending operation. After Apply, the next amount edit or drag
 starts a new operation from the selected caps; accepted geometry is never adjusted.
 Repeated E retains the current pending operation instead of accepting it implicitly.
+Insert Edge Loop and Knife activation enter Edge mode from any selection mode, including through
+Shift+R and C respectively; Edge mode is an activation result, not a shortcut precondition.
 Dragging follows the visible gizmo axis in every extrusion mode. When the axis points
 directly into the view and has no visible direction, dragging upward increases Amount.
 Extrusion dragging is unsnapped by default. Holding Ctrl snaps the total extrusion
@@ -257,6 +266,11 @@ Freehand selection consumes ordered, gesture-scoped pointer samples, including p
 a closed path collected between frames must not collapse to the final cursor position. Clear the
 sample stream on capture/focus loss, runtime rebinding, and coordinate-system changes.
 Focus/capture loss supplies `pointer_interaction_canceled`, even when Qt synthesizes a release.
+That transport signal is not explicit Cancel: gesture owners retain or accept their last valid
+sample on interruption without applying its pointer coordinates. Incomplete primitive footprints
+remain pending for retry or explicit Cancel. Outside panel clicks do not cancel a modeling draft;
+the requested tool/selection/document command owns any required acceptance.
+Merely focusing another pane while the pointer remains held preserves the pending gesture.
 `ViewportInteractionController::handle_tool_pointer_lifecycle()` preserves Curve-control prepass,
 semantic conversion edge order, native tool lifecycle, then ordinary transform-gizmo precedence.
 Qt submits the frame and presents tool cursor intent; it does not enumerate tools or reconstruct this
@@ -318,6 +332,12 @@ cancels the RMB chord without synthesizing a click. Win32 messages stay at the U
 The navigation release frame retains picking suppression while its sample still contains the
 captured pointer position. Hover and selection resume from the restored real cursor on the next
 frame; the navigation crosshair must never publish a scene hover candidate.
+Navigation suspends tool picking without clearing the last world-space preview or rolling back
+its authored values. Retain that preview through the captured release frame, including Curve
+placement ghosts and Knife/Loop hover feedback. A pointer subgesture may retire at its last valid
+value when its screen-space basis changes; navigation alone must not Apply/Cancel the pending tool
+operation. Explicit cancellation, tool changes and matching editing-button releases retain their
+own lifecycle rules.
 
 ## Verification map
 

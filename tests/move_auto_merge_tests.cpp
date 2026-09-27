@@ -381,7 +381,7 @@ TEST_F(MoveAutoMergeTests, ExtrudedCapSelectionSurvivesWeldIntoDuplicateSidewall
   EXPECT_GT(document().vertices.size(), 8U);
 }
 
-TEST_F(MoveAutoMergeTests, FailedPublicationRestoresGeometrySelectionAndHistory) {
+TEST_F(MoveAutoMergeTests, FailedPublicationRetainsPreviewForRetryWithoutPublishing) {
   create(1.0F);
   for (const auto failure : {
            ModelingSdkProjectionFailurePoint::BeforeCommit,
@@ -401,7 +401,8 @@ TEST_F(MoveAutoMergeTests, FailedPublicationRestoresGeometrySelectionAndHistory)
         ModelingSdkProjectionFailurePoint::None);
     EXPECT_FALSE(committed.ok);
     EXPECT_FALSE(committed.changed) << committed.message;
-    EXPECT_FALSE(modeling_.transform_drag_active());
+    EXPECT_TRUE(modeling_.transform_drag_active());
+    EXPECT_FALSE(modeling_.tool_preview_meshes().empty());
     EXPECT_EQ(document().vertices.size(), 6U);
     EXPECT_EQ(history_.undo_count(), 0U);
     EXPECT_EQ(scene_.revision(), scene_revision);
@@ -411,6 +412,16 @@ TEST_F(MoveAutoMergeTests, FailedPublicationRestoresGeometrySelectionAndHistory)
     EXPECT_FLOAT_EQ(modeling_.export_selection()
                         .objects.front().selected_vertices.front().position.x,
                     0.0F);
+    const auto retried = modeling_.commit_transform_drag(history_);
+    ASSERT_TRUE(retried.ok) << retried.message;
+    EXPECT_FALSE(modeling_.transform_drag_active());
+    EXPECT_EQ(document().vertices.size(), 5U);
+    EXPECT_EQ(history_.undo_count(), 1U);
+    ASSERT_TRUE(history_.undo().ok);
+    EXPECT_EQ(document().vertices.size(), 6U);
+    ASSERT_EQ(modeling_.export_selection().objects.front().selected_vertices.front().id,
+              source_);
+    history_.clear();
   }
 }
 

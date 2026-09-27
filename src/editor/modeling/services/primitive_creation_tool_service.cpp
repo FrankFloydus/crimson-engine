@@ -439,14 +439,8 @@ PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
     if (session_->kind == kind) {
       return command_unchanged_result();
     }
-    // A launcher starts a new creation session; it must never morph the last
-    // accepted object. Retire an unfinished resize before recording its shape.
-    const CommandResult resized = cancel_resize();
-    if (!resized.ok) {
-      return resized;
-    }
-    CommandResult settled = can_apply() ? apply() : cancel();
-    settled.changed = settled.changed || resized.changed;
+    // A launcher starts a new session after accepting the previous shape.
+    CommandResult settled = finish();
     if (!settled.ok) {
       return settled;
     }
@@ -549,22 +543,15 @@ CommandResult PrimitiveCreationToolService::accept_volume(
   std::optional<PrimitivePlacementFrame> frame =
       placement_frame(preview);
   if (!frame.has_value()) {
-    return rollback_and_exit(
-        "Primitive footprint does not define a valid volume.", true);
+    return command_invalid_result("Primitive footprint does not define a valid volume.");
   }
 
   // Beginning another accepted shape is itself a selection transition: the
   // runtime will select the new object and deselect the prior live primitive.
   const ModelingSessionMemento before = modeling_.capture_history_memento();
   if (!before.valid()) {
-    return rollback_and_exit(
-        "Primitive tool could not capture the shape's history state.", true);
+    return command_invalid_result("Primitive tool could not capture the shape's history state.");
   }
-  if (session_->history_cursor > 0U) {
-    // Seal the preceding shape after its final live settings edits.
-    session_->shapes[session_->history_cursor - 1U].after = before;
-  }
-  live_primitive_.reset();
 
   QVec3 local_min{-frame->width * 0.5f, -frame->height * 0.5f,
                   -frame->depth * 0.5f};
@@ -613,7 +600,7 @@ CommandResult PrimitiveCreationToolService::accept_volume(
                                         box_settings_, cylinder_settings_,
                                         cone_settings_, sphere_settings_, torus_settings_);
   if (document.vertices.empty() || document.faces.empty()) {
-    return rollback_and_exit("Primitive geometry could not be generated.", true);
+    return command_invalid_result("Primitive geometry could not be generated.");
   }
   if (name.empty()) {
     name = std::string(primitive_creation_default_name(session_->kind));
@@ -642,16 +629,59 @@ CommandResult PrimitiveCreationToolService::accept_volume(
       .initial_scene_transform = placement_transform(*frame),
       .world_texture_projection = true,
   });
+  if (checkpoint_hooks_.record_after_projection) {
+    checkpoint_hooks_.record_after_projection();
+  }
   if (!created.ok || !created.changed) {
-    return rollback_and_exit(
-        created.message.empty() ? "Primitive shape could not be created."
-                                : created.message,
-        true);
+    // Creation owns its publication rollback. Keep the previous accepted
+    // shapes, live edit, and unaccepted footprint available for retry.
+    return {.ok = false, .changed = created.changed,
+            .message = created.message.empty()
+                           ? "Primitive shape could not be created."
+                           : created.message};
+  }
+  const auto restore_previous_shapes = [&](std::string message,
+                                            bool transient_changed = false) {
+    if (checkpoint_hooks_.observe_before_projection) {
+      checkpoint_hooks_.observe_before_projection();
+    }
+    const ModelingCommandResult restored = modeling_.restore_history_memento(before);
+    if (checkpoint_hooks_.record_after_projection) {
+      checkpoint_hooks_.record_after_projection();
+    }
+    if (!restored.ok) {
+      message = combined_failure(std::move(message), restored.message.empty()
+          ? "The previous primitive state could not be restored." : restored.message);
+    } else if (live_primitive_) {
+      live_primitive_->selection_revision = modeling_.selection_summary().selection_revision;
+    }
+    return CommandResult{.ok = false,
+                         .changed = transient_changed || !restored.ok,
+                         .message = std::move(message)};
+  };
+  // Prepare every fallible part before replacing session metadata or the redo
+  // tail. Compensation removes only this candidate, never prior accepted shapes.
+  const ModelingSessionMemento after = history_.max_steps() > 0U
+      ? modeling_.capture_history_memento() : ModelingSessionMemento{};
+  if (history_.max_steps() > 0U && !after.valid()) {
+    return restore_previous_shapes("Primitive tool could not capture the created shape.");
+  }
+  const CommandResult reset = reset_footprint();
+  if (!reset.ok) {
+    return restore_previous_shapes(
+        reset.message.empty()
+            ? "Primitive shape was created, but the next footprint could not start."
+            : reset.message,
+        reset.changed);
+  }
+  if (session_->history_cursor > 0U) {
+    // Seal the previous shape only after the next shape was published.
+    session_->shapes[session_->history_cursor - 1U].after = before;
   }
   session_->shapes.resize(session_->history_cursor);
   session_->created_object_ids.resize(session_->accepted_shapes);
   if (history_.max_steps() > 0U) {
-    session_->shapes.push_back({.before = before});
+    session_->shapes.push_back({.before = before, .after = after});
     ++session_->history_cursor;
   }
   ++session_->accepted_shapes;
@@ -665,25 +695,6 @@ CommandResult PrimitiveCreationToolService::accept_volume(
       .local_min = local_min,
       .local_max = local_max,
   };
-  if (checkpoint_hooks_.record_after_projection) {
-    checkpoint_hooks_.record_after_projection();
-  }
-
-  const CommandResult reset = reset_footprint();
-  if (!reset.ok) {
-    return rollback_and_exit(
-        reset.message.empty()
-            ? "Primitive shape was created, but the next footprint could not start."
-            : reset.message,
-        true);
-  }
-  if (session_->history_cursor > 0U) {
-    session_->shapes.back().after = modeling_.capture_history_memento();
-    if (!session_->shapes.back().after.valid()) {
-      return rollback_and_exit(
-          "Primitive tool could not capture the created shape.", true);
-    }
-  }
   apply_history_limit();
   modeling_.release_redundant_sdk_history();
   return command_changed_result();
@@ -701,10 +712,9 @@ CommandResult PrimitiveCreationToolService::apply() {
 
   const ModelingCommandResult reset = modeling_.cancel_box();
   if (!reset.ok) {
-    return rollback_and_exit(
+    return command_invalid_result(
         reset.message.empty() ? "Primitive tool could not finalize."
-                              : reset.message,
-        true);
+                              : reset.message);
   }
 
   if (session_->history_cursor > 0U) {
@@ -723,8 +733,7 @@ CommandResult PrimitiveCreationToolService::apply() {
     const ModelingSessionMemento after =
         modeling_.capture_history_memento_without_objects(shape.after, {});
     if (!before.valid() || !after.valid()) {
-      return rollback_and_exit(
-          "Primitive tool could not capture its applied state.", true);
+      return command_invalid_result("Primitive tool could not capture its applied state.");
     }
     commands.push_back(std::make_unique<RecordedModelingMementoCommand>(
         modeling_, "Create Primitive", before, after));
@@ -739,14 +748,38 @@ CommandResult PrimitiveCreationToolService::apply() {
   for (auto &command : commands) {
     const CommandResult recorded = history_.record_executed(std::move(command));
     if (!recorded.ok) {
-      return rollback_and_exit(
+      return command_invalid_result(
           recorded.message.empty()
               ? "Primitive tool could not record its history transaction."
-              : recorded.message,
-          true);
+              : recorded.message);
     }
   }
 
+  finish_session();
+  finish_checkpoint(false);
+  return command_changed_result();
+}
+
+CommandResult PrimitiveCreationToolService::finish() {
+  if (!session_) {
+    return command_unchanged_result();
+  }
+  if (modeling_.box_drag_state() != ModelingBoxDragState::Idle) {
+    return command_invalid_result("Finish drawing the primitive footprint before changing tools.");
+  }
+  CommandResult resized = end_resize();
+  if (!resized.ok) {
+    return resized;
+  }
+  if (can_apply()) {
+    CommandResult applied = apply();
+    applied.changed = applied.changed || resized.changed;
+    return applied;
+  }
+  const ModelingCommandResult reset = modeling_.cancel_box();
+  if (!reset.ok) {
+    return modeling_memento_command_result(reset);
+  }
   finish_session();
   finish_checkpoint(false);
   return command_changed_result();
@@ -941,7 +974,6 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
   }
   const CommandResult frozen = freeze_live_primitive_if_selection_changed();
   if (!frozen.ok) {
-    // Cancellation failure may have rolled back and destroyed the session.
     return frozen;
   }
   const bool toggle = value != 0.0;
@@ -1493,6 +1525,8 @@ CommandResult PrimitiveCreationToolService::update_resize(double displacement) {
       same_bounds(maximum, live_primitive_->local_max) && !ratio_changed) {
     return command_unchanged_result();
   }
+  const QVec3 previous_minimum = live_primitive_->local_min;
+  const QVec3 previous_maximum = live_primitive_->local_max;
   live_primitive_->local_min = minimum;
   live_primitive_->local_max = maximum;
   if (ratio_changed) {
@@ -1502,6 +1536,9 @@ CommandResult PrimitiveCreationToolService::update_resize(double displacement) {
   const CommandResult result = update_live_primitive();
   if (result.ok) {
     ++primitive_revision_;
+  } else {
+    live_primitive_->local_min = previous_minimum;
+    live_primitive_->local_max = previous_maximum;
   }
   return result;
 }
@@ -1510,8 +1547,9 @@ CommandResult PrimitiveCreationToolService::end_resize() {
   if (!live_primitive_ || !live_primitive_->resize) {
     return command_unchanged_result();
   }
-  if (!live_primitive_creation()) {
-    return cancel_resize();
+  if (!session_ || !modeling_.entity_for_modeling_object(
+                       live_primitive_->modeling_object_id).has_value()) {
+    return command_invalid_result("The primitive resize target changed before completion.");
   }
   live_primitive_->resize.reset();
   ++primitive_revision_;
@@ -1530,6 +1568,8 @@ CommandResult PrimitiveCreationToolService::cancel_resize() {
   const bool restore_ratio = session_->kind == PrimitiveCreationKind::Torus &&
                              torus_settings_.tube_radius_ratio != baseline.tube_radius_ratio;
   if (restore_bounds || restore_ratio) {
+    const QVec3 previous_minimum = live_primitive_->local_min;
+    const QVec3 previous_maximum = live_primitive_->local_max;
     live_primitive_->local_min = baseline.local_min;
     live_primitive_->local_max = baseline.local_max;
     if (restore_ratio) {
@@ -1539,6 +1579,8 @@ CommandResult PrimitiveCreationToolService::cancel_resize() {
     // Restore bounds and torus ratio, retaining other settings and winding.
     const CommandResult restored = update_live_primitive(true);
     if (!restored.ok) {
+      live_primitive_->local_min = previous_minimum;
+      live_primitive_->local_max = previous_maximum;
       return restored;
     }
   }
@@ -1602,13 +1644,11 @@ PrimitiveCreationToolService::freeze_live_primitive_if_selection_changed() {
        modeling_.box_drag_state() == ModelingBoxDragState::Idle)) {
     return command_unchanged_result();
   }
-  // Selection loss (including a new footprint) can precede viewport gesture
-  // retirement. Restore the resize using the previous authored settings before
-  // applying any incoming setting to the pending primitive. Never discard its
-  // baseline first, and propagate rollback failures before callers use session_.
+  // Selection loss (including a new footprint) retires the gesture while
+  // keeping its displayed geometry. Only an explicit cancel restores a baseline.
   CommandResult result = command_unchanged_result();
   if (live_primitive_->resize.has_value()) {
-    result = cancel_resize();
+    result = end_resize();
     if (!result.ok) {
       return result;
     }
@@ -1627,11 +1667,20 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
     return command_changed_result();
   }
 
+  const auto reject_candidate = [&](std::string message, bool changed = false) {
+    load_settings(accepted_settings_);
+    session_->kind = accepted_settings_.preferred_kind;
+    live_primitive_->selection_revision =
+        modeling_.selection_summary().selection_revision;
+    return CommandResult{.ok = false, .changed = changed,
+                         .message = std::move(message)};
+  };
+
   const std::optional<PrimitivePlacementFrame> frame =
       placement_frame(live_primitive_->placement);
   if (!frame.has_value()) {
-    return rollback_and_exit(
-        "Live primitive no longer has a valid placement volume.", true);
+    return reject_candidate(
+        "Live primitive no longer has a valid placement volume.");
   }
   quader_poly::Document document =
       session_->kind == PrimitiveCreationKind::Box
@@ -1646,8 +1695,7 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
                                              cylinder_settings_, cone_settings_,
                                              sphere_settings_, torus_settings_);
   if (document.vertices.empty() || document.faces.empty()) {
-    return rollback_and_exit("Live primitive geometry could not be generated.",
-                             true);
+    return reject_candidate("Live primitive geometry could not be generated.");
   }
 
   if (checkpoint_hooks_.observe_before_projection) {
@@ -1655,14 +1703,14 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
   }
   const ModelingCommandResult updated = modeling_.replace_mesh_document(
       live_primitive_->modeling_object_id, std::move(document), preserve_selection);
-  if (!updated.ok || !updated.changed) {
-    return rollback_and_exit(
-        updated.message.empty() ? "Live primitive could not be updated."
-                                : updated.message,
-        true);
-  }
   if (checkpoint_hooks_.record_after_projection) {
     checkpoint_hooks_.record_after_projection();
+  }
+  if (!updated.ok || !updated.changed) {
+    return reject_candidate(
+        updated.message.empty() ? "Live primitive could not be updated."
+                                : updated.message,
+        updated.changed);
   }
   live_primitive_->selection_revision =
       modeling_.selection_summary().selection_revision;

@@ -731,6 +731,31 @@ CommandResult CurveToolService::apply() {
   return result;
 }
 
+CommandResult CurveToolService::finish() {
+  if (!active_) {
+    return command_unchanged_result();
+  }
+  if (drawing_ && draft_.point_count() == 1u) {
+    return command_invalid_result("Place at least two points before finishing the Curve.");
+  }
+  CommandResult result = commit_drag();
+  if (!result.ok) {
+    return result;
+  }
+  if (drawing_ && draft_.point_count() != 0u) {
+    const CommandResult applied = apply();
+    result.changed = result.changed || applied.changed;
+    if (!applied.ok) {
+      return {.ok = false, .changed = result.changed, .message = applied.message};
+    }
+  }
+  // All authored changes are committed. Retire the lifecycle while keeping
+  // the selected Curve available through its passive editing path.
+  const CommandResult exited = cancel();
+  return {.ok = exited.ok, .changed = result.changed || exited.changed,
+          .message = exited.message};
+}
+
 CommandResult CurveToolService::begin_new_curve() {
   if (!release_has_feature(ReleaseFeature::Curves)) {
     return command_invalid_result(release_feature_unavailable_message());

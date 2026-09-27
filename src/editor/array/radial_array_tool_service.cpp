@@ -560,9 +560,6 @@ CommandResult RadialArrayToolService::apply() {
     return command_unchanged_result();
   }
   if (!session_sources_are_valid(*session_)) {
-    session_.reset();
-    clear_preview_cache();
-    issue_tool_settings_revision();
     return command_invalid_result(
         "Radial Array sources changed before the operation was applied.");
   }
@@ -600,6 +597,19 @@ CommandResult RadialArrayToolService::apply() {
     issue_tool_settings_revision();
   }
   return result;
+}
+
+CommandResult RadialArrayToolService::finish() {
+  if (!session_) {
+    return command_unchanged_result();
+  }
+  if (!session_sources_are_valid(*session_)) {
+    return command_invalid_result(
+        "Radial Array sources changed before the operation was applied.");
+  }
+  // Source validity and center presence are separate: a stale authored preview
+  // must not be mistaken for an empty tool and silently discarded.
+  return session_->candidate_valid ? apply() : cancel();
 }
 
 CommandResult RadialArrayToolService::apply_instance_array(

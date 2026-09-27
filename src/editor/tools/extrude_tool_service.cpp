@@ -254,8 +254,8 @@ CommandResult ExtrudeToolService::activate_preview(
   return activate_impl(requested_mode);
 }
 
-CommandResult ExtrudeToolService::activate_impl(
-    modeling::FaceExtrudeMode requested_mode) {
+CommandResult ExtrudeToolService::preflight_activation(
+    modeling::FaceExtrudeMode requested_mode) const {
   if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
     return command_invalid_result(release_feature_unavailable_message());
   }
@@ -263,11 +263,8 @@ CommandResult ExtrudeToolService::activate_impl(
   if (!valid_options(options)) {
     return command_invalid_result("Invalid extrusion settings.");
   }
-  if (active()) {
-    return start_preview(options);
-  }
   // Reject invalid candidates before changing selection or viewport-tool state.
-  if (has_selected_faces() && options.amount != 0.0) {
+  if (!active() && has_selected_faces() && options.amount != 0.0) {
     const auto &target = impl_->target();
     if (!target.ok) {
       return command_invalid_result(target.message);
@@ -277,6 +274,19 @@ CommandResult ExtrudeToolService::activate_impl(
     if (!validated.ok) {
       return modeling_memento_command_result(validated);
     }
+  }
+  return command_unchanged_result();
+}
+
+CommandResult ExtrudeToolService::activate_impl(
+    modeling::FaceExtrudeMode requested_mode) {
+  const CommandResult preflight = preflight_activation(requested_mode);
+  if (!preflight.ok) {
+    return preflight;
+  }
+  const ExtrudeSessionDefaults options{requested_mode, amount()};
+  if (active()) {
+    return start_preview(options);
   }
   const auto previous_tool = impl_->modeling.tool_status().active_tool;
   CommandResult result = modeling_memento_command_result(
@@ -518,7 +528,8 @@ CommandResult ExtrudeToolService::release_drag() {
     return command_unchanged_result();
   }
   if (!can_update_drag()) {
-    return cancel_preview();
+    return command_invalid_result(
+        "The pending extrusion source changed; cancel it explicitly before retrying.");
   }
   impl_->drag->pointer_drag = false;
   impl_->remember_options({impl_->drag->options.mode, impl_->drag->amount});

@@ -14,13 +14,16 @@
 #include "api/quader_scene_documents_api.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
+#include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "io/mesh/obj_writer.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_viewport_camera_persistence.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "scene/components.hpp"
 #include "scene/scene_texture_mapping.hpp"
 #include "io/project/project_manifest.hpp"
@@ -471,15 +474,12 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
                                     std::move(message));
     }
 
-    // Public compatibility checks precede any user-visible replacement action.
-    // Full retains the existing dirty-close ordering. Always read again after
-    // that boundary because choosing Save may have updated this exact target.
-    if (current_product_release() != kInternalFullRelease) {
-      const auto compatible = QdrDocumentReader::read_project_document(
-          target, current_product_release());
-      if (!compatible.ok) {
-        return quader_api_failure_status(scene_session(session_), compatible.message);
-      }
+    // Invalid candidates must not settle the outgoing preview or open a prompt.
+    // Read again after the decision because Save may update this exact target.
+    const auto compatible = QdrDocumentReader::read_project_document(
+        target, current_product_release());
+    if (!compatible.ok) {
+      return quader_api_failure_status(scene_session(session_), compatible.message);
     }
     if (std::optional<QuaderApiVoidResult> blocked =
             dirty_replacement_preflight("project.open")) {
@@ -795,6 +795,17 @@ QuaderProjectApi::close_open_scenes(std::string_view action_id) {
     };
   }
   const auto prepared = scene_documents_->prepare_project_close(action_id);
+  if (prepared.value().proceed) {
+    const auto material = project_session_->standard_material_editor()
+                              .accept_base_color_preview();
+    if (!material.ok) {
+      return {
+          .status = quader_api_failure_status(scene_session(session_),
+                                              material.message),
+          .proceed = false,
+      };
+    }
+  }
   if (prepared.value().proceed && project_session_->has_dirty_material()) {
     if (runtime_hooks_.prepare_material_document_close &&
         runtime_hooks_.prepare_material_document_close(action_id) &&
@@ -844,6 +855,11 @@ QuaderProjectApi::choose_export_obj_path() const {
 std::optional<QuaderApiVoidResult>
 QuaderProjectApi::dirty_replacement_preflight(std::string_view action_id) {
   SceneSession &session = scene_session(session_);
+  const CommandResult property =
+      session.document_commands().accept_active_property_edit();
+  if (!property.ok) return quader_api_failure_status(session, property.message);
+  const CommandResult settled = session.native_tools().settle_transient_state();
+  if (!settled.ok) return quader_api_failure_status(session, settled.message);
   if (!session.dirty()) {
     return std::nullopt;
   }

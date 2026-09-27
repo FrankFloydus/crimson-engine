@@ -753,9 +753,21 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     }
   }
 
+  if (dragging_ && active_backend_ == DragBackend::CurveControl &&
+      (!curve_refresh_ok || curve_tool == nullptr || !curve_tool->dragging() ||
+       !active_curve_selection_.has_value() ||
+       !curve_control_selection_identity_matches(
+           curve_tool, *active_curve_selection_))) {
+    result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
+    clear_frame();
+    return result;
+  }
+
   if (frame.input.pointer_interaction_canceled &&
       (pending_drag_.has_value() || dragging_)) {
-    result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
+    result.gizmo_consumed = frame.input_result.cancel_requested
+                                ? cancel_active_drag(editor, curve_tool)
+                                : finish_active_drag(editor, curve_tool);
     clear_frame();
     return result;
   }
@@ -768,7 +780,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
       frame.input.navigation_active || frame.input_result.navigation_active ||
       frame.input_result.camera_changed || frame.input_result.view_changed;
   if (curve_pointer_active && curve_pointer_invalidated) {
-    result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
+    result.gizmo_consumed = finish_active_drag(editor, curve_tool);
     clear_frame();
     return result;
   }
@@ -782,15 +794,22 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     return result;
   }
 
-  if (dragging_ && active_backend_ == DragBackend::CurveControl &&
-      (!curve_refresh_ok || curve_tool == nullptr || !curve_tool->dragging() ||
-       !active_curve_selection_.has_value() ||
-       !curve_control_selection_identity_matches(
-           curve_tool, *active_curve_selection_))) {
-    result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
+  if (dragging_ && !frame.input.viewport_focused) {
+    // Moving keyboard focus alone does not author a new sample or settle the
+    // operation. A lost pointer/release does finish the last authored sample.
+    result.gizmo_consumed = true;
+    if (frame.left_released || !frame.left_down) {
+      (void)finish_active_drag(editor, curve_tool);
+    }
+    return result;
+  }
+
+  if (dragging_ && curve_pointer_invalidated) {
+    result.gizmo_consumed = finish_active_drag(editor, curve_tool);
     clear_frame();
     return result;
   }
+
   if (pending_drag_.has_value() &&
       pending_drag_->backend == DragBackend::CurveControl &&
       (!curve_refresh_ok || !pending_drag_->curve_selection.has_value() ||
@@ -834,7 +853,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     clear_frame();
     reset_pending_drag();
     if (dragging_) {
-      result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
+      result.gizmo_consumed = finish_active_drag(editor, curve_tool);
     }
     return result;
   }
@@ -1242,24 +1261,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
       }
     }
     if (release_requested) {
-      if (active_backend_ == DragBackend::CurveControl) {
-        const CommandResult commit = curve_tool->commit_drag();
-        if (!commit.ok) {
-          LOG_ERROR("Curve control edit commit failed: {}",
-                    commit.message.empty() ? "Commit failed."
-                                           : commit.message);
-          (void)curve_tool->cancel_drag();
-        }
-      } else {
-        const QuaderApiResult<QuaderTransformDragPreview> commit =
-            editor.modeling().commit_transform_drag();
-        if (!commit.ok) {
-          LOG_ERROR(
-              "Transform drag commit failed: {}",
-              commit.message.empty() ? "Commit failed." : commit.message);
-        }
-      }
-      reset_drag_state();
+      (void)finish_active_drag(editor, curve_tool);
     }
     return result;
   }
@@ -1281,6 +1283,44 @@ bool TransformGizmoInteraction::matches_last_drag_update(
          last.grid_snap_enabled == signature.grid_snap_enabled &&
          last.rotation_snap_degrees == signature.rotation_snap_degrees &&
          last.precision == signature.precision;
+}
+
+bool TransformGizmoInteraction::finish_active_drag(
+    QuaderEditorApi &editor, ViewportCurveInteractionPort *curve_tool) {
+  if (pending_drag_.has_value()) {
+    // A press that never crossed the drag threshold authored no operation.
+    reset_pending_drag();
+    return true;
+  }
+  if (!dragging_) {
+    return false;
+  }
+  std::string error;
+  if (active_backend_ == DragBackend::CurveControl) {
+    if (curve_tool == nullptr) {
+      error = "Curve control drag lost its service owner.";
+    } else {
+      const CommandResult commit = curve_tool->commit_drag();
+      if (!commit.ok) {
+        error = commit.message.empty() ? "Curve control edit commit failed."
+                                       : commit.message;
+      }
+    }
+  } else {
+    const auto commit = editor.modeling().commit_transform_drag();
+    if (!commit.ok()) {
+      error = commit.error_message().empty() ? "Transform drag commit failed."
+                                             : commit.error_message();
+    }
+  }
+  if (!error.empty()) {
+    LOG_ERROR("Transform drag commit failed: {}", error);
+    (void)editor.ui().notify({.level = QuaderNotificationLevel::Error,
+                              .message = error});
+    return true;
+  }
+  reset_drag_state();
+  return true;
 }
 
 bool TransformGizmoInteraction::cancel_active_drag(QuaderEditorApi &editor) {

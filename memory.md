@@ -155,12 +155,26 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
 
 ## Modeling publication and preview transactions
 
+- Implicit tool, selection-mode, save, and scene transitions accept valid pending work through
+  its existing owner before changing the target state. Only explicit Cancel discards an authored
+  draft. Invalid meaningful work rejects the transition with the draft and its ownership intact;
+  an untouched starter exits without phantom geometry or history. Preflight unavailable targets
+  before accepting anything. Same-tool activation in the same pane preserves pending work, and
+  pane focus alone is nonmutating; acquiring another pane's tool settles the previous operation.
+  Undo accepts valid pending work, then undoes it so Redo can restore it. Native tool-local history
+  keeps its established gesture/session semantics. Selection edits that leave the operation settle
+  it; compatible same-mode selection edits for Bevel/Slice Quads still update their live preview.
+  API and viewport acceptance must share the
+  existing commit/publication owners, never synthesize an Apply binding or silently fall back to
+  Cancel. Coverage includes `ExtrudeToolServiceTests.SwitchingToolsAcceptsPendingExtrusionAsOneUndoStep`,
+  `PaneFocusRetainsPendingWorkUntilAnotherPaneAcquiresItsTool`, and
+  `UnavailableActivationDoesNotAcceptPendingExtrusion` in `tests/extrude_tool_service_tests.cpp`.
 - Dedicated Extrusion activation starts a pending preview; releasing a viewport drag ends
   pointer input but retains that preview with Apply enabled. Apply accepts it, while
   Escape/Cancel restores its source and preserves existing undo/redo.
   Activation uses the remembered Amount (initially zero) and locks preselected faces, or the first face picked after
-  activation. User selection edits and tool switches cannot replace that source while
-  pending; internal preview/history publication still restores its own selections.
+  activation. Selection edits and tool switches first accept the pending step before replacing
+  its source; internal preview/history publication still restores its own selections.
   Repeated E retains the pending step. Settings regenerate from its immutable source.
   Apply records one history entry and releases the source while retaining Amount;
   it does not start another preview. The next amount edit or drag creates a new step from the selected caps.
@@ -217,11 +231,13 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   references, and slots. Position changes may require both vertex streams and indices to refresh;
   the old assumption that every non-position stream stays static was superseded.
 - Viewport geometry acceptance uses the API-backed commit port and the existing modeling memento
-  command owner. SDK history alone does not register an editor Undo step. Transient modeling ports
-  expose no implicit commit fallback; previews and cancellation do not publish history. Returning
-  to Select without changing content must preserve the redo branch. Insert Edge Loop retains its
-  active tool after each single-cut acceptance and non-command interruption; focus loss, navigation,
-  and outside-pointer cancellation reset only the completed gesture/preview. The explicit Cancel
+  command owner, including implicit transitions. SDK history alone does not register an editor Undo
+  step; transient ports must not provide a history-bypassing fallback. A valid authored draft is
+  accepted before leaving it; an idle hover-only preview is retired without geometry or history.
+  Returning to Select without changing content must preserve the redo branch. Insert Edge Loop
+  and Knife activation enter Edge mode from every selection mode; shortcuts and menu eligibility
+  must not require that mode in advance. Loop retains its tool after each single-cut acceptance.
+  Pane focus alone leaves pending work intact. The explicit Cancel
   Active Tool command (Escape by default) clears transient loop state and returns to Select while
   retaining Edge component mode, content, history, and redo. Normal undo/redo clears its stale seed
   after successful restoration without exiting the tool; failure compensation preserves transient
@@ -233,6 +249,16 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   presentation. Clear, commit, and cancel must retire both lines and points in retained submission.
   See [loop input tests](tests/qt_input_adapter_tests.cpp) and
   [retained submission tests](tests/viewport_overlay_submission_coordinator_tests.cpp).
+- Knife/Loop surface hover exposes authored source wires without selecting the mesh. Keep the
+  actual surface candidate separate from valid Knife seeds and retained Loop seeds. The existing
+  persistent source-wire ID gates topology rebuilds; cursor movement only changes volatile cut
+  feedback. Tool-owned hover survives the viewport selection pass and camera navigation (including
+  its captured release sample); ordinary pointer leave and hard interruption still clear it.
+  Component topology retains its normal edit-wire depth classification during hover and navigation;
+  tagging it as generic Tool geometry makes hidden edges appear through occluders and disappear
+  again when hover is cleared. Only Object-mode silhouette replacement needs that exemption.
+  See [retained topology tests](tests/selected_mesh_outline_presentation_tests.cpp) and
+  [Vulkan captures](tests/selection_overlay_runtime_tests.cpp).
 - Native point selection carries a screen aperture and camera clip range; ray-only API requests
   retain world-distance tolerances. Transformed component candidates must be measured in world
   space before ranking, never with one scalar inverse-scale approximation. Runtime pick records
@@ -258,11 +284,13 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
 - Public history routes through the tool's local history before generic preview cancellation even
   when its history is empty. Retire the old held/release gesture without canceling a fresh press.
 - Apply validates every rebased memento before recording one editor-history item per accepted shape.
-  Cancel/failure restores the session baseline and pre-existing document redo branch. Local restore
-  observes the scene preview checkpoint; only Apply/Cancel finishes it.
+  Cancel restores the session baseline and pre-existing document redo branch. Rejected implicit
+  completion preserves the draft instead of taking that rollback path. Local restore observes the
+  scene preview checkpoint; acceptance/Cancel finishes it.
 - Direct primitive launchers finish the previous shape session before starting a different kind:
-  reject unavailable kinds first, restore an unfinished resize, discard unfinished drawing and
-  Apply completed shapes (Cancel an empty session). Same-kind launch is unchanged. The explicit
+  reject unavailable kinds first, accept an active resize at its current value, and apply released
+  shapes. Incomplete pointer-down drawing rejects the transition and retains the gesture; an empty
+  starter exits without geometry or history. Same-kind, same-pane launch is unchanged. The explicit
   legacy type setter still morphs the live shape; launchers must not route through that setter.
 - The modal history obeys the same retention limit. Keep its Cancel baseline and accepted object
   identities separately from bounded shape mementos. Applying after eviction makes the evicted

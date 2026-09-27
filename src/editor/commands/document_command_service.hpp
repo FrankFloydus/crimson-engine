@@ -137,6 +137,8 @@ public:
     DocumentCommandResult begin_fog_color_edit();
     DocumentCommandResult update_fog_color_edit(std::uint64_t generation, QVec3 color);
     DocumentCommandResult finish_fog_color_edit(std::uint64_t generation, bool cancel);
+    /// Accepts a valid pending property edit; rejection retains its draft.
+    DocumentCommandResult accept_active_property_edit();
     DocumentCommandResult cancel_active_property_edit();
     DocumentCommandResult cancel_active_point_light_range_edit();
     void abandon_property_edit() { property_edit_.reset(); }

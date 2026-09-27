@@ -36,6 +36,8 @@ public:
   [[nodiscard]] std::uint64_t hover_pick_count() const { return hover_pick_count_; }
 
 private:
+  /// Publishes the last valid radius, retaining the gesture if publication fails.
+  [[nodiscard]] bool finish(QuaderEditorApi &editor);
   /// Freezes the camera-facing drag plane and its press coordinate.
   struct Gesture {
     ViewportPointerGesture pointer;

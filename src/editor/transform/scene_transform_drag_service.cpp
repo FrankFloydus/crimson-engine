@@ -631,7 +631,9 @@ DocumentCommandResult SceneTransformDragService::accept() {
     }
 
     DocumentCommandResult result = preview_->accept();
-    reset();
+    if (result.ok || !preview_->active()) {
+      reset();
+    }
     return result;
 }
 
@@ -643,7 +645,9 @@ DocumentCommandResult SceneTransformDragService::commit(EditorHistoryService& hi
     }
 
     DocumentCommandResult result = preview_->commit(history);
-    reset();
+    if (result.ok || !preview_->active()) {
+      reset();
+    }
     return result;
 }
 
@@ -659,7 +663,9 @@ QuaderApiVoidResult SceneTransformDragService::commit(QuaderEditorApi& editor) {
 
     QuaderApiVoidResult result =
         editor.scene().commit_transform_preview(*preview_, label_);
-    reset();
+    if (result.ok() || !preview_->active()) {
+      reset();
+    }
     return result;
 }
 

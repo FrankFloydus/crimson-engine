@@ -8,6 +8,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "support/curve_modeling_test_support.hpp"
+#include "support/command_observable_state.hpp"
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
@@ -4848,7 +4849,7 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     KnifeActivationCancelAndCommitPreserveEveryPersistentSelectionMode) {
+     KnifeActivationEntersEdgeModeAndCancelAndCommitRetainIt) {
   constexpr std::array kModes{
       ModelingSelectionMode::Vertex,
       ModelingSelectionMode::Edge,
@@ -4932,8 +4933,8 @@ TEST(ModelingSessionServiceSplitTests,
     ModelingCommandResult command =
         service.activate_viewport_tool(ModelingViewportTool::Knife);
     ASSERT_TRUE(command.ok) << command.message;
-    EXPECT_EQ(service.selection_mode(), mode);
-    EXPECT_EQ(service.selection_summary().mode, mode);
+    EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Edge);
+    EXPECT_EQ(service.selection_summary().mode, ModelingSelectionMode::Edge);
 
     const int object_id = box.object.modeling_object_id;
     const ViewportOverlayFrame activated_persistent =
@@ -4978,11 +4979,11 @@ TEST(ModelingSessionServiceSplitTests,
 
     command = service.cancel_active_modal_tool();
     ASSERT_TRUE(command.ok) << command.message;
-    EXPECT_EQ(service.selection_mode(), mode);
+    EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Edge);
 
     command = service.activate_viewport_tool(ModelingViewportTool::Knife);
     ASSERT_TRUE(command.ok) << command.message;
-    ASSERT_EQ(service.selection_mode(), mode);
+    ASSERT_EQ(service.selection_mode(), ModelingSelectionMode::Edge);
     command = service.accept_knife_point(knife_event(-1.0f));
     ASSERT_TRUE(command.ok) << command.message;
     ASSERT_TRUE(command.changed);
@@ -5029,13 +5030,48 @@ TEST(ModelingSessionServiceSplitTests,
     EXPECT_EQ(source_wire_depth_stamps(invalid_hover_persistent, object_id),
               locked_depth_stamps);
     EXPECT_EQ(service.selection_overlay_signature(), locked_signature);
-    EXPECT_EQ(service.selection_mode(), mode);
+    EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Edge);
 
     command = service.commit_knife_tool();
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
-    EXPECT_EQ(service.selection_mode(), mode);
-    EXPECT_EQ(service.selection_summary().mode, mode);
+    EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Edge);
+    EXPECT_EQ(service.selection_summary().mode, ModelingSelectionMode::Edge);
+  }
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     KnifeReactivationPreservesIncompleteAndCompletePendingStrokes) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Retained knife draft");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Knife).ok());
+  for (const float y : {-1.0f, 1.0f}) {
+    SCOPED_TRACE(y);
+    ModelingToolRayEvent event;
+    event.ray = {.origin = {0.0f, y, 6.0f}, .direction = {0.0f, 0.0f, -1.0f}};
+    event.camera = {.orthographic = true, .origin = event.ray.origin,
+                    .viewport_size = {800.0f, 600.0f}, .orthographic_size = 4.0};
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.12;
+    event.snap_enabled = false;
+    ASSERT_TRUE(session.modeling().accept_knife_point(event).ok);
+    ASSERT_TRUE(session.modeling().pending_operation_active());
+    EXPECT_EQ(editor.query().tool_status().knife_can_commit, y > 0.0f);
+    const auto before = test::capture_command_observable_state(editor);
+    const auto repeated = editor.tools().activate(ViewportToolId::Knife);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+    const auto difference = test::diff_command_observable_state(
+        before, test::capture_command_observable_state(editor));
+    EXPECT_TRUE(difference.empty()) << difference.summary;
+    EXPECT_TRUE(session.modeling().pending_operation_active());
+    EXPECT_EQ(editor.query().tool_status().knife_can_commit, y > 0.0f);
   }
 }
 

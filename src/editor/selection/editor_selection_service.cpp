@@ -68,6 +68,13 @@ merge_modeling_selection_change(DocumentCommandResult result,
   return result;
 }
 
+template <typename Result>
+Result include_settlement_change(Result result,
+                                 const ModelingCommandResult &settled) {
+  result.changed = result.changed || settled.changed;
+  return result;
+}
+
 ModelingCommandResult
 modeling_command_result_from_document(DocumentCommandResult result) {
   return {
@@ -344,14 +351,33 @@ void EditorSelectionService::set_scene_selection_history_suppression_provider(
 }
 
 void EditorSelectionService::set_selection_edit_policy(
-    SelectionEditCallback preflight, SelectionEditCallback edited) {
+    SelectionEditCallback preflight, SelectionEditCallback edited,
+    SelectionEditBeginCallback begin,
+    SelectionSettlementPolicy requires_settlement) {
   selection_edit_preflight_ = std::move(preflight);
   selection_edited_ = std::move(edited);
+  selection_edit_begin_ = std::move(begin);
+  selection_settlement_policy_ = std::move(requires_settlement);
 }
 
 ModelingCommandResult EditorSelectionService::selection_edit_preflight() const {
   return selection_edit_preflight_ ? selection_edit_preflight_()
                                    : ModelingCommandResult{.ok = true};
+}
+
+ModelingCommandResult EditorSelectionService::begin_selection_edit(bool changing_mode) {
+  const auto preflight = selection_edit_preflight();
+  if (!preflight.ok) return preflight;
+  return selection_edit_begin_ && requires_selection_settlement(changing_mode)
+      ? selection_edit_begin_(changing_mode)
+      : ModelingCommandResult{.ok = true};
+}
+
+bool EditorSelectionService::requires_selection_settlement(bool changing_mode) const {
+  return selection_settlement_policy_
+      ? selection_settlement_policy_(changing_mode)
+      : modeling_.can_cancel_active_preview_for_undo() ||
+            modeling_.pending_operation_active();
 }
 
 ModelingCommandResult EditorSelectionService::finish_selection_edit(
@@ -461,25 +487,39 @@ DocumentCommandResult EditorSelectionService::apply_scene_selection_state(
   }
   if (same_scene_selection(capture_scene_selection(scene_), selection)) {
     if (is_component_selection_mode(modeling_.selection_mode())) {
-      return publish_scene_selection(preserve_selection_mode);
+      const auto settled = begin_selection_edit(
+          !preserve_selection_mode && is_component_selection_mode(modeling_.selection_mode()));
+      if (!settled.ok) {
+        return {.ok = false, .changed = settled.changed,
+                .message = settled.message};
+      }
+      return include_settlement_change(
+          publish_scene_selection(preserve_selection_mode), settled);
     }
     return document_command_unchanged_result();
+  }
+  const auto settled = begin_selection_edit(
+          !preserve_selection_mode && is_component_selection_mode(modeling_.selection_mode()));
+  if (!settled.ok) {
+    return {.ok = false, .changed = settled.changed,
+            .message = settled.message};
   }
   const auto publish = [this, preserve_selection_mode]() {
     return publish_scene_selection(preserve_selection_mode);
   };
   if (scene_selection_history_suppression_provider_ &&
       scene_selection_history_suppression_provider_()) {
-    return apply_runtime_scene_selection_state(std::move(selection),
-                                               preserve_selection_mode);
+    return include_settlement_change(
+        apply_runtime_scene_selection_state(std::move(selection),
+                                             preserve_selection_mode), settled);
   }
-  return document_commands_.select_entities(
+  return include_settlement_change(document_commands_.select_entities(
       std::move(selection.selected), selection.active,
       SceneSelectionApplicationMode::UndoableCommand, publish,
       {.merge_key = gesture_merge_key == 0
                         ? std::string{}
                         : "selection-click/" + std::to_string(gesture_merge_key)},
-      expected_history_revision);
+      expected_history_revision), settled);
 }
 
 std::uint64_t EditorSelectionService::selection_history_revision() const {
@@ -492,8 +532,8 @@ EditorSelectionService::apply_runtime_scene_selection_state(
   const SceneSelectionState before = capture_scene_selection(scene_);
   if (!same_scene_selection(before, selection) &&
       document_commands_.entity_property_edit_active()) {
-    const auto canceled = document_commands_.cancel_active_property_edit();
-    if (!canceled.ok) return canceled;
+    const auto accepted = document_commands_.accept_active_property_edit();
+    if (!accepted.ok) return accepted;
   }
   const SceneModelingProjectionCheckpoint checkpoint =
       capture_scene_selection_checkpoint(scene_, before, selection);
@@ -645,11 +685,17 @@ ModelingCommandResult EditorSelectionService::set_component_selection(
             .message = "The component owner is not visible in the current "
                        "viewport scope."};
   }
+  if (requires_selection_settlement(request.mode != modeling_.selection_mode())) {
+    const auto validated = modeling_.validate_component_selection(request);
+    if (!validated.ok) return validated;
+  }
+  const auto settled = begin_selection_edit(request.mode != modeling_.selection_mode());
+  if (!settled.ok) return settled;
   ModelingCommandResult result = modeling_.set_component_selection(request);
   if (result.ok && sub_selection_provider_ != nullptr) {
     sub_selection_provider_->synchronize_sub_selection_scope();
   }
-  return finish_selection_edit(std::move(result));
+  return include_settlement_change(finish_selection_edit(std::move(result)), settled);
 }
 
 ModelingCommandResult
@@ -659,6 +705,18 @@ EditorSelectionService::set_mode(ModelingSelectionMode mode) {
     return preflight;
   }
   const ModelingSelectionMode previous_mode = modeling_.selection_mode();
+  if (mode != ModelingSelectionMode::Object &&
+      mode != ModelingSelectionMode::Group &&
+      mode != ModelingSelectionMode::Vertex &&
+      mode != ModelingSelectionMode::Edge &&
+      mode != ModelingSelectionMode::Face) {
+    return {.ok = false, .message = "Selection mode is invalid."};
+  }
+  ModelingCommandResult settled{.ok = true};
+  if (previous_mode != mode) {
+    settled = begin_selection_edit(true);
+    if (!settled.ok) return settled;
+  }
   ModelingCommandResult result = modeling_.set_selection_mode(mode);
   if (result.ok && previous_mode != mode) {
     resolved_depth_cycle_active_ = false;
@@ -668,7 +726,7 @@ EditorSelectionService::set_mode(ModelingSelectionMode mode) {
   if (result.ok && sub_selection_provider_ != nullptr) {
     sub_selection_provider_->synchronize_sub_selection_scope();
   }
-  return result;
+  return include_settlement_change(std::move(result), settled);
 }
 
 bool EditorSelectionService::scene_target_selectable(EntityId entity) const {
@@ -722,10 +780,12 @@ ModelingCommandResult EditorSelectionService::select_all() {
       sub_selection.participates_in_bulk_selection) {
     return sub_selection_provider_->select_all_sub_elements();
   }
+  const auto settled = begin_selection_edit();
+  if (!settled.ok) return settled;
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   if (!selection_mode_uses_scene_document(selection_mode)) {
     QDR_PROFILE_SCOPE("Selection select all runtime components");
-    return finish_selection_edit(modeling_.select_all());
+    return include_settlement_change(finish_selection_edit(modeling_.select_all()), settled);
   }
 
   std::vector<EntityId> selected;
@@ -734,8 +794,8 @@ ModelingCommandResult EditorSelectionService::select_all() {
     selected = scene_bulk_candidates(selection_mode);
   }
   const EntityId active = selected.empty() ? kInvalidEntityId : selected.back();
-  return modeling_command_result_from_document(
-      set_scene_selection(selected, active));
+  return include_settlement_change(modeling_command_result_from_document(
+      set_scene_selection(selected, active)), settled);
 }
 
 ModelingCommandResult EditorSelectionService::invert() {
@@ -752,9 +812,11 @@ ModelingCommandResult EditorSelectionService::invert() {
       sub_selection.participates_in_bulk_selection) {
     return sub_selection_provider_->invert_sub_elements();
   }
+  const auto settled = begin_selection_edit();
+  if (!settled.ok) return settled;
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   if (!selection_mode_uses_scene_document(selection_mode)) {
-    return finish_selection_edit(modeling_.invert_selection());
+    return include_settlement_change(finish_selection_edit(modeling_.invert_selection()), settled);
   }
 
   const std::vector<EntityId> current = scene_.selected_entities();
@@ -788,8 +850,8 @@ ModelingCommandResult EditorSelectionService::invert() {
           : (selected.empty() ? kInvalidEntityId : selected.back());
   // The XOR is already policy-resolved. Reapplying user pickability here would
   // discard hidden, locked, or out-of-scope members that must stay selected.
-  return modeling_command_result_from_document(
-      set_inspection_scene_selection(selected, active));
+  return include_settlement_change(modeling_command_result_from_document(
+      set_inspection_scene_selection(selected, active)), settled);
 }
 
 ModelingCommandResult EditorSelectionService::clear() {
@@ -800,30 +862,37 @@ ModelingCommandResult EditorSelectionService::clear() {
   if (sub_selection_provider_ != nullptr) {
     sub_selection_provider_->synchronize_sub_selection_scope();
   }
-  if (sub_selection_provider_ != nullptr && has_sub_selection()) {
+  const auto sub_selection = current_sub_selection_snapshot();
+  if (sub_selection_provider_ != nullptr &&
+      (has_sub_selection() ||
+       (sub_selection.participates_in_bulk_selection &&
+        sub_selection.entity == kInvalidEntityId))) {
     return sub_selection_provider_->clear_sub_elements();
   }
+  const auto settled = begin_selection_edit();
+  if (!settled.ok) return settled;
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   if (!selection_mode_uses_scene_document(selection_mode)) {
     ModelingCommandResult result = modeling_.clear_selection();
     if (!result.ok || result.changed) {
-      return result;
+      return include_settlement_change(std::move(result), settled);
     }
     const std::vector<EntityId> selected = scene_.selected_entities();
     if (selected.empty() ||
         std::ranges::any_of(selected, [&](EntityId entity) {
           return scene_.modeling_object(entity) != nullptr;
         })) {
-      return result;
+      return include_settlement_change(std::move(result), settled);
     }
     // Lights and other scene-only selections can remain in component mode.
     // With no selected mesh, the modeling owner has nothing to clear.
-    return modeling_command_result_from_document(apply_scene_selection_state(
-        make_scene_selection(scene_, {}, kInvalidEntityId), true));
+    return include_settlement_change(modeling_command_result_from_document(
+        apply_scene_selection_state(
+            make_scene_selection(scene_, {}, kInvalidEntityId), true)), settled);
   }
 
-  return modeling_command_result_from_document(
-      set_scene_selection(std::span<const EntityId>{}, kInvalidEntityId));
+  return include_settlement_change(modeling_command_result_from_document(
+      set_scene_selection(std::span<const EntityId>{}, kInvalidEntityId)), settled);
 }
 
 ModelingCommandResult EditorSelectionService::apply_component_selection_command(
@@ -847,8 +916,10 @@ ModelingCommandResult EditorSelectionService::apply_component_selection_command(
         .message = "The selection command is unavailable in the current mode.",
     };
   }
-  return finish_selection_edit(
-      modeling_.apply_component_selection_command(command));
+  const auto settled = begin_selection_edit();
+  if (!settled.ok) return settled;
+  return include_settlement_change(finish_selection_edit(
+      modeling_.apply_component_selection_command(command)), settled);
 }
 
 ModelingCommandResult EditorSelectionService::select_edge_direction() {
@@ -928,7 +999,10 @@ ModelingCommandResult EditorSelectionService::select_mesh_ngons() {
         .message = "No directly editable mesh is selected.",
     };
   }
-  return finish_selection_edit(modeling_.select_mesh_ngons(targets));
+  const auto settled = begin_selection_edit();
+  if (!settled.ok) return settled;
+  return include_settlement_change(
+      finish_selection_edit(modeling_.select_mesh_ngons(targets)), settled);
 }
 
 ModelingCommandResult EditorSelectionService::select_similar_meshes() {
@@ -1359,6 +1433,10 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       if (modeling_object.has_value() &&
           modeling_.resolved_component_body_target_eligible(
               *modeling_object, body.source_occurrence)) {
+        const auto settled = begin_selection_edit();
+        if (!settled.ok) {
+          return {.command = settled, .selection = summary()};
+        }
         ModelingCommandResult command =
             modeling_.apply_resolved_component_body_selection({
                 .modeling_object_id = *modeling_object,
@@ -1371,6 +1449,7 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
                     request.policy
                         .preserve_existing_component_selection_on_hit,
             });
+        command.changed = command.changed || settled.changed;
         return {.command = std::move(command), .selection = summary()};
       }
     }
@@ -1378,8 +1457,14 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     if (!request.policy.preserve_selection_on_miss &&
         click_selection_edit(request.policy) ==
             ModelingSelectionEdit::Replace &&
-        !modeling_.operation_preview_active()) {
+        (!modeling_.operation_preview_active() ||
+         requires_selection_settlement())) {
+      const auto settled = begin_selection_edit();
+      if (!settled.ok) {
+        return {.command = settled, .selection = summary()};
+      }
       command = modeling_.clear_selection();
+      command.changed = command.changed || settled.changed;
     }
     return {.command = std::move(command), .selection = summary()};
   }
@@ -1476,9 +1561,29 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       .preserve_existing_component_selection_on_hit =
           request.policy.preserve_existing_component_selection_on_hit,
   };
+  if (requires_selection_settlement()) {
+    ModelingComponentSelectionRequest validation{
+        .modeling_object_id = winner.modeling_object_id,
+        .mode = selection_mode,
+    };
+    if (selection_mode == ModelingSelectionMode::Vertex) {
+      validation.vertices.push_back(winner.vertex);
+    } else if (selection_mode == ModelingSelectionMode::Edge) {
+      validation.edges.emplace_back(winner.edge_a, winner.edge_b);
+    } else {
+      validation.faces.push_back(winner.face);
+    }
+    const auto validated = modeling_.validate_component_selection(validation);
+    if (!validated.ok) {
+      return {.command = validated, .selection = summary()};
+    }
+  }
+  const auto settled = begin_selection_edit();
+  if (!settled.ok) return {.command = settled, .selection = summary()};
   ModelingCommandResult command =
       modeling_.apply_resolved_component_selection(component);
-  command = finish_selection_edit(std::move(command));
+  command = include_settlement_change(
+      finish_selection_edit(std::move(command)), settled);
   return {.command = std::move(command), .selection = summary()};
 }
 
@@ -1692,9 +1797,20 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_marquee(
     base_result = scene_box_selection_result(
         scene_targets, current_mode, request.edit, &request.baseline);
   } else {
+    if (requires_selection_settlement()) {
+      for (const auto &component : component_requests) {
+        const auto validated = modeling_.validate_component_selection(component);
+        if (!validated.ok) {
+          return {.command = validated, .selection = summary()};
+        }
+      }
+    }
+    const auto settled = begin_selection_edit();
+    if (!settled.ok) return {.command = settled, .selection = summary()};
     base_result.command = modeling_.apply_resolved_component_selections(
         component_requests, request.edit,
         *request.baseline.modeling_selection);
+    base_result.command.changed = base_result.command.changed || settled.changed;
     base_result.selection = summary();
   }
 
@@ -2020,6 +2136,10 @@ EditorSelectionService::box_select(const ModelingBoxSelectRequest &request,
 
   {
     QDR_PROFILE_SCOPE("Box selection publish modeling selection");
+    if (baseline != nullptr && baseline->mode != selection_mode) {
+      return summary();
+    }
+    if (!begin_selection_edit().ok) return summary();
     if (baseline != nullptr && baseline->modeling_selection.has_value() &&
         baseline->modeling_selection->valid() &&
         baseline->mode == modeling_.selection_mode()) {

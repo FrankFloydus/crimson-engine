@@ -1210,7 +1210,7 @@ TEST(StandardMaterialDocumentsTests,
 }
 
 TEST(StandardMaterialDocumentsTests,
-     BaseColorPreviewNoOpAndSaveRespectThePickerBoundary) {
+     BaseColorPreviewNoOpAndSaveAcceptsThePicker) {
   StandardMaterialDocumentsHarness harness("live-color-save");
   auto &documents = harness.editor().standard_material_documents();
   const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
@@ -1244,14 +1244,13 @@ TEST(StandardMaterialDocumentsTests,
   ASSERT_TRUE(documents.update_base_color_preview(
                            session_id, {0.25f, 0.5f, 0.75f})
                   .ok());
-  EXPECT_FALSE(documents.save().ok());
-  EXPECT_FALSE(documents.save_as(project_path("Materials/preview.qmat")).ok());
+  EXPECT_FALSE(documents.save_as(project_path("Scenes/preview.qmat")).ok());
   EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath),
             saved_bytes);
   EXPECT_FALSE(std::filesystem::exists(harness.root() / "Materials" /
                                        "preview.qmat"));
-  ASSERT_TRUE(documents.finish_base_color_preview(session_id, true).ok());
   ASSERT_TRUE(documents.save().ok());
+  EXPECT_FALSE(documents.finish_base_color_preview(session_id, false).ok());
   EXPECT_FALSE(documents.current().value().dirty);
   EXPECT_NE(read_bytes(harness.root() / kDefaultProjectMaterialPath),
             saved_bytes);
@@ -1260,6 +1259,29 @@ TEST(StandardMaterialDocumentsTests,
   ASSERT_TRUE(reopened.ok());
   EXPECT_EQ(reopened.value().material.base_color,
             (std::array<float, 3>{0.25f, 0.5f, 0.75f}));
+}
+
+TEST(StandardMaterialDocumentsTests,
+     ClosingWithLiveColorAcceptsDraftBeforeUnsavedGuard) {
+  StandardMaterialDocumentsHarness harness("live-color-close");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const auto opened = documents.open(*default_id);
+  ASSERT_TRUE(opened.ok());
+  const auto saved_bytes = read_bytes(harness.root() / kDefaultProjectMaterialPath);
+  ASSERT_TRUE(documents.begin_base_color_preview(opened.value().session_id).ok());
+  const std::array<float, 3> color{0.2f, 0.4f, 0.6f};
+  ASSERT_TRUE(documents.update_base_color_preview(opened.value().session_id, color).ok());
+
+  EXPECT_FALSE(documents.close().ok());
+  const auto retained = documents.current();
+  ASSERT_TRUE(retained.ok());
+  EXPECT_TRUE(retained.value().dirty);
+  EXPECT_EQ(retained.value().material.base_color, color);
+  EXPECT_FALSE(documents.finish_base_color_preview(opened.value().session_id, false).ok());
+  EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath), saved_bytes);
+  EXPECT_TRUE(documents.close(true).ok());
 }
 
 TEST(StandardMaterialDocumentsTests,
@@ -1325,7 +1347,7 @@ TEST(StandardMaterialDocumentsTests,
 }
 
 TEST(StandardMaterialDocumentsTests,
-     SceneReplacementCancelsLiveBaseColorWithoutDiscardingMaterialEdits) {
+     SceneReplacementAcceptsLiveBaseColorWithoutSavingMaterialEdits) {
   for (const bool initially_dirty : {false, true}) {
     SCOPED_TRACE(initially_dirty);
     StandardMaterialDocumentsHarness harness("live-color-scene-replacement");
@@ -1363,18 +1385,19 @@ TEST(StandardMaterialDocumentsTests,
     ASSERT_TRUE(after.ok());
     EXPECT_EQ(after.value().session_id, session_id);
     EXPECT_EQ(after.value().material.base_color,
-              before.value().material.base_color);
+              (std::array<float, 3>{0.15f, 0.35f, 0.55f}));
     EXPECT_FLOAT_EQ(after.value().material.roughness,
                     before.value().material.roughness);
-    EXPECT_EQ(after.value().dirty, initially_dirty);
-    EXPECT_EQ(harness.project().has_dirty_material(), initially_dirty);
+    EXPECT_TRUE(after.value().dirty);
+    EXPECT_TRUE(harness.project().has_dirty_material());
     EXPECT_FALSE(documents.finish_base_color_preview(session_id, true).ok())
-        << "a trailing picker acceptance must not revive a canceled preview";
+        << "a trailing picker acceptance must not revive a settled preview";
     const auto restored_render = resolver.resolve(*default_id);
     ASSERT_TRUE(restored_render.has_value());
     ASSERT_NE(restored_render->evaluation.standard_material(), nullptr);
-    EXPECT_EQ(*restored_render->evaluation.standard_material(),
-              *saved_render->evaluation.standard_material());
+    EXPECT_FLOAT_EQ(restored_render->evaluation.standard_material()->base_color.x, 0.15f);
+    EXPECT_FLOAT_EQ(restored_render->evaluation.standard_material()->base_color.y, 0.35f);
+    EXPECT_FLOAT_EQ(restored_render->evaluation.standard_material()->base_color.z, 0.55f);
   }
 }
 

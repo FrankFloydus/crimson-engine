@@ -41,6 +41,14 @@ file except through prior written authorization from Francesco Di Blasi.
   and undo/redo with focused synthetic behavior tests under the root verification contract.
   Geometry previews must also satisfy the [preview projection contract](modeling/runtime/README.md#live-preview-projection-contract)
   through the retained viewport submission, including when committed assets do not change.
+- Leaving a pending operation accepts its valid result through the existing history owner.
+  `NativeViewportToolCoordinator::settle_transient_state()` settles native lifecycles before the
+  generic modeling execution owner; never commit an Extrude/UV Peel preview underneath its tool.
+  Only explicit Cancel or document Discard rolls back authored work. Empty startup/hover state
+  may end without history; failed acceptance retains the draft and rejects the transition.
+  Validate the incoming request before settlement. Availability queries, unchanged selection,
+  same-tool reactivation and viewport focus alone must not finalize an operation. Keep cleanup
+  after owner destruction or failed publication separate from user-facing settlement.
 - Scene color previews publish through the existing property-preview checkpoint and record history
   only on acceptance. Material color previews remain drafts; scene saves and inactive-tab closure
   must not cancel the material picker. Preserve saved material texture identity during live tint edits.

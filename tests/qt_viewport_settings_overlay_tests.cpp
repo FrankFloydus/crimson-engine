@@ -444,7 +444,7 @@ TEST_F(QtViewportSettingsOverlayTests,
 }
 
 TEST_F(QtViewportSettingsOverlayTests,
-       PrimitiveSwitchRetiresHeldFootprintReleaseBeforeDrawingTheNextShape) {
+       PrimitiveSwitchRejectsHeldFootprintThenAcceptsItsCompletedShape) {
   auto *surface = host_->surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
   surface->resize(800, 600);
@@ -463,22 +463,44 @@ TEST_F(QtViewportSettingsOverlayTests,
   QApplication::sendEvent(surface, &drag);
   process_input();
   ASSERT_EQ(session_->modeling().box_drag_state(), quader::ModelingBoxDragState::Footprint);
-  ASSERT_TRUE(editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Sphere).ok());
-  // Sample the held packet, then its release: neither belongs to the new tool.
+  const auto authored = session_->modeling().box_preview();
+  const auto origin = editor_->tools().active_settings_presentation_origin();
+  const auto rejected = editor_->tools().begin_primitive_creation(
+      quader::QuaderPrimitiveCreationShape::Sphere);
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_EQ(session_->primitive_creation().active_kind(), quader::PrimitiveCreationKind::Box);
+  EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin);
+  EXPECT_EQ(session_->modeling().box_drag_state(), quader::ModelingBoxDragState::Footprint);
+  const auto retained = session_->modeling().box_preview();
+  ASSERT_EQ(retained.footprint_count, authored.footprint_count);
+  for (std::size_t index = 0; index < authored.footprint_count; ++index) {
+    EXPECT_FLOAT_EQ(retained.footprint[index].x, authored.footprint[index].x);
+    EXPECT_FLOAT_EQ(retained.footprint[index].y, authored.footprint[index].y);
+    EXPECT_FLOAT_EQ(retained.footprint[index].z, authored.footprint[index].z);
+  }
+  // A rejected switch preserves the original press and its matching release.
   process_input();
   QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
   QApplication::sendEvent(surface, &release);
   process_input();
-  EXPECT_TRUE(session_->modeling().objects().empty());
-  EXPECT_EQ(session_->primitive_creation().shape_count(), 0u);
+  ASSERT_EQ(session_->modeling().objects().size(), 1U);
+  EXPECT_EQ(session_->primitive_creation().shape_count(), 1U);
   EXPECT_EQ(session_->modeling().box_drag_state(), quader::ModelingBoxDragState::Idle);
+  ASSERT_TRUE(editor_->tools().live_primitive_creation().has_value());
+  EXPECT_EQ(editor_->tools().live_primitive_creation()->shape, quader::QuaderPrimitiveCreationShape::Box);
+  ASSERT_TRUE(editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Sphere).ok());
+  process_input();
+  EXPECT_EQ(session_->history().undo_count(), 1U);
+  EXPECT_EQ(session_->primitive_creation().shape_count(), 0U);
   EXPECT_FALSE(editor_->tools().live_primitive_creation().has_value());
   QApplication::sendEvent(surface, &press);
   process_input();
   QApplication::sendEvent(surface, &release);
   process_input();
   ASSERT_EQ(session_->primitive_creation().shape_count(), 1u);
+  EXPECT_EQ(session_->modeling().objects().size(), 2U);
   ASSERT_TRUE(editor_->tools().live_primitive_creation().has_value());
   EXPECT_EQ(editor_->tools().live_primitive_creation()->shape, quader::QuaderPrimitiveCreationShape::Sphere);
 }

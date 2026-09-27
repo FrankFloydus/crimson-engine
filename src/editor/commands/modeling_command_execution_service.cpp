@@ -87,6 +87,12 @@ private:
     const std::uint64_t content_before = modeling().content_revision();
     ModelingCommandResult result;
     switch (tool_) {
+    case ModelingViewportTool::Box: {
+      const ModelingCreateBoxResult created = modeling().commit_box("Box");
+      result = {.ok = created.ok, .changed = created.changed,
+                .message = created.message};
+      break;
+    }
     case ModelingViewportTool::InsertEdgeLoop:
       result = modeling().commit_insert_edge_loop_drag();
       break;
@@ -203,6 +209,14 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
     };
   }
 
+  if (modeling.pending_operation_active()) {
+    const ModelingCommandResult settled =
+        settle_pending_operations(history, modeling);
+    if (!settled.ok) {
+      return settled;
+    }
+  }
+
   if (tool->history_policy().mode !=
       ModelingCommandHistoryMode::ModelingUndoRedo) {
     return dispatcher_.execute(*tool, modeling, &selection);
@@ -260,6 +274,23 @@ ModelingCommandResult ModelingCommandExecutionService::begin_preview(
     return {.ok = false,
             .message = "Action is not available in the current mode."};
   }
+  if (found->visibility != ModelingActionVisibility::Enabled) {
+    return {.ok = false,
+            .message = found->disabled_reason.empty()
+                           ? "Action is disabled."
+                           : found->disabled_reason};
+  }
+  if (modeling.operation_preview_active() &&
+      modeling.tool_settings_target().action_id == action_id) {
+    return {.ok = true};
+  }
+  if (modeling.pending_operation_active()) {
+    const ModelingCommandResult settled =
+        settle_pending_operations(history, modeling);
+    if (!settled.ok) {
+      return settled;
+    }
+  }
   if (found->preview_kind != ModelingActionPreviewKind::None) {
     return modeling.execute_context_action(action_id);
   }
@@ -294,6 +325,101 @@ ModelingCommandResult ModelingCommandExecutionService::cancel_preview(
   return ModelingPreviewCommandService::cancel(modeling);
 }
 
+ModelingCommandResult ModelingCommandExecutionService::settle_pending_operations(
+    EditorHistoryService &history, ModelingSessionService &modeling,
+    MaterialReference creation_material) {
+  bool changed = false;
+  const auto absorb = [&changed](ModelingCommandResult result) {
+    changed = changed || result.changed;
+    result.changed = changed;
+    return result;
+  };
+  if (modeling.operation_preview_active()) {
+    const ModelingCommandResult result = absorb(commit_preview(
+        history, modeling, modeling.tool_settings_target().label));
+    if (!result.ok) {
+      return result;
+    }
+  }
+  if (modeling.transform_drag_active()) {
+    const ModelingTransformDragPreview result =
+        modeling.commit_transform_drag(history);
+    const ModelingCommandResult committed = absorb({
+        .ok = result.ok, .changed = result.changed, .message = result.message});
+    if (!committed.ok) {
+      return committed;
+    }
+  }
+  if (modeling.structural_transform_preview_active()) {
+    const ModelingCommandResult result =
+        absorb(modeling.commit_structural_transform_preview());
+    if (!result.ok) {
+      return result;
+    }
+  }
+  if (modeling.can_cancel_active_preview_for_undo()) {
+    const ModelingCommandResult result = absorb(from_command_result(
+        history.execute(std::make_unique<CommitTransformPreviewHistoryCommand>(
+            modeling))));
+    if (!result.ok) {
+      return result;
+    }
+  }
+
+  const ModelingToolStatus status = modeling.tool_status();
+  bool commit = false;
+  switch (status.active_tool) {
+  case ModelingViewportTool::InsertEdgeLoop:
+    // Merely hovering a loop is not an authored gesture.
+    commit = status.insert_edge_loop_dragging;
+    break;
+  case ModelingViewportTool::Knife:
+    if (status.knife_has_active_stroke && !status.knife_can_commit) {
+      return {.ok = false, .changed = changed,
+              .message = "Finish the Knife stroke or explicitly cancel it "
+                         "before continuing."};
+    }
+    commit = status.knife_can_commit;
+    break;
+  case ModelingViewportTool::Cut:
+    commit = status.cut_captured_point_count != 0;
+    break;
+  case ModelingViewportTool::Mirror:
+    commit = status.mirror_captured_point_count != 0;
+    break;
+  case ModelingViewportTool::Poly:
+    commit = status.poly_point_count != 0;
+    break;
+  case ModelingViewportTool::Box:
+    commit = modeling.pending_operation_active();
+    break;
+  default:
+    break;
+  }
+  if (commit) {
+    const ToolDescriptor *descriptor =
+        find_viewport_tool_descriptor(status.active_tool);
+    const ModelingCommandResult result = absorb(commit_viewport_tool(
+        history, modeling, status.active_tool,
+        descriptor == nullptr ? "Modeling Operation"
+                              : std::string(descriptor->label),
+        creation_material));
+    if (!result.ok) {
+      return result;
+    }
+  }
+  if (modeling.pending_operation_active()) {
+    return {.ok = false, .changed = changed,
+            .message = "Finish the pending operation or explicitly cancel it "
+                       "before continuing."};
+  }
+  if (modeling.modal_tool_owns_viewport()) {
+    // Only empty startup/hover state remains; this cannot discard authored work.
+    return absorb(modeling.cancel_active_modal_tool());
+  }
+  return {.ok = true, .changed = changed};
+}
+
 ModelingCommandResult ModelingCommandExecutionService::commit_viewport_tool(
     EditorHistoryService &history, ModelingSessionService &modeling,
     ModelingViewportTool tool, std::string label,
@@ -304,6 +430,7 @@ ModelingCommandResult ModelingCommandExecutionService::commit_viewport_tool(
             .message = release_feature_unavailable_message()};
   }
   switch (tool) {
+  case ModelingViewportTool::Box:
   case ModelingViewportTool::InsertEdgeLoop:
   case ModelingViewportTool::Cut:
   case ModelingViewportTool::Knife:

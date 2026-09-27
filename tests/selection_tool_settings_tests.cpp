@@ -196,13 +196,15 @@ TEST(SelectionToolSettingsTests, PaneAcquisitionRejectsStaleTargetsAndTransfersI
   EXPECT_EQ(tools.active_settings_presentation_origin().serial, acquired_origin);
 }
 
-TEST(SelectionToolSettingsTests, OtherPaneCannotAcquirePendingExtrusion) {
+TEST(SelectionToolSettingsTests, OtherPaneAcceptsPendingExtrusionWhenAcquiringItsTool) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   auto &tools = editor.tools();
   const auto created = editor.modeling().create_box(
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}}, "Pane extrusion");
   ASSERT_TRUE(created.ok());
+  const auto original = editor.query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(original.has_value());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Perspective).ok());
@@ -216,11 +218,16 @@ TEST(SelectionToolSettingsTests, OtherPaneCannotAcquirePendingExtrusion) {
   ASSERT_TRUE(before.has_value());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   EXPECT_EQ(tools.settings_for_pane(ViewportPaneId::Top).tool_id, "move");
-  EXPECT_FALSE(tools.acquire_pane_tool(ViewportPaneId::Top).ok());
-  EXPECT_FALSE(tools.set_setting(ViewportPaneId::Top, "move", "auto_merge_vertices", false).ok());
   EXPECT_EQ(tools.active_tool(), "extrude");
   EXPECT_EQ(tools.active_settings_revision(), revision);
   EXPECT_EQ(tools.active_settings_presentation_origin().serial, origin.serial);
+  ASSERT_TRUE(tools.acquire_pane_tool(ViewportPaneId::Top).ok());
+  EXPECT_TRUE(tools.set_setting(ViewportPaneId::Top, "move", "auto_merge_vertices", false).ok());
+  EXPECT_EQ(tools.active_tool(), "move");
+  EXPECT_FALSE(tools.active_settings().preview_active);
+  EXPECT_GT(tools.active_settings_revision(), revision);
+  EXPECT_GT(tools.active_settings_presentation_origin().serial, origin.serial);
+  EXPECT_EQ(editor.history().snapshot().undo_label, "Extrude Faces");
   const auto after = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(after.has_value());
   EXPECT_EQ(after->indices, before->indices);
@@ -230,6 +237,15 @@ TEST(SelectionToolSettingsTests, OtherPaneCannotAcquirePendingExtrusion) {
     EXPECT_FLOAT_EQ(after->vertices[index].position.y, before->vertices[index].position.y);
     EXPECT_FLOAT_EQ(after->vertices[index].position.z, before->vertices[index].position.z);
   }
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto undone = editor.query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(undone.has_value());
+  EXPECT_EQ(undone->indices, original->indices);
+  EXPECT_EQ(undone->vertices.size(), original->vertices.size());
+  ASSERT_TRUE(editor.history().redo().ok());
+  const auto redone = editor.query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(redone.has_value());
+  EXPECT_EQ(redone->indices, before->indices);
 }
 
 TEST(SelectionToolSettingsTests, CompletingOrCancelingOnlyUpdatesTheExecutingPaneChoice) {

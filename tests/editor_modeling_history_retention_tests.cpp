@@ -7,6 +7,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/commands/modeling_command_execution_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "support/curve_modeling_test_support.hpp"
@@ -255,6 +256,204 @@ TEST_F(EditorModelingHistoryRetentionTests,
   EXPECT_EQ(editor_.query().modeling_objects().size(), 2U);
   EXPECT_EQ(sdk().undo_depth(), 0U);
   EXPECT_FALSE(sdk().can_redo());
+}
+
+TEST_F(EditorModelingHistoryRetentionTests,
+       ImplicitTransformSettlementPreservesGeometryAndRecordsOneUndoStep) {
+  const auto created = create_box();
+  ASSERT_TRUE(created.ok());
+  auto &service = session_.modeling();
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = created.value().modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {1},
+      .active_kind = ModelingActiveSelectionKind::Face,
+      .active_face = 1,
+  }).ok);
+  const auto before = editor_.query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(before.has_value());
+  const auto history_before = session_.history().undo_count();
+  ASSERT_TRUE(service.begin_transform_preview(false).ok);
+  ASSERT_TRUE(service.update_transform_translate_preview({0.0F, 2.0F, 0.0F}).ok);
+  // The committed mesh intentionally stays unchanged until acceptance; obtain
+  // the displayed candidate from the retained preview's packed positions.
+  const auto previews = service.tool_preview_meshes();
+  ASSERT_EQ(previews.size(), 1U);
+  const auto &preview = previews.front();
+  QuaderMeshAsset candidate = *before;
+  ASSERT_EQ(preview.mesh.geometry().vertices.size(), candidate.vertices.size());
+  for (std::size_t index = 0; index < candidate.vertices.size(); ++index) {
+    const QVec3 position = preview.dynamic_position_payload
+        ? preview.dynamic_position_payload->at(index)
+        : preview.mesh.geometry().vertices[index].position;
+    candidate.vertices[index].position = {position.x, position.y, position.z};
+  }
+
+  // Raw owner transitions cannot silently discard an editor-owned draft.
+  EXPECT_FALSE(service.activate_viewport_tool(ModelingViewportTool::Rotate).ok);
+  EXPECT_FALSE(service.set_selection_mode(ModelingSelectionMode::Object).ok);
+  EXPECT_TRUE(service.pending_operation_active());
+  ModelingCommandExecutionService commands;
+  const auto accepted = commands.settle_pending_operations(session_.history(), service);
+  ASSERT_TRUE(accepted.ok) << accepted.message;
+  EXPECT_FALSE(service.pending_operation_active());
+  EXPECT_EQ(session_.history().undo_count(), history_before + 1U);
+  expect_same_mesh_geometry(*editor_.query().compiled_object_mesh(created.value()),
+                            candidate);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_same_mesh_geometry(*editor_.query().compiled_object_mesh(created.value()),
+                            *before);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_same_mesh_geometry(*editor_.query().compiled_object_mesh(created.value()),
+                            candidate);
+}
+
+TEST_F(EditorModelingHistoryRetentionTests,
+       FailedImplicitTransformSettlementRetainsCandidateForRetry) {
+  const auto created = create_box();
+  ASSERT_TRUE(created.ok());
+  auto &service = session_.modeling();
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = created.value().modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {1},
+  }).ok);
+  ASSERT_TRUE(service.begin_transform_preview(false).ok);
+  ASSERT_TRUE(service.update_transform_translate_preview({0.0F, 2.0F, 0.0F}).ok);
+  const auto candidate = editor_.query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(candidate.has_value());
+  const auto history_before = session_.history().undo_count();
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+  ModelingCommandExecutionService commands;
+  const auto failed = commands.settle_pending_operations(session_.history(), service);
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_TRUE(service.pending_operation_active());
+  EXPECT_EQ(session_.history().undo_count(), history_before);
+  expect_same_mesh_geometry(*editor_.query().compiled_object_mesh(created.value()),
+                            *candidate);
+  const auto retried = commands.settle_pending_operations(session_.history(), service);
+  ASSERT_TRUE(retried.ok) << retried.message;
+  EXPECT_FALSE(service.pending_operation_active());
+  EXPECT_EQ(session_.history().undo_count(), history_before + 1U);
+}
+
+TEST_F(EditorModelingHistoryRetentionTests,
+       KnifeSettlementRejectsIncompleteStrokeAndAcceptsCompletedCut) {
+  const auto created = create_box();
+  ASSERT_TRUE(created.ok());
+  auto &service = session_.modeling();
+  const auto before = editor_.query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(before.has_value());
+  const auto history_before = session_.history().undo_count();
+  const auto event_at = [](float y) {
+    ModelingToolRayEvent event;
+    event.ray = {.origin = {0.0F, y, 6.0F}, .direction = {0.0F, 0.0F, -1.0F}};
+    event.camera = {.orthographic = true, .origin = event.ray.origin,
+                    .viewport_size = {800.0F, 600.0F}, .orthographic_size = 4.0};
+    event.grid_size = 0.5;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.12;
+    event.snap_enabled = false;
+    return event;
+  };
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  ASSERT_TRUE(service.accept_knife_point(event_at(-1.0F)).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
+  ModelingCommandExecutionService commands;
+  const auto incomplete = commands.settle_pending_operations(session_.history(), service);
+  EXPECT_FALSE(incomplete.ok);
+  EXPECT_TRUE(service.tool_status().knife_has_active_stroke);
+  EXPECT_EQ(session_.history().undo_count(), history_before);
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  EXPECT_TRUE(service.tool_status().knife_has_active_stroke);
+  ASSERT_TRUE(service.accept_knife_point(event_at(1.0F)).ok);
+  ASSERT_TRUE(service.tool_status().knife_can_commit);
+  ASSERT_EQ(editor_.selection().summary().mode, QuaderSelectionMode::Edge);
+  const auto completed = editor_.selection().set_mode(QuaderSelectionMode::Face);
+  ASSERT_TRUE(completed.ok()) << completed.error_message();
+  EXPECT_EQ(editor_.selection().summary().mode, QuaderSelectionMode::Face);
+  EXPECT_FALSE(service.pending_operation_active());
+  EXPECT_EQ(session_.history().undo_count(), history_before + 1U);
+  const auto after = editor_.query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(after.has_value());
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_same_mesh_geometry(*editor_.query().compiled_object_mesh(created.value()), *before);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_same_mesh_geometry(*editor_.query().compiled_object_mesh(created.value()), *after);
+}
+
+TEST_F(EditorModelingHistoryRetentionTests,
+       LoopHoverSettlementCreatesNoGeometryButDraggingAcceptsThroughHistory) {
+  const auto created = create_box();
+  ASSERT_TRUE(created.ok());
+  auto &service = session_.modeling();
+  const auto before = editor_.query().compiled_object_mesh(created.value());
+  ASSERT_TRUE(before.has_value());
+  const auto history_before = session_.history().undo_count();
+  ModelingToolRayEvent event;
+  event.ray = {.origin = {1.0F, 0.0F, 5.0F}, .direction = {0.0F, 0.0F, -1.0F}};
+  event.camera = {.orthographic = true, .origin = {0.0F, 0.0F, 5.0F},
+                  .viewport_size = {800.0F, 600.0F}, .orthographic_size = 4.0};
+  event.snap_enabled = false;
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+  ASSERT_TRUE(service.update_insert_edge_loop_hover(event).ok);
+  ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+  EXPECT_FALSE(service.pending_operation_active());
+  ModelingCommandExecutionService commands;
+  ASSERT_TRUE(commands.settle_pending_operations(session_.history(), service).ok);
+  EXPECT_EQ(session_.history().undo_count(), history_before);
+  expect_same_mesh_geometry(*editor_.query().compiled_object_mesh(created.value()), *before);
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+  ASSERT_TRUE(service.begin_insert_edge_loop_drag(event).ok);
+  ASSERT_TRUE(service.tool_status().insert_edge_loop_dragging);
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::BeforeCommit);
+  const auto failed = commands.settle_pending_operations(session_.history(), service);
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_TRUE(service.tool_status().insert_edge_loop_dragging);
+  EXPECT_EQ(session_.history().undo_count(), history_before);
+  const auto accepted = commands.settle_pending_operations(session_.history(), service);
+  ASSERT_TRUE(accepted.ok) << accepted.message;
+  EXPECT_EQ(session_.history().undo_count(), history_before + 1U);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_same_mesh_geometry(*editor_.query().compiled_object_mesh(created.value()), *before);
+}
+
+TEST_F(EditorModelingHistoryRetentionTests,
+       PolySelectionModeTransitionAcceptsValidFaceAndRetainsIncompleteDraft) {
+  ASSERT_TRUE(create_box().ok());
+  auto &service = session_.modeling();
+  const auto history_before = session_.history().undo_count();
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Poly).ok);
+  const auto event_at = [](float x, float y) {
+    ModelingToolRayEvent event;
+    event.ray = {.origin = {x, y, 6.0F}, .direction = {0.0F, 0.0F, -1.0F}};
+    event.camera = {.orthographic = true, .origin = event.ray.origin,
+                    .viewport_size = {800.0F, 600.0F}, .orthographic_size = 4.0};
+    event.snap_enabled = false;
+    return event;
+  };
+  ASSERT_TRUE(service.accept_poly_point(event_at(-0.5F, -0.5F)).ok);
+  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  EXPECT_EQ(service.tool_status().poly_point_count, 1);
+  EXPECT_EQ(session_.history().undo_count(), history_before);
+  ASSERT_TRUE(service.accept_poly_point(event_at(0.5F, -0.5F)).ok);
+  ASSERT_TRUE(service.accept_poly_point(event_at(0.5F, 0.5F)).ok);
+  ASSERT_EQ(service.tool_status().poly_point_count, 3);
+  const auto accepted = editor_.selection().set_mode(QuaderSelectionMode::Edge);
+  ASSERT_TRUE(accepted.ok()) << accepted.error_message();
+  EXPECT_EQ(editor_.query().modeling_objects().size(), 2U);
+  EXPECT_EQ(session_.history().undo_count(), history_before + 1U);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_EQ(editor_.query().modeling_objects().size(), 1U);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_EQ(editor_.query().modeling_objects().size(), 2U);
 }
 
 } // namespace

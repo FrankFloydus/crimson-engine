@@ -169,6 +169,8 @@ public:
   using SceneSelectionScopeFilter = std::function<bool(EntityId)>;
   using SceneSelectionHistorySuppressionProvider = std::function<bool()>;
   using SelectionEditCallback = std::function<ModelingCommandResult()>;
+  using SelectionEditBeginCallback = std::function<ModelingCommandResult(bool changing_mode)>;
+  using SelectionSettlementPolicy = std::function<bool(bool changing_mode)>;
 
   EditorSelectionService(SceneDocument &scene,
                          DocumentCommandService &document_commands,
@@ -186,7 +188,9 @@ public:
       SceneSelectionHistorySuppressionProvider provider);
   /// User selection edits respect native preview ownership; publication bypasses it.
   void set_selection_edit_policy(SelectionEditCallback preflight,
-                                 SelectionEditCallback edited);
+                                 SelectionEditCallback edited,
+                                 SelectionEditBeginCallback begin = {},
+                                 SelectionSettlementPolicy requires_settlement = {});
   [[nodiscard]] ModelingCommandResult selection_edit_preflight() const;
   void set_sub_selection_provider(EditorSubSelectionProvider *provider);
   [[nodiscard]] bool has_sub_selection() const;
@@ -369,6 +373,8 @@ private:
       ModelingComponentSelectionCommand command,
       std::span<const ModelingSelectionMode> allowed_modes);
   ModelingCommandResult finish_selection_edit(ModelingCommandResult result);
+  ModelingCommandResult begin_selection_edit(bool changing_mode = false);
+  [[nodiscard]] bool requires_selection_settlement(bool changing_mode = false) const;
   [[nodiscard]] EditorSubSelectionSnapshot
   current_sub_selection_snapshot() const;
 
@@ -380,6 +386,8 @@ private:
   SceneSelectionHistorySuppressionProvider
       scene_selection_history_suppression_provider_;
   SelectionEditCallback selection_edit_preflight_;
+  SelectionEditBeginCallback selection_edit_begin_;
+  SelectionSettlementPolicy selection_settlement_policy_;
   SelectionEditCallback selection_edited_;
   EditorSubSelectionProvider *sub_selection_provider_ = nullptr;
   mutable bool summary_cache_valid_ = false;

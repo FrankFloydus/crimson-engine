@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/command_result.hpp"
+#include "assets/material_reference.hpp"
 #include "core/types.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/placement/snap_to_floor_tool_state_port.hpp"
@@ -18,6 +19,7 @@
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 
 #include <memory>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -69,7 +71,8 @@ public:
                                 ModelingSessionService &modeling,
                                 CurveToolService &curve,
                                 UvPeelToolService &uv_peel,
-                                ExtrudeToolService &extrude);
+                                ExtrudeToolService &extrude,
+                                std::function<CommandResult(MaterialReference)> settle_modeling);
   NativeViewportToolCoordinator(const NativeViewportToolCoordinator &) = delete;
   NativeViewportToolCoordinator &
   operator=(const NativeViewportToolCoordinator &) = delete;
@@ -143,7 +146,13 @@ public:
   CommandResult
   complete_active_light_creation(LightCreationOperation operation);
   CommandResult cancel_competing_state_for_tool_activation();
-  /// Scene transitions explicitly cancel previews without tool-switch guards.
+  /// Accepts pending work before an implicit tool transition.
+  CommandResult settle_competing_state_for_tool_activation();
+  /// Accepts pending authored work; failed acceptance leaves the operation active.
+  CommandResult settle_transient_state();
+  void set_creation_material(MaterialReference material) { creation_material_ = material; }
+  [[nodiscard]] bool settlement_in_progress() const { return settling_transient_state_; }
+  /// Explicit cancellation and destructive session teardown only.
   CommandResult cancel_transient_state();
   CommandResult commit_active() override;
   CommandResult undo_active();
@@ -166,6 +175,9 @@ private:
   CurveToolService &curve_;
   UvPeelToolService &uv_peel_;
   ExtrudeToolService &extrude_;
+  std::function<CommandResult(MaterialReference)> settle_modeling_;
+  bool settling_transient_state_ = false;
+  MaterialReference creation_material_;
   ViewportToolRuntime runtime_;
   ViewportNativeToolInteraction interaction_;
   ExtrudeViewportInteraction extrude_interaction_;

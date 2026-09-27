@@ -59,6 +59,12 @@ public:
 
   ModelingCommandResult cancel_preview(ModelingSessionService &modeling);
 
+  /// Accepts pending modeling work before a scene or tool transition.
+  /// Native tool owners must settle first so their history boundaries stay intact.
+  ModelingCommandResult settle_pending_operations(
+      EditorHistoryService &history, ModelingSessionService &modeling,
+      MaterialReference creation_material = {});
+
   [[nodiscard]] ModelingCommandAvailability
   availability(ModelingSessionService &modeling, std::string_view tool_id,
                EditorSelectionService *selection = nullptr,

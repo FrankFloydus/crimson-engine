@@ -281,8 +281,11 @@ TEST(UvPeelToolServiceTests,
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
   const QuaderUvPeelOptions options{.world_space = false, .u_offset = 0.25};
   set_options(editor, options);
+  const auto undo_count = harness.session.history().undo_count();
   ASSERT_TRUE(editor.selection().select_edge(strip, 2, 5).ok());
   refresh(harness);
+  EXPECT_TRUE(harness.session.uv_peel().active());
+  EXPECT_EQ(harness.session.history().undo_count(), undo_count);
   ASSERT_TRUE(editor.tools().active_settings().can_apply);
   expect_direct_peel_parity(editor.query().compiled_object_mesh(strip), options);
 
@@ -319,6 +322,8 @@ TEST(UvPeelToolServiceTests,
   refresh(harness);
   EXPECT_TRUE(editor.tools().active_settings().can_apply);
   expect_direct_peel_parity(editor.query().compiled_object_mesh(strip), options);
+  EXPECT_TRUE(harness.session.uv_peel().active());
+  EXPECT_EQ(harness.session.history().undo_count(), undo_count);
 }
 
 TEST(UvPeelToolServiceTests, EverySettingAndResetRecalculateWithoutAccumulation) {
@@ -659,26 +664,34 @@ TEST(UvPeelToolServiceTests, BranchingGuidesRestoreOriginalUvsAndRecoverInPlace)
   EXPECT_TRUE(harness.session.uv_peel().preview_error().empty());
 }
 
-TEST(UvPeelToolServiceTests, ToolAndSelectionModeChangesCancelUnfinishedUvs) {
-  UvPeelHarness harness;
-  auto &editor = harness.editor;
-  const auto strip = create_strip(editor);
-  ASSERT_TRUE(editor.selection().select_edge(strip, 2, 5).ok());
-  const auto original = editor.query().compiled_object_mesh(strip);
-  ASSERT_TRUE(original.has_value());
-  harness.session.history().clear();
-  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
-  ASSERT_TRUE(editor.tools().set_setting("uv_peel", "uv_peel.u_offset", 0.25).ok());
-  ASSERT_TRUE(editor.tools().activate("move").ok());
-  EXPECT_EQ(editor.tools().active_tool(), "move");
-  expect_mesh_equal(editor.query().compiled_object_mesh(strip), *original);
-  EXPECT_FALSE(editor.history().can_undo());
-  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
-  EXPECT_EQ(editor.tools().active_tool(), "select");
-  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Face);
-  expect_mesh_equal(editor.query().compiled_object_mesh(strip), *original);
-  EXPECT_FALSE(editor.history().can_undo());
+TEST(UvPeelToolServiceTests, ToolAndSelectionModeChangesAcceptUvsWithHistory) {
+  for (const bool change_mode : {false, true}) {
+    SCOPED_TRACE(change_mode);
+    UvPeelHarness harness;
+    auto &editor = harness.editor;
+    const auto strip = create_strip(editor);
+    ASSERT_TRUE(editor.selection().select_edge(strip, 2, 5).ok());
+    const auto original = editor.query().compiled_object_mesh(strip);
+    ASSERT_TRUE(original.has_value());
+    harness.session.history().clear();
+    ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+    ASSERT_TRUE(editor.tools().set_setting("uv_peel", "uv_peel.u_offset", 0.25).ok());
+    const auto preview = editor.query().compiled_object_mesh(strip);
+    ASSERT_TRUE(preview.has_value());
+    const auto changed = change_mode
+        ? editor.selection().set_mode(QuaderSelectionMode::Face)
+        : editor.tools().activate("move");
+    ASSERT_TRUE(changed.ok()) << changed.error_message();
+    EXPECT_EQ(editor.tools().active_tool(), change_mode ? "select" : "move");
+    EXPECT_EQ(editor.selection().summary().mode,
+              change_mode ? QuaderSelectionMode::Face : QuaderSelectionMode::Edge);
+    expect_mesh_equal(editor.query().compiled_object_mesh(strip), *preview);
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_mesh_equal(editor.query().compiled_object_mesh(strip), *original);
+    EXPECT_FALSE(editor.history().can_undo());
+    ASSERT_TRUE(editor.history().redo().ok());
+    expect_mesh_equal(editor.query().compiled_object_mesh(strip), *preview);
+  }
 }
 
 TEST(UvPeelToolServiceTests, UnchangedFramesDoNotRebuildOrRepublishThePreview) {
@@ -720,6 +733,16 @@ TEST(UvPeelToolServiceTests, SceneReplacementEndsTheToolAndKeepsAcceptedOptions)
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
   ASSERT_TRUE(editor.tools().set_setting("uv_peel", "uv_peel.u_offset", 0.25).ok());
   ASSERT_TRUE(editor.tools().active_settings().can_apply);
+  const auto preview = editor.query().compiled_object_mesh(strip);
+  ASSERT_TRUE(preview.has_value());
+  const auto blocked = editor.scene_documents().new_scene();
+  EXPECT_FALSE(blocked.ok());
+  EXPECT_FALSE(blocked.error_message().empty());
+  EXPECT_TRUE(harness.session.dirty());
+  EXPECT_TRUE(editor.history().can_undo());
+  expect_mesh_equal(editor.query().compiled_object_mesh(strip), *preview);
+  // A standalone replacement must first give the accepted scene a save decision.
+  harness.session.mark_clean();
   ASSERT_TRUE(editor.scene_documents().new_scene().ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_FALSE(editor.query().entity(strip.entity).has_value());
@@ -730,7 +753,7 @@ TEST(UvPeelToolServiceTests, SceneReplacementEndsTheToolAndKeepsAcceptedOptions)
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
-TEST(UvPeelToolServiceTests, SceneSwitchCancelsPreviewAndSharesAcceptedOptions) {
+TEST(UvPeelToolServiceTests, SceneSwitchAcceptsPreviewAndSharesAcceptedOptions) {
   ScopedPeelProjectDirectory directory;
   ProjectSession project;
   const auto created = project.create(directory.path());
@@ -746,6 +769,8 @@ TEST(UvPeelToolServiceTests, SceneSwitchCancelsPreviewAndSharesAcceptedOptions) 
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
   set_options(editor, remembered);
   ASSERT_TRUE(editor.tools().active_settings().can_apply);
+  const auto first_preview = editor.query().compiled_object_mesh(strip);
+  ASSERT_TRUE(first_preview.has_value());
   const auto second = editor.scene_documents().new_scene();
   ASSERT_TRUE(second.ok()) << second.error_message();
   EXPECT_EQ(editor.tools().active_tool(), "select");
@@ -759,12 +784,18 @@ TEST(UvPeelToolServiceTests, SceneSwitchCancelsPreviewAndSharesAcceptedOptions) 
   EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Edge);
   EXPECT_EQ(editor.selection().summary().selected_edge_count, 1u);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, remembered);
-  expect_mesh_equal(editor.query().compiled_object_mesh(strip), *original);
+  expect_mesh_equal(editor.query().compiled_object_mesh(strip), *first_preview);
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
   ASSERT_TRUE(editor.tools().active_settings().can_apply);
+  const auto second_preview = editor.query().compiled_object_mesh(strip);
+  ASSERT_TRUE(second_preview.has_value());
   ASSERT_TRUE(editor.scene_documents().activate(second.value()).ok());
   ASSERT_TRUE(editor.scene_documents().activate(first_scene).ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
+  expect_mesh_equal(editor.query().compiled_object_mesh(strip), *second_preview);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_mesh_equal(editor.query().compiled_object_mesh(strip), *first_preview);
+  ASSERT_TRUE(editor.history().undo().ok());
   expect_mesh_equal(editor.query().compiled_object_mesh(strip), *original);
 }
 

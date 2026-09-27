@@ -12,7 +12,9 @@
 #include "assets/default_material_catalog.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/curve/curve_tool_service.hpp"
+#include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_autosave_service.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
@@ -336,7 +338,42 @@ TEST(ProjectSessionWorkspace,
 }
 
 TEST(ProjectSessionWorkspace,
-     NewAndOpenedScenesCancelOutgoingCurveDragsBeforeRebinding) {
+     ToolActivationHookReceivesAcceptedPreviewAndInvalidRequestsNeverDispatch) {
+  SceneSession scene;
+  const auto binding = QuaderApiSessionInternalAccess::from_scene_session(scene);
+  QuaderEditorApi editor(binding);
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Hook transition");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Move).ok());
+  ASSERT_TRUE(scene.modeling().begin_transform_preview(false).ok);
+  ASSERT_TRUE(scene.modeling().update_transform_translate_preview({2.0f, 0.0f, 0.0f}).ok);
+  const auto history_before = scene.history().undo_count();
+  int dispatch_count = 0;
+  editor.tools().set_runtime_hooks({.activate = [&](std::string_view id) {
+    ++dispatch_count;
+    EXPECT_FALSE(scene.modeling().can_cancel_active_preview_for_undo());
+    EXPECT_EQ(scene.history().undo_count(), history_before + 1U);
+    return QuaderToolsApi(binding).activate(id);
+  }});
+
+  EXPECT_FALSE(editor.tools().activate("missing_tool").ok());
+  EXPECT_EQ(dispatch_count, 0);
+  EXPECT_TRUE(scene.modeling().can_cancel_active_preview_for_undo());
+  EXPECT_EQ(scene.history().undo_count(), history_before);
+
+  const auto switched = editor.tools().activate(ViewportToolId::Rotate);
+  ASSERT_TRUE(switched.ok()) << switched.error_message();
+  EXPECT_EQ(dispatch_count, 1);
+  EXPECT_EQ(editor.tools().active_tool(), "rotate");
+  EXPECT_EQ(scene.history().undo_count(), history_before + 1U);
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.history().redo().ok());
+}
+
+TEST(ProjectSessionWorkspace,
+     NewAndOpenedScenesAcceptOutgoingCurveDragsBeforeRebinding) {
   for (const bool open_existing_file : {false, true}) {
     SCOPED_TRACE(open_existing_file ? "Open Scene" : "New Scene");
     ScopedProjectSessionDirectory temporary("curve-transition");
@@ -355,13 +392,13 @@ TEST(ProjectSessionWorkspace,
     ASSERT_TRUE(curve.preview_state().document.has_value());
     const auto before = *curve.preview_state().document;
     const auto source_stamp = source->session->content_revision_stamp();
-    ASSERT_NE(source->session->history().undo_label(), nullptr);
-    const std::string undo_label = *source->session->history().undo_label();
+    const auto undo_steps = source->session->history().undo_count();
     ASSERT_TRUE(select_and_begin_curve_control_drag(
         curve, {.point = before.points()[0].id}));
     ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
     ASSERT_TRUE(curve.dragging());
     ASSERT_TRUE(source->session->modeling().curve_document_preview_active());
+    const auto pending = *curve.preview_state().document;
 
     const auto switched = open_existing_file
         ? editor.scene_documents().open(target_path)
@@ -371,15 +408,19 @@ TEST(ProjectSessionWorkspace,
     EXPECT_FALSE(curve.active());
     EXPECT_FALSE(curve.dragging());
     EXPECT_FALSE(source->session->modeling().curve_document_preview_active());
-    EXPECT_EQ(source->session->content_revision_stamp(), source_stamp);
-    EXPECT_FALSE(source->dirty());
-    ASSERT_NE(source->session->history().undo_label(), nullptr);
-    EXPECT_EQ(*source->session->history().undo_label(), undo_label);
+    EXPECT_NE(source->session->content_revision_stamp(), source_stamp);
+    EXPECT_TRUE(source->dirty());
+    EXPECT_EQ(source->session->history().undo_count(), undo_steps + 1U);
 
     ASSERT_TRUE(editor.scene_documents().activate(source_id).ok());
     const auto restored = editor.modeling().curve_snapshot(object);
     ASSERT_TRUE(restored.ok()) << restored.error_message();
-    EXPECT_TRUE(restored.value().document.has_same_geometry(before));
+    EXPECT_TRUE(restored.value().document.has_same_geometry(pending));
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.modeling().curve_snapshot(object).ok());
+    EXPECT_TRUE(editor.modeling().curve_snapshot(object).value().document.has_same_geometry(before));
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(editor.modeling().curve_snapshot(object).value().document.has_same_geometry(pending));
     ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
     ASSERT_TRUE(select_and_begin_curve_control_drag(
         curve, {.point = before.points()[0].id}));
@@ -3595,6 +3636,306 @@ TEST(ProjectSessionWorkspace,
   const auto persisted = ProjectManifestStore::open(project.manifest_path());
   ASSERT_TRUE(persisted.ok());
   EXPECT_EQ(persisted.value().manifest.minimum_product_release(), kInternalFullRelease);
+}
+
+TEST(ProjectSessionWorkspace, SceneSaveRoutesAcceptPendingEdits) {
+  for (const int route : {0, 1, 2, 3}) {
+    SCOPED_TRACE(route);
+    ScopedProjectSessionDirectory temporary("save-accepts-preview");
+    ProjectSession project;
+    ASSERT_TRUE(project.create(temporary.make_empty_child("Project")).ok);
+    QuaderEditorApi editor(project);
+    const auto object = create_saved_transition_curve(project, editor);
+    OpenSceneSession *scene = project.active_scene();
+    ASSERT_NE(scene, nullptr);
+    ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+    CurveToolService &curve = scene->session->curve();
+    ASSERT_TRUE(curve.preview_state().document.has_value());
+    const auto before = *curve.preview_state().document;
+    const auto history_count = scene->session->history().undo_count();
+    ASSERT_TRUE(select_and_begin_curve_control_drag(
+        curve, {.point = before.points()[0].id}));
+    ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+    const auto expected = *curve.preview_state().document;
+    ASSERT_TRUE(scene->dirty());
+
+    const ProjectRelativePath destination = route == 1
+        ? project_path("Scenes/Nested/Accepted.qdr")
+        : project_path("Scenes/Source.qdr");
+    if (route == 0) {
+      const auto saved = editor.scene_documents().save_active();
+      ASSERT_TRUE(saved.ok()) << saved.error_message();
+    } else if (route == 1) {
+      ASSERT_TRUE(std::filesystem::create_directories(
+          project.root() / destination.native_path().parent_path()));
+      const auto saved = editor.scene_documents().save_as(scene->session_id, destination);
+      ASSERT_TRUE(saved.ok()) << saved.error_message();
+    } else if (route == 2) {
+      const auto saved = editor.scene_documents().save_all();
+      ASSERT_TRUE(saved.ok()) << saved.error_message();
+    } else {
+      const auto saved = project.save_all();
+      ASSERT_TRUE(saved.ok) << saved.message;
+    }
+
+    EXPECT_FALSE(curve.dragging());
+    EXPECT_FALSE(scene->session->modeling().curve_document_preview_active());
+    EXPECT_FALSE(scene->dirty());
+    EXPECT_EQ(scene->session->history().undo_count(), history_count + 1U);
+    const auto read = QdrDocumentReader::read_project_document(
+        project.root() / destination.native_path());
+    ASSERT_TRUE(read.ok) << read.message;
+    const auto ids = read.document.assets().curve_ids();
+    ASSERT_EQ(ids.size(), 1U);
+    const auto *saved_curve = read.document.assets().curve(ids.front());
+    ASSERT_NE(saved_curve, nullptr);
+    ASSERT_NE(saved_curve->document, nullptr);
+    EXPECT_TRUE(saved_curve->document->has_same_geometry(expected));
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto undone = editor.modeling().curve_snapshot(object);
+    ASSERT_TRUE(undone.ok());
+    EXPECT_TRUE(undone.value().document.has_same_geometry(before));
+    ASSERT_TRUE(editor.history().redo().ok());
+    const auto redone = editor.modeling().curve_snapshot(object);
+    ASSERT_TRUE(redone.ok());
+    EXPECT_TRUE(redone.value().document.has_same_geometry(expected));
+  }
+}
+
+TEST(ProjectSessionWorkspace, ClosePromptsIncludeCleanPendingChangesWithoutAccepting) {
+  for (const bool close_project : {false, true}) {
+    SCOPED_TRACE(close_project);
+    ScopedProjectSessionDirectory temporary("close-accepts-preview");
+    ProjectSession project;
+    ASSERT_TRUE(project.create(temporary.make_empty_child("Project")).ok);
+    QuaderEditorApi editor(project);
+    const auto object = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Pending Pivot");
+    ASSERT_TRUE(object.ok()) << object.error_message();
+    OpenSceneSession *scene = project.active_scene();
+    ASSERT_NE(scene, nullptr);
+    const auto id = scene->session_id;
+    const auto path = project_path("Scenes/Source.qdr");
+    ASSERT_TRUE(editor.scene_documents().save_as(id, path).ok());
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Pivot).ok());
+    ASSERT_TRUE(editor.tools().execute_action("pivot", "pivot.align.bottom_center").ok());
+    const auto expected = scene->session->pivot().persistent_preview_position();
+    ASSERT_TRUE(expected.has_value());
+    expect_vec3_eq(*expected, {0.0f, -1.0f, 0.0f});
+    const auto history_count = scene->session->history().undo_count();
+    const auto stamp = scene->session->content_revision_stamp();
+    ASSERT_FALSE(scene->dirty());
+    int prompt_count = 0;
+    QuaderDirtySceneDecision decision = QuaderDirtySceneDecision::Cancel;
+    editor.scene_documents().set_runtime_hooks({
+        .confirm_dirty_scene = [&](const QuaderSceneDocumentInfo &info,
+                                   std::string_view) {
+          ++prompt_count;
+          EXPECT_EQ(info.session_id, id);
+          EXPECT_TRUE(info.dirty);
+          EXPECT_FALSE(scene->dirty());
+          EXPECT_EQ(scene->session->history().undo_count(), history_count);
+          return decision;
+        }});
+
+    const auto closed = close_project ? editor.project().close()
+                                     : editor.scene_documents().close(id);
+    ASSERT_TRUE(closed.ok()) << closed.error_message();
+    EXPECT_EQ(prompt_count, 1);
+    EXPECT_EQ(project.active_scene(), scene);
+    EXPECT_FALSE(scene->dirty());
+    EXPECT_EQ(scene->session->content_revision_stamp(), stamp);
+    EXPECT_EQ(scene->session->history().undo_count(), history_count);
+    const auto retained = scene->session->pivot().persistent_preview_position();
+    ASSERT_TRUE(retained.has_value());
+    expect_vec3_eq(*retained, *expected);
+    const auto saved_path = project.root() / path.native_path();
+    decision = QuaderDirtySceneDecision::Save;
+    const auto saved_and_closed = close_project ? editor.project().close()
+        : editor.scene_documents().close(id);
+    ASSERT_TRUE(saved_and_closed.ok()) << saved_and_closed.error_message();
+    EXPECT_EQ(prompt_count, 2);
+    EXPECT_EQ(project.find(id), nullptr);
+    const auto read = QdrDocumentReader::read_project_document(saved_path);
+    ASSERT_TRUE(read.ok) << read.message;
+    const auto *saved_transform = read.document.scene().transform(object.value().entity);
+    ASSERT_NE(saved_transform, nullptr);
+    expect_vec3_eq(saved_transform->position, *expected);
+  }
+}
+
+TEST(ProjectSessionWorkspace, DirectCloseCannotLoseCleanPendingChanges) {
+  for (const bool close_project : {false, true}) {
+    SCOPED_TRACE(close_project);
+    ScopedProjectSessionDirectory temporary("direct-close-preview");
+    ProjectSession project;
+    ASSERT_TRUE(project.create(temporary.make_empty_child("Project")).ok);
+    QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Pending Pivot").ok());
+    OpenSceneSession *scene = project.active_scene();
+    ASSERT_NE(scene, nullptr);
+    const auto id = scene->session_id;
+    ASSERT_TRUE(editor.scene_documents().save_as(id, project_path("Scenes/Source.qdr")).ok());
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Pivot).ok());
+    ASSERT_TRUE(editor.tools().execute_action("pivot", "pivot.align.bottom_center").ok());
+    const auto expected = scene->session->pivot().persistent_preview_position();
+    ASSERT_TRUE(expected.has_value());
+    expect_vec3_eq(*expected, {0.0f, -1.0f, 0.0f});
+    const auto history_count = scene->session->history().undo_count();
+    ASSERT_FALSE(scene->dirty());
+    const auto closed = close_project ? project.close() : project.close_scene(id);
+    EXPECT_FALSE(closed.ok);
+    EXPECT_EQ(project.active_scene(), scene);
+    EXPECT_TRUE(scene->dirty());
+    EXPECT_EQ(scene->session->history().undo_count(), history_count + 1U);
+    const auto retained = editor.query().selection_transform_pivot();
+    ASSERT_TRUE(retained.has_value());
+    expect_vec3_eq(*retained, *expected);
+    const auto discarded = close_project ? project.close(true)
+                                        : project.close_scene(id, true);
+    EXPECT_TRUE(discarded.ok) << discarded.message;
+  }
+}
+
+TEST(ProjectSessionWorkspace, DirectSaveAllAcceptsModalPolygonAndProjectMaterial) {
+  for (const bool reopen : {false, true}) {
+    SCOPED_TRACE(reopen);
+    ScopedProjectSessionDirectory temporary("save-all-polygon-preview");
+    ProjectSession project;
+    ASSERT_TRUE(project.create(temporary.make_empty_child("Project")).ok);
+    const auto path = project_path("Scenes/Polygon.qdr");
+    ASSERT_TRUE(project.save_as(project.active_scene_id(), path).ok);
+    if (reopen) {
+      const auto manifest = project.manifest_path();
+      ASSERT_TRUE(project.close().ok);
+      ASSERT_TRUE(project.open(manifest).ok);
+    }
+    QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Poly).ok());
+    OpenSceneSession *scene = project.active_scene();
+    ASSERT_NE(scene, nullptr);
+    auto &modeling = scene->session->modeling();
+    for (const QVec3 point : {QVec3{-2.0f, 0.0f, -2.0f},
+                             QVec3{2.0f, 0.0f, -2.0f},
+                             QVec3{2.0f, 0.0f, 2.0f}}) {
+      ModelingToolRayEvent event;
+      event.ray = {.origin = point + QVec3{0.0f, 10.0f, 0.0f},
+                   .direction = {0.0f, -1.0f, 0.0f}};
+      event.camera = {.orthographic = true,
+                      .origin = event.ray.origin,
+                      .x_axis = {1.0f, 0.0f, 0.0f},
+                      .y_axis = {0.0f, 0.0f, -1.0f},
+                      .z_axis = {0.0f, 1.0f, 0.0f},
+                      .viewport_size = {800.0f, 600.0f}};
+      event.snap_enabled = false;
+      const auto accepted = modeling.accept_poly_point(event);
+      ASSERT_TRUE(accepted.ok) << accepted.message;
+    }
+    ASSERT_EQ(modeling.tool_status().poly_point_count, 3);
+    ASSERT_TRUE(modeling.pending_operation_active());
+    ASSERT_FALSE(scene->dirty());
+    const auto saved = project.save_all();
+    ASSERT_TRUE(saved.ok) << saved.message;
+    EXPECT_TRUE(saved.changed);
+    EXPECT_FALSE(scene->dirty());
+    EXPECT_FALSE(modeling.pending_operation_active());
+    EXPECT_EQ(modeling.objects().size(), 1U);
+    const auto read = QdrDocumentReader::read_project_document(
+        project.root() / path.native_path());
+    ASSERT_TRUE(read.ok) << read.message;
+    EXPECT_EQ(read.document.assets().mesh_count(), 1U);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(modeling.objects().empty());
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(modeling.objects().size(), 1U);
+  }
+}
+
+TEST(ProjectSessionWorkspace, StandaloneProjectReplacementAcceptsBeforeDirtyPrompt) {
+  for (const bool open_scene : {false, true}) {
+    SCOPED_TRACE(open_scene);
+    ScopedProjectSessionDirectory temporary("standalone-project-preview");
+    SceneSession scene;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(scene));
+    const auto object = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Pending Pivot");
+    ASSERT_TRUE(object.ok()) << object.error_message();
+    const auto path = temporary.path() / "Source.qdr";
+    ASSERT_TRUE(editor.scene_documents().save_as_native_path(
+        *editor.scene_documents().active_scene_id(), path).ok());
+    const auto original_pivot = editor.query().selection_transform_pivot();
+    ASSERT_TRUE(original_pivot.has_value());
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Pivot).ok());
+    ASSERT_TRUE(editor.tools().execute_action("pivot", "pivot.align.bottom_center").ok());
+    // Persistent Pivot previews do not replace the committed transform pivot
+    // until Apply or implicit settlement publishes the rebase.
+    const auto preview = scene.pivot().persistent_preview_position();
+    ASSERT_TRUE(preview.has_value());
+    expect_vec3_eq(*preview, {0.0f, -1.0f, 0.0f});
+    ASSERT_FALSE(scene.dirty());
+    const auto history_count = scene.history().undo_count();
+    int prompts = 0;
+    editor.project().set_runtime_hooks({
+        .confirm_dirty_project_replacement = [&](std::string_view) {
+          ++prompts;
+          EXPECT_TRUE(scene.dirty());
+          EXPECT_EQ(scene.history().undo_count(), history_count + 1U);
+          return QuaderDirtyProjectDecision::Cancel;
+        }});
+    const auto result = open_scene ? editor.project().open(path)
+                                   : editor.project().new_project();
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_FALSE(result.changed());
+    EXPECT_EQ(prompts, 1);
+    const auto retained = editor.query().selection_transform_pivot();
+    ASSERT_TRUE(retained.has_value());
+    expect_vec3_eq(*retained, *preview);
+    EXPECT_TRUE(scene.dirty());
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto undone = editor.query().selection_transform_pivot();
+    ASSERT_TRUE(undone.has_value());
+    expect_vec3_eq(*undone, *original_pivot);
+    ASSERT_TRUE(editor.history().redo().ok());
+    const auto redone = editor.query().selection_transform_pivot();
+    ASSERT_TRUE(redone.has_value());
+    expect_vec3_eq(*redone, *preview);
+  }
+}
+
+TEST(ProjectSessionWorkspace, InvalidStandaloneProjectOpenPreservesPendingEdit) {
+  ScopedProjectSessionDirectory temporary("invalid-standalone-preview");
+  SceneSession scene;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(scene));
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Pending Pivot").ok());
+  ASSERT_TRUE(editor.scene_documents().save_as_native_path(
+      *editor.scene_documents().active_scene_id(),
+      temporary.path() / "Source.qdr").ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(editor.tools().execute_action("pivot", "pivot.align.bottom_center").ok());
+  const auto stamp = scene.content_revision_stamp();
+  const auto history_count = scene.history().undo_count();
+  ASSERT_FALSE(scene.dirty());
+  int prompts = 0;
+  editor.project().set_runtime_hooks({
+      .confirm_dirty_project_replacement = [&](std::string_view) {
+        ++prompts;
+        return QuaderDirtyProjectDecision::Discard;
+      }});
+  EXPECT_FALSE(editor.project().open(temporary.path() / "Missing.qdr").ok());
+  EXPECT_EQ(prompts, 0);
+  EXPECT_EQ(scene.content_revision_stamp(), stamp);
+  EXPECT_EQ(scene.history().undo_count(), history_count);
+  EXPECT_TRUE(editor.tools().active_settings().active);
+  EXPECT_FALSE(scene.dirty());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
 } // namespace

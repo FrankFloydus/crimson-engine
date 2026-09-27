@@ -87,6 +87,9 @@ public:
   CommandResult activate();
   /// Chooses a preset while retaining the current pending operation, if any.
   CommandResult activate(modeling::FaceExtrudeMode requested_mode);
+  /// Validates a requested activation without accepting another pending operation.
+  [[nodiscard]] CommandResult
+  preflight_activation(modeling::FaceExtrudeMode requested_mode) const;
   /// Tool activation captures selected faces until explicit Apply or Cancel.
   CommandResult activate_preview();
   CommandResult activate_preview(modeling::FaceExtrudeMode requested_mode);

@@ -65,8 +65,18 @@ QdrProjectWriteResult write_standalone_scene(
 
 bool has_uncommitted_preview(const SceneSession &session) {
   return session.document_commands().property_edit_active() ||
-         session.native_tools().has_pending_tool() ||
-         session.modeling().can_cancel_active_tool_or_preview();
+         session.native_tools().has_pending_history_preview() ||
+         session.modeling().can_cancel_active_preview_for_undo() ||
+         session.modeling().pending_operation_active();
+}
+
+CommandResult accept_scene_edits(SceneSession &session) {
+  const CommandResult property =
+      session.document_commands().accept_active_property_edit();
+  if (!property.ok) return property;
+  CommandResult result = session.native_tools().settle_transient_state();
+  result.changed = property.changed || result.changed;
+  return result;
 }
 
 } // namespace
@@ -262,6 +272,17 @@ QuaderSceneDocumentsApi::recover_autosave(ProjectRelativePath path) {
 QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::new_scene() {
   if (impl_->project_session == nullptr) {
     SceneSession &session = impl_->status_session();
+    if (has_uncommitted_preview(session)) {
+      const CommandResult settled = accept_scene_edits(session);
+      if (!settled.ok || session.dirty()) {
+        return quader_api_result_from_status(
+            status_for(session, false, settled.changed,
+                       !settled.ok ? settled.message
+                                   : "Save or discard the current standalone scene "
+                                     "before creating another scene."),
+            SceneSessionId{});
+      }
+    }
     session.replace_document(SceneContentDocument(SceneContentDocumentRecord{
         .id = 0u,
         .name = "Untitled Scene",
@@ -378,6 +399,15 @@ QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::open_native_path(
                                         : std::move(read.message)),
         SceneSessionId{});
   }
+  const CommandResult settled = accept_scene_edits(session);
+  if (!settled.ok || session.dirty()) {
+    return quader_api_result_from_status(
+        status_for(session, false, settled.changed,
+                   !settled.ok ? settled.message
+                               : "Save or discard the current standalone scene before "
+                                 "opening another scene."),
+        SceneSessionId{});
+  }
   if (!session.replace_document_with_persisted_viewport_camera(
           std::move(read.document),
           viewport_camera_pose_from_qdr(read.viewport_camera_pose))) {
@@ -424,10 +454,9 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save(SceneSessionId id) {
       return save_as(id);
     }
     SceneSession &session = impl_->status_session();
-    if (has_uncommitted_preview(session)) {
-      return status_for(
-          session, false, false,
-          "Commit or cancel the active preview before saving the scene.");
+    const CommandResult settled = accept_scene_edits(session);
+    if (!settled.ok) {
+      return status_for(session, false, settled.changed, settled.message);
     }
     const bool was_dirty = session.dirty();
     const QdrProjectWriteResult written =
@@ -518,10 +547,9 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_as_native_path(
                         "Scene tab is closed or stale.");
     }
     SceneSession &session = impl_->status_session();
-    if (has_uncommitted_preview(session)) {
-      return status_for(
-          session, false, false,
-          "Commit or cancel the active preview before saving the scene.");
+    const CommandResult settled = accept_scene_edits(session);
+    if (!settled.ok) {
+      return status_for(session, false, settled.changed, settled.message);
     }
     const bool was_dirty = session.dirty();
     const SceneId saved_scene_id = SceneId::generate();
@@ -564,7 +592,11 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_all() {
   }
   const std::vector<QuaderSceneDocumentInfo> scenes = open_scenes();
   for (const QuaderSceneDocumentInfo &scene : scenes) {
-    if (!scene.dirty || !scene.path.has_value()) {
+    const OpenSceneSession *resident =
+        impl_->project_session->find(scene.session_id);
+    const bool pending = resident != nullptr && resident->session != nullptr &&
+                         has_uncommitted_preview(*resident->session);
+    if ((!scene.dirty && !pending) || !scene.path.has_value()) {
       continue;
     }
     const ProjectSessionResult preflight =
@@ -575,7 +607,12 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_all() {
   }
   bool saved_any = false;
   for (const QuaderSceneDocumentInfo &scene : scenes) {
-    if (!scene.dirty) {
+    const OpenSceneSession *resident =
+        impl_->project_session->find(scene.session_id);
+    if (resident == nullptr) continue;
+    const bool pending = resident->session != nullptr &&
+                         has_uncommitted_preview(*resident->session);
+    if (!resident->dirty() && !pending) {
       continue;
     }
     QuaderApiVoidResult saved = scene.path.has_value()
@@ -587,7 +624,9 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_all() {
     saved_any = saved_any || saved.changed();
     const OpenSceneSession *saved_scene =
         impl_->project_session->find(scene.session_id);
-    if (saved_scene == nullptr || saved_scene->dirty()) {
+    if (saved_scene == nullptr || saved_scene->dirty() ||
+        (saved_scene->session != nullptr &&
+         has_uncommitted_preview(*saved_scene->session))) {
       return status_for(impl_->status_session(), true, saved_any,
                         "Save All canceled.");
     }
@@ -607,7 +646,9 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::close(SceneSessionId id) {
                       "Scene tab is closed or stale.");
   }
   bool discard = false;
-  if (scene->dirty()) {
+  const bool pending = scene->session != nullptr &&
+                       has_uncommitted_preview(*scene->session);
+  if (scene->dirty() || pending) {
     if (!impl_->hooks.confirm_dirty_scene) {
       return status_for(impl_->status_session(), false, false,
                         "Scene contains unsaved changes.");
@@ -619,6 +660,7 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::close(SceneSessionId id) {
         break;
       }
     }
+    info.dirty = info.dirty || pending;
     switch (impl_->hooks.confirm_dirty_scene(info, "scene.close")) {
     case QuaderDirtySceneDecision::Cancel:
       return status_for(impl_->status_session(), true, false,
@@ -629,7 +671,9 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::close(SceneSessionId id) {
         return saved;
       }
       const OpenSceneSession *saved_scene = impl_->project_session->find(id);
-      if (saved_scene == nullptr || saved_scene->dirty()) {
+      if (saved_scene == nullptr || saved_scene->dirty() ||
+          (saved_scene->session != nullptr &&
+           has_uncommitted_preview(*saved_scene->session))) {
         return status_for(impl_->status_session(), true, false,
                           "Scene close canceled.");
       }
@@ -674,6 +718,12 @@ QuaderSceneDocumentsApi::prepare_project_close(std::string_view action_id) {
   }
 
   std::vector<QuaderSceneDocumentInfo> ordered = open_scenes();
+  for (QuaderSceneDocumentInfo &scene : ordered) {
+    const auto *resident = impl_->project_session->find(scene.session_id);
+    scene.dirty = scene.dirty ||
+        (resident != nullptr && resident->session != nullptr &&
+         has_uncommitted_preview(*resident->session));
+  }
   std::stable_sort(ordered.begin(), ordered.end(),
                    [](const QuaderSceneDocumentInfo &left,
                       const QuaderSceneDocumentInfo &right) {
@@ -706,7 +756,9 @@ QuaderSceneDocumentsApi::prepare_project_close(std::string_view action_id) {
       saved_any = saved_any || saved.changed();
       const OpenSceneSession *saved_scene =
           impl_->project_session->find(scene.session_id);
-      if (saved_scene == nullptr || saved_scene->dirty()) {
+      if (saved_scene == nullptr || saved_scene->dirty() ||
+          (saved_scene->session != nullptr &&
+           has_uncommitted_preview(*saved_scene->session))) {
         return quader_api_result_from_status(
             status_for(impl_->status_session(), true, saved_any,
                        "Project close canceled."),

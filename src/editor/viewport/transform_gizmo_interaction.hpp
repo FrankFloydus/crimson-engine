@@ -211,6 +211,9 @@ private:
         const CurveControlSelectionIdentity &identity);
     [[nodiscard]] bool
     matches_last_drag_update(const DragUpdateSignature &signature) const;
+    /// Accepts the last valid sample without interpreting interruption coordinates.
+    [[nodiscard]] bool finish_active_drag(
+        QuaderEditorApi &editor, ViewportCurveInteractionPort *curve_tool);
     void reset_drag_state();
     void reset_pending_drag();
     void reset_curve_control_cache();

@@ -215,6 +215,8 @@ public:
       const std::optional<ViewportCameraPose> &camera_pose);
   void set_document_replacement_finalizer(
       std::function<void(SceneSession &)> finalizer);
+  /// Preserves project creation material across owner rebuilds and implicit acceptance.
+  void set_creation_material(MaterialReference material);
   /// Release required by the loaded scene; authoring saves may only raise it.
   [[nodiscard]] ProductRelease minimum_product_release() const noexcept {
     return minimum_product_release_;
@@ -250,6 +252,7 @@ private:
       const std::optional<ViewportCameraPose> &camera_pose);
 
   SceneContentDocument document_;
+  MaterialReference creation_material_;
   ProductRelease minimum_product_release_ = current_product_release();
   std::function<void(bool)> content_settled_observer_;
   SceneContentRevisionStamp clean_stamp_;

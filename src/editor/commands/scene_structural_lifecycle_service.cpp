@@ -106,10 +106,9 @@ PreparedStructuralDuplicate prepare_structural_duplicate(
     ModelingSelectionMode result_selection_mode, const std::string &label,
     bool independent_mesh_assets, bool contains_modeling_content) {
   PreparedStructuralDuplicate prepared;
-  const CommandResult property_cancel =
-      document_commands.cancel_active_property_edit();
-  if (!property_cancel.ok) {
-    prepared.result = duplicate_batch_failure(property_cancel);
+  if (document_commands.property_edit_active()) {
+    prepared.result = duplicate_batch_failure(command_invalid_result(
+        "Accept the active property edit before starting a duplicate transaction."));
     return prepared;
   }
   prepared.scalar_checkpoint =
@@ -381,10 +380,15 @@ SceneStructuralLifecycleService::group_selection(
     static_cast<DocumentCommandResult &>(result) = std::move(prepared.status);
     return result;
   }
+  const auto accepted = document_commands_.accept_active_property_edit();
+  if (!accepted.ok) {
+    static_cast<DocumentCommandResult &>(result) = accepted;
+    return result;
+  }
   static_cast<DocumentCommandResult &>(result) = history_.execute(
       std::make_unique<ModelingSelectionMementoCommand>(
           modeling_, selection_, std::move(prepared.command)));
-  result.changed = result.changed || prepared.status.changed;
+  result.changed = result.changed || accepted.changed;
   if (result.ok && result.changed) {
     result.group_entity = scene_.primary_selection();
   }
@@ -398,10 +402,12 @@ SceneStructuralLifecycleService::ungroup_selection() {
   if (!prepared.command) {
     return std::move(prepared.status);
   }
+  const auto accepted = document_commands_.accept_active_property_edit();
+  if (!accepted.ok) return accepted;
   auto result = history_.execute(
       std::make_unique<ModelingSelectionMementoCommand>(
           modeling_, selection_, std::move(prepared.command)));
-  result.changed = result.changed || prepared.status.changed;
+  result.changed = result.changed || accepted.changed;
   return result;
 }
 
@@ -523,7 +529,12 @@ SceneStructuralLifecycleService::duplicate_hierarchy(
   const bool contains_modeling_content =
       hierarchy_contains_modeling_content(normalized.roots);
   const SceneStructuralDuplicateBatch batch{.roots = normalized.roots};
-
+  if (history_.transaction_active()) {
+    return duplicate_failure(command_invalid_result(
+        "Cannot duplicate entities while another editor transaction is active."));
+  }
+  const auto accepted = document_commands_.accept_active_property_edit();
+  if (!accepted.ok) return duplicate_failure(accepted);
   EditorTransaction transaction = history_.begin_transaction(label);
   if (!transaction.active()) {
     return duplicate_failure(command_invalid_result(
@@ -748,17 +759,17 @@ CommandResult SceneStructuralLifecycleService::destroy_hierarchy(
   if (!normalized.status.ok) {
     return normalized.status;
   }
-  const CommandResult property_cancel =
-      document_commands_.cancel_active_property_edit();
-  if (!property_cancel.ok) {
-    return property_cancel;
+  const CommandResult property_accept =
+      document_commands_.accept_active_property_edit();
+  if (!property_accept.ok) {
+    return property_accept;
   }
   if (label.empty()) {
     label = "Destroy Entities";
   }
   CommandResult destroyed = history_.execute(modeling_.create_destroy_entities_command(
       std::move(normalized.roots), std::move(label)));
-  destroyed.changed = destroyed.changed || property_cancel.changed;
+  destroyed.changed = destroyed.changed || property_accept.changed;
   return destroyed;
 }
 

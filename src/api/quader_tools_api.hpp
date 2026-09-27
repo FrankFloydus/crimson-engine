@@ -49,6 +49,7 @@ public:
 
     void set_runtime_hooks(QuaderToolsRuntimeHooks hooks);
 
+    /// A genuine tool transition accepts pending work; explicit Cancel rolls it back.
     QuaderApiVoidResult activate(std::string_view tool_id);
     QuaderApiVoidResult activate(ViewportToolId tool);
     /// Acquires the single editing runtime only when a pane starts an edit.
@@ -60,7 +61,7 @@ public:
     QuaderApiVoidResult activate_extrude(QuaderExtrudeMode mode);
     [[nodiscard]] bool can_activate(std::string_view tool_id) const;
     [[nodiscard]] bool can_activate(ViewportToolId tool) const;
-    /** Starts the requested shape, finishing accepted shapes on a kind switch. */
+    /** Starts the requested shape, finishing the current valid shape on a kind switch. */
     QuaderApiVoidResult
     begin_primitive_creation(QuaderPrimitiveCreationShape shape);
     /** Enters Curve creation without attaching to an already selected Curve. */

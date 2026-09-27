@@ -7924,13 +7924,25 @@ public:
     }
     const bool prepared_document_changes = !prepared_updates.empty();
     if (prepared_document_changes) {
+      const auto candidate_checkpoint =
+          session_.capture_preview_checkpoint(preview.id);
+      if (!candidate_checkpoint.ok()) {
+        return failure(candidate_checkpoint.error_message());
+      }
       Result<OperationResult> updated = session_.update_preview_transaction(
           preview.id, std::move(prepared_updates));
       if (!updated.ok() || !updated.value().success ||
           fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
-        return abort_preview_publication(
-            preview.id, updated.ok() ? "Prepared transform could not publish."
-                                     : updated.error_message());
+        // Acceptance can stage topology changes such as an automatic weld.
+        // Restore the user's live candidate, not the pre-gesture document.
+        const auto restored =
+            session_.restore_preview_checkpoint(candidate_checkpoint.value());
+        if (!restored.ok() || !preview_fence_matches(preview.id)) {
+          return {.ok = false, .changed = true,
+                  .message = "Transform acceptance and candidate restoration failed."};
+        }
+        return failure(updated.ok() ? "Prepared transform could not publish."
+                                    : updated.error_message());
       }
       preview_changed_ = true;
     }

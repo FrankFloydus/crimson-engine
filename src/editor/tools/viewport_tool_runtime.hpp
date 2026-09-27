@@ -76,6 +76,8 @@ struct ViewportNativeToolLifecycleAdapter final {
   std::function<bool(EntityId)> blocks_document_mutation;
   std::function<CommandResult(double)> activate;
   std::function<CommandResult()> commit;
+  /// Finalizes authored work and retires an idle lifecycle on an implicit transition.
+  std::function<CommandResult()> settle;
   std::function<CommandResult()> cancel;
   std::function<void()> reset;
   std::optional<ViewportNativeToolHistoryAdapter> local_history;
@@ -235,6 +237,7 @@ public:
     [[nodiscard]] CommandResult undo_active_native_lifecycle();
     [[nodiscard]] CommandResult redo_active_native_lifecycle();
     [[nodiscard]] CommandResult cancel_native_lifecycles();
+    [[nodiscard]] CommandResult settle_native_lifecycles();
     void reset_native_lifecycles();
 
   private:

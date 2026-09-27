@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/session/scene_session.hpp"
+#include "editor/commands/modeling_command_execution_service.hpp"
 #include "editor/session/tool_session_defaults.hpp"
 
 #include "diagnostics/profile.hpp"
@@ -34,6 +35,13 @@
 #include <utility>
 
 namespace quader {
+void SceneSession::set_creation_material(MaterialReference material) {
+  creation_material_ = material;
+  if (native_tools_) {
+    native_tools_->set_creation_material(material);
+  }
+}
+
 namespace {
 
 void upgrade_legacy_modeling_local_frames(SceneContentDocument &document) {
@@ -235,11 +243,7 @@ void SceneSession::rebuild_services() {
   extrude_ = std::make_unique<ExtrudeToolService>(
       document_.scene(), *modeling_, *history_, *extrude_defaults_);
   selection_->set_selection_edit_policy(
-      [this]() -> ModelingCommandResult {
-        if (extrude_->preview_active()) {
-          return {.ok = false,
-                  .message = "Apply or cancel the extrusion before changing selection."};
-        }
+      []() -> ModelingCommandResult {
         return {.ok = true};
       },
       [this]() -> ModelingCommandResult {
@@ -249,11 +253,42 @@ void SceneSession::rebuild_services() {
         const CommandResult begun = extrude_->begin_selection_preview();
         return {.ok = begun.ok, .changed = begun.changed,
                 .message = begun.message};
+      },
+      [this](bool) -> ModelingCommandResult {
+        const CommandResult settled = native_tools_->settle_transient_state();
+        return {.ok = settled.ok, .changed = settled.changed,
+                .message = settled.message};
+      },
+      [this](bool changing_mode) {
+        if (!changing_mode && uv_peel_->active()) {
+          return false;
+        }
+        // Compatible component selection remains a parameter of the current
+        // modeling preview (for example, adding faces to Slice Quads).
+        if (!changing_mode && modeling_->operation_preview_active() &&
+            native_tools_ && !native_tools_->has_pending_history_preview()) {
+          return false;
+        }
+        if (!native_tools_ || native_tools_->settlement_in_progress() ||
+            (!native_tools_->has_pending_history_preview() &&
+             !modeling_->can_cancel_active_preview_for_undo() &&
+             !modeling_->pending_operation_active())) {
+          return false;
+        }
+        return true;
       });
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *path_array_,
       *primitive_creation_, *light_creation_,
-      *selection_, *modeling_, *curve_, *uv_peel_, *extrude_);
+      *selection_, *modeling_, *curve_, *uv_peel_, *extrude_,
+      [this](MaterialReference material) {
+        ModelingCommandExecutionService execution;
+        const ModelingCommandResult settled = execution.settle_pending_operations(
+            *history_, *modeling_, material);
+        return CommandResult{.ok = settled.ok, .changed = settled.changed,
+                             .message = settled.message};
+      });
+  native_tools_->set_creation_material(creation_material_);
   viewport_local_visibility_ =
       std::make_unique<ViewportLocalVisibilityService>(
           document_.scene(), document_.assets(), *modeling_, *instances_,

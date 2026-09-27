@@ -599,18 +599,18 @@ TEST_F(UvTransformAcceptanceTests, CancelAndZeroRotationLeaveChartsAndHistoryUnt
   EXPECT_EQ(session_.assets().revision(), asset_revision);
 }
 
-TEST_F(UvTransformAcceptanceTests, FailedAcceptanceRollsBackPositionsChartsAndHistory) {
+TEST_F(UvTransformAcceptanceTests, FailedAcceptanceRetainsCandidateAndRetriesPositionsChartsAndHistory) {
   create();
   const auto before = document();
   const auto expected = samples();
-  const auto scene_revision = session_.scene().revision();
-  const auto asset_revision = session_.assets().revision();
   const auto selected = session_.scene().selected_entities();
   for (const auto point : {ModelingSdkProjectionFailurePoint::BeforeCommit,
                            ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
                            ModelingSdkProjectionFailurePoint::CommittedSceneNotify,
                            ModelingSdkProjectionFailurePoint::AfterSdkMutation}) {
     SCOPED_TRACE(static_cast<int>(point));
+    const auto scene_revision = session_.scene().revision();
+    const auto asset_revision = session_.assets().revision();
     ASSERT_TRUE(editor_.modeling().begin_transform_drag(rotate_begin()).ok());
     ASSERT_TRUE(editor_.modeling().update_transform_drag(rotate_update()).ok());
     session_.modeling().set_modeling_sdk_projection_failure_for_tests(point);
@@ -621,12 +621,24 @@ TEST_F(UvTransformAcceptanceTests, FailedAcceptanceRollsBackPositionsChartsAndHi
     EXPECT_FALSE(failed.changed());
     expect_document(document(), before);
     expect_samples(mesh(), expected, false);
-    EXPECT_TRUE(session_.modeling().tool_preview_meshes().empty());
+    EXPECT_TRUE(session_.modeling().transform_drag_active());
+    const auto retained = session_.modeling().tool_preview_meshes();
+    ASSERT_EQ(retained.size(), 1U);
+    expect_preview_samples(retained.front(), expected, 180.0);
     EXPECT_EQ(session_.scene().selected_entities(), selected);
     EXPECT_EQ(session_.scene().revision(), scene_revision);
     EXPECT_EQ(session_.assets().revision(), asset_revision);
     EXPECT_EQ(session_.history().undo_count(), 0U);
     EXPECT_EQ(session_.history().redo_count(), 0U);
+    const auto retried = editor_.modeling().commit_transform_drag();
+    ASSERT_TRUE(retried.ok()) << retried.error_message();
+    EXPECT_TRUE(session_.modeling().tool_preview_meshes().empty());
+    expect_samples(mesh(), expected, true);
+    EXPECT_EQ(session_.history().undo_count(), 1U);
+    ASSERT_TRUE(editor_.history().undo().ok());
+    expect_document(document(), before);
+    expect_samples(mesh(), expected, false);
+    session_.history().clear();
   }
 }
 

@@ -123,16 +123,37 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
       input.text_input_active || input.navigation_active ||
       frame.input_result.navigation_active || frame.input_result.camera_changed ||
       frame.input_result.view_changed;
-  if (frame.input_result.cancel_requested || (press_ && interrupted)) {
+  if (frame.input_result.cancel_requested) {
     hover(ExtrudeHandlePart::None);
     const bool had_press = press_.has_value() || tool.dragging();
     const bool cancel_tool = !had_press ||
         (tool.preview_active() && !tool.dragging());
     publish(cancel_tool ? tool.cancel() : tool.cancel_drag());
-    clear_drag_state();
-    release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+    if (output.command_result.ok) {
+      clear_drag_state();
+      release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+    }
     output.consumed = output.blocks_transform_gizmo = true;
     output.sync_active_tool = cancel_tool && output.command_result.ok;
+    return output;
+  }
+  if (press_ && interrupted) {
+    hover(ExtrudeHandlePart::None);
+    output.consumed = output.blocks_transform_gizmo = true;
+    const bool focus_only = !input.viewport_focused &&
+        !input.pointer_interaction_canceled && !input.text_input_active &&
+        !input.navigation_active && !frame.input_result.navigation_active &&
+        !frame.input_result.camera_changed && !frame.input_result.view_changed;
+    if (focus_only && frame.left_down && !frame.left_released) {
+      return output;
+    }
+    // Ending capture/navigation finishes the pointer gesture at its last valid
+    // authored amount. The pending extrusion remains available for adjustment.
+    publish(tool.release_drag());
+    if (output.command_result.ok) {
+      clear_drag_state();
+      release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+    }
     return output;
   }
   if (interrupted || frame.transform_gizmo_consumed) {
@@ -221,9 +242,11 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
   if ((!frame.left_down && !frame.left_released) ||
       (press_->started && !tool.dragging()) ||
       (!press_->started && handle.revision != press_->handle_revision)) {
-    publish(tool.cancel_drag());
-    clear_drag_state();
-    release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+    publish(tool.release_drag());
+    if (output.command_result.ok) {
+      clear_drag_state();
+      release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+    }
     return output;
   }
   const QVec2 pointer = release != nullptr ? release->local : input.mouse_local;
@@ -345,17 +368,12 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
       if (updated.ok) {
         press_->rejected_sample.reset();
         publish(updated);
-      } else if (finite_pointer && tool.can_update_drag()) {
+      } else if (tool.can_update_drag()) {
         // Invalid intermediate caps leave the last valid preview intact. Cache
         // the rejected sample and allow reversal without repeated regeneration.
         press_->rejected_sample = updated;
       } else {
         publish(updated);
-        const CommandResult canceled = tool.cancel_drag();
-        output.invalidate_hover = output.invalidate_hover || canceled.changed;
-        output.mark_overlay_dirty = output.mark_overlay_dirty || canceled.changed;
-        clear_drag_state();
-        release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
         return output;
       }
     }
@@ -363,13 +381,11 @@ ViewportNativeToolInteractionResult ExtrudeViewportInteraction::handle_frame(
   }
   if (released) {
     if (press_->started) {
-      const CommandResult released = press_->rejected_sample
-          ? *press_->rejected_sample : tool.release_drag();
-      publish(released);
+      const CommandResult released = tool.release_drag();
+      publish(press_->rejected_sample && released.ok
+                  ? *press_->rejected_sample : released);
       if (!released.ok) {
-        const CommandResult canceled = tool.cancel_drag();
-        output.invalidate_hover = output.invalidate_hover || canceled.changed;
-        output.mark_overlay_dirty = output.mark_overlay_dirty || canceled.changed;
+        return output;
       }
     } else if (press_->face_click && !tool.preview_active()) {
       output.selection_click_requested = true;

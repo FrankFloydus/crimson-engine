@@ -142,6 +142,8 @@ public:
   CommandResult refresh();
   CommandResult cancel();
   CommandResult apply();
+  /// Accepts a pending preview; only a valid untouched center picker exits empty.
+  CommandResult finish();
   CommandResult update_center_candidate(QVec3 world_position,
                                         QVec3 world_normal,
                                         double fallback_grid_size);

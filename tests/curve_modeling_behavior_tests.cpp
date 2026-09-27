@@ -799,7 +799,7 @@ TEST_F(CurveModelingBehaviorTests,
 }
 
 TEST_F(CurveModelingBehaviorTests,
-       CancelAfterExternalSceneEditsDoesNotRevertTransformVisibilityOrSelection) {
+       SceneEditsSettleCurvePreviewAndLaterCancelPreservesAcceptedCurve) {
   const auto mesh = create_box(editor_);
   const auto curve = create_curve(editor_);
   const auto original = read_curve(editor_, curve);
@@ -816,10 +816,10 @@ TEST_F(CurveModelingBehaviorTests,
   const auto continued = with_middle_height(original, 5.0F);
   const auto continued_update =
       editor_.modeling().update_curve_preview(continued);
-  ASSERT_TRUE(continued_update.ok()) << continued_update.error_message();
-  expect_curve(editor_, curve, continued);
+  EXPECT_FALSE(continued_update.ok());
+  expect_curve(editor_, curve, authored);
   ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
-  expect_curve(editor_, curve, original);
+  expect_curve(editor_, curve, authored);
   const auto entity = editor_.query().entity(curve.entity);
   ASSERT_TRUE(entity.has_value());
   EXPECT_FALSE(entity->visible);

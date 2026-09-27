@@ -188,19 +188,30 @@ TEST_P(SceneColorPreviewTests, CancelPreservesConcurrentFieldsAndTheirDirtyState
   EXPECT_TRUE(session_.dirty());
 }
 
-TEST_P(SceneColorPreviewTests, OwnedFieldConflictRetiresPreviewWithoutOverwriting) {
+TEST_P(SceneColorPreviewTests, OwnedFieldConflictKeepsPreviewWithoutOverwriting) {
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
   ASSERT_TRUE(update(begun.value(), {0.125f, 0.25f, 0.5f}).ok());
   const quader::QVec3 competing{0.75f, 0.5f, 0.25f};
   overwrite_color(competing);
   EXPECT_FALSE(update(begun.value(), {0.25f, 0.25f, 0.25f}).ok());
+  EXPECT_TRUE(session_.document_commands().property_edit_active());
+  const auto history_count = session_.history().undo_count();
+  EXPECT_FALSE(session_.document_commands().accept_active_property_edit().ok);
+  EXPECT_TRUE(session_.document_commands().property_edit_active());
+  EXPECT_EQ(session_.history().undo_count(), history_count);
+  expect_color(competing);
+  EXPECT_TRUE(session_.dirty());
+  const auto revision = session_.scene().revision();
+  ASSERT_TRUE(finish(begun.value(), true).ok());
   EXPECT_FALSE(session_.document_commands().property_edit_active());
   expect_color(competing);
+  EXPECT_EQ(session_.scene().revision(), revision);
+  EXPECT_EQ(session_.history().undo_count(), history_count);
   EXPECT_TRUE(session_.dirty());
 }
 
-TEST_P(SceneColorPreviewTests, UndoCancelsPreviewBeforeConsumingExistingHistory) {
+TEST_P(SceneColorPreviewTests, UndoAcceptsPreviewThenUndoesItWithoutConsumingEarlierHistory) {
   const auto before = color();
   const auto undo_count = session_.history().undo_count();
   const auto begun = begin();
@@ -210,10 +221,16 @@ TEST_P(SceneColorPreviewTests, UndoCancelsPreviewBeforeConsumingExistingHistory)
   EXPECT_FALSE(session_.document_commands().property_edit_active());
   expect_color(before);
   EXPECT_EQ(session_.history().undo_count(), undo_count);
-  EXPECT_FALSE(session_.dirty());
+  // Ordinary accepted history advances content revisions even when Undo
+  // restores the original values; implicit acceptance follows the same rule.
+  EXPECT_TRUE(session_.dirty());
+  EXPECT_EQ(session_.history().redo_count(), 1u);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_color({0.125f, 0.25f, 0.5f});
+  EXPECT_EQ(session_.history().undo_count(), undo_count + 1u);
 }
 
-TEST_P(SceneColorPreviewTests, SelectionChangeCancelsOnlyEntityColor) {
+TEST_P(SceneColorPreviewTests, SelectionChangeAcceptsOnlyEntityColor) {
   const auto before = color();
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
@@ -223,10 +240,15 @@ TEST_P(SceneColorPreviewTests, SelectionChangeCancelsOnlyEntityColor) {
     EXPECT_TRUE(session_.document_commands().property_edit_active());
     expect_color({0.125f, 0.25f, 0.5f});
     ASSERT_TRUE(finish(begun.value(), true).ok());
+    expect_color(before);
   } else {
     EXPECT_FALSE(session_.document_commands().property_edit_active());
+    expect_color({0.125f, 0.25f, 0.5f});
+    ASSERT_TRUE(editor_.history().undo().ok());
+    expect_color({0.125f, 0.25f, 0.5f});
+    ASSERT_TRUE(editor_.history().undo().ok());
+    expect_color(before);
   }
-  expect_color(before);
 }
 
 TEST_P(SceneColorPreviewTests, ReplacementRejectsStaleCallbacksAndKeepsNewPreview) {
@@ -251,16 +273,18 @@ TEST_P(SceneColorPreviewTests, ReplacementRejectsStaleCallbacksAndKeepsNewPrevie
   ASSERT_TRUE(finish(fresh.value(), true).ok());
 }
 
-TEST_P(SceneColorPreviewTests, InvalidValuesAndCompetingToolsPreservePreview) {
+TEST_P(SceneColorPreviewTests, InvalidValuesPreservePreviewBeforeToolSwitchAcceptsIt) {
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
   EXPECT_FALSE(begin().ok());
-  EXPECT_FALSE(editor_.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   const auto before = color();
   EXPECT_FALSE(update(begun.value(), {std::numeric_limits<float>::quiet_NaN(), 0, 0}).ok());
   expect_color(before);
   EXPECT_TRUE(session_.document_commands().property_edit_active());
-  ASSERT_TRUE(finish(begun.value(), true).ok());
+  ASSERT_TRUE(update(begun.value(), {0.125f, 0.25f, 0.5f}).ok());
+  ASSERT_TRUE(editor_.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  EXPECT_FALSE(session_.document_commands().property_edit_active());
+  expect_color({0.125f, 0.25f, 0.5f});
 }
 
 TEST_P(SceneColorPreviewTests, EqualComponentAndSelectionWritesKeepPreviewOpen) {
@@ -315,7 +339,7 @@ TEST_P(SceneColorPreviewTests, ReopenedPreviewRejectsCallbacksFromThePreviousEdi
   ASSERT_TRUE(finish(reopened.value(), true).ok());
 }
 
-TEST_P(SceneColorPreviewTests, SelectedCreationCancelsPreviewBeforeChangingSelection) {
+TEST_P(SceneColorPreviewTests, SelectedCreationAcceptsPreviewBeforeChangingSelection) {
   const auto before = color();
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
@@ -324,27 +348,28 @@ TEST_P(SceneColorPreviewTests, SelectedCreationCancelsPreviewBeforeChangingSelec
   ASSERT_TRUE(created.ok());
   EXPECT_FALSE(session_.document_commands().property_edit_active());
   EXPECT_EQ(session_.scene().primary_selection(), created.value().id);
-  expect_color(before);
+  expect_color({0.125f, 0.25f, 0.5f});
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_color({0.125f, 0.25f, 0.5f});
   ASSERT_TRUE(editor_.history().undo().ok());
   expect_color(before);
 }
 
-TEST_P(SceneColorPreviewTests, DuplicateCancelsPreviewBeforeCapturingTheClone) {
-  const auto before = color();
-  const auto light_before = *session_.scene().light(light_);
+TEST_P(SceneColorPreviewTests, DuplicateAcceptsPreviewBeforeCapturingTheClone) {
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
   ASSERT_TRUE(update(begun.value(), {0.125f, 0.25f, 0.5f}).ok());
+  const auto light_preview = *session_.scene().light(light_);
   const auto duplicated = editor_.scene().duplicate(light_);
   ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
   EXPECT_FALSE(session_.document_commands().property_edit_active());
-  expect_color(before);
+  expect_color({0.125f, 0.25f, 0.5f});
   ASSERT_NE(session_.scene().light(duplicated.value().id), nullptr);
-  EXPECT_TRUE(*session_.scene().light(duplicated.value().id) == light_before);
+  EXPECT_TRUE(*session_.scene().light(duplicated.value().id) == light_preview);
   ASSERT_TRUE(editor_.history().undo().ok());
-  expect_color(before);
+  expect_color({0.125f, 0.25f, 0.5f});
   ASSERT_TRUE(editor_.history().redo().ok());
-  EXPECT_TRUE(*session_.scene().light(duplicated.value().id) == light_before);
+  EXPECT_TRUE(*session_.scene().light(duplicated.value().id) == light_preview);
 }
 
 TEST_P(SceneColorPreviewTests, InvalidStructuralRequestsKeepThePreviewAndHistory) {
@@ -367,9 +392,23 @@ TEST_P(SceneColorPreviewTests, InvalidStructuralRequestsKeepThePreviewAndHistory
   ASSERT_TRUE(finish(begun.value(), true).ok());
 }
 
-TEST_P(SceneColorPreviewTests, GroupAndUngroupCancelOnlySuccessfulStructuralEdits) {
+TEST_P(SceneColorPreviewTests, PreparingGroupDoesNotAcceptPropertyPreview) {
+  const auto begun = begin();
+  ASSERT_TRUE(begun.ok());
+  const quader::QVec3 preview{0.125f, 0.25f, 0.5f};
+  ASSERT_TRUE(update(begun.value(), preview).ok());
+  const auto undo_count = session_.history().undo_count();
+  auto prepared = session_.document_commands().prepare_group_selection_command(
+      "Prepared group");
+  ASSERT_TRUE(prepared.command);
+  EXPECT_TRUE(session_.document_commands().property_edit_active());
+  EXPECT_EQ(session_.history().undo_count(), undo_count);
+  expect_color(preview);
+  ASSERT_TRUE(finish(begun.value(), true).ok());
+}
+
+TEST_P(SceneColorPreviewTests, GroupAndUngroupAcceptOnlyValidatedStructuralEdits) {
   ASSERT_TRUE(editor_.scene().select(light_).ok());
-  const auto before = color();
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
   const quader::QVec3 preview{0.125f, 0.25f, 0.5f};
@@ -382,21 +421,20 @@ TEST_P(SceneColorPreviewTests, GroupAndUngroupCancelOnlySuccessfulStructuralEdit
   const auto grouped = editor_.scene().group_selection("Light group");
   ASSERT_TRUE(grouped.ok()) << grouped.error_message();
   EXPECT_FALSE(session_.document_commands().property_edit_active());
-  expect_color(before);
+  expect_color(preview);
   const auto ungroup_edit = begin();
   ASSERT_TRUE(ungroup_edit.ok());
   ASSERT_TRUE(update(ungroup_edit.value(), preview).ok());
   ASSERT_TRUE(editor_.scene().ungroup_selection().ok());
   EXPECT_FALSE(session_.document_commands().property_edit_active());
-  expect_color(before);
+  expect_color(preview);
   ASSERT_TRUE(editor_.history().undo().ok());
-  expect_color(before);
+  expect_color(preview);
 }
 
-TEST_P(SceneColorPreviewTests, FailedGroupPublicationKeepsCancelOutsideScalarRollback) {
+TEST_P(SceneColorPreviewTests, FailedGroupPublicationKeepsAcceptanceOutsideScalarRollback) {
   ASSERT_TRUE(editor_.scene().select(light_).ok());
   session_.mark_clean();
-  const auto before = color();
   const auto parent = session_.scene().parent(light_);
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
@@ -410,20 +448,19 @@ TEST_P(SceneColorPreviewTests, FailedGroupPublicationKeepsCancelOutsideScalarRol
   EXPECT_FALSE(failed.ok());
   EXPECT_TRUE(failed.changed());
   EXPECT_FALSE(session_.document_commands().property_edit_active());
-  expect_color(before);
+  expect_color({0.125f, 0.25f, 0.5f});
   EXPECT_EQ(session_.scene().parent(light_), parent);
   EXPECT_EQ(session_.scene().primary_selection(), light_);
-  EXPECT_GT(session_.scene().revision(), preview_revision);
-  EXPECT_EQ(session_.history().undo_count(), undo_count);
-  EXPECT_FALSE(session_.dirty());
+  EXPECT_GE(session_.scene().revision(), preview_revision);
+  EXPECT_EQ(session_.history().undo_count(), undo_count + 1u);
+  EXPECT_TRUE(session_.dirty());
 }
 
-TEST_P(SceneColorPreviewTests, FailedUngroupPublicationKeepsCancelOutsideScalarRollback) {
+TEST_P(SceneColorPreviewTests, FailedUngroupPublicationKeepsAcceptanceOutsideScalarRollback) {
   ASSERT_TRUE(editor_.scene().select(light_).ok());
   const auto grouped = editor_.scene().group_selection("Existing group");
   ASSERT_TRUE(grouped.ok());
   session_.mark_clean();
-  const auto before = color();
   const auto parent = session_.scene().parent(light_);
   const auto begun = begin();
   ASSERT_TRUE(begun.ok());
@@ -438,12 +475,12 @@ TEST_P(SceneColorPreviewTests, FailedUngroupPublicationKeepsCancelOutsideScalarR
   EXPECT_EQ(failed.error_message(), "Injected selection failure");
   EXPECT_TRUE(failed.changed());
   EXPECT_FALSE(session_.document_commands().property_edit_active());
-  expect_color(before);
+  expect_color({0.125f, 0.25f, 0.5f});
   EXPECT_EQ(session_.scene().parent(light_), parent);
   EXPECT_EQ(session_.scene().primary_selection(), parent);
-  EXPECT_GT(session_.scene().revision(), preview_revision);
-  EXPECT_EQ(session_.history().undo_count(), undo_count);
-  EXPECT_FALSE(session_.dirty());
+  EXPECT_GE(session_.scene().revision(), preview_revision);
+  EXPECT_EQ(session_.history().undo_count(), undo_count + 1u);
+  EXPECT_TRUE(session_.dirty());
 }
 
 INSTANTIATE_TEST_SUITE_P(LightEnvironmentAndFog, SceneColorPreviewTests,
@@ -462,11 +499,20 @@ TEST(SceneSettingsColorPreviewTests, EmptyDocumentSharesSettingsAcrossApiFacades
       begun.value(), {0.125f, 0.25f, 0.5f}).ok());
   EXPECT_FLOAT_EQ(first.query().scene_settings().environment.clear_color.x, 0.125f);
   EXPECT_FLOAT_EQ(second.query().snapshot().scene_settings.environment.clear_color.z, 0.5f);
-  EXPECT_FALSE(second.scene().begin_fog_color_edit().ok());
-  ASSERT_TRUE(second.scene().finish_environment_color_edit(begun.value(), true).ok());
+  const auto fog = second.scene().begin_fog_color_edit();
+  ASSERT_TRUE(fog.ok());
+  EXPECT_FALSE(second.scene().finish_environment_color_edit(begun.value(), true).ok());
+  EXPECT_FLOAT_EQ(first.query().scene_settings().environment.clear_color.x, 0.125f);
+  ASSERT_TRUE(first.scene().update_fog_color_edit(
+      fog.value(), {0.7f, 0.6f, 0.5f}).ok());
+  ASSERT_TRUE(second.scene().finish_fog_color_edit(fog.value(), true).ok());
+  EXPECT_FLOAT_EQ(first.query().scene_settings().environment.clear_color.x, 0.125f);
+  EXPECT_EQ(session.scene().scene_settings().fog, original.fog);
+  EXPECT_EQ(session.history().undo_count(), 1u);
+  ASSERT_TRUE(first.history().undo().ok());
   EXPECT_EQ(session.scene().scene_settings(), original);
   EXPECT_TRUE(session.scene().entities().empty());
-  EXPECT_FALSE(session.dirty());
+  EXPECT_TRUE(session.dirty());
 }
 
 TEST(SceneSettingsColorPreviewTests, ReboundApiRejectsPreviousSessionAtMatchingGeneration) {
@@ -634,6 +680,66 @@ TEST(SceneLightColorPreviewTests, CancelRestoresModeAndPresetWhileRetainingKelvi
   EXPECT_EQ(restored.source_preset, light.source_preset);
   EXPECT_FLOAT_EQ(restored.color_temperature_kelvin, 1900.0f);
   EXPECT_FALSE(session.dirty());
+}
+
+TEST(SceneLightColorPreviewTests, LockedEntityRejectsAcceptanceWithoutCancelingDraft) {
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto created = editor.scene().create_point_light();
+  ASSERT_TRUE(created.ok());
+  const auto entity = created.value().id;
+  const auto original = session.scene().light(entity)->color;
+  const auto edit = editor.scene().begin_light_color_edit(entity);
+  ASSERT_TRUE(edit.ok());
+  ASSERT_TRUE(editor.scene().update_light_color_edit(
+      edit.value(), {0.125f, 0.25f, 0.5f}).ok());
+  ASSERT_TRUE(session.scene().set_locked(entity, true));
+  const auto history_count = session.history().undo_count();
+  const auto revision = session.scene().revision();
+  EXPECT_FALSE(session.document_commands().accept_active_property_edit().ok);
+  EXPECT_TRUE(session.document_commands().property_edit_active());
+  EXPECT_EQ(session.history().undo_count(), history_count);
+  EXPECT_EQ(session.scene().revision(), revision);
+  EXPECT_FLOAT_EQ(session.scene().light(entity)->color.x, 0.125f);
+  ASSERT_TRUE(editor.scene().finish_light_color_edit(edit.value(), true).ok());
+  EXPECT_FALSE(session.document_commands().property_edit_active());
+  EXPECT_FLOAT_EQ(session.scene().light(entity)->color.x, original.x);
+}
+
+TEST(SceneLightColorPreviewTests, ExplicitCancelRetiresDeletedOrReidentifiedOwner) {
+  for (const bool remove_owner : {false, true}) {
+    SCOPED_TRACE(remove_owner);
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto created = editor.scene().create_point_light();
+    ASSERT_TRUE(created.ok());
+    const auto entity = created.value().id;
+    const auto edit = editor.scene().begin_light_color_edit(entity);
+    ASSERT_TRUE(edit.ok());
+    ASSERT_TRUE(editor.scene().update_light_color_edit(
+        edit.value(), {0.125f, 0.25f, 0.5f}).ok());
+    if (remove_owner) {
+      ASSERT_TRUE(session.scene().destroy_entity(entity));
+    } else {
+      ASSERT_TRUE(session.scene().set_entity_uuid(entity, "cf2c26fa-1d01-4c62-8ec0-bd1d6e981301"));
+    }
+    const auto revision = session.scene().revision();
+    const auto history_count = session.history().undo_count();
+    EXPECT_FALSE(session.document_commands().accept_active_property_edit().ok);
+    EXPECT_TRUE(session.document_commands().property_edit_active());
+    const auto canceled = session.document_commands().cancel_active_property_edit();
+    ASSERT_TRUE(canceled.ok) << canceled.message;
+    EXPECT_TRUE(canceled.changed);
+    EXPECT_FALSE(session.document_commands().property_edit_active());
+    EXPECT_EQ(session.scene().revision(), revision);
+    EXPECT_EQ(session.history().undo_count(), history_count);
+    if (!remove_owner) {
+      EXPECT_EQ(session.scene().uuid(entity), "cf2c26fa-1d01-4c62-8ec0-bd1d6e981301");
+      EXPECT_FLOAT_EQ(session.scene().light(entity)->color.x, 0.125f);
+    }
+  }
 }
 
 TEST(SceneLightColorPreviewTests, InvalidLightPropertiesDoNotCommitTheColorPreview) {

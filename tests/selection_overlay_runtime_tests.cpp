@@ -35,6 +35,7 @@
 #include <QColor>
 #include <QDir>
 #include <QImage>
+#include <QRect>
 
 #include <array>
 #include <atomic>
@@ -330,6 +331,93 @@ public:
   }
 
   ModelingSessionService &modeling() { return session_.modeling(); }
+
+  bool create_tool_topology_sample(ViewportToolId tool) {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    quader_poly::Document document;
+    const std::array vertices{
+        quader_poly::add_vertex(document, {-1.0f, -0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {0.0f, -0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {1.0f, -0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {1.0f, 0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {0.0f, 0.75f, 0.0f}),
+        quader_poly::add_vertex(document, {-1.0f, 0.75f, 0.0f})};
+    (void)quader_poly::add_face(document,
+        std::array{vertices[0], vertices[1], vertices[4], vertices[5]});
+    (void)quader_poly::add_face(document,
+        std::array{vertices[1], vertices[2], vertices[3], vertices[4]});
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Unselected cutting tool topology pixel regression"});
+    if (!object.ok() ||
+        !editor.selection().set_mode(QuaderSelectionMode::Object).ok() ||
+        !editor.selection().clear().ok() || !editor.tools().activate(tool).ok()) {
+      return false;
+    }
+    tool_topology_object_ = object.value();
+    tool_topology_tool_ = tool;
+    camera_.view_axis(ViewportViewAxis::Z, 1);
+    camera_.focus_origin(3.0f);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  ModelingToolRayEvent tool_topology_event(QVec3 world) const {
+    const auto projected = camera_.project_world_point(world);
+    const auto ray = camera_.ray_from_viewport_point(projected.position);
+    return {
+        .screen_position = projected.position,
+        .ray = {.origin = ray.origin, .direction = ray.direction},
+        .camera = ViewportCameraAdapter::modeling_camera(camera_, {kWidth, kHeight}),
+        .grid_size = 0.5,
+        .edge_radius = 0.05,
+        .snap_enabled = false,
+    };
+  }
+
+  bool update_tool_topology_hover(QVec3 world) {
+    const auto event = tool_topology_event(world);
+    return tool_topology_tool_ == ViewportToolId::Knife
+        ? modeling().update_knife_hover(event).ok
+        : modeling().update_insert_edge_loop_hover(event).ok;
+  }
+
+  bool select_tool_topology_sample() {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    return editor.selection().select_object(tool_topology_object_).ok() &&
+           editor.selection().set_mode(QuaderSelectionMode::Edge).ok() &&
+           editor.tools().activate(tool_topology_tool_).ok();
+  }
+
+  bool occlude_tool_topology_internal_edge() {
+    QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    return api.modeling().create_box(
+        {.min = {-0.2f, 0.2f, 0.2f}, .max = {0.2f, 0.6f, 0.4f}},
+        "Cutting topology foreground occluder").ok();
+  }
+
+  QuaderSelectionSummary tool_topology_selection() {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    return editor.selection().summary();
+  }
+
+  QVec2 tool_topology_internal_edge_pixel() const {
+    // This authored shared edge is not a silhouette or triangulation diagonal.
+    // Its upper segment is also clear of the cut preview at y = -0.25.
+    auto pixel = camera_.project_world_point({0.0f, 0.4f, 0.0f}).position;
+    pixel.y = static_cast<float>(kHeight - 1u) - pixel.y;
+    return pixel;
+  }
+
+  QVec2 cutting_preview_pixel(QVec3 world) const {
+    auto pixel = camera_.project_world_point(world).position;
+    pixel.y = static_cast<float>(kHeight - 1u) - pixel.y;
+    return pixel;
+  }
 
   bool create_face_fill_depth_sample(bool front_facing) {
     QuaderEditorApi editor(
@@ -799,6 +887,8 @@ private:
   SceneSession session_;
   ViewportRenderSurface surface_ = ViewportRenderSurface::Swapchain;
   QuaderModelingObjectRef face_fill_object_;
+  QuaderModelingObjectRef tool_topology_object_;
+  ViewportToolId tool_topology_tool_ = ViewportToolId::Select;
   std::array<EntityId, 2> active_entities_{};
   RenderOverlaySnapshotCache active_snapshots_;
   filament::Engine *engine_ = nullptr;
@@ -1035,6 +1125,318 @@ TEST(SelectionOverlayRuntimeTests,
   ASSERT_FALSE(committed.isNull());
   save(committed, "committed");
   expect_removed(committed, first_pixels);
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanCuttingToolHoverShowsUnselectedAuthoredTopologyWithoutSelecting) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-cutting-tool-topology-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  constexpr std::array<std::pair<float, const char *>, 3> kScales{{
+      {1.0f, "100"}, {2.0f, "200"}, {1.0f, "scale_down_100"}}};
+  for (const auto &[tool, label] :
+       std::array<std::pair<ViewportToolId, const char *>, 2>{{
+           {ViewportToolId::Knife, "knife"},
+           {ViewportToolId::InsertEdgeLoop, "loop"}}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_tool_topology_sample(tool));
+    const auto before = harness.tool_topology_selection();
+    ASSERT_EQ(before.mode, QuaderSelectionMode::Edge);
+    ASSERT_FALSE(before.has_selection);
+    ASSERT_EQ(before.selected_object_count, 0u);
+    const auto history_before = harness.undo_count();
+    const auto probe = harness.tool_topology_internal_edge_pixel();
+    const QRect probe_region(int(probe.x) - 10, int(probe.y) - 10, 21, 21);
+    std::array<QImage, 3> hovered_regions;
+    std::array<QImage, 3> surface_regions;
+    QImage hover_at_100;
+    const auto save = [&](const QImage &image, const char *scale, const char *phase) {
+      const QString path = QDir(directory).filePath(
+          QStringLiteral("cutting_topology_%1_%2_%3.png")
+              .arg(QString::fromLatin1(label), QString::fromLatin1(scale),
+                   QString::fromLatin1(phase)));
+      EXPECT_TRUE(image.save(path));
+      std::cout << "Cutting topology GPU shared_edge_cyan="
+                << cyan_pixels(image, probe) << ", png=" << path.toStdString() << '\n';
+    };
+    const auto expect_unselected = [&]() {
+      const auto current = harness.tool_topology_selection();
+      EXPECT_EQ(current.mode, before.mode);
+      EXPECT_EQ(current.has_selection, before.has_selection);
+      EXPECT_EQ(current.active_kind, before.active_kind);
+      EXPECT_EQ(current.active_object_id, before.active_object_id);
+      EXPECT_EQ(current.selected_object_count, 0u);
+      EXPECT_EQ(current.selected_vertex_count, 0u);
+      EXPECT_EQ(current.selected_edge_count, 0u);
+      EXPECT_EQ(current.selected_face_count, 0u);
+      EXPECT_EQ(current.selection_revision, before.selection_revision);
+      EXPECT_EQ(current.content_revision, before.content_revision);
+      EXPECT_EQ(harness.undo_count(), history_before);
+    };
+    const auto expect_retained = [&](float scale) {
+      const auto builds = harness.selection_frame_builds();
+      EXPECT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+      EXPECT_EQ(harness.selection_frame_builds(), builds);
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    };
+    // Check broad surface hover before any edge establishes a retained loop
+    // seed. Missing the seed later deliberately preserves that cut preview.
+    for (std::size_t index = 0; index < kScales.size(); ++index) {
+      const auto &[scale, scale_label] = kScales[index];
+      SCOPED_TRACE(scale_label);
+      ASSERT_TRUE(harness.update_tool_topology_hover({3.0f, 0.0f, 0.0f}));
+      ASSERT_TRUE(harness.update_tool_topology_hover({0.45f, 0.15f, 0.0f}));
+      if (tool == ViewportToolId::InsertEdgeLoop) {
+        EXPECT_FALSE(harness.modeling().tool_status().insert_edge_loop_has_preview);
+      }
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+      const QImage surface = harness.capture();
+      ASSERT_FALSE(surface.isNull());
+      save(surface, scale_label, "surface_hover");
+      EXPECT_GE(cyan_pixels(surface, probe), 3)
+          << "Revealing authored topology must not require a valid insertion seed.";
+      surface_regions[index] = surface.copy(probe_region);
+      expect_unselected();
+      expect_retained(scale);
+    }
+    for (std::size_t index = 0; index < kScales.size(); ++index) {
+      const auto &[scale, scale_label] = kScales[index];
+      SCOPED_TRACE(scale_label);
+      ASSERT_TRUE(harness.update_tool_topology_hover({3.0f, 0.0f, 0.0f}));
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+      const QImage clear = harness.capture();
+      ASSERT_FALSE(clear.isNull());
+      save(clear, scale_label, "clear");
+      EXPECT_EQ(cyan_pixels(clear, probe), 0)
+          << "The unselected coplanar internal edge is absent without tool hover.";
+      expect_unselected();
+      expect_retained(scale);
+
+      ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, -0.25f, 0.0f}));
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+      const QImage hovered = harness.capture();
+      ASSERT_FALSE(hovered.isNull());
+      save(hovered, scale_label, "edge_hover");
+      EXPECT_GE(cyan_pixels(hovered, probe), 3)
+          << "Hover must expose authored internal edges away from the cut preview.";
+      hovered_regions[index] = hovered.copy(probe_region);
+      EXPECT_EQ(hovered_regions[index], surface_regions[index]);
+      if (index == 0u) hover_at_100 = hovered;
+      else if (scale == 1.0f) EXPECT_EQ(hovered, hover_at_100);
+      expect_unselected();
+      expect_retained(scale);
+
+      ASSERT_TRUE(harness.update_tool_topology_hover({3.0f, 0.0f, 0.0f}));
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+      const QImage left = harness.capture();
+      ASSERT_FALSE(left.isNull());
+      save(left, scale_label, "hover_left");
+      EXPECT_EQ(cyan_pixels(left, probe), 0);
+      EXPECT_EQ(left.copy(probe_region), clear.copy(probe_region))
+          << "Leaving must retire transient topology independently of the retained cut preview.";
+      expect_unselected();
+      expect_retained(scale);
+    }
+
+    ASSERT_TRUE(harness.update_tool_topology_hover({3.0f, 0.0f, 0.0f}));
+    ASSERT_TRUE(harness.select_tool_topology_sample());
+    ASSERT_EQ(harness.tool_topology_selection().mode, QuaderSelectionMode::Edge);
+    ASSERT_EQ(harness.tool_topology_selection().selected_object_count, 1u);
+    for (std::size_t index = 0; index < kScales.size(); ++index) {
+      const auto &[scale, scale_label] = kScales[index];
+      SCOPED_TRACE(scale_label);
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+      const QImage selected = harness.capture();
+      ASSERT_FALSE(selected.isNull());
+      save(selected, scale_label, "selected_reference");
+      EXPECT_GE(cyan_pixels(selected, probe), 3);
+      EXPECT_EQ(selected.copy(probe_region), hovered_regions[index])
+          << "Transient topology must match the real selected mesh's source-wire rendering.";
+      expect_retained(scale);
+      if (tool == ViewportToolId::InsertEdgeLoop) {
+        ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, -0.25f, 0.0f}));
+        ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+        EXPECT_GE(cyan_pixels(harness.capture(), probe), 3);
+        // Explicit preview cleanup must retain the selected mesh's authored
+        // topology. Camera navigation instead freezes these transient previews.
+        ASSERT_TRUE(harness.modeling().cancel_active_modal_tool(false).ok);
+        ASSERT_TRUE(harness.modeling().clear_selection_hover().ok);
+        ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+        const QImage cleaned = harness.capture();
+        ASSERT_FALSE(cleaned.isNull());
+        save(cleaned, scale_label, "selected_hover_cleared");
+        EXPECT_EQ(cleaned.copy(probe_region), selected.copy(probe_region));
+        EXPECT_GE(cyan_pixels(cleaned, probe), 3);
+        expect_retained(scale);
+      }
+    }
+    if (tool == ViewportToolId::InsertEdgeLoop) {
+      ASSERT_TRUE(harness.occlude_tool_topology_internal_edge());
+      ASSERT_TRUE(harness.select_tool_topology_sample());
+      ASSERT_TRUE(harness.modeling().clear_selection_hover().ok);
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+      const QImage covered_selected = harness.capture();
+      ASSERT_EQ(cyan_pixels(covered_selected, probe), 0);
+      ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, -0.25f, 0.0f}));
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+      const QImage covered_hover = harness.capture();
+      save(covered_hover, "100", "occluded_selected_hover");
+      EXPECT_EQ(covered_hover.copy(probe_region), covered_selected.copy(probe_region))
+          << "Hovering a selected mesh must retain its source-wire depth policy.";
+      ASSERT_TRUE(harness.modeling().cancel_active_modal_tool(false).ok);
+      ASSERT_TRUE(harness.modeling().clear_selection_hover().ok);
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+      const QImage covered_cleared = harness.capture();
+      save(covered_cleared, "100", "occluded_selected_hover_cleared");
+      EXPECT_EQ(covered_cleared.copy(probe_region), covered_hover.copy(probe_region))
+          << "Clearing a tool preview must not change selected topology visibility.";
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanCuttingPreviewsRemainWorldAnchoredDuringCameraOnlyFrames) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-cutting-preview-navigation-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+
+  for (const auto &[tool, label] :
+       std::array<std::pair<ViewportToolId, const char *>, 2>{{
+           {ViewportToolId::Knife, "knife"},
+           {ViewportToolId::InsertEdgeLoop, "loop"}}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_tool_topology_sample(tool));
+    ASSERT_TRUE(harness.pan_face_fill_camera(0.0f));
+    auto &modeling = harness.modeling();
+    if (tool == ViewportToolId::Knife) {
+      ASSERT_TRUE(modeling.accept_knife_point(
+          harness.tool_topology_event({-1.0f, -0.25f, 0.0f})).ok);
+      ASSERT_TRUE(modeling.accept_knife_point(
+          harness.tool_topology_event({0.0f, -0.25f, 0.0f})).ok);
+      ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, 0.25f, 0.0f}));
+      ASSERT_TRUE(modeling.tool_status().knife_has_current);
+    } else {
+      ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, -0.25f, 0.0f}));
+      ASSERT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
+    }
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+    const auto frozen = modeling.volatile_overlay_snapshot();
+    ASSERT_NE(frozen.frame, nullptr);
+    ASSERT_FALSE(frozen.frame->lines.empty());
+    ASSERT_FALSE(frozen.frame->points.empty());
+    const auto selected = harness.tool_topology_selection();
+    const auto undo = harness.undo_count();
+    const auto builds = harness.selection_frame_builds();
+    const auto volatile_builds = modeling.volatile_overlay_cache_stats().build_count;
+    const auto first_probe = harness.cutting_preview_pixel({0.5f, -0.25f, 0.0f});
+    QImage initial;
+
+    // The input-controller test covers RMB suspension. These frames exercise
+    // its retained rendering contract: only the camera changes, so the authored
+    // Knife stroke/current segment and Loop preview must stay in world space.
+    for (const auto &[camera_x, phase] :
+         std::array<std::pair<float, const char *>, 4>{{
+             {0.0f, "before"}, {0.18f, "camera_right"},
+             {-0.12f, "camera_left"}, {0.0f, "camera_restored"}}}) {
+      SCOPED_TRACE(phase);
+      ASSERT_TRUE(harness.pan_face_fill_camera(camera_x));
+      ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+      const QImage image = harness.capture();
+      ASSERT_FALSE(image.isNull());
+      const QString path = QDir(directory).filePath(
+          QStringLiteral("cutting_preview_%1_%2.png")
+              .arg(QString::fromLatin1(label), QString::fromLatin1(phase)));
+      EXPECT_TRUE(image.save(path));
+      std::cout << "Frozen cutting preview GPU png=" << path.toStdString() << '\n';
+      if (tool == ViewportToolId::Knife) {
+        EXPECT_GE(yellow_pixels(image, harness.cutting_preview_pixel(
+            {-0.5f, -0.25f, 0.0f})), 3)
+            << "The accepted Knife segment must remain visible while navigating.";
+        EXPECT_GE(yellow_pixels(image, harness.cutting_preview_pixel(
+            {0.5f, 0.0f, 0.0f})), 3)
+            << "The current Knife segment must remain visible while navigating.";
+      } else {
+        for (const float x : {-1.0f, 0.0f, 1.0f}) {
+          EXPECT_GE(loop_preview_green_pixels(image,
+              harness.cutting_preview_pixel({x, -0.25f, 0.0f}), true), 9)
+              << "Loop preview vertices must follow camera projection.";
+        }
+        EXPECT_GE(loop_preview_green_pixels(image,
+            harness.cutting_preview_pixel({0.5f, -0.25f, 0.0f}), false), 9)
+            << "The pending loop connector must remain visible while navigating.";
+      }
+      if (initial.isNull()) initial = image;
+      else if (camera_x == 0.0f) EXPECT_EQ(image, initial);
+      else {
+        EXPECT_NE(image, initial);
+        EXPECT_GT(std::abs(harness.cutting_preview_pixel(
+            {0.5f, -0.25f, 0.0f}).x - first_probe.x), 10.0f);
+      }
+      const auto retained = modeling.volatile_overlay_snapshot();
+      EXPECT_EQ(retained.frame, frozen.frame);
+      EXPECT_EQ(retained.source.publication_revision, frozen.source.publication_revision);
+      EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, volatile_builds);
+      EXPECT_EQ(harness.selection_frame_builds(), builds);
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      EXPECT_EQ(harness.tool_topology_selection().content_revision, selected.content_revision);
+      EXPECT_EQ(harness.tool_topology_selection().selection_revision, selected.selection_revision);
+      EXPECT_EQ(harness.undo_count(), undo);
+    }
+
+    // A new pointer sample after navigation must replace the frozen endpoint.
+    // Use the edge midpoint, clear of the fixture's vertex-picking radius.
+    ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, 0.0f, 0.0f}));
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+    EXPECT_NE(modeling.volatile_overlay_snapshot().source.publication_revision,
+              frozen.source.publication_revision);
+    const QImage resumed = harness.capture();
+    ASSERT_FALSE(resumed.isNull());
+    const QString resumed_path = QDir(directory).filePath(
+        QStringLiteral("cutting_preview_%1_hover_resumed.png")
+            .arg(QString::fromLatin1(label)));
+    EXPECT_TRUE(resumed.save(resumed_path));
+    std::cout << "Resumed cutting preview GPU png="
+              << resumed_path.toStdString() << '\n';
+    if (tool == ViewportToolId::Knife) {
+      ASSERT_TRUE(modeling.tool_status().knife_has_current);
+      EXPECT_GE(yellow_pixels(resumed,
+          harness.cutting_preview_pixel({0.5f, -0.125f, 0.0f})), 3);
+    } else {
+      ASSERT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
+      EXPECT_GE(loop_preview_green_pixels(resumed,
+          harness.cutting_preview_pixel({0.5f, 0.0f, 0.0f}), false), 9);
+    }
+  }
 }
 
 TEST(SelectionOverlayRuntimeTests,

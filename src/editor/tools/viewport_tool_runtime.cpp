@@ -589,6 +589,22 @@ CommandResult ViewportToolRuntime::cancel_native_lifecycles() {
   return {.ok = true, .changed = changed};
 }
 
+CommandResult ViewportToolRuntime::settle_native_lifecycles() {
+  bool changed = false;
+  for (ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
+    if (!adapter.pending()) {
+      continue;
+    }
+    CommandResult settled = adapter.settle ? adapter.settle() : adapter.commit();
+    changed = changed || settled.changed;
+    if (!settled.ok) {
+      settled.changed = changed;
+      return settled;
+    }
+  }
+  return {.ok = true, .changed = changed};
+}
+
 void ViewportToolRuntime::reset_native_lifecycles() {
   for (ViewportNativeToolLifecycleAdapter &adapter : native_lifecycles_) {
     adapter.reset();

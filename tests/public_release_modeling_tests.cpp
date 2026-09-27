@@ -64,6 +64,40 @@ protected:
 };
 
 TEST_F(PublicReleaseModelingTests,
+       CuttingToolsActivateFromObjectModeAndEnterEdgeMode) {
+  for (const bool knife : {false, true}) {
+    SCOPED_TRACE(knife);
+    ASSERT_TRUE(editor().tools().activate(ViewportToolId::Select).ok());
+    ASSERT_TRUE(editor().selection().set_mode(QuaderSelectionMode::Object).ok());
+    const auto command_id = knife ? quader_command::kToolsActivateKnife
+                                  : quader_command::kToolsActivateInsertEdgeLoop;
+    const auto tool = knife ? ViewportToolId::Knife : ViewportToolId::InsertEdgeLoop;
+    const auto command = editor().commands().descriptor(command_id);
+    ASSERT_TRUE(command.has_value());
+    ASSERT_TRUE(command->enabled);
+    const auto history_before = editor().history().snapshot();
+    const auto content_before = editor().selection().summary().content_revision;
+    const auto result = editor().commands().execute(command_id);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_EQ(editor().selection().summary().mode, QuaderSelectionMode::Edge);
+    EXPECT_EQ(editor().tools().active_tool(), knife ? "knife" : "insert_edge_loop");
+    EXPECT_EQ(editor().viewports().selected_tool(), tool);
+    EXPECT_EQ(editor().selection().summary().content_revision, content_before);
+    EXPECT_EQ(editor().history().snapshot().undo_label, history_before.undo_label);
+    ASSERT_TRUE(first.select().replace().ok());
+    ASSERT_EQ(editor().selection().summary().mode, QuaderSelectionMode::Object);
+    const auto history_after_selection = editor().history().snapshot();
+    const auto reactivated = editor().commands().execute(command_id);
+    ASSERT_TRUE(reactivated.ok()) << reactivated.error_message();
+    EXPECT_TRUE(reactivated.changed());
+    EXPECT_EQ(editor().selection().summary().mode, QuaderSelectionMode::Edge);
+    EXPECT_EQ(editor().viewports().selected_tool(), tool);
+    EXPECT_EQ(editor().selection().summary().content_revision, content_before);
+    EXPECT_EQ(editor().history().snapshot().undo_label, history_after_selection.undo_label);
+  }
+}
+
+TEST_F(PublicReleaseModelingTests,
        ComponentHelpersRejectBeforeReplacingSelectionOrCancelingPreview) {
   ASSERT_TRUE(editor().modeling().begin_transform_preview().ok());
   ASSERT_TRUE(editor().modeling().update_transform_translate({0.5f, 0.0f, 0.0f}).ok());

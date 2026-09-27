@@ -253,6 +253,127 @@ TEST(NativeViewportToolCursorTests,
 }
 
 TEST(NativeViewportToolCursorTests,
+     NavigationRetainsArrayAndPivotPreviewsAndAllowsAFreshDrag) {
+  for (int mode = 0; mode < 3; ++mode) {
+    SCOPED_TRACE(mode);
+    const bool linear = mode == 0;
+    const bool quick_pivot = mode == 2;
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto source = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Navigation Preview Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    if (quick_pivot) {
+      session.pivot().begin_quick({});
+    } else {
+      ASSERT_TRUE(editor.tools().activate(linear ? ViewportToolId::LinearArray
+                                                : ViewportToolId::Pivot).ok());
+    }
+    ViewportCameraController camera;
+    camera.set_viewport_size(800.0f, 600.0f);
+    camera.focus_origin(16.0f);
+    camera.view_axis(ViewportViewAxis::Y, 1);
+    ViewportInputFrame input;
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f, 600.0f};
+    input.quick_pivot_down = quick_pivot;
+    ViewportInputResult input_result;
+    const auto handle_world = [&]() {
+      return linear ? session.linear_array().handle_state().endpoint_world
+                    : session.pivot().handle_state().world_position;
+    };
+    const auto frame = [&](bool pressed, bool down, bool released) {
+      input.mouse_screen = input.mouse_local;
+      return session.native_tools().handle_pointer_frame(
+          session.scene(), session.assets(), &session.point_placement(), camera,
+          {.input = input,
+           .input_result = input_result,
+           .left_pressed = pressed,
+           .left_down = down,
+           .left_released = released,
+           .left_click_local = input.mouse_local,
+           .scene_snap_enabled = false,
+           .grid_snap_enabled = false});
+    };
+    const QVec3 origin = handle_world();
+    input.mouse_local = camera.project_world_point(origin).position;
+    (void)frame(true, true, false);
+    ASSERT_TRUE(session.native_tools().pointer_dragging());
+    input.mouse_local.x += 80.0f;
+    (void)frame(false, true, false);
+    const QVec3 authored = handle_world();
+    ASSERT_GT(length(authored - origin), 0.1f);
+    const LinearArrayPreviewState array_before =
+        session.linear_array().preview_state();
+    const auto history_revision = session.history().revision();
+    const auto scene_revision = session.scene().revision();
+    const auto pivot_revision = session.pivot().selection_pivot_revision();
+    std::uint64_t settled_array_revision = 0;
+
+    for (int phase = 0; phase < 4; ++phase) {
+      SCOPED_TRACE(phase);
+      input.navigation_active = phase != 0;
+      input_result.navigation_active = phase != 3;
+      input_result.fly_navigation_active = phase != 3;
+      input_result.camera_changed = phase == 1;
+      input.mouse_local = {-1000.0f, -1000.0f};
+      if (phase == 1) {
+        camera.view_axis(ViewportViewAxis::Z, 1);
+      }
+      (void)frame(false, phase < 2, phase == 2);
+      EXPECT_FALSE(session.native_tools().pointer_dragging());
+      expect_vec3_near(handle_world(), authored);
+      EXPECT_EQ(session.history().revision(), history_revision);
+      EXPECT_EQ(session.scene().revision(), scene_revision);
+      EXPECT_EQ(session.pivot().selection_pivot_revision(), pivot_revision);
+      if (quick_pivot) {
+        EXPECT_TRUE(session.pivot().quick_edit_active());
+        EXPECT_TRUE(session.pivot().handle_state().visible);
+      }
+      if (linear) {
+        const auto &after = session.linear_array().preview_state();
+        EXPECT_TRUE(after.active);
+        ASSERT_EQ(after.sources.size(), array_before.sources.size());
+        for (std::size_t index = 0; index < after.sources.size(); ++index) {
+          const auto &actual = after.sources[index].generated_world_transforms;
+          const auto &expected =
+              array_before.sources[index].generated_world_transforms;
+          ASSERT_EQ(actual.size(), expected.size());
+          for (std::size_t copy = 0; copy < actual.size(); ++copy) {
+            expect_matrix_near(actual[copy], expected[copy]);
+          }
+        }
+        if (phase == 0) {
+          settled_array_revision = after.revision;
+        } else {
+          EXPECT_EQ(after.revision, settled_array_revision);
+        }
+      }
+    }
+
+    input.navigation_active = false;
+    input_result = {};
+    camera.view_axis(ViewportViewAxis::Y, 1);
+    input.mouse_local = camera.project_world_point(authored).position;
+    (void)frame(false, false, false);
+    (void)frame(true, true, false);
+    ASSERT_TRUE(session.native_tools().pointer_dragging());
+    input.mouse_local.x += 40.0f;
+    (void)frame(false, true, false);
+    const QVec3 resumed = handle_world();
+    ASSERT_GT(length(resumed - authored), 0.1f);
+    (void)frame(false, false, true);
+    EXPECT_FALSE(session.native_tools().pointer_dragging());
+    expect_vec3_near(handle_world(), resumed);
+    EXPECT_EQ(session.history().revision(), history_revision);
+  }
+}
+
+TEST(NativeViewportToolCursorTests,
      HiddenRadialCenterKeepsPlacementAndLockingAvailable) {
   SceneSession session;
   QuaderEditorApi editor(

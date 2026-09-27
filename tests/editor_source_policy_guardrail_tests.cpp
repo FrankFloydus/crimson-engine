@@ -271,7 +271,7 @@ TEST(ViewportToolGuardrailTests,
   ASSERT_NE(interpret, std::string::npos);
   ASSERT_NE(execute, std::string::npos);
   EXPECT_LT(interpret, execute);
-  EXPECT_NE(commands.find("active_native_tool_lifecycle(state.active_tool)"),
+  EXPECT_NE(commands.find("active_native_tool_lifecycle(lifecycle_state.active_tool)"),
             std::string::npos);
   EXPECT_NE(commands.find("metadata->action_id == \"tools.finalize\""),
             std::string::npos);
@@ -660,8 +660,6 @@ TEST(ViewportToolGuardrailTests,
             std::string::npos);
   EXPECT_EQ(pivot_overlay.find("frame.points.push_back"), std::string::npos);
   EXPECT_NE(native_tools.find("blocked_by_navigation"),
-            std::string::npos);
-  EXPECT_NE(native_tools.find("pivot->clear_quick_override()"),
             std::string::npos);
   EXPECT_NE(native_tools.find("!blocked_by_navigation && "
                               "input.quick_pivot_down"),

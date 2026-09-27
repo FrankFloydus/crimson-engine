@@ -107,7 +107,9 @@ public:
       MaterialEditSessionId session_id, std::array<float, 3> color);
   [[nodiscard]] StandardMaterialEditResult
   finish_base_color_preview(MaterialEditSessionId session_id, bool accept);
-  /// Cancels before a live project changes its active scene/runtime binding.
+  /// Accepts the live picker into its draft before changing scene bindings.
+  [[nodiscard]] StandardMaterialEditResult accept_base_color_preview();
+  /// Explicitly discards the live picker without discarding other draft edits.
   [[nodiscard]] StandardMaterialEditResult cancel_base_color_preview();
   /// Projects only the draft albedo explicitly previewed on assigned objects.
   [[nodiscard]] std::optional<std::array<float, 3>>

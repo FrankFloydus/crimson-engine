@@ -1613,16 +1613,20 @@ void ViewportSelectionInteraction::handle_frame(
     return;
   }
 
-  const bool knife_authored_hover_this_frame =
+  const bool cutting_tool_retains_hover =
       tool_result.handled &&
-      frame.input_router.state().active_tool == ViewportToolId::Knife &&
-      frame.input.viewport_hovered && !frame.input.text_input_active &&
-      !navigation_active &&
-      !frame.input_result.camera_changed && !gizmo_blocks_hover;
-  if (knife_authored_hover_this_frame) {
-    // Knife owns component hover while its point resolver is eligible to run.
-    // Re-arm clearing so a later suppressed frame or pointer leave cannot retain
-    // the last Knife target.
+      (frame.input_router.state().active_tool == ViewportToolId::Knife ||
+       frame.input_router.state().active_tool == ViewportToolId::InsertEdgeLoop) &&
+      frame.input.viewport_focused &&
+      !frame.input.pointer_interaction_canceled &&
+      !frame.input_result.cancel_requested &&
+      !frame.input.text_input_active && !gizmo_blocks_hover &&
+      (navigation_active ||
+       (frame.input.viewport_hovered && !frame.input_result.camera_changed));
+  if (cutting_tool_retains_hover) {
+    // Navigation retains the last tool preview and source candidate, including
+    // the captured release frame. Picking resumes from the restored cursor.
+    // Keep ordinary pointer leave and hard interruptions armed for cleanup.
     hover_clear_state_ = HoverClearState::Armed;
     return;
   }

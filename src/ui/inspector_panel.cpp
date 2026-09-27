@@ -860,10 +860,13 @@ struct InspectorPanel::Impl {
         next_primary != primary_;
     if (!owner_changed && selection_changed &&
         active_color_dialog_ != nullptr) {
-      active_color_dialog_->reject();
+      active_color_dialog_->accept();
     }
     if (!owner_changed && selection_changed) {
-      cancel_active_transform_edit();
+      discard_pending_transform_preview();
+      if (!commit_active_transform_edit()) {
+        return;
+      }
       active_continuous_edit_.reset();
       continuous_edit_active_ = false;
       active_continuous_id_.clear();
@@ -2345,7 +2348,16 @@ private:
       return false;
     }
 
-    cancel_active_transform_edit();
+    if (active_transform_edit_) {
+      const std::uint64_t generation = runtime_binding_generation_;
+      const QPointer<InspectorPanel> guard(&panel_);
+      const TransformEditKind previous_kind = active_transform_edit_->kind;
+      finish_transform_edit(previous_kind);
+      if (guard == nullptr || generation != runtime_binding_generation_ ||
+          active_transform_edit_) {
+        return false;
+      }
+    }
     const TextureLockSettings texture_locks{
         .texture_lock = editor_->preferences().texture_lock_enabled(),
         .texture_lock_scale =
@@ -2518,18 +2530,51 @@ private:
     }
     if (document_ == nullptr ||
         document_->selection_revision() != built_scene_selection_revision_) {
-      cancel_active_transform_edit();
+      // Selection may have changed before the editor's queued focus-out. The
+      // retained preview still owns its original targets; never retarget it.
+      discard_pending_transform_preview();
+      (void)commit_active_transform_edit();
+      if (guard == nullptr || generation != runtime_binding_generation_) {
+        return;
+      }
       force_rebuild_ = true;
       return;
     }
     if (!transform_edit_matches(kind)) {
       return;
     }
+    (void)commit_active_transform_edit();
+    if (guard == nullptr || generation != runtime_binding_generation_) {
+      return;
+    }
+    force_rebuild_ = true;
+  }
+
+  /// Accept only the existing preview's captured targets, not current selection.
+  bool commit_active_transform_edit() {
     if (active_transform_preview_.preview_active()) {
-      (void)active_transform_preview_.commit(*editor_);
+      if (editor_ == nullptr) {
+        return false;
+      }
+      const std::uint64_t generation = runtime_binding_generation_;
+      const QPointer<InspectorPanel> guard(&panel_);
+      const auto result = active_transform_preview_.commit(*editor_);
+      if (guard == nullptr || generation != runtime_binding_generation_) {
+        return false;
+      }
+      if (!result.ok()) {
+        (void)editor_->ui().notify({.level = QuaderNotificationLevel::Error,
+                                    .message = result.error_message()});
+        if (guard == nullptr || generation != runtime_binding_generation_) {
+          return false;
+        }
+        if (active_transform_preview_.preview_active()) {
+          return false;
+        }
+      }
     }
     active_transform_edit_.reset();
-    force_rebuild_ = true;
+    return true;
   }
 
   void cancel_active_transform_edit() {

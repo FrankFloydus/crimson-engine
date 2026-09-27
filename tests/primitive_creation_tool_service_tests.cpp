@@ -419,6 +419,7 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_TRUE(harness.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.3).ok);
     ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(), "Rejected Edit").ok);
     const auto accepted_options = remembered;
+    const auto accepted_content = compiled_content_id(harness.modeling, "Rejected Edit");
     harness.modeling.set_modeling_sdk_projection_failure_for_tests(
         ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
     const auto rejected = change_kind
@@ -426,12 +427,24 @@ TEST(PrimitiveCreationToolServiceTests,
         : harness.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.4);
     EXPECT_FALSE(rejected.ok);
     EXPECT_FALSE(rejected.changed);
-    EXPECT_FALSE(harness.tool.active());
-    EXPECT_TRUE(harness.modeling.objects().empty());
+    EXPECT_TRUE(harness.tool.active());
+    EXPECT_EQ(harness.tool.active_kind(), PrimitiveCreationKind::Torus);
+    ASSERT_EQ(harness.modeling.objects().size(), 1U);
+    EXPECT_TRUE(harness.tool.live_primitive_creation().has_value());
+    EXPECT_EQ(compiled_content_id(harness.modeling, "Rejected Edit"), accepted_content);
     expect_primitive_settings(harness.tool, accepted_options);
     EXPECT_EQ(remembered.preferred_kind, accepted_options.preferred_kind);
+    harness.modeling.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    const auto retried = change_kind
+        ? harness.tool.set_kind(PrimitiveCreationKind::Sphere)
+        : harness.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.4);
+    ASSERT_TRUE(retried.ok) << retried.message;
+    ASSERT_TRUE(harness.tool.finish().ok);
+    EXPECT_TRUE(harness.history.can_undo());
 
-    PrimitiveCreationHarness observer(&remembered);
+    auto previous_options = accepted_options;
+    PrimitiveCreationHarness observer(&previous_options);
     ASSERT_TRUE(observer.tool.activate().ok);
     EXPECT_EQ(observer.tool.active_kind(), PrimitiveCreationKind::Torus);
     expect_primitive_settings(observer.tool, accepted_options);
@@ -1957,8 +1970,9 @@ TEST(PrimitiveCreationToolServiceTests,
           : editor.tools().cancel_active_tool_preview();
       ASSERT_TRUE(exited.ok()) << exited.error_message();
       EXPECT_FALSE(session.primitive_creation().active());
-      EXPECT_TRUE(session.modeling().objects().empty());
-      EXPECT_FALSE(editor.history().can_undo());
+      EXPECT_EQ(session.modeling().objects().size(),
+                switch_tool && accept_shapes ? 2u : 0u);
+      EXPECT_EQ(editor.history().can_undo(), switch_tool && accept_shapes);
       EXPECT_FALSE(editor.history().can_redo());
       expect_primitive_settings(session.primitive_creation(), remembered);
       EXPECT_GT(session.primitive_creation().tool_settings_revision(),
@@ -1982,7 +1996,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     LivePublicationFailureRetainsLastAcceptedPrimitiveSettingsBeforeReactivation) {
+     LivePublicationFailureRetainsTheActiveDraftForRetry) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -1991,25 +2005,32 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(session.primitive_creation().accept_preview(
       valid_primitive_preview(), "Custom Torus").ok);
   const auto remembered = primitive_settings(session.primitive_creation());
+  const auto content = compiled_content_id(session.modeling(), "Custom Torus");
   session.modeling().set_modeling_sdk_projection_failure_for_tests(
       ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
   const QuaderApiVoidResult failed = editor.tools().set_setting(
       kCreatePrimitiveToolId, kTorusTubeRadiusRatioSetting, 0.4);
   EXPECT_FALSE(failed.ok());
   EXPECT_FALSE(failed.error_message().empty());
-  EXPECT_FALSE(session.primitive_creation().active());
-  EXPECT_TRUE(session.modeling().objects().empty());
-  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_TRUE(session.primitive_creation().active());
+  ASSERT_EQ(session.modeling().objects().size(), 1U);
+  EXPECT_EQ(compiled_content_id(session.modeling(), "Custom Torus"), content);
+  EXPECT_TRUE(editor.tools().live_primitive_creation().has_value());
+  EXPECT_TRUE(editor.history().can_undo());
+  EXPECT_EQ(session.history().undo_count(), 0U);
   expect_primitive_settings(session.primitive_creation(), remembered);
-  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
   EXPECT_EQ(session.primitive_creation().active_kind(),
             PrimitiveCreationKind::Torus);
   expect_primitive_settings(session.primitive_creation(), remembered);
+  ASSERT_TRUE(editor.tools().set_setting(
+      kCreatePrimitiveToolId, kTorusTubeRadiusRatioSetting, 0.4).ok());
   EXPECT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     PerShapeFailureRollsBackAcceptedShapesAndExitsTheTool) {
+     InvalidShapeRetainsAcceptedShapesAndTheLiveSessionForRetry) {
   PrimitiveCreationHarness harness;
   ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Sphere).ok);
   ASSERT_TRUE(
@@ -2033,12 +2054,14 @@ TEST(PrimitiveCreationToolServiceTests,
       harness.tool.accept_preview(invalid, "Invalid Sphere");
   EXPECT_FALSE(failed.ok);
   EXPECT_FALSE(failed.message.empty());
-  EXPECT_FALSE(harness.tool.active());
-  EXPECT_EQ(harness.tool.shape_count(), 0U);
-  EXPECT_TRUE(harness.modeling.objects().empty());
+  EXPECT_TRUE(harness.tool.active());
+  EXPECT_EQ(harness.tool.shape_count(), 1U);
+  EXPECT_EQ(harness.modeling.objects().size(), 1u);
   EXPECT_FALSE(harness.history.can_undo());
   EXPECT_FALSE(harness.history.can_redo());
-  EXPECT_EQ(harness.modeling.selection_summary().selected_object_count, 0U);
+  EXPECT_EQ(harness.modeling.selection_summary().selected_object_count, 1U);
+  EXPECT_TRUE(harness.tool.live_primitive_creation().has_value());
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Accepted Hemisphere"), accepted_indices);
   expect_primitive_settings(harness.tool, remembered);
   ASSERT_TRUE(harness.tool.activate().ok);
   EXPECT_EQ(harness.tool.active_kind(), PrimitiveCreationKind::Sphere);
@@ -2048,6 +2071,44 @@ TEST(PrimitiveCreationToolServiceTests,
   EXPECT_EQ(compiled_index_count(harness.modeling, "Remembered Hemisphere After Failure"),
             accepted_indices);
   EXPECT_TRUE(harness.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     NewShapePublicationFailurePreservesPriorShapesLiveEditAndLocalRedo) {
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::AfterSceneBinding,
+                             ModelingSdkProjectionFailurePoint::AfterSelection,
+                             ModelingSdkProjectionFailurePoint::BeforeCommit}) {
+    SCOPED_TRACE(static_cast<int>(failure));
+    PrimitiveCreationHarness harness;
+    ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
+    ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(), "Kept Shape").ok);
+    ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(4.0f), "Redo Shape").ok);
+    ASSERT_TRUE(harness.tool.undo().ok);
+    ASSERT_TRUE(harness.tool.can_redo());
+    const auto content = compiled_content_id(harness.modeling, "Kept Shape");
+    const auto selected = harness.modeling.selection_summary().active_object_id;
+    harness.modeling.set_modeling_sdk_projection_failure_for_tests(failure);
+    const auto failed = harness.tool.accept_preview(valid_primitive_preview(8.0f), "Rejected Shape");
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_TRUE(harness.tool.active());
+    EXPECT_EQ(harness.tool.shape_count(), 1u);
+    EXPECT_TRUE(harness.tool.can_redo());
+    EXPECT_EQ(harness.modeling.objects().size(), 1u);
+    EXPECT_EQ(compiled_content_id(harness.modeling, "Kept Shape"), content);
+    EXPECT_EQ(harness.modeling.selection_summary().active_object_id, selected);
+    EXPECT_FALSE(harness.history.can_undo());
+    harness.modeling.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(8.0f), "Retried Shape").ok);
+    EXPECT_EQ(harness.tool.shape_count(), 2u);
+    EXPECT_FALSE(harness.tool.can_redo());
+    ASSERT_TRUE(harness.tool.finish().ok);
+    EXPECT_EQ(harness.history.undo_count(), 2u);
+    ASSERT_TRUE(harness.history.undo().ok);
+    EXPECT_EQ(harness.modeling.objects().size(), 1u);
+    EXPECT_EQ(compiled_content_id(harness.modeling, "Kept Shape"), content);
+  }
 }
 
 TEST(PrimitiveCreationToolServiceTests,
@@ -2166,7 +2227,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     PublicDeselectAndConcurrentEditRemainValidAfterCancel) {
+     PublicDeselectAcceptsPrimitiveBeforeConcurrentEditAndLaterDraftCancellation) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -2204,8 +2265,10 @@ TEST(PrimitiveCreationToolServiceTests,
       compiled_index_count(session.modeling(), "Canceled Transient");
 
   ASSERT_TRUE(editor.selection().clear().ok());
-  EXPECT_FALSE(session.history().can_undo());
-  ASSERT_TRUE(editor.tools()
+  EXPECT_EQ(session.history().undo_count(), 2U);
+  EXPECT_FALSE(session.primitive_creation().active());
+  EXPECT_TRUE(session.scene().selected_entities().empty());
+  EXPECT_FALSE(editor.tools()
                   .set_setting("create_primitive",
                                "primitive.box.subdivisions_x", 3.0)
                   .ok());
@@ -2213,24 +2276,45 @@ TEST(PrimitiveCreationToolServiceTests,
             transient_indices);
 
   ASSERT_TRUE(editor.scene().set_visible(baseline.object.entity, false).ok());
-  ASSERT_TRUE(editor.history().can_undo());
+  EXPECT_EQ(session.history().undo_count(), 3U);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(valid_primitive_preview(8.0f), "Later Canceled Draft")
+                  .ok);
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
-  ASSERT_EQ(session.modeling().objects().size(), 1U);
-  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count);
+  ASSERT_EQ(session.modeling().objects().size(), 2U);
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
   EXPECT_EQ(session.modeling().objects().front().modeling_object_id,
             baseline.object.modeling_object_id);
+  EXPECT_TRUE(session.scene().exists(transient->entity));
+  EXPECT_EQ(session.history().undo_count(), 3U);
   const std::optional<QuaderEntitySnapshot> canceled_baseline =
       editor.query().entity(baseline.object.entity);
   ASSERT_TRUE(canceled_baseline.has_value());
   EXPECT_FALSE(canceled_baseline->visible);
-  EXPECT_EQ(session.modeling().selection_summary().active_object_id,
-            baseline.object.modeling_object_id);
+  EXPECT_FALSE(session.modeling().selection_summary().has_selection);
+  EXPECT_TRUE(session.scene().selected_entities().empty());
 
   ASSERT_TRUE(editor.history().undo().ok());
   const std::optional<QuaderEntitySnapshot> undone_visibility =
       editor.query().entity(baseline.object.entity);
   ASSERT_TRUE(undone_visibility.has_value());
   EXPECT_TRUE(undone_visibility->visible);
+  // Selection is its own command after primitive acceptance.
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.scene().primary_selection(), transient->entity);
+  EXPECT_TRUE(session.scene().exists(transient->entity));
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(session.scene().exists(transient->entity));
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count);
+  EXPECT_FALSE(editor.history().can_undo());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(session.scene().exists(transient->entity));
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
+  EXPECT_EQ(session.scene().primary_selection(), transient->entity);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(session.scene().selected_entities().empty());
   ASSERT_TRUE(editor.history().redo().ok());
   const std::optional<QuaderEntitySnapshot> redone_visibility =
       editor.query().entity(baseline.object.entity);
@@ -2239,7 +2323,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     ApplyHistoryOrdersConcurrentEditsBeforeEachPrimitiveDelta) {
+     PublicDeselectOrdersPrimitiveDeltasBeforeTheFollowingSceneEdit) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -2262,9 +2346,10 @@ TEST(PrimitiveCreationToolServiceTests,
                                   "Second Applied Primitive")
                   .ok);
   ASSERT_TRUE(editor.selection().clear().ok());
-  ASSERT_FALSE(session.history().can_undo());
+  EXPECT_EQ(session.history().undo_count(), 3U);
+  EXPECT_FALSE(session.primitive_creation().active());
   ASSERT_TRUE(editor.scene().set_visible(baseline.object.entity, false).ok());
-  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(session.history().undo_count(), 4U);
   const std::vector<ModelingObjectRecord> applied_objects =
       session.modeling().objects();
   ASSERT_EQ(applied_objects.size(), 3U);
@@ -2285,30 +2370,33 @@ TEST(PrimitiveCreationToolServiceTests,
   };
 
   ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 3U);
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
+  expect_visibility(true);
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_EQ(session.modeling().objects().size(), 3U);
+  EXPECT_EQ(session.scene().primary_selection(), second_primitive->entity);
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
+  ASSERT_TRUE(editor.history().undo().ok());
   ASSERT_EQ(session.modeling().objects().size(), 2U);
   EXPECT_TRUE(session.scene().exists(first_primitive->entity));
   EXPECT_FALSE(session.scene().exists(second_primitive->entity));
   EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
-  expect_visibility(false);
+  expect_visibility(true);
   ASSERT_TRUE(editor.history().undo().ok());
   ASSERT_EQ(session.modeling().objects().size(), 1U);
   EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count);
   EXPECT_EQ(session.modeling().objects().front().modeling_object_id,
             baseline.object.modeling_object_id);
-  expect_visibility(false);
-
-  ASSERT_TRUE(editor.history().undo().ok());
   expect_visibility(true);
   EXPECT_FALSE(editor.history().can_undo());
 
-  ASSERT_TRUE(editor.history().redo().ok());
-  expect_visibility(false);
   ASSERT_TRUE(editor.history().redo().ok());
   ASSERT_EQ(session.modeling().objects().size(), 2U);
   EXPECT_TRUE(session.scene().exists(first_primitive->entity));
   EXPECT_FALSE(session.scene().exists(second_primitive->entity));
   EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
-  expect_visibility(false);
+  expect_visibility(true);
   ASSERT_TRUE(editor.history().redo().ok());
   const std::vector<ModelingObjectRecord> redone_objects =
       session.modeling().objects();
@@ -2323,8 +2411,18 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_EQ(redone->mesh, expected->mesh);
   }
   EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
+  expect_visibility(true);
+  EXPECT_EQ(session.scene().primary_selection(), second_primitive->entity);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(session.scene().selected_entities().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
   expect_visibility(false);
 
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_visibility(true);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.scene().primary_selection(), second_primitive->entity);
+  EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
   ASSERT_TRUE(editor.history().undo().ok());
   EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 1U);
   ASSERT_TRUE(editor.history().redo().ok());
@@ -2335,35 +2433,65 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_NE(repeated_redo_primitive, nullptr);
   EXPECT_EQ(repeated_redo_primitive->mesh, second_primitive->mesh);
   EXPECT_EQ(session.assets().mesh_ids().size(), baseline_mesh_count + 2U);
+  expect_visibility(true);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(session.scene().selected_entities().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
   expect_visibility(false);
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     TransientPublicDeselectPreservesTheExistingRedoBranch) {
-  SceneSession session;
-  QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_scene_session(session));
-  QuaderCreateEntityArgs args;
-  args.name = "Redo Sentinel";
-  const QuaderApiResult<QuaderEntityRef> sentinel =
-      editor.scene().create_entity(args);
-  ASSERT_TRUE(sentinel.ok()) << sentinel.error_message();
-  ASSERT_TRUE(editor.history().undo().ok());
-  ASSERT_TRUE(editor.history().can_redo());
+     PublicDeselectReplacesRedoWhileExplicitCancelPreservesIt) {
+  for (const bool accept_by_deselecting : {false, true}) {
+    SCOPED_TRACE(accept_by_deselecting);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    QuaderCreateEntityArgs args;
+    args.name = "Redo Sentinel";
+    const QuaderApiResult<QuaderEntityRef> sentinel =
+        editor.scene().create_entity(args);
+    ASSERT_TRUE(sentinel.ok()) << sentinel.error_message();
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.history().can_redo());
 
-  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
-  ASSERT_TRUE(session.primitive_creation()
-                  .accept_preview(valid_primitive_preview(),
-                                  "Redo Branch Transient")
-                  .ok);
-  ASSERT_TRUE(editor.selection().clear().ok());
-  EXPECT_TRUE(session.history().can_redo());
-  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(), "Redo Branch Transient")
+                    .ok);
+    ASSERT_TRUE(session.history().can_redo());
+    if (!accept_by_deselecting) {
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+      EXPECT_TRUE(session.modeling().objects().empty());
+      ASSERT_TRUE(editor.history().can_redo());
+      ASSERT_TRUE(editor.history().redo().ok());
+      EXPECT_TRUE(editor.query().entity(sentinel.value().id).has_value());
+      continue;
+    }
 
-  EXPECT_TRUE(session.modeling().objects().empty());
-  ASSERT_TRUE(editor.history().can_redo());
-  ASSERT_TRUE(editor.history().redo().ok());
-  EXPECT_TRUE(editor.query().entity(sentinel.value().id).has_value());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    EXPECT_FALSE(session.primitive_creation().active());
+    EXPECT_FALSE(session.history().can_redo());
+    EXPECT_EQ(session.history().undo_count(), 2U);
+    ASSERT_EQ(session.modeling().objects().size(), 1U);
+    const ModelingObjectRecord accepted = session.modeling().objects().front();
+    EXPECT_FALSE(editor.query().entity(sentinel.value().id).has_value());
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_EQ(session.modeling().objects().size(), 1U);
+    EXPECT_EQ(session.scene().primary_selection(), accepted.entity);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(session.modeling().objects().empty());
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_EQ(session.modeling().objects().size(), 1U);
+    const ModelingObjectRecord redone = session.modeling().objects().front();
+    EXPECT_EQ(redone.entity, accepted.entity);
+    EXPECT_EQ(redone.modeling_object_id, accepted.modeling_object_id);
+    EXPECT_EQ(redone.mesh, accepted.mesh);
+    EXPECT_EQ(session.scene().primary_selection(), accepted.entity);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(session.scene().selected_entities().empty());
+    EXPECT_FALSE(editor.query().entity(sentinel.value().id).has_value());
+  }
 }
 
 TEST(PrimitiveCreationToolServiceTests,
@@ -3189,7 +3317,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     CubeResizeCancellationAfterSelectionChangeRestoresBoundsWithoutReselecting) {
+     PublicSelectionAcceptsCubeResizeAndRejectsStaleCancellationWithoutReselecting) {
   for (const bool select_other : {false, true}) {
     SCOPED_TRACE(select_other);
     SceneSession session;
@@ -3211,6 +3339,8 @@ TEST(PrimitiveCreationToolServiceTests,
                     .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, false)
                     .ok());
     ASSERT_TRUE(editor.tools().update_primitive_cube_resize(-1.0).ok());
+    const auto resized = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(resized.has_value());
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_TRUE(session.scene().selected_entities().empty());
     if (select_other) {
@@ -3221,7 +3351,9 @@ TEST(PrimitiveCreationToolServiceTests,
     const auto selection_revision = session.scene().selection_revision();
     EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
     EXPECT_FALSE(editor.tools().update_primitive_cube_resize(-2.0).ok());
-    ASSERT_TRUE(editor.tools().cancel_primitive_cube_resize().ok());
+    const auto stale_cancel = editor.tools().cancel_primitive_cube_resize();
+    ASSERT_TRUE(stale_cancel.ok());
+    EXPECT_FALSE(stale_cancel.changed());
     EXPECT_EQ(session.scene().selected_entities(), expected_selection);
     EXPECT_EQ(session.scene().selection_revision(), selection_revision);
     const auto restored_summary = session.modeling().selection_summary();
@@ -3229,18 +3361,43 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_EQ(restored_summary.active_object_id, expected_summary.active_object_id);
     EXPECT_EQ(restored_summary.selected_object_count, expected_summary.selected_object_count);
     expect_cube_mesh_bounds(session.modeling(), cube->object_id,
-                             cube->local_min, cube->local_max);
-    const auto restored_content = compiled_content_id(session.modeling(), "Selection Box");
-    // Retiring the resize removes its stale-selection guard. Flip now changes
-    // the pending setting and does not modify the cube that just froze.
-    ASSERT_TRUE(editor.tools().flip_primitive_faces().ok());
-    EXPECT_EQ(compiled_content_id(session.modeling(), "Selection Box"), restored_content);
+                             resized->local_min, resized->local_max);
+    const auto accepted_content = compiled_content_id(session.modeling(), "Selection Box");
+    EXPECT_FALSE(session.primitive_creation().active());
+    EXPECT_FALSE(editor.tools().flip_primitive_faces().ok());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Selection Box"), accepted_content);
     ASSERT_TRUE(editor.selection().select_object(*entity).ok());
     EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
     EXPECT_FALSE(editor.tools()
                      .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true)
                      .ok());
-    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_FALSE(editor.tools().cancel_active_tool_preview().ok());
+    // Undo reselect, optional target selection, and deselect before creation.
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(session.scene().selected_entities(), expected_selection);
+    EXPECT_TRUE(session.scene().exists(*entity));
+    if (select_other) {
+      ASSERT_TRUE(editor.history().undo().ok());
+      EXPECT_TRUE(session.scene().selected_entities().empty());
+      EXPECT_TRUE(session.scene().exists(*entity));
+    }
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(session.scene().primary_selection(), *entity);
+    expect_cube_mesh_bounds(session.modeling(), cube->object_id,
+                             resized->local_min, resized->local_max);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FALSE(session.scene().exists(*entity));
+    ASSERT_TRUE(editor.history().redo().ok());
+    expect_cube_mesh_bounds(session.modeling(), cube->object_id,
+                             resized->local_min, resized->local_max);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(session.scene().selected_entities().empty());
+    if (select_other) {
+      ASSERT_TRUE(editor.history().redo().ok());
+      EXPECT_EQ(session.scene().selected_entities(), expected_selection);
+    }
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(session.scene().primary_selection(), *entity);
   }
 }
 
@@ -3267,7 +3424,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     SettingsBeforeViewportRetirementCancelLostSelectionResizeFirst) {
+     SettingsBeforeViewportRetirementAcceptLostSelectionResizeFirst) {
   for (const std::string_view action : {"flip", "subdivide", "unchanged"}) {
     SCOPED_TRACE(action);
     SceneSession session;
@@ -3279,12 +3436,13 @@ TEST(PrimitiveCreationToolServiceTests,
                     .ok);
     const auto cube = editor.tools().live_primitive_cube();
     ASSERT_TRUE(cube.has_value());
-    const auto original_content = compiled_content_id(session.modeling(), "Interrupted Box");
     ASSERT_TRUE(editor.tools()
                     .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true)
                     .ok());
     ASSERT_TRUE(editor.tools().update_primitive_cube_resize(1.0).ok());
-    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto resized_cube = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(resized_cube.has_value());
+    ASSERT_TRUE(session.modeling().clear_selection().ok);
     const auto resized_content = compiled_content_id(session.modeling(), "Interrupted Box");
     // Rejected input leaves the unfinished gesture available for cancellation.
     EXPECT_FALSE(editor.tools()
@@ -3297,14 +3455,14 @@ TEST(PrimitiveCreationToolServiceTests,
                                    kCreatePrimitiveToolId, kBoxSubdivisionsXSetting,
                                    action == "subdivide" ? 3.0 : 1.0);
     ASSERT_TRUE(changed.ok()) << changed.error_message();
-    // Even an unchanged setting reports the restored resize geometry.
+    // Even an unchanged setting reports that the gesture was finalized.
     EXPECT_TRUE(changed.changed());
     EXPECT_TRUE(session.primitive_creation().active());
     EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
     EXPECT_TRUE(session.scene().selected_entities().empty());
-    EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Box"), original_content);
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Box"), resized_content);
     expect_cube_mesh_bounds(session.modeling(), cube->object_id,
-                             cube->local_min, cube->local_max);
+                             resized_cube->local_min, resized_cube->local_max);
     EXPECT_EQ(session.primitive_creation().box_settings().flip_faces, action == "flip");
     EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x,
               action == "subdivide" ? 3 : 1);
@@ -3316,7 +3474,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     SettingsPropagateInterruptedResizePublicationFailureBeforeChangingPendingCube) {
+     SettingsRetireInterruptedResizeWithoutRepublishingItsDisplayedGeometry) {
   for (const bool flip : {false, true}) {
     for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
                                ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
@@ -3336,30 +3494,34 @@ TEST(PrimitiveCreationToolServiceTests,
                       .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::X, true)
                       .ok());
       ASSERT_TRUE(editor.tools().update_primitive_cube_resize(1.0).ok());
-      ASSERT_TRUE(editor.selection().clear().ok());
+      const auto content = compiled_content_id(session.modeling(), "Failed Interrupted Box");
+      ASSERT_TRUE(session.modeling().clear_selection().ok);
       session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
-      const auto rejected = flip
+      const auto changed = flip
                                 ? editor.tools().flip_primitive_faces()
                                 : editor.tools().set_setting(
                                       kCreatePrimitiveToolId, kBoxSubdivisionsXSetting, 3.0);
-      EXPECT_FALSE(rejected.ok());
-      EXPECT_FALSE(rejected.changed());
-      EXPECT_FALSE(rejected.error_message().empty());
-      EXPECT_FALSE(session.primitive_creation().active());
-      EXPECT_FALSE(session.primitive_creation().box_settings().flip_faces);
-      EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x, 1);
+      ASSERT_TRUE(changed.ok()) << changed.error_message();
+      EXPECT_TRUE(changed.changed());
+      EXPECT_TRUE(session.primitive_creation().active());
+      EXPECT_EQ(session.primitive_creation().box_settings().flip_faces, flip);
+      EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x, flip ? 1 : 3);
+      ASSERT_EQ(session.modeling().objects().size(), 2U);
+      EXPECT_EQ(compiled_content_id(session.modeling(), "Failed Interrupted Box"), content);
+      EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
+      EXPECT_FALSE(editor.tools().cancel_primitive_cube_resize().changed());
+      session.modeling().set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::None);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
       ASSERT_EQ(session.modeling().objects().size(), 1U);
       EXPECT_EQ(session.modeling().objects().front().modeling_object_id,
                 baseline.value().modeling_object_id);
-      EXPECT_FALSE(editor.tools().live_primitive_cube().has_value());
-      EXPECT_FALSE(editor.tools().cancel_primitive_cube_resize().changed());
-      EXPECT_FALSE(editor.tools().flip_primitive_faces().ok());
     }
   }
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     PublicCubeResizeCancellationRetainsComponentModeSelectionAndActiveElement) {
+     PublicComponentSelectionAcceptsCubeResizeAndKeepsItsActiveElement) {
   for (const auto kind : {QuaderComponentKind::Vertex, QuaderComponentKind::Edge,
                           QuaderComponentKind::Face}) {
     SCOPED_TRACE(static_cast<int>(kind));
@@ -3378,6 +3540,8 @@ TEST(PrimitiveCreationToolServiceTests,
                     .begin_primitive_cube_resize(QuaderPrimitiveCubeAxis::Z, true)
                     .ok());
     ASSERT_TRUE(editor.tools().update_primitive_cube_resize(1.0).ok());
+    const auto resized = editor.tools().live_primitive_cube();
+    ASSERT_TRUE(resized.has_value());
     if (kind == QuaderComponentKind::Vertex) {
       ASSERT_TRUE(editor.selection().select_vertices(*object, {1, 2}).ok());
     } else if (kind == QuaderComponentKind::Edge) {
@@ -3415,13 +3579,15 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_EQ(session.scene().primary_selection(), primary_selection);
     EXPECT_EQ(session.scene().selection_revision(), scene_selection_revision);
     expect_cube_mesh_bounds(session.modeling(), cube->object_id,
-                             cube->local_min, cube->local_max);
-    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+                             resized->local_min, resized->local_max);
+    EXPECT_FALSE(session.primitive_creation().active());
+    EXPECT_EQ(session.history().undo_count(), 1U);
+    EXPECT_FALSE(editor.tools().cancel_active_tool_preview().ok());
   }
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     FailedCubeResizePublicationRollsBackSessionAndRetainsBaselineObject) {
+     FailedCubeResizePublicationRetainsTheSessionAndLastDisplayedBoundsForRetry) {
   for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
                              ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
     SCOPED_TRACE(static_cast<int>(failure));
@@ -3432,21 +3598,34 @@ TEST(PrimitiveCreationToolServiceTests,
     });
     ASSERT_TRUE(baseline.ok);
     const auto baseline_content = compiled_content_id(harness.modeling, "Baseline Box");
-    const auto baseline_assets = harness.assets.mesh_ids();
     ASSERT_TRUE(harness.tool.activate().ok);
     ASSERT_TRUE(harness.tool.accept_preview(valid_primitive_preview(4.0f), "Rejected Resize Box").ok);
+    const auto content = compiled_content_id(harness.modeling, "Rejected Resize Box");
+    const auto cube = harness.tool.live_cube();
+    ASSERT_TRUE(cube.has_value());
+    const auto assets = harness.assets.mesh_ids();
     ASSERT_TRUE(harness.tool.begin_cube_resize(PrimitiveCubeAxis::Z, true).ok);
     harness.modeling.set_modeling_sdk_projection_failure_for_tests(failure);
     const auto rejected = harness.tool.update_cube_resize(1.0);
     EXPECT_FALSE(rejected.ok);
     EXPECT_FALSE(rejected.changed);
-    EXPECT_FALSE(harness.tool.active());
-    EXPECT_FALSE(harness.tool.live_cube().has_value());
-    ASSERT_EQ(harness.modeling.objects().size(), 1U);
-    EXPECT_EQ(harness.modeling.objects().front().modeling_object_id, baseline.object.modeling_object_id);
+    EXPECT_TRUE(harness.tool.active());
+    ASSERT_TRUE(harness.tool.live_cube().has_value());
+    EXPECT_TRUE(harness.tool.live_cube()->resizing);
+    ASSERT_EQ(harness.modeling.objects().size(), 2U);
+    EXPECT_EQ(compiled_content_id(harness.modeling, "Rejected Resize Box"), content);
+    expect_cube_mesh_bounds(harness.modeling, cube->modeling_object_id,
+                           cube->local_min, cube->local_max);
+    EXPECT_FLOAT_EQ(harness.tool.live_cube()->local_min.z, cube->local_min.z);
+    EXPECT_FLOAT_EQ(harness.tool.live_cube()->local_max.z, cube->local_max.z);
     EXPECT_EQ(compiled_content_id(harness.modeling, "Baseline Box"), baseline_content);
-    EXPECT_EQ(harness.assets.mesh_ids(), baseline_assets);
+    EXPECT_EQ(harness.assets.mesh_ids(), assets);
     EXPECT_FALSE(harness.history.can_undo());
+    harness.modeling.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    ASSERT_TRUE(harness.tool.update_cube_resize(1.0).ok);
+    ASSERT_TRUE(harness.tool.finish().ok);
+    EXPECT_TRUE(harness.history.can_undo());
   }
 }
 
@@ -3634,7 +3813,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     ShapeSwitchDiscardsFootprintAndHeightWithoutDiscardingCompletedShapes) {
+     ShapeSwitchPreservesUnfinishedFootprintAndRejectsTheTransition) {
   for (const bool accepted_shape : {false, true}) {
     for (const bool height_stage : {false, true}) {
       SCOPED_TRACE(::testing::Message() << accepted_shape << ";" << height_stage);
@@ -3664,23 +3843,23 @@ TEST(PrimitiveCreationToolServiceTests,
           before_repeated, test::capture_command_observable_state(editor));
       EXPECT_TRUE(difference.empty()) << difference.summary;
 
-      ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere).ok());
-      EXPECT_EQ(session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
-      EXPECT_FALSE(session.modeling().box_preview(false).valid);
-      EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
+      const auto refused = editor.tools().begin_primitive_creation(
+          QuaderPrimitiveCreationShape::Sphere);
+      EXPECT_FALSE(refused.ok());
+      EXPECT_FALSE(refused.changed());
+      EXPECT_EQ(session.primitive_creation().active_kind(), PrimitiveCreationKind::Box);
+      EXPECT_NE(session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+      EXPECT_TRUE(session.modeling().box_preview(false).valid);
       EXPECT_EQ(session.modeling().objects().size(), accepted_shape ? 1u : 0u);
-      EXPECT_EQ(session.history().can_undo(), accepted_shape);
+      EXPECT_FALSE(session.history().can_undo());
       ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
-      EXPECT_EQ(session.modeling().objects().size(), accepted_shape ? 1u : 0u);
-      if (accepted_shape) {
-        EXPECT_EQ(compiled_index_count(session.modeling(), "Completed Box"), 36u);
-      }
+      EXPECT_TRUE(session.modeling().objects().empty());
     }
   }
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     ShapeSwitchDiscardsUnfinishedResizeBeforeCommittingTheCompletedObject) {
+     ShapeSwitchAcceptsTheDisplayedResizeBeforeCommittingTheCompletedObject) {
   for (const auto shape : {QuaderPrimitiveCreationShape::Box, QuaderPrimitiveCreationShape::Torus}) {
     SCOPED_TRACE(static_cast<int>(shape));
     SceneSession session;
@@ -3693,6 +3872,9 @@ TEST(PrimitiveCreationToolServiceTests,
         ? QuaderPrimitiveResizeControl::PositiveX : QuaderPrimitiveResizeControl::InnerRadius;
     ASSERT_TRUE(editor.tools().begin_primitive_resize(control).ok());
     ASSERT_TRUE(editor.tools().update_primitive_resize(0.2).ok());
+    const auto resized = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(resized.has_value());
+    const auto resized_content = compiled_content_id(session.modeling(), "Completed Shape");
     const auto before_repeated = test::capture_command_observable_state(editor);
     const auto repeated = editor.tools().begin_primitive_creation(shape);
     EXPECT_TRUE(repeated.ok());
@@ -3707,23 +3889,25 @@ TEST(PrimitiveCreationToolServiceTests,
     const auto mesh = session.modeling().compile_object_mesh(original->object_id);
     ASSERT_TRUE(mesh.has_value());
     for (const auto &vertex : mesh->geometry().vertices) {
-      EXPECT_GE(vertex.position.x, original->local_min.x - 0.0001f);
-      EXPECT_LE(vertex.position.x, original->local_max.x + 0.0001f);
+      EXPECT_GE(vertex.position.x, resized->local_min.x - 0.0001f);
+      EXPECT_LE(vertex.position.x, resized->local_max.x + 0.0001f);
     }
     if (shape == QuaderPrimitiveCreationShape::Torus) {
       EXPECT_DOUBLE_EQ(session.primitive_creation().torus_settings().tube_radius_ratio,
-                       original->tube_radius_ratio);
+                       resized->tube_radius_ratio);
     }
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Completed Shape"), resized_content);
     ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_TRUE(session.modeling().objects().empty());
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_EQ(session.modeling().objects().front().modeling_object_id, original->object_id);
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Completed Shape"), resized_content);
   }
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     ShapeSwitchStopsWhenRetiringThePreviousResizeFails) {
+     ShapeSwitchAcceptsResizeWithoutRepublishingOrRestoringItsBaseline) {
   for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
                              ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
     SCOPED_TRACE(static_cast<int>(failure));
@@ -3733,15 +3917,17 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Failed Resize").ok);
     ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::PositiveX).ok());
     ASSERT_TRUE(editor.tools().update_primitive_resize(0.5).ok());
+    const auto resized_content = compiled_content_id(session.modeling(), "Failed Resize");
     session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
     const auto switched = editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere);
-    EXPECT_FALSE(switched.ok());
-    EXPECT_FALSE(switched.error_message().empty());
-    EXPECT_FALSE(session.primitive_creation().active());
+    EXPECT_TRUE(switched.ok()) << switched.error_message();
+    EXPECT_TRUE(session.primitive_creation().active());
+    EXPECT_EQ(session.primitive_creation().active_kind(), PrimitiveCreationKind::Sphere);
     EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
-    EXPECT_EQ(editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Box);
-    EXPECT_FALSE(session.history().can_undo());
-    EXPECT_TRUE(session.modeling().objects().empty());
+    EXPECT_EQ(editor.tools().preferred_primitive_shape(), QuaderPrimitiveCreationShape::Sphere);
+    EXPECT_TRUE(session.history().can_undo());
+    ASSERT_EQ(session.modeling().objects().size(), 1u);
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Failed Resize"), resized_content);
   }
 }
 
@@ -4139,7 +4325,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     CylinderSelectionLossRestoresResizeBeforePendingSettingsWithoutReselecting) {
+     CylinderSelectionLossAcceptsResizeExceptForExplicitCancellation) {
   for (const std::string_view action : {"cancel", "caps", "flip", "unchanged"}) {
     SCOPED_TRACE(action);
     SceneSession session;
@@ -4149,7 +4335,8 @@ TEST(PrimitiveCreationToolServiceTests,
     const auto original_content = compiled_content_id(session.modeling(), "Interrupted Cylinder");
     ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::Radius).ok());
     ASSERT_TRUE(editor.tools().update_primitive_resize(1.0).ok());
-    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto resized_content = compiled_content_id(session.modeling(), "Interrupted Cylinder");
+    ASSERT_TRUE(session.modeling().clear_selection().ok);
     const auto selection_revision = session.scene().selection_revision();
     EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
     EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 2.0).ok());
@@ -4159,7 +4346,8 @@ TEST(PrimitiveCreationToolServiceTests,
         : editor.tools().set_setting(kCreatePrimitiveToolId, kCylinderSideCountSetting, 32.0);
     ASSERT_TRUE(result.ok()) << result.error_message();
     EXPECT_TRUE(result.changed());
-    EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Cylinder"), original_content);
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Cylinder"),
+              action == "cancel" ? original_content : resized_content);
     EXPECT_TRUE(session.scene().selected_entities().empty());
     EXPECT_EQ(session.scene().selection_revision(), selection_revision);
     EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
@@ -4172,10 +4360,10 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     CylinderResizePublicationFailuresRollbackSessionAndRetainAcceptedSettings) {
+     CylinderResizePublicationFailuresPreserveTheDraftAndSettingsForRetry) {
   for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
                              ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
-    for (const std::string_view action : {"resize", "cancel", "pending_caps"}) {
+    for (const std::string_view action : {"resize", "cancel", "caps"}) {
       SCOPED_TRACE(::testing::Message() << static_cast<int>(failure) << ";" << action);
       SceneSession session;
       QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -4189,26 +4377,37 @@ TEST(PrimitiveCreationToolServiceTests,
       if (action != "resize") {
         ASSERT_TRUE(editor.tools().update_primitive_resize(0.5).ok());
       }
-      if (action == "pending_caps") {
-        ASSERT_TRUE(editor.selection().clear().ok());
-      }
       const auto remembered = primitive_settings(session.primitive_creation());
+      const auto content = compiled_content_id(session.modeling(), "Failed Cylinder");
+      const auto before = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(before.has_value());
       session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
       const auto result = action == "resize" ? editor.tools().update_primitive_resize(1.0)
           : action == "cancel" ? editor.tools().cancel_primitive_resize()
           : editor.tools().toggle_primitive_caps();
       EXPECT_FALSE(result.ok());
       EXPECT_FALSE(result.changed());
-      EXPECT_FALSE(session.primitive_creation().active());
-      EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
-      ASSERT_EQ(session.modeling().objects().size(), 1U);
+      EXPECT_TRUE(session.primitive_creation().active());
+      ASSERT_TRUE(editor.tools().live_primitive_creation().has_value());
+      EXPECT_TRUE(editor.tools().live_primitive_creation()->resizing);
+      EXPECT_FLOAT_EQ(editor.tools().live_primitive_creation()->local_min.x, before->local_min.x);
+      EXPECT_FLOAT_EQ(editor.tools().live_primitive_creation()->local_max.x, before->local_max.x);
+      EXPECT_FLOAT_EQ(editor.tools().live_primitive_creation()->local_min.z, before->local_min.z);
+      EXPECT_FLOAT_EQ(editor.tools().live_primitive_creation()->local_max.z, before->local_max.z);
+      ASSERT_EQ(session.modeling().objects().size(), 2U);
+      EXPECT_EQ(compiled_content_id(session.modeling(), "Failed Cylinder"), content);
       EXPECT_EQ(compiled_content_id(session.modeling(), "Baseline"), baseline);
       expect_primitive_settings(session.primitive_creation(), remembered);
-      EXPECT_FALSE(editor.tools().cancel_primitive_resize().changed());
-      EXPECT_FALSE(editor.tools().toggle_primitive_caps().ok());
-      ASSERT_NO_FATAL_FAILURE(activate_public_cylinder(editor.tools()));
-      EXPECT_FALSE(session.primitive_creation().cylinder_settings().caps);
+      session.modeling().set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::None);
+      const auto retried = action == "resize" ? editor.tools().update_primitive_resize(1.0)
+          : action == "cancel" ? editor.tools().cancel_primitive_resize()
+          : editor.tools().toggle_primitive_caps();
+      ASSERT_TRUE(retried.ok()) << retried.error_message();
+      EXPECT_EQ(session.primitive_creation().cylinder_settings().caps, action == "caps");
       ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+      ASSERT_EQ(session.modeling().objects().size(), 1U);
+      EXPECT_EQ(compiled_content_id(session.modeling(), "Baseline"), baseline);
     }
   }
 }
@@ -4719,7 +4918,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     TorusInterruptedResizeRestoresRatioBeforePendingFlipAndPropagatesPublicationFailure) {
+     TorusInterruptedResizeRetainsRatioWithoutRepublishingBeforePendingFlip) {
   for (const auto failure : {ModelingSdkProjectionFailurePoint::None,
                              ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
                              ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
@@ -4731,33 +4930,31 @@ TEST(PrimitiveCreationToolServiceTests,
     const auto baseline = compiled_content_id(session.modeling(), "Baseline");
     ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), "torus"));
     ASSERT_TRUE(session.primitive_creation().accept_preview(valid_primitive_preview(), "Interrupted Torus").ok);
-    const auto content = compiled_content_id(session.modeling(), "Interrupted Torus");
     ASSERT_TRUE(editor.tools().begin_primitive_resize(QuaderPrimitiveResizeControl::InnerRadius).ok());
     ASSERT_TRUE(editor.tools().update_primitive_resize(0.25).ok());
-    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto content = compiled_content_id(session.modeling(), "Interrupted Torus");
+    ASSERT_TRUE(session.modeling().clear_selection().ok);
     const auto selection_revision = session.scene().selection_revision();
     EXPECT_FALSE(editor.tools().set_setting(kCreatePrimitiveToolId, kTorusTubeRadiusRatioSetting, 0.0).ok());
     EXPECT_NE(session.primitive_creation().torus_settings().tube_radius_ratio, 0.2);
     const auto remembered = primitive_settings(session.primitive_creation());
     session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
     const auto flipped = editor.tools().flip_primitive_faces();
-    if (failure == ModelingSdkProjectionFailurePoint::None) {
-      ASSERT_TRUE(flipped.ok()) << flipped.error_message();
-      EXPECT_TRUE(flipped.changed());
-      EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Torus"), content);
-      EXPECT_TRUE(session.scene().selected_entities().empty());
-      EXPECT_EQ(session.scene().selection_revision(), selection_revision);
-      EXPECT_DOUBLE_EQ(session.primitive_creation().torus_settings().tube_radius_ratio, 0.2);
-      EXPECT_TRUE(session.primitive_creation().torus_settings().flip_faces);
-      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
-    } else {
-      EXPECT_FALSE(flipped.ok());
-      EXPECT_FALSE(flipped.changed());
-      EXPECT_FALSE(session.primitive_creation().active());
-      expect_primitive_settings(session.primitive_creation(), remembered);
-    }
+    ASSERT_TRUE(flipped.ok()) << flipped.error_message();
+    EXPECT_TRUE(flipped.changed());
+    EXPECT_EQ(compiled_content_id(session.modeling(), "Interrupted Torus"), content);
+    EXPECT_TRUE(session.scene().selected_entities().empty());
+    EXPECT_EQ(session.scene().selection_revision(), selection_revision);
+    EXPECT_DOUBLE_EQ(session.primitive_creation().torus_settings().tube_radius_ratio,
+                     remembered.torus.tube_radius_ratio);
+    EXPECT_TRUE(session.primitive_creation().torus_settings().flip_faces);
     EXPECT_FALSE(editor.tools().live_primitive_creation().has_value());
     EXPECT_FALSE(editor.tools().cancel_primitive_resize().changed());
+    EXPECT_TRUE(session.primitive_creation().active());
+    ASSERT_EQ(session.modeling().objects().size(), 2U);
+    session.modeling().set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
     ASSERT_EQ(session.modeling().objects().size(), 1U);
     EXPECT_EQ(compiled_content_id(session.modeling(), "Baseline"), baseline);
   }

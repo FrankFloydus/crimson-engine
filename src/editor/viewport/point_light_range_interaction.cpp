@@ -87,6 +87,39 @@ bool PointLightRangeInteraction::handle_frame(
                                     frame.left_down, frame.left_released)) {
     return true;
   }
+  if (frame.input_result.cancel_requested) return cancel(editor);
+
+  if (gesture_) {
+    if (editor.scene_documents().active_scene_id() != gesture_->scene) {
+      return cancel(editor);
+    }
+    const bool target_present = std::any_of(
+        frame.scene_billboard_pick_candidates.begin(),
+        frame.scene_billboard_pick_candidates.end(), [this](const auto &candidate) {
+          return candidate.entity == gesture_->entity && candidate.point_light_range &&
+                 candidate.selectable && !candidate.effectively_locked;
+        });
+    if (!target_present) {
+      // Selection, visibility or locking may already have settled the edit in
+      // its owner. Finish that original reference without requiring a pickable
+      // handle; a deleted/replaced target must never publish an old draft.
+      const auto target = editor.query().entity(gesture_->entity);
+      if (!target || !target->has_light ||
+          target->light.type != QuaderLightType::Point) {
+        return cancel(editor);
+      }
+      return finish(editor);
+    }
+    if (frame.selection_state.summary.selection_revision != gesture_->selection_revision) {
+      return finish(editor);
+    }
+    if (!frame.input.viewport_focused && !frame.input.pointer_interaction_canceled &&
+        frame.left_down && !frame.left_released) {
+      // Another pane gaining focus is presentation-only while this pane still
+      // owns the physical gesture. Do not use its coordinates for an update.
+      return true;
+    }
+  }
   const bool allowed = frame.settings.bool_value(ViewportBoolSettingId::ShowGizmos) &&
       frame.settings.bool_value(ViewportBoolSettingId::ShowOverlays) &&
       editor.preferences().overlays_visible() &&
@@ -95,20 +128,9 @@ bool PointLightRangeInteraction::handle_frame(
       !frame.input.navigation_active && !frame.input_result.navigation_active &&
       !frame.input_result.camera_changed && !frame.input_result.view_changed &&
       !frame.input.pointer_interaction_canceled && !frame.input_result.cancel_requested;
-  if (!allowed) return cancel(editor);
+  if (!allowed) return finish(editor);
 
-  if (gesture_) {
-    const bool target_present = std::any_of(
-        frame.scene_billboard_pick_candidates.begin(),
-        frame.scene_billboard_pick_candidates.end(), [this](const auto &candidate) {
-          return candidate.entity == gesture_->entity && candidate.point_light_range &&
-                 candidate.selectable && !candidate.effectively_locked;
-        });
-    if (!target_present || editor.scene_documents().active_scene_id() != gesture_->scene ||
-        frame.selection_state.summary.selection_revision != gesture_->selection_revision) {
-      return cancel(editor);
-    }
-  } else {
+  if (!gesture_) {
     if (!frame.input.viewport_hovered) return false;
     const auto pose = frame.camera.pose();
     const QVec3 normal = normalize(pose.target - pose.eye);
@@ -152,13 +174,27 @@ bool PointLightRangeInteraction::handle_frame(
     }
   }
   if (released) {
-    if (edit_) (void)editor.scene().finish_point_light_range_edit(*edit_);
-    edit_.reset();
-    gesture_.reset();
-    hovered_ = false;
+    (void)finish(editor);
   } else if (!frame.left_down && !frame.left_pressed) {
-    (void)cancel(editor);
+    (void)finish(editor);
   }
+  return true;
+}
+
+bool PointLightRangeInteraction::finish(QuaderEditorApi &editor) {
+  hovered_ = false;
+  if (!gesture_) return false;
+  if (edit_) {
+    const auto result = editor.scene().finish_point_light_range_edit(*edit_);
+    if (!result.ok()) {
+      (void)editor.ui().notify({.level = QuaderNotificationLevel::Error,
+                                .message = result.error_message()});
+      return true;
+    }
+  }
+  release_suppression_.begin(QuaderMouseButton::Left, left_down_);
+  edit_.reset();
+  gesture_.reset();
   return true;
 }
 

@@ -3187,7 +3187,7 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
-     FocusLossCancelsDraftCurveConstructionAndLeavesSelectedControlsInert) {
+     FocusLossRetainsAuthoredCurveDraftAndLeavesSelectedControlsInert) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-curve-focus-input-tests";
@@ -3215,6 +3215,19 @@ TEST(QtViewportSurfaceInputTests,
     quader::CurveToolService &curve = session.curve();
     const auto before = *curve.preview_state().document;
     const auto history_before = editor.history().snapshot();
+    const auto undo_steps_before = session.history().undo_count();
+    const auto redo_steps_before = session.history().redo_count();
+    const auto expect_no_published_history = [&]() {
+      EXPECT_EQ(session.history().undo_count(), undo_steps_before);
+      EXPECT_EQ(session.history().redo_count(), redo_steps_before);
+      if (drawing) {
+        // Undo can discard an unfinished draft without publishing a history step.
+        EXPECT_TRUE(editor.history().can_undo());
+        EXPECT_FALSE(editor.history().can_redo());
+      } else {
+        expect_history_unchanged(editor.history().snapshot(), history_before);
+      }
+    };
 
     quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
     surface.resize(800, 600);
@@ -3325,6 +3338,7 @@ TEST(QtViewportSurfaceInputTests,
       ASSERT_EQ(curve.control_selection().controls.size(), 1u);
       ASSERT_TRUE(curve.control_selection().active.has_value());
     }
+    const auto authored = *curve.preview_state().document;
 
     QFocusEvent focus_out(QEvent::FocusOut, Qt::ActiveWindowFocusReason);
     QApplication::sendEvent(&surface, &focus_out);
@@ -3340,10 +3354,10 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_TRUE(dispatch(lost_focus).curve_consumed);
     EXPECT_FALSE(session.native_tools().pointer_dragging());
     EXPECT_FALSE(curve.dragging());
-    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
+    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(authored));
     if (drawing) {
-      EXPECT_TRUE(curve.control_selection().empty());
-      EXPECT_FALSE(curve.control_selection().active.has_value());
+      EXPECT_EQ(curve.control_selection().controls.size(), 1u);
+      EXPECT_TRUE(curve.control_selection().active.has_value());
     } else {
       const quader::CurveControlTarget anchor{
           .point = before.points()[0].id,
@@ -3355,7 +3369,7 @@ TEST(QtViewportSurfaceInputTests,
       EXPECT_EQ(curve.control_selection().active, anchor);
     }
     EXPECT_FALSE(session.dirty());
-    expect_history_unchanged(editor.history().snapshot(), history_before);
+    expect_no_published_history();
 
     const auto next = surface.take_input_frame(0.0f, true);
     EXPECT_FALSE(next.input.pointer_interaction_canceled);
@@ -3367,8 +3381,8 @@ TEST(QtViewportSurfaceInputTests,
     const auto released = surface.take_input_frame(0.0f, true);
     EXPECT_FALSE(released.input.pointer_interaction_canceled);
     (void)dispatch(released);
-    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
-    expect_history_unchanged(editor.history().snapshot(), history_before);
+    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(authored));
+    expect_no_published_history();
   }
 }
 
@@ -6066,6 +6080,25 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(surface, &release);
   process();
   EXPECT_TRUE(session.modeling().tool_status().knife_active);
+
+  const auto history_before_outside = editor.history().snapshot();
+  QEvent leave(QEvent::Leave);
+  QFocusEvent blur(QEvent::FocusOut);
+  QApplication::sendEvent(surface, &leave);
+  QApplication::sendEvent(surface, &blur);
+  QWidget outside;
+  QMouseEvent outside_press(QEvent::MouseButtonPress, {10, 10}, {-100, -100},
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QMouseEvent outside_release(QEvent::MouseButtonRelease, {10, 10}, {-100, -100},
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(&outside, &outside_press);
+  QApplication::sendEvent(&outside, &outside_release);
+  process();
+  EXPECT_TRUE(session.modeling().tool_status().knife_has_active_stroke)
+      << "Panel clicks must leave the draft for the requested command to settle";
+  expect_history_unchanged(editor.history().snapshot(), history_before_outside);
+  ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+  EXPECT_FALSE(session.modeling().tool_status().knife_has_active_stroke);
 }
 
 TEST(QtViewportSurfaceInputTests, RoundPrimitiveFootprintUsesNaturalHeightThroughPanel) {

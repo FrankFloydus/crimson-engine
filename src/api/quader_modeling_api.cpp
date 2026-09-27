@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_modeling_api.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 
 #include "api/quader_api_mutation_runner.hpp"
@@ -2750,11 +2751,16 @@ QuaderApiVoidResult QuaderModelingApi::exit_instance_edit() {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
   SceneSession &session = scene_session(session_);
-  if (session.native_tools().has_pending_tool()) {
-    const CommandResult canceled = session.native_tools().cancel_active();
-    if (!canceled.ok) {
-      return mutations_.run_runtime_result(canceled, "Exit Instance Edit");
-    }
+  if (!session.instances().can_exit_instance_edit()) {
+    return invalid_api_status(session_, "No instance edit scope is active.");
+  }
+  const CommandResult accepted = session.document_commands().accept_active_property_edit();
+  if (!accepted.ok) {
+    return mutations_.run_runtime_result(accepted, "Exit Instance Edit");
+  }
+  const CommandResult settled = session.native_tools().settle_transient_state();
+  if (!settled.ok) {
+    return mutations_.run_runtime_result(settled, "Exit Instance Edit");
   }
   const SceneInstanceMutationResult result =
       session.instances().exit_instance_edit();

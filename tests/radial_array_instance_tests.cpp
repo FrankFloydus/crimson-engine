@@ -96,6 +96,41 @@ public:
 };
 
 TEST(RadialArrayInstanceTests,
+     ImplicitFinishPreservesStaleAuthoredCenterUntilSourceRecovers) {
+  RadialArrayInstanceHarness harness;
+  const auto source = harness.box("Stale Radial Source");
+  ASSERT_NE(source.entity, kInvalidEntityId);
+  harness.begin({source.entity}, false);
+  auto &tool = harness.session.radial_array();
+  ASSERT_TRUE(tool.has_valid_center());
+  const auto center = tool.center_state().world_position;
+  ASSERT_TRUE(harness.session.scene().set_locked(source.entity, true));
+
+  const auto failed = harness.editor.tools().activate(ViewportToolId::Move);
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_NE(failed.error_message().find("Radial Array sources changed"), std::string::npos);
+  EXPECT_TRUE(tool.has_session());
+  EXPECT_EQ(harness.session.scene().entities().size(), 1u);
+  EXPECT_FALSE(harness.session.history().can_undo());
+
+  ASSERT_TRUE(harness.session.scene().set_locked(source.entity, false));
+  ASSERT_TRUE(tool.has_valid_center());
+  EXPECT_EQ(tool.center_state().world_position.x, center.x);
+  EXPECT_EQ(tool.center_state().world_position.y, center.y);
+  EXPECT_EQ(tool.center_state().world_position.z, center.z);
+  const auto retried = harness.editor.tools().activate(ViewportToolId::Move);
+  ASSERT_TRUE(retried.ok()) << retried.error_message();
+  EXPECT_FALSE(tool.has_session());
+  EXPECT_EQ(harness.session.scene().entities().size(), 3u);
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_EQ(harness.session.scene().entities().size(), 1u);
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  EXPECT_EQ(harness.session.scene().entities().size(), 3u);
+}
+
+TEST(RadialArrayInstanceTests,
      RemembersAllOptionsAcrossApplyCancelAndServiceReplacement) {
   RadialArraySessionDefaults defaults;
   for (int run = 0; run < 2; ++run) {

@@ -24,7 +24,7 @@ public:
     [[nodiscard]] bool accept_preview(ViewportBoxToolContext &box_context,
                                       const std::string &name,
                                       bool snap_enabled) const;
-    [[nodiscard]] bool rollback_failed_preview(
+    [[nodiscard]] bool preview_failure_ended_session(
         ViewportBoxToolContext &box_context, const char *action,
         const ModelingBoxPreview &preview) const;
     [[nodiscard]] ViewportPointerCursor pointer_cursor() const override;

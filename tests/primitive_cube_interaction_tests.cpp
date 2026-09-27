@@ -439,19 +439,75 @@ TEST(PrimitiveCubeInteractionTests, DotResizePreservesOppositeFaceAndSnaps) {
   EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
 }
 
-TEST(PrimitiveCubeInteractionTests, CaptureLossRestoresBoundsAndReservesRelease) {
+TEST(PrimitiveCubeInteractionTests, InterruptedResizeKeepsLastBoundsAndRetiresItsGesture) {
+  for (int interruption = 0; interruption < 6; ++interruption) {
+    SCOPED_TRACE(interruption);
+    PrimitiveCubeInteractionHarness h;
+    const auto before = *h.box.live_primitive();
+    const auto control = h.modal.primitive_creation.frame().controls[0];
+    const auto end = h.camera.project_world_point(control.world_position + before.world_x).position;
+    ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
+    ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
+    const auto authored = *h.box.live_primitive();
+    ASSERT_NE(authored.local_max.x, before.local_max.x);
+    h.box.primitive_controls_visible = interruption != 5;
+    ASSERT_TRUE(h.frame({.left_down = interruption != 1,
+                         .gizmo_consumed = interruption == 4,
+                         .navigation_active = interruption == 2,
+                         .text_input_active = interruption == 3,
+                         .viewport_focused = interruption != 0,
+                         .pointer_interaction_canceled = interruption == 0,
+                         .mouse_local = {-9000.0f, -9000.0f}}).consumed);
+    ASSERT_TRUE(h.box.live_primitive());
+    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, authored.local_max.x);
+    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_min.x, before.local_min.x);
+    EXPECT_FALSE(h.box.live_primitive()->resizing);
+    EXPECT_FALSE(h.modal.primary_pointer_gesture);
+    EXPECT_FALSE(h.session.history().can_undo());
+    (void)h.pointer(end, false, false, true);
+    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, authored.local_max.x);
+    EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+    EXPECT_EQ(h.session.primitive_creation().shape_count(), 1U);
+    const EntityId entity = h.session.scene().primary_selection();
+    ASSERT_TRUE(h.editor.tools().commit_active_tool_preview().ok());
+    EXPECT_EQ(h.session.history().undo_count(), 1U);
+    ASSERT_TRUE(h.editor.history().undo().ok());
+    EXPECT_FALSE(h.session.scene().exists(entity));
+    ASSERT_TRUE(h.editor.history().redo().ok());
+    EXPECT_TRUE(h.session.scene().exists(entity));
+  }
+}
+
+TEST(PrimitiveCubeInteractionTests, FocusAlonePreservesResizeAndFailedCompletionCanRetry) {
   PrimitiveCubeInteractionHarness h;
-  const auto before = h.box.live_primitive();
+  const auto before = *h.box.live_primitive();
   const auto control = h.modal.primitive_creation.frame().controls[0];
-  const auto end = h.camera.project_world_point(control.world_position + before->world_x).position;
-  h.pointer(control.screen_position, true, true, false);
-  h.pointer(end, false, true, false);
-  ASSERT_NE(h.box.live_primitive()->local_max.x, before->local_max.x);
+  const auto end = h.camera.project_world_point(control.world_position + before.world_x).position;
+  ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
+  ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
+  const auto authored = *h.box.live_primitive();
   ASSERT_TRUE(h.frame({.left_down = true, .viewport_focused = false,
+                       .mouse_local = {-9000.0f, -9000.0f}}).consumed);
+  EXPECT_TRUE(h.box.live_primitive()->resizing);
+  EXPECT_TRUE(h.modal.primary_pointer_gesture);
+  EXPECT_EQ(h.box.live_primitive()->revision, authored.revision);
+  EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, authored.local_max.x);
+
+  const auto end_resize = h.box.end_resize;
+  h.box.end_resize = [] {
+    return ModelingCommandResult{.ok = false, .message = "Completion rejected for test."};
+  };
+  ASSERT_TRUE(h.frame({.left_down = true,
                        .pointer_interaction_canceled = true}).consumed);
-  EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, before->local_max.x);
-  EXPECT_TRUE(h.pointer(end, false, false, true).consumed);
-  EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+  EXPECT_TRUE(h.box.live_primitive()->resizing);
+  EXPECT_FALSE(h.modal.primary_pointer_gesture);
+  EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, authored.local_max.x);
+  h.box.end_resize = end_resize;
+  ASSERT_TRUE(h.frame({.left_down = true,
+                       .mouse_local = {-9000.0f, -9000.0f}}).consumed);
+  EXPECT_FALSE(h.box.live_primitive()->resizing);
+  EXPECT_FALSE(h.modal.primary_pointer_gesture);
+  EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, authored.local_max.x);
 }
 
 TEST(PrimitiveCubeInteractionTests, PublicUndoCancelsResizeWithoutReusingHeldPress) {
@@ -535,7 +591,20 @@ TEST(PrimitiveCubeInteractionTests, SelectionLossRetiresOwnerResizeAndTrailingRe
   EXPECT_TRUE(h.pointer(point, false, false, true).consumed);
   EXPECT_FALSE(h.box.live_primitive());
   EXPECT_TRUE(h.session.scene().selected_entities().empty());
-  EXPECT_TRUE(h.editor.tools().flip_primitive_faces().ok());
+  EXPECT_FALSE(h.editor.tools().has_active_primitive_creation());
+  EXPECT_FALSE(h.editor.tools().flip_primitive_faces().ok());
+  EXPECT_EQ(h.session.history().undo_count(), 2U);
+  EXPECT_EQ(h.session.modeling().objects().size(), 1U);
+  const EntityId entity = h.session.modeling().objects().front().entity;
+  ASSERT_TRUE(h.editor.history().undo().ok());
+  EXPECT_TRUE(h.session.scene().exists(entity));
+  EXPECT_EQ(h.session.scene().primary_selection(), entity);
+  ASSERT_TRUE(h.editor.history().undo().ok());
+  EXPECT_FALSE(h.session.scene().exists(entity));
+  ASSERT_TRUE(h.editor.history().redo().ok());
+  EXPECT_TRUE(h.session.scene().exists(entity));
+  ASSERT_TRUE(h.editor.history().redo().ok());
+  EXPECT_TRUE(h.session.scene().selected_entities().empty());
 }
 
 TEST(PrimitiveCubeInteractionTests, ResizeReturnsToBaselineAfterCrossingThreshold) {
@@ -582,7 +651,7 @@ TEST(PrimitiveCubeInteractionTests, RepeatedSnappedDragSkipsMeshAndOverlayWork) 
   EXPECT_EQ(h.overlay_invalidations, invalidations);
 }
 
-TEST(PrimitiveCubeInteractionTests, CameraChangeCancelsResizeAndReservesRelease) {
+TEST(PrimitiveCubeInteractionTests, CameraChangeFinishesLastResizeAndReservesRelease) {
   PrimitiveCubeInteractionHarness h;
   const auto before = h.box.live_primitive();
   const auto control = h.modal.primitive_creation.frame().controls[0];
@@ -590,9 +659,11 @@ TEST(PrimitiveCubeInteractionTests, CameraChangeCancelsResizeAndReservesRelease)
   h.pointer(control.screen_position, true, true, false);
   h.pointer(end, false, true, false);
   ASSERT_NE(h.box.live_primitive()->local_max.x, before->local_max.x);
+  const float authored_max = h.box.live_primitive()->local_max.x;
   EXPECT_TRUE(h.frame({.left_down = true, .mouse_local = end,
                        .camera_changed = true}).consumed);
-  EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, before->local_max.x);
+  EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, authored_max);
+  EXPECT_FALSE(h.box.live_primitive()->resizing);
   EXPECT_TRUE(h.pointer(end, false, false, true).consumed);
 }
 
@@ -738,7 +809,7 @@ TEST(PrimitiveCubeInteractionTests, CylinderSegmentButtonUsesCtrlAndBothLimitsWi
   }
 }
 
-TEST(PrimitiveCubeInteractionTests, CylinderCanceledRadiusRestoresBoundsAndReservesRelease) {
+TEST(PrimitiveCubeInteractionTests, CylinderCaptureLossKeepsRadiusWhileUndoRestoresIt) {
   for (const bool undo : {false, true}) {
     PrimitiveCubeInteractionHarness h(true);
     const auto before = *h.box.live_primitive();
@@ -748,6 +819,7 @@ TEST(PrimitiveCubeInteractionTests, CylinderCanceledRadiusRestoresBoundsAndReser
     ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
     ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
     EXPECT_NE(h.box.live_primitive()->local_max.x, before.local_max.x);
+    const auto authored = *h.box.live_primitive();
     if (undo) {
       ASSERT_TRUE(h.editor.history().undo().ok());
       EXPECT_TRUE(h.pointer(end, false, true, false).consumed);
@@ -756,8 +828,9 @@ TEST(PrimitiveCubeInteractionTests, CylinderCanceledRadiusRestoresBoundsAndReser
                            .pointer_interaction_canceled = true}).consumed);
     }
     EXPECT_TRUE(h.pointer(end, false, false, true).consumed);
-    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_min.x, before.local_min.x);
-    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.z, before.local_max.z);
+    const auto &expected = undo ? before : authored;
+    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_min.x, expected.local_min.x);
+    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.z, expected.local_max.z);
     EXPECT_FALSE(h.box.live_primitive()->resizing);
     EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
   }
@@ -971,7 +1044,7 @@ TEST(PrimitiveCubeInteractionTests, RoundShapeButtonsChangeOnlyTheirSettingAndFr
   }
 }
 
-TEST(PrimitiveCubeInteractionTests, TorusBoundaryDragsPreserveTheOtherBoundaryAndCancelRatioWithBounds) {
+TEST(PrimitiveCubeInteractionTests, TorusBoundaryDragsPreserveBoundsAndRatioOnCaptureLoss) {
   for (const int index : {0, 1, 2}) {
     PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Torus);
     const auto before = *h.box.live_primitive();
@@ -997,11 +1070,11 @@ TEST(PrimitiveCubeInteractionTests, TorusBoundaryDragsPreserveTheOtherBoundaryAn
     EXPECT_TRUE(h.frame({.left_down = true, .viewport_focused = false,
                         .pointer_interaction_canceled = true}).consumed);
     EXPECT_TRUE(h.pointer(end, false, false, true).consumed);
-    const auto canceled = *h.box.live_primitive();
-    EXPECT_FLOAT_EQ(canceled.local_max.x, before.local_max.x);
-    EXPECT_FLOAT_EQ(canceled.local_max.y, before.local_max.y);
-    EXPECT_DOUBLE_EQ(canceled.tube_radius_ratio, before.tube_radius_ratio);
-    EXPECT_FALSE(canceled.resizing);
+    const auto finished = *h.box.live_primitive();
+    EXPECT_FLOAT_EQ(finished.local_max.x, after.local_max.x);
+    EXPECT_FLOAT_EQ(finished.local_max.y, after.local_max.y);
+    EXPECT_DOUBLE_EQ(finished.tube_radius_ratio, after.tube_radius_ratio);
+    EXPECT_FALSE(finished.resizing);
   }
 }
 

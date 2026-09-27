@@ -1743,7 +1743,7 @@ TEST(QtCommandEventFilterTests,
 }
 
 TEST(QtCommandEventFilterTests,
-     EditorPanelModeAndGridBindingsUseOwnersAndCancelActivePreviews) {
+     EditorPanelModeAndGridBindingsUseOwnersAndAcceptActivePreviews) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-editor-panel-mode-shortcut-tests";
@@ -1804,18 +1804,34 @@ TEST(QtCommandEventFilterTests,
   ASSERT_TRUE(editor.commands().execute(
       editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
   ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+  const auto preview_mesh = editor.query().mesh(box.value().mesh);
+  ASSERT_TRUE(preview_mesh.has_value());
   send_key_press(panel, Qt::Key_4, Qt::NoModifier, QStringLiteral("4"));
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
   EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
   const auto mesh_after = editor.query().mesh(box.value().mesh);
   ASSERT_TRUE(mesh_after.has_value());
-  EXPECT_EQ(mesh_after->vertex_count, mesh_before->vertex_count);
-  EXPECT_EQ(mesh_after->primitive_count, mesh_before->primitive_count);
+  EXPECT_EQ(mesh_after->vertex_count, preview_mesh->vertex_count);
+  EXPECT_EQ(mesh_after->primitive_count, preview_mesh->primitive_count);
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto restored = editor.query().mesh(box.value().mesh);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->vertex_count, mesh_before->vertex_count);
+  EXPECT_EQ(restored->primitive_count, mesh_before->primitive_count);
+  ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+  const auto restored_mode =
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object);
+  ASSERT_TRUE(restored_mode.ok()) << restored_mode.error_message();
+  EXPECT_TRUE(restored_mode.changed());
+  ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
 
   const std::string face_target = editor.commands().keybinding_target_id_for_selection_mode(
       quader::QuaderSelectionMode::Face);
   ASSERT_TRUE(editor.commands().set_shortcut(face_target, "Down").ok());
+  ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  const auto status_before_navigation = editor.commands().last_status_revision();
   send_key_press(panel, Qt::Key_Down, Qt::NoModifier);
+  EXPECT_EQ(editor.commands().last_status_revision(), status_before_navigation);
   EXPECT_EQ(panel.currentItem(), panel.topLevelItem(1));
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
   ASSERT_TRUE(editor.commands().set_shortcut(face_target, "Ctrl+Alt+F23").ok());

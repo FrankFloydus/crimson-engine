@@ -316,6 +316,19 @@ CommandResult runtime_tool_activation_preflight(
   return command_unchanged_result();
 }
 
+CommandResult settle_tool_transition(SceneSession &session) {
+  const auto property =
+      session.document_commands().accept_active_property_edit();
+  if (!property.ok) {
+    return {.ok = false, .changed = property.changed,
+            .message = property.message};
+  }
+  CommandResult settled =
+      session.native_tools().settle_competing_state_for_tool_activation();
+  settled.changed = settled.changed || property.changed;
+  return settled;
+}
+
 bool is_cut_mode_setting(std::string_view tool_id, std::string_view name) {
   const bool cut_tool = tool_id.empty() || tool_id == "cut";
   const bool cut_setting = name == "operation.cut.keep_mode" ||
@@ -1469,35 +1482,40 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
   const QuaderSettingsOperationOriginCapture origin(session_);
   const bool changing_pane = !pane_owns_executing_tool(
       scene_session(session_).viewport_workspace().focused_pane());
-  bool pane_settled = false;
+  bool transition_changed = false;
   const auto activate_tool = [&]() -> QuaderApiVoidResult {
-    if (scene_session(session_).extrude().preview_active() &&
-        (changing_pane || tool_id != viewport_tool_catalog_id(ViewportToolId::Extrude))) {
-      return quader_api_failure_status(
-          scene_session(session_), "Apply or cancel the extrusion before changing tools.");
-    }
-    if (scene_session(session_).document_commands().property_edit_active()) {
-      return quader_api_failure_status(
-          scene_session(session_), "Finish the active property edit before changing tools.");
-    }
     SceneSession &session = scene_session(session_);
-    if (changing_pane && tool_id == active_tool_id(session) &&
-        (session.native_tools().has_pending_tool() ||
-         session.modeling().can_cancel_active_preview_for_undo())) {
-      if (!can_activate(tool_id)) {
-        return quader_api_failure_status(session, "The tool cannot start in the current selection.");
-      }
-      const auto settled = session.native_tools().cancel_competing_state_for_tool_activation();
+    const ViewportTool *tool = find_viewport_tool(tool_id);
+    if (tool == nullptr) {
+      return quader_api_failure_status(session, "Unknown viewport tool.");
+    }
+    const bool native_tool = session.native_tools().handles(tool_id);
+    const CommandResult preflight = tool->viewport_tool() == ViewportToolId::Extrude
+        ? session.extrude().preflight_activation(session.extrude().mode())
+        : native_tool
+              ? (session.native_tools().can_activate(tool_id)
+                     ? command_unchanged_result()
+                     : command_invalid_result("The tool cannot start in the current selection."))
+              : runtime_tool_activation_preflight(session, *tool);
+    if (!preflight.ok) {
+      return api_status_from_command(session, preflight,
+                                     QuaderMutationKind::Runtime, tool_id);
+    }
+
+    const bool same_operation = !changing_pane && tool_id == active_tool_id(session) &&
+        !session.modeling().operation_preview_active();
+    if (!same_operation) {
+      const auto settled = settle_tool_transition(session);
       if (!settled.ok) {
         return api_status_from_command(session, settled, QuaderMutationKind::Runtime, tool_id);
       }
-      pane_settled = settled.changed;
+      transition_changed = settled.changed;
     }
     if (hooks_.activate) {
       return hooks_.activate(tool_id);
     }
 
-    if (session.native_tools().handles(tool_id)) {
+    if (native_tool) {
       const double grid_size =
           hooks_.grid_world_size ? hooks_.grid_world_size() : 1.0;
       return api_status_from_command(
@@ -1505,41 +1523,20 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
           QuaderMutationKind::Runtime, tool_id);
     }
 
-    const ViewportTool *tool = find_viewport_tool(tool_id);
-    if (tool == nullptr) {
-      return quader_api_failure_status(session, "Unknown viewport tool.");
-    }
-    const CommandResult preflight =
-        runtime_tool_activation_preflight(session, *tool);
-    if (!preflight.ok) {
-      return api_status_from_command(session, preflight,
-                                     QuaderMutationKind::Runtime, tool_id);
-    }
-
-    const ModelingSessionService &modeling = session.modeling();
-    const bool repeated_without_competing_preview =
-        !session.native_tools().has_pending_tool() &&
-        modeling.tool_status().active_tool == tool->modeling_tool() &&
-        !modeling.can_cancel_active_preview_for_undo();
-    CommandResult canceled = command_unchanged_result();
-    if (!repeated_without_competing_preview) {
-      canceled =
-          session.native_tools().cancel_competing_state_for_tool_activation();
-      if (!canceled.ok) {
-        return api_status_from_command(session, canceled,
-                                       QuaderMutationKind::Runtime, tool_id);
-      }
+    if (same_operation && tool->viewport_tool() != ViewportToolId::Knife &&
+        tool->viewport_tool() != ViewportToolId::InsertEdgeLoop) {
+      return quader_api_void_status(session, true, false, {}, QuaderMutationKind::None);
     }
 
     ModelingCommandResult result = tool->activate(session.modeling());
-    const bool changed = result.changed || canceled.changed;
     return quader_api_void_status(session, result.ok,
-                                  changed, std::move(result.message),
+                                  result.changed, std::move(result.message),
                                   QuaderMutationKind::Modeling, tool_id);
   };
   QuaderApiVoidResult result = activate_tool();
+  result.changed = transition_changed || result.changed;
   if (result.ok()) {
-    if (pane_settled || changing_pane) {
+    if (transition_changed || changing_pane) {
       result.changed = true;
       if (result.mutation_kind == QuaderMutationKind::None) {
         result.mutation_kind = QuaderMutationKind::Runtime;
@@ -1598,19 +1595,12 @@ QuaderApiVoidResult QuaderToolsApi::acquire_pane_tool(ViewportPaneId pane) {
   }
   const bool same_tool = active_tool_id(session) == requested_id;
   const bool owns_operation = pane_owns_executing_tool(pane);
-  if (owns_operation && (same_tool || session.native_tools().light_creation_active())) {
+  if (owns_operation && !session.modeling().operation_preview_active() &&
+      (same_tool || session.native_tools().light_creation_active())) {
     return quader_api_void_status(session, true, false, {}, QuaderMutationKind::None);
   }
-  if (!owns_operation && session.extrude().preview_active()) {
-    return quader_api_failure_status(
-        session, "Apply or cancel the extrusion before changing tools.");
-  }
-  if (session.document_commands().property_edit_active()) {
-    return quader_api_failure_status(
-        session, "Finish the active property edit before changing tools.");
-  }
   const QuaderSettingsOperationOriginCapture origin(session_);
-  // Activation owns preflight and settlement; do not cancel here before its
+  // Activation owns preflight and settlement; do not finish here before its
   // selection/release checks have accepted the requested tool.
   auto result = activate(selected);
   if (result.ok() && origin.current()) {
@@ -1630,15 +1620,6 @@ QuaderApiVoidResult QuaderToolsApi::activate_extrude(QuaderExtrudeMode mode) {
   }
   const QuaderSettingsOperationOriginCapture origin(session_);
   SceneSession &session = scene_session(session_);
-  if (session.extrude().preview_active() &&
-      !pane_owns_executing_tool(session.viewport_workspace().focused_pane())) {
-    return quader_api_failure_status(
-        session, "Apply or cancel the extrusion before changing tools.");
-  }
-  if (session.document_commands().property_edit_active()) {
-    return quader_api_failure_status(
-        session, "Finish the active property edit before changing tools.");
-  }
   modeling::FaceExtrudeMode native_mode;
   switch (mode) {
   case QuaderExtrudeMode::Region:
@@ -1653,9 +1634,24 @@ QuaderApiVoidResult QuaderToolsApi::activate_extrude(QuaderExtrudeMode mode) {
   default:
     return quader_api_failure_status(session, "Unknown extrusion mode.");
   }
+  const auto preflight = session.extrude().preflight_activation(native_mode);
+  if (!preflight.ok) {
+    return api_status_from_command(session, preflight, QuaderMutationKind::Runtime,
+                                   "Extrude");
+  }
+  CommandResult settled = command_unchanged_result();
+  if (!session.extrude().active() ||
+      !pane_owns_executing_tool(session.viewport_workspace().focused_pane())) {
+    settled = settle_tool_transition(session);
+    if (!settled.ok) {
+      return api_status_from_command(session, settled, QuaderMutationKind::Runtime,
+                                     "Extrude");
+    }
+  }
   auto result = api_status_from_command(
       session, session.native_tools().activate_extrude(native_mode),
       QuaderMutationKind::Runtime, "Extrude");
+  result.changed = settled.changed || result.changed;
   if (result.ok() && origin.record_selected_tool(ViewportToolId::Extrude)) {
     result.changed = true;
     result.mutation_kind = QuaderMutationKind::Runtime;
@@ -1671,14 +1667,6 @@ bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
     return false;
   }
   SceneSession &session = scene_session(session_);
-  if (session.extrude().preview_active() &&
-      (tool_id != viewport_tool_catalog_id(ViewportToolId::Extrude) ||
-       !pane_owns_executing_tool(session.viewport_workspace().focused_pane()))) {
-    return false;
-  }
-  if (session.document_commands().property_edit_active()) {
-    return false;
-  }
   if (session.native_tools().handles(tool_id)) {
     return session.native_tools().can_activate(tool_id);
   }
@@ -1698,12 +1686,6 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
   if (!mutations.available()) {
     return quader_api_failure_status(session, "No scene is active.");
   }
-  if (session.document_commands().property_edit_active()) {
-    return quader_api_failure_status(
-        session,
-        "Finish the active property edit before creating a primitive.");
-  }
-
   const std::optional<PrimitiveCreationKind> kind =
       primitive_creation_kind(shape);
   if (!kind.has_value()) {
@@ -1713,26 +1695,13 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
     return quader_api_failure_status(session, release_feature_unavailable_message());
   }
 
-  const bool was_active = session.primitive_creation().active();
-  CommandResult canceled = command_unchanged_result();
-  if (was_active &&
-      !pane_owns_executing_tool(session.viewport_workspace().focused_pane())) {
-    auto &primitive = session.primitive_creation();
-    canceled = primitive.cancel_resize();
-    if (canceled.ok) {
-      const auto settled = primitive.can_apply() ? primitive.apply() : primitive.cancel();
-      canceled = {.ok = settled.ok, .changed = canceled.changed || settled.changed,
-                  .message = settled.message};
-    }
-    if (!canceled.ok) {
-      return api_status_from_command(session, canceled, QuaderMutationKind::Runtime,
-                                     "Create Primitive");
-    }
-  } else if (!was_active) {
-    canceled =
-        session.native_tools().cancel_competing_state_for_tool_activation();
-    if (!canceled.ok) {
-      return api_status_from_command(session, canceled,
+  const bool same_operation = session.primitive_creation().active_kind() == kind &&
+      pane_owns_executing_tool(session.viewport_workspace().focused_pane());
+  CommandResult settled = command_unchanged_result();
+  if (!same_operation) {
+    settled = settle_tool_transition(session);
+    if (!settled.ok) {
+      return api_status_from_command(session, settled,
                                      QuaderMutationKind::Runtime,
                                      "Create Primitive");
     }
@@ -1745,7 +1714,7 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
   if (activated.ok && activated.changed) {
     origin.publish();
   }
-  activated.changed = activated.changed || canceled.changed;
+  activated.changed = activated.changed || settled.changed;
   return api_status_from_command(session, activated,
                                  QuaderMutationKind::Runtime,
                                  "Create Primitive");
@@ -1762,17 +1731,13 @@ QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
   if (!mutations.available()) {
     return quader_api_failure_status(session, "No scene is active.");
   }
-  if (session.document_commands().property_edit_active()) {
-    return quader_api_failure_status(
-        session, "Finish the active property edit before creating a Curve.");
-  }
-
-  CommandResult canceled = command_unchanged_result();
-  if (!session.curve().active()) {
-    canceled =
-        session.native_tools().cancel_competing_state_for_tool_activation();
-    if (!canceled.ok) {
-      return api_status_from_command(session, canceled,
+  CommandResult settled = command_unchanged_result();
+  const bool same_operation = session.curve().active() &&
+      pane_owns_executing_tool(session.viewport_workspace().focused_pane());
+  if (!same_operation) {
+    settled = settle_tool_transition(session);
+    if (!settled.ok) {
+      return api_status_from_command(session, settled,
                                      QuaderMutationKind::Runtime,
                                      "Create Curve");
     }
@@ -1785,7 +1750,7 @@ QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
   if (activated.ok && activated.changed) {
     origin.publish();
   }
-  activated.changed = activated.changed || canceled.changed;
+  activated.changed = activated.changed || settled.changed;
   return api_status_from_command(session, activated,
                                  QuaderMutationKind::Runtime, "Create Curve");
 }
@@ -1808,12 +1773,6 @@ QuaderToolsApi::begin_light_creation(QuaderLightType type) {
   if (!mutations.available()) {
     return quader_api_failure_status(session, "No scene is active.");
   }
-  if (session.document_commands().property_edit_active()) {
-    return quader_api_failure_status(
-        session,
-        "Finish the active property edit before creating a light.");
-  }
-
   LightCreationKind kind;
   std::string_view operation;
   switch (type) {
@@ -1832,9 +1791,15 @@ QuaderToolsApi::begin_light_creation(QuaderLightType type) {
     return quader_api_failure_status(session, "Unknown light type.");
   }
 
+  const auto property = session.document_commands().accept_active_property_edit();
+  if (!property.ok) {
+    return api_status_from_command(session, property, QuaderMutationKind::Document,
+                                   operation);
+  }
   auto result = api_status_from_command(
       session, session.native_tools().begin_light_creation(kind),
       QuaderMutationKind::Runtime, operation);
+  result.changed = property.changed || result.changed;
   if (result.ok()) {
     origin.publish();
   }

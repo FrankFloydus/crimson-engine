@@ -113,6 +113,9 @@ public:
     void set_content_settled_observer(std::function<void(bool)> observer);
 
     [[nodiscard]] EditorTransaction begin_transaction(std::string label);
+    [[nodiscard]] bool transaction_active() const {
+      return active_transaction_ != nullptr;
+    }
 
   private:
     friend class EditorTransaction;

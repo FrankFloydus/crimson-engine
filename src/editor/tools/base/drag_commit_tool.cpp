@@ -43,12 +43,52 @@ ViewportToolResult DragCommitTool::handle_event(
   const bool dragging =
       context.modal_state->insert_edge_loop_drag_active ||
       status.insert_edge_loop_dragging;
+  const auto finish_drag = [&]() {
+    const ModelingCommandResult command =
+        commit_port.commit_insert_edge_loop_drag();
+    handle_result(context, "Insert edge loop commit", command, true);
+    if (command.ok) {
+      context.modal_state->insert_edge_loop_drag_active = false;
+      if (context.ports.selection_mode != nullptr) {
+        context.ports.selection_mode->set_viewport_selection_mode(
+            app_selection_mode_to_viewport(
+                context.ports.selection_mode->selection_summary().mode));
+      }
+    }
+    return command.ok;
+  };
+  const bool navigation_suspended =
+      pointer.navigation_active && !pointer.pointer_interaction_canceled &&
+      pointer.viewport_focused && !pointer.text_input_active &&
+      !pointer.gizmo_consumed;
+  if (navigation_suspended && !(dragging && pointer.left_released)) {
+    // Camera navigation suspends picking and preserves the last preview. An
+    // authored drag still accepts its last valid result on its own LMB release.
+    return {.handled = true, .consumed = dragging};
+  }
   const bool interrupted = pointer.pointer_interaction_canceled ||
       !pointer.viewport_focused || pointer.navigation_active ||
       pointer.text_input_active || pointer.gizmo_consumed ||
+      (!dragging && !pointer.can_interact) ||
       (dragging && pointer.left_released && !pointer.can_interact);
   if (interrupted) {
-    if (dragging || status.insert_edge_loop_has_preview) {
+    const bool focus_only = !pointer.viewport_focused &&
+        !pointer.pointer_interaction_canceled && !pointer.navigation_active &&
+        !pointer.text_input_active && !pointer.gizmo_consumed;
+    if (dragging && focus_only && pointer.left_down && !pointer.left_released) {
+      return {.handled = true, .consumed = true};
+    }
+    if (dragging) {
+      const bool finished = finish_drag();
+      if (finished) {
+        context.modal_state->primary_release_suppression.begin(
+            QuaderMouseButton::Left, pointer.left_down);
+      }
+      return {.handled = true, .consumed = true,
+              .modal_state_changed = finished};
+    }
+    if (status.insert_edge_loop_has_preview) {
+      // Hover alone has no authored insertion to accept.
       context.modal_state->primary_release_suppression.begin(
           QuaderMouseButton::Left, pointer.left_down);
       return cancel_active_modal_tool(context, false);
@@ -72,19 +112,11 @@ ViewportToolResult DragCommitTool::handle_event(
     const bool can_commit =
         begin_command.ok &&
         preview_port.tool_status().insert_edge_loop_dragging;
-    context.modal_state->insert_edge_loop_drag_active = false;
     if (can_commit) {
-      const ModelingCommandResult commit_command =
-          commit_port.commit_insert_edge_loop_drag();
-      handle_result(context, "Insert edge loop commit", commit_command, true);
-      if (context.ports.selection_mode != nullptr) {
-        context.ports.selection_mode->set_viewport_selection_mode(
-            app_selection_mode_to_viewport(
-                context.ports.selection_mode->selection_summary().mode));
-      }
+      const bool finished = finish_drag();
       return {
           .handled = true,
-          .modal_state_changed = true,
+          .modal_state_changed = finished,
       };
     }
   } else if (pointer.can_interact && pointer.left_down && dragging) {
@@ -93,19 +125,12 @@ ViewportToolResult DragCommitTool::handle_event(
                       point_context.make_event_at(pointer.mouse_local, true)));
   }
 
-  if (pointer.left_released && dragging) {
-    const ModelingCommandResult command =
-        commit_port.commit_insert_edge_loop_drag();
-    handle_result(context, "Insert edge loop commit", command, true);
-    context.modal_state->insert_edge_loop_drag_active = false;
-    if (context.ports.selection_mode != nullptr) {
-      context.ports.selection_mode->set_viewport_selection_mode(
-          app_selection_mode_to_viewport(
-              context.ports.selection_mode->selection_summary().mode));
-    }
+  if (dragging && (pointer.left_released ||
+                   (!pointer.left_down && !pointer.left_clicked))) {
+    const bool finished = finish_drag();
     return {
         .handled = true,
-        .modal_state_changed = true,
+        .modal_state_changed = finished,
     };
   }
 

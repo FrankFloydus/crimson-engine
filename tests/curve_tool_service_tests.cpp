@@ -2140,7 +2140,7 @@ TEST(CurveToolServiceTests, SourceDeletionAndDocumentReplacementClearStaleContro
   EXPECT_FALSE(harness.session.history().can_undo());
 }
 
-TEST(CurveToolServiceTests, PointerCaptureBlocksSelectionAndCancelsForNavigation) {
+TEST(CurveToolServiceTests, PointerCaptureBlocksSelectionAndRetainsAuthoredPointForNavigation) {
   CurveToolHarness harness;
   ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
   harness.input_result.navigation_active = true;
@@ -2165,12 +2165,89 @@ TEST(CurveToolServiceTests, PointerCaptureBlocksSelectionAndCancelsForNavigation
   (void)harness.frame(false, true, false);
   EXPECT_FALSE(harness.interaction.dragging());
   EXPECT_FALSE(harness.session.curve().dragging());
-  EXPECT_FALSE(harness.session.curve().control_selection().active.has_value());
-  EXPECT_EQ(harness.session.curve().point_count(), 0u);
+  EXPECT_TRUE(harness.session.curve().control_selection().active.has_value());
+  EXPECT_EQ(harness.session.curve().point_count(), 1u);
   EXPECT_FALSE(harness.session.history().can_undo());
 }
 
-TEST(CurveToolServiceTests, PointerReleaseCommitsAndCaptureLossCancelsOnlyTheGesture) {
+TEST(CurveToolServiceTests,
+     NavigationRetainsDrawingAndPresetPlacementPreviewsUntilPointerResumes) {
+  for (const CurveCreationKind kind :
+       {CurveCreationKind::Draw, CurveCreationKind::Circle,
+        CurveCreationKind::Oval}) {
+    for (const bool placement_pressed : {false, true}) {
+      if (kind == CurveCreationKind::Draw && placement_pressed) {
+        continue;
+      }
+      SCOPED_TRACE(static_cast<int>(kind));
+      SCOPED_TRACE(placement_pressed);
+      CurveToolHarness harness;
+      ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
+      CurveToolService &curve = harness.session.curve();
+      ASSERT_TRUE(curve.set_creation_kind(kind).ok);
+      if (kind == CurveCreationKind::Draw) {
+        harness.place({-1.0f, 0.0f, 0.0f});
+        harness.place({1.0f, 0.0f, 0.0f});
+      }
+      harness.input.mouse_local = {500.0f, 350.0f};
+      (void)harness.frame(placement_pressed, placement_pressed, false);
+      const CurveToolPreviewState before = curve.preview_state();
+      ASSERT_TRUE(before.hover_world.has_value());
+      ASSERT_TRUE(before.document.has_value());
+      ASSERT_EQ(before.preset_hover_document.has_value(),
+                kind != CurveCreationKind::Draw);
+      const auto history_revision = harness.session.history().revision();
+      const auto scene_revision = harness.session.scene().revision();
+
+      for (int phase = 0; phase < 4; ++phase) {
+        SCOPED_TRACE(phase);
+        // The final packet can have sampled navigation with released capture.
+        harness.input.navigation_active = phase != 0;
+        harness.input_result.navigation_active = phase != 3;
+        harness.input_result.camera_changed = phase == 1;
+        harness.input.mouse_local = {-1000.0f, -1000.0f};
+        if (phase == 1) {
+          harness.camera.view_axis(ViewportViewAxis::Z, 1);
+        }
+        const auto result = harness.frame(
+            false, placement_pressed && phase < 2,
+            placement_pressed && phase == 2);
+        EXPECT_TRUE(result.curve_consumed);
+        const CurveToolPreviewState &after = curve.preview_state();
+        EXPECT_EQ(after.revision, before.revision);
+        ASSERT_TRUE(after.hover_world.has_value());
+        EXPECT_FLOAT_EQ(after.hover_world->x, before.hover_world->x);
+        EXPECT_FLOAT_EQ(after.hover_world->y, before.hover_world->y);
+        EXPECT_FLOAT_EQ(after.hover_world->z, before.hover_world->z);
+        ASSERT_TRUE(after.document.has_value());
+        EXPECT_EQ(after.document->content_identity(),
+                  before.document->content_identity());
+        EXPECT_EQ(after.preset_hover_transform.values,
+                  before.preset_hover_transform.values);
+        ASSERT_EQ(after.preset_hover_document.has_value(),
+                  before.preset_hover_document.has_value());
+        if (before.preset_hover_document) {
+          EXPECT_EQ(after.preset_hover_document->content_identity(),
+                    before.preset_hover_document->content_identity());
+        }
+        EXPECT_EQ(harness.session.history().revision(), history_revision);
+        EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+      }
+
+      harness.input.navigation_active = false;
+      harness.input_result = {};
+      harness.camera.view_axis(ViewportViewAxis::Y, 1);
+      harness.input.mouse_local = {600.0f, 400.0f};
+      (void)harness.frame(false, false, false);
+      ASSERT_TRUE(curve.preview_state().hover_world.has_value());
+      EXPECT_GT(curve.preview_state().revision, before.revision);
+      EXPECT_NE(curve.preview_state().hover_world->x, before.hover_world->x);
+      EXPECT_EQ(harness.session.history().revision(), history_revision);
+    }
+  }
+}
+
+TEST(CurveToolServiceTests, PointerReleaseAndCaptureLossRetainAuthoredPointsInTheDraft) {
   CurveToolHarness harness;
   ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
   (void)harness.frame(true, true, false);
@@ -2183,9 +2260,39 @@ TEST(CurveToolServiceTests, PointerReleaseCommitsAndCaptureLossCancelsOnlyTheGes
   (void)harness.frame(true, true, false);
   EXPECT_EQ(harness.session.curve().point_count(), 2u);
   (void)harness.frame(false, false, false);
-  EXPECT_EQ(harness.session.curve().point_count(), 1u);
+  EXPECT_EQ(harness.session.curve().point_count(), 2u);
   EXPECT_FALSE(harness.session.curve().dragging());
   EXPECT_FALSE(harness.session.history().can_undo());
+}
+
+TEST(CurveToolServiceTests,
+     PointConstructionFocusAloneRetainsGestureAndExplicitCancelRemovesOnlyItsPoint) {
+  for (const bool cancel : {false, true}) {
+    CurveToolHarness harness;
+    ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
+    ASSERT_TRUE(harness.frame(true, true, false).curve_consumed);
+    harness.input.mouse_local.x += 80.0f;
+    ASSERT_TRUE(harness.frame(false, true, false).curve_consumed);
+    const auto authored = *harness.session.curve().preview_state().document;
+    ASSERT_EQ(authored.point_count(), 1u);
+    harness.input.viewport_focused = false;
+    harness.input.mouse_local.x += 80.0f;
+    ASSERT_TRUE(harness.frame(false, true, false).curve_consumed);
+    EXPECT_TRUE(harness.session.curve().point_construction_dragging());
+    EXPECT_TRUE(harness.session.curve().preview_state().document->has_same_geometry(authored));
+    EXPECT_FALSE(harness.session.history().can_undo());
+    harness.input.pointer_interaction_canceled = true;
+    harness.input_result.cancel_requested = cancel;
+    const auto finished = harness.frame(false, false, true);
+    EXPECT_TRUE(finished.curve_consumed);
+    EXPECT_TRUE(finished.command_result.ok);
+    EXPECT_FALSE(harness.session.curve().point_construction_dragging());
+    EXPECT_EQ(harness.session.curve().point_count(), cancel ? 0u : 1u);
+    if (!cancel) {
+      EXPECT_TRUE(harness.session.curve().preview_state().document->has_same_geometry(authored));
+    }
+    EXPECT_FALSE(harness.session.history().can_undo());
+  }
 }
 
 TEST(CurveToolServiceTests,
@@ -3975,7 +4082,7 @@ TEST(CurveToolServiceTests,
 }
 
 TEST(CurveToolServiceTests,
-     PointerCancellationRestoresSelectedControlGizmoPreviewWithoutHistory) {
+     PointerCaptureLossAcceptsSelectedControlGizmoPreviewWithHistory) {
   CurveToolHarness harness;
   harness.make_curve();
   ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
@@ -4023,6 +4130,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(harness.controller.dragging());
   ASSERT_TRUE(curve.dragging());
   ASSERT_FALSE(curve.preview_state().document->has_same_geometry(before));
+  const auto authored = *curve.preview_state().document;
 
   harness.input.pointer_interaction_canceled = true;
   const auto canceled = harness.controller.handle_before_active_tool(
@@ -4031,15 +4139,19 @@ TEST(CurveToolServiceTests,
   EXPECT_TRUE(canceled.gizmo_consumed);
   EXPECT_FALSE(harness.controller.dragging());
   EXPECT_FALSE(curve.dragging());
-  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(authored));
   ASSERT_TRUE(curve.control_selection().active.has_value());
   EXPECT_EQ(*curve.control_selection().active, target);
-  EXPECT_FALSE(harness.session.history().can_undo());
-  EXPECT_FALSE(harness.session.dirty());
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+  EXPECT_TRUE(harness.session.dirty());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(authored));
 }
 
 TEST(CurveToolServiceTests,
-     CameraViewAndNavigationInvalidationCancelPendingAndActiveControlGizmos) {
+     CameraViewAndNavigationFinishAuthoredControlGizmosAndDropEmptyPresses) {
   enum class Invalidation { Camera, View, Navigation };
   /// Associates each invalidation source with its diagnostic trace label.
   struct InvalidationCase {
@@ -4113,6 +4225,7 @@ TEST(CurveToolServiceTests,
         ASSERT_TRUE(curve.preview_state().document->has_same_geometry(before));
       }
 
+      const auto authored = *curve.preview_state().document;
       switch (invalidation.kind) {
       case Invalidation::Camera:
         harness.input_result.camera_changed = true;
@@ -4137,9 +4250,15 @@ TEST(CurveToolServiceTests,
       EXPECT_TRUE(curve.active());
       ASSERT_TRUE(curve.control_selection().active.has_value());
       EXPECT_EQ(*curve.control_selection().active, target);
-      EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
-      EXPECT_FALSE(harness.session.history().can_undo());
-      EXPECT_FALSE(harness.session.dirty());
+      EXPECT_TRUE(curve.preview_state().document->has_same_geometry(authored));
+      EXPECT_EQ(harness.session.history().undo_count(), cross_threshold ? 1u : 0u);
+      EXPECT_EQ(harness.session.dirty(), cross_threshold);
+      if (cross_threshold) {
+        ASSERT_TRUE(harness.editor.history().undo().ok());
+        EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
+        ASSERT_TRUE(harness.editor.history().redo().ok());
+        EXPECT_TRUE(curve.preview_state().document->has_same_geometry(authored));
+      }
     }
   }
 }
@@ -5462,6 +5581,34 @@ TEST(CurveToolServiceTests,
       first_hit, EditorSubSelectionEdit::Replace, nullptr, first);
   EXPECT_FALSE(detached_edit.ok);
   EXPECT_FALSE(detached_edit.changed);
+}
+
+TEST(CurveToolServiceTests, BulkControlSelectionKeepsUnfinishedAndValidDraftsOpen) {
+  for (const int point_count : {1, 2}) {
+    SCOPED_TRACE(point_count);
+    CurveToolHarness harness;
+    ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
+    auto &curve = harness.session.curve();
+    ASSERT_TRUE(curve.set_creation_kind(CurveCreationKind::Draw).ok);
+    for (int index = 0; index < point_count; ++index) {
+      harness.place({static_cast<float>(index) * 2.0f, 0.0f, 0.0f});
+    }
+    const auto history_count = harness.session.history().undo_count();
+    const auto scene_revision = harness.session.scene().revision();
+    ASSERT_TRUE(harness.editor.selection().select_all().ok());
+    EXPECT_FALSE(curve.control_selection().empty());
+    ASSERT_TRUE(harness.editor.selection().select_inverse().ok());
+    EXPECT_TRUE(curve.control_selection().empty());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    ASSERT_TRUE(harness.editor.selection().select_all().ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    EXPECT_TRUE(curve.control_selection().empty());
+    EXPECT_TRUE(curve.active());
+    EXPECT_TRUE(curve.drawing());
+    EXPECT_EQ(curve.point_count(), static_cast<std::size_t>(point_count));
+    EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+    EXPECT_EQ(harness.session.history().undo_count(), history_count);
+  }
 }
 
 TEST(CurveToolServiceTests,

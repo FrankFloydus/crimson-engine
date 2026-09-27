@@ -715,10 +715,11 @@ struct QtMainMenu::Impl {
   QAction *add_presented_command_action(
       QMenu &menu, const CommandPresentationDescriptor &presentation) {
     if (const ViewportTool *tool = tool_for_command(presentation.command_id)) {
-      // Peel enters Edge mode itself, so its UV menu category must not
-      // prevent activation before the user has selected guides.
+      // These tools enter Edge mode themselves; their menu category is not an
+      // operand restriction on activation.
       const std::optional<CommandPresentationDomain> operand_domain =
-          tool->viewport_tool() == ViewportToolId::UvPeel
+          tool->viewport_tool() == ViewportToolId::InsertEdgeLoop ||
+                  tool->viewport_tool() == ViewportToolId::UvPeel
               ? std::nullopt
               : std::optional{presentation.domain};
       return add_tool_action(menu, *tool, presentation.command_id,

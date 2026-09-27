@@ -175,6 +175,7 @@ public:
 
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
+  [[nodiscard]] bool commit_in_progress() const { return committing_; }
   [[nodiscard]] bool has_source() const;
   [[nodiscard]] bool preview_valid() const;
   [[nodiscard]] bool can_activate() const;

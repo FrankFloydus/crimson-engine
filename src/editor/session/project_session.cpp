@@ -74,6 +74,15 @@ ProjectSessionResult success(bool changed, std::string message,
   };
 }
 
+bool has_pending_scene_edits(const OpenSceneSession &scene) {
+  if (!scene.session) return false;
+  return scene.session->document_commands().property_edit_active() ||
+         scene.session->native_tools().has_pending_history_preview() ||
+         scene.session->modeling().can_cancel_active_preview_for_undo() ||
+         scene.session->modeling().pending_operation_active() ||
+         scene.session->modeling().curve_document_preview_active();
+}
+
 void append_bridge_notification_warning(
     ProjectSessionResult &result, const ProjectIoResult<void> &notification) {
   const std::string &warning = notification.ok()
@@ -588,9 +597,19 @@ ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
   }
 
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
-    if (scene && !cancel_transient_state(*scene)) {
+    const CommandResult settled = scene
+        ? settle_transient_state(*scene, discard_existing_dirty)
+        : command_unchanged_result();
+    if (!settled.ok) {
       rollback_new_project(candidate, material_changes);
-      return failure("Could not cancel an open scene preview.");
+      return failure(settled.message);
+    }
+  }
+  if (!discard_existing_dirty) {
+    const auto material = standard_material_editor().accept_base_color_preview();
+    if (!material.ok) {
+      rollback_new_project(candidate, material_changes);
+      return failure(material.message);
     }
   }
   if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
@@ -828,7 +847,7 @@ ProjectSessionResult ProjectSession::open_workspace(
   ProjectSessionResult installed = install_workspace(
       std::move(candidate), std::move(candidate_catalog),
       std::move(scenes), requested_active, std::move(warnings),
-      prepare_replacement, original_manifest);
+      prepare_replacement, original_manifest, discard_existing_dirty);
   if (!installed.ok || !installed.changed) {
     ProjectMaterialProvisioner::rollback(material_changes);
   } else if (active_scene_id_.valid()) {
@@ -845,8 +864,18 @@ ProjectSessionResult ProjectSession::close(bool discard_dirty) {
     return failure("Project contains unsaved document changes.");
   }
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
-    if (scene && !cancel_transient_state(*scene)) {
-      return failure("Could not cancel an open scene preview.");
+    const CommandResult settled = scene
+        ? settle_transient_state(*scene, discard_dirty)
+        : command_unchanged_result();
+    if (!settled.ok) {
+      return failure(settled.message);
+    }
+  }
+  if (!discard_dirty) {
+    const auto material = standard_material_editor().accept_base_color_preview();
+    if (!material.ok) return failure(material.message);
+    if (has_dirty_scenes() || has_dirty_material()) {
+      return failure("Project contains unsaved document changes.");
     }
   }
   release_open_scene_ids();
@@ -979,8 +1008,9 @@ ProjectSessionResult ProjectSession::activate(SceneSessionId id) {
     return success(false, "Scene is already active.", id);
   }
   if (OpenSceneSession *current = active_scene()) {
-    if (!cancel_transient_state(*current)) {
-      return failure("Could not cancel the active scene preview.");
+    const CommandResult settled = settle_transient_state(*current);
+    if (!settled.ok) {
+      return failure(settled.message);
     }
   }
   const ModelingCommandResult hover_cleared =
@@ -1000,8 +1030,16 @@ ProjectSessionResult ProjectSession::activate(SceneSessionId id) {
     activation_generation_ = previous_activation_generation;
     return persisted;
   }
-  (void)standard_material_editor().cancel_base_color_preview();
+  (void)standard_material_editor().accept_base_color_preview();
   return success(true, "Active scene changed.", id);
+}
+
+ProjectSessionResult ProjectSession::settle_scene_edits(SceneSessionId id) {
+  OpenSceneSession *scene = find(id);
+  if (scene == nullptr) return failure("Scene tab is closed or stale.");
+  const CommandResult settled = settle_transient_state(*scene);
+  return settled.ok ? success(settled.changed, settled.message, id)
+                    : failure(settled.message);
 }
 
 ProjectSessionResult ProjectSession::preflight_save(SceneSessionId id) const {
@@ -1039,8 +1077,9 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   if (!absolute.ok()) {
     return failure(absolute.error().message);
   }
-  if (!cancel_transient_state(*scene)) {
-    return failure("Commit or cancel the active preview before saving.");
+  const CommandResult settled = settle_transient_state(*scene);
+  if (!settled.ok) {
+    return failure(settled.message);
   }
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
   SceneWriteSnapshotResult snapshot = scene_write_snapshot(
@@ -1102,8 +1141,9 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
   if (find_catalog_scene(path) != nullptr) {
     return failure("A project scene already uses that path.");
   }
-  if (!cancel_transient_state(*scene)) {
-    return failure("Commit or cancel the active preview before saving.");
+  const CommandResult settled = settle_transient_state(*scene);
+  if (!settled.ok) {
+    return failure(settled.message);
   }
 
   SceneId new_scene_id = SceneId::generate();
@@ -1418,7 +1458,7 @@ ProjectSessionResult ProjectSession::save_all() {
   bool changed = false;
   std::vector<std::string> warnings;
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
-    if (!scene || !scene->dirty()) {
+    if (!scene || (!scene->dirty() && !has_pending_scene_edits(*scene))) {
       continue;
     }
     if (!scene->path.has_value()) {
@@ -1430,7 +1470,7 @@ ProjectSessionResult ProjectSession::save_all() {
     }
   }
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
-    if (!scene || !scene->dirty()) {
+    if (!scene || (!scene->dirty() && !has_pending_scene_edits(*scene))) {
       continue;
     }
     ProjectSessionResult saved = save(scene->session_id);
@@ -1469,8 +1509,12 @@ ProjectSessionResult ProjectSession::close_scene(SceneSessionId id,
   if ((*found)->dirty() && !discard_dirty) {
     return failure("Scene contains unsaved changes.");
   }
-  if (!cancel_transient_state(**found)) {
-    return failure("Could not cancel the scene preview before closing.");
+  const CommandResult settled = settle_transient_state(**found, discard_dirty);
+  if (!settled.ok) {
+    return failure(settled.message);
+  }
+  if ((*found)->dirty() && !discard_dirty) {
+    return failure("Scene contains unsaved changes.");
   }
   const std::size_t index =
       static_cast<std::size_t>(std::distance(open_scenes_.begin(), found));
@@ -1508,7 +1552,7 @@ ProjectSessionResult ProjectSession::close_scene(SceneSessionId id,
     return persisted;
   }
   if (was_active) {
-    (void)standard_material_editor().cancel_base_color_preview();
+    (void)standard_material_editor().accept_base_color_preview();
   }
   release_session_id(id);
   return success(true, "Scene closed.", active_scene_id_.valid()
@@ -1828,6 +1872,9 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
   auto session = std::make_unique<SceneSession>(path_array_defaults_,
                                                  std::move(document),
                                                  extrude_defaults_, tool_defaults_);
+  if (const auto material = default_project_material_id()) {
+    session->set_creation_material(MaterialReference::project(*material));
+  }
   session->set_minimum_product_release(minimum_product_release);
   session->set_history_max_steps(history_max_steps_);
   (void)session->restore_persisted_viewport_camera_pose(
@@ -1914,13 +1961,14 @@ ProjectSessionResult ProjectSession::install_scene_and_activate(
     return persisted;
   }
 
-  if (OpenSceneSession *outgoing = active_scene();
-      outgoing != nullptr && !cancel_transient_state(*outgoing)) {
+  const CommandResult settled = active_scene() != nullptr
+      ? settle_transient_state(*active_scene()) : command_unchanged_result();
+  if (!settled.ok) {
     reject_candidate();
     ProjectSessionResult restored =
         persist_prepared_manifest(*workspace_, previous_manifest);
     ProjectSessionResult result =
-        failure("Could not cancel the active scene preview.");
+        failure(settled.message);
     if (!restored.ok) {
       // The old tab remains authoritative even when a second I/O failure stops
       // its manifest rollback. Report the durable mismatch rather than retaining
@@ -1932,7 +1980,7 @@ ProjectSessionResult ProjectSession::install_scene_and_activate(
     return result;
   }
 
-  (void)standard_material_editor().cancel_base_color_preview();
+  (void)standard_material_editor().accept_base_color_preview();
   active_scene_id_ = id;
   ++activation_generation_;
   ProjectSessionResult result = success(true, "Scene activated.", id);
@@ -1947,7 +1995,8 @@ ProjectSessionResult ProjectSession::install_workspace(
     std::optional<ProjectRelativePath> requested_active,
     std::vector<std::string> warnings,
     const std::function<bool()> &prepare_replacement,
-    std::optional<ProjectManifest> original_manifest) {
+    std::optional<ProjectManifest> original_manifest,
+    bool discard_existing_dirty) {
   SceneSessionId candidate_active;
   if (requested_active.has_value()) {
     for (const std::unique_ptr<OpenSceneSession> &scene : scenes) {
@@ -1990,22 +2039,25 @@ ProjectSessionResult ProjectSession::install_workspace(
     }
     return result;
   };
-  // Save/Discard can mutate the outgoing documents. Resolve every candidate
-  // load and manifest-write failure before invoking that host decision flow.
+  // Resolve candidate I/O and any requested save destinations before settling.
+  // The host includes pending edits in its dirty prompts without accepting them.
   if (prepare_replacement && !prepare_replacement()) {
     return abandon_workspace(success(false, "Open Recent canceled."));
   }
-
-  // Candidate loading, validation, and manifest persistence are complete.
-  // Only now cross the destructive replacement boundary so a late candidate
-  // failure cannot cancel transient state in the still-active workspace.
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
-    if (scene && !cancel_transient_state(*scene)) {
-      return abandon_workspace(
-          failure("Could not cancel an open scene preview."));
+    const CommandResult settled = scene
+        ? settle_transient_state(*scene, discard_existing_dirty ||
+                                          static_cast<bool>(prepare_replacement))
+        : command_unchanged_result();
+    if (!settled.ok) return abandon_workspace(failure(settled.message));
+  }
+  if (!discard_existing_dirty) {
+    const auto material = standard_material_editor().accept_base_color_preview();
+    if (!material.ok) return abandon_workspace(failure(material.message));
+    if (!prepare_replacement && (has_dirty_scenes() || has_dirty_material())) {
+      return abandon_workspace(failure("Project contains unsaved document changes."));
     }
   }
-
   release_open_scene_ids();
   (void)standard_material_editor_->close(true);
   clipboard_->clear();
@@ -2062,18 +2114,22 @@ ProjectSessionResult ProjectSession::persist_prepared_manifest(
   return result;
 }
 
-bool ProjectSession::cancel_transient_state(OpenSceneSession &scene) {
+CommandResult ProjectSession::settle_transient_state(
+    OpenSceneSession &scene, bool discard) {
   if (!scene.session) {
-    return true;
+    return command_unchanged_result();
   }
   const CommandResult property_edit =
-      scene.session->document_commands().cancel_active_property_edit();
+      discard ? scene.session->document_commands().cancel_active_property_edit()
+              : scene.session->document_commands().accept_active_property_edit();
   if (!property_edit.ok) {
-    return false;
+    return property_edit;
   }
-  const CommandResult native =
-      scene.session->native_tools().cancel_transient_state();
-  return native.ok;
+  CommandResult native = discard
+      ? scene.session->native_tools().cancel_transient_state()
+      : scene.session->native_tools().settle_transient_state();
+  native.changed = native.changed || property_edit.changed;
+  return native;
 }
 
 bool ProjectSession::path_is_open(const ProjectRelativePath &path,

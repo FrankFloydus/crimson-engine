@@ -70,6 +70,7 @@ bool native_pointer_interrupted(
     const ViewportNativeToolInteractionFrame &frame) {
   return frame.input.pointer_interaction_canceled ||
          !frame.input.viewport_focused || frame.input.text_input_active ||
+         frame.input.navigation_active ||
          frame.input_result.cancel_requested ||
          frame.input_result.navigation_active ||
          frame.input_result.camera_changed || frame.input_result.view_changed;
@@ -160,6 +161,10 @@ ViewportNativeToolInteraction::handle_frame(
   pivot_handle_hovered_ = false;
   const ViewportInputFrame &input = frame.input;
   const ViewportInputResult &input_result = frame.input_result;
+  const bool navigation_suspended =
+      (input.navigation_active || input_result.navigation_active) &&
+      !input.pointer_interaction_canceled && !input.text_input_active &&
+      !input_result.cancel_requested;
   const bool canceled_left_release = left_release_suppression_.consume(
       QuaderMouseButton::Left, frame.left_pressed, frame.left_down,
       frame.left_released);
@@ -464,6 +469,20 @@ ViewportNativeToolInteraction::handle_frame(
         record_change(curve->set_hover(std::nullopt));
       }
     };
+    const auto finish_construction_drag = [&](bool cancel) {
+      const CommandResult finished = cancel ? curve->cancel_drag()
+                                             : curve->commit_drag();
+      record_change(finished);
+      output.command_attempted = true;
+      output.command_result = finished;
+      if (finished.ok) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+        curve_point_construction_press_.reset();
+        pointer_cursor_ = ViewportPointerCursor::Default;
+      }
+      return finished.ok;
+    };
     if (!curve->point_construction_dragging()) {
       if (curve_point_construction_press_) {
         left_release_suppression_.begin(QuaderMouseButton::Left,
@@ -484,10 +503,9 @@ ViewportNativeToolInteraction::handle_frame(
       // native path must not reinterpret it as a free pointer-plane drag.
       if (curve_point_construction_press_ &&
           curve->point_construction_dragging()) {
-        record_change(curve->cancel_drag());
-        left_release_suppression_.begin(QuaderMouseButton::Left,
-                                        frame.left_down);
-        curve_point_construction_press_.reset();
+        if (!finish_construction_drag(input_result.cancel_requested)) {
+          return output;
+        }
       }
       if (curve_preset_placement_press_) {
         left_release_suppression_.begin(QuaderMouseButton::Left,
@@ -503,18 +521,26 @@ ViewportNativeToolInteraction::handle_frame(
           curve_conversion_press_.reset();
         }
       }
-      clear_curve_hover();
+      // Camera motion leaves the last world-space placement candidate intact.
+      if (!navigation_suspended) {
+        clear_curve_hover();
+      }
       return output;
     }
     const bool blocked = native_pointer_interrupted(frame);
     if (blocked) {
       if (curve->point_construction_dragging()) {
-        record_change(curve->cancel_drag());
-        if (curve_point_construction_press_) {
-          left_release_suppression_.begin(QuaderMouseButton::Left,
-                                          frame.left_down);
+        const bool focus_only = !input.viewport_focused &&
+            !input.pointer_interaction_canceled && !input.text_input_active &&
+            !input.navigation_active && !input_result.cancel_requested &&
+            !input_result.navigation_active && !input_result.camera_changed &&
+            !input_result.view_changed;
+        if (focus_only && frame.left_down && !frame.left_released) {
+          return output;
         }
-        curve_point_construction_press_.reset();
+        if (!finish_construction_drag(input_result.cancel_requested)) {
+          return output;
+        }
       }
       if (curve_preset_placement_press_) {
         left_release_suppression_.begin(QuaderMouseButton::Left,
@@ -532,7 +558,9 @@ ViewportNativeToolInteraction::handle_frame(
           curve_conversion_press_.reset();
         }
       }
-      clear_curve_hover();
+      if (!navigation_suspended) {
+        clear_curve_hover();
+      }
       return output;
     }
 
@@ -857,21 +885,26 @@ ViewportNativeToolInteraction::handle_frame(
         }
       }
       if (matching_release && !canceled_left_release) {
-        record_change(curve->commit_drag());
-        curve_point_construction_press_.reset();
-        pointer_cursor_ = ViewportPointerCursor::Default;
+        (void)finish_construction_drag(false);
       } else if (!frame.left_down && !frame.left_released) {
-        // Capture/focus loss without a real release must never create history.
-        record_change(curve->cancel_drag());
-        left_release_suppression_.begin(QuaderMouseButton::Left, false);
-        curve_point_construction_press_.reset();
+        // A lost release accepts the authored point/tangents in the current
+        // draft. It does not publish the entire curve or reinterpret the cursor.
+        (void)finish_construction_drag(false);
       }
     }
     return output;
   }
   if (curve_point_construction_press_) {
     if (curve != nullptr && curve->point_construction_dragging()) {
-      (void)curve->cancel_drag();
+      const CommandResult finished = input_result.cancel_requested
+          ? curve->cancel_drag() : curve->commit_drag();
+      record_change(finished);
+      output.command_attempted = true;
+      output.command_result = finished;
+      if (!finished.ok) {
+        output.consumed = output.blocks_transform_gizmo = true;
+        return output;
+      }
     }
     left_release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
   }
@@ -1090,9 +1123,13 @@ ViewportNativeToolInteraction::handle_frame(
                                  !drag_handle.visible || !frame.handles_visible;
         const bool abandoned = !frame.left_down && !frame.left_released;
         if (interrupted || abandoned) {
-          (void)linear_array->set_endpoint(
-              linear_array_handle_press_->endpoint_before, false,
-              viewport_grid_world_size_for_preset(input.grid_preset));
+          // Retire the screen-space gesture when its camera changes, retaining
+          // the authored endpoint while navigation owns the pointer.
+          if (!navigation_suspended) {
+            (void)linear_array->set_endpoint(
+                linear_array_handle_press_->endpoint_before, false,
+                viewport_grid_world_size_for_preset(input.grid_preset));
+          }
           linear_array->end_endpoint_drag();
           left_release_suppression_.begin(QuaderMouseButton::Left,
                                           frame.left_down);
@@ -1120,19 +1157,11 @@ ViewportNativeToolInteraction::handle_frame(
   }
 
   if (pivot != nullptr) {
-    const bool blocked_by_navigation = input_result.fly_navigation_active ||
+    const bool blocked_by_navigation = input.navigation_active ||
+                                       input_result.fly_navigation_active ||
                                        input_result.navigation_active;
     if (input.quick_pivot_released) {
       pivot->end_quick_edit();
-      if (pivot_handle_press_) {
-        left_release_suppression_.begin(QuaderMouseButton::Left,
-                                        frame.left_down);
-      }
-      pivot_handle_press_.reset();
-      output.pivot_consumed = true;
-    }
-    if (blocked_by_navigation && pivot->quick_edit_active()) {
-      pivot->clear_quick_override();
       if (pivot_handle_press_) {
         left_release_suppression_.begin(QuaderMouseButton::Left,
                                         frame.left_down);
@@ -1208,11 +1237,13 @@ ViewportNativeToolInteraction::handle_frame(
                                !handle.visible || !frame.handles_visible;
       const bool abandoned = !frame.left_down && !frame.left_released;
       if (interrupted || abandoned) {
-        if (pivot_handle_press_->persistent) {
-          pivot->set_persistent_preview_position(
-              pivot_handle_press_->position_before);
-        } else {
-          pivot->set_quick_preview_position(pivot_handle_press_->position_before);
+        if (!navigation_suspended) {
+          if (pivot_handle_press_->persistent) {
+            pivot->set_persistent_preview_position(
+                pivot_handle_press_->position_before);
+          } else {
+            pivot->set_quick_preview_position(pivot_handle_press_->position_before);
+          }
         }
         left_release_suppression_.begin(QuaderMouseButton::Left,
                                         frame.left_down);

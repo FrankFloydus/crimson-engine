@@ -3758,6 +3758,7 @@ public:
                          : sdk_restored.message,
       };
     }
+    app_selection_mode_ = sdk_projection_adapter_.selection_mode();
     if (memento.impl_->group_selection.has_value()) {
       document_command_apply_selection(scene_, *memento.impl_->group_selection);
       app_selection_mode_ = ModelingSelectionMode::Group;
@@ -3797,6 +3798,7 @@ public:
                          : sdk_restored.message,
       };
     }
+    app_selection_mode_ = sdk_projection_adapter_.selection_mode();
     if (memento.impl_->group_selection.has_value()) {
       app_selection_mode_ = ModelingSelectionMode::Group;
     }
@@ -3990,6 +3992,7 @@ public:
         memento.impl_->group_selection.has_value()) {
       document_command_apply_selection(scene_, *memento.impl_->group_selection);
     }
+    app_selection_mode_ = sdk_projection_adapter_.selection_mode();
     if (memento.impl_->group_selection.has_value()) {
       app_selection_mode_ = ModelingSelectionMode::Group;
     }
@@ -4075,7 +4078,9 @@ public:
             .selection_mode = [&]() { return selection_mode(); },
             .set_selection_mode =
                 [&](ModelingSelectionMode mode) {
-                  return set_selection_mode(mode);
+                  // Duplication owns the enclosing structural checkpoint and
+                  // temporarily projects its mesh batch in Object mode.
+                  return set_selection_mode(mode, true);
                 },
             .duplicate_modeling_objects =
                 [&](std::span<const EntityId> source_meshes) {
@@ -4136,40 +4141,24 @@ public:
                                         ModelingSelectionMode::Object, true);
   }
 
-  ModelingCommandResult set_selection_mode(ModelingSelectionMode mode) {
-    bool canceled_preview = false;
-    const auto absorb_cancel = [&canceled_preview](
-                                   ModelingCommandResult result) {
-      canceled_preview = canceled_preview || result.changed;
-      return result;
-    };
-    if (operation_preview_active()) {
-      const ModelingCommandResult canceled =
-          absorb_cancel(cancel_active_operation_preview());
-      if (!canceled.ok) {
-        return canceled;
-      }
+  ModelingCommandResult set_selection_mode(ModelingSelectionMode mode,
+                                           bool structural_publication = false) {
+    if (mode == selection_mode()) {
+      app_selection_mode_ = mode;
+      return {.ok = true};
     }
-    if (transform_drag_active()) {
-      const ModelingCommandResult canceled =
-          absorb_cancel(cancel_transform_drag());
-      if (!canceled.ok) {
-        return canceled;
-      }
+    if (!structural_publication && pending_operation_active()) {
+      return {.ok = false,
+              .message = "Accept the pending operation through editor history "
+                         "before changing selection mode."};
     }
-    if (has_transform_preview()) {
-      const ModelingCommandResult canceled =
-          absorb_cancel(cancel_transform_preview());
-      if (!canceled.ok) {
-        return canceled;
-      }
-    }
+    bool retired_idle_tool = false;
     if (modal_tool_owns_viewport()) {
-      const ModelingCommandResult canceled =
-          absorb_cancel(cancel_active_modal_tool());
+      const ModelingCommandResult canceled = cancel_active_modal_tool();
       if (!canceled.ok) {
         return canceled;
       }
+      retired_idle_tool = canceled.changed;
     }
 
     if (mode == ModelingSelectionMode::Group) {
@@ -4201,7 +4190,7 @@ public:
       if (result.ok) {
         app_selection_mode_ = mode;
       }
-      result.changed = result.changed || canceled_preview ||
+      result.changed = result.changed || retired_idle_tool ||
                        removed_instance_scope_selection;
       if (result.changed) {
         invalidate_selection_overlay_caches();
@@ -4228,7 +4217,7 @@ public:
     if (!scene_only_selection.empty()) {
       ModelingCommandResult synchronized = sync_object_selection_from_scene();
       if (!synchronized.ok) {
-        synchronized.changed = synchronized.changed || canceled_preview;
+        synchronized.changed = synchronized.changed || retired_idle_tool;
         return synchronized;
       }
     }
@@ -4238,7 +4227,7 @@ public:
     if (result.ok) {
       app_selection_mode_ = mode;
     }
-    result.changed = result.changed || canceled_preview;
+    result.changed = result.changed || retired_idle_tool;
     invalidate_selection_overlay_caches();
     if (mode == ModelingSelectionMode::Object &&
         !scene_only_selection.empty()) {
@@ -5682,6 +5671,29 @@ public:
            structural_drag_checkpoint_active_;
   }
 
+  [[nodiscard]] bool pending_operation_active() const {
+    if (can_cancel_active_preview_for_undo()) {
+      return true;
+    }
+    const ModelingToolStatus status = tool_status();
+    switch (status.active_tool) {
+    case ModelingViewportTool::InsertEdgeLoop:
+      return status.insert_edge_loop_dragging;
+    case ModelingViewportTool::Knife:
+      return status.knife_has_active_stroke || status.knife_can_commit;
+    case ModelingViewportTool::Cut:
+      return status.cut_captured_point_count != 0;
+    case ModelingViewportTool::Mirror:
+      return status.mirror_captured_point_count != 0;
+    case ModelingViewportTool::Poly:
+      return status.poly_point_count != 0;
+    case ModelingViewportTool::Box:
+      return box_preview(false).drag_state != ModelingBoxDragState::Idle;
+    default:
+      return false;
+    }
+  }
+
   ModelingCommandResult cancel_competing_state_for_native_tool_activation() {
     bool changed = false;
     const auto cancel = [&changed](ModelingCommandResult result) {
@@ -6354,6 +6366,15 @@ public:
   ModelingCommandResult begin_operation_preview(
       const ModelingActionItem &action,
       const quader_editor_core::EditorOperation &operation) {
+    if (operation_preview_active() &&
+        tool_settings_target().action_id == action.action_id) {
+      return {.ok = true};
+    }
+    if (pending_operation_active()) {
+      return {.ok = false,
+              .message = "Accept the pending operation through editor history "
+                         "before starting another operation."};
+    }
     if (structural_transform_preview_active() ||
         structural_drag_checkpoint_active_) {
       return {
@@ -6759,8 +6780,8 @@ public:
     }
     if (structural_preview_history_ == nullptr ||
         !structural_preview_scene_transform_.preview_active()) {
-      return cancel_structural_transform_preview_after_failure(
-          "Structural transform preview state is incomplete.");
+      return {.ok = false,
+              .message = "Structural transform preview state is incomplete."};
     }
     if (label.empty()) {
       label = "Commit Transform Preview";
@@ -6771,10 +6792,10 @@ public:
         structural_preview_scene_transform_.commit(*structural_preview_history_);
     record_preview_content_checkpoint(structural_preview_checkpoint_active_);
     if (!preview_commit.ok) {
-      return cancel_structural_transform_preview_after_failure(
-          preview_commit.message.empty()
-              ? "Structural transform preview could not be committed."
-              : preview_commit.message);
+      return {.ok = false, .changed = preview_commit.changed,
+              .message = preview_commit.message.empty()
+                  ? "Structural transform preview could not be committed."
+                  : preview_commit.message};
     }
     const CommandResult transaction_commit =
         structural_preview_transaction_->commit();
@@ -6908,6 +6929,13 @@ public:
     }
     if (face_texture_gesture_begin_.has_value()) {
       return commit_face_texture_gesture();
+    }
+    if (uv_peel_preview_active_) {
+      return commit_uv_peel_preview();
+    }
+    if (curve_document_preview_active() && !curve_target_is_editable(
+            sdk_projection_adapter_.curve_document_preview_object_id())) {
+      return {.ok = false, .message = "The curve preview is no longer editable."};
     }
     if (structural_transform_preview_active()) {
       return commit_structural_transform_preview();
@@ -7129,9 +7157,11 @@ public:
         transform_drag_service_.commit_transform_drag(
         transform_drag_context(), history);
     record_preview_content_checkpoint(structural_drag_checkpoint_active_);
-    finish_preview_content_checkpoint(
-        structural_drag_checkpoint_active_, !result.ok && !result.changed);
-    clear_transform_drag_caches();
+    if (result.ok || !transform_drag_active()) {
+      finish_preview_content_checkpoint(
+          structural_drag_checkpoint_active_, !result.ok && !result.changed);
+      clear_transform_drag_caches();
+    }
     if (drag_was_active || result.changed) {
       invalidate_volatile_overlay_cache();
     }
@@ -7284,7 +7314,15 @@ public:
       return cleared;
     }
     if (result.command.changed) {
-      invalidate_selection_overlay_caches();
+      if (command.command_id ==
+          quader_editor_core::EditorRuntimeCommandId::UpdateInsertEdgeLoopHover) {
+        // Cursor motion changes the cut preview, not the target's topology.
+        // The persistent source-wire ID independently gates context changes.
+        overlay_service_.invalidate_composed_frame();
+        invalidate_volatile_overlay_cache();
+      } else {
+        invalidate_selection_overlay_caches();
+      }
     }
     return command_executor_.from_runtime(result.command);
   }
@@ -7320,16 +7358,32 @@ public:
   }
 
   ModelingCommandResult activate_viewport_tool(ModelingViewportTool tool) {
+    if (to_runtime(tool) == runtime_.active_tool()) {
+      const bool idle_cutting_mode_correction =
+          (tool == ModelingViewportTool::Knife ||
+           tool == ModelingViewportTool::InsertEdgeLoop) &&
+          selection_mode() != ModelingSelectionMode::Edge &&
+          !pending_operation_active();
+      if (!idle_cutting_mode_correction) {
+        return {.ok = true};
+      }
+    }
+    if (pending_operation_active()) {
+      return {.ok = false,
+              .message = "Accept the pending operation through editor history "
+                         "before changing tools."};
+    }
     bool selection_mode_changed = false;
     std::string selection_mode_message;
     std::optional<ModelingSelectionMode> required_selection_mode;
-    if (tool == ModelingViewportTool::InsertEdgeLoop) {
+    if (tool == ModelingViewportTool::InsertEdgeLoop ||
+        tool == ModelingViewportTool::Knife) {
       required_selection_mode = ModelingSelectionMode::Edge;
     } else if (tool == ModelingViewportTool::Mirror) {
       required_selection_mode = ModelingSelectionMode::Object;
     }
     if (required_selection_mode.has_value() &&
-        app_selection_mode_ != *required_selection_mode) {
+        selection_mode() != *required_selection_mode) {
       const ModelingCommandResult mode_result =
           set_selection_mode(*required_selection_mode);
       if (!mode_result.ok) {
@@ -7441,7 +7495,8 @@ public:
   }
 
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
-  pick_insert_edge_loop_target(const ModelingToolRayEvent &event) const {
+  pick_insert_edge_loop_target(const ModelingToolRayEvent &event,
+                               int *hover_object_id = nullptr) const {
     quader_poly::PickOptions options =
         quader_editor_core::selection_pick_options_from_radii(
             event.vertex_radius, event.edge_radius);
@@ -7449,6 +7504,12 @@ public:
     const auto &objects = cached_scene_transformed_objects_for_picking();
     quader_poly::PickOptions face_options = options;
     face_options.mode = quader_poly::SelectionMode::Face;
+    if (hover_object_id != nullptr) {
+      const auto surface = quader_editor_core::pick_nearest(
+          objects, {.ray = to_runtime(event.ray), .options = face_options},
+          cached_pick_object_bounds(), cached_pick_face_geometry(face_options));
+      *hover_object_id = surface.has_value() ? surface->object_id : -1;
+    }
     const auto hit = tool_event_has_screen_edge_radius(event)
         ? tool_screen_space_component_pick(
               objects, event, quader_poly::SelectionMode::Edge,
@@ -7463,6 +7524,9 @@ public:
         edge_has_quad_face(objects[static_cast<std::size_t>(hit->object_index)]
                                .document,
                            hit->edge)) {
+      if (hover_object_id != nullptr) {
+        *hover_object_id = hit->object_id;
+      }
       return hit;
     }
 
@@ -7600,7 +7664,7 @@ public:
   [[nodiscard]] std::array<
       std::optional<quader_editor_core::PickHitRecord>, 3U>
   knife_pick_targets(const ModelingToolRayEvent &event,
-                     int target_object_id = -1) const {
+                     int target_object_id, int &hover_object_id) const {
     constexpr std::array kModes{
         quader_poly::SelectionMode::Vertex,
         quader_poly::SelectionMode::Edge,
@@ -7633,6 +7697,7 @@ public:
              .options = face_options,
              .target_object_id = target_object_id},
             bounds, face_geometry);
+    hover_object_id = surface_hit.has_value() ? surface_hit->object_id : -1;
     const bool requires_topology_seed =
         !runtime_.knife_state().has_active_stroke;
     for (std::size_t index = 0U; index < kModes.size(); ++index) {
@@ -8234,8 +8299,9 @@ public:
 
   ModelingCommandResult
   update_insert_edge_loop_hover(const ModelingToolRayEvent &event) {
+    int hover_object_id = -1;
     const std::optional<quader_editor_core::PickHitRecord> world_hit =
-        pick_insert_edge_loop_target(event);
+        pick_insert_edge_loop_target(event, &hover_object_id);
     const int target_object_id = world_hit.has_value()
                                      ? world_hit->object_id
                                      : std::max(runtime_.insert_edge_loop_state()
@@ -8258,10 +8324,15 @@ public:
       return {.ok = false,
               .message = "Edge loop target transform is not invertible."};
     }
-    return execute_runtime_command(
+    ModelingCommandResult result = execute_runtime_command(
         RuntimeToolCommandService::update_insert_edge_loop_hover(
             *local_event, target_object_id, local_hit, resolved_factor),
         false);
+    if (result.ok) {
+      const bool hover_changed = set_cutting_tool_hover_candidate(hover_object_id);
+      result.changed = result.changed || hover_changed;
+    }
+    return result;
   }
 
   ModelingCommandResult
@@ -8324,7 +8395,6 @@ public:
     ModelingCommandResult result = sdk_projection_adapter_.insert_edge_loop(
         state.object_id, state.edge.a, state.edge.b, state.factor);
     if (!result.ok) {
-      runtime_.set_insert_edge_loop_dragging(false);
       if (result.message.empty()) {
         result.message = "Could not insert edge loop.";
       }
@@ -8368,11 +8438,13 @@ public:
   }
 
   ModelingCommandResult clear_knife_hover() {
+    const int candidate_before = runtime_.hover().candidate_object_id;
     const KnifeHoverOverlayKey overlay_before =
         knife_hover_overlay_key(runtime_.knife_state());
     runtime_.clear_knife_hover();
     const bool changed =
-        overlay_before != knife_hover_overlay_key(runtime_.knife_state());
+        overlay_before != knife_hover_overlay_key(runtime_.knife_state()) ||
+        candidate_before != runtime_.hover().candidate_object_id;
     if (changed) {
       overlay_service_.invalidate_composed_frame();
       invalidate_volatile_overlay_cache();
@@ -8381,11 +8453,13 @@ public:
   }
 
   ModelingCommandResult update_knife_hover(const ModelingToolRayEvent &event) {
+    const int candidate_before = runtime_.hover().candidate_object_id;
     const KnifeHoverOverlayKey overlay_before =
         knife_hover_overlay_key(runtime_.knife_state());
     auto finish = [&](bool ok, std::string message) {
       const bool changed =
-          overlay_before != knife_hover_overlay_key(runtime_.knife_state());
+          overlay_before != knife_hover_overlay_key(runtime_.knife_state()) ||
+          candidate_before != runtime_.hover().candidate_object_id;
       if (changed) {
         overlay_service_.invalidate_composed_frame();
         invalidate_volatile_overlay_cache();
@@ -8397,8 +8471,9 @@ public:
       };
     };
     const int locked_object_id = runtime_.knife_state().target_object_id;
+    int hover_object_id = -1;
     const auto world_hits = knife_pick_targets(
-        event, locked_object_id > 0 ? locked_object_id : -1);
+        event, locked_object_id > 0 ? locked_object_id : -1, hover_object_id);
     std::array<std::optional<quader_editor_core::PickHitRecord>, 3U>
         local_hits;
     std::array<std::optional<ModelingToolRayEvent>, 3U>
@@ -8434,6 +8509,11 @@ public:
     if (!target_valid) {
       runtime_.clear_knife_hover();
     }
+    // A surface can expose its topology before it is a valid first Knife point.
+    auto hover = runtime_.hover();
+    hover.candidate_object_id = target_valid
+        ? runtime_.knife_state().current_object_id : hover_object_id;
+    runtime_.set_hover(hover);
     return finish(true, {});
   }
 
@@ -9927,6 +10007,20 @@ public:
     return set_component_selections(one);
   }
 
+  [[nodiscard]] ModelingCommandResult validate_component_selection(
+      const ModelingComponentSelectionRequest &request) const {
+    const std::array one{request};
+    const ModelingCommandResult scope = validate_component_selection_scope(one);
+    if (!scope.ok) {
+      return scope;
+    }
+    ModelingCommandResult result = selection_service_
+        .set_component_selection(selection_projection_snapshot(), request)
+        .command;
+    result.changed = false;
+    return result;
+  }
+
   ModelingCommandResult apply_resolved_component_selection(
       const ModelingResolvedComponentSelectionRequest &request) {
     const ModelingSelectionProjectionSnapshot &projection =
@@ -10153,8 +10247,8 @@ public:
     return set_component_selection(component);
   }
 
-  ModelingCommandResult set_component_selections(
-      std::span<const ModelingComponentSelectionRequest> requests) {
+  [[nodiscard]] ModelingCommandResult validate_component_selection_scope(
+      std::span<const ModelingComponentSelectionRequest> requests) const {
     const ModelingInstanceEditScope edit_scope =
         instance_edit_scope_provider_ ? instance_edit_scope_provider_()
                                       : ModelingInstanceEditScope{};
@@ -10180,6 +10274,16 @@ public:
                 "Component selection is outside the active instance scope.",
         };
       }
+    }
+    return {.ok = true};
+  }
+
+  ModelingCommandResult set_component_selections(
+      std::span<const ModelingComponentSelectionRequest> requests) {
+    const ModelingCommandResult scope =
+        validate_component_selection_scope(requests);
+    if (!scope.ok) {
+      return scope;
     }
     ModelingCommandResult result =
         sdk_projection_adapter_.set_component_selections(requests);
@@ -10428,17 +10532,35 @@ public:
   }
 
 private:
+  bool set_cutting_tool_hover_candidate(int object_id) {
+    auto hover = runtime_.hover();
+    if (hover.candidate_object_id == object_id) return false;
+    hover.candidate_object_id = object_id;
+    runtime_.set_hover(hover);
+    overlay_service_.invalidate_composed_frame();
+    invalidate_volatile_overlay_cache();
+    return true;
+  }
+
   [[nodiscard]] int persistent_tool_source_wire_object_id(
       const ModelingSelectionProjectionSnapshot &projected) const {
+    if (runtime_.active_tool() ==
+        quader_editor_core::ViewportInteractionTool::InsertEdgeLoop) {
+      const auto &loop = runtime_.insert_edge_loop_state();
+      return loop.dragging ? loop.object_id : runtime_.hover().candidate_object_id;
+    }
     const quader_editor_core::KnifeToolState &knife = runtime_.knife_state();
     if (runtime_.active_tool() !=
-            quader_editor_core::ViewportInteractionTool::Knife ||
-        !knife.active) {
+        quader_editor_core::ViewportInteractionTool::Knife) {
       return -1;
     }
-    return knife.target_object_id > 0
-               ? knife.target_object_id
-               : projected.active_object_id();
+    if (knife.active && knife.target_object_id > 0) {
+      return knife.target_object_id;
+    }
+    if (runtime_.hover().candidate_object_id > 0) {
+      return runtime_.hover().candidate_object_id;
+    }
+    return knife.active ? projected.active_object_id() : -1;
   }
 
   /** Borrows the cached native projection for read-only selection queries. */
@@ -11721,6 +11843,10 @@ bool ModelingSessionService::can_cancel_active_preview_for_undo() const {
   return impl_->can_cancel_active_preview_for_undo();
 }
 
+bool ModelingSessionService::pending_operation_active() const {
+  return impl_->pending_operation_active();
+}
+
 ModelingCommandResult
 ModelingSessionService::cancel_competing_state_for_native_tool_activation() {
   return impl_->cancel_competing_state_for_native_tool_activation();
@@ -12450,6 +12576,11 @@ ModelingSessionService::set_object_selection(std::span<const EntityId> entities,
 ModelingCommandResult ModelingSessionService::set_component_selection(
     const ModelingComponentSelectionRequest &request) {
   return impl_->set_component_selection(request);
+}
+
+ModelingCommandResult ModelingSessionService::validate_component_selection(
+    const ModelingComponentSelectionRequest &request) const {
+  return impl_->validate_component_selection(request);
 }
 
 ModelingCommandResult ModelingSessionService::apply_resolved_component_selection(

@@ -5669,7 +5669,7 @@ TEST(QtMainMenuTests,
       {dissolve_vertices, quader_command::kModelingDissolveVertices,
        QuaderSelectionMode::Vertex},
       {insert_edge_loop, quader_command::kToolsActivateInsertEdgeLoop,
-       QuaderSelectionMode::Edge},
+       std::nullopt},
       {bevel_edges, quader_command::kModelingBevelEdges,
        QuaderSelectionMode::Edge},
       {fill_hole, quader_command::kModelingFillHole,
@@ -5773,6 +5773,13 @@ TEST(QtMainMenuTests,
   EXPECT_FALSE(shade_faces_smooth->isEnabled());
   EXPECT_EQ(uv_peel->text(), QStringLiteral("Guided UV Peel"));
   EXPECT_EQ(align_texture_to_grid->text(), QStringLiteral("To Grid"));
+
+  ASSERT_TRUE(insert_edge_loop->isEnabled());
+  insert_edge_loop->trigger();
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Edge);
+  EXPECT_EQ(editor.tools().active_tool(), "insert_edge_loop");
+  EXPECT_EQ(editor.viewports().selected_tool(), ViewportToolId::InsertEdgeLoop);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Select).ok());
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.selection().select_vertex(box.value(), 1).ok());

@@ -1056,7 +1056,7 @@ void QtStandardMaterialEditorWindow::closeEvent(QCloseEvent *event) {
   if (active_albedo_dialog_ != nullptr) {
     abandon_interactions();
     if (albedo_preview_finish_) {
-      albedo_preview_finish_(false);
+      albedo_preview_finish_(true);
     }
   }
   flush_pending_number_edits();

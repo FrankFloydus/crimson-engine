@@ -2914,7 +2914,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(abandon, "workspace_ = nullptr");
   expect_contains(abandon, "active_box_preview_ = {};");
   expect_contains(abandon, "modal_tool_dragging_ = false");
-  expect_contains(abandon, "pending_external_pointer_event_ = false");
   expect_contains(abandon, "linear_array_wheel_remainder_ = 0.0");
   expect_contains(abandon, "radial_array_wheel_remainder_ = 0.0");
   expect_missing(abandon, "*interaction_native_tools_");
@@ -3965,7 +3964,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     QtViewportFocusAndOutsideCancellationStayWiredToHostPolicies) {
+     QtViewportFocusAndActivationStayWiredToHostPolicies) {
   const std::string panel_header =
       read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string panel = read_source_file("src/ui/qt_viewport_panel.cpp");
@@ -3979,29 +3978,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(surface, "ViewportPaneFocusTrigger::PointerPress");
   expect_contains(surface, "ViewportPaneFocusTrigger::Wheel");
   expect_contains(panel, "viewport_pane_focus_decision({");
-  expect_contains(panel, "qApp->installEventFilter(this)");
-  expect_contains(panel_header, "application_pointer_filter_installed_");
+  expect_missing(panel, "qApp->installEventFilter(this)");
   expect_contains(
       panel,
       "void QtViewportPanel::set_modal_tool_owns_viewport_snapshot(");
-  expect_contains(panel,
-                  "modal_tool_owns_viewport_snapshot_ && qApp != nullptr");
-  expect_contains(panel, "qApp->removeEventFilter(this)");
-  const std::size_t constructor_begin =
-      panel.find("QtViewportPanel::QtViewportPanel(QWidget *parent)");
-  const std::size_t destructor_begin =
-      panel.find("QtViewportPanel::~QtViewportPanel()", constructor_begin);
-  ASSERT_NE(constructor_begin, std::string::npos);
-  ASSERT_NE(destructor_begin, std::string::npos);
-  EXPECT_EQ(panel.substr(constructor_begin,
-                         destructor_begin - constructor_begin)
-                .find("qApp->installEventFilter(this)"),
-            std::string::npos)
-      << "the QApplication-wide filter must not remain installed while "
-         "viewport modal ownership is inactive";
-  expect_contains(panel, "current == pane_state.frame");
-  expect_contains(panel,
-                  "should_cancel_modal_tool_for_external_pointer({");
+  expect_contains(panel, "if (result.cancel_requested)");
+  expect_missing(panel, "cancel_active_modal_tool(false)");
   expect_contains(panel, "should_dispatch_viewport_tool_activation({");
   expect_contains(
       panel,

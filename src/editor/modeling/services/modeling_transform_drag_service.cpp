@@ -740,17 +740,16 @@ ModelingTransformDragService::commit_transform_drag(
   const bool scene_duplicate_transaction_active =
       scene_duplicate_transaction_.has_value() &&
       scene_duplicate_transaction_->active();
+  const auto retain_failed_commit = [&](std::string message, bool changed = false) {
+    ModelingTransformDragPreview result = transform_drag_preview(context, changed);
+    result.ok = false;
+    result.preview_driven = was_preview_driven;
+    result.message = std::move(message);
+    return result;
+  };
   if (scene_duplicate_transaction_active && history == nullptr) {
-    const ModelingCommandResult canceled = cancel_transform_drag(context);
-    return {
-        .ok = false,
-        .changed = canceled.changed,
-        .preview_driven = was_preview_driven,
-        .message = canceled.ok
-                       ? "Linked instance drag duplication requires editor "
-                         "history when committing."
-                       : canceled.message,
-    };
+    return retain_failed_commit(
+        "Linked instance drag duplication requires editor history when committing.");
   }
   const bool finish_preview_transaction =
       was_preview_driven ||
@@ -781,38 +780,15 @@ ModelingTransformDragService::commit_transform_drag(
     const bool portable_preview =
         context.port.portable_modeling_preview_active();
     if (!portable_preview) {
-      const ModelingCommandResult rollback = cancel_transform_drag(context);
-      return {
-          .ok = false,
-          .changed = !rollback.ok,
-          .preview_driven = was_preview_driven,
-          .message = rollback.ok
-                         ? "Portable transform preview is no longer active."
-                         : "Portable transform preview is no longer active; "
-                           "rollback failed: " +
-                               rollback.message,
-      };
+      return retain_failed_commit("Portable transform preview is no longer active.");
     }
     const ModelingCommandResult committed =
         context.port.commit_portable_translate_preview();
     if (!committed.ok) {
-      const ModelingCommandResult rollback = cancel_transform_drag(context);
-      return {
-          .ok = false,
-          .changed = !rollback.ok,
-          .preview_driven = was_preview_driven,
-          .message = !rollback.ok
-                         ? (committed.message.empty()
-                                ? "Could not commit portable transform "
-                                  "preview; rollback failed: " +
-                                      rollback.message
-                                : committed.message + "; rollback failed: " +
-                                      rollback.message)
-                         : (committed.message.empty()
-                                ? "Could not commit portable transform "
-                                  "preview."
-                                : committed.message),
-      };
+      return retain_failed_commit(
+          committed.message.empty() ? "Could not commit portable transform preview."
+                                    : committed.message,
+          committed.changed);
     }
     changed = committed.changed;
     context.port.invalidate_selection_overlay_caches();
@@ -923,22 +899,10 @@ ModelingTransformDragService::commit_transform_drag(
                                 : scene_transform_drag_service_.accept();
     }();
     if (!scene_commit.ok) {
-      const ModelingCommandResult rollback = cancel_transform_drag(context);
-      return {
-          .ok = false,
-          .changed = !rollback.ok,
-          .preview_driven = was_preview_driven,
-          .message = !rollback.ok
-                         ? (scene_commit.message.empty()
-                                ? "Could not commit scene transform preview; "
-                                  "rollback failed: " +
-                                      rollback.message
-                                : scene_commit.message + "; rollback failed: " +
-                                      rollback.message)
-                         : (scene_commit.message.empty()
-                                ? "Could not commit scene transform preview."
-                                : scene_commit.message),
-      };
+      return retain_failed_commit(
+          scene_commit.message.empty() ? "Could not commit scene transform preview."
+                                       : scene_commit.message,
+          changed || scene_commit.changed);
     }
     changed = changed || scene_commit.changed;
     if (scene_commit.changed) {

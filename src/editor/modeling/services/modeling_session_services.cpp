@@ -3841,6 +3841,24 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
         SelectionOverlayProjection::project_selection_overlay_frame(
             base_frame, object_registry, scene, selection_mode,
             instance_edit_scope, entity_visible);
+    // Object-mode silhouettes must retain cutting-tool topology. Component
+    // modes already retain it and must keep their edit-wire depth policy when
+    // navigation clears the tool's hover candidate.
+    if (selection_mode == quader_editor_core::SelectionMode::Object &&
+        options.persistent_source_wire_object_id > 0) {
+      for (auto &line : projected_overlay_base_cache_.frame.lines) {
+        if (line.layer == ViewportOverlayLayer::SourceWire &&
+            line.element.object_id == options.persistent_source_wire_object_id) {
+          line.source = ViewportOverlaySource::Tool;
+        }
+      }
+      for (auto &triangle : projected_overlay_base_cache_.frame.triangles) {
+        if (triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp &&
+            triangle.element.object_id == options.persistent_source_wire_object_id) {
+          triangle.source = ViewportOverlaySource::Tool;
+        }
+      }
+    }
     projected_overlay_base_cache_.content_revision = content_revision;
     projected_overlay_base_cache_.active_object_id = session.active_object_id();
     projected_overlay_base_cache_.selection_revision = selection_revision;
@@ -3889,6 +3907,13 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
 
   ViewportOverlayFrame frame;
   const quader_editor_core::SelectionHoverState &hover = runtime.hover();
+  auto component_hover = hover;
+  if (selection_mode != quader_editor_core::SelectionMode::Vertex &&
+      component_hover.candidate_object_id == persistent_source_wire_object_id) {
+    // Persistent topology already supplies these edges and depth stamps.
+    // Do not rebuild them on every movement of the cut preview.
+    component_hover.candidate_object_id = -1;
+  }
   if (hover.kind != quader_editor_core::SelectionHoverKind::None ||
       hover.candidate_object_id > 0) {
     QDR_PROFILE_SCOPE("Volatile overlay project hover frame");
@@ -3903,7 +3928,7 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
           hover_frame,
           quader_editor_core::build_selection_hover_overlay_frame(
               std::span<const quader_editor_core::PolygonObject>(object, 1U),
-              selection_mode, hover, {}));
+              selection_mode, component_hover, {}));
     };
     append_hover_object(hover.candidate_object_id);
     if (hover.object_id != hover.candidate_object_id) {

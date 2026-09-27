@@ -273,9 +273,6 @@ bool QuaderApiMutationRunner::can_run_tracked_modeling_tool(
     return false;
   }
   SceneSession &session = scene_session();
-  if (session.native_tools().blocks_modeling_content_mutation()) {
-    return false;
-  }
   return modeling_commands_
       .availability(session.modeling(), tool_id, &session.selection(),
                     &session.structural_lifecycle())
@@ -288,14 +285,20 @@ QuaderApiMutationRunner::run_tracked_modeling_tool(std::string_view tool_id) {
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
-  if (!can_mutate_modeling_content()) {
-    return modeling_content_blocked_status("editing modeling content.");
-  }
   SceneSession &session = scene_session();
+  const ModelingCommandAvailability available = modeling_commands_.availability(
+      session.modeling(), tool_id, &session.selection(),
+      &session.structural_lifecycle());
+  if (!available.enabled) {
+    return quader_api_failure_status(session, available.disabled_reason);
+  }
+  const CommandResult settled = settle_pending_operations();
+  if (!settled.ok) return status_from(settled, QuaderMutationKind::Modeling, tool_id);
   const QuaderSettingsOperationOriginCapture origin(session_);
-  const ModelingCommandResult result = modeling_commands_.execute(
+  ModelingCommandResult result = modeling_commands_.execute(
       history(), session.modeling(), session.selection(), tool_id,
       &session.structural_lifecycle());
+  result.changed = result.changed || settled.changed;
   if (result.ok && result.changed && origin.current() &&
       session.modeling().operation_preview_active()) {
     origin.publish();
@@ -308,14 +311,23 @@ QuaderApiVoidResult QuaderApiMutationRunner::begin_tracked_modeling_preview(
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
-  if (!can_mutate_modeling_content()) {
-    return modeling_content_blocked_status("starting a modeling preview.");
-  }
   SceneSession &session = scene_session();
+  const ModelingCommandAvailability available = modeling_commands_.availability(
+      session.modeling(), action_id, &session.selection(),
+      &session.structural_lifecycle());
+  if (!available.enabled) {
+    return quader_api_failure_status(session, available.disabled_reason);
+  }
+  const bool same_preview = session.modeling().operation_preview_active() &&
+      session.modeling().tool_settings_target().action_id == action_id;
+  const CommandResult settled = same_preview
+      ? command_unchanged_result() : settle_pending_operations();
+  if (!settled.ok) return status_from(settled, QuaderMutationKind::Modeling, action_id);
   const QuaderSettingsOperationOriginCapture origin(session_);
-  const ModelingCommandResult result = modeling_commands_.begin_preview(
+  ModelingCommandResult result = modeling_commands_.begin_preview(
       history(), session.modeling(), session.selection(), action_id,
       &session.structural_lifecycle());
+  result.changed = result.changed || settled.changed;
   if (result.ok && result.changed && origin.current() &&
       session.modeling().operation_preview_active()) {
     origin.publish();
@@ -349,23 +361,7 @@ QuaderApiMutationRunner::set_selection_mode(ModelingSelectionMode mode) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
-  const auto preflight = session.selection().selection_edit_preflight();
-  if (!preflight.ok) {
-    return status_from(preflight, QuaderMutationKind::Modeling,
-                       "Set Selection Mode");
-  }
-  bool changed = false;
-  if (session.native_tools().has_pending_tool()) {
-    const CommandResult canceled = session.native_tools().cancel_active();
-    if (!canceled.ok) {
-      return status_from(canceled, QuaderMutationKind::Runtime,
-                         "Set Selection Mode");
-    }
-    changed = canceled.changed;
-  }
-
   ModelingCommandResult result = session.selection().set_mode(mode);
-  result.changed = result.changed || changed;
   return status_from(std::move(result), QuaderMutationKind::Modeling,
                      "Set Selection Mode");
 }
@@ -414,7 +410,8 @@ bool QuaderApiMutationRunner::can_undo() const {
   if (session.native_tools().has_pending_history_preview()) {
     return true;
   }
-  if (session.modeling().can_cancel_active_preview_for_undo()) {
+  if (session.modeling().can_cancel_active_preview_for_undo() ||
+      session.modeling().pending_operation_active()) {
     return true;
   }
   return history().can_undo();
@@ -434,7 +431,8 @@ bool QuaderApiMutationRunner::can_redo() const {
   if (session.native_tools().has_pending_history_preview()) {
     return false;
   }
-  if (session.modeling().can_cancel_active_preview_for_undo()) {
+  if (session.modeling().can_cancel_active_preview_for_undo() ||
+      session.modeling().pending_operation_active()) {
     return false;
   }
   return history().can_redo();
@@ -445,25 +443,23 @@ QuaderApiVoidResult QuaderApiMutationRunner::undo() {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
-  if (session.document_commands().property_edit_active()) {
-    return status_from(
-        session.document_commands().cancel_active_property_edit(),
-        QuaderMutationKind::Document, "Undo");
-  }
+  const CommandResult property =
+      session.document_commands().accept_active_property_edit();
+  if (!property.ok) return status_from(property, QuaderMutationKind::Document, "Undo");
   if (session.native_tools().active_history_state()) {
     return status_from(session.native_tools().undo_active(),
                        QuaderMutationKind::Runtime, "Undo");
   }
-  if (session.native_tools().has_pending_history_preview()) {
-    return status_from(session.native_tools().cancel_active(),
-                       QuaderMutationKind::Runtime, "Undo");
+  CommandResult settled = command_unchanged_result();
+  if (session.native_tools().has_pending_history_preview() ||
+      session.modeling().can_cancel_active_preview_for_undo() ||
+      session.modeling().pending_operation_active()) {
+    settled = session.native_tools().settle_transient_state();
+    if (!settled.ok) return status_from(settled, QuaderMutationKind::Runtime, "Undo");
   }
-  if (session.modeling().can_cancel_active_preview_for_undo()) {
-    const ModelingCommandResult cancel =
-        cancel_active_tool_or_preview_for_undo();
-    if (!cancel.ok || cancel.changed || !history().can_undo()) {
-      return status_from(cancel, QuaderMutationKind::Runtime, "Undo");
-    }
+  if (!history().can_undo() && (property.changed || settled.changed)) {
+    settled.changed = settled.changed || property.changed;
+    return status_from(settled, QuaderMutationKind::Document, "Undo");
   }
   EditorCommandService commands = editor_commands();
   CommandResult result = commands.undo();
@@ -684,19 +680,14 @@ void QuaderApiMutationRunner::observe_dirty_state() {
   }
 }
 
-ModelingCommandResult
-QuaderApiMutationRunner::cancel_active_tool_or_preview_for_undo() {
+CommandResult QuaderApiMutationRunner::settle_pending_operations() {
   SceneSession &session = scene_session();
-  if (session.modeling().operation_preview_active()) {
-    return modeling_commands_.cancel_preview(session.modeling());
-  }
-
-  ModelingCommandResult cancel = session.modeling().cancel_transform_drag();
-  if (!cancel.ok || cancel.changed) {
-    return cancel;
-  }
-
-  return {.ok = true, .changed = false};
+  const CommandResult property =
+      session.document_commands().accept_active_property_edit();
+  if (!property.ok) return property;
+  CommandResult result = session.native_tools().settle_transient_state();
+  result.changed = result.changed || property.changed;
+  return result;
 }
 
 } // namespace quader

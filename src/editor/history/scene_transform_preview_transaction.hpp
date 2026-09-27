@@ -250,8 +250,6 @@ private:
   }
 
   DocumentCommandResult reject_invalid_finish() {
-    (void)apply_stored(false);
-    active_ = false;
     return document_command_missing_entity_result();
   }
 

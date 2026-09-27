@@ -1035,6 +1035,7 @@ TEST(ViewportToolRuntimeTests,
            descriptor.tool == ViewportToolId::Pivot);
       QVec2 gesture_local = input.mouse_local;
       std::optional<QVec3> handle_position_before;
+      std::optional<QVec3> handle_position_authored;
       std::optional<std::size_t> curve_point_count_before;
       if (exercises_pointer_gesture) {
         const NativeViewportToolPresentationSnapshot before =
@@ -1110,6 +1111,13 @@ TEST(ViewportToolRuntimeTests,
              .pointer_drag_threshold_pixels = 4.0f});
         EXPECT_TRUE(coordinator.pointer_dragging());
         input.pointer_released_edges.clear();
+        const NativeViewportToolPresentationSnapshot authored =
+            coordinator.presentation_snapshot();
+        if (descriptor.tool == ViewportToolId::LinearArray) {
+          handle_position_authored = authored.linear_array_handle.endpoint_world;
+        } else if (descriptor.tool == ViewportToolId::Pivot) {
+          handle_position_authored = authored.pivot_handle.world_position;
+        }
       }
 
       switch (scenario.interruption) {
@@ -1128,12 +1136,8 @@ TEST(ViewportToolRuntimeTests,
         input_result.cancel_requested = true;
         break;
       case Interruption::OutsidePointer: {
-        const bool cancel = should_cancel_modal_tool_for_external_pointer({
-            .external_pointer_event = true,
-            .modal_tool_owns_viewport = true,
-            .persistent_native_tool_active = true,
-        });
-        EXPECT_FALSE(cancel);
+        // A panel click dispatches no tool event. Merely interacting with the
+        // surrounding UI must retain the pending operation and its controls.
         break;
       }
       }
@@ -1167,28 +1171,33 @@ TEST(ViewportToolRuntimeTests,
       if (exercises_pointer_gesture && !scenario.cancels_lifecycle) {
         const NativeViewportToolPresentationSnapshot after =
             coordinator.presentation_snapshot();
+        // Camera navigation releases the pointer gesture without reverting its
+        // authored preview. Capture/focus interruption retains its old policy.
+        const auto &expected_handle_position =
+            scenario.interruption == Interruption::Navigation
+                ? handle_position_authored : handle_position_before;
         if (descriptor.tool == ViewportToolId::LinearArray) {
-          ASSERT_TRUE(handle_position_before.has_value());
+          ASSERT_TRUE(expected_handle_position.has_value());
           EXPECT_FLOAT_EQ(after.linear_array_handle.endpoint_world.x,
-                          handle_position_before->x);
+                          expected_handle_position->x);
           EXPECT_FLOAT_EQ(after.linear_array_handle.endpoint_world.y,
-                          handle_position_before->y);
+                          expected_handle_position->y);
           EXPECT_FLOAT_EQ(after.linear_array_handle.endpoint_world.z,
-                          handle_position_before->z);
+                          expected_handle_position->z);
         } else if (descriptor.tool == ViewportToolId::Pivot) {
-          ASSERT_TRUE(handle_position_before.has_value());
+          ASSERT_TRUE(expected_handle_position.has_value());
           EXPECT_FLOAT_EQ(after.pivot_handle.world_position.x,
-                          handle_position_before->x);
+                          expected_handle_position->x);
           EXPECT_FLOAT_EQ(after.pivot_handle.world_position.y,
-                          handle_position_before->y);
+                          expected_handle_position->y);
           EXPECT_FLOAT_EQ(after.pivot_handle.world_position.z,
-                          handle_position_before->z);
+                          expected_handle_position->z);
         } else {
           ASSERT_NE(after.curve_preview, nullptr);
           ASSERT_TRUE(after.curve_preview->document.has_value());
           ASSERT_TRUE(curve_point_count_before.has_value());
           EXPECT_EQ(after.curve_preview->document->point_count(),
-                    *curve_point_count_before);
+                    *curve_point_count_before + 1u);
         }
       }
 
@@ -1243,6 +1252,98 @@ TEST(ViewportToolRuntimeTests,
 
   EXPECT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   EXPECT_FALSE(session.native_tools().has_pending_tool());
+}
+
+TEST(ViewportToolRuntimeTests,
+     ImplicitSettlementRetiresEmptyNativeToolsWithoutAuthoredHistory) {
+  for (const ViewportToolId tool :
+       {ViewportToolId::Curve, ViewportToolId::CreatePrimitive,
+        ViewportToolId::RadialArray, ViewportToolId::PathArray,
+        ViewportToolId::Pivot, ViewportToolId::UvPeel, ViewportToolId::Extrude}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    if (tool == ViewportToolId::PathArray) {
+      const auto curve = editor.modeling().create_curve({
+          .points = {{.position = {}}, {.position = {4.0f, 0.0f, 0.0f}}},
+          .name = "Empty lifecycle path"});
+      ASSERT_TRUE(curve.ok()) << curve.error_message();
+      ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+    } else {
+      const auto box = editor.modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+          "Empty lifecycle source");
+      ASSERT_TRUE(box.ok()) << box.error_message();
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    }
+    session.history().clear();
+    const auto entities_before = session.scene().entities().size();
+    ASSERT_TRUE(editor.tools().activate(tool).ok());
+    const auto switched = editor.tools().activate(ViewportToolId::Move);
+    EXPECT_TRUE(switched.ok()) << switched.error_message();
+    EXPECT_FALSE(session.native_tools().has_pending_tool());
+    EXPECT_EQ(session.scene().entities().size(), entities_before);
+    EXPECT_FALSE(session.history().can_undo());
+    EXPECT_EQ(editor.tools().active_tool(), "move");
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     CurveToolSwitchRejectsIncompleteDraftThenAcceptsCompleteDraftWithHistory) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Curve).ok());
+  ASSERT_TRUE(session.curve().begin_point({}).ok);
+  ASSERT_TRUE(session.curve().commit_drag().ok);
+  const auto rejected = editor.tools().activate(ViewportToolId::Move);
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_EQ(session.curve().point_count(), 1u);
+  EXPECT_TRUE(session.curve().active());
+  EXPECT_TRUE(session.scene().entities().empty());
+  EXPECT_FALSE(session.history().can_undo());
+
+  ASSERT_TRUE(session.curve().begin_point({4.0f, 0.0f, 0.0f}).ok);
+  const auto switched = editor.tools().activate(ViewportToolId::Move);
+  ASSERT_TRUE(switched.ok()) << switched.error_message();
+  EXPECT_FALSE(session.curve().active());
+  EXPECT_FALSE(session.curve().dragging());
+  ASSERT_EQ(session.scene().entities().size(), 1u);
+  EXPECT_EQ(session.history().undo_count(), 1u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(session.scene().entities().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(session.scene().entities().size(), 1u);
+}
+
+TEST(ViewportToolRuntimeTests,
+     FailedLinearArraySettlementPreservesPreviewUntilRetryOrExplicitCancel) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Array acceptance source");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  session.history().clear();
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  const auto failed = editor.tools().activate(ViewportToolId::Move);
+  EXPECT_FALSE(failed.ok());
+  EXPECT_EQ(editor.tools().active_tool(), "linear_array");
+  EXPECT_TRUE(session.native_tools().has_pending_tool());
+  EXPECT_EQ(session.scene().entities().size(), 1u);
+  EXPECT_FALSE(session.history().can_undo());
+  session.modeling().set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const auto retried = editor.tools().activate(ViewportToolId::Move);
+  ASSERT_TRUE(retried.ok()) << retried.error_message();
+  EXPECT_FALSE(session.native_tools().has_pending_tool());
+  EXPECT_GT(session.scene().entities().size(), 1u);
+  EXPECT_EQ(session.history().undo_count(), 1u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.scene().entities().size(), 1u);
 }
 
 TEST(ViewportToolRuntimeTests,
@@ -1986,11 +2087,9 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests,
-     PrimitivePointerInterruptionRollsBackAndSuppressesRelease) {
-  enum class Interruption { FocusLoss, CaptureLoss, Navigation };
-  for (const Interruption interruption :
-       {Interruption::FocusLoss, Interruption::CaptureLoss,
-        Interruption::Navigation}) {
+     PrimitivePointerInterruptionPreservesFootprintForMatchingReleaseOrRetry) {
+  for (int interruption = 0; interruption < 5; ++interruption) {
+    SCOPED_TRACE(interruption);
     PrimitivePointerHarness harness;
     ASSERT_NE(harness.tool, nullptr);
     ASSERT_TRUE(harness.activated);
@@ -2019,26 +2118,38 @@ TEST(ViewportToolRuntimeTests,
         .mouse_screen = kDragLocal,
     });
     ASSERT_TRUE(harness.modal_state.primary_pointer_gesture.has_value());
+    const ModelingBoxPreview authored = harness.session.modeling().box_preview();
+    ASSERT_TRUE(authored.valid);
+    const bool pointer_lost = interruption == 1 || interruption == 3;
 
-    ViewportPointerToolEvent canceled{
+    const ViewportPointerToolEvent interrupted{
         .hovered = true,
-        .left_down = true,
-        .viewport_focused = interruption != Interruption::FocusLoss,
-        .pointer_interaction_canceled =
-            interruption == Interruption::CaptureLoss,
-        .mouse_local = kDragLocal,
-        .mouse_screen = kDragLocal,
+        .left_down = interruption != 3,
+        .navigation_active = interruption == 2,
+        .text_input_active = interruption == 4,
+        .viewport_focused = interruption != 0,
+        .pointer_interaction_canceled = interruption == 1,
+        .mouse_local = {-9000.0f, -9000.0f},
+        .mouse_screen = {-9000.0f, -9000.0f},
     };
-    canceled.navigation_active = interruption == Interruption::Navigation;
-    const ViewportToolResult cancellation =
-        harness.dispatch_direct(canceled);
-    EXPECT_TRUE(cancellation.consumed);
-    EXPECT_FALSE(harness.modal_state.primary_pointer_gesture.has_value());
-    EXPECT_TRUE(harness.modal_state.primary_release_suppression.active());
+    EXPECT_TRUE(harness.dispatch_direct(interrupted).consumed);
+    EXPECT_EQ(harness.modal_state.primary_pointer_gesture.has_value(), !pointer_lost);
+    EXPECT_EQ(harness.modal_state.primary_release_suppression.active(), interruption == 1);
     EXPECT_EQ(harness.session.modeling().box_preview().drag_state,
-              ModelingBoxDragState::Idle);
+              ModelingBoxDragState::Footprint);
+    const auto expect_authored_footprint = [&]() {
+      const ModelingBoxPreview retained = harness.session.modeling().box_preview();
+      ASSERT_EQ(retained.footprint_count, authored.footprint_count);
+      for (std::size_t index = 0; index < authored.footprint_count; ++index) {
+        EXPECT_FLOAT_EQ(retained.footprint[index].x, authored.footprint[index].x);
+        EXPECT_FLOAT_EQ(retained.footprint[index].y, authored.footprint[index].y);
+        EXPECT_FLOAT_EQ(retained.footprint[index].z, authored.footprint[index].z);
+      }
+    };
+    expect_authored_footprint();
     EXPECT_TRUE(harness.session.primitive_creation().active());
     EXPECT_EQ(harness.accept_count, 0);
+    EXPECT_FALSE(harness.session.history().can_undo());
 
     const std::array release_edges{ViewportPointerButtonEdge{
         .button = QuaderMouseButton::Left,
@@ -2053,10 +2164,85 @@ TEST(ViewportToolRuntimeTests,
         .mouse_screen = kDragLocal,
         .pointer_released_edges = release_edges,
     });
-    EXPECT_TRUE(release.consumed);
     EXPECT_FALSE(harness.modal_state.primary_release_suppression.active());
+    if (!pointer_lost) {
+      EXPECT_TRUE(release.consumed);
+      EXPECT_EQ(harness.accept_count, 1);
+      EXPECT_EQ(harness.session.primitive_creation().shape_count(), 1U);
+      continue;
+    }
     EXPECT_EQ(harness.accept_count, 0);
+    expect_authored_footprint();
+    const auto rejected = harness.editor.tools().activate(ViewportToolId::Move);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_TRUE(harness.session.primitive_creation().active());
+    expect_authored_footprint();
+
+    constexpr QVec2 kRetryPress{80.0f, 80.0f};
+    const auto retry = [&](bool released, QVec2 point) {
+      return harness.dispatch_direct({
+          .hovered = true,
+          .left_clicked = true,
+          .left_down = !released,
+          .left_released = released,
+          .viewport_focused = true,
+          .mouse_local = point,
+          .mouse_screen = point,
+          .left_click_local = kRetryPress,
+      });
+    };
+    EXPECT_TRUE(retry(true, kRetryPress).consumed);
+    EXPECT_FALSE(harness.modal_state.primary_pointer_gesture);
+    EXPECT_EQ(harness.accept_count, 0);
+    expect_authored_footprint();
+    ASSERT_TRUE(retry(false, kRetryPress).consumed);
+    expect_authored_footprint();
+    EXPECT_TRUE(harness.dispatch_direct({
+        .hovered = true,
+        .left_released = true,
+        .viewport_focused = true,
+        .mouse_local = kDragLocal,
+    }).consumed);
+    EXPECT_EQ(harness.accept_count, 1);
+    EXPECT_EQ(harness.session.primitive_creation().shape_count(), 1U);
   }
+}
+
+TEST(ViewportToolRuntimeTests,
+     PrimitiveIncompleteFootprintSurvivesLostCaptureUntilExplicitCancel) {
+  PrimitivePointerHarness harness;
+  ASSERT_TRUE(harness.dispatch_direct({
+      .hovered = true, .left_clicked = true, .left_down = true,
+      .mouse_local = {20.0f, 20.0f}, .left_click_local = {20.0f, 20.0f},
+  }).consumed);
+  ASSERT_TRUE(harness.dispatch_direct({
+      .hovered = true, .left_down = true, .mouse_local = {50.0f, 20.0f},
+  }).handled);
+  const ModelingBoxPreview authored = harness.session.modeling().box_preview();
+  ASSERT_FALSE(authored.valid);
+  ASSERT_EQ(authored.footprint_count, 2U);
+  ASSERT_TRUE(harness.dispatch_direct({
+      .pointer_interaction_canceled = true,
+      .mouse_local = {-9000.0f, -9000.0f},
+  }).consumed);
+  EXPECT_EQ(harness.session.modeling().box_preview().drag_state,
+            ModelingBoxDragState::Footprint);
+  EXPECT_FLOAT_EQ(harness.session.modeling().box_preview().footprint_size.x,
+                  authored.footprint_size.x);
+  EXPECT_EQ(harness.accept_count, 0);
+  EXPECT_FALSE(harness.editor.tools().activate(ViewportToolId::Move).ok());
+  EXPECT_TRUE(harness.session.primitive_creation().active());
+  const auto canceled = harness.tool->handle_event(harness.context, {
+      .kind = ViewportToolEventKind::Cancel,
+      .tool = ViewportToolId::CreatePrimitive,
+      .exit_active_modal_tool = true,
+  });
+  EXPECT_TRUE(canceled.consumed);
+  EXPECT_FALSE(harness.session.primitive_creation().active());
+  EXPECT_EQ(harness.session.modeling().box_preview().drag_state,
+            ModelingBoxDragState::Idle);
+  EXPECT_TRUE(harness.session.scene().entities().empty());
+  EXPECT_FALSE(harness.session.history().can_undo());
 }
 
 TEST(ViewportToolRuntimeTests,
@@ -2127,7 +2313,7 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests,
-     PersistentPrimitivePreservesSnapModeAndRollsBackAfterPreviewFailure) {
+     PersistentPrimitivePreservesSnapModeAndAcceptedShapesAfterPreviewFailure) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -2218,12 +2404,24 @@ TEST(ViewportToolRuntimeTests,
                       .left_clicked = true,
                       .left_down = true,
                       .left_click_local = {20.0f, 20.0f}});
-  EXPECT_TRUE(failed.active_tool_changed);
-  EXPECT_TRUE(failed.sync_active_tool_from_modeling);
-  EXPECT_FALSE(session.primitive_creation().active());
-  EXPECT_EQ(editor.tools().active_tool(), "select");
-  EXPECT_TRUE(session.modeling().objects().empty());
-  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_FALSE(failed.active_tool_changed);
+  EXPECT_FALSE(failed.sync_active_tool_from_modeling);
+  EXPECT_TRUE(session.primitive_creation().active());
+  EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+  EXPECT_EQ(session.modeling().objects().size(), 1U);
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+  EXPECT_TRUE(editor.history().can_undo());
+  current_event.ray.direction = {0.0f, -1.0f, 0.0f};
+  ASSERT_TRUE(dispatch_frame({.hovered = true,
+                              .left_clicked = true,
+                              .left_down = true,
+                              .left_click_local = {20.0f, 20.0f}}).handled);
+  current_event.ray.origin = {9.0f, 4.0f, 10.0f};
+  ASSERT_TRUE(dispatch_frame({.hovered = true,
+                              .left_released = true,
+                              .mouse_local = {40.0f, 40.0f}}).handled);
+  EXPECT_EQ(session.primitive_creation().shape_count(), 2U);
+  EXPECT_EQ(session.modeling().objects().size(), 2U);
 }
 
 TEST(ViewportToolRuntimeTests,
@@ -2344,7 +2542,7 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests,
-     PersistentPrimitiveRollsBackOnQueryAndHoverPreviewFailures) {
+     PersistentPrimitiveQueryAndHoverFailuresNeverCancelTheSession) {
   const ViewportTool *box_tool =
       find_viewport_tool(ViewportToolId::CreatePrimitive);
   ASSERT_NE(box_tool, nullptr);
@@ -2386,9 +2584,9 @@ TEST(ViewportToolRuntimeTests,
 
     EXPECT_TRUE(result.handled);
     EXPECT_TRUE(result.consumed);
-    EXPECT_TRUE(result.active_tool_changed);
-    EXPECT_TRUE(result.sync_active_tool_from_modeling);
-    EXPECT_EQ(cancel_count, 1);
+    EXPECT_FALSE(result.active_tool_changed);
+    EXPECT_FALSE(result.sync_active_tool_from_modeling);
+    EXPECT_EQ(cancel_count, 0);
     EXPECT_EQ(ports.hover_updates, fail_query ? 0 : 1);
     EXPECT_GT(ports.invalidations, 0);
   }
@@ -2665,6 +2863,113 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests,
+     PlaneAndPolyPreviewsSuspendAcrossNavigationAndResumeAtTheNextPointerSample) {
+  for (const auto tool : {ViewportToolId::Cut, ViewportToolId::Mirror,
+                          ViewportToolId::Poly}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    ModelingPointerHistoryHarness harness;
+    harness.initialize(tool);
+    const auto before = harness.documents();
+    const bool plane_tool = tool != ViewportToolId::Poly;
+    ASSERT_TRUE(harness.dispatch({.left_clicked = true,
+                                  .left_down = plane_tool,
+                                  .can_interact = true,
+                                  .suppress_hover_work = true}).handled);
+    ASSERT_TRUE(harness.dispatch({.left_down = plane_tool,
+                                  .can_interact = true,
+                                  .mouse_local = {1.0f, 0.0f}}).handled);
+    const auto status = harness.session.modeling().tool_status();
+    if (tool == ViewportToolId::Cut) {
+      ASSERT_TRUE(status.cut_dragging);
+      ASSERT_TRUE(status.cut_preview_valid);
+    } else if (tool == ViewportToolId::Mirror) {
+      ASSERT_TRUE(status.mirror_dragging);
+      ASSERT_TRUE(status.mirror_preview_valid);
+    } else {
+      ASSERT_EQ(status.poly_point_count, 1);
+      ASSERT_TRUE(status.poly_has_current);
+    }
+    const auto authored = harness.session.modeling().volatile_overlay_snapshot();
+    ASSERT_NE(authored.frame, nullptr);
+    ASSERT_FALSE(authored.frame->lines.empty());
+    const auto preview_revision = harness.session.modeling().tool_preview_source_revision();
+    harness.commands.clear();
+    for (int frame = 0; frame < 8; ++frame) {
+      ASSERT_TRUE(harness.dispatch({.left_down = plane_tool,
+                                    .suppress_hover_work = true,
+                                    .navigation_active = true,
+                                    .mouse_local = {100.0f + frame, -100.0f},
+                                    .camera_changed = true}).handled);
+      const auto retained = harness.session.modeling().volatile_overlay_snapshot();
+      // Retaining the immutable publication proves every world-space preview
+      // primitive is unchanged and avoids rebuilding it for camera movement.
+      EXPECT_EQ(retained.frame, authored.frame);
+      EXPECT_EQ(retained.source.publication_revision,
+                authored.source.publication_revision);
+      EXPECT_EQ(harness.session.modeling().tool_preview_source_revision(), preview_revision);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    }
+    EXPECT_TRUE(harness.commands.empty());
+    harness.expect_documents(before);
+
+    // RMB release has no LMB edge. Suppress its recentered cursor sample just
+    // as the host does, then resume authoring on the next real pointer sample.
+    ASSERT_TRUE(harness.dispatch({.left_down = plane_tool,
+                                  .suppress_hover_work = true}).handled);
+    EXPECT_EQ(harness.session.modeling().volatile_overlay_snapshot().frame, authored.frame);
+    ASSERT_TRUE(harness.dispatch({.left_down = plane_tool,
+                                  .can_interact = true,
+                                  .mouse_local = {0.5f, 0.0f}}).handled);
+    ASSERT_FALSE(harness.commands.empty());
+    EXPECT_TRUE(harness.commands.back().ok) << harness.commands.back().message;
+    EXPECT_NE(harness.session.modeling().volatile_overlay_snapshot().frame, authored.frame);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    harness.expect_documents(before);
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     InsertEdgeLoopNavigationKeepsAuthoredDragUntilItsOwnLeftRelease) {
+  ModelingPointerHistoryHarness harness;
+  harness.initialize(ViewportToolId::InsertEdgeLoop);
+  const auto before = harness.documents();
+  harness.begin_preview();
+  const auto authored = harness.session.modeling().volatile_overlay_snapshot();
+  ASSERT_NE(authored.frame, nullptr);
+  ASSERT_FALSE(authored.frame->lines.empty());
+  harness.commands.clear();
+  for (int frame = 0; frame < 8; ++frame) {
+    ASSERT_TRUE(harness.dispatch({.left_down = true,
+                                  .suppress_hover_work = true,
+                                  .navigation_active = true,
+                                  .mouse_local = {100.0f + frame, -100.0f},
+                                  .camera_changed = true}).handled);
+    EXPECT_TRUE(harness.session.modeling().tool_status().insert_edge_loop_dragging);
+    EXPECT_TRUE(harness.session.modeling().tool_status().insert_edge_loop_has_preview);
+    const auto retained = harness.session.modeling().volatile_overlay_snapshot();
+    EXPECT_EQ(retained.frame, authored.frame);
+    EXPECT_EQ(retained.source.publication_revision, authored.source.publication_revision);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  }
+  EXPECT_TRUE(harness.commands.empty());
+  harness.expect_documents(before);
+  ASSERT_TRUE(harness.dispatch({.left_released = true,
+                                .suppress_hover_work = true,
+                                .navigation_active = true,
+                                .mouse_local = {100.0f, -100.0f}}).handled);
+  ASSERT_FALSE(harness.commands.empty());
+  EXPECT_TRUE(harness.commands.back().ok) << harness.commands.back().message;
+  EXPECT_FALSE(harness.session.modeling().tool_status().insert_edge_loop_dragging);
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+  EXPECT_EQ(harness.state.active_tool, ViewportToolId::InsertEdgeLoop);
+  const auto after = harness.documents();
+  ASSERT_EQ(after.size(), 1u);
+  EXPECT_GT(after.front().second.vertices.size(), before.front().second.vertices.size());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  harness.expect_documents(before);
+}
+
+TEST(ViewportToolRuntimeTests,
      InsertEdgeLoopReleaseCommitPreservesActiveToolAndRecordsHistory) {
   ModelingPointerHistoryHarness harness;
   harness.initialize(ViewportToolId::InsertEdgeLoop);
@@ -2781,7 +3086,7 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests,
-     InsertEdgeLoopInterruptedReleaseCancelsPreviewAndPreservesActivation) {
+     InsertEdgeLoopInterruptedReleaseAcceptsPreviewAndPreservesActivation) {
   for (int interruption = 0; interruption < 4; ++interruption) {
     SCOPED_TRACE(interruption);
     ModelingPointerHistoryHarness harness;
@@ -2803,19 +3108,24 @@ TEST(ViewportToolRuntimeTests,
     EXPECT_EQ(harness.editor.tools().active_tool(), "insert_edge_loop");
     EXPECT_FALSE(harness.session.modeling().tool_status().insert_edge_loop_dragging);
     EXPECT_FALSE(harness.session.modeling().tool_status().insert_edge_loop_has_preview);
-    EXPECT_EQ(harness.session.history().undo_count(), 0u);
-    harness.expect_documents(before);
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    const auto after = harness.documents();
+    ASSERT_EQ(after.size(), before.size());
+    EXPECT_GT(after.front().second.vertices.size(), before.front().second.vertices.size());
     EXPECT_TRUE(harness.dispatch({.left_released = true,
                                   .can_interact = true,
                                   .suppress_hover_work = true}).handled);
-    EXPECT_EQ(harness.session.history().undo_count(), 0u);
-    ASSERT_TRUE(harness.commit_pointer().handled);
     EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    harness.expect_documents(after);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    harness.expect_documents(before);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    harness.expect_documents(after);
   }
 }
 
 TEST(ViewportToolRuntimeTests,
-     InsertEdgeLoopExplicitToolChangeClearsPreviewAndOldRelease) {
+     InsertEdgeLoopExplicitToolChangeAcceptsPreviewAndSuppressesOldRelease) {
   ModelingPointerHistoryHarness harness;
   harness.initialize(ViewportToolId::InsertEdgeLoop);
   const auto before = harness.documents();
@@ -2827,13 +3137,47 @@ TEST(ViewportToolRuntimeTests,
   EXPECT_FALSE(harness.session.modeling().tool_status().insert_edge_loop_dragging);
   EXPECT_FALSE(harness.session.modeling().tool_status().insert_edge_loop_has_preview);
   harness.dispatch({.left_released = true, .can_interact = true});
-  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+  const auto after = harness.documents();
+  ASSERT_EQ(after.size(), before.size());
+  EXPECT_GT(after.front().second.vertices.size(), before.front().second.vertices.size());
+  ASSERT_TRUE(harness.editor.history().undo().ok());
   harness.expect_documents(before);
   ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok());
   ASSERT_TRUE(harness.runtime.set_active_tool(harness.state,
                                             ViewportToolId::InsertEdgeLoop));
   ASSERT_TRUE(harness.commit_pointer().handled);
   EXPECT_EQ(harness.session.history().undo_count(), 1u);
+}
+
+TEST(ViewportToolRuntimeTests,
+     InsertEdgeLoopFocusAloneRetainsDragAndFailedInterruptionPreservesPreview) {
+  ModelingPointerHistoryHarness harness;
+  harness.initialize(ViewportToolId::InsertEdgeLoop);
+  const auto before = harness.documents();
+  harness.begin_preview();
+  EXPECT_TRUE(harness.dispatch({.left_down = true,
+                                .viewport_focused = false}).handled);
+  EXPECT_TRUE(harness.session.modeling().tool_status().insert_edge_loop_dragging);
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  harness.expect_documents(before);
+  RejectingToolCommitPort rejected;
+  harness.context.ports.commit = &rejected;
+  EXPECT_TRUE(harness.dispatch({.left_released = true,
+                                .pointer_interaction_canceled = true}).handled);
+  ASSERT_FALSE(harness.commands.empty());
+  EXPECT_FALSE(harness.commands.back().ok);
+  EXPECT_TRUE(harness.session.modeling().tool_status().insert_edge_loop_dragging);
+  EXPECT_TRUE(harness.session.modeling().tool_status().insert_edge_loop_has_preview);
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  harness.expect_documents(before);
+  harness.context.ports.commit = &harness.commit_adapter;
+  EXPECT_TRUE(harness.dispatch({.left_released = true,
+                                .pointer_interaction_canceled = true}).handled);
+  EXPECT_FALSE(harness.session.modeling().tool_status().insert_edge_loop_dragging);
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  harness.expect_documents(before);
 }
 
 TEST(ViewportToolRuntimeTests,

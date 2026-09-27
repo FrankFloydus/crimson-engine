@@ -248,7 +248,7 @@ public:
   }
 
   CommandResult activate();
-  /// Finishes accepted shapes and discards unfinished gestures before switching.
+  /// Finishes the current creation session before switching primitive kinds.
   CommandResult activate(PrimitiveCreationKind kind);
   CommandResult set_kind(PrimitiveCreationKind kind);
   /// Accepts an explicit volume, preserving all supplied dimensions.
@@ -262,6 +262,8 @@ public:
                                 std::string name,
                                 MaterialReference material = {});
   CommandResult apply();
+  /// Accepts existing shapes, including their current resize, before moving on.
+  CommandResult finish();
   CommandResult cancel();
   CommandResult undo();
   CommandResult redo();

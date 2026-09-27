@@ -112,21 +112,33 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
                        cube->shape != interaction.shape() ||
                        cube->sphere_type != interaction.sphere_type() ||
                        (resizing && !cube->resizing);
+    if (stale) {
+      // The owner already settled or replaced this operation. Retire only the
+      // captured input; an old gesture must not alter the current primitive.
+      retire();
+      return consumed_cube();
+    }
     const bool interrupted = pointer.pointer_interaction_canceled ||
-        !pointer.viewport_focused || pointer.navigation_active ||
+        pointer.navigation_active ||
         pointer.text_input_active || pointer.gizmo_consumed ||
         (resizing && pointer.camera_changed) ||
         !box.primitive_controls_visible ||
         (!pointer.left_down && !pointer.left_released);
-    if (stale || interrupted || !modal.primary_pointer_gesture) {
-      if (resizing && (!cube || (cube->object_id == interaction.object_id() &&
-                                cube->sphere_type == interaction.sphere_type()))) {
-        (void)accepted_cube_result(box.cancel_resize());
+    if (interrupted || !modal.primary_pointer_gesture) {
+      if (resizing) {
+        // Capture and context loss finish the last published sample. They are
+        // not explicit Cancel and carry no usable final pointer coordinate.
+        const bool ended = accepted_cube_result(box.end_resize());
         if (!context.runtime_binding.current()) return consumed_cube();
+        if (!ended) {
+          modal.primary_pointer_gesture.reset();
+          return consumed_cube();
+        }
       }
       retire();
       return consumed_cube();
     }
+    if (!pointer.viewport_focused) return consumed_cube();
     const ViewportPointerGesture &gesture = *modal.primary_pointer_gesture;
     const ViewportPointerButtonEdge *release =
         viewport_pointer_edge_after(pointer.pointer_released_edges, gesture.press);
@@ -158,7 +170,12 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
     }
     if (matching_release || pointer.finalize_pressed) {
       if (resizing) {
-        (void)accepted_cube_result(box.end_resize());
+        const bool ended = accepted_cube_result(box.end_resize());
+        if (!context.runtime_binding.current()) return consumed_cube();
+        if (!ended) {
+          modal.primary_pointer_gesture.reset();
+          return consumed_cube();
+        }
       } else if (matching_release &&
                  !modal.primitive_creation_drag_started &&
                  interaction.hit_test(current) == active) {

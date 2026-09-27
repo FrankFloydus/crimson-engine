@@ -14,6 +14,7 @@
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 #include "support/curve_modeling_test_support.hpp"
+#include "viewport/viewport_workspace_service.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
@@ -429,6 +430,75 @@ TEST_F(ExtrudeToolServiceTests, SharedOptionsSeedTheNextActivationUntilANewAppLi
   EXPECT_DOUBLE_EQ(fresh.extrude().amount(), 0.0);
 }
 
+TEST_F(ExtrudeToolServiceTests, SwitchingToolsAcceptsPendingExtrusionAsOneUndoStep) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  const auto original = mesh(strip);
+  const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor_.tools().set_setting("extrude", "extrude.amount", 32.0).ok());
+  const auto pending = mesh(strip);
+
+  ASSERT_TRUE(editor_.tools().can_activate(ViewportToolId::Move));
+  const auto switched = editor_.tools().activate(ViewportToolId::Move);
+  ASSERT_TRUE(switched.ok()) << switched.error_message();
+  EXPECT_EQ(editor_.tools().active_tool(), "move");
+  EXPECT_FALSE(session_.extrude().active());
+  EXPECT_FALSE(session_.extrude().preview_active());
+  EXPECT_EQ(session_.history().undo_count(), steps + 1U);
+  expect_mesh(strip, pending);
+
+  ASSERT_TRUE(editor_.tools().cancel_modal_tool().ok());
+  expect_mesh(strip, pending);
+  EXPECT_EQ(session_.history().undo_count(), steps + 1U);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_mesh(strip, original);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_mesh(strip, pending);
+}
+
+TEST_F(ExtrudeToolServiceTests, PaneFocusRetainsPendingWorkUntilAnotherPaneAcquiresItsTool) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(session_.viewport_workspace().set_layout(ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor_.tools().set_setting("extrude", "extrude.amount", 16.0).ok());
+  const auto pending = mesh(strip);
+  ASSERT_TRUE(session_.viewport_workspace().record_selected_tool(
+      ViewportPaneId::Top, ViewportToolId::Rotate, true));
+
+  ASSERT_TRUE(session_.viewport_workspace().focus_pane(ViewportPaneId::Top));
+  EXPECT_TRUE(session_.extrude().preview_active());
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  expect_mesh(strip, pending);
+
+  const auto acquired = editor_.tools().acquire_pane_tool(ViewportPaneId::Top);
+  ASSERT_TRUE(acquired.ok()) << acquired.error_message();
+  EXPECT_EQ(editor_.tools().active_tool(), "rotate");
+  EXPECT_TRUE(editor_.tools().pane_owns_executing_tool(ViewportPaneId::Top));
+  EXPECT_EQ(session_.history().undo_count(), steps + 1U);
+  EXPECT_FALSE(session_.extrude().preview_active());
+  expect_mesh(strip, pending);
+}
+
+TEST_F(ExtrudeToolServiceTests, UnavailableActivationDoesNotAcceptPendingExtrusion) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  const auto steps = session_.history().undo_count();
+  ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor_.tools().set_setting("extrude", "extrude.amount", 16.0).ok());
+  const auto pending = mesh(strip);
+
+  EXPECT_FALSE(editor_.tools().activate("missing_tool").ok());
+  EXPECT_FALSE(editor_.tools().begin_primitive_creation(
+      static_cast<QuaderPrimitiveCreationShape>(-1)).ok());
+  EXPECT_TRUE(session_.extrude().preview_active());
+  EXPECT_EQ(editor_.tools().active_tool(), "extrude");
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  expect_mesh(strip, pending);
+}
+
 TEST_F(ExtrudeToolServiceTests, SharedDefaultsRememberAcceptedAmountsWithoutChangingPendingGeometry) {
   const auto strip = create_strip();
   select_strip(strip);
@@ -745,7 +815,11 @@ TEST_F(ExtrudeToolServiceTests, FailedDragReleaseCannotRememberACompensatedSampl
   EXPECT_FALSE(tool.update_drag(4.0).ok);
   session_.modeling().set_modeling_sdk_projection_failure_for_tests(
       ModelingSdkProjectionFailurePoint::None);
-  ASSERT_TRUE(tool.release_drag().ok);
+  EXPECT_FALSE(tool.release_drag().ok);
+  EXPECT_TRUE(tool.preview_active());
+  EXPECT_TRUE(tool.dragging());
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  ASSERT_TRUE(tool.cancel_drag().ok);
   EXPECT_FALSE(tool.preview_active());
   EXPECT_DOUBLE_EQ(tool.amount(), 2.0);
   expect_mesh(strip, original);

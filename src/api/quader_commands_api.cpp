@@ -2099,16 +2099,25 @@ std::optional<QuaderKeybindingContext>
 QuaderCommandsApi::Impl::tool_settings_keybinding_context(
     const ViewportToolState &state) const {
   const auto pane = viewports_.focused_pane();
-  if (!tools_.pane_owns_executing_tool(pane)) {
-    return std::nullopt;
-  }
-  const auto settings = tools_.settings_for_pane(pane);
+  const bool owns_operation = tools_.pane_owns_executing_tool(pane);
+  const auto settings = owns_operation ? tools_.settings_for_pane(pane)
+                                      : tools_.active_settings();
   if (!settings.active || (!settings.apply_visible && !settings.can_cancel)) {
     return std::nullopt;
   }
-  const bool native = tools_.active_native_tool_lifecycle(state.active_tool);
+  auto lifecycle_state = state;
+  if (!owns_operation) {
+    // Reserve the executing operation's lifecycle keys in a passive pane's
+    // settings panel too. Otherwise Escape can fall through to Select and
+    // implicitly accept another pane's draft. Execution still checks ownership.
+    const auto *descriptor = find_viewport_tool_descriptor(tools_.active_tool());
+    if (descriptor == nullptr) return std::nullopt;
+    lifecycle_state.active_tool = descriptor->tool;
+  }
+  const bool native =
+      tools_.active_native_tool_lifecycle(lifecycle_state.active_tool);
   return viewport_keybinding_context(
-      state, true, false,
+      lifecycle_state, true, false,
       {.modal_tool_active = native,
        .active_tool_owns_viewport = native,
        .operation_preview_active = !native && settings.preview_active},
@@ -3259,10 +3268,11 @@ void QuaderCommandsApi::Impl::register_commands() {
           return viewport_tool_available(tool_kind) &&
                  tools_.can_activate(tool_kind);
         });
-    if (tool->viewport_tool() == ViewportToolId::Knife ||
+    if (tool->viewport_tool() == ViewportToolId::InsertEdgeLoop ||
+        tool->viewport_tool() == ViewportToolId::Knife ||
         tool->viewport_tool() == ViewportToolId::UvPeel) {
-      // Peel activates before guides are selected and intentionally has no
-      // default shortcut; existing assignments keep their canonical command.
+      // Loop insertion and Peel enter Edge mode through their activation owner;
+      // Knife accepts every mode. Keep their launch shortcuts equally available.
       set_keybinding_selection_modes(activation_command, kSelectionModeAny);
     } else if (tool->viewport_tool() == ViewportToolId::PathArray) {
       // Path Array starts from one selected Curve, which is exposed through

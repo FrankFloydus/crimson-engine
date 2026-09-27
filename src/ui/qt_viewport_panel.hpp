@@ -251,9 +251,6 @@ private:
   void refresh_control_hint_context();
   [[nodiscard]] bool pane_interaction_locked() const;
   void set_modal_tool_owns_viewport_snapshot(bool owns_viewport);
-  [[nodiscard]] bool is_viewport_internal_event_target(
-      const QObject *target, const QPoint &global_position) const;
-  void queue_external_pointer_event(const QMouseEvent &event);
   void update_fly_navigation_hud(Pane &pane, bool active,
                                  bool speed_is_default, float speed);
   void hide_fly_navigation_huds();
@@ -351,9 +348,6 @@ private:
   bool modal_tool_dragging_ = false;
   bool modal_tool_owns_viewport_snapshot_ = false;
   bool active_tool_revision_valid_ = false;
-  bool application_pointer_filter_installed_ = false;
-  bool pending_external_pointer_event_ = false;
-  bool pending_external_pointer_left_release_only_ = true;
   std::vector<QuaderInputChord> suppressed_keybinding_chords_;
   std::array<ViewportPointerReleaseSuppression, 3>
       command_pointer_release_suppression_;

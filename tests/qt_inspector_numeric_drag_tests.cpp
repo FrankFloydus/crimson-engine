@@ -1391,6 +1391,63 @@ TEST_F(QtInspectorNumericDragTests,
 }
 
 TEST_F(QtInspectorNumericDragTests,
+       ChangingTransformFieldAcceptsThePreviousDraftBeforeStartingAnother) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize();
+  InspectorPanel panel;
+  show(panel, runtime);
+  auto *position = position_x(panel);
+  auto *scale = scale_axis(panel, "x");
+  ASSERT_NE(position, nullptr);
+  ASSERT_NE(scale, nullptr);
+  const auto undo_before = runtime.session.history().undo_count();
+  position->setValue(2.0);
+  runtime.expect_position_x(2.0);
+  EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
+  scale->setValue(3.0);
+  runtime.expect_position_x(2.0);
+  expect_scale(runtime, runtime.entity, {3.0, 1.0, 1.0});
+  EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
+  ASSERT_TRUE(QMetaObject::invokeMethod(scale, "editingFinished", Qt::DirectConnection));
+  EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 2u);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  expect_scale(runtime, runtime.entity, {1.0, 1.0, 1.0});
+  runtime.expect_position_x(2.0);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  runtime.expect_position_x(0.0);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       SelectionRefreshAcceptsTheOriginalDraftWithoutEditingTheNewSelection) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize();
+  const auto second = runtime.editor.scene().create_empty();
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(runtime.editor.scene().select(runtime.entity).ok());
+  InspectorPanel panel;
+  show(panel, runtime);
+  auto *position = position_x(panel);
+  ASSERT_NE(position, nullptr);
+  position->setValue(2.0);
+  runtime.expect_position_x(2.0);
+  ASSERT_TRUE(runtime.editor.scene().select(second.value().id).ok());
+  const auto undo_before_refresh = runtime.session.history().undo_count();
+  panel.refresh(runtime.context);
+  runtime.expect_position_x(2.0);
+  EXPECT_FLOAT_EQ(runtime.editor.query().entity(second.value().id)->transform.position.x,
+                  0.0f);
+  EXPECT_EQ(runtime.session.history().undo_count(), undo_before_refresh + 1u);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  runtime.expect_position_x(0.0);
+  EXPECT_FLOAT_EQ(runtime.editor.query().entity(second.value().id)->transform.position.x,
+                  0.0f);
+  ASSERT_TRUE(runtime.editor.history().redo().ok());
+  runtime.expect_position_x(2.0);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
        RuntimeAbandonmentDropsPendingMotionWithoutCallingTheOutgoingOwner) {
   InspectorTransformRuntime runtime;
   runtime.initialize();

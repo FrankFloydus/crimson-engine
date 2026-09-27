@@ -1390,14 +1390,13 @@ CommandResult PivotToolService::apply_persistent() {
     return command_unchanged_result();
   }
   if (!persistent_session_is_valid()) {
-    persistent_.reset();
     return command_invalid_result(
         "Pivot target changed before the operation was applied.");
   }
   const PersistentSession session = *persistent_;
-  persistent_.reset();
   if (near_same_point(session.original_world_position,
                       session.preview_world_position)) {
+    persistent_.reset();
     clear_quick_override();
     return command_changed_result();
   }
@@ -1410,6 +1409,7 @@ CommandResult PivotToolService::apply_persistent() {
       }},
       "Set Pivot"));
   if (result.ok) {
+    persistent_.reset();
     clear_quick_override();
   }
   return result;

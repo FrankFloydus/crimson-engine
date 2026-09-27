@@ -129,6 +129,8 @@ public:
   CommandResult refresh();
   CommandResult cancel();
   CommandResult apply();
+  /// Accepts a draft or control drag before leaving the Curve tool.
+  CommandResult finish();
   /** Activates a detached, empty creation session without discarding a draft. */
   CommandResult begin_new_curve();
   CommandResult new_curve();

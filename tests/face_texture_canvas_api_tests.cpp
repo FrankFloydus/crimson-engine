@@ -312,36 +312,55 @@ TEST(FaceTextureCanvasApiTests, ModifierChangesUseOneBaselineAndReturningWithSna
 }
 
 TEST(FaceTextureCanvasApiTests, GenericUndoAndCancelFinishTheTextureCheckpoint) {
-  FaceTextureCanvasHarness harness;
-  harness.create_box();
-  auto &editor = harness.editor;
-  harness.session.mark_clean();
-  const auto original = editor.modeling().face_texture_canvas();
-  const auto history = editor.history().snapshot();
   for (const bool use_undo : {true, false}) {
+    SCOPED_TRACE(use_undo);
+    FaceTextureCanvasHarness harness;
+    harness.create_box();
+    auto &editor = harness.editor;
+    harness.session.mark_clean();
+    const auto original = editor.modeling().face_texture_canvas();
+    const auto history = editor.history().snapshot();
     ASSERT_TRUE(harness.begin_translation().ok());
     ASSERT_TRUE(editor.modeling().update_face_texture_gesture({.current = {9.0f, 2.0f}}).ok());
+    const auto candidate = editor.modeling().face_texture_canvas();
     const auto canceled = use_undo ? editor.history().undo() : editor.modeling().cancel_preview();
     ASSERT_TRUE(canceled.ok()) << canceled.error_message();
     EXPECT_FALSE(editor.modeling().face_texture_canvas().gesture_active);
     expect_same_mapping(editor.modeling().face_texture_canvas(), original);
-    expect_same_history(editor.history().snapshot(), history);
-    EXPECT_FALSE(editor.project().dirty());
+    if (use_undo) {
+      EXPECT_TRUE(editor.history().can_redo());
+      EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+      ASSERT_TRUE(editor.history().redo().ok());
+      expect_same_mapping(editor.modeling().face_texture_canvas(), candidate);
+      ASSERT_TRUE(editor.history().undo().ok());
+      expect_same_mapping(editor.modeling().face_texture_canvas(), original);
+    } else {
+      expect_same_history(editor.history().snapshot(), history);
+      EXPECT_FALSE(editor.project().dirty());
+    }
   }
 }
 
-TEST(FaceTextureCanvasApiTests, SceneReplacementEndsGestureAndRejectsOldUpdates) {
+TEST(FaceTextureCanvasApiTests, SceneReplacementAcceptsGestureAndRetainsDirtyScene) {
   FaceTextureCanvasHarness harness;
   harness.create_box();
   auto &editor = harness.editor;
+  const auto original = editor.modeling().face_texture_canvas();
+  const auto history_before = harness.session.history().undo_count();
   ASSERT_TRUE(harness.begin_translation().ok());
   ASSERT_TRUE(editor.modeling().update_face_texture_gesture({.current = {9.0f, 2.0f}}).ok());
-  ASSERT_TRUE(editor.scene_documents().new_scene().ok());
+  const auto candidate = editor.modeling().face_texture_canvas();
+  const auto replaced = editor.scene_documents().new_scene();
+  EXPECT_FALSE(replaced.ok());
+  EXPECT_NE(replaced.error_message().find("Save or discard"), std::string::npos);
   EXPECT_FALSE(editor.modeling().face_texture_canvas().gesture_active);
-  EXPECT_TRUE(editor.modeling().face_texture_canvas().outline.empty());
+  expect_same_mapping(editor.modeling().face_texture_canvas(), candidate);
   EXPECT_FALSE(editor.modeling().update_face_texture_gesture({.current = {19.0f, 2.0f}}).ok());
-  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_EQ(harness.session.history().undo_count(), history_before + 1U);
   ASSERT_TRUE(editor.modeling().cancel_face_texture_gesture().ok());
+  expect_same_mapping(editor.modeling().face_texture_canvas(), candidate);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_same_mapping(editor.modeling().face_texture_canvas(), original);
 }
 
 TEST(FaceTextureCanvasApiTests, UnchangedQueriesDoNotExtractGeometryOrRepublish) {

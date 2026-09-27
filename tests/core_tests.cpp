@@ -16027,7 +16027,7 @@ TEST(DocumentCommandTests,
 }
 
 TEST(DocumentCommandTests,
-     TransformPreviewCommitRestoresBeforeStateWhenTargetBecomesLocked) {
+     TransformPreviewCommitRetainsCandidateWhenTargetBecomesLocked) {
   SceneDocument scene;
   const EntityId entity = scene.create_entity("Brush");
   EditorHistoryService history;
@@ -16042,12 +16042,42 @@ TEST(DocumentCommandTests,
 
   const DocumentCommandResult committed = transaction.commit(history);
   EXPECT_FALSE(committed.ok);
-  EXPECT_FALSE(transaction.active());
+  EXPECT_TRUE(transaction.active());
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 6.0f);
   ASSERT_NE(scene.lock(entity), nullptr);
   EXPECT_TRUE(scene.lock(entity)->locked);
   EXPECT_FALSE(history.can_undo());
+  ASSERT_TRUE(scene.set_locked(entity, false));
+  ASSERT_TRUE(transaction.commit(history).ok);
+  EXPECT_FALSE(transaction.active());
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 6.0f);
+}
+
+TEST(DocumentCommandTests,
+     SceneTransformDragCommitFailureRetainsPreviewUntilExplicitCancel) {
+  SceneDocument scene;
+  const EntityId entity = scene.create_entity("Brush");
+  ASSERT_TRUE(scene.set_selected(entity, true));
+  EditorHistoryService history;
+  SceneTransformDragService service;
+  ASSERT_TRUE(service.begin(scene, {}, true, "Move Preview"));
+  TransformComponent after = *scene.transform(entity);
+  after.position.x = 6.0F;
+  ASSERT_TRUE(service.preview_transform(entity, after).ok);
+  ASSERT_TRUE(scene.set_locked(entity, true));
+  const auto failed = service.commit(history);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_TRUE(service.preview_active());
+  EXPECT_FALSE(service.targets().empty());
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 6.0F);
+  EXPECT_FALSE(history.can_undo());
+  ASSERT_TRUE(service.cancel().ok);
+  EXPECT_FALSE(service.preview_active());
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0F);
 }
 
 
@@ -20359,6 +20389,11 @@ TEST(ModelingSessionServiceTests,
       test_tool_screen_event(camera, {0.0f, -1.0f, 1.0f}, 4.0f));
   ASSERT_TRUE(hover.ok) << hover.message;
   ASSERT_TRUE(service.tool_status().knife_has_current);
+  ASSERT_TRUE(service.accept_knife_point(
+      test_tool_screen_event(camera, {0.0f, -1.0f, 1.0f}, 4.0f)).ok);
+  ASSERT_TRUE(service.update_knife_hover(
+      test_tool_screen_event(camera, {0.0f, 1.0f, 1.0f}, 4.0f)).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
 
   const ViewportOverlayFrame persistent = service.selection_overlay_frame();
   const ViewportOverlayFrame volatile_frame = service.volatile_overlay_frame();
@@ -20368,7 +20403,19 @@ TEST(ModelingSessionServiceTests,
       }));
   EXPECT_TRUE(std::ranges::none_of(
       persistent.lines, [](const ViewportOverlayLine &line) {
-        return line.source == ViewportOverlaySource::Tool;
+        return line.source == ViewportOverlaySource::Tool &&
+               line.layer != ViewportOverlayLayer::SourceWire;
+      }));
+  EXPECT_TRUE(std::ranges::any_of(
+      persistent.lines, [&](const ViewportOverlayLine &line) {
+        return line.source == ViewportOverlaySource::ComponentSelection &&
+               line.layer == ViewportOverlayLayer::SourceWire &&
+               line.element.object_id == box.object.modeling_object_id;
+      }));
+  EXPECT_TRUE(std::ranges::any_of(
+      volatile_frame.lines, [](const ViewportOverlayLine &line) {
+        return line.source == ViewportOverlaySource::Tool &&
+               line.layer == ViewportOverlayLayer::ToolPreviewLine;
       }));
   EXPECT_TRUE(std::ranges::any_of(
       volatile_frame.points, [](const ViewportOverlayPoint &point) {
@@ -25013,7 +25060,7 @@ TEST(SceneSessionTests,
 }
 
 TEST(SceneSessionTests,
-     StructuralAndOperationPreviewsRejectOverlappingCheckpointOwnership) {
+     OperationTransitionSettlesStructuralPreviewWithoutOverlappingCheckpoints) {
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -25025,13 +25072,24 @@ TEST(SceneSessionTests,
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
   session.mark_clean();
+  const auto history_before = session.history().undo_count();
 
   ASSERT_TRUE(editor.modeling().begin_transform_preview(true).ok());
-  const QuaderApiVoidResult blocked_operation = editor.commands().execute(
+  const auto duplicate = session.scene().primary_selection();
+  ASSERT_NE(duplicate, box.value().entity);
+  const QuaderApiVoidResult next_operation = editor.commands().execute(
       editor.commands().command_id_for_modeling_action("half_cut"));
-  EXPECT_FALSE(blocked_operation.ok());
-  ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
-  EXPECT_FALSE(session.dirty());
+  ASSERT_TRUE(next_operation.ok()) << next_operation.error_message();
+  EXPECT_FALSE(session.modeling().structural_transform_preview_active());
+  EXPECT_TRUE(session.modeling().operation_preview_active());
+  EXPECT_EQ(session.history().undo_count(), history_before + 1U);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_TRUE(session.scene().exists(duplicate));
+  EXPECT_TRUE(session.dirty());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(session.scene().exists(duplicate));
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  session.mark_clean();
 
   const QuaderApiVoidResult operation = editor.commands().execute(
       editor.commands().command_id_for_modeling_action("half_cut"));

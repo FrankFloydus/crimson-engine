@@ -91,6 +91,8 @@ public:
   [[nodiscard]] ProjectSessionResult new_scene();
   [[nodiscard]] ProjectSessionResult open_scene(ProjectRelativePath path);
   [[nodiscard]] ProjectSessionResult activate(SceneSessionId id);
+  /// Accepts pending edits before a document transition or dirty-state prompt.
+  [[nodiscard]] ProjectSessionResult settle_scene_edits(SceneSessionId id);
   /// Validates a saved scene destination without settling previews or writing.
   [[nodiscard]] ProjectSessionResult preflight_save(SceneSessionId id) const;
   [[nodiscard]] ProjectSessionResult save(SceneSessionId id);
@@ -199,7 +201,7 @@ private:
              std::optional<ViewportCameraPose> viewport_camera_pose =
                  std::nullopt,
              ProductRelease minimum_product_release = current_product_release());
-  /** Stages a new tab, persists it, then cancels the outgoing scene before binding. */
+  /** Stages a new tab, persists it, then accepts the outgoing scene before binding. */
   [[nodiscard]] ProjectSessionResult install_scene_and_activate(
       std::unique_ptr<OpenSceneSession> scene, ProjectManifest manifest);
   [[nodiscard]] ProjectSessionResult install_workspace(
@@ -209,7 +211,8 @@ private:
       std::optional<ProjectRelativePath> requested_active,
       std::vector<std::string> warnings,
       const std::function<bool()> &prepare_replacement = {},
-      std::optional<ProjectManifest> original_manifest = std::nullopt);
+      std::optional<ProjectManifest> original_manifest = std::nullopt,
+      bool discard_existing_dirty = false);
   [[nodiscard]] ProjectSessionResult persist_workspace();
   [[nodiscard]] ProjectSessionResult persist_manifest(
       ProjectWorkspaceStorage &workspace, ProjectManifest manifest,
@@ -217,7 +220,8 @@ private:
       std::optional<ProjectRelativePath> active_path);
   [[nodiscard]] ProjectSessionResult persist_prepared_manifest(
       ProjectWorkspaceStorage &workspace, ProjectManifest manifest);
-  [[nodiscard]] bool cancel_transient_state(OpenSceneSession &scene);
+  [[nodiscard]] CommandResult settle_transient_state(
+      OpenSceneSession &scene, bool discard = false);
   [[nodiscard]] bool path_is_open(const ProjectRelativePath &path,
                                   SceneSessionId *id = nullptr) const;
   [[nodiscard]] const ProjectSceneCatalogEntry *

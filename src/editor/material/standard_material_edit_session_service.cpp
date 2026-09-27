@@ -159,6 +159,13 @@ StandardMaterialEditSessionService::new_material() {
   if (!name.ok()) {
     return failure(name.error().message);
   }
+  const auto accepted = accept_base_color_preview();
+  if (!accepted.ok) {
+    return accepted;
+  }
+  if (current_ && current_->snapshot.dirty) {
+    return failure("Current Standard Material has unsaved changes.");
+  }
   document.id = ProjectAssetId::generate();
   document.name = name.take_value();
   document.kind = ProjectMaterialKind::Standard;
@@ -197,6 +204,13 @@ StandardMaterialEditSessionService::open(ProjectAssetId id) {
       entry->material.standard_material() == nullptr) {
     return failure("The selected QMAT is not a supported Standard Material.");
   }
+  const auto accepted = accept_base_color_preview();
+  if (!accepted.ok) {
+    return accepted;
+  }
+  if (current_ && current_->snapshot.dirty) {
+    return failure("Current Standard Material has unsaved changes.");
+  }
   reset_with(entry->material, entry->path, entry->content_revision);
   return success(true, "Standard Material opened.");
 }
@@ -225,6 +239,12 @@ StandardMaterialEditResult
 StandardMaterialEditSessionService::close(bool discard_dirty) {
   if (!current_) {
     return success(false, "No Standard Material is open.");
+  }
+  if (!discard_dirty) {
+    const auto accepted = accept_base_color_preview();
+    if (!accepted.ok) {
+      return accepted;
+    }
   }
   if (current_->snapshot.dirty && !discard_dirty) {
     return failure("Standard Material contains unsaved changes.");
@@ -396,6 +416,13 @@ StandardMaterialEditSessionService::scene_base_color_preview(
       current_->snapshot.document.standard_material();
   return material != nullptr ? std::optional(material->base_color)
                              : std::nullopt;
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::accept_base_color_preview() {
+  return current_ && current_->base_color_preview.has_value()
+             ? finish_base_color_preview(current_->snapshot.session_id, true)
+             : success(false);
 }
 
 StandardMaterialEditResult
@@ -752,9 +779,6 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     return failure(release_feature_unavailable_message());
   }
 
-  if (current_ && current_->base_color_preview.has_value()) {
-    return failure("Finish the albedo preview before saving the material.");
-  }
   if (!current_ || project_ == nullptr || !project_->has_project() ||
       project_->workspace() == nullptr) {
     return failure("Open a project and Standard Material before saving.");
@@ -873,6 +897,9 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
         "Saved Standard Material is missing from the catalog.");
   }
   rollback.commit();
+  // The serialized draft already includes the live color. End the picker only
+  // after publication succeeds, so a failed save leaves it editable.
+  current_->base_color_preview.reset();
   if (current_->scene_color_preview) {
     current_->scene_color_preview = false;
     advance_scene_preview_revision();

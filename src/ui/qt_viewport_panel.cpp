@@ -837,8 +837,6 @@ void QtViewportPanel::shutdown() {
   last_fly_navigation_active_ = false;
   edge_length_hud_enabled_ = false;
   modal_tool_dragging_ = false;
-  pending_external_pointer_event_ = false;
-  pending_external_pointer_left_release_only_ = true;
   linear_array_wheel_remainder_ = 0.0;
   radial_array_wheel_remainder_ = 0.0;
   curve_pick_cache_.reset();
@@ -912,8 +910,6 @@ void QtViewportPanel::abandon_interactions() {
   interaction_controller_.clear_modal_tool_state();
   active_box_preview_ = {};
   modal_tool_dragging_ = false;
-  pending_external_pointer_event_ = false;
-  pending_external_pointer_left_release_only_ = true;
   suppressed_keybinding_chords_.clear();
   command_pointer_release_suppression_ = {};
   linear_array_wheel_remainder_ = 0.0;
@@ -2170,24 +2166,6 @@ bool QtViewportPanel::eventFilter(QObject *watched, QEvent *event) {
       }
     }
   }
-  const bool pointer_event =
-      event != nullptr &&
-      (event->type() == QEvent::MouseButtonPress ||
-       event->type() == QEvent::MouseButtonDblClick ||
-       event->type() == QEvent::MouseButtonRelease);
-  if (pointer_event && modal_tool_owns_viewport_snapshot_) {
-    const auto &mouse = *static_cast<const QMouseEvent *>(event);
-    if (!is_viewport_internal_event_target(
-            watched, mouse.globalPosition().toPoint())) {
-    // Pane-owned chrome and its combo popups are internal by QObject ancestry.
-    // Split handles, docks, menus and dialogs remain external. Active Qt
-    // popups/modals are intentionally not blanket exemptions: their keyboard
-    // scope is protected by QtCommandEventFilter, while an outside pointer
-    // gesture still exits an already-active viewport modal tool.
-      queue_external_pointer_event(mouse);
-    }
-  }
-
   if (event == nullptr ||
       (event->type() != QEvent::MouseButtonPress &&
        event->type() != QEvent::MouseButtonDblClick &&
@@ -3151,65 +3129,6 @@ void QtViewportPanel::cancel_navigation() {
 void QtViewportPanel::set_modal_tool_owns_viewport_snapshot(
     bool owns_viewport) {
   modal_tool_owns_viewport_snapshot_ = owns_viewport;
-  const bool should_install =
-      modal_tool_owns_viewport_snapshot_ && qApp != nullptr;
-  if (application_pointer_filter_installed_ == should_install) {
-    return;
-  }
-
-  if (should_install) {
-    qApp->installEventFilter(this);
-  } else if (qApp != nullptr) {
-    qApp->removeEventFilter(this);
-  }
-  application_pointer_filter_installed_ = should_install;
-}
-
-bool QtViewportPanel::is_viewport_internal_event_target(
-    const QObject *target, const QPoint &global_position) const {
-  if (qt_event_target_belongs_to_tool_settings(target, global_position)) {
-    return true;
-  }
-
-  const auto pane_owns_object = [this](const QObject *object) {
-    for (const QObject *current = object; current != nullptr;
-         current = current->parent()) {
-      for (const Pane &pane_state : panes_) {
-        if (current == pane_state.frame || current == pane_state.surface ||
-            current == pane_state.surface_container) {
-          return true;
-        }
-      }
-    }
-    return false;
-  };
-  if (pane_owns_object(target)) {
-    return true;
-  }
-
-  // A QMenu popup has its own QWidgetWindow. Associate both the popup widget
-  // and that native window with the pane-owned display menu that created it.
-  const QWidget *popup = QApplication::activePopupWidget();
-  return popup != nullptr && pane_owns_object(popup) &&
-         (target == popup || target == popup->windowHandle());
-}
-
-void QtViewportPanel::queue_external_pointer_event(const QMouseEvent &event) {
-  if (event.button() != Qt::LeftButton &&
-      event.button() != Qt::RightButton &&
-      event.button() != Qt::MiddleButton) {
-    return;
-  }
-  const bool left_button_release =
-      event.type() == QEvent::MouseButtonRelease &&
-      event.button() == Qt::LeftButton;
-  if (!pending_external_pointer_event_) {
-    pending_external_pointer_left_release_only_ = left_button_release;
-  } else {
-    pending_external_pointer_left_release_only_ =
-        pending_external_pointer_left_release_only_ && left_button_release;
-  }
-  pending_external_pointer_event_ = true;
 }
 
 void QtViewportPanel::update_fly_navigation_hud(
@@ -4414,31 +4333,6 @@ void QtViewportPanel::process_viewport_input(
     }
   }
 
-  const bool external_pointer_event =
-      std::exchange(pending_external_pointer_event_, false);
-  const bool external_pointer_left_release_only =
-      std::exchange(pending_external_pointer_left_release_only_, true);
-  if (should_cancel_modal_tool_for_external_pointer({
-          .external_pointer_event = external_pointer_event,
-          .modal_tool_owns_viewport = modal_tool_owns_viewport(),
-          .persistent_native_tool_active =
-              native_tools.light_creation_active() ||
-              interaction_controller_
-                  .active_tool_uses_editor_native_lifecycle(
-                      input_router_.state().active_tool),
-          .navigation_active = result.navigation_active,
-          .left_button_release_only = external_pointer_left_release_only,
-          .insert_edge_loop_dragging =
-              current_tool_status.insert_edge_loop_dragging,
-          .cut_dragging = current_tool_status.cut_dragging,
-          .mirror_dragging = current_tool_status.mirror_dragging,
-      })) {
-    if (!cancel_active_modal_tool(false)) {
-      return;
-    }
-    cancel_consumed = true;
-  }
-
   if (suppress_hover_work || result.grid_preset_changed) {
     hover_controller_.invalidate();
   }
@@ -4798,12 +4692,14 @@ void QtViewportPanel::process_viewport_input(
                       .left_released = sample.left_released,
                       .can_interact = input.viewport_hovered &&
                                       !gizmo_consumed &&
+                                      !input.navigation_active &&
                                       !result.navigation_active,
                       .finalize_pressed = input.modal_tool_finalize_pressed,
                       .mode_cycle_pressed = input.modal_tool_mode_cycle_pressed,
                       .suppress_hover_work = suppress_hover_work,
                       .gizmo_consumed = gizmo_consumed,
-                      .navigation_active = result.navigation_active,
+                      .navigation_active = input.navigation_active ||
+                                           result.navigation_active,
                       .text_input_active = input.text_input_active,
                       .viewport_focused = input.viewport_focused,
                       .pointer_interaction_canceled =

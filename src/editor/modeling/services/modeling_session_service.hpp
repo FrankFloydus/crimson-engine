@@ -401,6 +401,8 @@ public:
   [[nodiscard]] bool transform_drag_active() const;
   [[nodiscard]] bool can_cancel_active_tool_or_preview() const;
   [[nodiscard]] bool can_cancel_active_preview_for_undo() const;
+  /// Authored drafts/gestures requiring acceptance; excludes idle tool hover.
+  [[nodiscard]] bool pending_operation_active() const;
   ModelingCommandResult cancel_competing_state_for_native_tool_activation();
   [[nodiscard]] ModelingToolStatus tool_status() const;
   [[nodiscard]] ModelingLiveStatus live_status() const;
@@ -581,6 +583,9 @@ public:
                        EntityId active = kInvalidEntityId);
   ModelingCommandResult
   set_component_selection(const ModelingComponentSelectionRequest &request);
+  /// Read-only preflight used only when a selection change would settle a draft.
+  [[nodiscard]] ModelingCommandResult validate_component_selection(
+      const ModelingComponentSelectionRequest &request) const;
   ModelingCommandResult apply_resolved_component_selection(
       const ModelingResolvedComponentSelectionRequest &request);
   [[nodiscard]] bool resolved_component_body_target_eligible(

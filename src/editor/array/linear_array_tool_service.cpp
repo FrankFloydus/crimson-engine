@@ -554,17 +554,32 @@ CommandResult LinearArrayToolService::apply() {
     return command_unchanged_result();
   }
   if (!session_sources_are_valid(*session_)) {
-    session_.reset();
-    clear_preview_cache();
-    issue_tool_settings_revision();
     return command_invalid_result(
         "Linear Array sources changed before the operation was applied.");
   }
 
   const Session committed = *session_;
-  session_.reset();
-  clear_preview_cache();
-  issue_tool_settings_revision();
+  const auto finish = [this](CommandResult result) {
+    if (result.ok) {
+      session_.reset();
+      clear_preview_cache();
+      issue_tool_settings_revision();
+    } else if (!result.changed) {
+      // A successful command rollback restores the same sources but can advance
+      // their publication revisions. Retain the draft against those restored
+      // revisions so a retry does not mistake our own rollback for an edit.
+      session_->selection_revision = scene_.selection_revision();
+      for (SourceSnapshot &source : session_->sources) {
+        if (const MeshAsset *mesh = assets_.mesh(source.mesh)) {
+          source.mesh_revision = mesh->revision;
+        }
+      }
+      validated_session_generation_ = 0;
+      clear_preview_cache();
+      issue_tool_settings_revision();
+    }
+    return result;
+  };
   if (committed.instance_occurrences) {
     std::vector<LinkedInstanceArraySource> sources;
     sources.reserve(committed.sources.size());
@@ -594,8 +609,8 @@ CommandResult LinearArrayToolService::apply() {
           .generated_sampling_from_local = std::move(*mappings),
       });
     }
-    return history_.execute(std::make_unique<LinkedInstanceArrayCommand>(
-        scene_, "Linear Array", std::move(sources)));
+    return finish(history_.execute(std::make_unique<LinkedInstanceArrayCommand>(
+        scene_, "Linear Array", std::move(sources))));
   }
 
   ModelingLinearArrayRequest request{
@@ -609,8 +624,8 @@ CommandResult LinearArrayToolService::apply() {
         .modeling_object_id = source.modeling_object_id,
     });
   }
-  return history_.execute(std::make_unique<LinearArrayHistoryCommand>(
-      modeling_, std::move(request)));
+  return finish(history_.execute(std::make_unique<LinearArrayHistoryCommand>(
+      modeling_, std::move(request))));
 }
 
 CommandResult LinearArrayToolService::set_count(std::uint32_t count) {

@@ -56,20 +56,14 @@ bool TwoStageBoxTool::accept_preview(ViewportBoxToolContext &box_context,
   return accepted.changed;
 }
 
-bool TwoStageBoxTool::rollback_failed_preview(
+bool TwoStageBoxTool::preview_failure_ended_session(
     ViewportBoxToolContext &box_context, const char *action,
     const ModelingBoxPreview &preview) const {
   log_preview_failure(action, preview);
-  if (preview.ok || !box_context.cancel_session) {
-    return false;
-  }
-
-  const ModelingCommandResult canceled = box_context.cancel_session();
-  if (!canceled.ok) {
-    LOG_ERROR("Primitive rollback failed: {}", canceled.message);
-  }
-  return canceled.ok ||
-         (box_context.session_active && !box_context.session_active());
+  // Invalid pointer samples and temporary query failures must not discard
+  // previously accepted shapes or the last authored footprint.
+  return !preview.ok && box_context.session_active &&
+         !box_context.session_active();
 }
 
 ViewportPointerCursor TwoStageBoxTool::pointer_cursor() const {
@@ -153,6 +147,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
     bool action_consumed = false;
     bool active_tool_sync_requested = false;
     bool settings_operation_started = false;
+    bool pointer_gesture_started = false;
 
     if (preview.ok && preview.drag_state == ModelingBoxDragState::Idle &&
         modal_state.primary_pointer_gesture) {
@@ -174,6 +169,12 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       }
     }
 
+    const auto retire_pointer_gesture = [&]() {
+      modal_state.primary_release_suppression.begin(
+          QuaderMouseButton::Left, pointer.left_down);
+      modal_state.primary_pointer_gesture.reset();
+      invalidate(context);
+    };
     const auto cancel_pointer_gesture = [&]() {
       if (!modal_state.primary_pointer_gesture) {
         return true;
@@ -189,28 +190,28 @@ ViewportToolResult TwoStageBoxTool::handle_event(
         LOG_ERROR("Primitive pointer cancel failed: {}", canceled.message);
         return false;
       }
-      modal_state.primary_release_suppression.begin(
-          QuaderMouseButton::Left, pointer.left_down);
-      modal_state.primary_pointer_gesture.reset();
-      invalidate(context);
+      retire_pointer_gesture();
       return true;
     };
 
-    const bool pointer_interrupted =
-        modal_state.primary_pointer_gesture &&
-        (pointer.pointer_interaction_canceled || !pointer.viewport_focused ||
-         pointer.navigation_active || pointer.gizmo_consumed ||
-         pointer.text_input_active);
     const bool pointer_abandoned =
         modal_state.primary_pointer_gesture && !pointer.left_down &&
         !pointer.left_released;
-    if (pointer_interrupted || pointer_abandoned) {
-      const bool canceled = cancel_pointer_gesture();
+    if (modal_state.primary_pointer_gesture &&
+        (pointer.pointer_interaction_canceled || pointer_abandoned)) {
+      // An unfinished footprint has no authored release endpoint. Preserve it
+      // for a fresh gesture or explicit Cancel rather than guessing a volume.
+      retire_pointer_gesture();
       return {
           .handled = true,
           .consumed = true,
-          .modal_state_changed = canceled,
+          .modal_state_changed = true,
       };
+    }
+    if (modal_state.primary_pointer_gesture &&
+        (!pointer.viewport_focused || pointer.navigation_active ||
+         pointer.gizmo_consumed || pointer.text_input_active)) {
+      return {.handled = true, .consumed = true};
     }
 
     if (!preview.ok) {
@@ -219,7 +220,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
             QuaderMouseButton::Left, pointer.left_down);
       }
       modal_state.primary_pointer_gesture.reset();
-      active_tool_sync_requested = rollback_failed_preview(
+      active_tool_sync_requested = preview_failure_ended_session(
           box_context, "Box preview query", preview);
       invalidate(context);
       return {
@@ -252,7 +253,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
 
     auto finish_footprint_and_accept = [&](const ModelingBoxToolEvent &finish) {
       preview = preview_port.update_box_footprint(finish);
-      if (rollback_failed_preview(box_context,
+      if (preview_failure_ended_session(box_context,
                                   "Box footprint finalize update", preview)) {
         active_tool_sync_requested = true;
       }
@@ -272,7 +273,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       modal_state.primary_pointer_gesture.reset();
       if (preview.ok) {
         preview = preview_port.begin_box_height(finish);
-        if (rollback_failed_preview(box_context, "Box height begin",
+        if (preview_failure_ended_session(box_context, "Box height begin",
                                     preview)) {
           active_tool_sync_requested = true;
         }
@@ -304,7 +305,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
                     : ModelingBoxPreview{};
       if (!preview.ok) {
         active_tool_sync_requested =
-            rollback_failed_preview(box_context, "Box hover", preview);
+            preview_failure_ended_session(box_context, "Box hover", preview);
         invalidate(context);
         action_consumed = true;
       }
@@ -319,12 +320,15 @@ ViewportToolResult TwoStageBoxTool::handle_event(
               pointer.pointer_pressed_edges, QuaderMouseButton::Left,
               pointer.left_click_local, pointer.mouse_screen, pointer.modifiers,
               pointer.pointer_drag_threshold_pixels);
+      pointer_gesture_started = true;
       box_event =
           make_box_event(modal_state.primary_pointer_gesture->press.local);
-      preview = preview_port.begin_box_footprint(box_event);
-      settings_operation_started =
-          preview.ok && preview.drag_state == ModelingBoxDragState::Footprint;
-      if (rollback_failed_preview(box_context, "Box footprint begin",
+      if (preview.drag_state != ModelingBoxDragState::Footprint) {
+        preview = preview_port.begin_box_footprint(box_event);
+        settings_operation_started =
+            preview.ok && preview.drag_state == ModelingBoxDragState::Footprint;
+      }
+      if (preview_failure_ended_session(box_context, "Box footprint begin",
                                   preview)) {
         active_tool_sync_requested = true;
         modal_state.primary_release_suppression.begin(
@@ -347,7 +351,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
          (modal_state.primary_pointer_gesture->press.sequence == 0u &&
           pointer.pointer_released_edges.empty()));
     // A first drag can begin and end between two host frames.
-    if ((!action_consumed || settings_operation_started) && matching_release &&
+    if ((!action_consumed || pointer_gesture_started) && matching_release &&
         preview.drag_state == ModelingBoxDragState::Footprint &&
         !pointer.gizmo_consumed && !pointer.navigation_active) {
       const QVec2 release_local =
@@ -357,7 +361,12 @@ ViewportToolResult TwoStageBoxTool::handle_event(
         box_event = make_box_event(release_local);
         finish_footprint_and_accept(box_event);
       } else {
-        (void)cancel_pointer_gesture();
+        if (preview.footprint_count > 0U) {
+          // A stationary retry must not erase the retained authored footprint.
+          retire_pointer_gesture();
+        } else {
+          (void)cancel_pointer_gesture();
+        }
         action_consumed = true;
       }
     }
@@ -371,7 +380,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
             *modal_state.primary_pointer_gesture, pointer.mouse_local)) {
       box_event = make_box_event(pointer.mouse_local);
       preview = preview_port.update_box_footprint(box_event);
-      if (rollback_failed_preview(box_context, "Box footprint update",
+      if (preview_failure_ended_session(box_context, "Box footprint update",
                                   preview)) {
         active_tool_sync_requested = true;
       }
