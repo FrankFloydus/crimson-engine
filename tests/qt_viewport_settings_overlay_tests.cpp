@@ -14,6 +14,7 @@
 #include "editor/session/scene_session.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
 
@@ -22,6 +23,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
+#include <QDir>
 #include <QEvent>
 #include <QEventLoop>
 #include <QFocusEvent>
@@ -31,6 +33,7 @@
 #include <QLocale>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QPixmap>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -38,6 +41,7 @@
 #include <QTimer>
 
 #include <memory>
+#include <optional>
 #include <array>
 #include <filesystem>
 #include <string_view>
@@ -314,6 +318,62 @@ TEST_F(QtViewportSettingsOverlayTests,
       EXPECT_FALSE(settings_->has_settings());
       EXPECT_TRUE(settings_->isHidden());
     }
+  }
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
+       AllArrayToolsExposeDefaultOnDimensionsCheckboxWithoutHistoryChanges) {
+  quader::apply_qt_obsidian_application_theme(QApplication::palette());
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(review_directory));
+  const auto box = editor_->modeling().create_box(
+      {.min = {-0.5f, -0.5f, -0.5f}, .max = {0.5f, 0.5f, 0.5f}}, "Array source");
+  const auto path = editor_->modeling().create_curve({
+      .points = {{.position = {}}, {.position = {4.0f, 0.0f, 0.0f}}}, .name = "Array path"});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(path.ok());
+  for (const auto tool : {"linear_array", "radial_array", "path_array"}) {
+    SCOPED_TRACE(tool);
+    ASSERT_TRUE(editor_->selection().select_object(
+        std::string_view(tool) == "path_array" ? path.value() : box.value()).ok());
+    ASSERT_TRUE(editor_->tools().activate(tool).ok());
+    refresh();
+    auto *checkbox = settings_->findChild<QCheckBox *>(QStringLiteral(
+        "tool_settings.control.%1.show_bounding_box_dimensions").arg(QString::fromUtf8(tool)));
+    ASSERT_NE(checkbox, nullptr);
+    ASSERT_TRUE(checkbox->isVisible());
+    EXPECT_TRUE(checkbox->isChecked());
+    ASSERT_EQ(editor_->tools().active_array_bounding_box_dimensions(), std::optional<bool>{true});
+    const auto history = editor_->history().snapshot();
+    std::uint64_t scale_revision = 1u;
+    for (float scale : {1.0f, 2.0f, 1.0f}) {
+      const quader::QtUiScaleMetrics metrics{scale, ++scale_revision};
+      settings_->apply_ui_scale(metrics);
+      host_->apply_ui_scale(metrics);
+      refresh();
+      checkbox->click();
+      refresh();
+      EXPECT_FALSE(checkbox->isChecked());
+      EXPECT_EQ(editor_->tools().active_array_bounding_box_dimensions(), std::optional<bool>{false});
+      for (int idle = 0; idle < 8; ++idle) refresh();
+      EXPECT_FALSE(checkbox->isChecked());
+      checkbox->click();
+      refresh();
+      EXPECT_TRUE(checkbox->isChecked());
+      if (!review_directory.isEmpty()) {
+        auto *scroll = settings_->findChild<QScrollArea *>(QStringLiteral("tool_settings.scroll"));
+        ASSERT_NE(scroll, nullptr);
+        scroll->ensureWidgetVisible(checkbox);
+        QCoreApplication::processEvents();
+        ASSERT_TRUE(settings_->grab().save(QDir(review_directory).filePath(
+            QStringLiteral("%1_dimensions_settings_%2_%3.png")
+                .arg(QString::fromUtf8(tool)).arg(scale).arg(scale_revision))));
+      }
+    }
+    EXPECT_EQ(editor_->history().snapshot().undo_label, history.undo_label);
+    EXPECT_EQ(editor_->history().snapshot().redo_label, history.redo_label);
+    EXPECT_EQ(editor_->tools().active_tool(), tool);
+    ASSERT_TRUE(editor_->tools().cancel_active_tool_preview().ok());
   }
 }
 

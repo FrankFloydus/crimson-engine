@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,9 @@ public:
     QuaderApiVoidResult begin_light_creation(QuaderLightType type);
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
     [[nodiscard]] std::uint64_t active_settings_revision() const;
+    /// Array-only presentation choice; no preview/layout evaluation. No value
+    /// means ordinary selection dimensions own the viewport presentation.
+    [[nodiscard]] std::optional<bool> active_array_bounding_box_dimensions() const;
     /// Pure presentation of a pane's choice; never starts or settles a tool.
     [[nodiscard]] QuaderToolSettingsTarget settings_for_pane(ViewportPaneId pane) const;
     [[nodiscard]] std::uint64_t settings_revision(ViewportPaneId pane) const;

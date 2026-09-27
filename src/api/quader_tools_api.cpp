@@ -773,6 +773,9 @@ QuaderToolSettingsTarget linear_array_tool_settings_target(
       std::string(kLinearArrayCountSetting), "Num Copies", linear_array.count(),
       kLinearArrayMinimumCount, linear_array.maximum_count(), 1.0,
       QuaderToolSettingNumberInteraction::Stepped));
+  result.controls.push_back(toggle_control(
+      std::string(kLinearArrayShowBoundingBoxDimensionsSetting),
+      "Bounding Box and Dimensions", linear_array.show_bounding_box_dimensions()));
   return result;
 }
 
@@ -845,6 +848,12 @@ path_array_tool_settings_target(const PathArrayToolService &path_array,
   axis.group_id = kPlacementGroup;
   axis.enabled = path_array.follow_path();
   result.controls.push_back(std::move(axis));
+
+  QuaderToolSettingControl bounds = toggle_control(
+      std::string(kPathArrayShowBoundingBoxDimensionsSetting),
+      "Bounding Box and Dimensions", path_array.show_bounding_box_dimensions());
+  bounds.group_id = kPlacementGroup;
+  result.controls.push_back(std::move(bounds));
 
   result.controls.push_back(vector3_number_control(
       "path_array.rotation_offset", "Offset per Copy",
@@ -953,6 +962,9 @@ QuaderToolSettingsTarget radial_array_tool_settings_target(
       radial_array.create_instances()));
   result.controls.back().tooltip =
       "Create linked instances so geometry edits update every copy.";
+  result.controls.push_back(toggle_control(
+      std::string(kRadialArrayShowBoundingBoxDimensionsSetting),
+      "Bounding Box and Dimensions", radial_array.show_bounding_box_dimensions()));
   return result;
 }
 
@@ -1155,6 +1167,8 @@ viewport_transform_array_curve_input_hints(
     const auto handle = session.linear_array().handle_state();
     state.can_apply = handle.visible;
     state.owner_dragging = handle.dragging;
+    state.linear_array_unconstrained =
+        handle.constraint == LinearArrayAxisConstraint::Free;
   } else if (tool_id == "radial_array") {
     state.can_apply = session.radial_array().has_valid_center();
     state.radial_center_locked = session.radial_array().center_locked();
@@ -1840,6 +1854,20 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
                                        modeling.interaction_settings());
 }
 
+std::optional<bool> QuaderToolsApi::active_array_bounding_box_dimensions() const {
+  const SceneSession &session = scene_session(session_);
+  if (session.path_array().active()) {
+    return session.path_array().show_bounding_box_dimensions();
+  }
+  if (session.radial_array().active()) {
+    return session.radial_array().show_bounding_box_dimensions();
+  }
+  if (session.linear_array().active()) {
+    return session.linear_array().show_bounding_box_dimensions();
+  }
+  return std::nullopt;
+}
+
 QuaderToolSettingsTarget
 QuaderToolsApi::settings_for_pane(ViewportPaneId pane) const {
   if (!pane_settings_index(pane).has_value()) {
@@ -2290,6 +2318,15 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
       return quader_api_failure_status(
           session, "Tool setting does not belong to Path Array.");
     }
+    if (name == kPathArrayShowBoundingBoxDimensionsSetting) {
+      if (value != 0.0 && value != 1.0) {
+        return quader_api_failure_status(
+            session, "Invalid Path Array bounding box and dimensions setting.");
+      }
+      return api_status_from_command(
+          session, session.path_array().set_show_bounding_box_dimensions(value != 0.0),
+          QuaderMutationKind::Runtime, "Set Path Array Bounding Box and Dimensions");
+    }
     if (name == kPathArrayCountSetting) {
       if (!std::isfinite(value) || std::round(value) != value ||
           value < static_cast<double>(kPathArrayMinimumCount) ||
@@ -2504,6 +2541,15 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
   }
   const bool radial_array_tool =
       tool_id.empty() || tool_id == kRadialArrayToolId;
+  if (radial_array_tool && name == kRadialArrayShowBoundingBoxDimensionsSetting) {
+    if (value != 0.0 && value != 1.0) {
+      return quader_api_failure_status(
+          session, "Invalid Radial Array bounding box and dimensions setting.");
+    }
+    return api_status_from_command(
+        session, session.radial_array().set_show_bounding_box_dimensions(value != 0.0),
+        QuaderMutationKind::Runtime, "Set Radial Array Bounding Box and Dimensions");
+  }
   if (radial_array_tool && name == kRadialArrayCreateInstancesSetting) {
     if (value != 0.0 && value != 1.0) {
       return quader_api_failure_status(
@@ -2556,6 +2602,16 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
     return api_status_from_command(
         session, session.radial_array().set_repeat_spacing(value),
         QuaderMutationKind::Runtime, "Set Radial Array Repeat Spacing");
+  }
+  if ((tool_id.empty() || tool_id == kLinearArrayToolId) &&
+      name == kLinearArrayShowBoundingBoxDimensionsSetting) {
+    if (value != 0.0 && value != 1.0) {
+      return quader_api_failure_status(
+          session, "Invalid Linear Array bounding box and dimensions setting.");
+    }
+    return api_status_from_command(
+        session, session.linear_array().set_show_bounding_box_dimensions(value != 0.0),
+        QuaderMutationKind::Runtime, "Set Linear Array Bounding Box and Dimensions");
   }
   if ((tool_id.empty() || tool_id == kLinearArrayToolId) &&
       name == kLinearArrayCountSetting) {

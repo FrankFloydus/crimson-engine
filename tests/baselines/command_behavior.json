@@ -25314,7 +25314,7 @@
         }
       },
       "before": "437217de023fcb18ba9740c5f3ab8304",
-      "after": "089f5659174a7362bfc845590b24c16c",
+      "after": "fdf72b7cbeea3d8e673a50d15005f828",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "57621cb4a3f8fe1ace5bbdac9858c0d8",
@@ -25336,7 +25336,7 @@
         "overlay": "2d247ba4c61215e52c530ea381f7cc32",
         "assets": "fed964b26c70d7b8147ff43a1abb220f",
         "history": "4404c6ffdacf87205e55c2eaa73f0bec",
-        "tools": "faacd129b08bc1fc98dccd8aaafce893",
+        "tools": "7af2d28f86621635aa31b2bf895b338c",
         "viewports": "ca9b698ae14b869eceba87c567a99300",
         "preferences": "9a8598571c15cae158b60f5f277e2ef5",
         "revisions": "cb81ce5cd4daadc3c53f831b3c2742b0"
@@ -25370,7 +25370,7 @@
         }
       },
       "before": "437217de023fcb18ba9740c5f3ab8304",
-      "after": "39cc2097990a6fb2573852c341c40297",
+      "after": "ade8a6423e811d3e77f53684515d67d9",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "57621cb4a3f8fe1ace5bbdac9858c0d8",
@@ -25392,7 +25392,7 @@
         "overlay": "2d247ba4c61215e52c530ea381f7cc32",
         "assets": "fed964b26c70d7b8147ff43a1abb220f",
         "history": "4404c6ffdacf87205e55c2eaa73f0bec",
-        "tools": "2016bb5b08e344df83e0440aaa07da43",
+        "tools": "bb1a38b08d9f442e024a39ec7a4e4371",
         "viewports": "4611550b0189a5c98cb7cfbd23246529",
         "preferences": "9a8598571c15cae158b60f5f277e2ef5",
         "revisions": "cb81ce5cd4daadc3c53f831b3c2742b0"
@@ -25482,7 +25482,7 @@
         }
       },
       "before": "51c02d75d59b88ffe99b58dacebb51e3",
-      "after": "9d44a174d5588971d3ff3208dc0eea9e",
+      "after": "e859cae008a294ada135a262f984f940",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "3cf9ef112c349127ad21bf417e252e49",
@@ -25504,7 +25504,7 @@
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "3ae98e2e4408f3556cb5cbca578bb9ef",
         "history": "814150f27ec358e86fed6dec276166fd",
-        "tools": "b07ba31ed8283601d25769eb1e5f3552",
+        "tools": "e302c6a48a87ba98b2ceae0c35b884c7",
         "viewports": "bf196a9841568b430dc2b48941f68995",
         "preferences": "9a8598571c15cae158b60f5f277e2ef5",
         "revisions": "9d39dcf04c03b9c662fdcd262f22df50"
@@ -25515,5 +25515,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Keep cutting-tool source topology in component depth rendering so hover and RMB navigation have identical occlusion."
+  "approved_change_reason": "Array tools now expose a default-on Bounding Box and Dimensions presentation checkbox."
 }

@@ -13,10 +13,13 @@
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/viewport_overlay_frame.hpp"
+#include "render/render_source_stamp.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
+#include <vector>
 
 namespace quader {
 
@@ -24,7 +27,12 @@ class ViewportSettings;
 struct RenderToolPreviewMeshRecord;
 struct RenderToolPreviewGroupMarkerRecord;
 struct RenderToolPreviewCurveRecord;
+struct RenderToolPreviewLightRecord;
 struct RenderToolPreviewSuppressionSnapshot;
+struct RenderSceneSnapshot;
+
+/// An array owns its dimensions channel independently of selected-object dimensions.
+enum class ViewportArrayDimensionsMode { Inactive, Hidden, Visible };
 
 /** Source-owner facts that invalidate the shared component-selection frame. */
 struct ViewportOverlaySelectionSourceStamp final {
@@ -209,6 +217,9 @@ struct ViewportOverlaySubmissionRequest final {
   std::span<const RenderToolPreviewMeshRecord> selection_dimension_preview_meshes;
   std::span<const RenderToolPreviewGroupMarkerRecord> selection_dimension_preview_groups;
   std::span<const RenderToolPreviewCurveRecord> selection_dimension_preview_curves;
+  std::span<const RenderToolPreviewLightRecord> array_dimension_preview_lights;
+  /// Visible originals for additive arrays; borrowed only during submit().
+  const RenderSceneSnapshot *array_dimension_scene_snapshot = nullptr;
   const RenderToolPreviewSuppressionSnapshot *selection_dimension_preview_suppression = nullptr;
   /// Borrowed persistent mesh geometry; present only for whole-mesh outline selection.
   const RenderOverlaySelectedObjectSnapshot *selected_mesh_outline_snapshot = nullptr;
@@ -232,6 +243,7 @@ struct ViewportOverlaySubmissionRequest final {
   bool wireframe_pane = false;
   bool point_light_gizmos_visible = false;
   bool selection_dimensions_visible = true;
+  ViewportArrayDimensionsMode array_dimensions_mode = ViewportArrayDimensionsMode::Inactive;
 };
 
 /** Outcome plus the unstyled dynamic stream consumed by the Qt edge HUD. */
@@ -262,6 +274,8 @@ struct ViewportOverlaySubmissionWorkCounters final {
   std::uint64_t selection_dimension_bounds_build_count = 0u;
   std::uint64_t selection_dimension_source_record_count = 0u;
   std::uint64_t selection_dimension_frame_build_count = 0u;
+  std::uint64_t array_dimension_bounds_build_count = 0u;
+  std::uint64_t array_dimension_originals_build_count = 0u;
 };
 
 /**
@@ -307,6 +321,19 @@ private:
     bool valid = false;
   };
 
+  /// Separate from selection so submitting sibling panes cannot evict array bounds.
+  struct ArrayDimensionSourceState final {
+    RenderSourceStamp scene;
+    std::uintptr_t scene_identity = 0u;
+    std::uintptr_t preview_identity = 0u;
+    std::uint64_t preview_revision = 0u;
+    std::vector<std::pair<EntityId, EntityId>> originals;
+    std::optional<ViewportSelectionDimensionBounds> original_bounds;
+    std::optional<ViewportSelectionDimensionBounds> bounds;
+    std::uint64_t publication_revision = 0u;
+    bool valid = false;
+  };
+
   /** Retains per-pane persistent and dynamic overlay stream state. */
   struct PaneState final {
     ViewportOverlayPersistentSubmissionStamp persistent;
@@ -326,6 +353,7 @@ private:
   std::array<PaneState, kMaxViewportSlots> panes_;
   SelectionSourceState selection_source_;
   SelectionDimensionSourceState selection_dimensions_;
+  ArrayDimensionSourceState array_dimensions_;
   CurveToolOverlayCache curve_overlay_source_;
   SelectedMeshOutlineCache mesh_outline_source_;
   ViewportOverlaySubmissionWorkCounters work_counters_;

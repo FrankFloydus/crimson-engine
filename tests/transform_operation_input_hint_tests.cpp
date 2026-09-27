@@ -191,6 +191,26 @@ TEST(TransformOperationInputHintTests, LinearArrayGroupsBindingsAndKeepsDragPend
   context.linear_array_endpoint_hovered = true;
   EXPECT_NE(find_gesture(transform_operation_input_hints("linear_array", state, context),
                          Gesture::Control), nullptr);
+
+  state.linear_array_unconstrained = true;
+  hints = transform_operation_input_hints("linear_array", state, context);
+  const auto *vertical = find_gesture(hints, Gesture::Alt);
+  ASSERT_NE(vertical, nullptr);
+  EXPECT_EQ(vertical->label_fallback, "Move Vertically");
+  EXPECT_FALSE(vertical->active);
+  context.alt = true;
+  state.owner_dragging = true;
+  context.linear_array_endpoint_hovered = false;
+  hints = transform_operation_input_hints("linear_array", state, context);
+  ASSERT_NE(find_gesture(hints, Gesture::Alt), nullptr);
+  EXPECT_TRUE(find_gesture(hints, Gesture::Alt)->active);
+  state.linear_array_unconstrained = false;
+  EXPECT_EQ(find_gesture(transform_operation_input_hints("linear_array", state, context),
+                         Gesture::Alt), nullptr);
+  state.linear_array_unconstrained = true;
+  state.owner_dragging = false;
+  EXPECT_EQ(find_gesture(transform_operation_input_hints("linear_array", state, context),
+                         Gesture::Alt), nullptr);
 }
 
 TEST(TransformOperationInputHintTests, RadialPlacementAndCanonicalCompletionAreDistinct) {

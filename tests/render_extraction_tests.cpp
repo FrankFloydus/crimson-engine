@@ -7038,6 +7038,50 @@ TEST(OverlayFaceFillBuilderTests, PreservesFaceTintWithoutWritingDepth) {
     }
 }
 
+TEST(RenderSceneSnapshotTests,
+     ArrayWireframePreviewPinsSharedEdgesAndDistinctRetainedPlacements) {
+  AssetRegistry assets;
+  std::vector<QMat4> transforms(257u);
+  for (std::size_t index = 0u; index < transforms.size(); ++index) {
+    transforms[index].values[12] = static_cast<float>(index) * 2.0f;
+  }
+  const auto records = build_render_tool_preview_snapshot(
+      {ToolPreviewMesh{.source_entity = 7u,
+                       .mesh = make_overlay_triangle_mesh(),
+                       .instance_transforms = transforms,
+                       .suppress_source = true},
+       ToolPreviewMesh{.source_entity = 8u,
+                       .mesh = make_overlay_triangle_mesh()}}, assets);
+  auto wires = build_render_tool_preview_wireframe_snapshot(records);
+  ASSERT_EQ(wires.meshes.size(), transforms.size());
+  wires.layer_mask = viewport_grid_layer_mask(0u);
+  const auto payload = wires.meshes.front().wire_geometry_payload;
+  for (std::size_t index = 0u; index < transforms.size(); ++index) {
+    const auto &mesh = wires.meshes[index];
+    EXPECT_EQ(mesh.world_transform.values, transforms[index].values);
+    EXPECT_EQ(mesh.wire_geometry_payload, payload);
+    EXPECT_EQ(mesh.geometry_payload, wires.meshes.front().geometry_payload);
+    EXPECT_EQ(mesh.wire_segments.size(), 3u);
+    if (index != 0u) {
+      EXPECT_NE(mesh.participant_token, wires.meshes[index - 1u].participant_token);
+    }
+  }
+  const auto plan = plan_scene_wireframe_overlay_batches(wires, 128u);
+  EXPECT_EQ(plan.participant_count, 257u);
+  EXPECT_EQ(plan.unique_geometry_style_count, 1u);
+  EXPECT_EQ(plan.batches.chunks.size(), 3u);
+  EXPECT_EQ(plan.work.local_bounds_vertex_visit_count, 3u);
+  EXPECT_EQ(plan.work.local_bounds_cache_hit_count, 256u);
+
+  auto moved = records;
+  moved.front().instance_transforms.back().values[13] = 4.0f;
+  const auto changed = build_render_tool_preview_wireframe_snapshot(moved);
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(wires.meshes, changed.meshes));
+  EXPECT_EQ(changed.meshes.back().wire_geometry_payload, payload);
+  EXPECT_FLOAT_EQ(changed.meshes.back().world_transform.values[13], 4.0f);
+  EXPECT_TRUE(build_render_tool_preview_wireframe_snapshot({}).meshes.empty());
+}
+
 TEST(OverlayFaceFillBuilderTests,
      SelectedAndHoverFaceFillsReadSceneDepthAndRenderTwoSided) {
     const std::array<ViewportOverlayLayer, 4u> layers{{

@@ -41,6 +41,21 @@ float screen_distance_squared(QVec2 left, QVec2 right) {
   return delta.x * delta.x + delta.y * delta.y;
 }
 
+QVec3 linear_array_drag_axis(LinearArrayAxisConstraint constraint,
+                            bool vertical) {
+  switch (constraint) {
+  case LinearArrayAxisConstraint::X:
+    return {1.0f, 0.0f, 0.0f};
+  case LinearArrayAxisConstraint::Y:
+    return {0.0f, 1.0f, 0.0f};
+  case LinearArrayAxisConstraint::Z:
+    return {0.0f, 0.0f, 1.0f};
+  case LinearArrayAxisConstraint::Free:
+    return vertical ? QVec3{0.0f, 1.0f, 0.0f} : QVec3{};
+  }
+  return {};
+}
+
 float distance_to_segment_squared(QVec2 point, QVec2 start, QVec2 end) {
   const QVec2 segment = end - start;
   const float length_sq = segment.x * segment.x + segment.y * segment.y;
@@ -1056,13 +1071,13 @@ ViewportNativeToolInteraction::handle_frame(
           *frame.linear_array_wheel_remainder);
     }
     if (input.tool_constraint_x_pressed) {
-      (void)linear_array->set_axis_constraint(LinearArrayAxisConstraint::X);
+      record_change(linear_array->set_axis_constraint(LinearArrayAxisConstraint::X));
     }
     if (input.tool_constraint_y_pressed) {
-      (void)linear_array->set_axis_constraint(LinearArrayAxisConstraint::Y);
+      record_change(linear_array->set_axis_constraint(LinearArrayAxisConstraint::Y));
     }
     if (input.tool_constraint_z_pressed) {
-      (void)linear_array->set_axis_constraint(LinearArrayAxisConstraint::Z);
+      record_change(linear_array->set_axis_constraint(LinearArrayAxisConstraint::Z));
     }
     if (input.modal_tool_finalize_pressed) {
       record_commit("Linear Array apply",
@@ -1107,7 +1122,11 @@ ViewportNativeToolInteraction::handle_frame(
                 input.pointer_pressed_edges, QuaderMouseButton::Left,
                 frame.left_click_local, input.mouse_screen, input.modifiers),
             .endpoint_before = handle.endpoint_world,
+            .constraint_before = handle.constraint,
         };
+        rebase_linear_array_drag(
+            *linear_array_handle_press_, camera, frame.left_click_local, handle,
+            linear_array_handle_press_->gesture.modifiers.alt);
         linear_array->begin_endpoint_drag();
         output.claim_interaction_pane = true;
       }
@@ -1126,9 +1145,20 @@ ViewportNativeToolInteraction::handle_frame(
           // Retire the screen-space gesture when its camera changes, retaining
           // the authored endpoint while navigation owns the pointer.
           if (!navigation_suspended) {
+            // A drag can author several axes before it is canceled. Restore
+            // its entire endpoint, not only the currently constrained channel.
+            if (drag_handle.constraint != LinearArrayAxisConstraint::Free) {
+              (void)linear_array->set_axis_constraint(
+                  LinearArrayAxisConstraint::Free);
+            }
             (void)linear_array->set_endpoint(
                 linear_array_handle_press_->endpoint_before, false,
                 viewport_grid_world_size_for_preset(input.grid_preset));
+            if (linear_array_handle_press_->constraint_before !=
+                LinearArrayAxisConstraint::Free) {
+              (void)linear_array->set_axis_constraint(
+                  linear_array_handle_press_->constraint_before);
+            }
           }
           linear_array->end_endpoint_drag();
           left_release_suppression_.begin(QuaderMouseButton::Left,
@@ -1136,13 +1166,31 @@ ViewportNativeToolInteraction::handle_frame(
           linear_array_handle_press_.reset();
           output.invalidate_hover = true;
           output.mark_overlay_dirty = true;
-        } else if (frame.left_down && drag_handle.visible) {
-          (void)linear_array->set_endpoint(
-              linear_array_drag_point(camera, input.mouse_local, drag_handle),
-              frame.grid_snap_enabled,
-              viewport_grid_world_size_for_preset(input.grid_preset));
-          output.invalidate_hover = true;
-          output.mark_overlay_dirty = true;
+        } else if ((frame.left_down || matching_release) && drag_handle.visible) {
+          const QVec2 pointer = release != nullptr ? release->local
+                                                   : input.mouse_local;
+          const ViewportModifiers modifiers = release != nullptr
+              ? release->modifiers.value_or(input.modifiers) : input.modifiers;
+          const bool vertical = drag_handle.constraint ==
+                                    LinearArrayAxisConstraint::Free &&
+                                modifiers.alt;
+          LinearArrayHandlePress &press = *linear_array_handle_press_;
+          if (press.motion_constraint != drag_handle.constraint ||
+              press.vertical != vertical) {
+            // Keep the authored endpoint when its motion plane changes. Future
+            // displacement is relative to this pointer, not the original ray.
+            rebase_linear_array_drag(press, camera, pointer, drag_handle,
+                                     vertical);
+          } else if (press.motion_started || viewport_pointer_distance_squared(
+                                                press.motion_pointer, pointer) > 0.0) {
+            press.motion_started = true;
+            record_change(linear_array->set_endpoint(
+                linear_array_drag_point(camera, pointer, press),
+                frame.grid_snap_enabled,
+                viewport_grid_world_size_for_preset(input.grid_preset),
+                vertical ? LinearArrayEndpointMotion::Vertical
+                         : LinearArrayEndpointMotion::Horizontal));
+          }
         }
         if (linear_array_handle_press_ && matching_release &&
             !canceled_left_release) {
@@ -1451,38 +1499,81 @@ bool ViewportNativeToolInteraction::linear_array_handle_hit(
              pick_radius_pixels * pick_radius_pixels;
 }
 
+void ViewportNativeToolInteraction::rebase_linear_array_drag(
+    LinearArrayHandlePress &press, const ViewportCameraController &camera,
+    QVec2 pointer, const LinearArrayHandleState &handle, bool vertical) {
+  press.motion_endpoint = handle.endpoint_world;
+  press.motion_pointer = pointer;
+  press.motion_constraint = handle.constraint;
+  press.vertical = handle.constraint == LinearArrayAxisConstraint::Free && vertical;
+  press.motion_started = false;
+  const QVec3 axis = linear_array_drag_axis(handle.constraint, press.vertical);
+  const QVec3 ray_direction = normalize_or_zero(
+      camera.ray_from_viewport_point(pointer).direction);
+  // Freeze the fallback for this motion segment. End-on axes and edge-on
+  // planes must not amplify tiny changes or switch mappings under the cursor.
+  constexpr float kFiveDegreeSine = 0.08715574f;
+  constexpr float kFiveDegreeCosineSquared = 0.99240388f;
+  const float alignment = dot(axis, ray_direction);
+  press.screen_fallback = length_squared(axis) > 0.5f
+      ? alignment * alignment >= kFiveDegreeCosineSquared
+      : std::abs(ray_direction.y) <= kFiveDegreeSine;
+}
+
 QVec3 ViewportNativeToolInteraction::linear_array_drag_point(
     const ViewportCameraController &camera, QVec2 mouse_local,
-    const LinearArrayHandleState &handle) {
-  const ViewportRay ray = camera.ray_from_viewport_point(mouse_local);
-  QVec3 axis = {};
-  switch (handle.constraint) {
-  case LinearArrayAxisConstraint::X:
-    axis = {1.0f, 0.0f, 0.0f};
-    break;
-  case LinearArrayAxisConstraint::Y:
-    axis = {0.0f, 1.0f, 0.0f};
-    break;
-  case LinearArrayAxisConstraint::Z:
-    axis = {0.0f, 0.0f, 1.0f};
-    break;
-  case LinearArrayAxisConstraint::Free:
-    break;
+    const LinearArrayHandlePress &press) {
+  const QVec3 axis = linear_array_drag_axis(press.motion_constraint,
+                                           press.vertical);
+  if (!press.screen_fallback) {
+    const ViewportRay start_ray = camera.ray_from_viewport_point(press.motion_pointer);
+    const ViewportRay ray = camera.ray_from_viewport_point(mouse_local);
+    if (length_squared(axis) > 0.5f) {
+      const auto start = quader_editor_core::axis_distance_from_ray(
+          axis, press.motion_endpoint, {start_ray.origin, start_ray.direction});
+      const auto current = quader_editor_core::axis_distance_from_ray(
+          axis, press.motion_endpoint, {ray.origin, ray.direction});
+      if (start.ok && current.ok) {
+        return press.motion_endpoint +
+               axis * static_cast<float>(current.distance - start.distance);
+      }
+    } else {
+      const auto start = quader_editor_core::horizontal_drag_point(
+          {start_ray.origin, start_ray.direction}, press.motion_endpoint);
+      const auto current = quader_editor_core::horizontal_drag_point(
+          {ray.origin, ray.direction}, press.motion_endpoint);
+      if (start.ok && current.ok) {
+        return press.motion_endpoint + current.point - start.point;
+      }
+    }
+    return press.motion_endpoint;
   }
+
+  const ViewportCameraBasis basis = ViewportCameraAdapter::basis(camera);
+  const ViewportCameraState &state = camera.state();
+  const quader_editor_core::CameraDragState drag_camera{
+      .valid = true,
+      .projection = state.projection == ViewportProjection::Orthographic
+          ? quader_editor_core::CameraProjection::Orthographic
+          : quader_editor_core::CameraProjection::Perspective,
+      .origin = basis.eye,
+      .right = basis.right,
+      .up = basis.up,
+      .forward = basis.forward,
+      .viewport_size = camera.viewport_size(),
+      .orthographic_size = state.orthographic_size,
+      .fov_degrees = state.fov_degrees,
+  };
   if (length_squared(axis) > 0.5f) {
-    const quader_editor_core::DragDistanceResult distance =
-        quader_editor_core::axis_distance_from_ray(
-            axis, handle.source_world,
-            quader_poly::Ray{.origin = ray.origin, .direction = ray.direction},
-            0.000001);
-    return distance.ok ? handle.source_world +
-                             axis * static_cast<float>(distance.distance)
-                       : handle.endpoint_world;
+    // Looking along an axis gives it no usable screen direction. Upward drag
+    // increases that axis, at the same world-per-pixel scale as the viewport.
+    const double units_per_pixel = quader_editor_core::drag_world_units_per_pixel(
+        drag_camera, press.motion_endpoint);
+    return press.motion_endpoint + axis * static_cast<float>(
+        (press.motion_pointer.y - mouse_local.y) * units_per_pixel);
   }
-  const ViewportCameraPose pose = camera.pose();
-  const QVec3 plane_normal = normalize_or_zero(pose.target - pose.eye);
-  return intersect_ray_plane(ray, handle.endpoint_world, plane_normal)
-      .value_or(handle.endpoint_world);
+  return press.motion_endpoint + quader_editor_core::screen_fallback_move_delta(
+      drag_camera, mouse_local, press.motion_pointer, press.motion_endpoint, false);
 }
 
 } // namespace quader

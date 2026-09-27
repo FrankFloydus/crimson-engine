@@ -43,6 +43,8 @@ inline constexpr std::string_view kRadialArrayRepeatsSetting =
     "radial_array.repeats";
 inline constexpr std::string_view kRadialArrayRepeatSpacingSetting =
     "radial_array.repeat_spacing";
+inline constexpr std::string_view kRadialArrayShowBoundingBoxDimensionsSetting =
+    "radial_array.show_bounding_box_dimensions";
 
 inline constexpr double kRadialArrayDefaultDegrees = 360.0;
 inline constexpr double kRadialArrayMinimumDegrees = 0.0;
@@ -65,6 +67,7 @@ struct RadialArraySessionDefaults final {
   std::uint32_t copies = kRadialArrayDefaultCopies;
   std::uint32_t repeats = kRadialArrayDefaultRepeats;
   std::optional<double> repeat_spacing;
+  bool show_bounding_box_dimensions = true;
 
   friend bool operator==(const RadialArraySessionDefaults &,
                          const RadialArraySessionDefaults &) = default;
@@ -132,6 +135,7 @@ public:
   [[nodiscard]] std::uint32_t copies() const;
   [[nodiscard]] std::uint32_t repeats() const;
   [[nodiscard]] double repeat_spacing() const;
+  [[nodiscard]] bool show_bounding_box_dimensions() const;
   [[nodiscard]] std::uint32_t maximum_copies() const;
   [[nodiscard]] std::uint32_t maximum_repeats() const;
   [[nodiscard]] RadialArrayCenterState center_state() const;
@@ -157,6 +161,7 @@ public:
   CommandResult set_repeats(std::uint32_t repeats);
   CommandResult adjust_repeats(int delta);
   CommandResult set_repeat_spacing(double spacing);
+  CommandResult set_show_bounding_box_dimensions(bool enabled);
   CommandResult reset_settings();
 
 private:

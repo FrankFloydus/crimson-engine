@@ -34,6 +34,8 @@ class SceneDocument;
 inline constexpr std::string_view kLinearArrayToolId = "linear_array";
 inline constexpr std::string_view kLinearArrayCountSetting =
     "linear_array.count";
+inline constexpr std::string_view kLinearArrayShowBoundingBoxDimensionsSetting =
+    "linear_array.show_bounding_box_dimensions";
 inline constexpr std::uint32_t kLinearArrayDefaultCount = 4u;
 inline constexpr std::uint32_t kLinearArrayMinimumCount =
     kLinearArrayLayoutMinimumCount;
@@ -45,19 +47,28 @@ inline constexpr std::size_t kLinearArrayMaximumTotalElements =
 /** Keeps user options across tool and scene replacement for this app run. */
 struct LinearArraySessionDefaults final {
   std::uint32_t count = kLinearArrayDefaultCount;
+  bool show_bounding_box_dimensions = true;
 
   friend bool operator==(const LinearArraySessionDefaults &,
                          const LinearArraySessionDefaults &) = default;
 };
 
 /**
- * Selects the world-space constraint used while dragging endpoint B.
+ * Locks future movement to a world axis through the current endpoint B.
+ * Changing the constraint preserves that endpoint and the existing array span.
  */
 enum class LinearArrayAxisConstraint {
   Free,
   X,
   Y,
   Z,
+};
+
+/** Limits unconstrained endpoint movement without snapping locked coordinates. */
+enum class LinearArrayEndpointMotion {
+  Any,
+  Horizontal,
+  Vertical,
 };
 
 /**
@@ -115,6 +126,7 @@ public:
     return tool_settings_revision_counter_;
   }
   [[nodiscard]] std::uint32_t count() const;
+  [[nodiscard]] bool show_bounding_box_dimensions() const;
   [[nodiscard]] std::uint32_t maximum_count() const;
   [[nodiscard]] LinearArrayHandleState handle_state() const;
   /// The returned view remains valid until this service is mutated.
@@ -125,11 +137,14 @@ public:
   CommandResult cancel();
   CommandResult apply();
   CommandResult set_count(std::uint32_t count);
+  CommandResult set_show_bounding_box_dimensions(bool enabled);
   CommandResult reset_settings();
   CommandResult adjust_count(int delta);
   CommandResult set_axis_constraint(LinearArrayAxisConstraint constraint);
   CommandResult set_endpoint(QVec3 world_position, bool snap_to_grid,
-                             double grid_size);
+                             double grid_size,
+                             LinearArrayEndpointMotion motion =
+                                 LinearArrayEndpointMotion::Any);
   void begin_endpoint_drag();
   void end_endpoint_drag();
 

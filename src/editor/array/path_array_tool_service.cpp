@@ -571,6 +571,10 @@ bool PathArrayToolService::follow_path() const {
                               : defaults_.follow_path;
 }
 
+bool PathArrayToolService::show_bounding_box_dimensions() const {
+  return defaults_.show_bounding_box_dimensions;
+}
+
 PathArraySignedAxis PathArrayToolService::forward_axis() const {
   return session_.has_value() ? session_->forward_axis
                               : defaults_.forward_axis;
@@ -926,6 +930,24 @@ CommandResult PathArrayToolService::set_follow_path(bool follow) {
   return command_changed_result();
 }
 
+CommandResult PathArrayToolService::set_show_bounding_box_dimensions(bool show) {
+  if (!release_allows_tool(kPathArrayToolId)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
+  if (!session_.has_value()) {
+    return command_invalid_result("Path Array tool is not active.");
+  }
+  if (defaults_.show_bounding_box_dimensions == show) {
+    return command_unchanged_result();
+  }
+  defaults_.show_bounding_box_dimensions = show;
+  if (pending_defaults_.has_value()) {
+    pending_defaults_->show_bounding_box_dimensions = show;
+  }
+  issue_tool_settings_revision();
+  return command_changed_result();
+}
+
 CommandResult
 PathArrayToolService::set_forward_axis(PathArraySignedAxis axis) {
   if (!release_allows_tool(kPathArrayToolId)) {
@@ -1070,10 +1092,11 @@ CommandResult PathArrayToolService::reset_settings() {
                        !session_->follow_path ||
                        session_->forward_axis != kPathArrayDefaultForwardAxis ||
                        session_->variation != reset_variation;
-  editable_defaults() = {.remembered_distance = reset_distance};
   if (!changed) {
-    return command_unchanged_result();
+    return set_show_bounding_box_dimensions(true);
   }
+  editable_defaults() = {.remembered_distance = reset_distance};
+  defaults_.show_bounding_box_dimensions = true;
   session_->count = reset_count;
   session_->distance = reset_distance;
   session_->follow_path = kPathArrayDefaultFollowPath;

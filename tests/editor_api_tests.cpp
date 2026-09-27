@@ -19497,6 +19497,76 @@ TEST(EditorApiTests, EdgeBevelSelectionRestartRecalculatesUsefulWidth) {
 
 
 TEST(EditorApiTests,
+     ArrayBoundsVisibilitySettingsAreVisualOnlyAndRemembered) {
+  for (const std::string_view tool_id :
+       {"linear_array", "radial_array", "path_array"}) {
+    SCOPED_TRACE(tool_id);
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    EXPECT_FALSE(editor.tools().active_array_bounding_box_dimensions().has_value());
+    (void)create_selected_box(editor, "Array Bounds Source");
+    if (tool_id == "path_array") {
+      const auto curve = editor.modeling().create_curve({
+          .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                     {.position = {5.0f, 0.0f, 0.0f}}},
+          .name = "Array Bounds Path",
+      });
+      ASSERT_TRUE(curve.ok()) << curve.error_message();
+      ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+    }
+    ASSERT_TRUE(editor.tools().activate(tool_id).ok());
+    const std::string setting_id =
+        std::string(tool_id) + ".show_bounding_box_dimensions";
+    auto settings = editor.tools().active_settings();
+    const auto *control = find_tool_setting_control(settings, setting_id);
+    ASSERT_NE(control, nullptr);
+    EXPECT_EQ(control->kind, quader::QuaderToolSettingControlKind::Toggle);
+    EXPECT_EQ(control->label, "Bounding Box and Dimensions");
+    EXPECT_TRUE(control->bool_value);
+    EXPECT_EQ(editor.tools().active_array_bounding_box_dimensions(), true);
+    const auto before = editor.revisions();
+    const auto history_before = editor.query().history();
+    const auto settings_revision = editor.tools().active_settings_revision();
+
+    const auto hidden = editor.tools().set_setting(tool_id, setting_id, false);
+    ASSERT_TRUE(hidden.ok()) << hidden.error_message();
+    EXPECT_TRUE(hidden.changed());
+    EXPECT_EQ(editor.tools().active_array_bounding_box_dimensions(), false);
+    EXPECT_GT(editor.tools().active_settings_revision(), settings_revision);
+    const auto hidden_revision = editor.tools().active_settings_revision();
+    settings = editor.tools().active_settings();
+    control = find_tool_setting_control(settings, setting_id);
+    ASSERT_NE(control, nullptr);
+    EXPECT_FALSE(control->bool_value);
+    EXPECT_FALSE(editor.tools().set_setting(tool_id, setting_id, false).changed());
+    EXPECT_FALSE(editor.tools().set_setting(tool_id, setting_id, 2.0).ok());
+    EXPECT_EQ(editor.tools().active_settings_revision(), hidden_revision);
+    const auto after = editor.revisions();
+    EXPECT_EQ(after.scene_revision, before.scene_revision);
+    EXPECT_EQ(after.asset_revision, before.asset_revision);
+    EXPECT_EQ(after.modeling_content_revision, before.modeling_content_revision);
+    EXPECT_EQ(after.modeling_selection_revision, before.modeling_selection_revision);
+
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_FALSE(editor.tools().active_array_bounding_box_dimensions().has_value());
+    ASSERT_TRUE(editor.tools().activate(tool_id).ok());
+    EXPECT_EQ(editor.tools().active_array_bounding_box_dimensions(), false);
+    ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+    EXPECT_EQ(editor.tools().active_array_bounding_box_dimensions(), true);
+    settings = editor.tools().active_settings();
+    control = find_tool_setting_control(settings, setting_id);
+    ASSERT_NE(control, nullptr);
+    EXPECT_TRUE(control->bool_value);
+
+    const auto history_after = editor.query().history();
+    EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+    EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+    EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+    EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+  }
+}
+
+TEST(EditorApiTests,
      LinearArrayToolAcceptsMultipleMeshesAndKeepsSharedEndpointFixed) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;

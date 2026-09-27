@@ -301,7 +301,15 @@ TEST(PathArrayUiCatalogTests,
   EXPECT_EQ(target.groups[2].label, "Scale");
   EXPECT_FALSE(target.groups[2].expanded_by_default);
 
-  ASSERT_EQ(target.controls.size(), 10U);
+  ASSERT_EQ(target.controls.size(), 11U);
+  EXPECT_EQ(target.controls[3].id, kPathArrayForwardAxisSetting);
+  const QuaderToolSettingControl &bounds = target.controls[4];
+  EXPECT_EQ(bounds.id, kPathArrayShowBoundingBoxDimensionsSetting);
+  EXPECT_EQ(bounds.kind, QuaderToolSettingControlKind::Toggle);
+  EXPECT_EQ(bounds.label, "Bounding Box and Dimensions");
+  EXPECT_EQ(bounds.group_id, "path_array.group.placement");
+  EXPECT_TRUE(bounds.bool_value);
+  EXPECT_EQ(target.controls[5].id, "path_array.rotation_offset");
   for (const QuaderToolSettingControl &control : target.controls) {
     EXPECT_TRUE(std::ranges::any_of(
         target.groups, [&control](const QuaderToolSettingGroup &group) {

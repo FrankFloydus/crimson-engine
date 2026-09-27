@@ -186,6 +186,11 @@ std::vector<QuaderOperationInputHint> transform_operation_input_hints(
                    "viewport.linear_array.decrease_copies",
                    "operation.hints.array.copies", "Copies", context.shift);
     if (state.owner_dragging || context.linear_array_endpoint_hovered) {
+      if (state.linear_array_unconstrained) {
+        hints.push_back(gesture(Gesture::Alt,
+                                 "operation.hints.array.move_vertically",
+                                 "Move Vertically", context.alt));
+      }
       append_grid_snap(hints, context);
     }
   } else if (tool_id == "radial_array") {

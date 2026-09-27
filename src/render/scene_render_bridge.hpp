@@ -127,7 +127,7 @@ public:
       return tool_preview_submission_revision_;
     }
     [[nodiscard]] bool scene_asset_overlay_sync_pending() const {
-      return tool_preview_overlay_suppression_dirty_;
+      return tool_preview_overlay_suppression_dirty_ || tool_preview_wireframe_dirty_;
     }
     [[nodiscard]] SceneRenderResourceDiagnostics diagnostics() const;
     /** Drains one retired preview proxy during an explicitly idle UI slice. */
@@ -167,6 +167,7 @@ public:
     InstanceSelectionOverlayCache instance_selection_overlay_cache_;
     CollisionShapeOverlayCache collision_shape_overlay_cache_;
     SceneWireframeOverlayCache scene_wireframe_overlay_cache_;
+    SceneWireframeOverlayCache tool_preview_wireframe_cache_;
     SelectedObjectOverlayCache selected_object_overlay_cache_;
     SceneRenderSyncService sync_service_;
     CurveSolidGeometryCache curve_solid_geometry_cache_;
@@ -183,10 +184,13 @@ public:
         tool_preview_occurrence_suppressions_;
     RenderToolPreviewSuppressionSnapshot tool_preview_suppression_;
     ViewportOverlayFrame tool_preview_overlay_frame_;
+    RenderOverlaySceneWireframeSnapshot tool_preview_wireframe_snapshot_;
+    bool tool_preview_wireframe_dirty_ = false;
     /// Pins the accepted candidate for CPU selection measurements as well as GPU streams.
     std::vector<RenderToolPreviewMeshRecord> selection_dimension_preview_meshes_;
     std::vector<RenderToolPreviewGroupMarkerRecord> selection_dimension_preview_groups_;
     std::vector<RenderToolPreviewCurveRecord> selection_dimension_preview_curves_;
+    std::vector<RenderToolPreviewLightRecord> array_dimension_preview_lights_;
     std::uint64_t tool_preview_overlay_revision_ = 0u;
     RenderOverlaySelectionSnapshot filtered_scene_overlay_snapshot_;
     RenderOverlayCollisionSnapshot filtered_collision_snapshot_;

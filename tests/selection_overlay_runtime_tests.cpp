@@ -8,10 +8,14 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/path_array_tool_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
+#include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
@@ -22,6 +26,7 @@
 #include "render/viewport_renderer.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
+#include "viewport/viewport_host_interaction_policy.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
@@ -648,6 +653,202 @@ public:
     return true;
   }
 
+  bool create_array_wire_sample(ViewportToolId tool) {
+    auto &editor = array_editor();
+    const auto object = editor.modeling().create_box(
+        {.min = {-0.25f, -0.25f, -0.25f}, .max = {0.25f, 0.25f, 0.25f}},
+        "Array wire preview source");
+    if (!object.ok() || !editor.selection().select_object(object.value()).ok()) return false;
+    if (tool == ViewportToolId::PathArray) {
+      const auto path = editor.modeling().create_curve({
+          .points = {{.position = {}}, {.position = {4.0f, 0.0f, 0.0f}}},
+          .name = "Array wire preview path"});
+      if (!path.ok() || !editor.selection().select_object(path.value()).ok() ||
+          !editor.tools().activate(tool).ok() ||
+          !session_.path_array().select_source(object.value().entity).ok) return false;
+    } else {
+      if (!editor.tools().activate(tool).ok()) return false;
+      if (tool == ViewportToolId::LinearArray &&
+          !session_.linear_array().set_endpoint({4.0f, 0.0f, 0.0f}, false, 1.0).ok) return false;
+      if (tool == ViewportToolId::RadialArray &&
+          (!session_.radial_array().update_center_candidate(
+               {-2.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, 1.0).ok ||
+           !session_.radial_array().lock_center().ok)) return false;
+    }
+    camera_.view_axis(ViewportViewAxis::Z, 1);
+    camera_.focus_bounds({-5.0f, -4.0f, -1.0f}, {5.0f, 4.0f, 1.0f}, 1.25f);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    view_.set_scene_visible(false);
+    view_.set_overlay_visible(should_enable_viewport_overlay_pass({
+        .overlays_visible = false, .gizmos_visible = false, .wireframe_pane = true}));
+    return true;
+  }
+
+  bool present_array_wire_sample(std::uint8_t wire_panes, float scale = 1.0f) {
+    auto &editor = array_editor();
+    if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok() ||
+        !QuaderRenderApiRuntimeAccess::sync_tool_previews(
+            editor.render(), bridge_, {}, [&](RenderToolPreviewSceneSnapshot preview) {
+              if (!preview.meshes.empty() && !preview.meshes.front().instance_transforms.empty()) {
+                // Probe an authored box edge, independently of the wire snapshot.
+                array_probe_world_ = transform_point(
+                    preview.meshes.front().instance_transforms.back(), {-0.25f, 0.0f, 0.25f});
+              }
+              return bridge_.set_tool_preview_scene(std::move(preview));
+            }).ok()) return false;
+    const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(
+        ViewportSettings::defaults(), scale);
+    ViewportPersistentOverlayRasterGroupSet groups;
+    if (!groups.add(viewport_grid_layer_mask(0u), style) ||
+        !groups.add(viewport_grid_layer_mask(1u), style)) return false;
+    return QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
+        editor.render(), bridge_, active_snapshots_,
+        {.scene_wireframe_layer_mask = wire_panes,
+         .selected_scene_wire_visible = false,
+         .selected_mesh_outline_only = true,
+         .style = style, .raster_groups = groups}).ok();
+  }
+
+  QVec2 array_wire_probe_pixel() const {
+    auto pixel = camera_.project_world_point(array_probe_world_).position;
+    pixel.y = static_cast<float>(view_.height() - 1u) - pixel.y;
+    return pixel;
+  }
+
+  SceneRenderResourceDiagnostics render_diagnostics() const { return bridge_.diagnostics(); }
+
+  bool reject_array_wire_candidate() {
+    return bridge_.set_tool_preview_scene({.complete = false}) == ToolPreviewSubmissionResult::Failed;
+  }
+
+  bool change_array_wire_count() {
+    auto &editor = array_editor();
+    const auto tool = editor.tools().active_tool();
+    return editor.tools().set_setting(tool,
+        tool == "radial_array" ? "radial_array.copies" : tool + ".count", 6.0).ok();
+  }
+
+  bool cancel_array_wire_sample() {
+    auto &editor = array_editor();
+    return editor.tools().cancel_active_tool_preview().ok();
+  }
+
+  void retire_array_scene_binding() { bridge_.bind_scene({.scene_session_id = 999u}); }
+
+  bool set_array_dimensions_visible(bool visible) {
+    auto &editor = array_editor();
+    const auto tool = editor.tools().active_tool();
+    return editor.tools().set_setting(tool, tool + ".show_bounding_box_dimensions", visible).ok();
+  }
+
+  bool configure_array_dimensions_camera() {
+    if (!camera_.restore_perspective_pose({
+            .eye = {7.0f, 8.0f, 14.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}})) return false;
+    camera_.focus_bounds({-5.0f, -4.0f, -1.0f}, {5.0f, 4.0f, 1.0f}, 1.1f);
+    view_.update_camera(camera_);
+    return true;
+  }
+
+  bool present_array_dimensions_sample(bool wireframe, bool overlays = true,
+                                       float scale = 1.0f) {
+    if (!present_array_wire_sample(wireframe ? viewport_grid_layer_mask(0u) : 0u, scale)) return false;
+    view_.set_scene_visible(!wireframe);
+    auto &editor = array_editor();
+    const auto array_visible = editor.tools().active_array_bounding_box_dimensions();
+    const auto &scene = QuaderRenderApiRuntimeAccess::build_scene_overlay_snapshot(
+        editor.render(), active_snapshots_);
+    const auto &modeling = session_.modeling();
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u),
+         .raster_scale = scale,
+         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .selection_source = {
+             .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+             .content_revision = modeling.content_revision(),
+             .selection_revision = modeling.selection_revision(),
+             .scene_revision = session_.scene().revision(),
+             .asset_revision = session_.assets().revision(),
+             .overlay_signature = modeling.selection_overlay_signature()},
+         .selection_frame_provider = this,
+         .scene_overlay_snapshot = &scene,
+         .overlays_visible = overlays,
+         .scene_overlay_requested = overlays,
+         .wireframe_pane = wireframe,
+         .selection_dimensions_visible = false,
+         .array_dimensions_mode = !array_visible ? ViewportArrayDimensionsMode::Inactive
+             : *array_visible ? ViewportArrayDimensionsMode::Visible : ViewportArrayDimensionsMode::Hidden},
+        ViewportSettings::defaults());
+    return true;
+  }
+
+  bool configure_linear_guide_sample(LinearArrayAxisConstraint axis,
+                                     bool orthographic) {
+    auto &tool = session_.linear_array();
+    if (!tool.set_axis_constraint(LinearArrayAxisConstraint::Free).ok ||
+        !tool.set_endpoint({2.0f, 5.0f, 1.0f}, false, 1.0).ok ||
+        !tool.set_axis_constraint(axis).ok) return false;
+    if (orthographic) {
+      camera_.view_axis(axis == LinearArrayAxisConstraint::Z
+                            ? ViewportViewAxis::Y : ViewportViewAxis::Z, 1);
+    } else if (!camera_.restore_perspective_pose({
+                   .eye = {10.0f, 11.0f, 13.0f}, .target = {2.0f, 5.0f, 1.0f},
+                   .up = {0.0f, 1.0f, 0.0f}})) {
+      return false;
+    }
+    camera_.focus_bounds({-3.0f, 0.0f, -4.0f}, {7.0f, 10.0f, 6.0f}, 1.25f);
+    view_.update_camera(camera_);
+    return true;
+  }
+
+  void present_linear_guide_sample(float scale) {
+    const auto handle = session_.linear_array().handle_state();
+    const auto overlay_camera = ViewportCameraAdapter::overlay_camera(
+        camera_, {static_cast<float>(view_.width()), static_cast<float>(view_.height())});
+    const ViewportToolOverlaySource source({
+        .source_identity = reinterpret_cast<std::uintptr_t>(this),
+        .raster_scale = scale,
+        .overlay_camera = &overlay_camera,
+        .viewport_camera = &camera_,
+        .linear_array_handle = &handle,
+        .interaction_pane = true,
+        .gizmos_visible = true,
+        .overlays_visible = true});
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u),
+         .raster_scale = scale,
+         .camera = overlay_camera,
+         .dynamic_tool_source = source.source_stamp(),
+         .dynamic_tool_frame_provider = &source,
+         .overlays_visible = true,
+         .selection_dimensions_visible = false}, ViewportSettings::defaults());
+  }
+
+  std::array<QVec2, 2> linear_guide_probe_pixels(LinearArrayAxisConstraint axis) const {
+    const QVec3 direction = axis == LinearArrayAxisConstraint::X ? QVec3{1, 0, 0}
+        : axis == LinearArrayAxisConstraint::Y ? QVec3{0, 1, 0} : QVec3{0, 0, 1};
+    std::array<QVec2, 2> pixels;
+    for (std::size_t index = 0u; index < pixels.size(); ++index) {
+      // Both samples lie beyond the endpoint marker and away from the A-to-B
+      // segment. A short colored span cannot satisfy these guide probes.
+      const QVec3 world = QVec3{2.0f, 5.0f, 1.0f} + direction * (index == 0u ? -3.0f : 3.0f);
+      pixels[index] = camera_.project_world_point(world).position;
+      pixels[index].y = static_cast<float>(view_.height() - 1u) - pixels[index].y;
+    }
+    return pixels;
+  }
+
+  bool clear_linear_guide_constraint() {
+    return session_.linear_array().set_axis_constraint(LinearArrayAxisConstraint::Free).ok;
+  }
+
+  void pan_linear_guide_camera() {
+    camera_.begin_drag({320.0f, 240.0f}, ViewportDragMode::Pan);
+    camera_.update_drag({351.0f, 261.0f});
+    camera_.end_drag();
+    view_.update_camera(camera_);
+  }
+
   bool present_face_sample(bool dimensions_visible = false) {
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session_));
@@ -833,6 +1034,16 @@ public:
   }
 
 private:
+  QuaderEditorApi &array_editor() {
+    // Match the viewport's retained facade: recreating it every frame discards
+    // QuaderRenderApi's source stamps and republishes an unchanged preview.
+    if (!array_editor_) {
+      array_editor_ = std::make_unique<QuaderEditorApi>(
+          QuaderApiSessionInternalAccess::from_scene_session(session_));
+    }
+    return *array_editor_;
+  }
+
   static void append_box_depth_stamps(ViewportOverlayFrame &frame,
                                       float min_z, float max_z, bool inward) {
     const auto quad = [&](QVec3 a, QVec3 b, QVec3 c, QVec3 d) {
@@ -885,11 +1096,13 @@ private:
   }
 
   SceneSession session_;
+  std::unique_ptr<QuaderEditorApi> array_editor_;
   ViewportRenderSurface surface_ = ViewportRenderSurface::Swapchain;
   QuaderModelingObjectRef face_fill_object_;
   QuaderModelingObjectRef tool_topology_object_;
   ViewportToolId tool_topology_tool_ = ViewportToolId::Select;
   std::array<EntityId, 2> active_entities_{};
+  QVec3 array_probe_world_;
   RenderOverlaySnapshotCache active_snapshots_;
   filament::Engine *engine_ = nullptr;
   filament::Scene *scene_ = nullptr;
@@ -917,6 +1130,266 @@ int cyan_pixels(const QImage &image, QVec2 center) {
     }
   }
   return count;
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanArrayMeshPreviewsRetainWireGeometryInTheirWireframePanes) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-array-wire-preview-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  const auto bright_pixels = [](const QImage &image, QVec2 pixel) {
+    int count = 0;
+    for (int y = int(pixel.y) - 3; y <= int(pixel.y) + 3; ++y) {
+      for (int x = int(pixel.x) - 3; x <= int(pixel.x) + 3; ++x) {
+        if (image.rect().contains(x, y) && image.pixelColor(x, y).lightness() > 80) ++count;
+      }
+    }
+    return count;
+  };
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath())
+                                         .absoluteFilePath(QStringLiteral("../selection_features_visual"));
+  ASSERT_TRUE(QDir().mkpath(directory));
+  for (const auto &[tool, label] : std::array{
+           std::pair{ViewportToolId::LinearArray, "linear"},
+           std::pair{ViewportToolId::RadialArray, "radial"},
+           std::pair{ViewportToolId::PathArray, "curve"}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(-0.02f, false));
+    ASSERT_TRUE(harness.create_array_wire_sample(tool));
+    for (const float scale : {1.0f, 2.0f, 1.0f}) {
+      SCOPED_TRACE(scale);
+      ASSERT_TRUE(harness.present_array_wire_sample(viewport_grid_layer_mask(0u), scale));
+      const auto probe = harness.array_wire_probe_pixel();
+      const auto visible = harness.capture();
+      ASSERT_FALSE(visible.isNull());
+      ASSERT_GE(bright_pixels(visible, probe), 3) << "Generated mesh edges must survive without fill passes.";
+      const QString path = QDir(directory).filePath(
+          QStringLiteral("%1_array_wire_%2.png").arg(QString::fromLatin1(label)).arg(scale));
+      ASSERT_TRUE(visible.save(path));
+      const auto resources = harness.render_diagnostics();
+      ASSERT_GT(resources.wire_participant_count, 0u);
+      for (int frame = 0; frame < 16; ++frame) {
+        ASSERT_TRUE(harness.present_array_wire_sample(viewport_grid_layer_mask(0u), scale));
+      }
+      EXPECT_EQ(harness.render_diagnostics().gpu_geometry_upload_count, resources.gpu_geometry_upload_count);
+      EXPECT_EQ(harness.render_diagnostics().gpu_geometry_reuse_count, resources.gpu_geometry_reuse_count);
+      EXPECT_EQ(harness.capture(), visible);
+      ASSERT_TRUE(harness.reject_array_wire_candidate());
+      EXPECT_EQ(harness.capture(), visible) << "Failed publication preserves the accepted wire preview.";
+
+      ASSERT_TRUE(harness.present_array_wire_sample(viewport_grid_layer_mask(1u), scale));
+      EXPECT_EQ(bright_pixels(harness.capture(), probe), 0)
+          << "A sibling wireframe pane must not leak preview wires into this pane.";
+      ASSERT_TRUE(harness.present_array_wire_sample(viewport_grid_layer_mask(0u), scale));
+      EXPECT_GE(bright_pixels(harness.capture(), probe), 3);
+    }
+    ASSERT_TRUE(harness.change_array_wire_count());
+    ASSERT_TRUE(harness.present_array_wire_sample(viewport_grid_layer_mask(0u)));
+    const auto last_probe = harness.array_wire_probe_pixel();
+    EXPECT_GE(bright_pixels(harness.capture(), last_probe), 3);
+    harness.retire_array_scene_binding();
+    EXPECT_EQ(bright_pixels(harness.capture(), last_probe), 0)
+        << "Switching scene bindings must retire outgoing generated wires.";
+    ASSERT_TRUE(harness.present_array_wire_sample(viewport_grid_layer_mask(0u)));
+    EXPECT_GE(bright_pixels(harness.capture(), last_probe), 3);
+    ASSERT_TRUE(harness.cancel_array_wire_sample());
+    ASSERT_TRUE(harness.present_array_wire_sample(viewport_grid_layer_mask(0u)));
+    EXPECT_EQ(bright_pixels(harness.capture(), last_probe), 0)
+        << "Cancel must retire all generated mesh edges.";
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanLinearArrayConstraintGuideTracksEndpointCameraAndRasterScale) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-array-constraint-guide-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(-0.02f, false));
+  ASSERT_TRUE(harness.create_array_wire_sample(ViewportToolId::LinearArray));
+  const auto has_axis_color = [](QColor pixel, LinearArrayAxisConstraint axis) {
+    const int r = pixel.red(), g = pixel.green(), b = pixel.blue();
+    if (axis == LinearArrayAxisConstraint::X) return r > 100 && r > g * 1.5f && r > b * 1.25f;
+    // A one-pixel green guide straddles two pixels: the production AA sample
+    // is (40, 89, 12). Channel dominance still excludes white/cyan handles.
+    if (axis == LinearArrayAxisConstraint::Y) return g > 50 && g > r * 1.25f && g > b * 1.25f;
+    return b > 100 && b > r * 1.4f && b > g * 1.15f;
+  };
+  const auto probe_count = [&](const QImage &image, QVec2 point, LinearArrayAxisConstraint axis) {
+    int count = 0;
+    for (int y = int(point.y) - 3; y <= int(point.y) + 3; ++y) {
+      for (int x = int(point.x) - 3; x <= int(point.x) + 3; ++x) {
+        if (image.rect().contains(x, y) && has_axis_color(image.pixelColor(x, y), axis)) ++count;
+      }
+    }
+    return count;
+  };
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath())
+                                         .absoluteFilePath(QStringLiteral("../selection_features_visual"));
+  ASSERT_TRUE(QDir().mkpath(directory));
+  const std::array axes{LinearArrayAxisConstraint::X, LinearArrayAxisConstraint::Y,
+                        LinearArrayAxisConstraint::Z};
+  for (bool orthographic : {false, true}) {
+    SCOPED_TRACE(orthographic ? "orthographic" : "perspective");
+    for (std::size_t index = 0u; index < axes.size(); ++index) {
+      const auto axis = axes[index];
+      SCOPED_TRACE(index);
+      ASSERT_TRUE(harness.configure_linear_guide_sample(axis, orthographic));
+      const auto probes = harness.linear_guide_probe_pixels(axis);
+      QImage at_100_percent;
+      for (float scale : {1.0f, 2.0f, 1.0f}) {
+        SCOPED_TRACE(scale);
+        harness.present_linear_guide_sample(scale);
+        const auto image = harness.capture();
+        ASSERT_FALSE(image.isNull());
+        for (auto probe : probes) {
+          EXPECT_GE(probe_count(image, probe, axis), 3)
+              << "The guide must extend in both directions through the off-axis endpoint.";
+        }
+        ASSERT_TRUE(image.save(QDir(directory).filePath(QStringLiteral("linear_guide_%1_%2_%3.png")
+            .arg(orthographic ? "ortho" : "perspective").arg(index).arg(scale))));
+        if (at_100_percent.isNull()) at_100_percent = image;
+        else if (scale == 1.0f) EXPECT_EQ(image, at_100_percent);
+        for (int frame = 0; frame < 16; ++frame) {
+          harness.present_linear_guide_sample(scale);
+          EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        }
+        EXPECT_EQ(harness.capture(), image);
+      }
+      const auto before_camera = harness.last_submission().dynamic_source_signature;
+      harness.pan_linear_guide_camera();
+      harness.present_linear_guide_sample(1.0f);
+      EXPECT_TRUE(harness.last_submission().dynamic_submitted);
+      EXPECT_NE(harness.last_submission().dynamic_source_signature, before_camera);
+      const auto moved = harness.capture();
+      ASSERT_FALSE(moved.isNull());
+      for (auto probe : harness.linear_guide_probe_pixels(axis)) {
+        EXPECT_GE(probe_count(moved, probe, axis), 3);
+      }
+      for (auto other_axis : axes) {
+        if (other_axis == axis) continue;
+        int stale = 0;
+        for (int y = 0; y < moved.height(); ++y) {
+          for (int x = 0; x < moved.width(); ++x) {
+            if (has_axis_color(moved.pixelColor(x, y), other_axis)) ++stale;
+          }
+        }
+        EXPECT_EQ(stale, 0) << "Switching constraints must retire the previous axis guide.";
+      }
+      const auto moved_probes = harness.linear_guide_probe_pixels(axis);
+      ASSERT_TRUE(harness.clear_linear_guide_constraint());
+      harness.present_linear_guide_sample(1.0f);
+      const auto free = harness.capture();
+      ASSERT_FALSE(free.isNull());
+      for (auto probe : moved_probes) EXPECT_EQ(probe_count(free, probe, axis), 0);
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanArrayDimensionsCoverAllCopiesAndToggleWithoutStaleFrames) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-array-dimensions-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath())
+                                         .absoluteFilePath(QStringLiteral("../selection_features_visual"));
+  ASSERT_TRUE(QDir().mkpath(directory));
+  for (const auto &[tool, label] : std::array{
+           std::pair{ViewportToolId::LinearArray, "linear"},
+           std::pair{ViewportToolId::RadialArray, "radial"},
+           std::pair{ViewportToolId::PathArray, "curve"}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_array_wire_sample(tool));
+    ASSERT_TRUE(harness.configure_array_dimensions_camera());
+    for (bool wireframe : {false, true}) {
+      SCOPED_TRACE(wireframe ? "wireframe" : "shaded");
+      for (float scale : {1.0f, 2.0f, 1.0f}) {
+        SCOPED_TRACE(scale);
+        ASSERT_TRUE(harness.present_array_dimensions_sample(wireframe, true, scale));
+        ASSERT_TRUE(harness.last_submission().selection_dimension_bounds.has_value())
+            << "Default-on tool dimensions must override the disabled global display preference.";
+        const auto bounds = *harness.last_submission().selection_dimension_bounds;
+        EXPECT_GT(bounds.max.x - bounds.min.x, 1.5f)
+            << "The 0.5-unit source alone must not determine the dimensions.";
+        if (tool == ViewportToolId::LinearArray) {
+          EXPECT_NEAR(bounds.min.x, -0.25f, 0.0001f);
+          EXPECT_NEAR(bounds.max.x, 4.25f, 0.0001f);
+        }
+        const auto enabled = harness.capture();
+        ASSERT_FALSE(enabled.isNull());
+        ASSERT_TRUE(enabled.save(QDir(directory).filePath(QStringLiteral("%1_array_dimensions_%2_%3.png")
+            .arg(QString::fromLatin1(label)).arg(wireframe ? "wire" : "shaded").arg(scale))));
+        const auto signature = harness.last_submission().selection_dimension_signature;
+        for (int frame = 0; frame < 8; ++frame) {
+          ASSERT_TRUE(harness.present_array_dimensions_sample(wireframe, true, scale));
+          EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+          EXPECT_EQ(harness.last_submission().selection_dimension_signature, signature);
+        }
+        EXPECT_EQ(harness.capture(), enabled);
+        const auto geometry_uploads = harness.render_diagnostics().gpu_geometry_upload_count;
+        ASSERT_TRUE(harness.set_array_dimensions_visible(false));
+        ASSERT_TRUE(harness.present_array_dimensions_sample(wireframe, true, scale));
+        EXPECT_FALSE(harness.last_submission().selection_dimension_bounds.has_value());
+        const auto disabled = harness.capture();
+        ASSERT_FALSE(disabled.isNull());
+        int changed = 0, colored = 0;
+        for (int y = 0; y < enabled.height(); ++y) {
+          for (int x = 0; x < enabled.width(); ++x) {
+            if (enabled.pixel(x, y) == disabled.pixel(x, y)) continue;
+            ++changed;
+            const auto pixel = enabled.pixelColor(x, y);
+            if (pixel.red() > pixel.blue() + 35 || pixel.green() > pixel.blue() + 35 ||
+                pixel.blue() > pixel.red() + 35) ++colored;
+          }
+        }
+        EXPECT_GT(changed, 40);
+        EXPECT_GT(colored, 20) << "The colored dimensions and cage must reach the Vulkan surface.";
+        ASSERT_TRUE(harness.set_array_dimensions_visible(true));
+        ASSERT_TRUE(harness.present_array_dimensions_sample(wireframe, true, scale));
+        EXPECT_EQ(harness.render_diagnostics().gpu_geometry_upload_count, geometry_uploads)
+            << "A measurement toggle must not rebuild array mesh geometry.";
+        EXPECT_EQ(harness.capture(), enabled);
+        ASSERT_TRUE(harness.present_array_dimensions_sample(wireframe, false, scale));
+        EXPECT_FALSE(harness.last_submission().selection_dimension_bounds.has_value());
+        ASSERT_TRUE(harness.present_array_dimensions_sample(wireframe, true, scale));
+        EXPECT_EQ(harness.capture(), enabled);
+      }
+      const auto before = *harness.last_submission().selection_dimension_bounds;
+      harness.pan_linear_guide_camera();
+      ASSERT_TRUE(harness.present_array_dimensions_sample(wireframe));
+      ASSERT_TRUE(harness.last_submission().selection_dimension_bounds.has_value());
+      const auto after = *harness.last_submission().selection_dimension_bounds;
+      EXPECT_FLOAT_EQ(after.min.x, before.min.x);
+      EXPECT_FLOAT_EQ(after.max.x, before.max.x);
+      EXPECT_FLOAT_EQ(after.min.y, before.min.y);
+      EXPECT_FLOAT_EQ(after.max.y, before.max.y);
+      EXPECT_TRUE(harness.last_submission().dynamic_submitted);
+    }
+    ASSERT_TRUE(harness.cancel_array_wire_sample());
+    ASSERT_TRUE(harness.present_array_dimensions_sample(true));
+    EXPECT_FALSE(harness.last_submission().selection_dimension_bounds.has_value());
+  }
 }
 
 TEST(SelectionOverlayRuntimeTests,

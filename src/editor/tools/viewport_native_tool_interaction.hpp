@@ -175,9 +175,6 @@ public:
       const ViewportCameraController &camera,
       const LinearArrayHandleState &handle, QVec2 mouse_local,
       float viewport_pixel_scale = 1.0f);
-  [[nodiscard]] static QVec3 linear_array_drag_point(
-      const ViewportCameraController &camera, QVec2 mouse_local,
-      const LinearArrayHandleState &handle);
 private:
   /// Reuses projected handle hover until the camera, pointer, or handle moves.
   struct HandleHoverKey final {
@@ -220,7 +217,21 @@ private:
   struct LinearArrayHandlePress final {
     ViewportPointerGesture gesture;
     QVec3 endpoint_before = {};
+    LinearArrayAxisConstraint constraint_before = LinearArrayAxisConstraint::Free;
+    QVec3 motion_endpoint = {};
+    QVec2 motion_pointer = {};
+    LinearArrayAxisConstraint motion_constraint = LinearArrayAxisConstraint::Free;
+    bool vertical = false;
+    bool screen_fallback = false;
+    bool motion_started = false;
   };
+
+  static void rebase_linear_array_drag(
+      LinearArrayHandlePress &press, const ViewportCameraController &camera,
+      QVec2 pointer, const LinearArrayHandleState &handle, bool vertical);
+  [[nodiscard]] static QVec3 linear_array_drag_point(
+      const ViewportCameraController &camera, QVec2 mouse_local,
+      const LinearArrayHandlePress &press);
 
   /** Retains press-time state for one pivot-handle gesture. */
   struct PivotHandlePress final {

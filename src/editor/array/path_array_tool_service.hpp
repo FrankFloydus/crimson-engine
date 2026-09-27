@@ -45,6 +45,8 @@ inline constexpr std::string_view kPathArrayDistanceSetting =
     "path_array.distance";
 inline constexpr std::string_view kPathArrayFollowPathSetting =
     "path_array.follow_path";
+inline constexpr std::string_view kPathArrayShowBoundingBoxDimensionsSetting =
+    "path_array.show_bounding_box_dimensions";
 inline constexpr std::string_view kPathArrayForwardAxisSetting =
     "path_array.forward_axis";
 inline constexpr std::string_view kPathArrayRotationOffsetXSetting =
@@ -115,6 +117,7 @@ struct PathArraySessionDefaults final {
   std::optional<double> remembered_distance;
   std::uint32_t count = kPathArrayDefaultCount;
   bool follow_path = kPathArrayDefaultFollowPath;
+  bool show_bounding_box_dimensions = true;
   PathArraySignedAxis forward_axis = kPathArrayDefaultForwardAxis;
   QVec3 rotation_offset_degrees = kPathArrayDefaultRotationOffsetDegrees;
   QVec3 rotation_random_min_degrees = kPathArrayDefaultRotationRandomMinDegrees;
@@ -194,6 +197,7 @@ public:
   [[nodiscard]] double distance() const;
   [[nodiscard]] double maximum_distance() const;
   [[nodiscard]] bool follow_path() const;
+  [[nodiscard]] bool show_bounding_box_dimensions() const;
   [[nodiscard]] PathArraySignedAxis forward_axis() const;
   [[nodiscard]] QVec3 rotation_offset_degrees() const;
   [[nodiscard]] QVec3 rotation_random_min_degrees() const;
@@ -221,6 +225,7 @@ public:
   CommandResult set_count(std::uint32_t count);
   CommandResult set_distance(double distance);
   CommandResult set_follow_path(bool follow);
+  CommandResult set_show_bounding_box_dimensions(bool show);
   CommandResult set_forward_axis(PathArraySignedAxis axis);
   CommandResult set_rotation_offset_degrees(QVec3 value);
   CommandResult set_rotation_random_min_degrees(QVec3 value);

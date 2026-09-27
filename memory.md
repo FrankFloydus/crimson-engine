@@ -433,6 +433,19 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
 
 ## Deferred input and topology traversal
 
+- Linear Array constraints restrict subsequent endpoint movement; switching X/Y/Z never projects
+  or rotates the existing span. Lock the other coordinates to the current endpoint, including
+  during snapping, and rebase pointer motion on constraint changes. Its axis guide passes through
+  that endpoint and is clipped per pane; camera-only navigation invalidates the guide projection.
+  Coverage: [array input](tests/linear_array_tests.cpp),
+  [retained guide submission](tests/viewport_overlay_submission_coordinator_tests.cpp).
+- Array dimensions use the accepted render preview, independently of the selection-dimensions
+  preference. Linear/Radial include their original visible occurrences; Curve Array replaces
+  its source and must not include the old position. Keep array bounds separate from selected
+  bounds so sibling panes cannot evict the cache. Camera movement and the per-tool visibility
+  checkbox must not rebuild array geometry. Coverage:
+  [bounds submission](tests/viewport_overlay_submission_coordinator_tests.cpp),
+  [Vulkan previews](tests/selection_overlay_runtime_tests.cpp).
 - Freeze the resolved physical chord and semantic action at press through deferred release, gizmo
   handoff, and click/double-click disambiguation. A modifier release must not reinterpret the gesture.
 - Edge loops use topological continuation; rings cross opposite quad edges. Picked-face context does

@@ -67,6 +67,9 @@ void SceneRenderBridge::initialize(
   scene_wireframe_overlay_cache_.initialize(engine, scene,
                                             selected_object_line_material,
                                             engine.getMaxAutomaticInstances());
+  tool_preview_wireframe_cache_.initialize(engine, scene,
+                                           selected_object_line_material,
+                                           engine.getMaxAutomaticInstances());
   selected_object_overlay_cache_.initialize(engine, scene, overlay_material);
   sync_service_.initialize(engine, scene, mesh_cache_, instance_cache_,
                            material_binding_);
@@ -81,6 +84,7 @@ void SceneRenderBridge::shutdown() {
     sync_service_.shutdown();
     selected_object_overlay_cache_.shutdown();
     scene_wireframe_overlay_cache_.shutdown();
+    tool_preview_wireframe_cache_.shutdown();
     instance_selection_overlay_cache_.shutdown();
     collision_shape_overlay_cache_.shutdown();
     mesh_cache_.shutdown();
@@ -105,9 +109,12 @@ void SceneRenderBridge::shutdown() {
   tool_preview_occurrence_suppressions_.clear();
   tool_preview_suppression_ = {};
   tool_preview_overlay_frame_ = {};
+  tool_preview_wireframe_snapshot_ = {};
+  tool_preview_wireframe_dirty_ = false;
   selection_dimension_preview_meshes_.clear();
   selection_dimension_preview_groups_.clear();
   selection_dimension_preview_curves_.clear();
+  array_dimension_preview_lights_.clear();
   ++tool_preview_overlay_revision_;
   filtered_scene_overlay_snapshot_ = {};
   filtered_collision_snapshot_ = {};
@@ -149,9 +156,12 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   tool_preview_occurrence_suppressions_.clear();
   tool_preview_suppression_ = {};
   tool_preview_overlay_frame_ = {};
+  tool_preview_wireframe_snapshot_ = {};
+  tool_preview_wireframe_dirty_ = false;
   selection_dimension_preview_meshes_.clear();
   selection_dimension_preview_groups_.clear();
   selection_dimension_preview_curves_.clear();
+  array_dimension_preview_lights_.clear();
   ++tool_preview_overlay_revision_;
   filtered_scene_overlay_snapshot_ = {};
   filtered_collision_snapshot_ = {};
@@ -163,6 +173,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   // Retire outgoing preview and viewport-overlay material consumers before
   // switching the scene. Their texture pins drain alongside the scene proxies.
   tool_preview_cache_.clear();
+  tool_preview_wireframe_cache_.clear();
   tool_preview_light_cache_.clear();
   mesh_cache_.set_preview_suppressed_entities({});
   instance_cache_.set_preview_suppressed_entities({}, {}, {});
@@ -307,27 +318,34 @@ SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
   const InstanceRenderableCacheStats instances = instance_cache_.stats();
   const SceneWireframeOverlayCacheStats wire =
       scene_wireframe_overlay_cache_.stats();
+  const SceneWireframeOverlayCacheStats preview_wire =
+      tool_preview_wireframe_cache_.stats();
   const InstanceSelectionOverlayCacheStats selection =
       instance_selection_overlay_cache_.stats();
   result.gpu_geometry_resource_count =
       geometry.resource_count + wire.unique_geometry_resource_count +
+      preview_wire.unique_geometry_resource_count +
       selection.unique_wire_geometry_resource_count;
   result.gpu_geometry_upload_count =
       geometry.upload_count + wire.geometry_upload_count +
+      preview_wire.geometry_upload_count +
       selection.wire_geometry_upload_count;
   result.gpu_geometry_reuse_count =
       geometry.cache_hit_count + wire.geometry_reuse_count +
+      preview_wire.geometry_reuse_count +
       selection.wire_geometry_reuse_count;
   result.gpu_uploaded_vertex_bytes =
       geometry.uploaded_vertex_bytes + wire.derived_vertex_bytes +
+      preview_wire.derived_vertex_bytes +
       selection.wire_derived_vertex_bytes;
   result.gpu_uploaded_index_bytes =
       geometry.uploaded_index_bytes + wire.derived_index_bytes +
+      preview_wire.derived_index_bytes +
       selection.wire_derived_index_bytes;
   result.base_instance_participant_count = instances.participant_count;
   result.base_instance_batch_chunk_count = instances.chunk_count;
-  result.wire_participant_count = wire.participant_count;
-  result.wire_batch_chunk_count = wire.chunk_count;
+  result.wire_participant_count = wire.participant_count + preview_wire.participant_count;
+  result.wire_batch_chunk_count = wire.chunk_count + preview_wire.chunk_count;
   result.selection_fill_batch_chunk_count = selection.fill_chunk_count;
   result.selection_wire_batch_chunk_count = selection.wire_chunk_count;
   result.planned_primitive_submissions =
@@ -468,6 +486,19 @@ void SceneRenderBridge::sync_scene_asset_overlays(
   if (engine_ && scene_ && scene_wireframe_overlay_cache_.initialized()) {
     scene_wireframe_overlay_cache_.sync(*wireframe);
   }
+  if (engine_ && scene_ && tool_preview_wireframe_cache_.initialized()) {
+    // Only wireframe panes receive generated mesh edges. The same accepted
+    // placements keep their filled siblings in adjacent shaded/rendered panes.
+    auto &preview = tool_preview_wireframe_snapshot_;
+    preview.scene_binding = scene_binding_;
+    preview.layer_mask = wireframe_snapshot.layer_mask;
+    preview.style = wireframe_snapshot.style;
+    preview.raster_groups = wireframe_snapshot.raster_groups;
+    preview.clip_planes = wireframe_snapshot.clip_planes;
+    preview.instance_edit_scope = wireframe_snapshot.instance_edit_scope;
+    tool_preview_wireframe_cache_.sync(preview);
+  }
+  tool_preview_wireframe_dirty_ = false;
   tool_preview_overlay_suppression_dirty_ = false;
 }
 
@@ -565,6 +596,8 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
   }
   ViewportOverlayFrame overlay_candidate =
       build_render_tool_preview_overlay_frame(preview);
+  RenderOverlaySceneWireframeSnapshot wireframe_candidate =
+      build_render_tool_preview_wireframe_snapshot(preview.meshes);
   const ToolPreviewSubmissionResult light_result =
       tool_preview_light_cache_.prepare(preview.lights);
   if (light_result == ToolPreviewSubmissionResult::Failed) {
@@ -579,11 +612,15 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
   }
   tool_preview_light_cache_.publish_prepared();
   ++tool_preview_submission_revision_;
+  wireframe_candidate.scene_revision = tool_preview_submission_revision_;
+  tool_preview_wireframe_snapshot_ = std::move(wireframe_candidate);
+  tool_preview_wireframe_dirty_ = true;
   (void)overlay_cache_.set_transform_position_streams(preview.meshes);
   tool_preview_overlay_frame_ = std::move(overlay_candidate);
   selection_dimension_preview_meshes_ = std::move(preview.meshes);
   selection_dimension_preview_groups_ = std::move(preview.group_markers);
   selection_dimension_preview_curves_ = std::move(preview.curves);
+  array_dimension_preview_lights_ = std::move(preview.lights);
   ++tool_preview_overlay_revision_;
 
   if (!tool_preview_suppression_valid_ ||
@@ -631,6 +668,9 @@ ViewportOverlaySubmissionResult SceneRenderBridge::submit_viewport_overlay(
   request.selection_dimension_preview_meshes = selection_dimension_preview_meshes_;
   request.selection_dimension_preview_groups = selection_dimension_preview_groups_;
   request.selection_dimension_preview_curves = selection_dimension_preview_curves_;
+  request.array_dimension_preview_lights = array_dimension_preview_lights_;
+  request.array_dimension_scene_snapshot = has_previous_scene_snapshot_
+      ? &previous_scene_snapshot_ : nullptr;
   request.selection_dimension_preview_suppression = &tool_preview_suppression_;
   if (!tool_preview_suppression_.empty() &&
       request.scene_overlay_snapshot != nullptr) {

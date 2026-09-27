@@ -325,6 +325,7 @@ TEST(PathArrayToolServiceTests,
       ASSERT_TRUE(tool.set_scale_offset_factors({1.1F, 0.9F, 1.2F}).ok);
       ASSERT_TRUE(tool.set_scale_random_min_factors({0.5F, 0.6F, 0.7F}).ok);
       ASSERT_TRUE(tool.set_scale_random_max_factors({1.5F, 1.6F, 1.7F}).ok);
+      ASSERT_TRUE(tool.set_show_bounding_box_dimensions(false).ok);
       // Cancel resolves any valid option batch that has not been rendered yet.
       ASSERT_TRUE(tool.cancel().ok);
       ASSERT_TRUE(tool.activate().ok);
@@ -333,6 +334,7 @@ TEST(PathArrayToolServiceTests,
     EXPECT_EQ(tool.count(), 6U);
     EXPECT_DOUBLE_EQ(tool.distance(), 2.25);
     EXPECT_FALSE(tool.follow_path());
+    EXPECT_FALSE(tool.show_bounding_box_dimensions());
     EXPECT_EQ(tool.forward_axis(), PathArraySignedAxis::NegativeZ);
     expect_vector(tool.rotation_offset_degrees(), {2, 3, 4});
     expect_vector(tool.rotation_random_min_degrees(), {-10, -20, -30});
@@ -354,6 +356,97 @@ TEST(PathArrayToolServiceTests,
   ASSERT_TRUE(fresh.session.path_array().activate().ok);
   EXPECT_EQ(fresh.session.path_array().count(), kPathArrayDefaultCount);
   EXPECT_TRUE(fresh.session.path_array().follow_path());
+  EXPECT_TRUE(fresh.session.path_array().show_bounding_box_dimensions());
+}
+
+TEST(PathArrayToolServiceTests,
+     BoundsVisibilityAndVisualOnlyResetRetainPreviewAndHistory) {
+  PathArrayHarness harness;
+  const auto path = create_path(harness.editor, {12.0F, 0.0F, 0.0F});
+  const auto source = create_box(harness.editor);
+  select_path(harness, path);
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.select_source(source.entity).ok);
+  const PathArrayPreviewState &preview = tool.preview_state();
+  ASSERT_TRUE(preview.active);
+  ASSERT_FALSE(preview.scene.meshes.empty());
+  const auto *roots = preview.root_world_transforms.data();
+  const auto *meshes = preview.scene.meshes.data();
+  const auto *instances = preview.scene.meshes.front().instance_transforms.data();
+  const std::uint64_t preview_revision = preview.revision;
+  const std::uint64_t preview_scene_revision = preview.scene.revision;
+  const PathArrayLayoutWorkStats work = tool.layout_work_stats_for_tests();
+  const std::uint64_t scene_revision = harness.session.scene().revision();
+  const std::uint64_t history_revision = harness.session.history().revision();
+  const std::uint64_t settings_revision = tool.tool_settings_revision();
+
+  const auto expect_retained_preview = [&] {
+    const PathArrayPreviewState &current = tool.preview_state();
+    EXPECT_EQ(current.revision, preview_revision);
+    EXPECT_EQ(current.scene.revision, preview_scene_revision);
+    EXPECT_EQ(current.root_world_transforms.data(), roots);
+    EXPECT_EQ(current.scene.meshes.data(), meshes);
+    EXPECT_EQ(current.scene.meshes.front().instance_transforms.data(), instances);
+    EXPECT_EQ(tool.layout_work_stats_for_tests().backbone_build_count,
+              work.backbone_build_count);
+    EXPECT_EQ(tool.layout_work_stats_for_tests().layout_evaluation_count,
+              work.layout_evaluation_count);
+    EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+    EXPECT_EQ(harness.session.history().revision(), history_revision);
+  };
+
+  EXPECT_TRUE(tool.show_bounding_box_dimensions());
+  const CommandResult hidden = tool.set_show_bounding_box_dimensions(false);
+  ASSERT_TRUE(hidden.ok);
+  EXPECT_TRUE(hidden.changed);
+  EXPECT_FALSE(tool.show_bounding_box_dimensions());
+  EXPECT_EQ(tool.tool_settings_revision(), settings_revision + 1U);
+  expect_retained_preview();
+  const CommandResult unchanged = tool.set_show_bounding_box_dimensions(false);
+  ASSERT_TRUE(unchanged.ok);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(tool.tool_settings_revision(), settings_revision + 1U);
+  expect_retained_preview();
+
+  const CommandResult reset = tool.reset_settings();
+  ASSERT_TRUE(reset.ok);
+  EXPECT_TRUE(reset.changed);
+  EXPECT_TRUE(tool.show_bounding_box_dimensions());
+  EXPECT_EQ(tool.tool_settings_revision(), settings_revision + 2U);
+  expect_retained_preview();
+  const CommandResult unchanged_reset = tool.reset_settings();
+  ASSERT_TRUE(unchanged_reset.ok);
+  EXPECT_FALSE(unchanged_reset.changed);
+  EXPECT_EQ(tool.tool_settings_revision(), settings_revision + 2U);
+  expect_retained_preview();
+}
+
+TEST(PathArrayToolServiceTests,
+     BoundsVisibilitySurvivesPendingLayoutPublicationAndCancellation) {
+  const auto defaults = std::make_shared<PathArraySessionDefaults>();
+  PathArrayHarness harness(defaults);
+  const auto path = create_path(harness.editor, {12.0F, 0.0F, 0.0F});
+  const auto source = create_box(harness.editor);
+  select_path(harness, path);
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.select_source(source.entity).ok);
+  ASSERT_TRUE(tool.preview_valid());
+  ASSERT_TRUE(tool.set_count(6U).ok);
+  ASSERT_TRUE(tool.set_show_bounding_box_dimensions(false).ok);
+  EXPECT_FALSE(defaults->show_bounding_box_dimensions);
+  EXPECT_EQ(defaults->count, kPathArrayDefaultCount);
+  ASSERT_TRUE(tool.preview_valid());
+  EXPECT_EQ(defaults->count, 6U);
+  EXPECT_FALSE(defaults->show_bounding_box_dimensions);
+  ASSERT_TRUE(tool.set_count(5U).ok);
+  ASSERT_TRUE(tool.set_show_bounding_box_dimensions(true).ok);
+  ASSERT_TRUE(tool.cancel().ok);
+  EXPECT_EQ(defaults->count, 5U);
+  EXPECT_TRUE(defaults->show_bounding_box_dimensions);
+  ASSERT_TRUE(tool.activate().ok);
+  EXPECT_TRUE(tool.show_bounding_box_dimensions());
 }
 
 TEST(PathArrayToolServiceTests,
@@ -401,11 +494,13 @@ TEST(PathArrayToolServiceTests,
         tool.set_scale_random_min_factors({0.5F, 0.6F, 0.7F}).ok);
     ASSERT_TRUE(
         tool.set_scale_random_max_factors({1.5F, 1.6F, 1.7F}).ok);
+    ASSERT_TRUE(tool.set_show_bounding_box_dimensions(false).ok);
     const CommandResult reset = tool.reset_settings();
     ASSERT_TRUE(reset.ok) << reset.message;
     EXPECT_EQ(tool.count(), kPathArrayDefaultCount);
     EXPECT_NEAR(tool.distance(), 1.0, 0.0001);
     EXPECT_TRUE(tool.follow_path());
+    EXPECT_TRUE(tool.show_bounding_box_dimensions());
     EXPECT_EQ(tool.forward_axis(), PathArraySignedAxis::PositiveX);
     EXPECT_EQ(tool.rotation_offset_degrees().x, 0.0F);
     EXPECT_EQ(tool.rotation_random_min_degrees().y, 0.0F);
@@ -1185,6 +1280,9 @@ TEST(PathArrayToolServiceTests,
   ASSERT_FALSE(valid.scene.suppression.entities.empty());
   ASSERT_TRUE(tool.set_follow_path(true).ok);
   EXPECT_FALSE(tool.preview_valid());
+  ASSERT_TRUE(tool.set_show_bounding_box_dimensions(false).ok);
+  EXPECT_FALSE(defaults->show_bounding_box_dimensions)
+      << "visual options are accepted independently of a rejected layout";
   const PathArrayPreviewState &retained = tool.preview_state();
   EXPECT_TRUE(retained.active);
   EXPECT_EQ(retained.revision, valid.revision);
@@ -1209,6 +1307,7 @@ TEST(PathArrayToolServiceTests,
   ASSERT_TRUE(tool.cancel().ok);
   ASSERT_TRUE(tool.activate().ok);
   EXPECT_FALSE(tool.follow_path());
+  EXPECT_FALSE(tool.show_bounding_box_dimensions());
 }
 
 } // namespace

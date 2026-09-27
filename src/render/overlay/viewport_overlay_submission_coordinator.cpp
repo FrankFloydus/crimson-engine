@@ -308,6 +308,88 @@ bool dimension_selection_source(ViewportOverlaySource source) {
          source == ViewportOverlaySource::ComponentSelection;
 }
 
+constexpr auto kArrayDimensionSourceDependencies = RenderSourceDependencyMask::from({
+    RenderSourceDependency::SceneBinding, RenderSourceDependency::VisibilityRevision,
+    RenderSourceDependency::LocalVisibilityRevision, RenderSourceDependency::TransformRevision,
+    RenderSourceDependency::MeshBindingRevision, RenderSourceDependency::RenderComponentRevision,
+    RenderSourceDependency::LayerRevision, RenderSourceDependency::AssetRevision,
+    RenderSourceDependency::InstanceEditScope});
+
+std::optional<ViewportSelectionDimensionBounds> array_original_dimension_bounds(
+    const ViewportOverlaySubmissionRequest &request,
+    ViewportOverlaySubmissionWorkCounters &work) {
+  std::optional<ViewportSelectionDimensionBounds> bounds;
+  const auto *scene = request.array_dimension_scene_snapshot;
+  if (scene == nullptr) return bounds;
+  const auto append_mesh = [&](const RenderMeshAssetSnapshot &mesh, const QMat4 &world) {
+    for (const auto &vertex : mesh.vertices) {
+      include_dimension_point(bounds, transform_point(world, vertex.position));
+    }
+    work.selection_dimension_source_record_count += mesh.vertices.size();
+  };
+  for (const auto &preview : request.selection_dimension_preview_meshes) {
+    if (preview.suppress_source) continue;
+    const EntityId occurrence = preview.visibility_entity != kInvalidEntityId
+        ? preview.visibility_entity : preview.source_entity;
+    for (const auto &mesh : scene->meshes) {
+      if (mesh.entity_id == preview.source_entity) append_mesh(mesh.mesh, mesh.world_transform);
+    }
+    for (const auto &primitive : scene->instance_primitives) {
+      if (primitive.member_entity != kInvalidEntityId &&
+          primitive.member_entity != preview.source_entity) continue;
+      for (const auto &instance : primitive.occurrences) {
+        if (instance.entity_id == occurrence) append_mesh(primitive.mesh, instance.world_transform);
+      }
+    }
+  }
+  return bounds;
+}
+
+std::optional<ViewportSelectionDimensionBounds> array_dimension_bounds(
+    const ViewportOverlaySubmissionRequest &request,
+    std::optional<ViewportSelectionDimensionBounds> bounds,
+    ViewportOverlaySubmissionWorkCounters &work) {
+  for (const auto &preview : request.selection_dimension_preview_meshes) {
+    const auto &vertices = preview.mesh.geometry().vertices;
+    const bool dynamic = preview.dynamic_positions && preview.dynamic_position_payload &&
+        preview.dynamic_position_payload->size() == vertices.size();
+    const auto append_at = [&](const QMat4 &world) {
+      for (std::size_t index = 0u; index < vertices.size(); ++index) {
+        include_dimension_point(bounds, transform_point(world, dynamic
+            ? (*preview.dynamic_position_payload)[index] : vertices[index].position));
+      }
+      work.selection_dimension_source_record_count += vertices.size();
+    };
+    if (preview.instance_transforms.empty()) append_at(preview.transform);
+    else for (const auto &world : preview.instance_transforms) append_at(world);
+  }
+  for (const auto &curve : request.selection_dimension_preview_curves) {
+    if (!curve.selection_dimension_bounds) continue;
+    include_dimension_point(bounds, curve.selection_dimension_bounds->min);
+    include_dimension_point(bounds, curve.selection_dimension_bounds->max);
+    ++work.selection_dimension_source_record_count;
+  }
+  // Lights and empties contribute their authored positions, not display-sized
+  // icons, attenuation radii, or conservative rotated group cages.
+  for (const auto &light : request.array_dimension_preview_lights) {
+    for (const auto &world : light.instance_transforms) {
+      include_dimension_point(bounds, transform_point(world, {}));
+      ++work.selection_dimension_source_record_count;
+    }
+  }
+  for (const auto &group : request.selection_dimension_preview_groups) {
+    // A nondegenerate cage represents child geometry already measured above.
+    // Its pivot may lie outside that geometry and is not an additional extent.
+    if (group.local_min.x != group.local_max.x || group.local_min.y != group.local_max.y ||
+        group.local_min.z != group.local_max.z) continue;
+    for (const auto &world : group.instance_transforms) {
+      include_dimension_point(bounds, transform_point(world, group.local_min));
+      ++work.selection_dimension_source_record_count;
+    }
+  }
+  return bounds;
+}
+
 std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds(
     const ViewportOverlaySubmissionRequest &request,
     const ViewportOverlayFrame *selection,
@@ -666,6 +748,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     }
   }
   const bool dimensions_visible = request.overlays_visible &&
+      request.array_dimensions_mode == ViewportArrayDimensionsMode::Inactive &&
       request.selection_dimensions_visible &&
       (request.scene_selection_mode != RenderOverlaySelectionMode::Component ||
        request.style_selection_context == ViewportOverlaySelectionContext::Face);
@@ -705,6 +788,54 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     }
     result.selection_dimension_bounds = selection_dimensions_.bounds;
     result.selection_dimension_signature = selection_dimensions_.publication_revision;
+  }
+  if (request.overlays_visible &&
+      request.array_dimensions_mode == ViewportArrayDimensionsMode::Visible) {
+    const auto *scene = request.array_dimension_scene_snapshot;
+    const auto scene_identity = reinterpret_cast<std::uintptr_t>(scene);
+    const RenderSourceStamp scene_stamp = scene != nullptr
+        ? static_cast<const RenderSourceStamp &>(*scene) : RenderSourceStamp{};
+    const bool scene_changed = !array_dimensions_.valid ||
+        array_dimensions_.scene_identity != scene_identity ||
+        !render_source_dependencies_match(array_dimensions_.scene, scene_stamp,
+                                           kArrayDimensionSourceDependencies);
+    if (scene_changed ||
+        array_dimensions_.preview_identity != request.tool_preview_overlay_identity ||
+        array_dimensions_.preview_revision != request.tool_preview_overlay_revision) {
+      bool originals_changed = scene_changed;
+      std::size_t original_index = 0u;
+      for (const auto &preview : request.selection_dimension_preview_meshes) {
+        if (preview.suppress_source) continue;
+        const auto key = std::pair{preview.source_entity, preview.visibility_entity};
+        if (original_index >= array_dimensions_.originals.size() ||
+            array_dimensions_.originals[original_index] != key) originals_changed = true;
+        ++original_index;
+      }
+      originals_changed |= original_index != array_dimensions_.originals.size();
+      if (originals_changed) {
+        array_dimensions_.originals.clear();
+        for (const auto &preview : request.selection_dimension_preview_meshes) {
+          if (!preview.suppress_source) array_dimensions_.originals.emplace_back(
+              preview.source_entity, preview.visibility_entity);
+        }
+        array_dimensions_.original_bounds = array_original_dimension_bounds(request, work_counters_);
+        ++work_counters_.array_dimension_originals_build_count;
+      }
+      auto bounds = array_dimension_bounds(request, array_dimensions_.original_bounds,
+                                           work_counters_);
+      ++work_counters_.array_dimension_bounds_build_count;
+      if (!array_dimensions_.valid || !same_dimension_bounds(array_dimensions_.bounds, bounds)) {
+        array_dimensions_.publication_revision = ++selection_dimension_publication_revision_;
+      }
+      array_dimensions_.bounds = bounds;
+      array_dimensions_.scene = scene_stamp;
+      array_dimensions_.scene_identity = scene_identity;
+      array_dimensions_.preview_identity = request.tool_preview_overlay_identity;
+      array_dimensions_.preview_revision = request.tool_preview_overlay_revision;
+      array_dimensions_.valid = true;
+    }
+    result.selection_dimension_bounds = array_dimensions_.bounds;
+    result.selection_dimension_signature = array_dimensions_.publication_revision;
   }
   const bool dimension_box_visible = result.selection_dimension_bounds.has_value();
   ViewportOverlaySelectionDimensionSubmissionStamp dimension_stamp;
@@ -942,6 +1073,7 @@ void ViewportOverlaySubmissionCoordinator::invalidate_all() {
   panes_ = {};
   selection_source_ = {};
   selection_dimensions_ = {};
+  array_dimensions_ = {};
   curve_overlay_source_.reset();
   mesh_outline_source_.reset();
 }

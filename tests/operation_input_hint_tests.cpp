@@ -7,6 +7,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "core/localization_service.hpp"
+#include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/input/quader_input_binding.hpp"
@@ -226,6 +227,49 @@ TEST(OperationInputHintTests, ExtrudeOwnerPhasesReplaceModeChoicesWithLiveModifi
   ASSERT_TRUE(session.extrude().set_mode(modeling::FaceExtrudeMode::Individual).ok);
   ASSERT_TRUE(session.extrude().begin_drag().ok);
   EXPECT_FALSE(contains_command(editor.tools().active_input_hints(), QuaderCommandId{"viewport.extrude.constraint_x"}));
+}
+
+TEST(OperationInputHintTests, LinearArrayVerticalHintTracksOwnerConstraintAndHeldAlt) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Array Hint Source").ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
+  QuaderOperationInputContext context;
+  context.linear_array_endpoint_hovered = true;
+  const auto initial = editor.tools().active_input_hints_revision(context);
+  const auto hints = editor.tools().active_input_hints(context);
+  const auto vertical = std::ranges::find_if(hints, [](const auto &hint) {
+    return hint.gesture == QuaderOperationInputGesture::Alt;
+  });
+  ASSERT_NE(vertical, hints.end());
+  for (const char *locale : {"en-US", "it-IT"}) {
+    EXPECT_NE(localization_for(locale).text(vertical->label_key, "missing"), "missing");
+  }
+  for (int frame = 0; frame < 20; ++frame) {
+    EXPECT_EQ(editor.tools().active_input_hints_revision(context), initial);
+  }
+  context.alt = true;
+  const auto held = editor.tools().active_input_hints_revision(context);
+  EXPECT_GT(held, initial);
+  const auto held_hints = editor.tools().active_input_hints(context);
+  EXPECT_TRUE(std::ranges::any_of(held_hints, [](const auto &hint) {
+    return hint.gesture == QuaderOperationInputGesture::Alt && hint.active;
+  }));
+  for (const auto axis : {LinearArrayAxisConstraint::X,
+                          LinearArrayAxisConstraint::Y,
+                          LinearArrayAxisConstraint::Z}) {
+    ASSERT_TRUE(session.linear_array().set_axis_constraint(axis).ok);
+    EXPECT_GT(editor.tools().active_input_hints_revision(context), held);
+    EXPECT_FALSE(contains_gesture(editor.tools().active_input_hints(context),
+                                 QuaderOperationInputGesture::Alt));
+  }
+  ASSERT_TRUE(session.linear_array().set_axis_constraint(LinearArrayAxisConstraint::Free).ok);
+  EXPECT_TRUE(contains_gesture(editor.tools().active_input_hints(context),
+                              QuaderOperationInputGesture::Alt));
+  context.navigation = QuaderInputNavigation::Fly;
+  EXPECT_FALSE(contains_gesture(editor.tools().active_input_hints(context),
+                               QuaderOperationInputGesture::Alt));
 }
 
 TEST(OperationInputHintTests, ModelingPhasesDoNotAdvertiseUnavailableApplyOrWrongModifiers) {

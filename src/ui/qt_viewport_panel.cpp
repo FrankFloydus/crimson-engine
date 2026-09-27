@@ -1588,6 +1588,12 @@ void QtViewportPanel::prepare_viewports(
   const auto &operation_origin = editor.tools().active_settings_presentation_origin();
   const ViewportPaneId operation_pane = operation_origin.serial != 0u
       ? operation_origin.pane : interaction_pane_id_;
+  const std::optional<bool> array_dimensions =
+      editor.tools().active_array_bounding_box_dimensions();
+  const auto pane_dimensions_visible = [&](ViewportPaneId pane_id) {
+    return pane_id == operation_pane && array_dimensions.has_value()
+               ? *array_dimensions : selection_dimensions_visible;
+  };
   for (Pane &pane_state : panes_) {
     const bool overlays_visible = workspace_->effective_settings(pane_state.id)
         .bool_value(ViewportBoolSettingId::ShowOverlays);
@@ -1606,7 +1612,7 @@ void QtViewportPanel::prepare_viewports(
          pane_state.id != interaction_pane_id_ ||
          !pane_state.frame->isVisible()) &&
         !footprint_dimensions_visible &&
-        !(selection_dimensions_visible && overlays_visible &&
+        !(pane_dimensions_visible(pane_state.id) && overlays_visible &&
           pane_state.frame->isVisible())) {
       pane_state.edge_length_hud->hide();
     }
@@ -1934,6 +1940,10 @@ void QtViewportPanel::prepare_viewports(
                     shading == ViewportShadingMode::Wireframe,
                 .point_light_gizmos_visible = point_light_gizmos_visible,
                 .selection_dimensions_visible = selection_dimensions_visible,
+                .array_dimensions_mode = pane_state.id != operation_pane || !array_dimensions
+                    ? ViewportArrayDimensionsMode::Inactive
+                    : *array_dimensions ? ViewportArrayDimensionsMode::Visible
+                                        : ViewportArrayDimensionsMode::Hidden,
             },
             pane_settings);
     pane_state.edge_length_hud->present(
@@ -1952,7 +1962,7 @@ void QtViewportPanel::prepare_viewports(
         overlay_submission.selection_dimension_bounds
             ? &*overlay_submission.selection_dimension_bounds : nullptr,
         overlay_submission.selection_dimension_signature,
-        selection_dimensions_visible && overlays_visible);
+        pane_dimensions_visible(pane_state.id) && overlays_visible);
     sync_pane_control_selection(pane_state);
   }
   if (diagnostics_enabled) {

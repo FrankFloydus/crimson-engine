@@ -64,22 +64,22 @@ MaterialAssetRevision embedded_material_revision(
              : MaterialAssetRevision{};
 }
 
-QVec3 constrained_endpoint(QVec3 source, QVec3 endpoint,
+QVec3 constrained_endpoint(QVec3 locked_endpoint, QVec3 endpoint,
                            LinearArrayAxisConstraint constraint) {
   switch (constraint) {
   case LinearArrayAxisConstraint::X:
-    return {endpoint.x, source.y, source.z};
+    return {endpoint.x, locked_endpoint.y, locked_endpoint.z};
   case LinearArrayAxisConstraint::Y:
-    return {source.x, endpoint.y, source.z};
+    return {locked_endpoint.x, endpoint.y, locked_endpoint.z};
   case LinearArrayAxisConstraint::Z:
-    return {source.x, source.y, endpoint.z};
+    return {locked_endpoint.x, locked_endpoint.y, endpoint.z};
   case LinearArrayAxisConstraint::Free:
     break;
   }
   return endpoint;
 }
 
-QVec3 snapped_endpoint(QVec3 source, QVec3 endpoint,
+QVec3 snapped_endpoint(QVec3 locked_endpoint, QVec3 endpoint,
                        LinearArrayAxisConstraint constraint, double grid_size) {
   if (!std::isfinite(grid_size) || grid_size <= kLinearArrayEpsilon) {
     return endpoint;
@@ -102,7 +102,7 @@ QVec3 snapped_endpoint(QVec3 source, QVec3 endpoint,
     endpoint = {snapped(endpoint.x), snapped(endpoint.y), snapped(endpoint.z)};
     break;
   }
-  return constrained_endpoint(source, endpoint, constraint);
+  return constrained_endpoint(locked_endpoint, endpoint, constraint);
 }
 
 } // namespace
@@ -419,6 +419,10 @@ std::uint32_t LinearArrayToolService::count() const {
   return session_.has_value() ? session_->count : defaults_.count;
 }
 
+bool LinearArrayToolService::show_bounding_box_dimensions() const {
+  return defaults_.show_bounding_box_dimensions;
+}
+
 std::uint32_t LinearArrayToolService::maximum_count() const {
   return session_.has_value() ? maximum_count_for(session_->sources.size())
                               : kLinearArrayMaximumCount;
@@ -650,6 +654,22 @@ CommandResult LinearArrayToolService::set_count(std::uint32_t count) {
   return command_changed_result();
 }
 
+CommandResult LinearArrayToolService::set_show_bounding_box_dimensions(
+    bool enabled) {
+  if (!release_has_feature(ReleaseFeature::LinearArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
+  if (!session_.has_value()) {
+    return command_invalid_result("Linear Array tool is not active.");
+  }
+  if (defaults_.show_bounding_box_dimensions == enabled) {
+    return command_unchanged_result();
+  }
+  defaults_.show_bounding_box_dimensions = enabled;
+  issue_tool_settings_revision();
+  return command_changed_result();
+}
+
 CommandResult LinearArrayToolService::reset_settings() {
   if (!release_has_feature(ReleaseFeature::LinearArray)) {
     return command_invalid_result(release_feature_unavailable_message());
@@ -659,14 +679,16 @@ CommandResult LinearArrayToolService::reset_settings() {
   }
   const std::uint32_t default_count =
       std::min(kLinearArrayDefaultCount, maximum_count());
-  if (session_->count == default_count &&
-      defaults_ == LinearArraySessionDefaults{}) {
+  const bool geometry_changed = session_->count != default_count;
+  if (!geometry_changed && defaults_ == LinearArraySessionDefaults{}) {
     return command_unchanged_result();
   }
   session_->count = default_count;
   defaults_ = {};
-  session_->revision = issue_revision();
-  clear_preview_cache();
+  if (geometry_changed) {
+    session_->revision = issue_revision();
+    clear_preview_cache();
+  }
   issue_tool_settings_revision();
   return command_changed_result();
 }
@@ -701,16 +723,16 @@ CommandResult LinearArrayToolService::set_axis_constraint(
     return command_unchanged_result();
   }
   session_->constraint = next;
-  session_->endpoint_world = constrained_endpoint(
-      session_->anchor_world, session_->endpoint_world, next);
   session_->revision = issue_revision();
+  issue_tool_settings_revision();
   clear_preview_cache();
   return command_changed_result();
 }
 
 CommandResult LinearArrayToolService::set_endpoint(QVec3 world_position,
                                                    bool snap_to_grid,
-                                                   double grid_size) {
+                                                   double grid_size,
+                                                   LinearArrayEndpointMotion motion) {
   if (!release_has_feature(ReleaseFeature::LinearArray)) {
     return command_invalid_result(release_feature_unavailable_message());
   }
@@ -721,10 +743,18 @@ CommandResult LinearArrayToolService::set_endpoint(QVec3 world_position,
     return command_invalid_result("Linear Array endpoint must be finite.");
   }
   QVec3 endpoint = constrained_endpoint(
-      session_->anchor_world, world_position, session_->constraint);
+      session_->endpoint_world, world_position, session_->constraint);
   if (snap_to_grid) {
-    endpoint = snapped_endpoint(session_->anchor_world, endpoint,
+    endpoint = snapped_endpoint(session_->endpoint_world, endpoint,
                                 session_->constraint, grid_size);
+  }
+  if (session_->constraint == LinearArrayAxisConstraint::Free) {
+    if (motion == LinearArrayEndpointMotion::Horizontal) {
+      endpoint.y = session_->endpoint_world.y;
+    } else if (motion == LinearArrayEndpointMotion::Vertical) {
+      endpoint.x = session_->endpoint_world.x;
+      endpoint.z = session_->endpoint_world.z;
+    }
   }
   if (near_same_point(session_->endpoint_world, endpoint)) {
     return command_unchanged_result();

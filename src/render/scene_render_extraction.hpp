@@ -13,12 +13,14 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace quader {
 
 class AssetRegistry;
 class SceneDocument;
+struct RenderOverlaySceneWireframeSnapshot;
 
 /**
  * Captures a transient tool preview mesh before render material dependencies
@@ -169,5 +171,10 @@ build_render_tool_preview_scene_snapshot(
 /** Builds camera-independent Curve, Light-marker, and group-marker geometry. */
 [[nodiscard]] ViewportOverlayFrame build_render_tool_preview_overlay_frame(
     const RenderToolPreviewSceneSnapshot &preview);
+
+/** Pins authored edges once and retains the placements of generated array meshes. */
+[[nodiscard]] RenderOverlaySceneWireframeSnapshot
+build_render_tool_preview_wireframe_snapshot(
+    std::span<const RenderToolPreviewMeshRecord> meshes);
 
 } // namespace quader

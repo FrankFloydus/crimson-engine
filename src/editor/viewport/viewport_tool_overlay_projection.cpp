@@ -15,6 +15,7 @@
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/overlay/viewport_box_overlay_builder.hpp"
+#include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/viewport_primitive_creation_overlay_builder.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
@@ -28,6 +29,8 @@
 #include <bit>
 #include <cassert>
 #include <cmath>
+#include <limits>
+#include <numbers>
 #include <optional>
 
 namespace quader {
@@ -218,6 +221,79 @@ std::uint32_t linear_array_axis_color(LinearArrayAxisConstraint constraint) {
   return kOverlayToolAxisMixedColor;
 }
 
+void append_linear_array_constraint_guide(
+    ViewportOverlayFrame &frame, const ViewportOverlayCamera &input_camera,
+    const LinearArrayHandleState &handle) {
+  if (!handle.visible || handle.constraint == LinearArrayAxisConstraint::Free) {
+    return;
+  }
+  const QVec3 axis = handle.constraint == LinearArrayAxisConstraint::X
+      ? QVec3{1.0f, 0.0f, 0.0f}
+      : handle.constraint == LinearArrayAxisConstraint::Y
+          ? QVec3{0.0f, 1.0f, 0.0f} : QVec3{0.0f, 0.0f, 1.0f};
+  const OverlayCameraProjector projector(input_camera);
+  const auto &camera = projector.camera();
+  const auto relative_dot = [&](QVec3 direction) {
+    return (static_cast<double>(handle.endpoint_world.x) - camera.eye.x) * direction.x +
+           (static_cast<double>(handle.endpoint_world.y) - camera.eye.y) * direction.y +
+           (static_cast<double>(handle.endpoint_world.z) - camera.eye.z) * direction.z;
+  };
+  const double x = relative_dot(camera.right);
+  const double y = relative_dot(camera.up);
+  const double depth = relative_dot(camera.forward);
+  const double dx = dot(axis, camera.right);
+  const double dy = dot(axis, camera.up);
+  const double dz = dot(axis, camera.forward);
+  double first = -std::numeric_limits<double>::infinity();
+  double last = std::numeric_limits<double>::infinity();
+  // Clip the infinite world line to the actual pane frustum. This avoids
+  // arbitrary lengths and precision loss from enormous offscreen endpoints.
+  const auto clip = [&](double offset, double slope) {
+    if (!std::isfinite(offset) || !std::isfinite(slope)) return false;
+    if (slope == 0.0) return offset >= 0.0;
+    const double boundary = -offset / slope;
+    if (slope > 0.0) first = std::max(first, boundary);
+    else last = std::min(last, boundary);
+    return first < last;
+  };
+  if (!clip(depth - camera.near_plane, dz) ||
+      !clip(camera.far_plane - depth, -dz)) return;
+  const double aspect = static_cast<double>(camera.viewport_size.x) / camera.viewport_size.y;
+  const double half_height = camera.projection == ViewportOverlayProjection::Perspective
+      ? std::tan(static_cast<double>(camera.fov_degrees) * std::numbers::pi / 360.0)
+      : camera.orthographic_size * 0.5;
+  const double half_width = half_height * aspect;
+  const bool perspective = camera.projection == ViewportOverlayProjection::Perspective;
+  const double width = perspective ? half_width * depth : half_width;
+  const double height = perspective ? half_height * depth : half_height;
+  const double width_slope = perspective ? half_width * dz : 0.0;
+  const double height_slope = perspective ? half_height * dz : 0.0;
+  if (!clip(width + x, width_slope + dx) || !clip(width - x, width_slope - dx) ||
+      !clip(height + y, height_slope + dy) || !clip(height - y, height_slope - dy) ||
+      !std::isfinite(first) || !std::isfinite(last)) return;
+  const auto world_point = [&](double distance) -> QVec3 {
+    return {static_cast<float>(handle.endpoint_world.x + distance * axis.x),
+            static_cast<float>(handle.endpoint_world.y + distance * axis.y),
+            static_cast<float>(handle.endpoint_world.z + distance * axis.z)};
+  };
+  const QVec3 start = world_point(first);
+  const QVec3 end = world_point(last);
+  const auto a = projector.project(projector.view_point_for(start));
+  const auto b = projector.project(projector.view_point_for(end));
+  if (!a.valid || !b.valid || !std::isfinite(a.pixel.x) || !std::isfinite(a.pixel.y) ||
+      !std::isfinite(b.pixel.x) || !std::isfinite(b.pixel.y) ||
+      std::hypot(a.pixel.x - b.pixel.x, a.pixel.y - b.pixel.y) < 0.25f) return;
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::ToolHandle,
+      .start = start,
+      .end = end,
+      .color = linear_array_axis_color(handle.constraint),
+      .width_pixels = 2.0f,
+      .style_role = ViewportOverlayStyleRole::ExplicitColor,
+      .source = ViewportOverlaySource::Tool,
+  });
+}
+
 void add_double(RenderSignatureBuilder &signature, double value) {
   signature.add_value(std::bit_cast<std::uint64_t>(value));
 }
@@ -402,6 +478,8 @@ std::uint64_t tool_overlay_publication_revision(
       (inputs.interaction_pane && inputs.tool_overlay_visible) ||
       transform_gizmo_visible || marquee_visible || pivot_visible ||
       primitive_creation_visible ||
+      (inputs.linear_array_handle != nullptr && inputs.linear_array_handle->visible &&
+       inputs.linear_array_handle->constraint != LinearArrayAxisConstraint::Free) ||
       (inputs.extrusion_handle != nullptr && inputs.extrusion_handle->active);
   signature.add_bool(camera_affects_frame);
   if (camera_affects_frame) {
@@ -495,6 +573,8 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
         inputs_.raster_scale);
   }
   if (inputs_.linear_array_handle != nullptr) {
+    append_linear_array_constraint_guide(frame, *inputs_.overlay_camera,
+                                         *inputs_.linear_array_handle);
     ViewportToolOverlayProjection::append_linear_array_handle(
         frame, *inputs_.linear_array_handle);
   }
@@ -575,7 +655,7 @@ void ViewportToolOverlayProjection::append_linear_array_handle(
       .layer = ViewportOverlayLayer::ToolHandle,
       .start = handle.source_world,
       .end = handle.endpoint_world,
-      .color = linear_array_axis_color(handle.constraint),
+      .color = kOverlayToolAxisMixedColor,
       .width_pixels = 2.0f,
       .style_role = ViewportOverlayStyleRole::ExplicitColor,
       .source = ViewportOverlaySource::Tool,

@@ -17,6 +17,7 @@ namespace quader {
 struct TransformOperationHintState {
   bool can_apply = false;
   bool owner_dragging = false;
+  bool linear_array_unconstrained = false;
   bool curve_drawing = false;
   bool curve_preset = false;
   bool curve_construction_dragging = false;

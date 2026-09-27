@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -371,6 +372,275 @@ TEST(NativeViewportToolCursorTests,
     expect_vec3_near(handle_world(), resumed);
     EXPECT_EQ(session.history().revision(), history_revision);
   }
+}
+
+class LinearArrayPointerTests : public testing::Test {
+protected:
+  void SetUp() override {
+    const auto source = editor_.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Linear Pointer Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor_.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor_.tools().activate(ViewportToolId::LinearArray).ok());
+    camera_.set_viewport_size(800.0f, 600.0f);
+    camera_.focus_origin(16.0f);
+    input_.viewport_hovered = true;
+    input_.viewport_focused = true;
+    input_.viewport_size = {800.0f, 600.0f};
+  }
+
+  void set_camera(int mode) {
+    camera_ = ViewportCameraController{};
+    camera_.set_viewport_size(800.0f, 600.0f);
+    camera_.focus_origin(16.0f);
+    if (mode > 0) {
+      const std::array axes{ViewportViewAxis::Y, ViewportViewAxis::Z,
+                             ViewportViewAxis::X};
+      camera_.view_axis(axes[mode - 1], 1);
+    }
+  }
+
+  QVec3 endpoint() const {
+    return session_.linear_array().handle_state().endpoint_world;
+  }
+
+  ViewportNativeToolInteractionResult frame(bool pressed, bool down,
+                                             bool released) {
+    input_.mouse_screen = input_.mouse_local;
+    return session_.native_tools().handle_pointer_frame(
+        session_.scene(), session_.assets(), &session_.point_placement(), camera_,
+        {.input = input_,
+         .input_result = input_result_,
+         .left_pressed = pressed,
+         .left_down = down,
+         .left_released = released,
+         .left_click_local = input_.mouse_local,
+         .grid_snap_enabled = grid_snap_});
+  }
+
+  SceneSession session_;
+  QuaderEditorApi editor_{
+      QuaderApiSessionInternalAccess::from_scene_session(session_)};
+  ViewportCameraController camera_;
+  ViewportInputFrame input_;
+  ViewportInputResult input_result_;
+  bool grid_snap_ = false;
+};
+
+TEST_F(LinearArrayPointerTests,
+       UnconstrainedDraggingUsesXZAndAltUsesYWithoutTransitionJumps) {
+  const auto history_revision = session_.history().revision();
+  const auto scene_revision = session_.scene().revision();
+  for (int camera_mode = 0; camera_mode < 4; ++camera_mode) {
+    SCOPED_TRACE(camera_mode);
+    set_camera(camera_mode);
+    ASSERT_TRUE(session_.linear_array().set_endpoint(
+        {2.35f, 0.37f, 1.65f}, false, 1.0).ok);
+    const QVec3 initial = endpoint();
+    input_.modifiers = {};
+    // Picking near the handle must not move its endpoint onto the press ray.
+    input_.mouse_local = camera_.project_world_point(initial).position +
+                         QVec2{3.0f, 2.0f};
+    const QVec2 press = input_.mouse_local;
+    (void)frame(true, true, false);
+    ASSERT_TRUE(session_.native_tools().pointer_dragging());
+    expect_vec3_near(endpoint(), initial);
+    input_.mouse_local = press + QVec2{36.0f, 21.0f};
+    (void)frame(false, true, false);
+    const QVec3 horizontal = endpoint();
+    EXPECT_FLOAT_EQ(horizontal.y, initial.y);
+    EXPECT_GT(length(horizontal - initial), 0.1f);
+
+    // Returning to the original pointer restores the start rather than leaving
+    // the last nonzero sample behind.
+    input_.mouse_local = press;
+    (void)frame(false, true, false);
+    expect_vec3_near(endpoint(), initial);
+    input_.mouse_local = press + QVec2{36.0f, 21.0f};
+    (void)frame(false, true, false);
+    expect_vec3_near(endpoint(), horizontal);
+
+    input_.modifiers.alt = true;
+    (void)frame(false, true, false);
+    expect_vec3_near(endpoint(), horizontal);
+    const auto switched_revision = session_.linear_array().handle_state().revision;
+    const auto &switched_preview = session_.linear_array().preview_state();
+    const auto preview_revision = switched_preview.revision;
+    const auto *const preview_storage =
+        switched_preview.sources.front().generated_world_transforms.data();
+    for (int repeat = 0; repeat < 5; ++repeat) {
+      (void)frame(false, true, false);
+      EXPECT_EQ(session_.linear_array().handle_state().revision,
+                switched_revision);
+      EXPECT_EQ(session_.linear_array().preview_state().revision,
+                preview_revision);
+      EXPECT_EQ(session_.linear_array().preview_state().sources.front()
+                    .generated_world_transforms.data(), preview_storage);
+    }
+    input_.mouse_local.y -= 30.0f;
+    (void)frame(false, true, false);
+    const QVec3 vertical = endpoint();
+    EXPECT_FLOAT_EQ(vertical.x, horizontal.x);
+    EXPECT_FLOAT_EQ(vertical.z, horizontal.z);
+    EXPECT_GT(vertical.y, horizontal.y + 0.1f);
+
+    input_.modifiers.alt = false;
+    (void)frame(false, true, false);
+    expect_vec3_near(endpoint(), vertical);
+    input_.mouse_local = input_.mouse_local + QVec2{25.0f, 13.0f};
+    (void)frame(false, true, false);
+    const QVec3 resumed = endpoint();
+    EXPECT_FLOAT_EQ(resumed.y, vertical.y);
+    EXPECT_GT(length(resumed - vertical), 0.1f);
+    (void)frame(false, false, true);
+    expect_vec3_near(endpoint(), resumed);
+    EXPECT_FALSE(session_.native_tools().pointer_dragging());
+    EXPECT_EQ(session_.history().revision(), history_revision);
+    EXPECT_EQ(session_.scene().revision(), scene_revision);
+  }
+  ASSERT_TRUE(session_.native_tools().cancel_active().ok);
+  EXPECT_FALSE(session_.linear_array().preview_state().active);
+  EXPECT_EQ(session_.history().revision(), history_revision);
+  EXPECT_EQ(session_.scene().revision(), scene_revision);
+}
+
+TEST_F(LinearArrayPointerTests,
+       AxisChangesDuringDragRetainTheEndpointAndRebaseThePointer) {
+  for (int camera_mode = 0; camera_mode < 4; ++camera_mode) {
+    SCOPED_TRACE(camera_mode);
+    set_camera(camera_mode);
+    auto &tool = session_.linear_array();
+    ASSERT_TRUE(tool.set_axis_constraint(LinearArrayAxisConstraint::Free).ok);
+    const QVec3 initial{-3.0f, 5.0f, 1.0f};
+    ASSERT_TRUE(tool.set_endpoint(initial, false, 1.0).ok);
+    input_.mouse_local = camera_.project_world_point(endpoint()).position;
+    input_.modifiers = {};
+    (void)frame(true, true, false);
+    ASSERT_TRUE(session_.native_tools().pointer_dragging());
+
+    input_.tool_constraint_x_pressed = true;
+    (void)frame(false, true, false);
+    input_.tool_constraint_x_pressed = false;
+    expect_vec3_near(endpoint(), initial);
+    (void)frame(false, true, false);
+    expect_vec3_near(endpoint(), initial);
+
+    input_.tool_constraint_y_pressed = true;
+    (void)frame(false, true, false);
+    input_.tool_constraint_y_pressed = false;
+    expect_vec3_near(endpoint(), initial);
+    input_.tool_constraint_z_pressed = true;
+    (void)frame(false, true, false);
+    input_.tool_constraint_z_pressed = false;
+    expect_vec3_near(endpoint(), initial);
+    input_.modifiers.alt = true;
+    (void)frame(false, true, false);
+    expect_vec3_near(endpoint(), initial);
+    input_.mouse_local = input_.mouse_local + QVec2{21.0f, -40.0f};
+    (void)frame(false, true, false);
+    EXPECT_FLOAT_EQ(endpoint().x, initial.x);
+    EXPECT_FLOAT_EQ(endpoint().y, initial.y);
+    EXPECT_GT(std::abs(endpoint().z - initial.z), 0.05f);
+    const QVec3 moved_z = endpoint();
+    input_.tool_constraint_x_pressed = true;
+    (void)frame(false, true, false);
+    input_.tool_constraint_x_pressed = false;
+    expect_vec3_near(endpoint(), moved_z);
+    input_.mouse_local = input_.mouse_local + QVec2{40.0f, -21.0f};
+    (void)frame(false, true, false);
+    EXPECT_GT(std::abs(endpoint().x - moved_z.x), 0.05f);
+    EXPECT_FLOAT_EQ(endpoint().y, initial.y);
+    EXPECT_FLOAT_EQ(endpoint().z, moved_z.z);
+    const QVec3 moved = endpoint();
+    input_.tool_constraint_x_pressed = true;
+    (void)frame(false, true, false);
+    input_.tool_constraint_x_pressed = false;
+    EXPECT_EQ(tool.handle_state().constraint, LinearArrayAxisConstraint::Free);
+    expect_vec3_near(endpoint(), moved);
+    (void)frame(false, false, true);
+    expect_vec3_near(endpoint(), moved);
+  }
+}
+
+TEST_F(LinearArrayPointerTests,
+       InterruptedAxisDragRestoresItsConstraintUnlessNavigationRetainsIt) {
+  auto &tool = session_.linear_array();
+  const auto history_revision = session_.history().revision();
+  const QVec3 initial{2.0f, 0.0f, 0.0f};
+  for (const bool navigation : {false, true}) {
+    SCOPED_TRACE(navigation);
+    ASSERT_TRUE(tool.set_axis_constraint(LinearArrayAxisConstraint::Free).ok);
+    ASSERT_TRUE(tool.set_endpoint(initial, false, 1.0).ok);
+    ASSERT_TRUE(tool.set_axis_constraint(LinearArrayAxisConstraint::X).ok);
+    input_.mouse_local = camera_.project_world_point(initial).position;
+    (void)frame(true, true, false);
+    input_.tool_constraint_y_pressed = true;
+    (void)frame(false, true, false);
+    input_.tool_constraint_y_pressed = false;
+    expect_vec3_near(endpoint(), initial);
+    input_.mouse_local.y -= 30.0f;
+    (void)frame(false, true, false);
+    const QVec3 moved = endpoint();
+    input_.pointer_interaction_canceled = !navigation;
+    input_result_.navigation_active = navigation;
+    (void)frame(false, true, false);
+    EXPECT_FALSE(session_.native_tools().pointer_dragging());
+    EXPECT_EQ(tool.handle_state().constraint,
+              navigation ? LinearArrayAxisConstraint::Y
+                         : LinearArrayAxisConstraint::X);
+    expect_vec3_near(endpoint(), navigation ? moved : initial);
+    input_.pointer_interaction_canceled = false;
+    input_result_.navigation_active = false;
+    (void)frame(false, false, true);
+    expect_vec3_near(endpoint(), navigation ? moved : initial);
+    EXPECT_EQ(session_.history().revision(), history_revision);
+  }
+}
+
+TEST_F(LinearArrayPointerTests,
+       ReleaseUsesItsPointerAndAltStateAndSnapsOnlyTheMovingCoordinates) {
+  set_camera(0);
+  auto &tool = session_.linear_array();
+  const QVec3 initial{2.35f, 0.37f, 1.65f};
+  ASSERT_TRUE(tool.set_endpoint(initial, false, 1.0).ok);
+  input_.mouse_local = camera_.project_world_point(initial).position;
+  input_.modifiers.alt = true;
+  (void)frame(true, true, false);
+  const QVec3 desired{initial.x, initial.y + 1.31f, initial.z};
+  const QVec2 release_pointer = camera_.project_world_point(desired).position;
+  input_.pointer_released_edges = {{
+      .button = QuaderMouseButton::Left,
+      .local = release_pointer,
+      .sequence = 1u,
+      .modifiers = ViewportModifiers{.alt = true},
+  }};
+  // A later key and mouse event in the drained frame must not replace the
+  // actual release that ended the handle gesture.
+  input_.modifiers.alt = false;
+  input_.mouse_local = {20.0f, 30.0f};
+  grid_snap_ = true;
+  const auto history_revision = session_.history().revision();
+  (void)frame(false, false, true);
+  EXPECT_FALSE(session_.native_tools().pointer_dragging());
+  const float grid = static_cast<float>(
+      viewport_grid_world_size_for_preset(input_.grid_preset));
+  expect_vec3_near(endpoint(),
+                   {initial.x, std::round(desired.y / grid) * grid, initial.z});
+  EXPECT_EQ(session_.history().revision(), history_revision);
+
+  const QVec3 accepted = endpoint();
+  const auto preview = tool.preview_state();
+  ASSERT_TRUE(tool.apply().ok);
+  EXPECT_GT(session_.history().revision(), history_revision);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  ASSERT_TRUE(editor_.history().redo().ok());
+  const auto objects = session_.scene().selected_entities();
+  ASSERT_EQ(objects.size(), tool.count());
+  EXPECT_EQ(preview.sources.front().generated_world_transforms.size() + 1u,
+            objects.size());
+  expect_vec3_near(transform_point(
+      session_.scene().world_transform_matrix(objects.back()), {}), accepted);
 }
 
 TEST(NativeViewportToolCursorTests,
@@ -1034,6 +1304,167 @@ TEST(LinearArrayToolServiceTests,
 }
 
 TEST(LinearArrayToolServiceTests,
+     AxisChangesKeepTheEndpointAndMoveOnlyTheNewAxis) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto source = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Axis Motion Linear Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.scene().set_transform(
+      source.value().entity, {.position = {10.0f, 20.0f, 30.0f}}).ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
+  auto &tool = session.linear_array();
+  const QVec3 anchor = tool.handle_state().source_world;
+  ASSERT_TRUE(tool.set_endpoint(anchor + QVec3{1.25f, 2.25f, 3.25f}, false,
+                                1.0).ok);
+  const auto history_revision = session.history().revision();
+  const auto scene_revision = session.scene().revision();
+  const auto selection_revision = session.scene().selection_revision();
+
+  struct AxisCase {
+    LinearArrayAxisConstraint axis;
+    QVec3 requested_offset;
+    QVec3 expected_offset;
+    bool snap;
+  };
+  const std::array cases{
+      AxisCase{LinearArrayAxisConstraint::Y, {99.0f, 7.25f, 99.0f},
+               {1.25f, 7.25f, 3.25f}, false},
+      AxisCase{LinearArrayAxisConstraint::Z, {99.0f, 99.0f, 5.8f},
+               {1.25f, 7.25f, 6.0f}, true},
+      AxisCase{LinearArrayAxisConstraint::X, {-3.6f, 99.0f, 99.0f},
+               {-4.0f, 7.25f, 6.0f}, true},
+  };
+  for (const auto &test_case : cases) {
+    SCOPED_TRACE(static_cast<int>(test_case.axis));
+    const QVec3 previous_endpoint = tool.handle_state().endpoint_world;
+    ASSERT_TRUE(tool.preview_state().active);
+    ASSERT_EQ(tool.preview_state().sources.size(), 1u);
+    const auto previous_transforms =
+        tool.preview_state().sources.front().generated_world_transforms;
+    const auto old_handle_revision = tool.handle_state().revision;
+    const auto old_settings_revision = tool.tool_settings_revision();
+    ASSERT_TRUE(tool.set_axis_constraint(test_case.axis).ok);
+    const auto handle = tool.handle_state();
+    EXPECT_EQ(handle.constraint, test_case.axis);
+    EXPECT_EQ(handle.revision, old_handle_revision + 1u);
+    EXPECT_EQ(tool.tool_settings_revision(), old_settings_revision + 1u);
+    expect_vec3_near(handle.endpoint_world, previous_endpoint);
+    const auto &constrained_preview = tool.preview_state();
+    ASSERT_TRUE(constrained_preview.active);
+    ASSERT_EQ(constrained_preview.sources.size(), 1u);
+    const auto &constrained_transforms =
+        constrained_preview.sources.front().generated_world_transforms;
+    ASSERT_EQ(constrained_transforms.size(), previous_transforms.size());
+    for (std::size_t index = 0; index < previous_transforms.size(); ++index) {
+      expect_matrix_near(constrained_transforms[index], previous_transforms[index]);
+    }
+
+    ASSERT_TRUE(tool.set_endpoint(anchor + test_case.requested_offset,
+                                  test_case.snap, 1.0).ok);
+    expect_vec3_near(tool.handle_state().endpoint_world,
+                     anchor + test_case.expected_offset);
+    const auto &preview = tool.preview_state();
+    ASSERT_TRUE(preview.active);
+    ASSERT_EQ(preview.sources.size(), 1u);
+    ASSERT_FALSE(preview.sources.front().generated_world_transforms.empty());
+    expect_vec3_near(transform_point(
+        preview.sources.front().generated_world_transforms.back(), {}),
+        anchor + test_case.expected_offset);
+    EXPECT_EQ(session.history().revision(), history_revision);
+    EXPECT_EQ(session.scene().revision(), scene_revision);
+    EXPECT_EQ(session.scene().selection_revision(), selection_revision);
+  }
+
+  // Pressing the same axis releases the constraint without moving its end.
+  const QVec3 final_endpoint = tool.handle_state().endpoint_world;
+  ASSERT_TRUE(tool.set_axis_constraint(LinearArrayAxisConstraint::X).ok);
+  EXPECT_EQ(tool.handle_state().constraint, LinearArrayAxisConstraint::Free);
+  expect_vec3_near(tool.handle_state().endpoint_world, final_endpoint);
+  const auto free_revision = tool.handle_state().revision;
+  const auto free_settings_revision = tool.tool_settings_revision();
+  const auto &free_preview = tool.preview_state();
+  const auto preview_revision = free_preview.revision;
+  const auto *const storage =
+      free_preview.sources.front().generated_world_transforms.data();
+  EXPECT_FALSE(tool.set_axis_constraint(LinearArrayAxisConstraint::Free).changed);
+  EXPECT_EQ(tool.handle_state().revision, free_revision);
+  EXPECT_EQ(tool.tool_settings_revision(), free_settings_revision);
+  EXPECT_EQ(tool.preview_state().revision, preview_revision);
+  EXPECT_EQ(tool.preview_state().sources.front().generated_world_transforms.data(),
+            storage);
+  ASSERT_TRUE(tool.set_endpoint(anchor + QVec3{8.0f, 9.0f, 10.0f}, false, 1.0).ok);
+  expect_vec3_near(tool.handle_state().endpoint_world,
+                   anchor + QVec3{8.0f, 9.0f, 10.0f});
+  EXPECT_EQ(session.history().revision(), history_revision);
+  EXPECT_EQ(session.scene().revision(), scene_revision);
+  EXPECT_EQ(session.scene().selection_revision(), selection_revision);
+}
+
+TEST(LinearArrayToolServiceTests,
+     ZeroSpanAxisChangesStayFiniteWithoutCreatingHistory) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto source = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Zero Span Linear Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
+  auto &tool = session.linear_array();
+  const QVec3 anchor = tool.handle_state().source_world;
+  ASSERT_TRUE(tool.set_endpoint(anchor, false, 1.0).ok);
+  const auto history_revision = session.history().revision();
+  for (const auto axis : {LinearArrayAxisConstraint::X,
+                          LinearArrayAxisConstraint::Y,
+                          LinearArrayAxisConstraint::Z,
+                          LinearArrayAxisConstraint::Free}) {
+    ASSERT_TRUE(tool.set_axis_constraint(axis).ok);
+    expect_vec3_near(tool.handle_state().endpoint_world, anchor);
+    const auto unchanged_revision = tool.handle_state().revision;
+    EXPECT_FALSE(tool.set_endpoint(anchor, false, 1.0).changed);
+    EXPECT_EQ(tool.handle_state().revision, unchanged_revision);
+    EXPECT_EQ(session.history().revision(), history_revision);
+  }
+}
+
+TEST(LinearArrayToolServiceTests,
+     PlaneAndVerticalMotionPreserveLockedOffGridCoordinates) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto source = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Constrained Motion Linear Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
+  auto &tool = session.linear_array();
+  ASSERT_TRUE(tool.set_endpoint({1.25f, 2.25f, 3.25f}, false, 1.0).ok);
+  ASSERT_TRUE(tool.set_endpoint({5.4f, 99.0f, 8.8f}, true, 1.0,
+                               LinearArrayEndpointMotion::Horizontal).ok);
+  expect_vec3_near(tool.handle_state().endpoint_world, {5.0f, 2.25f, 9.0f});
+
+  ASSERT_TRUE(tool.set_endpoint({1.25f, 2.25f, 3.25f}, false, 1.0).ok);
+  ASSERT_TRUE(tool.set_endpoint({99.0f, -7.6f, 99.0f}, true, 1.0,
+                               LinearArrayEndpointMotion::Vertical).ok);
+  expect_vec3_near(tool.handle_state().endpoint_world, {1.25f, -8.0f, 3.25f});
+  const auto unchanged_revision = tool.handle_state().revision;
+  EXPECT_FALSE(tool.set_endpoint({0.0f, -7.6f, 0.0f}, true, 1.0,
+                                LinearArrayEndpointMotion::Vertical).changed);
+  EXPECT_EQ(tool.handle_state().revision, unchanged_revision);
+
+  ASSERT_TRUE(tool.set_axis_constraint(LinearArrayAxisConstraint::X).ok);
+  ASSERT_TRUE(tool.set_endpoint({7.6f, 99.0f, 99.0f}, true, 1.0,
+                               LinearArrayEndpointMotion::Vertical).ok);
+  expect_vec3_near(tool.handle_state().endpoint_world, {8.0f, -8.0f, 3.25f});
+}
+
+TEST(LinearArrayToolServiceTests,
      SourceCapacityDoesNotReplaceTheRememberedCount) {
   SceneSession session;
   QuaderEditorApi editor(
@@ -1160,6 +1591,118 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(repeated.ok) << repeated.message;
   EXPECT_FALSE(repeated.changed);
   EXPECT_EQ(tool.tool_settings_revision(), locked_revision + 1u);
+}
+
+TEST(LinearArrayToolServiceTests,
+     DimensionVisibilityPersistsWithoutChangingArrayGeometryOrHistory) {
+  LinearArraySessionDefaults linear_defaults;
+  RadialArraySessionDefaults radial_defaults;
+  EXPECT_TRUE(linear_defaults.show_bounding_box_dimensions);
+  EXPECT_TRUE(radial_defaults.show_bounding_box_dimensions);
+  for (int kind = 0; kind < 2; ++kind) {
+    SCOPED_TRACE(kind == 0 ? "Linear" : "Radial");
+    for (int run = 0; run < 2; ++run) {
+      SCOPED_TRACE(run);
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      const auto source = editor.modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+          "Array Dimension Source");
+      ASSERT_TRUE(source.ok()) << source.error_message();
+      ASSERT_TRUE(editor.scene().set_transform(
+          source.value().entity, {.position = {6.0f, 0.0f, 0.0f}}).ok());
+      ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+
+      const auto verify_visibility = [&](auto &tool, auto prepare_preview,
+                                          auto handle_revision) {
+        EXPECT_EQ(tool.show_bounding_box_dimensions(), run == 0);
+        EXPECT_FALSE(tool.set_show_bounding_box_dimensions(false).ok);
+        EXPECT_EQ(tool.show_bounding_box_dimensions(), run == 0);
+        ASSERT_TRUE(tool.activate(1.0).ok);
+        ASSERT_TRUE(prepare_preview());
+        ASSERT_TRUE(tool.preview_state().active);
+        ASSERT_EQ(tool.preview_state().sources.size(), 1u);
+        const auto preview_revision = tool.preview_state().revision;
+        const auto *const preview_storage = tool.preview_state().sources.front()
+            .generated_world_transforms.data();
+        const auto geometry_revision = handle_revision();
+        const auto scene_revision = session.scene().revision();
+        const auto history_revision = session.history().revision();
+        const auto selection_revision = session.scene().selection_revision();
+        auto settings_revision = tool.tool_settings_revision();
+
+        const auto expect_geometry_unchanged = [&]() {
+          EXPECT_EQ(handle_revision(), geometry_revision);
+          EXPECT_EQ(tool.preview_state().revision, preview_revision);
+          EXPECT_EQ(tool.preview_state().sources.front()
+                        .generated_world_transforms.data(), preview_storage);
+          EXPECT_EQ(session.scene().revision(), scene_revision);
+          EXPECT_EQ(session.history().revision(), history_revision);
+          EXPECT_EQ(session.scene().selection_revision(), selection_revision);
+        };
+        for (const bool enabled : {false, false, true, false}) {
+          const bool expected_change =
+              tool.show_bounding_box_dimensions() != enabled;
+          const CommandResult changed =
+              tool.set_show_bounding_box_dimensions(enabled);
+          ASSERT_TRUE(changed.ok);
+          EXPECT_EQ(changed.changed, expected_change);
+          EXPECT_EQ(tool.show_bounding_box_dimensions(), enabled);
+          settings_revision += expected_change ? 1u : 0u;
+          EXPECT_EQ(tool.tool_settings_revision(), settings_revision);
+          expect_geometry_unchanged();
+        }
+
+        const CommandResult reset = tool.reset_settings();
+        ASSERT_TRUE(reset.ok);
+        EXPECT_TRUE(reset.changed);
+        EXPECT_TRUE(tool.show_bounding_box_dimensions());
+        EXPECT_EQ(tool.tool_settings_revision(), ++settings_revision);
+        expect_geometry_unchanged();
+        const CommandResult repeated_reset = tool.reset_settings();
+        ASSERT_TRUE(repeated_reset.ok);
+        EXPECT_FALSE(repeated_reset.changed);
+        EXPECT_EQ(tool.tool_settings_revision(), settings_revision);
+        expect_geometry_unchanged();
+
+        ASSERT_TRUE(tool.set_show_bounding_box_dimensions(false).ok);
+        ASSERT_TRUE(tool.cancel().ok);
+        EXPECT_FALSE(tool.show_bounding_box_dimensions());
+        EXPECT_EQ(session.history().revision(), history_revision);
+        ASSERT_TRUE(tool.activate(1.0).ok);
+        ASSERT_TRUE(prepare_preview());
+        EXPECT_FALSE(tool.show_bounding_box_dimensions());
+        ASSERT_TRUE(tool.apply().ok);
+        EXPECT_FALSE(tool.show_bounding_box_dimensions());
+        EXPECT_GT(session.history().revision(), history_revision);
+        ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+        ASSERT_TRUE(tool.activate(1.0).ok);
+        EXPECT_FALSE(tool.show_bounding_box_dimensions());
+        ASSERT_TRUE(tool.cancel().ok);
+      };
+
+      if (kind == 0) {
+        LinearArrayToolService tool(
+            session.scene(), session.assets(), session.history(),
+            session.modeling(), session.selection(), session.instances(),
+            &linear_defaults);
+        verify_visibility(tool, [] { return true; },
+                          [&] { return tool.handle_state().revision; });
+        EXPECT_FALSE(linear_defaults.show_bounding_box_dimensions);
+      } else {
+        RadialArrayToolService tool(
+            session.scene(), session.assets(), session.history(),
+            session.modeling(), session.selection(), session.instances(),
+            session.structural_lifecycle(), &radial_defaults);
+        verify_visibility(tool, [&] {
+          return tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok &&
+                 tool.lock_center().ok;
+        }, [&] { return tool.center_state().revision; });
+        EXPECT_FALSE(radial_defaults.show_bounding_box_dimensions);
+      }
+    }
+  }
 }
 
 TEST(LinearArrayToolServiceTests,

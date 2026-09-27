@@ -348,6 +348,10 @@ double RadialArrayToolService::repeat_spacing() const {
                               : defaults_.repeat_spacing.value_or(1.0);
 }
 
+bool RadialArrayToolService::show_bounding_box_dimensions() const {
+  return defaults_.show_bounding_box_dimensions;
+}
+
 std::uint32_t RadialArrayToolService::maximum_copies_for(
     std::size_t source_count, std::uint32_t repeats) {
   if (source_count == 0u || repeats == 0u ||
@@ -1073,6 +1077,22 @@ CommandResult RadialArrayToolService::set_repeat_spacing(double spacing) {
   return command_changed_result();
 }
 
+CommandResult RadialArrayToolService::set_show_bounding_box_dimensions(
+    bool enabled) {
+  if (!release_has_feature(ReleaseFeature::RadialArray)) {
+    return command_invalid_result(release_feature_unavailable_message());
+  }
+  if (!session_.has_value()) {
+    return command_invalid_result("Radial Array tool is not active.");
+  }
+  if (defaults_.show_bounding_box_dimensions == enabled) {
+    return command_unchanged_result();
+  }
+  defaults_.show_bounding_box_dimensions = enabled;
+  issue_tool_settings_revision();
+  return command_changed_result();
+}
+
 CommandResult RadialArrayToolService::reset_settings() {
   if (!release_has_feature(ReleaseFeature::RadialArray)) {
     return command_invalid_result(release_feature_unavailable_message());
@@ -1085,13 +1105,14 @@ CommandResult RadialArrayToolService::reset_settings() {
       kRadialArrayDefaultCopies,
       maximum_copies_for(session_->sources.size(), default_repeats));
   const double default_spacing = automatic_repeat_spacing(*session_);
-  const bool changed =
+  const bool geometry_changed =
       session_->degrees != kRadialArrayDefaultDegrees ||
       session_->copies != default_copies ||
       session_->repeats != default_repeats ||
       session_->repeat_spacing != default_spacing ||
       session_->repeat_spacing_edited ||
-      session_->mode != RadialArrayMode::Total || session_->create_instances ||
+      session_->mode != RadialArrayMode::Total;
+  const bool changed = geometry_changed || session_->create_instances ||
       defaults_ != RadialArraySessionDefaults{};
   if (!changed) {
     return command_unchanged_result();
@@ -1104,7 +1125,9 @@ CommandResult RadialArrayToolService::reset_settings() {
   session_->mode = RadialArrayMode::Total;
   session_->create_instances = false;
   defaults_ = {};
-  session_->revision = issue_revision();
+  if (geometry_changed) {
+    session_->revision = issue_revision();
+  }
   issue_tool_settings_revision();
   return command_changed_result();
 }

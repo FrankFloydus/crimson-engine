@@ -11,12 +11,14 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/default_material_catalog.hpp"
+#include "assets/mesh_wire_geometry.hpp"
 #include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/curve_solid_geometry_cache.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/overlay/curve_overlay_geometry.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
 #include "scene/scene_document.hpp"
@@ -2001,6 +2003,39 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
       .occurrences = std::move(occurrences),
       .signature = suppression_signature.value(),
   };
+  return snapshot;
+}
+
+RenderOverlaySceneWireframeSnapshot build_render_tool_preview_wireframe_snapshot(
+    std::span<const RenderToolPreviewMeshRecord> meshes) {
+  RenderOverlaySceneWireframeSnapshot snapshot;
+  snapshot.selected_mesh_wire_visible = false;
+  // Array previews are immutable geometry with explicit placements. Deforming
+  // modeling previews already publish their own position-aware semantic wires.
+  for (std::size_t source_index = 0u; source_index < meshes.size(); ++source_index) {
+    const auto &mesh = meshes[source_index];
+    if (mesh.dynamic_positions || mesh.instance_transforms.empty()) continue;
+    const auto geometry = mesh.mesh.geometry_payload();
+    const auto wire = build_mesh_wire_geometry_payload(mesh.mesh);
+    if (wire == nullptr || wire->segments.empty()) continue;
+    for (std::size_t placement = 0u; placement < mesh.instance_transforms.size(); ++placement) {
+      snapshot.meshes.push_back({
+          .entity = mesh.source_entity,
+          .participant_token = RenderSignatureBuilder{}
+                                   .add_size(source_index)
+                                   .add_size(placement)
+                                   .value(),
+          .mesh_revision = mesh.mesh.revision.value,
+          .geometry_payload = geometry,
+          .geometry_content_id = mesh.mesh.geometry_content_id(),
+          .wire_geometry_payload = wire,
+          .world_transform = mesh.instance_transforms[placement],
+          .vertices = geometry->vertices,
+          .indices = geometry->indices,
+          .wire_segments = wire->segments,
+      });
+    }
+  }
   return snapshot;
 }
 
