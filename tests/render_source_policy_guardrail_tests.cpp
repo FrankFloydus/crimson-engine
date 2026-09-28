@@ -2217,11 +2217,11 @@ TEST(SceneRenderBridgeTests,
   EXPECT_TRUE(source_contains_compact(
       cache_source,
       "prepare_generation(*current_generation_, meshes, candidate_indices, "
-      "false)"));
+      "false, preparation_failed)"));
   EXPECT_TRUE(source_contains_compact(
       cache_source,
       "prepare_generation(*warm_generation_, meshes, candidate_indices, "
-      "true)"));
+      "true, preparation_failed)"));
   EXPECT_TRUE(source_contains_compact(
       factory_source,
       "instance_capacity = instance_capacity == 0u ? "
@@ -3873,7 +3873,7 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_EQ(cache_source.find("update_line_proxy"), std::string::npos);
   EXPECT_EQ(cache_source.find("line_proxy_"), std::string::npos);
   EXPECT_EQ(cache_source.find("setParameter(\"nearPlane\""), std::string::npos);
-  EXPECT_NE(cache_source.find("destroy_face_entries()"), std::string::npos);
+  EXPECT_NE(cache_source.find("destroy_face_batches()"), std::string::npos);
 }
 
 TEST(SceneMeshOccurrenceProjectionPolicyTests,

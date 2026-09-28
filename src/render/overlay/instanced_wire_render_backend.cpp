@@ -38,6 +38,15 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
+void submit_wire_retirement(filament::Engine &engine,
+                            std::size_t &pending_retirements) {
+  constexpr std::size_t kRetirementBatchSize = 64u;
+  if (++pending_retirements >= kRetirementBatchSize) {
+    engine.flush();
+    pending_retirements = 0u;
+  }
+}
+
 struct InstancedWireVertex final {
   OverlayFloat4 position;
   OverlayFloat4 start;
@@ -414,23 +423,51 @@ void InstancedWireRenderBackend::destroy_batch(BatchProxy &proxy) {
 
 void InstancedWireRenderBackend::destroy_batches(
     std::span<BatchProxy> proxies) {
+  if (engine_ == nullptr || proxies.empty()) {
+    return;
+  }
+  std::size_t pending_retirements = 0u;
+  auto &renderables = engine_->getRenderableManager();
+  // Release all borrowing components before their materials. Merely removing
+  // scene membership leaves Filament's material-lifetime validation scans live.
+  for (const BatchProxy &proxy : proxies) {
+    if (proxy.entity_ && renderables.hasComponent(proxy.entity_)) {
+      renderables.destroy(proxy.entity_);
+      submit_wire_retirement(*engine_, pending_retirements);
+    }
+  }
   for (BatchProxy &proxy : proxies) {
+    const bool had_resources = proxy.entity_ ||
+                               proxy.material_instance_ != nullptr ||
+                               proxy.instance_buffer_ != nullptr;
     destroy_batch(proxy);
+    if (had_resources) {
+      submit_wire_retirement(*engine_, pending_retirements);
+    }
+  }
+  if (pending_retirements != 0u) {
+    engine_->flush();
   }
 }
 
 void InstancedWireRenderBackend::destroy_geometry_resources() {
   if (engine_ != nullptr) {
+    std::size_t pending_retirements = 0u;
     for (auto &[signature, resources] : geometry_resources_) {
       (void)signature;
       for (const std::unique_ptr<GeometryResource> &resource : resources) {
         if (resource->vertex_buffer != nullptr) {
           engine_->destroy(resource->vertex_buffer);
+          submit_wire_retirement(*engine_, pending_retirements);
         }
         if (resource->index_buffer != nullptr) {
           engine_->destroy(resource->index_buffer);
+          submit_wire_retirement(*engine_, pending_retirements);
         }
       }
+    }
+    if (pending_retirements != 0u) {
+      engine_->flush();
     }
   }
   geometry_resources_.clear();
@@ -447,6 +484,7 @@ void InstancedWireRenderBackend::prune_unused_geometry_resources(
 
 void InstancedWireRenderBackend::prune_unused_geometry_resources(
     std::span<const std::span<const BatchProxy>> live_proxy_groups) {
+  std::size_t pending_retirements = 0u;
   std::unordered_set<const GeometryResource *> live;
   std::size_t live_proxy_count = 0u;
   for (const std::span<const BatchProxy> group : live_proxy_groups) {
@@ -471,9 +509,11 @@ void InstancedWireRenderBackend::prune_unused_geometry_resources(
       }
       if (resource.vertex_buffer != nullptr) {
         engine_->destroy(resource.vertex_buffer);
+        submit_wire_retirement(*engine_, pending_retirements);
       }
       if (resource.index_buffer != nullptr) {
         engine_->destroy(resource.index_buffer);
+        submit_wire_retirement(*engine_, pending_retirements);
       }
       stats_.derived_vertex_bytes -= resource.vertex_bytes;
       stats_.derived_index_bytes -= resource.index_bytes;
@@ -485,6 +525,9 @@ void InstancedWireRenderBackend::prune_unused_geometry_resources(
     } else {
       ++bucket_it;
     }
+  }
+  if (pending_retirements != 0u) {
+    engine_->flush();
   }
 }
 

@@ -9,7 +9,8 @@ material {
     requires : [
         uv0,
         color,
-        custom0
+        custom0,
+        custom1
     ],
     variables : [
         pointUv
@@ -78,6 +79,9 @@ vertex {
             max(unbiasedDeviceDepth - legacyMaximumPull, biasedDeviceDepth));
         highp vec4 finalDevice = vec4(centerDevice.xy + offsetDevice,
                                      deviceDepth, 1.0);
+        if (getCustom1().x < 0.5) {
+            finalDevice = vec4(1000000.0, 1000000.0, 0.0, 1.0);
+        }
 
         material.clipSpaceTransform = mat4(1.0);
         material.clipSpaceTransform[3] = finalDevice;

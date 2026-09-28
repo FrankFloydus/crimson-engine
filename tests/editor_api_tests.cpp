@@ -14886,6 +14886,66 @@ TEST(EditorApiTests,
                             *direct_vertex_orientation);
 }
 
+TEST(EditorApiTests, ComponentMarqueeRetainsSelectionAndTracksMovedGeometry) {
+  using namespace quader;
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    for (const bool select_backfaces : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(select_backfaces);
+      CommandTestHarness harness;
+      auto &editor = harness.editor;
+      const auto object = create_polygon_mesh(editor, 3u, "Marquee Triangle");
+      ASSERT_TRUE(editor.selection().select_object(object).ok());
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      ASSERT_TRUE(editor.selection().clear().ok());
+      if (mode == QuaderSelectionMode::Vertex) {
+        ASSERT_TRUE(editor.selection().select_vertex(object, 2).ok());
+      } else if (mode == QuaderSelectionMode::Edge) {
+        ASSERT_TRUE(editor.selection().select_edge(object, 2, 3).ok());
+      } else {
+        ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+      }
+      const auto baseline = editor.selection().summary();
+      const auto component_count = [mode](const QuaderSelectionSummary &summary) {
+        return mode == QuaderSelectionMode::Vertex ? summary.selected_vertex_count
+            : mode == QuaderSelectionMode::Edge ? summary.selected_edge_count
+                                               : summary.selected_face_count;
+      };
+      const std::size_t expected_count = mode == QuaderSelectionMode::Face ? 1u : 3u;
+      QuaderBoxSelectRequest request{
+          .camera = api_orthographic_camera(), .start = {48.0f, 48.0f},
+          .end = {52.0f, 52.0f}, .edit = QuaderSelectionEdit::Add,
+          .rule = QuaderBoxSelectionRule::Contain,
+          .select_backfaces = select_backfaces};
+      const auto selected = editor.selection().box_select(request);
+      ASSERT_TRUE(selected.ok()) << selected.error_message();
+      EXPECT_EQ(component_count(selected.value()), expected_count);
+      EXPECT_EQ(selected.value().content_revision, baseline.content_revision);
+      EXPECT_EQ(selected.value().active_kind, baseline.active_kind);
+      EXPECT_EQ(selected.value().active_vertex_id, baseline.active_vertex_id);
+      EXPECT_EQ(selected.value().active_edge_a, baseline.active_edge_a);
+      EXPECT_EQ(selected.value().active_edge_b, baseline.active_edge_b);
+      EXPECT_EQ(selected.value().active_face_id, baseline.active_face_id);
+      const auto repeated = editor.selection().box_select(request);
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_FALSE(repeated.changed());
+      EXPECT_EQ(repeated.value().selection_revision, selected.value().selection_revision);
+
+      ASSERT_TRUE(editor.modeling().move_selection({20.0f, 0.0f, 0.0f}).ok());
+      request.edit = QuaderSelectionEdit::Replace;
+      const auto missed = editor.selection().box_select(request);
+      ASSERT_TRUE(missed.ok()) << missed.error_message();
+      EXPECT_EQ(component_count(missed.value()), 0u);
+      request.start.x += 20.0f;
+      request.end.x += 20.0f;
+      const auto moved = editor.selection().box_select(request);
+      ASSERT_TRUE(moved.ok()) << moved.error_message();
+      EXPECT_EQ(component_count(moved.value()), expected_count);
+    }
+  }
+}
+
 TEST(EditorApiTests, ComponentPickSelectionRemainsRuntimeOwned) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;

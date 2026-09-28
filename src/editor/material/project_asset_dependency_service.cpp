@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_asset_dependency_service.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/project_material_reference_resolver.hpp"
@@ -59,6 +60,7 @@ void canonicalize_material_ids(std::vector<ProjectAssetId> &ids,
 }
 
 std::vector<ProjectAssetId> stored_material_ids(const SceneDocument &scene) {
+  QDR_PROFILE_SCOPE("Project asset dependency inspect live scene");
   std::set<ProjectAssetId> ids;
   const auto add_reference = [&](const MaterialReference &reference) {
     if (reference.project_owned()) {
@@ -464,6 +466,7 @@ struct ProjectAssetDependencyService::State final {
     if (!refresh_files && owners_match()) {
       return retained;
     }
+    QDR_PROFILE_SCOPE("Project asset dependency rebuild snapshot");
     ++work.snapshot_build_count;
     const ProjectManifest *manifest = project.manifest();
     ProjectAssetDependencySnapshot candidate{
@@ -540,6 +543,7 @@ ProjectAssetDependencyService::~ProjectAssetDependencyService() = default;
 
 std::shared_ptr<const ProjectAssetDependencySnapshot>
 ProjectAssetDependencyService::snapshot(bool refresh_files) const {
+  QDR_PROFILE_SCOPE("Project asset dependency snapshot");
   return state_->build(refresh_files);
 }
 

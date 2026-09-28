@@ -383,15 +383,25 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   [render extraction tests](tests/render_extraction_tests.cpp) and the actual Vulkan
   [selection overlay tests](tests/selection_overlay_runtime_tests.cpp).
 - Native Object/Group selection uses a camera silhouette in place of the semantic
-  full-mesh wire used by modeling/tool consumers. Visible and occluded fragments use complementary
-  depth comparisons over shared ribbon buffers; only occluded silhouette fragments receive half
-  the authored alpha. Vulkan reserves a separate stencil bit so visible contours suppress hidden
-  contours at the same pixel; other backends draw hidden contours first. Component editing wires
-  never inherit this hidden-object treatment.
+  full-mesh wire used by modeling/tool consumers. Vulkan uses retained class-specific mask batches
+  and per-pane GPU outline composition; camera changes must never rebuild CPU triangle unions or
+  upload selection geometry. Only occluded fragments receive half the authored alpha. Sample the
+  current pixel's selected depth inside coverage, and the nearest occupied pixel outside it, so
+  sloped surfaces do not occlude their own inner ribbon. Prefer the nearer class, with active
+  selection winning depth ties. Component editing wires never inherit this hidden-object treatment.
+  Mask views must be opaque: Filament's translucent-view color blit leaves their custom depth
+  attachment unwritten. Allocate and bind targets before `beginFrame`, including when viewport
+  sizing precedes initialization; render-time target creation can hide a stale first frame.
+  See [GPU outline renderer](src/render/overlay/selected_mesh_outline_renderer.cpp),
+  [mask retention tests](tests/selected_mesh_outline_mask_cache_tests.cpp), and first-frame/occlusion
+  cases in [selection overlay tests](tests/selection_overlay_runtime_tests.cpp).
   Object selection retains its face fill;
   submission removes internal selection edges.
   Persistent scene and instance wire backends also honor `selected_mesh_outline_only`. Live primitive
-  creation retains its faint topology, and component modes retain their editing wires. The shared
+  creation retains its faint topology, and component modes retain their editing wires. The CPU
+  fallback (including source-replacing tool previews) keeps complementary ribbon depth passes.
+  Its Vulkan stencil prevents hidden contours adding tint beneath visible ones; other backends draw
+  hidden contours first. The shared
   [outline cache](src/render/overlay/selected_mesh_outline_cache.cpp) welds compiled corner splits,
   retains adjacency across camera movement and instances, and only republishes changed contours.
   Contour candidates are clipped against the combined projected coverage of selected triangles,
@@ -407,6 +417,8 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   selections; inherited selection also suppresses native facet wires. Group bounds remain visible.
   Coverage: [outline projection](tests/selected_mesh_outline_cache_tests.cpp) and
   [native wire policy](tests/selected_mesh_outline_presentation_tests.cpp).
+  Performance reproduction must include Frame Selection with the entire selected scene visible,
+  interior navigation, and orthographic views; a mostly culled saved camera hides the union cost.
 - An empty spatial hover sample differs from explicit lifecycle clear. Component misses and leaving
   the viewport retain the last candidate mesh wire; meshes with selected components remain sticky
   independently. Object-mode hover emits no mesh outline and never changes click-owned selection.
@@ -817,11 +829,64 @@ Tests: [presentation](tests/render_presentation_tests.cpp),
 - Multi-object hydration, selection, duplication, and commits use bulk indexed owners. Never call
   scalar full-session operations inside a batch, reserve exact growing overlay capacity per object,
   or validate every selected element by repeatedly scanning its entire domain.
+- Face Texture chart queries share immutable documents per object and preserve selection order,
+  individual failures and stored-angle fallbacks. Multi-face presentation stops only after proving
+  the angle is mixed, after validating every selected target; numeric Rotate lazily prepares all maps
+  after request validation. Keep the single-face canvas and UV gesture on the live preview document.
+  Unchanged queries and exactly uniform usable-angle no-ops do no additional chart work.
+  See [chart projection](src/editor/modeling/services/modeling_sdk_projection_adapter.cpp) and
+  [canvas regressions and opt-in scene benchmark](tests/face_texture_canvas_api_tests.cpp).
 - Camera motion reuses persistent world-space overlays and selection projections; hover/tool deltas
   have separate invalidation. Scene selection-only changes patch selected flags, not mesh geometry.
+- Surface ray snapshots never derive snap landmarks eagerly. Frozen snapshots pin the geometry and
+  transforms needed for their one-time, thread-safe landmark derivation, including after owner
+  destruction. Reuse pinned local geometry when a transform-only rebuild exceeds the strong LRU;
+  cache capacity must not force unchanged geometry to be rebuilt on every drag sample. See
+  [surface query regressions](tests/scene_surface_query_tests.cpp).
+- Component point layers retain quads, frame indices and source-face acceleration across camera
+  changes. Camera visibility classification uses immutable per-object queries and updates only the
+  visibility stream; source geometry changes rebuild acceleration. Packed position streams preserve
+  the pinned base query and first strictly reclassify viewport-skipped layers; preserve that pending
+  flag across unrelated frame-layer updates. Refresh camera clip uniforms even when another semantic
+  layer changes in the same frame. See
+  [point layer cache](src/render/overlay/overlay_renderable_cache.cpp) and
+  [point visibility regressions](tests/overlay_depth_point_visibility_tests.cpp).
+- Identical marquee inputs do not prove the resolved selection is still applied: Clear can restore
+  the same empty baseline. Reapply the cached policy result after selection changes and validate
+  the actual owner revision before taking the unchanged exit; never predict a publication revision.
+  See [selection cache regressions](tests/modeling_selection_performance_tests.cpp).
+- Marquee facing/incidence facts pin immutable document storage, with separate winding variants.
+  Camera, selection and backface admission changes reuse those facts; COW geometry edits replace
+  their identity. Prune sources after participant projection without invalidating unchanged facts.
+  Screen hover may reuse exact rays and conservatively reject object bounds, but must retain the
+  original epsilon-sensitive surface order and front-face preference. Only an already-visible
+  candidate can suppress a later visibility query. See
+  [picking regressions](tests/modeling_domain/qdr_modeling_runtime_picking_tests.cpp).
 - Geometry/selection payload reuse requires exact equality after hashing, not hash-only identity.
   Preview ticks retain topology and update required dynamic streams; commit performs canonical
   projection once. Do not remove visible overlays or lower render cadence to disguise UI work.
+- SDK preview updates validate authored candidates and advance their revisions before derived
+  mesh/overlay materialization. Payload readers build only accepted candidates they consume;
+  unchanged, feedback-only and rejected updates retain the cached payload. Commit/cancel need no
+  derived build. See [preview owner](src/sdk/core/modeling/src/session.cpp) and
+  [lazy payload regressions](tests/sdk/modeling_curve_session_tests.cpp).
+- Affine component preview preparation mutates each canonical SDK candidate once, then derives
+  native geometry and packed positions from that same accepted arithmetic. Worker jobs own separate
+  candidates; reject the complete batch before publishing any participant or reusing its currently
+  visible position buffer. Freeze each worker's final geometry before publication so its first content
+  hash does not serialize on the render thread. Retained topology compiles the changed-face normal neighborhood through
+  the canonical compiler, including every incident face in the affected smoothing fans; uncertain
+  topology takes the full fallback. See [projection parity](tests/uv_native_sampling_tests.cpp) and
+  [atomic preview rejection](tests/component_transform_persistence_tests.cpp).
+- A drag's fixed movable vertex set can retain its normal-neighborhood plan, including a cached
+  full-compile fallback. Validate authored attributes, untouched positions and compiled layout
+  against the pinned source before reuse; canonical compilation remains authoritative. A rejected
+  candidate must not mutate either the plan or the currently published geometry.
+- Measure dense interaction through real viewport preparation and Vulkan submission as well as
+  modeling work. The opt-in [native viewport fixture](tests/dense_component_frame_runtime_tests.cpp)
+  clones the project and reports frame, publication, overlay and rendering stages for unchanged,
+  navigation, selection, deformation and commit workloads. Preserve scene, camera, raster and selected
+  element counts in before/after comparisons; a model-only timing cannot establish viewport FPS.
 
 Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
 [render guardrails](tests/render_source_policy_guardrail_tests.cpp),

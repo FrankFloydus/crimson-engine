@@ -273,6 +273,12 @@ void SceneRenderBridge::sync(RenderSceneSnapshot snapshot) {
   (void)sync_service_.sync(snapshot);
   previous_scene_snapshot_ = std::move(snapshot);
   has_previous_scene_snapshot_ = true;
+  QDR_PROFILE_PLOT("Quader ordinary mesh records",
+                   static_cast<std::int64_t>(previous_scene_snapshot_.meshes.size()));
+  QDR_PROFILE_PLOT("Quader base instance chunks",
+                   static_cast<std::int64_t>(instance_cache_.stats().chunk_count));
+  QDR_PROFILE_PLOT("Quader resident mesh geometry resources",
+                   static_cast<std::int64_t>(mesh_factory_.geometry_cache_stats().resource_count));
 }
 
 void SceneRenderBridge::update_mesh_surface_grid(

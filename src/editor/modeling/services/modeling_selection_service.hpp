@@ -11,8 +11,10 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/selection/modeling_selection_projection_snapshot.hpp"
 
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -25,6 +27,10 @@
 
 namespace quader_editor_core {
 class EditorRuntime;
+}
+
+namespace quader_poly {
+class DocumentPickQuery;
 }
 
 namespace quader {
@@ -113,8 +119,11 @@ public:
   void invalidate_picking_cache() const;
   [[nodiscard]] std::uint64_t
   transformed_picking_projection_build_count() const;
+  [[nodiscard]] std::uint64_t world_picking_geometry_build_count() const;
   [[nodiscard]] std::uint64_t
   rectangle_picking_projection_build_count() const;
+  [[nodiscard]] std::uint64_t rectangle_pick_facts_build_count() const;
+  [[nodiscard]] std::uint64_t rectangle_pick_facts_reuse_count() const;
   [[nodiscard]] std::uint64_t
   rectangle_selection_universe_build_count() const;
   [[nodiscard]] std::uint64_t
@@ -257,6 +266,14 @@ public:
                     const quader_poly::Selection &right);
 
 private:
+  /// Pins the exact document borrowed by the immutable marquee facing queries.
+  /// Both winding variants survive camera, selection and transform changes.
+  struct RectanglePickFactsCacheEntry {
+    std::shared_ptr<const quader_poly::Document> document;
+    std::array<std::shared_ptr<const quader_poly::DocumentPickQuery>, 2u> queries;
+    std::uint64_t generation = 0u;
+  };
+
   /**
    * Caches screen-space rectangle candidates for one geometry/camera key.
    */
@@ -309,6 +326,8 @@ private:
         quader_editor_core::SelectionEditOperation::Replace;
     quader_editor_core::RectangleSelectionState baseline;
     quader_editor_core::RectangleSelectionHits hits;
+    quader_editor_core::RectangleSelectionState resolved_selection;
+    std::optional<std::uint64_t> validated_selection_revision;
   };
 
   [[nodiscard]] const quader_editor_core::RectangleProjectedHitsRequest &
@@ -327,6 +346,9 @@ private:
       const ModelingSelectionProjectionSnapshot &session) const;
   [[nodiscard]] const std::vector<quader_poly::Edge> &cached_document_edges(
       const quader_editor_core::PolygonObject &object) const;
+  [[nodiscard]] const quader_poly::DocumentPickQuery &cached_rectangle_pick_facts(
+      const quader_editor_core::PolygonObject &object,
+      bool reverse_face_winding) const;
   [[nodiscard]] const quader_editor_core::RectangleSelectionUniverse &
   rectangle_selection_universe(
       const ModelingSelectionProjectionSnapshot &session,
@@ -335,11 +357,17 @@ private:
       quader_editor_core::SelectionMode selection_mode) const;
 
   mutable ModelingPickingCache picking_cache_;
+  mutable std::unordered_map<std::uintptr_t, RectanglePickFactsCacheEntry>
+      rectangle_pick_facts_cache_;
+  mutable std::uint64_t rectangle_pick_facts_generation_ = 0u;
+  mutable std::uint64_t rectangle_pick_facts_build_count_ = 0u;
+  mutable std::uint64_t rectangle_pick_facts_reuse_count_ = 0u;
   mutable RectangleProjectionCache rectangle_projection_cache_;
   mutable RectangleProjectionCache lasso_projection_cache_;
   mutable RectangleUniverseCache rectangle_universe_cache_;
   mutable RectangleResolutionCache rectangle_resolution_cache_;
   mutable std::uint64_t transformed_picking_projection_build_count_ = 0;
+  mutable std::uint64_t world_picking_geometry_build_count_ = 0;
   mutable std::uint64_t rectangle_picking_projection_build_count_ = 0;
   mutable std::uint64_t rectangle_selection_universe_build_count_ = 0;
   mutable std::uint64_t rectangle_selection_resolution_build_count_ = 0;

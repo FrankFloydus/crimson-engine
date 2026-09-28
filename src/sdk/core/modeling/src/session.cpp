@@ -3930,24 +3930,6 @@ Result<SessionPreviewBeginResult> ModelingSession::begin_preview_transaction(
     }
   }
 
-  for (PreviewTransactionObject &object : prepared.objects) {
-    if (object.action == SessionPreviewAction::RemoveExisting) {
-      continue;
-    }
-    const auto *polygon =
-        std::get_if<PolygonDocument>(&object.preview_document);
-    if (polygon == nullptr) {
-      continue;
-    }
-    Result<ToolPreviewPayload> payload = build_preview_payload(*polygon);
-    ++impl_->preview_work_stats.mesh_payload_build_count;
-    if (!payload.ok()) {
-      return Result<SessionPreviewBeginResult>::failure(payload.error());
-    }
-    object.payload = std::move(payload).value();
-    object.payload_valid = true;
-  }
-
   const std::uint64_t available_object_ids =
       impl_->next_object_index == 0U
           ? 0U
@@ -4000,12 +3982,11 @@ Result<SessionPreviewBeginResult> ModelingSession::begin_preview_transaction(
                     &PreviewTransactionObject::object_id);
   rebuild_preview_object_index(prepared);
 
+  // Authored candidates are already validated. Derive mesh and overlay payloads
+  // only when a consumer requests them; hosts may project authored data directly.
   for (PreviewTransactionObject &object : prepared.objects) {
     object.payload_revision = impl_->advance_preview_payload_revision(
         document_content_revision(object.preview_document));
-    if (object.payload_valid) {
-      object.payload.mesh.content_revision = object.payload_revision;
-    }
   }
   refresh_preview_object_summaries(prepared);
   for (const PreviewTransactionObject &object : prepared.objects) {
@@ -4019,6 +4000,7 @@ Result<SessionPreviewBeginResult> ModelingSession::begin_preview_transaction(
 
 Result<OperationResult> ModelingSession::update_preview_transaction(
     PreviewId preview_id, std::vector<SessionPreviewDocumentUpdate> updates) {
+  QDR_PROFILE_FUNCTION();
   if (!impl_->preview.active || impl_->preview.id != preview_id) {
     return Result<OperationResult>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));
@@ -4061,8 +4043,6 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
   struct StagedPreviewUpdate {
     std::optional<SessionDocument> document;
     OperationResult receipt;
-    ToolPreviewPayload payload;
-    bool payload_valid = false;
     bool publication_changed = false;
     bool feedback_changed = false;
     std::optional<EdgeBevelWidthFeedback> edge_bevel_width;
@@ -4126,23 +4106,6 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
     staged.push_back(std::move(next));
   }
 
-  for (StagedPreviewUpdate &update : staged) {
-    if (!update.publication_changed) {
-      continue;
-    }
-    const auto *polygon = std::get_if<PolygonDocument>(&*update.document);
-    if (polygon == nullptr) {
-      continue;
-    }
-    Result<ToolPreviewPayload> payload = build_preview_payload(*polygon);
-    ++impl_->preview_work_stats.mesh_payload_build_count;
-    if (!payload.ok()) {
-      return Result<OperationResult>::failure(payload.error());
-    }
-    update.payload = std::move(payload).value();
-    update.payload_valid = true;
-  }
-
   // Feedback belongs to the accepted candidate even when its geometry is
   // already current. Publish it only after every participant has validated.
   bool feedback_changed = false;
@@ -4173,13 +4136,10 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
     object.preview_document = std::move(*update.document);
     object.receipt = std::move(update.receipt);
     object.dirty = object.receipt.dirty;
-    object.payload = std::move(update.payload);
-    object.payload_valid = update.payload_valid;
+    object.payload = {};
+    object.payload_valid = false;
     object.payload_revision = impl_->advance_preview_payload_revision(
         document_content_revision(object.preview_document));
-    if (object.payload_valid) {
-      object.payload.mesh.content_revision = object.payload_revision;
-    }
   }
   refresh_preview_object_summaries(impl_->preview);
   for (std::size_t index = 0; index < staged.size(); ++index) {
@@ -4581,6 +4541,7 @@ Result<OperationResult> ModelingSession::commit_preview(PreviewId preview_id) {
 
 Result<SessionPreviewCommitResult>
 ModelingSession::commit_preview_transaction(PreviewId preview_id) {
+  QDR_PROFILE_FUNCTION();
   if (!impl_->preview.active || impl_->preview.id != preview_id) {
     return Result<SessionPreviewCommitResult>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));

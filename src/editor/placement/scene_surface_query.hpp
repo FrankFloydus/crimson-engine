@@ -139,8 +139,10 @@ struct SceneSurfaceQueryStats final {
   std::uint64_t snapshot_build_count = 0u;
   std::uint64_t tlas_build_count = 0u;
   std::uint64_t blas_build_count = 0u;
+  std::uint64_t landmark_build_count = 0u;
   std::size_t participant_count = 0u;
   std::size_t triangle_count = 0u;
+  /// Counts materialized landmarks in the current snapshot; queries stay lazy.
   std::size_t landmark_count = 0u;
   std::size_t unique_geometry_count = 0u;
 };
@@ -182,8 +184,9 @@ public:
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] std::span<const SceneSurfaceParticipant>
   participants() const noexcept;
+  /// Derives landmarks once from frozen payloads, safely across concurrent readers.
   [[nodiscard]] std::span<const SceneSurfaceLandmark>
-  landmarks() const noexcept;
+  landmarks() const;
   /// Changes only when the owner publishes a different frozen snapshot.
   [[nodiscard]] std::uint64_t revision() const noexcept;
   [[nodiscard]] std::optional<SceneSurfaceHit>

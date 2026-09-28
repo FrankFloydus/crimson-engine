@@ -34,6 +34,15 @@ bool overlay_camera_material_state_changed(
          before.far_plane != after.far_plane;
 }
 
+std::uint64_t point_frame_order_signature(const ViewportOverlayFrame &frame) {
+  RenderSignatureBuilder signature;
+  signature.add_size(frame.points.size());
+  for (const auto &point : frame.points) {
+    signature.add_value(static_cast<std::uint64_t>(point.layer));
+  }
+  return signature.value();
+}
+
 } // namespace
 
 OverlayRenderableCache::~OverlayRenderableCache() {
@@ -123,7 +132,23 @@ bool OverlayRenderableCache::set_overlay_frame(std::size_t viewport_index,
     restore_transform_base(slot, false);
   }
 
+  const auto point_order = point_frame_order_signature(frame);
+  if (point_order != slot.point_order_signature) {
+    // Interleaved point layers share frame indices. Refresh their mappings
+    // after an insertion even when a layer's own geometry remains unchanged.
+    for (std::size_t index = 0u; index < slot.proxy_groups.size(); ++index) {
+      if (slot.signatures.point_counts[index] != 0u || signatures.point_counts[index] != 0u) {
+        slot.proxy_groups[index].signature = 0u;
+      }
+    }
+  }
+  slot.point_order_signature = point_order;
   slot.frame = std::move(frame);
+  // An unrelated frame layer can change while point proxies remain retained.
+  // Keep their viewport-skip proof until strict point reclassification occurs.
+  if (!signatures.has_source_wire_depth_stamp) {
+    slot.point_visibility.invalidate();
+  }
   slot.has_frame = true;
   slot.frame_signature = signature;
   slot.signatures = signatures;
@@ -149,6 +174,11 @@ bool OverlayRenderableCache::set_overlay_frame(std::size_t viewport_index,
     apply_transform_stream(slot, transform_position_signature_);
   } else if (factory_ && factory_->initialized()) {
     rebuild_slot(slot, true);
+  }
+  if (camera_material_state_changed) {
+    // Unrelated semantic edits may keep point geometry while changing its clip
+    // plane. Retained batches still need the current material camera state.
+    update_retained_camera_state(slot);
   }
   return true;
 }
@@ -372,6 +402,9 @@ bool OverlayRenderableCache::set_transform_position_streams(
       if (!slot.has_frame) {
         continue;
       }
+      // Packed positions leave the semantic source frame untouched. Its owned
+      // BVHs and strict flags remain valid until that source changes; cameras
+      // classify the same base points before GPU position displacement.
       bool upload_all_sources = false;
       if (layout_changed) {
         if (slot.transform_active) {
@@ -413,6 +446,15 @@ void OverlayRenderableCache::reset_transform_position_streams() {
 void OverlayRenderableCache::begin_transform_stream(
     OverlaySlot &slot, std::uint64_t layout_signature) {
   QDR_PROFILE_FUNCTION();
+  if (slot.point_viewport_skips_applied) {
+    // A skipped offscreen ray may have retained an otherwise hidden point.
+    // Restore the original source-face classification before position streams
+    // can move that point onscreen. Further preview camera rebuilds keep the
+    // viewport shortcut disabled until the transform stream ends.
+    QDR_PROFILE_SCOPE("Overlay restore strict point visibility for transform");
+    update_point_visibility(slot);
+    slot.point_viewport_skips_applied = false;
+  }
   slot.transform_base_signatures = slot.signatures;
   slot.transform_base_frame_signature = slot.frame_signature;
   slot.transform_active = true;
@@ -648,7 +690,11 @@ void OverlayRenderableCache::apply_transform_stream(
         if (proxy_index >= group.proxies.size()) {
           continue;
         }
-        (void)factory_->update_position_streams(group.proxies[proxy_index]);
+        auto &proxy = group.proxies[proxy_index];
+        if (factory_->update_position_streams(proxy) &&
+            proxy.kind == OverlayRenderableProxyKind::Point) {
+          ++slot.point_position_upload_count;
+        }
       }
     }
   }
@@ -709,7 +755,10 @@ void OverlayRenderableCache::restore_transform_base(OverlaySlot &slot,
           changed = true;
         }
         if (changed) {
-          (void)factory_->update_position_streams(proxy);
+          if (factory_->update_position_streams(proxy) &&
+              proxy.kind == OverlayRenderableProxyKind::Point) {
+            ++slot.point_position_upload_count;
+          }
         }
       }
     }
@@ -725,7 +774,7 @@ void OverlayRenderableCache::restore_transform_base(OverlaySlot &slot,
     const auto layer = static_cast<ViewportOverlayLayer>(index);
     slot.proxy_groups[index].signature =
         OverlayRenderableBuilder::layer_build_signature(
-            slot.transform_base_signatures, slot.camera, layer);
+            slot.transform_base_signatures, slot.camera, layer, true);
   }
   (void)rebuild;
 }
@@ -750,11 +799,29 @@ OverlayRenderableCache::stats(std::size_t viewport_index) const {
   }
 
   const OverlaySlot &slot = slots_[viewport_index];
+  std::size_t point_vertex_count = 0u;
+  std::size_t visible_point_vertex_count = 0u;
+  for (const OverlayProxyGroup &group : slot.proxy_groups) {
+    for (const OverlayRenderableProxy &proxy : group.proxies) {
+      if (proxy.kind == OverlayRenderableProxyKind::Point) {
+        point_vertex_count += proxy.vertex_count;
+        visible_point_vertex_count += static_cast<std::size_t>(std::count_if(
+            proxy.point_visibility_stream.begin(), proxy.point_visibility_stream.end(),
+            [](float visible) { return visible > 0.5f; }));
+      }
+    }
+  }
   return {
       .frame_signature = slot.frame_signature,
       .camera_signature = slot.camera_signature,
       .layer_mask = slot.layer_mask,
       .proxy_count = active_proxy_count(viewport_index),
+      .point_vertex_count = point_vertex_count,
+      .visible_point_vertex_count = visible_point_vertex_count,
+      .point_geometry_update_count = slot.point_geometry_update_count,
+      .point_visibility_upload_count = slot.point_visibility_upload_count,
+      .point_position_upload_count = slot.point_position_upload_count,
+      .point_visibility = slot.point_visibility.stats(),
   };
 }
 
@@ -793,7 +860,7 @@ void OverlayRenderableCache::rebuild_slot(
     QDR_PROFILE_SCOPE("Overlay rebuild layer");
     const std::uint64_t layer_signature =
         OverlayRenderableBuilder::layer_build_signature(slot.signatures,
-                                                        slot.camera, layer);
+                                                        slot.camera, layer, true);
     OverlayProxyGroup &group =
         slot.proxy_groups[static_cast<std::size_t>(layer)];
     if (group.signature == layer_signature) {
@@ -813,7 +880,9 @@ void OverlayRenderableCache::rebuild_slot(
     }
 
     const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
-        slot.frame, slot.camera, layer, &slot.signatures, blend_order_bias_);
+        slot.frame, slot.camera, layer, &slot.signatures, blend_order_bias_,
+        nullptr, !transform_stream_active_, true);
+    if (!plan.point_batches.empty()) ++slot.point_geometry_update_count;
     const std::uint8_t layer_mask = effective_layer_mask(slot, layer);
     if (!factory_->update_layer_proxies(group.proxies, plan, layer_mask)) {
       destroy_group(group);
@@ -832,6 +901,24 @@ void OverlayRenderableCache::rebuild_slot(
     slot.transform_position_signature = 0u;
     apply_transform_stream(slot, transform_position_signature_);
   }
+  update_point_visibility(slot);
+}
+
+void OverlayRenderableCache::update_point_visibility(OverlaySlot &slot) {
+  if (!factory_ || !factory_->initialized() || slot.frame.points.empty()) return;
+  const auto viewport_skips_before = slot.point_visibility.stats().viewport_skip_count;
+  const auto visibility = slot.point_visibility.evaluate(
+      slot.frame, slot.signatures, slot.camera, !transform_stream_active_);
+  slot.point_viewport_skips_applied |=
+      slot.point_visibility.stats().viewport_skip_count > viewport_skips_before;
+  QDR_PROFILE_SCOPE("Overlay upload retained point visibility flags");
+  for (auto &group : slot.proxy_groups) {
+    for (auto &proxy : group.proxies) {
+      if (factory_->update_point_visibility(proxy, visibility)) {
+        ++slot.point_visibility_upload_count;
+      }
+    }
+  }
 }
 
 void OverlayRenderableCache::destroy_slot(OverlaySlot &slot) {
@@ -845,6 +932,7 @@ void OverlayRenderableCache::destroy_slot(OverlaySlot &slot) {
   slot.camera_signature = 0;
   slot.layer_mask = 0;
   slot.has_frame = false;
+  slot.point_visibility.invalidate();
   slot.transform_base_signatures = {};
   slot.transform_base_frame_signature = 0u;
   slot.transform_layout_signature = 0u;
@@ -854,6 +942,8 @@ void OverlayRenderableCache::destroy_slot(OverlaySlot &slot) {
   slot.transform_source_binding_spans.clear();
   slot.transform_bindings_valid = false;
   slot.transform_active = false;
+  slot.point_viewport_skips_applied = false;
+  slot.point_order_signature = 0u;
 }
 
 void OverlayRenderableCache::destroy_group(OverlayProxyGroup &group) {

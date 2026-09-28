@@ -1,0 +1,83 @@
+material {
+    name : QuaderSelectionOutline,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : true,
+    doubleSided : true,
+    vertexDomain : device,
+    parameters : [
+        { type : sampler2d, name : ordinaryMask, precision : high },
+        { type : sampler2d, name : activeMask, precision : high },
+        { type : sampler2d, name : ordinaryDepth, precision : high },
+        { type : sampler2d, name : activeDepth, precision : high },
+        { type : float4, name : ordinaryColor },
+        { type : float4, name : activeColor },
+        { type : float, name : lineWidth },
+        { type : float, name : featherPixels },
+        { type : float, name : guardPixels },
+        { type : float, name : alphaScale }
+    ]
+}
+
+fragment {
+    // Masks contain the union of occupied pixels in each selection class.
+    // Sampling native framebuffer coordinates preserves the backend's texture
+    // orientation for both a swapchain and an offscreen viewport attachment.
+    vec2 occupancy(ivec2 pixel) {
+        return vec2(texelFetch(materialParams_ordinaryMask, pixel, 0).r,
+                    texelFetch(materialParams_activeMask, pixel, 0).r);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        ivec2 center = ivec2(gl_FragCoord.xy) + ivec2(int(materialParams.guardPixels));
+        vec2 inside = step(vec2(0.5), occupancy(center));
+        float halfWidth = max(1.0, materialParams.lineWidth) * 0.5;
+        float feather = max(0.0, materialParams.featherPixels);
+        int radius = int(ceil(halfWidth + feather * 0.5 + 1.0));
+        vec2 nearestDistance = vec2(float(radius) + 1.0);
+        ivec2 ordinaryPixel = center;
+        ivec2 activePixel = center;
+        for (int y = -radius; y <= radius; ++y) {
+            for (int x = -radius; x <= radius; ++x) {
+                if (x == 0 && y == 0) continue;
+                float distance = length(vec2(x, y)) - 0.5;
+                if (distance > halfWidth + feather * 0.5) continue;
+                if (distance >= nearestDistance.x && distance >= nearestDistance.y) continue;
+                ivec2 pixel = center + ivec2(x, y);
+                vec2 sampleInside = step(vec2(0.5), occupancy(pixel));
+                if (sampleInside.x != inside.x && distance < nearestDistance.x) {
+                    nearestDistance.x = distance;
+                    ordinaryPixel = inside.x < 0.5 ? pixel : center;
+                }
+                if (sampleInside.y != inside.y && distance < nearestDistance.y) {
+                    nearestDistance.y = distance;
+                    activePixel = inside.y < 0.5 ? pixel : center;
+                }
+            }
+        }
+        vec2 coverage = feather > 0.0001 ?
+            clamp(vec2(0.5) - (nearestDistance - halfWidth) / feather, 0.0, 1.0) :
+            step(nearestDistance, vec2(halfWidth));
+        highp float ordinaryDepth = coverage.x > 0.0 ?
+            texelFetch(materialParams_ordinaryDepth, ordinaryPixel, 0).r : 0.0;
+        highp float activeDepth = coverage.y > 0.0 ?
+            texelFetch(materialParams_activeDepth, activePixel, 0).r : 0.0;
+        // A nearer ordinary ribbon must not be replaced by a hidden active
+        // ribbon. Equal-depth coincident coverage keeps active precedence.
+        bool activeOutline = coverage.y > 0.0 &&
+            (coverage.x <= 0.0 || activeDepth >= ordinaryDepth);
+        float alpha = activeOutline ? coverage.y : coverage.x;
+        if (alpha <= 0.0) discard;
+        highp float boundaryDepth = activeOutline ? activeDepth : ordinaryDepth;
+        // Inside coverage, compare this pixel's surface depth, not a sloped
+        // boundary neighbor that could falsely occlude the inner half-ribbon.
+        // Outside coverage, use the nearest occupied boundary pixel's depth.
+        // Both are backend-correct reverse Z; GE/L never write scene depth.
+        gl_FragDepth = boundaryDepth;
+        vec4 color = activeOutline ? materialParams.activeColor : materialParams.ordinaryColor;
+        color.a *= alpha * materialParams.alphaScale;
+        material.baseColor = vec4(color.rgb * color.a, color.a);
+    }
+}

@@ -31,6 +31,10 @@ struct InstanceRenderableCacheStats final {
   std::size_t chunk_count = 0u;
   std::uint64_t rebuild_count = 0u;
   std::uint64_t transform_update_count = 0u;
+  /** Proxies rebound to a compatible immutable geometry replacement. */
+  std::uint64_t geometry_rebind_count = 0u;
+  std::uint64_t proxy_creation_count = 0u;
+  std::uint64_t proxy_retirement_count = 0u;
 };
 
 namespace instance_renderable_cache_detail {

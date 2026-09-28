@@ -5,16 +5,28 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "assets/mesh_asset_payload.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
+#include "editor/render/quader_render_api_runtime_access.hpp"
+#include "render/scene_render_bridge.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <gtest/gtest.h>
+#include <QTemporaryDir>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
+#include <iostream>
+#include <limits>
 #include <string>
+#include <string_view>
 
 namespace quader {
 namespace {
@@ -209,6 +221,645 @@ TEST_F(ComponentTransformPersistenceTests, OrdinaryFaceMoveRetainsItsTopologyThr
   const auto after = topology();
   EXPECT_TRUE(quader_poly::validate_polygon_document(after).ok());
   verify_history_and_roundtrip(before, after);
+}
+
+TEST_F(ComponentTransformPersistenceTests, CommitReusesTheExactAcceptedPreviewGeometry) {
+  select_positive_x_face();
+  const auto before = topology();
+  ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(editor_.modeling().update_transform_translate({0.5F, 0.25F, 0.0F}).ok());
+  auto &session = *project_.active_scene()->session;
+  const auto previews = session.modeling().tool_preview_meshes();
+  ASSERT_EQ(previews.size(), 1U);
+  const auto candidate = previews.front().mesh;
+  ASSERT_NE(candidate.authored_polygon_document, nullptr);
+  const auto document = MeshProjectionService::sdk_document_from_polygon_document(
+      *candidate.authored_polygon_document);
+  ASSERT_TRUE(document.ok());
+  const auto canonical = MeshProjectionService::compile_sdk_document_mesh(document.value());
+  ASSERT_TRUE(canonical.has_value());
+  ASSERT_TRUE(mesh_geometry_payload_equal(candidate.geometry(), canonical->geometry()));
+  const auto compilations = session.modeling().modeling_sdk_projection_stats_for_tests()
+                                .mesh_compile_count;
+  ASSERT_TRUE(editor_.modeling().commit_transform_preview().ok());
+  const auto *binding = session.scene().mesh(object_.entity);
+  ASSERT_NE(binding, nullptr);
+  const auto *committed = session.assets().mesh(binding->mesh);
+  ASSERT_NE(committed, nullptr);
+  EXPECT_EQ(committed->geometry_payload(), candidate.geometry_payload());
+  EXPECT_TRUE(mesh_geometry_payload_equal(committed->geometry(), canonical->geometry()));
+  EXPECT_EQ(session.modeling().modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+            compilations);
+  expect_same_authored_topology(topology(), *candidate.authored_polygon_document);
+  verify_history_and_roundtrip(before, topology());
+}
+
+TEST_F(ComponentTransformPersistenceTests, AffinePreviewAndCommitShareCanonicalSdkArithmetic) {
+  select_positive_x_face();
+  const auto before = topology();
+  const auto selected_face = editor_.selection().summary().active_face_id;
+  auto document = MeshProjectionService::sdk_document_from_polygon_document(before);
+  ASSERT_TRUE(document.ok());
+  ASSERT_TRUE(document.value().select_face(
+      modeling::make_id<modeling::FaceTag>(static_cast<std::uint32_t>(selected_face))).ok());
+  const QuaderTransform3 transform{
+      .x_axis = {1.0F, 0.0F, 0.0F}, .y_axis = {0.03F, 1.0F, 0.0F},
+      .z_axis = {0.77F, 0.0F, 1.0F}, .origin = {0.03F, 0.0F, 0.0F}};
+  ASSERT_TRUE(document.value().transform_selection({
+      .x_axis = {1.0F, 0.0F, 0.0F}, .y_axis = {0.03F, 1.0F, 0.0F},
+      .z_axis = {0.77F, 0.0F, 1.0F}, .origin = {0.03F, 0.0F, 0.0F}}).ok());
+  const auto canonical = MeshProjectionService::compile_sdk_document_mesh(document.value());
+  ASSERT_TRUE(canonical.has_value());
+  ASSERT_NE(canonical->authored_polygon_document, nullptr);
+  ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(editor_.modeling().update_transform_matrix(transform, {}).ok());
+  auto &session = *project_.active_scene()->session;
+  const auto previews = session.modeling().tool_preview_meshes();
+  ASSERT_EQ(previews.size(), 1U);
+  ASSERT_NE(previews.front().mesh.authored_polygon_document, nullptr);
+  ASSERT_TRUE(mesh_asset_payload_detail::same_polygon_document(
+      *previews.front().mesh.authored_polygon_document,
+      *canonical->authored_polygon_document));
+  EXPECT_TRUE(mesh_geometry_payload_equal(previews.front().mesh.geometry(), canonical->geometry()));
+  const auto compilations = session.modeling().modeling_sdk_projection_stats_for_tests()
+                                .mesh_compile_count;
+  ASSERT_TRUE(editor_.modeling().commit_transform_preview().ok());
+  const auto *binding = session.scene().mesh(object_.entity);
+  ASSERT_NE(binding, nullptr);
+  const auto *committed = session.assets().mesh(binding->mesh);
+  ASSERT_NE(committed, nullptr);
+  EXPECT_TRUE(mesh_geometry_payload_equal(committed->geometry(), canonical->geometry()));
+  EXPECT_EQ(session.modeling().modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+            compilations);
+  EXPECT_EQ(committed->geometry_payload(), previews.front().mesh.geometry_payload());
+  expect_same_authored_topology(topology(), *canonical->authored_polygon_document);
+  verify_history_and_roundtrip(before, topology());
+}
+
+TEST_F(ComponentTransformPersistenceTests, SparseDragHistoryRestoresCanonicalAcceptedPositions) {
+  select_positive_x_face();
+  const auto before = topology();
+  const QuaderTransformDragBeginRequest begin{
+      .tool = QuaderTransformTool::Rotate, .axis = QuaderTransformAxis::X,
+      .pivot = {1.0F, 0.03F, 0.07F}, .screen_position = {120, 100},
+      .screen_pivot = {100, 100}, .screen_tip = {120, 100},
+      .has_world_direction = true, .world_direction = {1, 0, 0},
+      .ray = {.origin = {10, 0, 0}, .direction = {-1, 0, 0}},
+      .camera = {.orthographic = true, .origin = {10, 0, 0},
+                 .x_axis = {0, 0, -1}, .y_axis = {0, 1, 0}, .z_axis = {1, 0, 0},
+                 .viewport_size = {800, 600}, .orthographic_size = 8},
+      .vertex_snap_radius = 0, .grid_snap_enabled = false, .rotation_snap_degrees = 0};
+  auto &modeling = project_.active_scene()->session->modeling();
+  for (const QVec2 position : {QVec2{117, 113}, QVec2{113, 121}, QVec2{81, 117}}) {
+    ASSERT_TRUE(editor_.modeling().begin_transform_drag(begin).ok());
+    ASSERT_TRUE(editor_.modeling().update_transform_drag({
+        .screen_position = position, .ray = begin.ray, .camera = begin.camera,
+        .vertex_snap_radius = 0, .grid_snap_enabled = false,
+        .rotation_snap_degrees = 0}).ok());
+    const auto compilations = modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count;
+    ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+    EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+              compilations);
+    const auto accepted = topology();
+    ASSERT_TRUE(editor_.history().undo().ok());
+    expect_same_authored_topology(topology(), before);
+    ASSERT_TRUE(editor_.history().redo().ok());
+    expect_same_authored_topology(topology(), accepted);
+    ASSERT_TRUE(editor_.history().undo().ok());
+  }
+}
+
+TEST_F(ComponentTransformPersistenceTests, SparseDragHistoryOmitsSdkUnchangedParticipants) {
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  const auto original = topology();
+  const auto first_vertex = std::ranges::find_if(original.vertices, [](const auto &vertex) {
+    return vertex.position.x == 1.0F && vertex.position.y == 1.0F && vertex.position.z == 1.0F;
+  });
+  ASSERT_NE(first_vertex, original.vertices.end());
+  const auto first_id = static_cast<QuaderElementId>(first_vertex->id);
+  ASSERT_TRUE(editor_.selection().select_vertex(object_, first_id).ok());
+  ASSERT_TRUE(editor_.modeling().move_selection({-1.0F, 0.0F, 0.0F}).ok());
+  const auto first_before = topology();
+  const auto created = editor_.modeling().create_box(
+      {.min = {2, 0, 0}, .max = {4, 1, 1}}, "Changed history participant");
+  ASSERT_TRUE(created.ok());
+  const auto second = created.value();
+  auto &session = *project_.active_scene()->session;
+  const auto document = [&](QuaderModelingObjectRef object) {
+    const auto *binding = session.scene().mesh(object.entity);
+    const auto *mesh = binding != nullptr ? session.assets().mesh(binding->mesh) : nullptr;
+    EXPECT_NE(mesh, nullptr);
+    EXPECT_TRUE(mesh != nullptr && mesh->authored_polygon_document != nullptr);
+    return mesh != nullptr && mesh->authored_polygon_document
+        ? *mesh->authored_polygon_document : quader_poly::Document{};
+  };
+  const auto second_before = document(second);
+  const auto second_vertex = std::ranges::find_if(second_before.vertices, [](const auto &vertex) {
+    return vertex.position.x == 2.0F && vertex.position.y == 1.0F && vertex.position.z == 0.0F;
+  });
+  ASSERT_NE(second_vertex, second_before.vertices.end());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor_.selection().select_vertex(object_, first_id).ok());
+  ASSERT_TRUE(editor_.selection().select_components({
+      .object = second, .kind = QuaderComponentKind::Vertex,
+      .vertices = {static_cast<QuaderElementId>(second_vertex->id)},
+      .edit = QuaderSelectionEdit::Add}).ok());
+  ASSERT_EQ(editor_.selection().summary().selected_object_count, 2U);
+  const auto begun = editor_.modeling().begin_transform_drag({
+      .tool = QuaderTransformTool::Move, .axis = QuaderTransformAxis::X,
+      .screen_position = {100, 100}, .screen_pivot = {100, 100},
+      .screen_tip = {120, 100}, .has_world_direction = true, .world_direction = {1, 0, 0},
+      .ray = {.origin = {0, 0, 5}, .direction = {0, 0, -1}},
+      .camera = {.orthographic = true, .origin = {0, 0, 5},
+                 .x_axis = {1, 0, 0}, .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1},
+                 .viewport_size = {800, 600}, .orthographic_size = 8},
+      .vertex_snap_radius = 0, .grid_snap_enabled = false});
+  ASSERT_TRUE(begun.ok()) << begun.error_message();
+  ASSERT_TRUE(begun.value().preview_driven);
+  // The public affine update keeps the drag's sparse history owner active.
+  // The canonical SDK arithmetic leaves (0,1,1) fixed despite cancellation.
+  // Both live presentation and sparse history must preserve that unchanged participant.
+  ASSERT_TRUE(editor_.modeling().update_transform_matrix({
+      .x_axis = {1, 0, 0}, .y_axis = {1, 1, 0}, .z_axis = {-1, 0, 1},
+      .origin = {1.0e-8F, 0, 0}}, {}).ok());
+  const auto previews = session.modeling().tool_preview_meshes();
+  const auto first_preview = std::ranges::find(previews, object_.entity,
+                                               &ModelingToolPreviewMesh::source_entity);
+  ASSERT_NE(first_preview, previews.end());
+  ASSERT_NE(first_preview->mesh.authored_polygon_document, nullptr);
+  EXPECT_TRUE(mesh_asset_payload_detail::same_polygon_document(
+      *first_preview->mesh.authored_polygon_document, first_before));
+  ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+  expect_same_authored_topology(document(object_), first_before);
+  const auto second_after = document(second);
+  EXPECT_FALSE(mesh_asset_payload_detail::same_polygon_document(second_before, second_after));
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_same_authored_topology(document(object_), first_before);
+  expect_same_authored_topology(document(second), second_before);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_same_authored_topology(document(object_), first_before);
+  expect_same_authored_topology(document(second), second_after);
+}
+
+TEST_F(ComponentTransformPersistenceTests, ParallelAffineRejectionPreservesEveryAcceptedParticipant) {
+  auto &session = *project_.active_scene()->session;
+  std::vector<QuaderModelingObjectRef> objects{object_};
+  constexpr std::size_t kParticipantCount = 72U;
+  for (std::size_t index = 1U; index < kParticipantCount; ++index) {
+    const auto created = editor_.modeling().create_box(
+        {.min = {index + 1U == kParticipantCount ? 0.0F : -1.0F, -1, -1},
+         .max = {1, 1, 1}}, "Affine batch participant");
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    objects.push_back(created.value());
+  }
+  const auto authored = [&](QuaderModelingObjectRef object) {
+    const auto *binding = session.scene().mesh(object.entity);
+    const auto *mesh = binding != nullptr ? session.assets().mesh(binding->mesh) : nullptr;
+    EXPECT_TRUE(mesh != nullptr && mesh->authored_polygon_document != nullptr);
+    return mesh != nullptr && mesh->authored_polygon_document
+               ? *mesh->authored_polygon_document : quader_poly::Document{};
+  };
+  std::vector<quader_poly::Document> before;
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  for (const auto object : objects) {
+    before.push_back(authored(object));
+    const auto &document = before.back();
+    const auto face = std::ranges::find_if(document.faces, [&](const auto &candidate) {
+      return std::ranges::all_of(candidate.vertices, [&](const auto id) {
+        return quader_poly::find_vertex(document, id)->position.x == 1.0F;
+      });
+    });
+    ASSERT_NE(face, document.faces.end());
+    ASSERT_TRUE(editor_.selection().select_components({
+        .object = object, .kind = QuaderComponentKind::Face,
+        .faces = {static_cast<QuaderElementId>(face->id)},
+        .edit = before.size() == 1U ? QuaderSelectionEdit::Replace
+                                    : QuaderSelectionEdit::Add}).ok());
+  }
+  ASSERT_EQ(editor_.selection().summary().selected_object_count, kParticipantCount);
+  ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(editor_.modeling().update_transform_translate({0.2F, 0, 0}).ok());
+  const auto accepted = session.modeling().tool_preview_meshes();
+  ASSERT_EQ(accepted.size(), kParticipantCount);
+  const auto rejected = editor_.modeling().update_transform_matrix({
+      .x_axis = {0, 0, 0}, .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1}}, {});
+  EXPECT_FALSE(rejected.ok());
+  const auto retained = session.modeling().tool_preview_meshes();
+  ASSERT_EQ(retained.size(), accepted.size());
+  for (std::size_t index = 0U; index < accepted.size(); ++index) {
+    EXPECT_EQ(retained[index].source_entity, accepted[index].source_entity);
+    EXPECT_EQ(retained[index].position_revision, accepted[index].position_revision);
+    EXPECT_EQ(retained[index].mesh.geometry_payload(), accepted[index].mesh.geometry_payload());
+    EXPECT_EQ(retained[index].dynamic_position_payload, accepted[index].dynamic_position_payload);
+    expect_same_authored_topology(*retained[index].mesh.authored_polygon_document,
+                                  *accepted[index].mesh.authored_polygon_document);
+    expect_same_authored_topology(authored(objects[index]), before[index]);
+  }
+  const auto unchanged = editor_.modeling().update_transform_translate({0.2F, 0, 0});
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  ASSERT_TRUE(editor_.modeling().commit_transform_preview().ok());
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    expect_same_authored_topology(authored(objects[index]),
+                                  *accepted[index].mesh.authored_polygon_document);
+  }
+  ASSERT_TRUE(editor_.history().undo().ok());
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    expect_same_authored_topology(authored(objects[index]), before[index]);
+  }
+  ASSERT_TRUE(editor_.history().redo().ok());
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    expect_same_authored_topology(authored(objects[index]),
+                                  *accepted[index].mesh.authored_polygon_document);
+  }
+}
+
+TEST_F(ComponentTransformPersistenceTests, AffineOverflowPreservesAcceptedPreviewAndCanRecover) {
+  const auto original = topology();
+  const auto first_vertex = std::ranges::find_if(original.vertices, [](const auto &vertex) {
+    return vertex.position.x == 1.0F;
+  });
+  ASSERT_NE(first_vertex, original.vertices.end());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor_.selection().select_vertex(
+      object_, static_cast<QuaderElementId>(first_vertex->id)).ok());
+  ASSERT_TRUE(editor_.modeling().move_selection({-1, 0, 0}).ok());
+  const auto created = editor_.modeling().create_box(
+      {.min = {0, 0, 0}, .max = {2, 1, 1}}, "Overflow participant");
+  ASSERT_TRUE(created.ok());
+  auto &session = *project_.active_scene()->session;
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  for (const auto object : {object_, created.value()}) {
+    const auto *binding = session.scene().mesh(object.entity);
+    ASSERT_NE(binding, nullptr);
+    const auto *mesh = session.assets().mesh(binding->mesh);
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_NE(mesh->authored_polygon_document, nullptr);
+    const auto &vertices = mesh->authored_polygon_document->vertices;
+    const auto selected = std::ranges::find_if(vertices, [&](const auto &vertex) {
+      return vertex.position.x == (object.entity == object_.entity ? 0.0F : 2.0F);
+    });
+    ASSERT_NE(selected, vertices.end());
+    ASSERT_TRUE(editor_.selection().select_components({
+        .object = object, .kind = QuaderComponentKind::Vertex,
+        .vertices = {static_cast<QuaderElementId>(selected->id)},
+        .edit = object.entity == object_.entity ? QuaderSelectionEdit::Replace
+                                                : QuaderSelectionEdit::Add}).ok());
+  }
+  ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(editor_.modeling().update_transform_translate({0.2F, 0, 0}).ok());
+  const auto accepted = session.modeling().tool_preview_meshes();
+  const auto rejected = editor_.modeling().update_transform_matrix({
+      .x_axis = {std::numeric_limits<float>::max(), 0, 0},
+      .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1}}, {});
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error_message(), "Vertex position updates must contain finite coordinates.");
+  const auto retained = session.modeling().tool_preview_meshes();
+  ASSERT_EQ(retained.size(), accepted.size());
+  for (std::size_t index = 0U; index < accepted.size(); ++index) {
+    EXPECT_EQ(retained[index].position_revision, accepted[index].position_revision);
+    EXPECT_EQ(retained[index].mesh.geometry_payload(), accepted[index].mesh.geometry_payload());
+    EXPECT_EQ(retained[index].dynamic_position_payload, accepted[index].dynamic_position_payload);
+  }
+  ASSERT_TRUE(editor_.modeling().update_transform_translate({0.4F, 0, 0}).ok());
+  ASSERT_TRUE(editor_.modeling().cancel_transform_preview().ok());
+}
+
+/// Retains the production coordinator's submitted component geometry without
+/// substituting GPU timings for this CPU workflow measurement.
+class ComponentDragSubmission final : public ViewportOverlaySelectionFrameProvider,
+                                      public ViewportOverlaySubmissionTarget {
+public:
+  explicit ComponentDragSubmission(SceneSession &session) : session_(session) {}
+  ViewportOverlayFrame build_selection_overlay_frame() const override {
+    ++builds;
+    return session_.modeling().selection_overlay_frame();
+  }
+  ViewportOverlayCameraUpdate update_overlay_cameras(
+      std::size_t, std::uint8_t, ViewportOverlayCamera) override {
+    return {true, true};
+  }
+  void submit_persistent_overlay(std::size_t, std::uint8_t,
+      ViewportOverlayFrame frame, ViewportOverlayCamera) override {
+    submitted = std::move(frame);
+    ++submissions;
+  }
+  void submit_dynamic_overlay(std::size_t, std::uint8_t,
+      ViewportOverlayFrame, ViewportOverlayCamera) override {}
+  ViewportOverlayFrame submitted;
+  mutable std::size_t builds = 0U;
+  std::size_t submissions = 0U;
+
+private:
+  SceneSession &session_;
+};
+
+TEST_F(ComponentTransformPersistenceTests, AffinePreviewRetainsSemanticProjectionAcrossChangedSamples) {
+  auto &session = *project_.active_scene()->session;
+  auto &modeling = session.modeling();
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(editor_.selection().clear().ok());
+    ASSERT_TRUE(editor_.selection().set_mode(mode).ok());
+    const auto document = topology();
+    const auto &face = document.faces.front();
+    const auto select = [&] {
+      if (mode == QuaderSelectionMode::Vertex) {
+        return editor_.selection().select_vertex(object_,
+            static_cast<QuaderElementId>(face.vertices.front()));
+      }
+      if (mode == QuaderSelectionMode::Edge) {
+        return editor_.selection().select_edge(object_,
+            static_cast<QuaderElementId>(face.vertices[0]),
+            static_cast<QuaderElementId>(face.vertices[1]));
+      }
+      return editor_.selection().select_face(object_, static_cast<QuaderElementId>(face.id));
+    };
+    ASSERT_TRUE(select().ok());
+    const auto context = mode == QuaderSelectionMode::Vertex
+        ? ViewportOverlaySelectionContext::Vertex : mode == QuaderSelectionMode::Edge
+        ? ViewportOverlaySelectionContext::Edge : ViewportOverlaySelectionContext::Face;
+    ComponentDragSubmission target(session);
+    ViewportOverlaySubmissionCoordinator coordinator;
+    const auto submit = [&] {
+      return coordinator.submit({
+          .viewport_index = 0U, .layer_mask = 1U,
+          .selection_source = {
+              .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+              .content_revision = modeling.content_revision(),
+              .selection_revision = modeling.selection_revision(),
+              .scene_revision = session.scene().revision(),
+              .asset_revision = session.assets().revision(),
+              .overlay_signature = modeling.selection_overlay_signature(),
+              .selection_context = context},
+          .selection_frame_provider = &target,
+          .scene_selection_mode = RenderOverlaySelectionMode::Component,
+          .style_selection_context = context, .overlays_visible = true,
+          .selection_dimensions_visible = false}, ViewportSettings::defaults(), target);
+    };
+    ASSERT_TRUE(submit().persistent_submitted);
+    ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+    ASSERT_TRUE(editor_.modeling().update_transform_translate({0.125F, 0.0F, 0.0F}).ok());
+    ASSERT_TRUE(submit().persistent_submitted);
+    const auto builds = target.builds;
+    const auto submissions = target.submissions;
+    const auto projections = modeling.modeling_sdk_projection_stats_for_tests()
+                                 .native_selection_projection_build_count;
+    for (const float amount : {0.25F, 0.375F, 0.0F}) {
+      SCOPED_TRACE(amount);
+      const auto previous_revision = modeling.transient_transform_preview_revision();
+      const auto updated = editor_.modeling().update_transform_translate({amount, 0.0F, 0.0F});
+      ASSERT_TRUE(updated.ok()) << updated.error_message();
+      // Changed describes the candidate relative to its gesture base. Returning
+      // to zero still uploads positions while leaving no edit to commit.
+      EXPECT_EQ(updated.changed(), amount != 0.0F);
+      const auto submission = submit();
+      EXPECT_FALSE(submission.selection_source_refreshed);
+      EXPECT_FALSE(submission.persistent_submitted);
+      EXPECT_EQ(target.builds, builds);
+      EXPECT_EQ(target.submissions, submissions);
+      EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests()
+                    .native_selection_projection_build_count, projections);
+      EXPECT_GT(modeling.transient_transform_preview_revision(), previous_revision);
+      if (amount == 0.0F) {
+        const auto previews = modeling.tool_preview_meshes();
+        ASSERT_EQ(previews.size(), 1U);
+        const auto &preview = previews.front();
+        ASSERT_NE(preview.dynamic_position_payload, nullptr);
+        ASSERT_EQ(preview.dynamic_position_payload->size(), preview.mesh.geometry().vertices.size());
+        for (std::size_t index = 0U; index < preview.mesh.geometry().vertices.size(); ++index) {
+          const auto &vertex = preview.mesh.geometry().vertices[index];
+          const auto original = std::ranges::find(document.vertices, vertex.source_vertex_id,
+                                                  &quader_poly::Vertex::id);
+          ASSERT_NE(original, document.vertices.end());
+          const auto position = (*preview.dynamic_position_payload)[index];
+          EXPECT_EQ(position.x, original->position.x);
+          EXPECT_EQ(position.y, original->position.y);
+          EXPECT_EQ(position.z, original->position.z);
+        }
+      }
+    }
+    ASSERT_TRUE(editor_.modeling().cancel_transform_preview().ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+    ASSERT_TRUE(editor_.modeling().update_transform_translate({0.125F, 0.0F, 0.0F}).ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    ASSERT_TRUE(editor_.modeling().commit_transform_preview().ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    ASSERT_TRUE(editor_.history().undo().ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    ASSERT_TRUE(editor_.selection().clear().ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    ASSERT_TRUE(select().ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    EXPECT_FALSE(submit().persistent_submitted);
+  }
+}
+
+TEST(ComponentTransformPerformanceTests, ClonedLargeSceneComponentDragSubmission) {
+  const char *source = std::getenv("QUADER_TEST_LARGE_SELECTION_PROJECT");
+  if (source == nullptr || *source == '\0') {
+    GTEST_SKIP() << "Set QUADER_TEST_LARGE_SELECTION_PROJECT to measure a cloned project.";
+  }
+  const char *backfaces = std::getenv("QUADER_TEST_COMPONENT_DRAG_BACKFACES");
+  const bool select_backfaces = backfaces == nullptr || std::string_view(backfaces) != "0";
+  const std::filesystem::path source_project = std::filesystem::u8path(source);
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_project));
+  const char *source_scene = std::getenv("QUADER_TEST_LARGE_SELECTION_SCENE");
+  const auto original_scene = source_scene != nullptr && *source_scene != '\0'
+      ? std::filesystem::u8path(source_scene)
+      : source_project.parent_path() / "Scenes" / "one.qdr";
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path root(temporary.path().toStdWString());
+  const auto project_root = root / source_project.parent_path().filename();
+  std::error_code error;
+  std::filesystem::copy(source_project.parent_path(), project_root,
+      std::filesystem::copy_options::recursive |
+          std::filesystem::copy_options::skip_symlinks, error);
+  ASSERT_FALSE(error) << error.message();
+  const auto relative_scene = std::filesystem::relative(
+      original_scene, source_project.parent_path(), error);
+  ASSERT_FALSE(error) << error.message();
+  ProjectSession project(root / "recent-scenes.json");
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+      "resources/modeling_assets");
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().open(project_root / source_project.filename()).ok());
+  ASSERT_TRUE(editor.scene_documents().open_native_path(project_root / relative_scene).ok());
+  auto &session = *project.active_scene()->session;
+  auto &modeling = session.modeling();
+  ASSERT_GE(modeling.modeling_sdk_object_count_for_tests(), 6'000u);
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  const auto bounds = modeling.selection_bounds();
+  ASSERT_TRUE(bounds.has_value());
+  const QVec3 extent = bounds->max - bounds->min;
+  const QVec3 center = (bounds->min + bounds->max) * 0.5f;
+  const float framing_size = std::max({extent.x, extent.y, extent.z, 1.0f});
+  SceneRenderBridge bridge;
+  std::vector<RenderToolPreviewMeshRecord> published;
+  const QuaderRenderApiRuntimeAccess::ToolPreviewPublisher publisher =
+      [&](std::vector<RenderToolPreviewMeshRecord> records) {
+        published = std::move(records);
+        return ToolPreviewSubmissionResult::Published;
+      };
+  const QuaderViewportCamera camera{
+      .orthographic = true, .origin = {center.x, center.y, bounds->max.z + framing_size},
+      .x_axis = {1.0f, 0.0f, 0.0f}, .y_axis = {0.0f, 1.0f, 0.0f},
+      .z_axis = {0.0f, 0.0f, 1.0f}, .viewport_size = {100.0f, 100.0f},
+      .orthographic_size = framing_size * 1.1 + 1.0, .fov_degrees = 60.0};
+  const QuaderRay ray{.origin = camera.origin, .direction = {0.0f, 0.0f, -1.0f}};
+  const auto elapsed = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+  };
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto selected_components = editor.selection().box_select({
+        .camera = camera, .start = camera.viewport_size, .end = {},
+        .edit = QuaderSelectionEdit::Replace, .rule = QuaderBoxSelectionRule::Crossing,
+        .select_backfaces = select_backfaces});
+    ASSERT_TRUE(selected_components.ok()) << selected_components.error_message();
+    const auto selected = editor.selection().summary();
+    ASSERT_TRUE(selected.has_selection);
+    ASSERT_GE(selected.selected_object_count, select_backfaces ? 6'000U : 3'000U);
+    ASSERT_GT(mode == QuaderSelectionMode::Vertex ? selected.selected_vertex_count
+        : mode == QuaderSelectionMode::Edge ? selected.selected_edge_count
+                                           : selected.selected_face_count, 0u);
+    const auto context = mode == QuaderSelectionMode::Vertex
+        ? ViewportOverlaySelectionContext::Vertex : mode == QuaderSelectionMode::Edge
+        ? ViewportOverlaySelectionContext::Edge : ViewportOverlaySelectionContext::Face;
+    ComponentDragSubmission target(session);
+    ViewportOverlaySubmissionCoordinator coordinator;
+    auto render_snapshot = build_render_scene_snapshot(session.scene(), session.assets());
+    const auto submit = [&] {
+      return coordinator.submit({
+          .viewport_index = 0u, .layer_mask = 1u,
+          .selection_source = {
+              .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+              .content_revision = modeling.content_revision(),
+              .selection_revision = modeling.selection_revision(),
+              .scene_revision = session.scene().revision(),
+              .asset_revision = session.assets().revision(),
+              .overlay_signature = modeling.selection_overlay_signature(),
+              .selection_context = context},
+          .selection_frame_provider = &target,
+          .scene_selection_mode = RenderOverlaySelectionMode::Component,
+          .style_selection_context = context, .overlays_visible = true,
+          .selection_dimensions_visible = false}, ViewportSettings::defaults(), target);
+    };
+    (void)submit();
+    auto start = std::chrono::steady_clock::now();
+    const auto begun = editor.modeling().begin_transform_drag({
+        .tool = QuaderTransformTool::Move, .operation = QuaderTransformOperation::Transform,
+        .axis = QuaderTransformAxis::X, .screen_position = {}, .screen_pivot = {},
+        .screen_tip = {10.0f, 0.0f}, .has_world_direction = true,
+        .world_direction = {1.0f, 0.0f, 0.0f}, .ray = ray, .camera = camera,
+        .grid_size = 1.0, .vertex_snap_radius = 0.0, .grid_snap_enabled = false});
+    const double begin_ms = elapsed(start);
+    ASSERT_TRUE(begun.ok()) << begun.error_message();
+    ASSERT_TRUE(begun.value().active);
+    ASSERT_TRUE(begun.value().preview_driven);
+    std::cout << "COMPONENT_DRAG mode=" << static_cast<int>(mode)
+              << " backfaces=" << select_backfaces
+              << " phase=begin ms=" << begin_ms
+              << " objects=" << selected.selected_object_count
+              << " vertices=" << selected.selected_vertex_count
+              << " edges=" << selected.selected_edge_count
+              << " faces=" << selected.selected_face_count << std::endl;
+    const auto scene_revision = session.scene().revision();
+    const auto asset_revision = session.assets().revision();
+    for (int sample = 0; sample < 5; ++sample) {
+      const QuaderTransformDragUpdateRequest request{
+          .screen_position = {0.25f * static_cast<float>(sample + 1), 0.0f},
+          .ray = ray, .camera = camera, .grid_size = 1.0,
+          .vertex_snap_radius = 0.0, .grid_snap_enabled = false};
+      const auto projection_before = MeshProjectionService::position_update_stats();
+      start = std::chrono::steady_clock::now();
+      const auto updated = editor.modeling().update_transform_drag(request);
+      const double update_ms = elapsed(start);
+      const auto projection_after = MeshProjectionService::position_update_stats();
+      ASSERT_TRUE(updated.ok()) << updated.error_message();
+      ASSERT_TRUE(updated.changed());
+      start = std::chrono::steady_clock::now();
+      ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          editor.render(), bridge, publisher).ok());
+      const double preview_extraction_ms = elapsed(start);
+      ASSERT_FALSE(published.empty());
+      start = std::chrono::steady_clock::now();
+      (void)submit();
+      const double overlay_submission_ms = elapsed(start);
+      EXPECT_FALSE(target.submitted.lines.empty());
+      EXPECT_TRUE(render_scene_snapshot_matches_sources(
+          render_snapshot, session.scene(), session.assets()));
+      EXPECT_EQ(session.scene().revision(), scene_revision);
+      EXPECT_EQ(session.assets().revision(), asset_revision);
+      const auto revision = modeling.transient_transform_preview_revision();
+      const auto work = modeling.tool_preview_work_stats();
+      start = std::chrono::steady_clock::now();
+      const auto repeated = editor.modeling().update_transform_drag(request);
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_FALSE(repeated.changed());
+      ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          editor.render(), bridge, publisher).ok());
+      EXPECT_FALSE(submit().persistent_submitted);
+      const double unchanged_ms = elapsed(start);
+      EXPECT_EQ(modeling.transient_transform_preview_revision(), revision);
+      EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+                work.mesh_extraction_count);
+      std::cout << "COMPONENT_DRAG mode=" << static_cast<int>(mode)
+                << " backfaces=" << select_backfaces
+                << " sample=" << sample << " update_ms=" << update_ms
+                << " preview_extraction_ms=" << preview_extraction_ms
+                << " overlay_submission_ms=" << overlay_submission_ms
+                << " unchanged_ms=" << unchanged_ms
+                << " preview_meshes=" << published.size()
+                << " retained_translation=" << projection_after.retained_translation_count -
+                    projection_before.retained_translation_count
+                << " retained_partial=" << projection_after.retained_partial_count -
+                    projection_before.retained_partial_count
+                << " partial_compiled_faces=" << projection_after.partial_compiled_face_count -
+                    projection_before.partial_compiled_face_count
+                << " retained_flat=" << projection_after.retained_flat_face_count -
+                    projection_before.retained_flat_face_count
+                << " full_compile=" << projection_after.full_compile_count -
+                    projection_before.full_compile_count << std::endl;
+    }
+    std::vector<std::pair<EntityId, std::shared_ptr<const MeshGeometryPayload>>>
+        candidate_geometry;
+    candidate_geometry.reserve(published.size());
+    for (const auto &preview : published) {
+      candidate_geometry.emplace_back(preview.source_entity,
+                                       preview.mesh.geometry_payload());
+    }
+    start = std::chrono::steady_clock::now();
+    const auto committed = editor.modeling().commit_transform_drag();
+    const double commit_ms = elapsed(start);
+    ASSERT_TRUE(committed.ok()) << committed.error_message();
+    EXPECT_TRUE(committed.changed());
+    std::size_t retained_committed_geometry = 0U;
+    for (const auto &[entity, geometry] : candidate_geometry) {
+      const auto *binding = session.scene().mesh(entity);
+      const auto *mesh = binding != nullptr ? session.assets().mesh(binding->mesh) : nullptr;
+      if (mesh != nullptr && mesh->geometry_payload() == geometry) {
+        ++retained_committed_geometry;
+      }
+    }
+    ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+        editor.render(), bridge, publisher).ok());
+    EXPECT_TRUE(published.empty());
+    ASSERT_TRUE(editor.history().undo().ok());
+    std::cout << "COMPONENT_DRAG mode=" << static_cast<int>(mode)
+              << " backfaces=" << select_backfaces
+              << " phase=commit ms=" << commit_ms
+              << " retained_geometry=" << retained_committed_geometry
+              << " candidates=" << candidate_geometry.size() << std::endl;
+  }
 }
 
 } // namespace

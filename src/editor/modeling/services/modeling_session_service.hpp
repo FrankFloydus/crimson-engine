@@ -287,8 +287,11 @@ public:
   [[nodiscard]] std::uint64_t transient_transform_preview_revision() const;
   [[nodiscard]] std::uint64_t
   transformed_picking_projection_build_count() const;
+  [[nodiscard]] std::uint64_t world_picking_geometry_build_count() const;
   [[nodiscard]] std::uint64_t
   rectangle_picking_projection_build_count() const;
+  [[nodiscard]] std::uint64_t rectangle_pick_facts_build_count() const;
+  [[nodiscard]] std::uint64_t rectangle_pick_facts_reuse_count() const;
   [[nodiscard]] std::uint64_t
   rectangle_selection_universe_build_count() const;
   [[nodiscard]] std::uint64_t

@@ -8,6 +8,7 @@
 
 #include "render/instance_edit_style.hpp"
 #include "render/overlay/overlay_stencil_reset.hpp"
+#include "render/overlay/selected_mesh_outline_renderer.hpp"
 #include "render/texture_registry.hpp"
 #include "render/viewport_grid_renderer.hpp"
 #include "render/viewport_render_target.hpp"
@@ -28,6 +29,10 @@
 #include <optional>
 
 namespace quader {
+
+class SelectedMeshOutlineMaskCache;
+struct RenderOverlaySelectedObjectSnapshot;
+struct RenderOverlaySelectionSnapshot;
 
 /**
  * Selects a viewport's target and whether its swapchain performs sRGB encoding.
@@ -71,6 +76,15 @@ public:
                std::uint8_t grid_layer_mask,
                ViewportRenderSurface surface = ViewportRenderSurface::Texture);
     void shutdown();
+
+    /** Enables retained GPU selection coverage when the backend supports it. */
+    bool configure_selected_mesh_outlines(SelectedMeshOutlineMaskCache &cache,
+                                         filament::Material &material,
+                                         std::uint8_t pane_layer_mask);
+    bool update_selected_mesh_outlines(
+        const RenderOverlaySelectedObjectSnapshot *snapshot,
+        const RenderOverlaySelectionSnapshot *hierarchy,
+        const ViewportPersistentOverlayStyleSnapshot &style, bool visible);
 
     void resize(std::uint32_t width, std::uint32_t height);
     void update_camera(const ViewportCameraController &controller);
@@ -126,6 +140,8 @@ public:
     utils::Entity overlay_camera_entity_;
     ViewportGridRenderer grid_renderer_;
     OverlayStencilReset overlay_stencil_reset_;
+    SelectedMeshOutlineRenderer selected_mesh_outline_renderer_;
+    SelectedMeshOutlineMaskCache *selected_mesh_outline_cache_ = nullptr;
     ViewportRenderPassCoordinator render_pass_coordinator_;
     ViewportRenderTarget render_target_;
     ViewportRenderTarget overlay_render_target_;

@@ -44,6 +44,7 @@ class MaterialPreviewRenderer;
 class MaterialThumbnailRenderer;
 struct MaterialThumbnailReadback;
 class SceneRenderBridge;
+class SelectedMeshOutlineMaskCache;
 class ViewportRenderer;
 class RenderVulkanPlatform;
 struct RenderSurfaceState;
@@ -166,6 +167,7 @@ public:
     filament::Scene* scene_ = nullptr;
     FilamentEnvironmentLibrary environment_library_;
     FilamentMaterialLibrary material_library_;
+    std::unique_ptr<SelectedMeshOutlineMaskCache> selected_mesh_outline_mask_cache_;
     std::unique_ptr<MaterialThumbnailRenderer> material_thumbnail_renderer_;
     // Borrowed by scene and preview material instances; destroyed at shutdown.
     filament::Texture *solid_color_texture_ = nullptr;

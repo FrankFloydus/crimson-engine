@@ -6,15 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "core/types.hpp"
-#include "math/types/qvec3.hpp"
-#include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/overlay_face_fill_composition.hpp"
+#include "render/overlay/overlay_mesh_types.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <utils/Entity.h>
@@ -36,113 +34,87 @@ namespace quader {
   return !has_synced || synced_signature != style.face_signature;
 }
 
-/**
- * Caches selected object overlay renderables outside the transient viewport overlay frame.
- */
+/// Retains selected face batches independently of camera navigation.
 class SelectedObjectOverlayCache {
 public:
-    SelectedObjectOverlayCache() = default;
-    SelectedObjectOverlayCache(const SelectedObjectOverlayCache&) = delete;
-    SelectedObjectOverlayCache& operator=(const SelectedObjectOverlayCache&) = delete;
-    SelectedObjectOverlayCache(SelectedObjectOverlayCache&&) = delete;
-    SelectedObjectOverlayCache& operator=(SelectedObjectOverlayCache&&) = delete;
-    ~SelectedObjectOverlayCache();
+  SelectedObjectOverlayCache() = default;
+  SelectedObjectOverlayCache(const SelectedObjectOverlayCache &) = delete;
+  SelectedObjectOverlayCache &operator=(const SelectedObjectOverlayCache &) = delete;
+  SelectedObjectOverlayCache(SelectedObjectOverlayCache &&) = delete;
+  SelectedObjectOverlayCache &operator=(SelectedObjectOverlayCache &&) = delete;
+  ~SelectedObjectOverlayCache();
 
-    void initialize(filament::Engine &engine, filament::Scene &scene,
-                    filament::Material &face_fill_material);
-    void shutdown();
+  void initialize(filament::Engine &engine, filament::Scene &scene,
+                  filament::Material &face_fill_material);
+  void shutdown();
 
-    bool initialized() const {
-      return engine_ != nullptr && scene_ != nullptr &&
-             face_fill_material_ != nullptr;
-    }
+  [[nodiscard]] bool initialized() const {
+    return engine_ != nullptr && scene_ != nullptr && face_fill_material_ != nullptr;
+  }
 
-    void sync(const RenderOverlaySelectedObjectSnapshot &snapshot);
-
-    /**
-     * Owns one Filament renderable and its GPU buffers for a cached selected-object overlay part.
-     */
-    struct Proxy {
-        Proxy() = default;
-        Proxy(const Proxy&) = delete;
-        Proxy& operator=(const Proxy&) = delete;
-        Proxy(Proxy&& other) noexcept;
-        Proxy& operator=(Proxy&& other) noexcept;
-
-        utils::Entity entity;
-        filament::VertexBuffer *vertex_buffer = nullptr;
-        filament::IndexBuffer *index_buffer = nullptr;
-        filament::MaterialInstance *material_instance = nullptr;
-        std::uint32_t vertex_count = 0;
-        std::uint32_t index_count = 0;
-        OverlayFaceFillPass face_fill_pass = OverlayFaceFillPass::Color;
-    };
-
-    /**
-     * Tracks the cached selected-object face proxies for one scene mesh entity.
-     */
-    struct Entry {
-        Entry() = default;
-        Entry(const Entry&) = delete;
-        Entry& operator=(const Entry&) = delete;
-        Entry(Entry&&) noexcept = default;
-        Entry& operator=(Entry&&) noexcept = delete;
-
-        utils::Entity transform_root;
-        AssetId mesh_id = kInvalidAssetId;
-        std::uint64_t mesh_revision = 0;
-        std::uint32_t face_color = 0;
-        OverlayFaceFillClass face_fill_class = OverlayFaceFillClass::None;
-        std::vector<Proxy> face_proxies;
-    };
+  void sync(const RenderOverlaySelectedObjectSnapshot &snapshot);
 
 private:
-    /**
-     * Tracks the selected entity render inputs that require a selected-overlay geometry rebuild.
-     */
-    struct SelectedEntityState {
-      EntityId entity = kInvalidEntityId;
-      AssetId mesh_id = kInvalidAssetId;
-      std::uint64_t mesh_revision = 0;
-      bool active_selected = false;
+  /// One composition pass borrowing its batch's shared geometry buffers.
+  struct FaceProxy {
+    utils::Entity entity;
+    filament::MaterialInstance *material_instance = nullptr;
+    OverlayFaceFillPass face_fill_pass = OverlayFaceFillPass::Color;
+  };
 
-      bool operator==(const SelectedEntityState &) const = default;
-    };
+  /// Owns one shared geometry stream and its four existing depth/stencil passes.
+  struct FaceBatch {
+    FaceBatch() = default;
+    FaceBatch(const FaceBatch &) = delete;
+    FaceBatch &operator=(const FaceBatch &) = delete;
+    FaceBatch(FaceBatch &&) noexcept = default;
+    FaceBatch &operator=(FaceBatch &&) noexcept = delete;
 
-    std::vector<SelectedEntityState> selected_entity_states(
-        const RenderOverlaySelectedObjectSnapshot &snapshot) const;
-    Entry create_entry(
-        const RenderOverlayMeshSnapshot &mesh,
-        const ViewportPersistentOverlayStyleSnapshot &style);
-    void destroy_entry(Entry &entry);
-    void destroy_proxy(Proxy &proxy, bool remove_from_scene);
-    void destroy_face_entries();
-    void destroy_transform_root(Entry &entry);
-    void set_proxy_layer_mask(const Proxy &proxy,
-                              std::uint8_t layer_mask) const;
-    void update_entry_transform(const Entry &entry,
-                                const QMat4 &world_transform) const;
-    void update_entry_face_color(Entry &entry,
-                                 const RenderOverlayMeshSnapshot &mesh,
-                                 const ViewportPersistentOverlayStyleSnapshot &style);
-    void update_entry_transforms(
-        const RenderOverlaySelectedObjectSnapshot &snapshot);
-    void set_visible(bool visible);
-    void remove_except(const std::unordered_set<EntityId> &live_entities);
-    void record_resource_change();
-    void flush_resource_commands();
+    filament::VertexBuffer *vertex_buffer = nullptr;
+    filament::IndexBuffer *index_buffer = nullptr;
+    std::array<FaceProxy, 4> proxies;
+    std::uint32_t face_color = 0u;
+    bool active_selected = false;
+  };
 
-    filament::Engine* engine_ = nullptr;
-    filament::Scene* scene_ = nullptr;
-    filament::Material *face_fill_material_ = nullptr;
-    std::unordered_map<EntityId, Entry> entries_;
-    std::vector<SelectedEntityState> synced_states_;
-    RenderSourceStamp synced_source_stamp_;
-    std::uint64_t synced_face_style_signature_ = 0;
-    bool synced_face_fills_enabled_ = false;
-    bool has_synced_ = false;
-    bool visible_ = true;
-    std::size_t pending_resource_changes_ = 0u;
+  /// Scalar geometry and transform inputs compared only after owner stamps change.
+  struct SelectedEntityState {
+    EntityId entity = kInvalidEntityId;
+    AssetId mesh_id = kInvalidAssetId;
+    std::uint64_t mesh_revision = 0u;
+    MeshGeometryContentId geometry_content_id;
+    std::array<float, 16> world_transform;
+    std::size_t vertex_count = 0u;
+    std::size_t index_count = 0u;
+    bool active_selected = false;
+
+    bool operator==(const SelectedEntityState &) const = default;
+  };
+
+  [[nodiscard]] std::vector<SelectedEntityState> selected_entity_states(
+      const RenderOverlaySelectedObjectSnapshot &snapshot) const;
+  void rebuild_face_batches(const RenderOverlaySelectedObjectSnapshot &snapshot);
+  void create_face_batch(std::vector<OverlayFaceFillVertex> vertices,
+                         std::vector<std::uint32_t> indices,
+                         bool active_selected,
+                         const ViewportPersistentOverlayStyleSnapshot &style,
+                         const QMat4 &world_transform = {});
+  void update_face_colors(const ViewportPersistentOverlayStyleSnapshot &style);
+  void destroy_face_batches();
+  void set_visible(bool visible);
+  void record_resource_change();
+  void flush_resource_commands();
+
+  filament::Engine *engine_ = nullptr;
+  filament::Scene *scene_ = nullptr;
+  filament::Material *face_fill_material_ = nullptr;
+  std::vector<FaceBatch> batches_;
+  std::vector<SelectedEntityState> synced_states_;
+  RenderSourceStamp synced_source_stamp_;
+  std::uint64_t synced_face_style_signature_ = 0u;
+  bool has_synced_ = false;
+  bool visible_ = true;
+  std::size_t pending_resource_changes_ = 0u;
 };
 
 } // namespace quader

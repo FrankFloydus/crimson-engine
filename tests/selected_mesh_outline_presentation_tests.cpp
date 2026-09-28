@@ -12,6 +12,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/overlay/instance_selection_overlay_cache.hpp"
@@ -46,16 +47,122 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QTimer>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 namespace quader {
 namespace {
+
+TEST(SelectedMeshOutlinePresentationTests,
+     LargeSceneBevelMeasuresProjection) {
+  const char *source = std::getenv("QUADER_TEST_LARGE_SELECTION_PROJECT");
+  if (source == nullptr || *source == '\0') {
+    GTEST_SKIP() << "Set QUADER_TEST_LARGE_SELECTION_PROJECT to measure a cloned project.";
+  }
+  const std::filesystem::path source_project = std::filesystem::u8path(source);
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_project));
+  const char *source_scene = std::getenv("QUADER_TEST_LARGE_SELECTION_SCENE");
+  const auto original_scene = source_scene != nullptr && *source_scene != '\0'
+      ? std::filesystem::u8path(source_scene)
+      : source_project.parent_path() / "Scenes" / "one.qdr";
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path root(temporary.path().toStdWString());
+  const auto project_root = root / source_project.parent_path().filename();
+  std::error_code error;
+  std::filesystem::copy(source_project.parent_path(), project_root,
+      std::filesystem::copy_options::recursive |
+          std::filesystem::copy_options::skip_symlinks, error);
+  ASSERT_FALSE(error) << error.message();
+  const auto relative_scene = std::filesystem::relative(
+      original_scene, source_project.parent_path(), error);
+  ASSERT_FALSE(error) << error.message();
+  ProjectSession project(root / "recent-scenes.json");
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+      "resources/modeling_assets");
+  QuaderEditorApi editor(project);
+  const auto opened_project = editor.project().open(project_root / source_project.filename());
+  ASSERT_TRUE(opened_project.ok()) << opened_project.error_message();
+  const auto opened = editor.scene_documents().open_native_path(project_root / relative_scene);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  auto &session = *project.active_scene()->session;
+  auto &modeling = session.modeling();
+  ASSERT_GE(modeling.modeling_sdk_object_count_for_tests(), 6'000u);
+  const auto created = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Bevel performance participant");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  ASSERT_TRUE(editor.selection().select_object(object).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
+  ASSERT_TRUE(editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.segments", 1.0).ok());
+  (void)modeling.selection_overlay_frame();
+  auto render_snapshot = build_render_scene_snapshot(session.scene(), session.assets());
+  const auto elapsed = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+  };
+  for (int sample = 0; sample < 10; ++sample) {
+    auto start = std::chrono::steady_clock::now();
+    ASSERT_TRUE(editor.tools().set_setting(
+        "edge_bevel", "operation.edge_bevel.width", 0.04 + sample * 0.025).ok());
+    const double update_ms = elapsed(start);
+    start = std::chrono::steady_clock::now();
+    const auto overlay = modeling.selection_overlay_frame();
+    const double selection_projection_ms = elapsed(start);
+    start = std::chrono::steady_clock::now();
+    render_snapshot = build_render_scene_snapshot(
+        session.scene(), session.assets(), {.previous = &render_snapshot});
+    const double render_projection_ms = elapsed(start);
+    const auto mesh = editor.query().compiled_object_mesh(object);
+    ASSERT_TRUE(mesh.has_value());
+    std::size_t source_wires = 0u;
+    for (const auto &line : overlay.lines) {
+      if (line.element.object_id != object.modeling_object_id ||
+          (line.layer != ViewportOverlayLayer::SourceWire &&
+           line.layer != ViewportOverlayLayer::SelectedEdge)) continue;
+      ++source_wires;
+      for (const auto endpoint : {line.start, line.end}) {
+        EXPECT_TRUE(std::ranges::any_of(mesh->vertices, [&](const auto &vertex) {
+          return length_squared(vertex.position - endpoint) < 1.0e-10F;
+        }));
+      }
+    }
+    EXPECT_GT(source_wires, 0u);
+    const auto builds = modeling.modeling_sdk_projection_stats_for_tests()
+                            .native_selection_projection_build_count;
+    start = std::chrono::steady_clock::now();
+    for (int repeat = 0; repeat < 4; ++repeat) {
+      (void)modeling.selection_overlay_frame();
+    }
+    const double retained_ms = elapsed(start);
+    EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests()
+                  .native_selection_projection_build_count, builds);
+    std::cout << "LARGE_SCENE_BEVEL sample=" << sample
+              << " objects=" << modeling.modeling_sdk_object_count_for_tests()
+              << " update_ms=" << update_ms
+              << " selection_projection_ms=" << selection_projection_ms
+              << " render_projection_ms=" << render_projection_ms
+              << " retained_4_ms=" << retained_ms << std::endl;
+  }
+  ASSERT_TRUE(editor.commands().execute_native_tool_settings_intent(
+      QuaderNativeToolSettingsIntent::Cancel).ok());
+}
 
 /// Mixes selected/unselected direct meshes and formal occurrences sharing geometry.
 struct OutlinePresentationHarness {
@@ -745,9 +852,22 @@ TEST(SelectedMeshOutlinePresentationTests,
       return modeling.update_transform_drag(update);
     };
     const auto durable = harness.source_stamp();
+    bool first_sample = true;
+    std::uint64_t retained_builds = 0U;
+    std::uint64_t retained_submissions = 0U;
     for (const float x : {0.5F, 0.0F}) {
       ASSERT_TRUE(drag_to(x).ok);
-      ASSERT_TRUE(submit().persistent_submitted);
+      const auto submission = submit();
+      EXPECT_EQ(submission.persistent_submitted, first_sample);
+      EXPECT_EQ(submission.selection_source_refreshed, first_sample);
+      if (first_sample) {
+        retained_builds = harness.provider.builds;
+        retained_submissions = harness.target.submissions;
+        first_sample = false;
+      } else {
+        EXPECT_EQ(harness.provider.builds, retained_builds);
+        EXPECT_EQ(harness.target.submissions, retained_submissions);
+      }
       ASSERT_EQ(published.size(), 1u);
       expect_face_position(x);
       const auto stamp = harness.source_stamp();
@@ -774,7 +894,7 @@ TEST(SelectedMeshOutlinePresentationTests,
       expect_face_position(1.0F);
     } else {
       ASSERT_TRUE(drag_to(-0.5F).ok);
-      ASSERT_TRUE(submit().persistent_submitted);
+      EXPECT_FALSE(submit().persistent_submitted);
       expect_face_position(-0.5F);
       EXPECT_NE(wires(), accepted_wires);
       ASSERT_NO_FATAL_FAILURE(expect_unchanged());

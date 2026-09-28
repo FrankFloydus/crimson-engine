@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <vector>
 
 namespace filament {
@@ -62,6 +63,11 @@ public:
     /// Uploads only retained world-position attributes. Static quad topology,
     /// controls, colors, indices and material/depth state remain untouched.
     bool update_position_streams(OverlayRenderableProxy &proxy);
+    /// Uploads only changed point visibility flags. Each mapped marker keeps
+    /// its position, static quad topology, indices and material/depth state.
+    bool update_point_visibility(
+        OverlayRenderableProxy &proxy,
+        std::span<const std::uint8_t> frame_visibility);
     /// Refreshes camera-dependent clip/bias uniforms without rebuilding or
     /// uploading retained line and point geometry.
     void update_camera_state(

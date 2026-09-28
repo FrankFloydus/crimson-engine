@@ -7,6 +7,7 @@
 #include "editor/material/project_material_usage_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "scene/scene_material_surface.hpp"
@@ -204,6 +205,7 @@ struct ProjectMaterialUsageService::State final {
   }
 
   void inspect_live(LiveScene &cached, const SceneSession &session) {
+    QDR_PROFILE_SCOPE("Project material usage inspect live scene");
     ++work.live_scene_scan_count;
     cached.material_ids.clear();
     cached.embedded_material_ids.clear();
@@ -331,6 +333,7 @@ struct ProjectMaterialUsageService::State final {
 
   std::shared_ptr<const ProjectMaterialUsageSnapshot> build(bool refresh_files) {
     if (!refresh_files && owners_match()) return retained;
+    QDR_PROFILE_SCOPE("Project material usage rebuild snapshot");
     ++work.snapshot_build_count;
     ProjectMaterialUsageSnapshot candidate{
         .project_generation = project.activation_generation(),
@@ -381,6 +384,7 @@ ProjectMaterialUsageService::~ProjectMaterialUsageService() = default;
 
 std::shared_ptr<const ProjectMaterialUsageSnapshot>
 ProjectMaterialUsageService::snapshot(bool refresh_files) const {
+  QDR_PROFILE_SCOPE("Project material usage snapshot");
   return state_->build(refresh_files);
 }
 

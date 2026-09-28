@@ -34,6 +34,7 @@
 #include <memory>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -363,20 +364,37 @@ filament::Box filament_bounds(const RenderInstanceBounds &bounds) {
   return box;
 }
 
+void submit_resource_retirement(filament::Engine &engine,
+                                std::size_t &pending_retirements) {
+  // Destruction does not automatically flush Filament's command arena. Count
+  // individual resources, including each material of a multi-primitive mesh.
+  constexpr std::size_t kRetirementBatchSize = 64u;
+  if (++pending_retirements >= kRetirementBatchSize) {
+    engine.flush();
+    pending_retirements = 0u;
+  }
+}
+
 void destroy_renderable_component_resources(filament::Engine &engine,
                                             filament::Scene *scene,
                                             MaterialBindingService &materials,
                                             MeshRenderableProxy &proxy,
-                                            bool remove_from_scene) {
+                                            bool remove_from_scene,
+                                            std::size_t &pending_retirements) {
   if (proxy.entity) {
     if (remove_from_scene && scene != nullptr) {
       scene->remove(proxy.entity);
     }
-    engine.getRenderableManager().destroy(proxy.entity);
+    auto &renderables = engine.getRenderableManager();
+    if (renderables.hasComponent(proxy.entity)) {
+      renderables.destroy(proxy.entity);
+      submit_resource_retirement(engine, pending_retirements);
+    }
     engine.getTransformManager().destroy(proxy.entity);
   }
   if (proxy.instance_buffer) {
     engine.destroy(proxy.instance_buffer);
+    submit_resource_retirement(engine, pending_retirements);
     proxy.instance_buffer = nullptr;
   }
   if (proxy.owns_material_instances) {
@@ -384,6 +402,7 @@ void destroy_renderable_component_resources(filament::Engine &engine,
          proxy.material_instances) {
       if (material_instance) {
         materials.destroy_mesh_material_instance(engine, material_instance);
+        submit_resource_retirement(engine, pending_retirements);
       }
     }
   }
@@ -396,6 +415,18 @@ void destroy_renderable_component_resources(filament::Engine &engine,
 }
 
 } // namespace
+
+/// CPU-only upload storage. Source identity prevents accidental cross-mesh or
+/// repeated consumption; the snapshot pins immutable attribute inputs.
+struct MeshRenderableFactory::DynamicGeometryUpdate final {
+  RenderMeshAssetSnapshot source;
+  const QVec3 *source_positions = nullptr;
+  std::size_t source_position_count = 0u;
+  filament::backend::BufferDescriptor positions;
+  filament::backend::BufferDescriptor static_vertices;
+  filament::backend::BufferDescriptor indices;
+  bool consumed = false;
+};
 
 /// Owns shared Filament vertex/index buffers keyed by immutable geometry.
 struct MeshRenderableFactory::GeometryCacheState final {
@@ -449,13 +480,21 @@ void MeshRenderableFactory::shutdown() {
         (void)id;
         if (resource->vertex_buffer != nullptr) {
           engine_->destroy(resource->vertex_buffer);
+          submit_resource_retirement(*engine_,
+                                     pending_resource_retirements_);
         }
         if (resource->index_buffer != nullptr) {
           engine_->destroy(resource->index_buffer);
+          submit_resource_retirement(*engine_,
+                                     pending_resource_retirements_);
         }
+      }
+      if (pending_resource_retirements_ != 0u) {
+        engine_->flush();
       }
     }
     geometry_cache_.reset();
+    pending_resource_retirements_ = 0u;
     engine_ = nullptr;
     scene_ = nullptr;
     material_binding_ = nullptr;
@@ -776,9 +815,13 @@ void MeshRenderableFactory::release_geometry(MeshRenderableProxy &proxy) {
     if (engine_ != nullptr && proxy.owns_mesh_buffers) {
       if (proxy.vertex_buffer != nullptr) {
         engine_->destroy(proxy.vertex_buffer);
+        submit_resource_retirement(*engine_,
+                                   pending_resource_retirements_);
       }
       if (proxy.index_buffer != nullptr) {
         engine_->destroy(proxy.index_buffer);
+        submit_resource_retirement(*engine_,
+                                   pending_resource_retirements_);
       }
     }
     proxy.vertex_buffer = nullptr;
@@ -892,11 +935,59 @@ MeshRenderableProxy MeshRenderableFactory::create(
   return proxy;
 }
 
+std::shared_ptr<MeshRenderableFactory::DynamicGeometryUpdate>
+MeshRenderableFactory::prepare_dynamic_geometry_update(
+    const RenderMeshAssetSnapshot &mesh,
+    std::span<const QVec3> dynamic_positions) {
+  if (!dynamic_positions.empty() &&
+      dynamic_positions.size() != mesh.vertices.size()) {
+    return {};
+  }
+  try {
+    auto prepared = std::make_shared<DynamicGeometryUpdate>();
+    prepared->source = mesh;
+    prepared->source_positions = dynamic_positions.data();
+    prepared->source_position_count = dynamic_positions.size();
+    std::vector<filament::math::float3> positions;
+    {
+      QDR_PROFILE_SCOPE("Mesh dynamic position upload pack");
+      positions.reserve(mesh.vertices.size());
+      if (dynamic_positions.empty()) {
+        for (const MeshVertex &vertex : mesh.vertices) {
+          positions.push_back(to_filament(vertex.position));
+        }
+      } else {
+        for (const QVec3 position : dynamic_positions) {
+          positions.push_back(to_filament(position));
+        }
+      }
+    }
+    {
+      QDR_PROFILE_SCOPE("Mesh dynamic derived attributes pack");
+      const std::vector<RenderVertex> render_vertices =
+          build_render_vertices(mesh, dynamic_positions);
+      auto static_vertices = pack_dynamic_static_vertices(render_vertices);
+      std::vector<std::uint32_t> indices(mesh.indices.begin(), mesh.indices.end());
+      // Descriptor wrappers own CPU bytes and may allocate. Prepare them here
+      // as well so submission cannot fail after uploading only some streams.
+      prepared->positions = FilamentBufferDescriptorFactory::vector(std::move(positions));
+      prepared->static_vertices = FilamentBufferDescriptorFactory::vector(std::move(static_vertices));
+      prepared->indices = FilamentBufferDescriptorFactory::vector(std::move(indices));
+    }
+    return prepared;
+  } catch (...) {
+    // Preparation is isolated from renderer state; keep the accepted preview
+    // intact if any worker cannot allocate its candidate upload storage.
+    return {};
+  }
+}
+
 bool MeshRenderableFactory::update_dynamic_geometry(
     const MeshRenderableProxy &proxy,
     const RenderMeshAssetSnapshot &mesh,
     std::span<const QVec3> dynamic_positions,
-    const RenderInstanceBounds *local_bounds_override) {
+    const RenderInstanceBounds *local_bounds_override,
+    std::shared_ptr<DynamicGeometryUpdate> prepared) {
   if (engine_ == nullptr || !proxy.dynamic_geometry ||
       proxy.vertex_buffer == nullptr || proxy.index_buffer == nullptr ||
       proxy.vertex_count != mesh.vertices.size() ||
@@ -905,40 +996,40 @@ bool MeshRenderableFactory::update_dynamic_geometry(
        dynamic_positions.size() != mesh.vertices.size())) {
     return false;
   }
-  std::vector<filament::math::float3> positions;
-  {
-    QDR_PROFILE_SCOPE("Mesh dynamic position upload pack");
-    positions.reserve(mesh.vertices.size());
-    if (dynamic_positions.empty()) {
-      for (const MeshVertex &vertex : mesh.vertices) {
-        positions.push_back(to_filament(vertex.position));
-      }
-    } else {
-      for (const QVec3 position : dynamic_positions) {
-        positions.push_back(to_filament(position));
-      }
-    }
+  if (!prepared) {
+    prepared = prepare_dynamic_geometry_update(mesh, dynamic_positions);
   }
+  if (!prepared || prepared->consumed ||
+      prepared->source.mesh_id != mesh.mesh_id ||
+      prepared->source.mesh_revision != mesh.mesh_revision ||
+      prepared->source.geometry_payload != mesh.geometry_payload ||
+      prepared->source.geometry_token != mesh.geometry_token ||
+      prepared->source.geometry_content_id != mesh.geometry_content_id ||
+      prepared->source.vertices.data() != mesh.vertices.data() ||
+      prepared->source.indices.data() != mesh.indices.data() ||
+      prepared->source.primitives.data() != mesh.primitives.data() ||
+      prepared->source.primitives.size() != mesh.primitives.size() ||
+      prepared->source_positions != dynamic_positions.data() ||
+      prepared->source_position_count != dynamic_positions.size() ||
+      prepared->source.vertices.size() != mesh.vertices.size() ||
+      prepared->source.indices.size() != mesh.indices.size()) {
+    return false;
+  }
+  prepared->consumed = true;
   {
     QDR_PROFILE_SCOPE("Mesh dynamic position upload submit");
     proxy.vertex_buffer->setBufferAt(
-        *engine_, 0,
-        FilamentBufferDescriptorFactory::vector(std::move(positions)));
+        *engine_, 0, std::move(prepared->positions));
   }
   {
-    QDR_PROFILE_SCOPE("Mesh dynamic derived attributes pack");
-    const std::vector<RenderVertex> render_vertices =
-        build_render_vertices(mesh, dynamic_positions);
-    std::vector<DynamicRenderVertexStatic> static_vertices =
-        pack_dynamic_static_vertices(render_vertices);
+    QDR_PROFILE_SCOPE("Mesh dynamic derived attributes upload submit");
     proxy.vertex_buffer->setBufferAt(
-        *engine_, 1,
-        FilamentBufferDescriptorFactory::vector(std::move(static_vertices)));
+        *engine_, 1, std::move(prepared->static_vertices));
   }
   {
     QDR_PROFILE_SCOPE("Mesh dynamic index upload submit");
     proxy.index_buffer->setBuffer(
-        *engine_, FilamentBufferDescriptorFactory::span(mesh.indices));
+        *engine_, std::move(prepared->indices));
   }
   {
     QDR_PROFILE_SCOPE("Mesh dynamic position update bounds");
@@ -1111,6 +1202,108 @@ bool MeshRenderableFactory::try_rebind_static_geometry(
     proxy.index_buffer = std::exchange(replacement.index_buffer, nullptr);
     proxy.vertex_count = std::exchange(replacement.vertex_count, 0u);
     proxy.index_count = std::exchange(replacement.index_count, 0u);
+  }
+  return true;
+}
+
+bool MeshRenderableFactory::try_rebind_instance_geometry(
+    std::span<const InstanceGeometryRebind> requests) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized() || geometry_cache_ == nullptr || requests.empty()) {
+    return false;
+  }
+  auto &renderables = engine_->getRenderableManager();
+  std::unordered_set<const MeshRenderableProxy *> unique_proxies;
+  unique_proxies.reserve(requests.size());
+  for (const InstanceGeometryRebind &request : requests) {
+    const MeshRenderableProxy *proxy = request.proxy;
+    const RenderMeshAssetSnapshot *mesh = request.mesh;
+    if (proxy == nullptr || mesh == nullptr || !mesh->renderable() ||
+        !proxy->entity || proxy->dynamic_geometry ||
+        proxy->instance_buffer == nullptr || proxy->mesh != mesh->mesh_id ||
+        proxy->geometry_resource == 0u || !proxy->owns_mesh_buffers ||
+        proxy->vertex_count != mesh->vertices.size() ||
+        proxy->index_count != mesh->indices.size() ||
+        !proxy->owns_material_instances || proxy->material_slots.size() != 1u ||
+        proxy->material_instances.size() != 1u ||
+        proxy->material_slots.front() != request.primitive.material_slot ||
+        request.primitive.index_count == 0u ||
+        static_cast<std::uint64_t>(request.primitive.index_offset) +
+                request.primitive.index_count > mesh->indices.size() ||
+        !unique_proxies.insert(proxy).second) {
+      return false;
+    }
+    const auto resource = geometry_cache_->resources.find(proxy->geometry_resource);
+    if (resource == geometry_cache_->resources.end() ||
+        resource->second->vertex_buffer != proxy->vertex_buffer ||
+        resource->second->index_buffer != proxy->index_buffer ||
+        !same_geometry_topology(*resource->second, *mesh)) {
+      return false;
+    }
+    const auto instance = renderables.getInstance(proxy->entity);
+    if (!instance || renderables.getPrimitiveCount(instance) != 1u ||
+        renderables.getMaterialInstanceAt(instance, 0u) !=
+            proxy->material_instances.front()) {
+      return false;
+    }
+  }
+
+  std::vector<MeshRenderableProxy> replacement_geometry;
+  replacement_geometry.reserve(requests.size());
+  try {
+    for (const InstanceGeometryRebind &request : requests) {
+      replacement_geometry.emplace_back();
+      if (!acquire_geometry(*request.mesh, replacement_geometry.back())) {
+        for (MeshRenderableProxy &replacement : replacement_geometry) {
+          release_geometry(replacement);
+        }
+        return false;
+      }
+      const auto &replacement = replacement_geometry.back();
+      if (!replacement.vertex_buffer->isCreationComplete() ||
+          !replacement.index_buffer->isCreationComplete()) {
+        for (MeshRenderableProxy &pending : replacement_geometry) {
+          release_geometry(pending);
+        }
+        return false;
+      }
+      // New immutable payloads can also arrive as one large commit. Submit
+      // their buffer commands before the command arena can wrap.
+      constexpr std::size_t kGeometryBatchSize = 64u;
+      if (replacement_geometry.size() % kGeometryBatchSize == 0u) {
+        engine_->flush();
+      }
+    }
+  } catch (...) {
+    for (MeshRenderableProxy &replacement : replacement_geometry) {
+      release_geometry(replacement);
+    }
+    throw;
+  }
+
+  // All requests and all replacement references are ready before the first
+  // renderable changes. Entities, material instances and InstanceBuffers stay.
+  for (std::size_t index = 0u; index < requests.size(); ++index) {
+    const InstanceGeometryRebind &request = requests[index];
+    MeshRenderableProxy &proxy = *request.proxy;
+    MeshRenderableProxy &replacement = replacement_geometry[index];
+    const auto instance = renderables.getInstance(proxy.entity);
+    renderables.setGeometryAt(instance, 0u,
+        filament::RenderableManager::PrimitiveType::TRIANGLES,
+        replacement.vertex_buffer, replacement.index_buffer,
+        request.primitive.index_offset, request.primitive.index_count);
+    renderables.setAxisAlignedBoundingBox(instance, filament_bounds(request.world_bounds));
+    release_geometry(proxy);
+    proxy.mesh_revision = request.mesh->mesh_revision;
+    proxy.geometry_resource = std::exchange(replacement.geometry_resource, 0u);
+    proxy.vertex_buffer = std::exchange(replacement.vertex_buffer, nullptr);
+    proxy.index_buffer = std::exchange(replacement.index_buffer, nullptr);
+    proxy.vertex_count = std::exchange(replacement.vertex_count, 0u);
+    proxy.index_count = std::exchange(replacement.index_count, 0u);
+    constexpr std::size_t kRebindBatchSize = 64u;
+    if ((index + 1u) % kRebindBatchSize == 0u) {
+      engine_->flush();
+    }
   }
   return true;
 }
@@ -1794,7 +1987,8 @@ void MeshRenderableFactory::destroy(MeshRenderableProxy& proxy) {
     }
 
     destroy_renderable_component_resources(*engine_, scene_, *material_binding_,
-                                           proxy, true);
+                                           proxy, true,
+                                           pending_resource_retirements_);
     release_geometry(proxy);
 }
 
@@ -1804,8 +1998,25 @@ void MeshRenderableFactory::destroy_detached(MeshRenderableProxy &proxy) {
   }
 
   destroy_renderable_component_resources(*engine_, nullptr, *material_binding_,
-                                         proxy, false);
+                                         proxy, false,
+                                         pending_resource_retirements_);
   release_geometry(proxy);
+}
+
+void MeshRenderableFactory::destroy_renderable_components(
+    std::span<const utils::Entity> entities) {
+  if (engine_ == nullptr || entities.empty()) {
+    return;
+  }
+  remove_from_scene(entities);
+  auto &renderables = engine_->getRenderableManager();
+  for (const utils::Entity entity : entities) {
+    if (renderables.hasComponent(entity)) {
+      renderables.destroy(entity);
+      submit_resource_retirement(*engine_,
+                                 pending_resource_retirements_);
+    }
+  }
 }
 
 std::uint64_t

@@ -599,9 +599,10 @@ public:
     return rect_;
   }
 
-  [[nodiscard]] std::vector<ModelingSelectionVisibilityWitness> finish() const {
+  [[nodiscard]] std::vector<ModelingSelectionVisibilityWitness> finish(
+      std::size_t expected_witnesses = 18u) const {
     std::vector<ModelingSelectionVisibilityWitness> result;
-    result.reserve(anchors_.size() * 2U);
+    result.reserve(std::min(expected_witnesses, anchors_.size() * 2U));
     for (const auto &nearest : nearest_) {
       for (const std::optional<RankedWitness> &ranked : nearest) {
         if (!ranked.has_value()) {
@@ -629,23 +630,6 @@ private:
   std::array<QVec2, 9> anchors_;
   std::array<std::array<std::optional<RankedWitness>, 2>, 9> nearest_{};
 };
-
-std::optional<QVec3> face_witness_at_screen(
-    const quader_editor_core::ViewportCameraState &camera,
-    const quader_poly::Document &document, const quader_poly::Face &face,
-    QVec2 screen) {
-  const quader_poly::Ray ray =
-      quader_editor_core::ray_from_viewport_screen_point(camera, screen);
-  quader_poly::PickOptions options;
-  options.mode = quader_poly::SelectionMode::Face;
-  options.pick_backfaces = true;
-  options.prefer_front_facing_faces = false;
-  const std::vector<quader_poly::PickFaceTriangle> triangles =
-      quader_poly::build_face_pick_geometry(document, face.id, options);
-  const quader_poly::PickResult hit =
-      quader_poly::pick_face_geometry(triangles, ray, options);
-  return hit.hit ? std::optional<QVec3>{hit.position} : std::nullopt;
-}
 
 void collect_face_visibility_witnesses(
     const quader_editor_core::ViewportCameraState &camera,
@@ -706,47 +690,48 @@ void collect_face_visibility_witnesses(
   if (!all_projected) {
     return;
   }
+  quader_poly::PickOptions options;
+  options.mode = quader_poly::SelectionMode::Face;
+  options.pick_backfaces = true;
+  options.prefer_front_facing_faces = false;
+  std::optional<std::vector<quader_poly::PickFaceTriangle>> triangles;
   for (const QVec2 anchor : witnesses.anchors()) {
     if (!screen_point_inside_polygon(anchor, screen_vertices)) {
       continue;
     }
-    if (const std::optional<QVec3> world =
-            face_witness_at_screen(camera, document, face, anchor)) {
-      witnesses.consider(anchor, *world);
+    if (!triangles.has_value()) {
+      triangles = quader_poly::build_face_pick_geometry(document, face.id,
+                                                       options);
+    }
+    const quader_poly::Ray ray =
+        quader_editor_core::ray_from_viewport_screen_point(camera, anchor);
+    const quader_poly::PickResult hit =
+        quader_poly::pick_face_geometry(*triangles, ray, options);
+    if (hit.hit) {
+      witnesses.consider(anchor, hit.position);
     }
   }
 }
 
 std::vector<ModelingSelectionVisibilityWitness>
 resolved_selection_visibility_witnesses(
-    std::span<const quader_editor_core::PolygonObject> picking_objects,
-    int participant_id, ModelingActiveSelectionKind kind, int vertex_id,
+    const quader_poly::Document &document,
+    ModelingActiveSelectionKind kind, int vertex_id,
     int edge_a, int edge_b, int face_id,
-    const ModelingBoxSelectRequest &request) {
-  const auto object = std::find_if(
-      picking_objects.begin(), picking_objects.end(),
-      [participant_id](const quader_editor_core::PolygonObject &candidate) {
-        return candidate.id == participant_id;
-      });
-  if (object == picking_objects.end()) {
-    return {};
-  }
-  const quader_poly::Document &document = object->document.read();
-  const quader_editor_core::ViewportCameraState camera =
-      modeling_runtime_camera(request.camera);
-  RectangleVisibilityWitnessAccumulator witnesses(
-      quader_editor_core::normalized_screen_rect(request.start, request.end));
-
+    const quader_editor_core::ViewportCameraState &camera,
+    const quader_editor_core::ScreenRect &rect) {
   if (kind == ModelingActiveSelectionKind::Vertex) {
     const quader_poly::Vertex *vertex =
         quader_poly::find_vertex(document, vertex_id);
     QVec2 screen{};
     if (vertex != nullptr && quader_editor_core::project_viewport_point(
-                                 camera, vertex->position, screen)) {
-      witnesses.consider(screen, vertex->position);
+                                 camera, vertex->position, screen) &&
+        quader_editor_core::screen_rect_contains(rect, screen)) {
+      return {{.screen_position = screen, .world_position = vertex->position}};
     }
-    return witnesses.finish();
+    return {};
   }
+  RectangleVisibilityWitnessAccumulator witnesses(rect);
   if (kind == ModelingActiveSelectionKind::Edge) {
     const quader_poly::Vertex *a = quader_poly::find_vertex(document, edge_a);
     const quader_poly::Vertex *b = quader_poly::find_vertex(document, edge_b);
@@ -760,9 +745,7 @@ resolved_selection_visibility_witnesses(
       witnesses.consider(screen_a, a->position);
       witnesses.consider(screen_b, b->position);
       const auto clipped = clipped_screen_segment_factors(
-          quader_editor_core::normalized_screen_rect(request.start,
-                                                     request.end),
-          screen_a, screen_b);
+          rect, screen_a, screen_b);
       if (clipped.has_value()) {
         const float screen_factor =
             (clipped->first + clipped->second) * 0.5F;
@@ -774,7 +757,7 @@ resolved_selection_visibility_witnesses(
             a->position + (b->position - a->position) * world_factor);
       }
     }
-    return witnesses.finish();
+    return witnesses.finish(3u);
   }
   if (kind == ModelingActiveSelectionKind::Face) {
     const quader_poly::Face *face = quader_poly::find_face(document, face_id);
@@ -2025,69 +2008,91 @@ public:
   [[nodiscard]] std::vector<ModelingSelectionHit>
   query_selection_marquee_hits(
       const ModelingBoxSelectRequest &request) const {
+    QDR_PROFILE_FUNCTION();
     const ModelingSelectionProjectionSnapshot &projected =
         selection_projection_snapshot();
     const quader_editor_core::RectangleSelectionHits hits =
         selection_service_.rectangle_selection_hits(
             projected, scene_, object_registry_, request);
-    const std::vector<quader_editor_core::PolygonObject> &picking_objects =
-        selection_service_.cached_scene_transformed_objects_for_picking(
-            projected, scene_, object_registry_);
-    std::vector<ModelingSelectionHit> result;
-    result.reserve(hits.object_ids.size() + hits.faces.size() +
-                   hits.edges.size() + hits.vertices.size());
-    const auto append = [&](int object_id, ModelingActiveSelectionKind kind,
-                            int vertex, int edge_a, int edge_b, int face) {
-      std::optional<EntityId> entity =
-          selection_service_.scene_target_for_picking_participant(object_id);
-      if (!entity.has_value()) {
-        entity = object_registry_.entity_for_modeling_object(object_id);
+    if (hits.object_ids.empty() && hits.faces.empty() && hits.edges.empty() &&
+        hits.vertices.empty()) {
+      return {};
+    }
+    const std::vector<quader_editor_core::PolygonObject> &picking_objects = [&]()
+        -> const std::vector<quader_editor_core::PolygonObject> & {
+      QDR_PROFILE_SCOPE("Marquee acquire world picking geometry");
+      return selection_service_.cached_scene_transformed_objects_for_picking(
+          projected, scene_, object_registry_);
+    }();
+    return [&]() {
+      QDR_PROFILE_SCOPE("Marquee build visibility witnesses");
+      std::unordered_map<int, const quader_editor_core::PolygonObject *>
+          picking_objects_by_id;
+      picking_objects_by_id.reserve(picking_objects.size());
+      for (const quader_editor_core::PolygonObject &object : picking_objects) {
+        picking_objects_by_id.emplace(object.id, &object);
       }
-      const std::optional<int> authored_modeling_object =
-          entity.has_value()
-              ? object_registry_.modeling_object_for_entity(*entity)
-              : std::nullopt;
-      const int resolved_object = authored_modeling_object.value_or(
-          kind == ModelingActiveSelectionKind::Object
-              ? kInvalidModelingObjectId
-              : object_id);
-      std::vector<ModelingSelectionVisibilityWitness> witnesses =
-          resolved_selection_visibility_witnesses(
-              picking_objects, object_id, kind, vertex, edge_a, edge_b, face,
-              request);
-      std::optional<QVec3> world_position =
-          witnesses.empty()
-              ? std::nullopt
-              : std::optional<QVec3>(witnesses.front().world_position);
-      result.push_back(ModelingSelectionHit{
-          .entity = entity.value_or(kInvalidEntityId),
-          .modeling_object_id = resolved_object,
-          .kind = kind,
-          .vertex_id = vertex,
-          .edge_a = edge_a,
-          .edge_b = edge_b,
-          .face_id = face,
-          .world_position = std::move(world_position),
-          .visibility_witnesses = std::move(witnesses),
-      });
-    };
-    for (const int object_id : hits.object_ids) {
-      append(object_id, ModelingActiveSelectionKind::Object, -1, -1, -1,
-             -1);
-    }
-    for (const auto &face : hits.faces) {
-      append(face.object_id, ModelingActiveSelectionKind::Face, -1, -1, -1,
-             face.face_index);
-    }
-    for (const auto &edge : hits.edges) {
-      append(edge.object_id, ModelingActiveSelectionKind::Edge, -1,
-             edge.a_index, edge.b_index, -1);
-    }
-    for (const auto &vertex : hits.vertices) {
-      append(vertex.object_id, ModelingActiveSelectionKind::Vertex,
-             vertex.vertex_index, -1, -1, -1);
-    }
-    return result;
+      std::vector<ModelingSelectionHit> result;
+      result.reserve(hits.object_ids.size() + hits.faces.size() +
+                     hits.edges.size() + hits.vertices.size());
+      const auto camera = modeling_runtime_camera(request.camera);
+      const auto rect = quader_editor_core::normalized_screen_rect(request.start, request.end);
+      const auto append = [&](int object_id, ModelingActiveSelectionKind kind,
+                              int vertex, int edge_a, int edge_b, int face) {
+        std::optional<EntityId> entity =
+            selection_service_.scene_target_for_picking_participant(object_id);
+        if (!entity.has_value()) {
+          entity = object_registry_.entity_for_modeling_object(object_id);
+        }
+        const std::optional<int> authored_modeling_object =
+            entity.has_value()
+                ? object_registry_.modeling_object_for_entity(*entity)
+                : std::nullopt;
+        const int resolved_object = authored_modeling_object.value_or(
+            kind == ModelingActiveSelectionKind::Object
+                ? kInvalidModelingObjectId
+                : object_id);
+        std::vector<ModelingSelectionVisibilityWitness> witnesses;
+        if (const auto object = picking_objects_by_id.find(object_id);
+            object != picking_objects_by_id.end()) {
+          witnesses = resolved_selection_visibility_witnesses(
+              object->second->document.read(), kind, vertex, edge_a, edge_b,
+              face, camera, rect);
+        }
+        std::optional<QVec3> world_position =
+            witnesses.empty()
+                ? std::nullopt
+                : std::optional<QVec3>(witnesses.front().world_position);
+        result.push_back(ModelingSelectionHit{
+            .entity = entity.value_or(kInvalidEntityId),
+            .modeling_object_id = resolved_object,
+            .kind = kind,
+            .vertex_id = vertex,
+            .edge_a = edge_a,
+            .edge_b = edge_b,
+            .face_id = face,
+            .world_position = std::move(world_position),
+            .visibility_witnesses = std::move(witnesses),
+        });
+      };
+      for (const int object_id : hits.object_ids) {
+        append(object_id, ModelingActiveSelectionKind::Object, -1, -1, -1,
+               -1);
+      }
+      for (const auto &face : hits.faces) {
+        append(face.object_id, ModelingActiveSelectionKind::Face, -1, -1, -1,
+               face.face_index);
+      }
+      for (const auto &edge : hits.edges) {
+        append(edge.object_id, ModelingActiveSelectionKind::Edge, -1,
+               edge.a_index, edge.b_index, -1);
+      }
+      for (const auto &vertex : hits.vertices) {
+        append(vertex.object_id, ModelingActiveSelectionKind::Vertex,
+               vertex.vertex_index, -1, -1, -1);
+      }
+      return result;
+    }();
   }
 
   [[nodiscard]] std::vector<ModelingSelectionHit> query_selection_lasso_hits(
@@ -2449,6 +2454,7 @@ public:
     if (face_texture_presented_revision_ == revision) {
       return face_texture_settings_cache_;
     }
+    QDR_PROFILE_SCOPE("Face texture settings rebuild");
     ModelingSelectedFaceTextureSnapshot snapshot =
         sdk_projection_adapter_.selected_face_texture_settings();
     std::string target_error;
@@ -2478,32 +2484,41 @@ public:
       settings.disabled_reason =
           "Commit or cancel the active tool or preview before editing textures.";
     }
-    // Resolve each selected planar chart once per owner revision. Both the
-    // canvas and absolute angle consume this immutable effective projection;
-    // scale and shift come from the stored properties of the current preview.
+    // Presentation needs one canvas or a common absolute angle. A proven mixed
+    // angle cannot change after visiting more faces; full rotation-edit maps
+    // are prepared lazily when a validated edit actually consumes them.
     face_texture_projection_cache_.clear();
+    face_texture_rotation_uniform_noop_ = false;
     std::vector<ModelingFaceTextureActionTarget> targets;
     modeling::FaceTextureActionOptions options;
-    const auto resolved = prepare_face_texture_action_targets(snapshot, options, targets);
+    const auto resolved = prepare_face_texture_action_targets(snapshot, options, targets, false);
     if (resolved.ok) {
       bool first = true;
-      for (std::size_t object_index = 0; object_index < snapshot.objects.size(); ++object_index) {
-        const auto &object = snapshot.objects[object_index];
-        for (const auto &face : object.faces) {
-          auto canvas = resolve_face_texture_canvas(object, face, targets[object_index], settings);
-          const bool usable = canvas.chart.mapping_usable && canvas.repeat_width > 0.0;
-          const double angle = usable ? canvas.rotation_degrees : face.texture_transform.rotation_degrees;
-          if (first) {
-            settings.rotation_degrees = angle;
-            settings.rotation_mixed = false;
-            first = false;
-          } else {
-            settings.rotation_mixed = settings.rotation_mixed ||
-                std::abs(std::remainder(angle - settings.rotation_degrees, 360.0)) > 1.0e-4;
-          }
-          face_texture_projection_cache_.push_back(std::move(canvas));
-        }
-      }
+      bool uniform_usable_angle = true;
+      sdk_projection_adapter_.visit_face_texture_canvases(targets,
+          [&](std::size_t object_index, std::size_t face_index, auto chart) {
+            const auto &object = snapshot.objects[object_index];
+            const auto &face = object.faces[face_index];
+            auto canvas = resolve_face_texture_canvas(object, face, targets[object_index],
+                settings, std::move(chart));
+            const bool usable = canvas.chart.mapping_usable && canvas.repeat_width > 0.0;
+            const double angle = usable ? canvas.rotation_degrees : face.texture_transform.rotation_degrees;
+            uniform_usable_angle = uniform_usable_angle && usable &&
+                (first || angle == settings.rotation_degrees);
+            if (first) {
+              settings.rotation_degrees = angle;
+              settings.rotation_mixed = false;
+              first = false;
+            } else {
+              settings.rotation_mixed = settings.rotation_mixed ||
+                  std::abs(std::remainder(angle - settings.rotation_degrees, 360.0)) > 1.0e-4;
+            }
+            if (settings.selected_face_count == 1u) {
+              face_texture_projection_cache_.push_back(std::move(canvas));
+            }
+            return !settings.rotation_mixed;
+          });
+      face_texture_rotation_uniform_noop_ = !first && uniform_usable_angle;
     }
     face_texture_canvas_cache_ = {};
     face_texture_canvas_cache_.selected_face_count = settings.selected_face_count;
@@ -2522,7 +2537,8 @@ public:
       const ModelingSelectedFaceTextureObject &object,
       const modeling::FaceTextureSettings &face,
       const ModelingFaceTextureActionTarget &target,
-      const ModelingFaceTextureSettings &settings) const {
+      const ModelingFaceTextureSettings &settings,
+      modeling::Result<modeling::FaceTextureCanvasChart> chart) const {
     ModelingFaceTextureCanvas canvas;
     canvas.selected_face_count = 1;
     canvas.selection_token = settings.selection_token;
@@ -2531,7 +2547,6 @@ public:
                      .face = face.face,
                      .world_from_local = target.world_from_local,
                      .sampling_from_local = target.sampling_from_local};
-    auto chart = sdk_projection_adapter_.face_texture_canvas(canvas.target);
     if (!chart.ok()) {
       canvas.disabled_reason = chart.error_message();
       return canvas;
@@ -2568,6 +2583,31 @@ public:
   [[nodiscard]] ModelingFaceTextureCanvas face_texture_canvas() const {
     (void)face_texture_settings();
     return face_texture_canvas_cache_;
+  }
+
+  /// Materialize all maps only for a numeric rotation that passed request and
+  /// selection validation. The presentation cache key fences every source used.
+  ModelingCommandResult ensure_face_texture_projection_cache(
+      const ModelingFaceTextureSettings &settings) const {
+    if (face_texture_projection_cache_.size() == settings.selected_face_count) {
+      return {.ok = true, .changed = false};
+    }
+    std::vector<ModelingFaceTextureActionTarget> targets;
+    modeling::FaceTextureActionOptions options;
+    const auto resolved = prepare_face_texture_action_targets(
+        face_texture_selection_cache_, options, targets, false);
+    if (!resolved.ok) return resolved;
+    std::vector<ModelingFaceTextureCanvas> canvases;
+    canvases.reserve(settings.selected_face_count);
+    sdk_projection_adapter_.visit_face_texture_canvases(targets,
+        [&](std::size_t object_index, std::size_t face_index, auto chart) {
+          const auto &object = face_texture_selection_cache_.objects[object_index];
+          canvases.push_back(resolve_face_texture_canvas(object, object.faces[face_index],
+              targets[object_index], settings, std::move(chart)));
+          return true;
+        });
+    face_texture_projection_cache_ = std::move(canvases);
+    return {.ok = true, .changed = false};
   }
 
   ModelingCommandResult begin_face_texture_gesture(
@@ -2710,7 +2750,8 @@ public:
   ModelingCommandResult prepare_face_texture_action_targets(
       const ModelingSelectedFaceTextureSnapshot &action_selection,
       modeling::FaceTextureActionOptions &options,
-      std::vector<ModelingFaceTextureActionTarget> &targets) const {
+      std::vector<ModelingFaceTextureActionTarget> &targets,
+      bool resolve_texture_extents = true) const {
     const ModelingInstanceEditScope scope = instance_edit_scope_provider_
         ? instance_edit_scope_provider_() : ModelingInstanceEditScope{};
     const ModelingSelectionSummary selection = selection_summary();
@@ -2736,6 +2777,10 @@ public:
       };
       target.faces.reserve(object.faces.size());
       for (const auto &face : object.faces) {
+        if (!resolve_texture_extents) {
+          target.faces.push_back({.face = face.face});
+          continue;
+        }
         const QVec2 extent = face_texture_extent(object.entity, face.material_slot);
         const auto dimension = [](float value) {
           return static_cast<std::uint32_t>(std::clamp<double>(
@@ -2777,6 +2822,12 @@ public:
     if (edit.field != ModelingFaceTextureField::Rotate) {
       result = sdk_projection_adapter_.apply_face_texture_updates(batches);
     } else {
+      if (face_texture_rotation_uniform_noop_ &&
+          std::abs(std::remainder(edit.value - settings.rotation_degrees, 360.0)) <= 1.0e-5) {
+        return {.ok = true, .changed = false};
+      }
+      const auto projections = ensure_face_texture_projection_cache(settings);
+      if (!projections.ok) return projections;
       std::vector<ModelingFaceTextureCanvasEdit> canvas_edits;
       std::size_t projection_index = 0;
       for (std::size_t object = 0; object < batches.size(); ++object) {
@@ -3642,9 +3693,21 @@ public:
     return selection_service_.transformed_picking_projection_build_count();
   }
 
+  [[nodiscard]] std::uint64_t world_picking_geometry_build_count() const {
+    return selection_service_.world_picking_geometry_build_count();
+  }
+
   [[nodiscard]] std::uint64_t
   rectangle_picking_projection_build_count() const {
     return selection_service_.rectangle_picking_projection_build_count();
+  }
+
+  [[nodiscard]] std::uint64_t rectangle_pick_facts_build_count() const {
+    return selection_service_.rectangle_pick_facts_build_count();
+  }
+
+  [[nodiscard]] std::uint64_t rectangle_pick_facts_reuse_count() const {
+    return selection_service_.rectangle_pick_facts_reuse_count();
   }
 
   [[nodiscard]] std::uint64_t
@@ -10974,6 +11037,7 @@ private:
   mutable ModelingFaceTextureSettings face_texture_settings_cache_;
   mutable ModelingFaceTextureCanvas face_texture_canvas_cache_;
   mutable std::vector<ModelingFaceTextureCanvas> face_texture_projection_cache_;
+  mutable bool face_texture_rotation_uniform_noop_ = false;
   std::uint64_t face_texture_gesture_revision_ = 0;
   ModelingFaceTextureCanvas face_texture_gesture_baseline_;
   std::optional<ModelingFaceTextureGestureBegin> face_texture_gesture_begin_;
@@ -11491,9 +11555,21 @@ ModelingSessionService::transformed_picking_projection_build_count() const {
   return impl_->transformed_picking_projection_build_count();
 }
 
+std::uint64_t ModelingSessionService::world_picking_geometry_build_count() const {
+  return impl_->world_picking_geometry_build_count();
+}
+
 std::uint64_t
 ModelingSessionService::rectangle_picking_projection_build_count() const {
   return impl_->rectangle_picking_projection_build_count();
+}
+
+std::uint64_t ModelingSessionService::rectangle_pick_facts_build_count() const {
+  return impl_->rectangle_pick_facts_build_count();
+}
+
+std::uint64_t ModelingSessionService::rectangle_pick_facts_reuse_count() const {
+  return impl_->rectangle_pick_facts_reuse_count();
 }
 
 std::uint64_t

@@ -93,6 +93,31 @@ void MeshRenderableCache::shutdown() {
         return;
     }
 
+    // Filament validates every material release against all live renderables.
+    // Retire the entire generation first so a large scene does not trigger a
+    // quadratic scan while its three per-mesh proxies are being destroyed.
+    std::vector<utils::Entity> entities;
+    entities.reserve(rendered_mesh_proxies_.size() +
+                     shaded_mesh_proxies_.size() +
+                     overlay_depth_mesh_proxies_.size() +
+                     retired_mesh_proxies_.size());
+    const auto append_entities = [&entities](const auto &proxies) {
+      for (const auto &[id, proxy] : proxies) {
+        (void)id;
+        if (proxy.entity) {
+          entities.push_back(proxy.entity);
+        }
+      }
+    };
+    append_entities(rendered_mesh_proxies_);
+    append_entities(shaded_mesh_proxies_);
+    append_entities(overlay_depth_mesh_proxies_);
+    for (const MeshRenderableProxy &proxy : retired_mesh_proxies_) {
+      if (proxy.entity) {
+        entities.push_back(proxy.entity);
+      }
+    }
+    factory_->destroy_renderable_components(entities);
     destroy_proxy_map(*factory_, rendered_mesh_proxies_);
     destroy_proxy_map(*factory_, shaded_mesh_proxies_);
     destroy_proxy_map(*factory_, overlay_depth_mesh_proxies_);

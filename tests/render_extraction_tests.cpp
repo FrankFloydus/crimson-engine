@@ -1793,6 +1793,159 @@ TEST(RenderSceneSnapshotTests,
 }
 
 TEST(RenderSceneSnapshotTests,
+     MaterialBindingsSurviveOrdinaryInstanceBatchMembershipChanges) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const ProjectAssetId material_id =
+      *ProjectAssetId::parse("55555555-5555-4555-8555-555555555555");
+  TestProjectMaterialResolver resolver;
+  resolver.material = RenderProjectMaterialSnapshot{
+      .evaluation = RenderMaterialEvaluationSnapshot{
+          .project_material_id = material_id,
+          .kind = RenderMaterialEvaluationKind::Standard,
+          .identity_revision = 2u,
+          .content_revision = 3u,
+          .payload = RenderStandardMaterialEvaluationSnapshot{},
+      },
+      .catalog_revision = 4u,
+  };
+  const MaterialComponent material{
+      .material = MaterialReference::project(material_id)};
+  std::vector<EntityId> entities;
+  std::vector<AssetId> meshes;
+  constexpr std::size_t kObjectCount = 200u;
+  for (std::size_t index = 0u; index < kObjectCount; ++index) {
+    const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+    const EntityId entity =
+        document.create_entity("Shared binding", EntityKind::Mesh);
+    ASSERT_TRUE(document.set_mesh(entity, {.mesh = mesh}));
+    ASSERT_TRUE(document.set_material(entity, material));
+    entities.push_back(entity);
+    meshes.push_back(mesh);
+  }
+
+  const auto initial = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  EXPECT_TRUE(initial.meshes.empty());
+  ASSERT_EQ(initial.instance_primitives.size(), 1u);
+  EXPECT_EQ(initial.instance_primitives.front().occurrences.size(), kObjectCount);
+  EXPECT_EQ(initial.extraction_work.material_binding_build_count, 1u);
+  EXPECT_EQ(initial.extraction_work.material_binding_reuse_count,
+            kObjectCount - 1u);
+  EXPECT_EQ(resolver.resolve_count, 1u);
+
+  ASSERT_TRUE(assets.replace_mesh(meshes.front(), make_authored_quad_mesh()));
+  ASSERT_TRUE(document.notify_mesh_payload_changed(entities.front()));
+  const auto split = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &initial, .project_material_resolver = &resolver});
+  ASSERT_EQ(split.meshes.size(), 1u);
+  EXPECT_EQ(split.meshes.front().entity_id, entities.front());
+  EXPECT_EQ(split.meshes.front().mesh.indices.size(), 6u);
+  ASSERT_EQ(split.instance_primitives.size(), 1u);
+  EXPECT_EQ(split.instance_primitives.front().occurrences.size(),
+            kObjectCount - 1u);
+  EXPECT_EQ(split.extraction_work.material_binding_build_count, 0u);
+  EXPECT_EQ(split.extraction_work.material_binding_reuse_count, kObjectCount);
+  EXPECT_EQ(resolver.resolve_count, 1u);
+  EXPECT_EQ(initial.instance_primitives.front().mesh.indices.size(), 3u);
+
+  ASSERT_TRUE(assets.replace_mesh(meshes.front(), make_overlay_triangle_mesh()));
+  ASSERT_TRUE(document.notify_mesh_payload_changed(entities.front()));
+  const auto rejoined = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &split, .project_material_resolver = &resolver});
+  EXPECT_TRUE(rejoined.meshes.empty());
+  ASSERT_EQ(rejoined.instance_primitives.size(), 1u);
+  EXPECT_EQ(rejoined.instance_primitives.front().occurrences.size(), kObjectCount);
+  EXPECT_EQ(rejoined.extraction_work.material_binding_build_count, 0u);
+  EXPECT_EQ(resolver.resolve_count, 1u);
+
+  MaterialComponent slotted = material;
+  slotted.material_slots.emplace(1u, material.material);
+  ASSERT_TRUE(document.set_material(entities.front(), slotted));
+  const auto changed_slot = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &rejoined, .project_material_resolver = &resolver});
+  EXPECT_EQ(changed_slot.extraction_work.material_binding_build_count, 1u);
+  EXPECT_EQ(changed_slot.extraction_work.material_binding_reuse_count,
+            kObjectCount - 1u);
+  EXPECT_EQ(resolver.resolve_count, 3u);
+
+  resolver.material->evaluation.content_revision += 1u;
+  std::get<RenderStandardMaterialEvaluationSnapshot>(
+      resolver.material->evaluation.payload).base_color = {0.2f, 0.4f, 0.6f};
+  ++resolver.revision_value;
+  const auto changed_project = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &changed_slot, .project_material_resolver = &resolver});
+  EXPECT_EQ(changed_project.extraction_work.material_binding_build_count, 2u);
+  EXPECT_EQ(resolver.resolve_count, 6u);
+  ASSERT_EQ(changed_project.instance_primitives.size(), 1u);
+  EXPECT_FLOAT_EQ(changed_project.instance_primitives.front()
+                      .material.primary_material.document.base_color.x,
+                  0.2f);
+}
+
+TEST(RenderSceneSnapshotTests,
+     MaterialBindingCacheTracksCatalogAndSceneBindingRevisions) {
+  SceneDocument document;
+  AssetRegistry assets;
+  TextureAsset texture;
+  texture.name = "Binding cache texture";
+  texture.source_path = "binding-cache-first.png";
+  const AssetId texture_id = assets.add_texture(texture);
+  MaterialDocument material = make_default_quader_material("Binding cache");
+  set_material_texture_slot(material, material_texture_slot::kBaseColor,
+                            texture_id);
+  const AssetId material_id = assets.add_material(material);
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Binding cache", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, {.mesh = mesh}));
+  ASSERT_TRUE(document.set_material(entity, {.material = material_id}));
+  const RenderSceneBindingKey binding{.scene_session_id = 17u};
+  const auto initial = build_render_scene_snapshot(
+      document, assets, {.scene_binding = binding});
+  ASSERT_EQ(initial.meshes.size(), 1u);
+  EXPECT_EQ(initial.extraction_work.material_binding_build_count, 1u);
+
+  ASSERT_TRUE(assets.update_texture(texture_id, [](TextureAsset &updated) {
+    updated.source_path = "binding-cache-replaced.png";
+  }));
+  const auto changed_texture = build_render_scene_snapshot(
+      document, assets, {.previous = &initial, .scene_binding = binding});
+  ASSERT_EQ(changed_texture.meshes.size(), 1u);
+  EXPECT_EQ(changed_texture.extraction_work.material_binding_build_count, 1u);
+  const auto *resolved = changed_texture.meshes.front()
+                             .material.primary_material.texture_for_slot(
+                                 material_texture_slot::kBaseColor);
+  ASSERT_NE(resolved, nullptr);
+  EXPECT_EQ(resolved->texture.source_path,
+            std::filesystem::path("binding-cache-replaced.png"));
+  EXPECT_NE(changed_texture.meshes.front().material.revision,
+            initial.meshes.front().material.revision);
+
+  ASSERT_TRUE(assets.update_material(material_id, [](MaterialDocument &updated) {
+    updated.base_color = {0.25f, 0.5f, 0.75f};
+  }));
+  const auto changed_material = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &changed_texture, .scene_binding = binding});
+  ASSERT_EQ(changed_material.meshes.size(), 1u);
+  EXPECT_EQ(changed_material.extraction_work.material_binding_build_count, 1u);
+  EXPECT_FLOAT_EQ(changed_material.meshes.front()
+                      .material.primary_material.document.base_color.x,
+                  0.25f);
+  const auto rebound = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &changed_material,
+       .scene_binding = {.scene_session_id = 18u}});
+  EXPECT_EQ(rebound.extraction_work.material_binding_build_count, 1u);
+  EXPECT_EQ(rebound.extraction_work.material_binding_reuse_count, 0u);
+}
+
+TEST(RenderSceneSnapshotTests,
      LightPropertyRefreshAvoidsMaterialResolutionAndMatchesFullExtraction) {
   SceneDocument document;
   AssetRegistry assets;
@@ -2029,6 +2182,7 @@ TEST(RenderDefaultMaterialTests,
   const RenderSceneSnapshot authored = build_render_scene_snapshot(
       document, assets, {.project_material_resolver = &resolver});
   ASSERT_EQ(authored.meshes.size(), 1u);
+  EXPECT_EQ(authored.extraction_work.material_binding_build_count, 1u);
   const auto &authored_binding = authored.meshes.front().material;
   EXPECT_EQ(authored_binding.primary_material.material_id, primary);
   ASSERT_NE(authored_binding.material_for_slot(3u), nullptr);
@@ -2048,6 +2202,7 @@ TEST(RenderDefaultMaterialTests,
       document, assets,
       {.previous = &authored, .project_material_resolver = &resolver});
   EXPECT_FALSE(overridden.reused_previous_records);
+  EXPECT_EQ(overridden.extraction_work.material_binding_build_count, 1u);
   EXPECT_TRUE(overridden.dirty.project_materials_changed);
   ASSERT_EQ(overridden.meshes.size(), 1u);
   EXPECT_TRUE(overridden.meshes.front().material_dirty);
@@ -2076,6 +2231,7 @@ TEST(RenderDefaultMaterialTests,
       document, assets,
       {.previous = &overridden, .project_material_resolver = &resolver});
   EXPECT_TRUE(unchanged.reused_previous_records);
+  EXPECT_EQ(unchanged.extraction_work.material_binding_build_count, 0u);
   EXPECT_FALSE(unchanged.dirty.any_dirty());
   EXPECT_EQ(unchanged.meshes.front().material.revision, binding.revision);
 
@@ -2088,6 +2244,7 @@ TEST(RenderDefaultMaterialTests,
       document, assets,
       {.previous = &unchanged, .project_material_resolver = &resolver});
   EXPECT_TRUE(replaced.dirty.project_materials_changed);
+  EXPECT_EQ(replaced.extraction_work.material_binding_build_count, 1u);
   ASSERT_EQ(replaced.meshes.size(), 1u);
   EXPECT_TRUE(replaced.meshes.front().material_dirty);
   EXPECT_NE(replaced.meshes.front().material.revision, binding.revision);
@@ -2106,6 +2263,7 @@ TEST(RenderDefaultMaterialTests,
       document, assets,
       {.previous = &replaced, .project_material_resolver = &resolver});
   ASSERT_EQ(restored.meshes.size(), 1u);
+  EXPECT_EQ(restored.extraction_work.material_binding_build_count, 1u);
   EXPECT_TRUE(restored.meshes.front().material_dirty);
   EXPECT_EQ(restored.meshes.front().material.component, component);
   EXPECT_EQ(restored.meshes.front().material.revision, authored_binding.revision);
@@ -8273,6 +8431,102 @@ TEST(RenderInstanceBatchPlannerTests,
               RenderInstanceBatchUpdateKind::TransformsOnly);
     EXPECT_FLOAT_EQ(moved.chunks.front().world_bounds.min.x, 10.0f);
     EXPECT_FLOAT_EQ(moved.chunks.front().world_bounds.max.x, 12.0f);
+  }
+}
+
+TEST(RenderInstanceBatchPlannerTests,
+     RepeatedGeometrySplitAndRestoreCoalescesDeviceChunks) {
+  constexpr std::size_t kOccurrenceCount = 130u;
+  constexpr std::size_t kDeviceCapacity = 64u;
+  const RenderInstancePrimitiveKey shared_key{
+      .geometry_payload = 17u,
+      .material_payload = 29u,
+      .index_count = 3u,
+  };
+  std::vector<RenderInstancePrimitiveOccurrence> occurrences;
+  occurrences.reserve(kOccurrenceCount);
+  for (std::size_t index = 0u; index < kOccurrenceCount; ++index) {
+    QMat4 transform;
+    transform.values[12] = static_cast<float>(index * 2u);
+    QMat4 sampling;
+    sampling.values[13] = static_cast<float>(index);
+    occurrences.push_back({
+        .key = shared_key,
+        .occurrence = index + 1u,
+        .world_transform = transform,
+        .sampling_from_local = sampling,
+        .local_bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}, .present = true},
+        .visible = index % 3u != 0u,
+    });
+  }
+  RenderInstanceBatchPlan retained =
+      plan_render_instance_batches(occurrences, kDeviceCapacity);
+  ASSERT_EQ(retained.chunks.size(), 3u);
+  for (std::size_t edit = 0u; edit < 3u; ++edit) {
+    SCOPED_TRACE(edit);
+    for (std::size_t index = 0u; index < occurrences.size(); ++index) {
+      occurrences[index].key.geometry_payload = 100u + index;
+    }
+    const auto split = plan_render_instance_batches(occurrences, kDeviceCapacity, &retained);
+    ASSERT_EQ(split.chunks.size(), kOccurrenceCount);
+    EXPECT_FALSE(split.work.retained_layout);
+    EXPECT_EQ(split.work.morton_ordered_occurrence_count, kOccurrenceCount);
+    EXPECT_EQ(classify_instance_batch_update(retained, split),
+              RenderInstanceBatchUpdateKind::Rebuild);
+
+    for (auto &occurrence : occurrences) {
+      occurrence.key = shared_key;
+    }
+    const auto restored = plan_render_instance_batches(occurrences, kDeviceCapacity, &split);
+    ASSERT_EQ(restored.chunks.size(), 3u);
+    EXPECT_FALSE(restored.work.retained_layout);
+    EXPECT_EQ(restored.work.morton_ordered_occurrence_count, kOccurrenceCount);
+    EXPECT_EQ(restored.work.chunk_storage_growth_count, 1u);
+    EXPECT_EQ(restored.work.relocated_chunk_count, 0u);
+    EXPECT_EQ(classify_instance_batch_update(split, restored),
+              RenderInstanceBatchUpdateKind::Rebuild);
+    for (const auto &chunk : restored.chunks) {
+      EXPECT_EQ(chunk.key, shared_key);
+      ASSERT_LE(chunk.occurrences.size(), kDeviceCapacity);
+      for (std::size_t slot = 0u; slot < chunk.occurrences.size(); ++slot) {
+        const auto index = chunk.occurrences[slot] - 1u;
+        EXPECT_FLOAT_EQ(chunk.world_transforms[slot].values[12], static_cast<float>(index * 2u));
+        EXPECT_FLOAT_EQ(chunk.sampling_from_local[slot].values[13], static_cast<float>(index));
+        EXPECT_EQ(chunk.visibility[slot], index % 3u != 0u ? 1u : 0u);
+      }
+    }
+    retained = plan_render_instance_batches(occurrences, kDeviceCapacity, &restored);
+    EXPECT_TRUE(retained.work.retained_layout);
+    EXPECT_EQ(retained.work.morton_ordered_occurrence_count, 0u);
+    EXPECT_EQ(classify_instance_batch_update(restored, retained),
+              RenderInstanceBatchUpdateKind::Unchanged);
+  }
+}
+
+TEST(RenderInstanceBatchPlannerTests,
+     CompatibleGeometryMergesKeepAlreadyFullDeviceChunks) {
+  constexpr std::size_t kDeviceCapacity = 4u;
+  std::vector<RenderInstancePrimitiveOccurrence> occurrences;
+  for (std::size_t index = 0u; index < kDeviceCapacity * 2u; ++index) {
+    occurrences.push_back({
+        .key = {.geometry_payload = index / kDeviceCapacity + 1u,
+                .material_payload = 3u, .index_count = 6u},
+        .occurrence = index + 1u,
+    });
+  }
+  const auto before = plan_render_instance_batches(occurrences, kDeviceCapacity);
+  ASSERT_EQ(before.chunks.size(), 2u);
+  for (auto &occurrence : occurrences) {
+    occurrence.key.geometry_payload = 7u;
+  }
+  const auto merged = plan_render_instance_batches(occurrences, kDeviceCapacity, &before);
+  ASSERT_EQ(merged.chunks.size(), 2u);
+  EXPECT_TRUE(merged.work.retained_layout);
+  EXPECT_EQ(merged.work.morton_ordered_occurrence_count, 0u);
+  EXPECT_EQ(classify_instance_batch_update(before, merged), RenderInstanceBatchUpdateKind::Rebuild);
+  for (std::size_t index = 0u; index < merged.chunks.size(); ++index) {
+    EXPECT_EQ(merged.chunks[index].key.geometry_payload, 7u);
+    EXPECT_EQ(merged.chunks[index].occurrences, before.chunks[index].occurrences);
   }
 }
 

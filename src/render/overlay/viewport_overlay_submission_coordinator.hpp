@@ -223,6 +223,7 @@ struct ViewportOverlaySubmissionRequest final {
   const RenderToolPreviewSuppressionSnapshot *selection_dimension_preview_suppression = nullptr;
   /// Borrowed persistent mesh geometry; present only for whole-mesh outline selection.
   const RenderOverlaySelectedObjectSnapshot *selected_mesh_outline_snapshot = nullptr;
+  bool gpu_mesh_outlines = false;
   const ViewportOverlayFrame *volatile_modeling_overlay_frame = nullptr;
   ViewportOverlayVolatileModelingSourceStamp volatile_modeling_source;
   /// Borrowed only for submit(); render owns all retained curve presentation.
@@ -263,6 +264,9 @@ struct ViewportOverlaySubmissionResult final {
 
 /** Monotonic counters for broad work performed behind retained source gates. */
 struct ViewportOverlaySubmissionWorkCounters final {
+  std::uint64_t mesh_outline_source_refresh_count = 0u;
+  std::uint64_t mesh_outline_topology_build_count = 0u;
+  std::uint64_t mesh_outline_camera_classification_count = 0u;
   // These remain zero and make accidental broad source hashing test-visible.
   std::uint64_t dynamic_source_hash_count = 0u;
   std::uint64_t dynamic_source_hashed_record_count = 0u;

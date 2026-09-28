@@ -19,6 +19,10 @@ file except through prior written authorization from Francesco Di Blasi.
   and the default-material cases in `tests/render_extraction_tests.cpp`.
 - `RenderSourceStamp` gates extraction; `RenderSceneSnapshot` feeds `SceneRenderBridge` and caches.
   Put dirty/revision checks before topology hashes, geometry compilation, snapshots, or uploads.
+  Snapshot-owned material bindings use exact authored keys and material catalog/project revisions.
+  Geometry edits can reuse bindings across ordinary/instance regrouping, but texture/material edits
+  and resolver/default-override changes must invalidate them. Keep compatibility grouping exact;
+  material reuse does not authorize reusing geometry groups after a payload changes.
 - Apply the [preview projection contract](../editor/modeling/runtime/README.md#live-preview-projection-contract)
   to dynamic meshes and every associated wire, selection, silhouette and depth stream. Stable
   topology or committed asset revisions do not imply stable preview positions.
@@ -28,12 +32,22 @@ file except through prior written authorization from Francesco Di Blasi.
 - Overlay order, colors, depth, widths, and points belong to overlay policy/style resolvers. Keep
   persistent and volatile overlay streams separate; do not restore UI wire fallbacks or raw
   Filament line/point shortcuts.
-- Selected object/group silhouette ribbons share geometry between complementary visible and
-  occluded depth passes; the hidden pass scales authored alpha without changing component
-  visibility. Keep both material instances synchronized through retained camera/style updates
-  and destroy them together. Line bias must remain bounded in view space across camera distances.
-  Conservative occurrence culling must include the resolved raster width, cap and feather extent;
-  retain viewport-straddling geometry and recheck membership when the camera framing changes.
+- Camera-only point classification retains geometry and uploads visibility flags only. Worker
+  queries pin immutable geometry and private scratch; Filament calls stay on the render owner.
+  Packed preview begin must resolve viewport-skipped points before positions move. Refresh clip
+  uniforms on camera changes even when unrelated frame layers also change.
+- Dynamic preview preparation validates every group before uploads. Parallel work owns candidate
+  CPU streams and upload descriptors; publish serially only after the whole batch succeeds. Reuse
+  unchanged groups and preserve canonical normals, UVs, indices and bounds.
+- Vulkan object/group silhouettes use retained ordinary/active geometry batches in a separate
+  selection scene and per-pane occupancy/depth targets. Camera movement updates projection, never
+  CPU triangle unions or geometry uploads. Keep the two class boundaries independent, with active
+  color winning equal-depth ribbons; preserve complementary visible/occluded depth passes.
+  Mask targets include a raster-width/feather guardband. Retire pane views before their shared
+  mask scene and materials. Source-replacing tool previews retain the existing projected CPU path.
+  The CPU fallback still shares ribbons between depth passes and conservatively culls occurrences
+  using resolved width, cap and feather extent. Pixel and camera-retention regressions live in
+  `tests/selection_overlay_runtime_tests.cpp` and `tests/selected_mesh_outline_mask_cache_tests.cpp`.
 - Vulkan face tints share the stencil policy in `overlay/overlay_face_fill_composition.*`:
   coverage chooses hover/removal over active over ordinary selection, then consumes one
   authored-alpha tint per pixel. Zero-alpha fills neither claim nor consume coverage.
@@ -51,12 +65,25 @@ file except through prior written authorization from Francesco Di Blasi.
   and backend-confirmed presentation modes. Retire pending GPU work before swapchain replacement;
   callback publication must stay thread-safe. Preview surfaces honor `needs_initial_frame()` after
   recreation even when their content is unchanged.
-- Bulk selected-object resource creation and retirement must submit bounded command batches before
-  `beginFrame`; a single large selection can exhaust Filament's command arena while the GPU is idle.
+- Bulk resource creation and retirement, including mesh, instance and wire teardown, must submit
+  bounded command batches before `beginFrame`; large scenes can exhaust Filament's command arena
+  even during shutdown.
   Detach the complete retiring set of renderables before releasing their materials, avoiding
   repeated material-lifetime validation scans. Keep unchanged synchronization free of submissions.
   See `SelectedObjectOverlayCache` and the
   6,400-mesh regression in `tests/selection_overlay_runtime_tests.cpp`.
+  Vulkan selected face fills share indexed buffers across their four composition passes and
+  combine meshes only within the same active/ordinary class. Color edits update uniforms;
+  camera moves never rebuild batches. Retain reflected winding and local origins for precision.
+  Non-Vulkan backends preserve per-mesh ordering because they lack the stencil composition path.
+- Geometry-only instance changes may retain compatible entities, materials and instance buffers.
+  Match exact occurrence order, materials, passes, topology and capacity; prepare the entire rebind
+  batch before changing a live proxy. Incompatible groups use normal replacement. See
+  `tests/render_texture_lifetime_tests.cpp` for retained identity and bulk retirement coverage.
+- When compatible geometry populations merge again, retained instance slots must not preserve
+  excess chunks from earlier splits. Rebuild through the existing planner when the current exact
+  keys require fewer chunks; keep compatible full-capacity layouts retained. Planner regressions
+  in `tests/render_extraction_tests.cpp` cover repeated split/restore cycles.
 - VSync requires the maintained Filament patch and matching headers/libraries. Dependency upgrades
   must preserve provenance checks and test actual presentation modes, not only timer intervals.
 

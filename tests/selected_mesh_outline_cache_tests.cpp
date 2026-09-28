@@ -14,6 +14,7 @@
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/viewport/viewport_scene_projection.hpp"
 #include "math/glm_bridge.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -26,9 +27,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -1082,6 +1086,72 @@ TEST(SelectedMeshOutlineCacheTests, GroupMembersUseOutlinesAndKeepBoundsWithStab
   EXPECT_TRUE(target.dynamic.lines.empty());
 }
 
+constexpr std::size_t kLargeSelectionCameraSteps = 8;
+
+/// Keeps bounded camera workloads derived from the loaded scene and its framing owner.
+struct LargeSelectionCameraRegime {
+  std::string_view name;
+  std::array<ViewportOverlayCamera, kLargeSelectionCameraSteps> cameras;
+};
+
+std::array<LargeSelectionCameraRegime, 4> large_selection_camera_regimes(
+    ViewportCameraController saved, const ViewportFocusBounds &bounds, QVec2 viewport_size) {
+  saved.set_viewport_size(viewport_size.x, viewport_size.y);
+  auto framed = saved;
+  // Matches QtViewportPanel::frame_selection, including its deliberate framing margin.
+  framed.focus_bounds(bounds.min, bounds.max, 1.4f);
+  const auto framed_pose = framed.pose();
+  const auto center = (bounds.min + bounds.max) * 0.5f;
+  const auto extent = bounds.max - bounds.min;
+  const float radius = std::max(length(extent) * 0.5f, saved.state().near_plane * 4);
+  std::array<LargeSelectionCameraRegime, 4> regimes{{
+      {.name = "saved_orbit"}, {.name = "framed_orbit"},
+      {.name = "interior"}, {.name = "orthographic"}}};
+  for (std::size_t step = 0; step < kLargeSelectionCameraSteps; ++step) {
+    auto saved_step = saved;
+    if (step != 0) {
+      saved_step.begin_drag({}, ViewportDragMode::Orbit, saved.state().target);
+      saved_step.update_drag_delta({static_cast<float>(step) * 8, static_cast<float>(step) * 2});
+      saved_step.end_drag();
+    }
+    regimes[0].cameras[step] = ViewportCameraAdapter::overlay_camera(saved_step, viewport_size);
+
+    const float angle = static_cast<float>(step) * 2 * std::acos(-1.0f) /
+        static_cast<float>(kLargeSelectionCameraSteps);
+    const float cosine = std::cos(angle), sine = std::sin(angle);
+    const auto rotate_y = [cosine, sine](QVec3 point) {
+      return QVec3{point.x * cosine + point.z * sine, point.y,
+                   -point.x * sine + point.z * cosine};
+    };
+    auto orbit = framed;
+    if (step != 0) {
+      EXPECT_TRUE(orbit.restore_perspective_pose({
+          .eye = framed_pose.target + rotate_y(framed_pose.eye - framed_pose.target),
+          .target = framed_pose.target, .up = rotate_y(framed_pose.up)}));
+    }
+    regimes[1].cameras[step] = ViewportCameraAdapter::overlay_camera(orbit, viewport_size);
+
+    auto interior = framed;
+    const QVec3 eye = center + QVec3{extent.x * 0.15f * cosine,
+        extent.y * 0.075f * std::sin(2 * angle), extent.z * 0.15f * sine};
+    const QVec3 direction = normalize(QVec3{cosine, -0.08f, sine});
+    EXPECT_TRUE(interior.restore_perspective_pose({
+        .eye = eye, .target = eye + direction * (radius * 0.5f), .up = {0, 1, 0}}));
+    regimes[2].cameras[step] = ViewportCameraAdapter::overlay_camera(interior, viewport_size);
+
+    auto orthographic = framed;
+    orthographic.view_axis(step < 4 ? ViewportViewAxis::Y : ViewportViewAxis::Z, 1);
+    orthographic.focus_bounds(bounds.min, bounds.max, 1.4f);
+    if (step % 4 != 0) {
+      orthographic.begin_drag({}, ViewportDragMode::Pan);
+      orthographic.update_drag_delta({static_cast<float>(step % 4) * 12, 0});
+      orthographic.end_drag();
+    }
+    regimes[3].cameras[step] = ViewportCameraAdapter::overlay_camera(orthographic, viewport_size);
+  }
+  return regimes;
+}
+
 TEST(SelectedMeshOutlineCacheTests, LargeSceneSelectAllRetainsSubmittedOverlays) {
   const char *source = std::getenv("QUADER_TEST_LARGE_SELECTION_PROJECT");
   if (source == nullptr || *source == '\0') {
@@ -1169,6 +1239,55 @@ TEST(SelectedMeshOutlineCacheTests, LargeSceneSelectAllRetainsSubmittedOverlays)
   EXPECT_EQ(provider.builds, 1);
   EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
       work.dynamic_source_compose_count);
+
+  const auto bounds = ViewportSceneProjection::selection_bounds(session.modeling());
+  ASSERT_TRUE(bounds.has_value());
+  const auto camera_regimes = large_selection_camera_regimes(
+      session.viewport_workspace().camera(ViewportPaneId::Perspective), *bounds, {1280, 720});
+  std::cout << std::setprecision(std::numeric_limits<float>::max_digits10)
+            << "LARGE_SELECTION bounds_min=" << bounds->min.x << ',' << bounds->min.y << ',' << bounds->min.z
+            << " bounds_max=" << bounds->max.x << ',' << bounds->max.y << ',' << bounds->max.z
+            << " path=cpu_fallback steps_per_regime=" << kLargeSelectionCameraSteps << std::endl;
+  for (const auto &regime : camera_regimes) {
+    std::array<double, kLargeSelectionCameraSteps> elapsed{};
+    double unchanged_milliseconds = 0;
+    for (std::size_t step = 0; step < regime.cameras.size(); ++step) {
+      request.camera = regime.cameras[step];
+      start = std::chrono::steady_clock::now();
+      (void)coordinator.submit(request, settings, target);
+      elapsed[step] = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - start).count();
+      const auto &camera = request.camera;
+      std::cout << "LARGE_SELECTION_CAMERA regime=" << regime.name << " step=" << step
+                << " submit_ms=" << elapsed[step] << " lines=" << target.dynamic.lines.size()
+                << " eye=" << camera.eye.x << ',' << camera.eye.y << ',' << camera.eye.z
+                << " forward=" << camera.forward.x << ',' << camera.forward.y << ',' << camera.forward.z
+                << " right=" << camera.right.x << ',' << camera.right.y << ',' << camera.right.z
+                << " up=" << camera.up.x << ',' << camera.up.y << ',' << camera.up.z
+                << " viewport=" << camera.viewport_size.x << ',' << camera.viewport_size.y
+                << " projection=" << static_cast<int>(camera.projection)
+                << " fov=" << camera.fov_degrees << " ortho_size=" << camera.orthographic_size
+                << " near=" << camera.near_plane << " far=" << camera.far_plane << std::endl;
+      start = std::chrono::steady_clock::now();
+      for (int repeat = 0; repeat < 5; ++repeat) {
+        EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+      }
+      unchanged_milliseconds += std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - start).count();
+      EXPECT_EQ(provider.builds, 1);
+      EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+          work.dynamic_source_compose_count);
+    }
+    const double first_milliseconds = elapsed.front();
+    const double mean_milliseconds = std::accumulate(elapsed.begin(), elapsed.end(), 0.0) / elapsed.size();
+    std::sort(elapsed.begin(), elapsed.end());
+    const auto percentile_index = static_cast<std::size_t>(std::ceil(elapsed.size() * 0.95)) - 1;
+    std::cout << "LARGE_SELECTION_REGIME name=" << regime.name << " samples=" << elapsed.size()
+              << " first_ms=" << first_milliseconds << " mean_ms=" << mean_milliseconds
+              << " median_ms=" << elapsed[elapsed.size() / 2] << " p95_ms=" << elapsed[percentile_index]
+              << " max_ms=" << elapsed.back() << " unchanged_40_ms=" << unchanged_milliseconds
+              << std::endl;
+  }
 }
 
 } // namespace

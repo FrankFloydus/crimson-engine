@@ -29,6 +29,12 @@ struct OverlayRenderableCacheStats {
   std::uint64_t camera_signature = 0;
   std::uint8_t layer_mask = 0;
   std::size_t proxy_count = 0;
+  std::size_t point_vertex_count = 0u;
+  std::size_t visible_point_vertex_count = 0u;
+  std::uint64_t point_geometry_update_count = 0u;
+  std::uint64_t point_visibility_upload_count = 0u;
+  std::uint64_t point_position_upload_count = 0u;
+  OverlayDepthStampPointVisibilityStats point_visibility;
 };
 
 /**
@@ -127,6 +133,7 @@ public:
         std::uint64_t camera_signature = 0;
         std::uint8_t layer_mask = 0;
         bool has_frame = false;
+        OverlayDepthStampPointVisibilityFilter point_visibility;
         std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxy_groups;
         OverlayFrameSignatures transform_base_signatures;
         std::uint64_t transform_base_frame_signature = 0u;
@@ -137,11 +144,17 @@ public:
         std::vector<TransformSourceBindingSpan> transform_source_binding_spans;
         bool transform_bindings_valid = false;
         bool transform_active = false;
+        bool point_viewport_skips_applied = false;
+        std::uint64_t point_order_signature = 0u;
+        std::uint64_t point_geometry_update_count = 0u;
+        std::uint64_t point_visibility_upload_count = 0u;
+        std::uint64_t point_position_upload_count = 0u;
     };
 
     void rebuild_slot(OverlaySlot &slot,
                       bool rebuild_camera_independent_layers);
     void update_retained_camera_state(OverlaySlot &slot);
+    void update_point_visibility(OverlaySlot &slot);
     void begin_transform_stream(OverlaySlot &slot,
                                 std::uint64_t layout_signature);
     void resolve_transform_stream_bindings(OverlaySlot &slot);

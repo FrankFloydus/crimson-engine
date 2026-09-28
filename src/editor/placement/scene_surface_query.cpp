@@ -20,9 +20,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <ranges>
 #include <unordered_map>
@@ -199,6 +201,104 @@ struct GeometryCacheEntry final {
   std::uint64_t last_use_sequence = 0u;
 };
 
+/// Tracks lazy work even when a frozen snapshot outlives its query owner.
+struct SurfaceLandmarkWorkCounters final {
+  std::atomic<std::uint64_t> build_count = 0u;
+};
+
+void append_landmarks(std::vector<SceneSurfaceLandmark> &landmarks,
+                       const SceneSurfaceParticipant &participant,
+                       const MeshGeometryPayload &geometry,
+                       const QMat4 &world_from_local) {
+  std::vector<QVec3> world_vertices;
+  world_vertices.reserve(geometry.vertices.size());
+  for (const MeshVertex &vertex : geometry.vertices) {
+    const QVec3 world = transform_point(world_from_local, vertex.position);
+    if (!finite_vector(world)) {
+      return;
+    }
+    world_vertices.push_back(world);
+  }
+
+  std::vector<QVec3> vertex_normal_sums(world_vertices.size());
+  std::vector<SurfaceEdgeAccumulator> edges;
+  std::unordered_map<std::uint64_t, std::size_t> edge_slots;
+  edge_slots.reserve(geometry.indices.size());
+  for (std::size_t offset = 0u; offset + 2u < geometry.indices.size();
+       offset += 3u) {
+    const std::uint32_t first = geometry.indices[offset];
+    const std::uint32_t second = geometry.indices[offset + 1u];
+    const std::uint32_t third = geometry.indices[offset + 2u];
+    if (first >= world_vertices.size() || second >= world_vertices.size() ||
+        third >= world_vertices.size()) {
+      continue;
+    }
+    const QVec3 a = world_vertices[first];
+    const QVec3 b = world_vertices[second];
+    const QVec3 c = world_vertices[third];
+    const QVec3 area_normal = cross(b - a, c - a);
+    if (!finite_vector(area_normal) ||
+        length_squared(area_normal) <= kRayEpsilon * kRayEpsilon) {
+      continue;
+    }
+    const QVec3 normal = normalize_or_zero(area_normal);
+    landmarks.push_back({
+        .participant = participant.id,
+        .world_position = (a + b + c) / 3.0f,
+        .world_normal = normal,
+        .kind = SceneSurfaceLandmarkKind::FaceCenter,
+        .element_key = offset / 3u,
+        .selectable = participant.selectable,
+        .effectively_locked = participant.effectively_locked,
+    });
+    vertex_normal_sums[first] += area_normal;
+    vertex_normal_sums[second] += area_normal;
+    vertex_normal_sums[third] += area_normal;
+
+    const std::array<std::pair<std::uint32_t, std::uint32_t>, 3u>
+        triangle_edges{{{first, second}, {second, third}, {third, first}}};
+    for (const auto &[left, right] : triangle_edges) {
+      const std::uint64_t key = surface_edge_key(left, right);
+      const auto found = edge_slots.find(key);
+      if (found == edge_slots.end()) {
+        edge_slots.emplace(key, edges.size());
+        edges.push_back({
+            .left = left,
+            .right = right,
+            .normal_sum = area_normal,
+            .key = key,
+        });
+      } else {
+        edges[found->second].normal_sum += area_normal;
+      }
+    }
+  }
+
+  for (std::size_t index = 0u; index < world_vertices.size(); ++index) {
+    landmarks.push_back({
+        .participant = participant.id,
+        .world_position = world_vertices[index],
+        .world_normal = normalize_or_zero(vertex_normal_sums[index]),
+        .kind = SceneSurfaceLandmarkKind::Vertex,
+        .element_key = index,
+        .selectable = participant.selectable,
+        .effectively_locked = participant.effectively_locked,
+    });
+  }
+  for (const SurfaceEdgeAccumulator &edge : edges) {
+    landmarks.push_back({
+        .participant = participant.id,
+        .world_position =
+            (world_vertices[edge.left] + world_vertices[edge.right]) * 0.5f,
+        .world_normal = normalize_or_zero(edge.normal_sum),
+        .kind = SceneSurfaceLandmarkKind::EdgeMidpoint,
+        .element_key = edge.key,
+        .selectable = participant.selectable,
+        .effectively_locked = participant.effectively_locked,
+    });
+  }
+}
+
 } // namespace
 
 /// Owns the reusable neutral traversal stacks hidden behind the native API.
@@ -212,7 +312,10 @@ public:
 struct SceneSurfaceQuerySnapshot::Data final {
   std::uint64_t revision = 0u;
   std::vector<SceneSurfaceParticipant> public_participants;
-  std::vector<SceneSurfaceLandmark> public_landmarks;
+  mutable std::vector<SceneSurfaceLandmark> public_landmarks;
+  mutable std::once_flag landmark_once;
+  mutable std::atomic<std::size_t> landmark_count = 0u;
+  std::shared_ptr<SurfaceLandmarkWorkCounters> landmark_work_counters;
   std::vector<FrozenSurfaceParticipant> participants;
   BoundsBvh tlas;
 };
@@ -262,6 +365,7 @@ public:
     std::shared_ptr<SceneSurfaceQuerySnapshot::Data> next =
         std::make_shared<SceneSurfaceQuerySnapshot::Data>();
     next->revision = ++snapshot_revision_;
+    next->landmark_work_counters = landmark_work_counters_;
     const auto local_allows = [&](EntityId entity) {
       if (local_snapshot.has_value()) {
         return local_snapshot->allows(entity);
@@ -276,7 +380,6 @@ public:
     ++stats_.snapshot_build_count;
     ++stats_.tlas_build_count;
     stats_.participant_count = snapshot_->participants.size();
-    stats_.landmark_count = snapshot_->public_landmarks.size();
     stats_.triangle_count = 0u;
     std::unordered_set<const CachedSurfaceGeometry *> unique_geometries;
     unique_geometries.reserve(snapshot_->participants.size());
@@ -291,7 +394,14 @@ public:
   }
 
   [[nodiscard]] SceneSurfaceQueryStats stats() const noexcept {
-    return stats_;
+    SceneSurfaceQueryStats result = stats_;
+    result.landmark_build_count =
+        landmark_work_counters_->build_count.load(std::memory_order_relaxed);
+    result.landmark_count = snapshot_
+                                ? snapshot_->landmark_count.load(
+                                      std::memory_order_acquire)
+                                : 0u;
+    return result;
   }
 
   void invalidate() noexcept {
@@ -299,13 +409,13 @@ public:
     fingerprint_valid_ = false;
     stats_.participant_count = 0u;
     stats_.triangle_count = 0u;
-    stats_.landmark_count = 0u;
     stats_.unique_geometry_count = 0u;
   }
 
 private:
   [[nodiscard]] std::shared_ptr<const CachedSurfaceGeometry>
-  geometry_for(std::shared_ptr<const MeshGeometryPayload> payload) const {
+  geometry_for(std::shared_ptr<const MeshGeometryPayload> payload,
+               SceneSurfaceParticipantId id) const {
     const MeshGeometryContentId content_id = payload->content_id();
     for (GeometryCacheEntry &entry : geometry_cache_) {
       if (!(entry.content_id == content_id)) {
@@ -318,6 +428,25 @@ private:
            mesh_geometry_payload_equal(*candidate->payload, *payload))) {
         entry.last_use_sequence = ++geometry_use_sequence_;
         return candidate;
+      }
+    }
+
+    // The bounded hide/show cache need not hold every live geometry. Reuse the
+    // previous frozen participant before rebuilding a BLAS evicted from it.
+    if (snapshot_) {
+      const auto previous = std::ranges::lower_bound(
+          snapshot_->participants, id, scene_surface_participant_id_less,
+          [](const FrozenSurfaceParticipant &participant) {
+            return participant.public_record.id;
+          });
+      if (previous != snapshot_->participants.end() &&
+          previous->public_record.id == id) {
+        const auto &candidate = previous->geometry;
+        if (candidate->payload->content_id() == content_id &&
+            (candidate->payload.get() == payload.get() ||
+             mesh_geometry_payload_equal(*candidate->payload, *payload))) {
+          return candidate;
+        }
       }
     }
 
@@ -374,7 +503,7 @@ private:
       return;
     }
     std::shared_ptr<const CachedSurfaceGeometry> geometry =
-        geometry_for(payload);
+        geometry_for(payload, id);
     const SceneSurfaceParticipant public_record{
         .id = id,
         .world_bounds = *bounds,
@@ -382,7 +511,6 @@ private:
         .selectable = selectable,
         .effectively_locked = effectively_locked,
     };
-    append_landmarks(target, public_record, *payload, world_from_local);
     target.participants.push_back({
         .public_record = public_record,
         .world_from_local = world_from_local,
@@ -390,99 +518,6 @@ private:
         .pinned_payload = std::move(payload),
         .geometry = std::move(geometry),
     });
-  }
-
-  void append_landmarks(SceneSurfaceQuerySnapshot::Data &target,
-                        const SceneSurfaceParticipant &participant,
-                        const MeshGeometryPayload &geometry,
-                        const QMat4 &world_from_local) const {
-    std::vector<QVec3> world_vertices;
-    world_vertices.reserve(geometry.vertices.size());
-    for (const MeshVertex &vertex : geometry.vertices) {
-      const QVec3 world = transform_point(world_from_local, vertex.position);
-      if (!finite_vector(world)) {
-        return;
-      }
-      world_vertices.push_back(world);
-    }
-
-    std::vector<QVec3> vertex_normal_sums(world_vertices.size());
-    std::vector<SurfaceEdgeAccumulator> edges;
-    std::unordered_map<std::uint64_t, std::size_t> edge_slots;
-    edge_slots.reserve(geometry.indices.size());
-    for (std::size_t offset = 0u; offset + 2u < geometry.indices.size();
-         offset += 3u) {
-      const std::uint32_t first = geometry.indices[offset];
-      const std::uint32_t second = geometry.indices[offset + 1u];
-      const std::uint32_t third = geometry.indices[offset + 2u];
-      if (first >= world_vertices.size() || second >= world_vertices.size() ||
-          third >= world_vertices.size()) {
-        continue;
-      }
-      const QVec3 a = world_vertices[first];
-      const QVec3 b = world_vertices[second];
-      const QVec3 c = world_vertices[third];
-      const QVec3 area_normal = cross(b - a, c - a);
-      if (!finite_vector(area_normal) ||
-          length_squared(area_normal) <= kRayEpsilon * kRayEpsilon) {
-        continue;
-      }
-      const QVec3 normal = normalize_or_zero(area_normal);
-      target.public_landmarks.push_back({
-          .participant = participant.id,
-          .world_position = (a + b + c) / 3.0f,
-          .world_normal = normal,
-          .kind = SceneSurfaceLandmarkKind::FaceCenter,
-          .element_key = offset / 3u,
-          .selectable = participant.selectable,
-          .effectively_locked = participant.effectively_locked,
-      });
-      vertex_normal_sums[first] += area_normal;
-      vertex_normal_sums[second] += area_normal;
-      vertex_normal_sums[third] += area_normal;
-
-      const std::array<std::pair<std::uint32_t, std::uint32_t>, 3u>
-          triangle_edges{{{first, second}, {second, third}, {third, first}}};
-      for (const auto &[left, right] : triangle_edges) {
-        const std::uint64_t key = surface_edge_key(left, right);
-        const auto found = edge_slots.find(key);
-        if (found == edge_slots.end()) {
-          edge_slots.emplace(key, edges.size());
-          edges.push_back({
-              .left = left,
-              .right = right,
-              .normal_sum = area_normal,
-              .key = key,
-          });
-        } else {
-          edges[found->second].normal_sum += area_normal;
-        }
-      }
-    }
-
-    for (std::size_t index = 0u; index < world_vertices.size(); ++index) {
-      target.public_landmarks.push_back({
-          .participant = participant.id,
-          .world_position = world_vertices[index],
-          .world_normal = normalize_or_zero(vertex_normal_sums[index]),
-          .kind = SceneSurfaceLandmarkKind::Vertex,
-          .element_key = index,
-          .selectable = participant.selectable,
-          .effectively_locked = participant.effectively_locked,
-      });
-    }
-    for (const SurfaceEdgeAccumulator &edge : edges) {
-      target.public_landmarks.push_back({
-          .participant = participant.id,
-          .world_position =
-              (world_vertices[edge.left] + world_vertices[edge.right]) * 0.5f,
-          .world_normal = normalize_or_zero(edge.normal_sum),
-          .kind = SceneSurfaceLandmarkKind::EdgeMidpoint,
-          .element_key = edge.key,
-          .selectable = participant.selectable,
-          .effectively_locked = participant.effectively_locked,
-      });
-    }
   }
 
   void build_participants(
@@ -522,19 +557,6 @@ private:
     for (const FrozenSurfaceParticipant &participant : target.participants) {
       target.public_participants.push_back(participant.public_record);
     }
-    std::ranges::sort(
-        target.public_landmarks,
-        [](const SceneSurfaceLandmark &left,
-           const SceneSurfaceLandmark &right) {
-          if (left.participant != right.participant) {
-            return scene_surface_participant_id_less(left.participant,
-                                                     right.participant);
-          }
-          if (left.kind != right.kind) {
-            return left.kind < right.kind;
-          }
-          return left.element_key < right.element_key;
-        });
   }
 
   void build_tlas(SceneSurfaceQuerySnapshot::Data &target) const {
@@ -575,6 +597,8 @@ private:
   mutable std::vector<GeometryCacheEntry> geometry_cache_;
   mutable std::uint64_t geometry_use_sequence_ = 0u;
   mutable std::uint64_t snapshot_revision_ = 0u;
+  std::shared_ptr<SurfaceLandmarkWorkCounters> landmark_work_counters_ =
+      std::make_shared<SurfaceLandmarkWorkCounters>();
   mutable std::shared_ptr<const SceneSurfaceQuerySnapshot::Data> snapshot_;
   mutable SurfaceSnapshotFingerprint fingerprint_;
   mutable bool fingerprint_valid_ = false;
@@ -606,9 +630,37 @@ SceneSurfaceQuerySnapshot::participants() const noexcept {
 }
 
 std::span<const SceneSurfaceLandmark>
-SceneSurfaceQuerySnapshot::landmarks() const noexcept {
-  return data_ ? std::span<const SceneSurfaceLandmark>(data_->public_landmarks)
-               : std::span<const SceneSurfaceLandmark>{};
+SceneSurfaceQuerySnapshot::landmarks() const {
+  if (!data_) {
+    return {};
+  }
+  std::call_once(data_->landmark_once, [this] {
+    QDR_PROFILE_SCOPE("Scene surface query build landmarks");
+    std::vector<SceneSurfaceLandmark> landmarks;
+    for (const FrozenSurfaceParticipant &participant : data_->participants) {
+      append_landmarks(landmarks, participant.public_record,
+                       *participant.pinned_payload, participant.world_from_local);
+    }
+    std::ranges::sort(
+        landmarks,
+        [](const SceneSurfaceLandmark &left,
+           const SceneSurfaceLandmark &right) {
+          if (left.participant != right.participant) {
+            return scene_surface_participant_id_less(left.participant,
+                                                     right.participant);
+          }
+          if (left.kind != right.kind) {
+            return left.kind < right.kind;
+          }
+          return left.element_key < right.element_key;
+        });
+    data_->public_landmarks = std::move(landmarks);
+    data_->landmark_count.store(data_->public_landmarks.size(),
+                                std::memory_order_release);
+    data_->landmark_work_counters->build_count.fetch_add(
+        1u, std::memory_order_relaxed);
+  });
+  return data_->public_landmarks;
 }
 
 std::uint64_t SceneSurfaceQuerySnapshot::revision() const noexcept {

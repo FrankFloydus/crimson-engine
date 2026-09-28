@@ -11,23 +11,71 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
 namespace quader {
+
+struct MeshProjectionPositionUpdatePlan {
+  struct FaceRange {
+    std::size_t face_index = 0U;
+    std::size_t vertex_offset = 0U;
+    bool dirty = false;
+    std::vector<std::size_t> normal_corners;
+  };
+
+  std::shared_ptr<const quader_poly::Document> source_document;
+  std::vector<std::uint8_t> movable_vertices;
+  std::vector<FaceRange> faces;
+  std::vector<MeshPrimitiveSpan> primitives;
+  std::vector<std::uint32_t> compiled_source_ids;
+  std::size_t index_count = 0U;
+  bool eligible = false;
+};
+
 namespace {
 
+std::atomic<std::uint64_t> retained_translation_count{0};
+std::atomic<std::uint64_t> retained_flat_face_count{0};
+std::atomic<std::uint64_t> retained_partial_count{0};
+std::atomic<std::uint64_t> partial_compiled_face_count{0};
+std::atomic<std::uint64_t> full_compile_count{0};
+std::atomic<std::uint64_t> partial_plan_build_count{0};
+std::atomic<std::uint64_t> partial_plan_face_visit_count{0};
+std::atomic<std::uint64_t> partial_plan_reuse_count{0};
+std::atomic<std::uint64_t> partial_plan_fallback_count{0};
+
 QVec3 from_runtime(quader::QVec3 value) { return {value.x, value.y, value.z}; }
+
+quader_poly::CompiledMesh &canonical_compilation_scratch();
+bool same_topology_layout(const quader_poly::Document &left,
+                          const quader_poly::Document &right);
+
+MeshVertex from_compiled_vertex(const quader_poly::CompiledVertex &vertex) {
+  return MeshVertex{
+      .position = from_runtime(vertex.position),
+      .normal = from_runtime(vertex.normal),
+      .uv = {vertex.uv0.x, vertex.uv0.y},
+      .rgba = vertex.color,
+      .source_vertex_id = vertex.source_vertex_id,
+      .uv_carrier = vertex.uv_carrier,
+      .uv_geometric_normal = vertex.uv_geometric_normal};
+}
 
 void replace_geometry_from_compiled(
     const quader_poly::CompiledMesh &compiled,
@@ -68,37 +116,81 @@ bool same_rebase_corner_ids(const quader_poly::Face &source,
   return source_ids == destination_ids;
 }
 
-float triangle_orientation(quader::QVec3 a, quader::QVec3 b,
-                           quader::QVec3 c, quader::QVec3 normal) {
-  const quader::QVec3 ab{b.x - a.x, b.y - a.y, b.z - a.z};
-  const quader::QVec3 ac{c.x - a.x, c.y - a.y, c.z - a.z};
-  const quader::QVec3 area{
-      ab.y * ac.z - ab.z * ac.y,
-      ab.z * ac.x - ab.x * ac.z,
-      ab.x * ac.y - ab.y * ac.x,
+double triangle_orientation(quader::QVec3 a, quader::QVec3 b,
+                            quader::QVec3 c, quader::QVec3 normal) {
+  const auto area = quader_geometry::triangle_area_vector(
+      quader_geometry::QTriangle3<double>{
+          {a.x, a.y, a.z}, {b.x, b.y, b.z}, {c.x, c.y, c.z}});
+  return quader_geometry::dot(
+      area, quader_geometry::QVec3d{normal.x, normal.y, normal.z});
+}
+
+/** Rejects rounded near-translations instead of assuming rigid geometry. */
+bool is_exact_document_translation(const quader_poly::Document &previous,
+                                   const quader_poly::Document &next) {
+  if (previous.vertices.empty() ||
+      previous.vertices.size() != next.vertices.size()) {
+    return false;
+  }
+  const auto difference = [](QVec3 left, QVec3 right) {
+    return std::array<double, 3>{
+        static_cast<double>(left.x) - right.x,
+        static_cast<double>(left.y) - right.y,
+        static_cast<double>(left.z) - right.z};
   };
-  return area.x * normal.x + area.y * normal.y + area.z * normal.z;
+  const auto translation = difference(next.vertices.front().position,
+                                      previous.vertices.front().position);
+  if (!std::ranges::all_of(translation,
+                           [](double value) { return std::isfinite(value); })) {
+    return false;
+  }
+  for (std::size_t index = 0; index < next.vertices.size(); ++index) {
+    if (difference(next.vertices[index].position,
+                   previous.vertices[index].position) != translation ||
+        difference(next.vertices[index].position,
+                   next.vertices.front().position) !=
+            difference(previous.vertices[index].position,
+                       previous.vertices.front().position)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Guarantees that the compiler never excludes this face from smoothing. */
+bool has_valid_normal_fallback(
+    const quader_poly::document_internal::VertexLookupIndex &vertex_lookup,
+    const quader_poly::Face &face) {
+  if (face.vertices.size() < 3U) return false;
+  const auto *a = vertex_lookup.find(face.vertices[0]);
+  const auto *b = vertex_lookup.find(face.vertices[1]);
+  const auto *c = vertex_lookup.find(face.vertices[2]);
+  if (a == nullptr || b == nullptr || c == nullptr) return false;
+  const auto normal = quader_geometry::triangle_unit_normal(
+      quader_geometry::QTriangle3<float>{
+          {a->position.x, a->position.y, a->position.z},
+          {b->position.x, b->position.y, b->position.z},
+          {c->position.x, c->position.y, c->position.z}});
+  return std::isfinite(normal.x) && std::isfinite(normal.y) &&
+         std::isfinite(normal.z) &&
+         quader_geometry::length_squared(normal) >
+             quader_poly::document_internal::kEpsilon;
 }
 
 /**
  * Applies a topology-retained transform directly to the already compiled
- * flat-shaded face ranges. This is the Quader equivalent of Blender's edit
- * mesh partial tessellation/normal update: unchanged faces retain their
- * derived buffers, while every affected face still receives canonical
- * normals, generated UVs, triangulation, winding, IDs, and primitive spans.
- * Smooth islands fall back to the full compiler because their normals can
- * propagate beyond the directly affected faces.
+ * face ranges. Exact translations may also retain smooth corner normals when
+ * every canonical face normal and its smoothing participation are unchanged.
+ * Changed faces still receive canonical UVs, triangulation and winding.
  */
-bool try_update_flat_document_mesh_positions(
+bool try_update_retained_document_mesh_positions(
     const quader_poly::Document &previous,
-    const quader_poly::Document &next, MeshAsset &projected) {
-  QDR_PROFILE_SCOPE("Mesh projection retained flat-face update");
+    const quader_poly::Document &next, MeshAsset &projected,
+    bool preserve_corner_normals) {
+  QDR_PROFILE_SCOPE("Mesh projection retained face update");
   using quader_poly::document_internal::Triangle;
 
-  if (previous.faces.size() != next.faces.size() ||
-      std::ranges::any_of(next.faces, [](const quader_poly::Face &face) {
-        return face.normal_shading != quader_poly::SurfaceShading::Flat;
-      })) {
+  if (previous.faces.size() != next.faces.size()) {
     return false;
   }
 
@@ -107,6 +199,9 @@ bool try_update_flat_document_mesh_positions(
     return false;
   }
 
+  const quader_poly::document_internal::VertexLookupIndex previous_lookup(previous);
+  const quader_poly::document_internal::VertexLookupIndex next_lookup(next);
+  std::vector<QVec3> face_positions;
   std::size_t vertex_offset = 0U;
   std::size_t index_offset = 0U;
   for (std::size_t face_index = 0U; face_index < next.faces.size();
@@ -119,6 +214,12 @@ bool try_update_flat_document_mesh_positions(
       return false;
     }
 
+    if (preserve_corner_normals &&
+        (!has_valid_normal_fallback(previous_lookup, previous_face) ||
+         !has_valid_normal_fallback(next_lookup, face))) {
+      return false;
+    }
+
     MeshPrimitiveSpan &primitive = geometry.primitives[face_index];
     if (primitive.index_offset != index_offset ||
         primitive.material_slot != face.material_slot ||
@@ -127,12 +228,13 @@ bool try_update_flat_document_mesh_positions(
     }
 
     bool face_changed = false;
+    face_positions.clear();
+    face_positions.reserve(face.vertices.size());
     for (std::size_t local_index = 0U;
          local_index < face.vertices.size(); ++local_index) {
       const quader_poly::ElementId vertex_id = face.vertices[local_index];
-      const quader_poly::Vertex *before =
-          quader_poly::find_vertex(previous, vertex_id);
-      const quader_poly::Vertex *after = quader_poly::find_vertex(next, vertex_id);
+      const quader_poly::Vertex *before = previous_lookup.find(vertex_id);
+      const quader_poly::Vertex *after = next_lookup.find(vertex_id);
       if (before == nullptr || after == nullptr ||
           geometry.vertices[vertex_offset + local_index].source_vertex_id !=
               vertex_id) {
@@ -140,44 +242,53 @@ bool try_update_flat_document_mesh_positions(
       }
       face_changed = face_changed ||
                      !same_position(before->position, after->position);
+      face_positions.push_back(after->position);
     }
 
     if (face_changed) {
-      QDR_PROFILE_SCOPE("Mesh projection retained flat-face changed face");
+      QDR_PROFILE_SCOPE("Mesh projection retained changed face");
+      const quader::QVec3 normal = quader_poly::face_normal(next, face);
+      if (preserve_corner_normals &&
+          !same_position(normal,
+                         geometry.vertices[vertex_offset].uv_geometric_normal)) {
+        return false;
+      }
       const std::vector<Triangle> triangles =
-          quader_poly::document_internal::triangulate_face_local_indices(next,
-                                                                          face);
+          quader_poly::document_internal::triangulate_face_local_indices(
+              next, face, next_lookup, normal);
       if (triangles.empty() ||
           triangles.size() * 3U != primitive.index_count) {
         return false;
       }
-
-      const quader::QVec3 normal = quader_poly::face_normal(next, face);
       const int dropped_axis =
           quader_poly::document_internal::dropped_axis_for_normal(normal);
-      const quader_poly::document_internal::FaceUvBasis uv_basis =
-          quader_poly::document_internal::generated_face_uv_basis(next, face,
-                                                                   normal);
       const bool use_loop_uvs =
           quader_poly::document_internal::face_has_loop_uvs(face);
-      const auto uv_carrier =
-          quader_poly::face_texture_carrier(next, face, normal);
+      const quader_poly::document_internal::FaceUvBasis uv_basis =
+          use_loop_uvs
+              ? quader_poly::document_internal::FaceUvBasis{}
+              : quader_poly::document_internal::generated_face_uv_basis(
+                    next, face, normal, next_lookup);
+      const auto uv_carrier = quader_poly::face_texture_carrier(
+          use_loop_uvs ? std::span<const QVec3>(face_positions)
+                       : std::span<const QVec3>{},
+          use_loop_uvs ? std::span<const QVec2>(face.uvs)
+                       : std::span<const QVec2>{},
+          normal, face.texture_transform);
       for (std::size_t local_index = 0U;
            local_index < face.vertices.size(); ++local_index) {
         const quader_poly::ElementId vertex_id = face.vertices[local_index];
-        const quader_poly::Vertex *vertex =
-            quader_poly::find_vertex(next, vertex_id);
-        if (vertex == nullptr) {
-          return false;
-        }
+        const QVec3 position = face_positions[local_index];
         const QVec2 base_uv =
             use_loop_uvs
                 ? face.uvs[local_index]
                 : quader_poly::document_internal::generated_uv_for_position(
-                      vertex->position, uv_basis, dropped_axis);
+                      position, uv_basis, dropped_axis);
+        const QVec3 corner_normal = preserve_corner_normals
+            ? geometry.vertices[vertex_offset + local_index].normal : normal;
         geometry.vertices[vertex_offset + local_index] = MeshVertex{
-            .position = vertex->position,
-            .normal = normal,
+            .position = position,
+            .normal = corner_normal,
             .uv = quader_poly::apply_face_texture_transform(
                 base_uv, face.texture_transform),
             .rgba = 0xff9f9f9fU,
@@ -189,19 +300,11 @@ bool try_update_flat_document_mesh_positions(
 
       std::size_t write_index = index_offset;
       for (const Triangle &triangle : triangles) {
-        const quader_poly::Vertex *a =
-            quader_poly::find_vertex(next, face.vertices[triangle.a]);
-        const quader_poly::Vertex *b =
-            quader_poly::find_vertex(next, face.vertices[triangle.b]);
-        const quader_poly::Vertex *c =
-            quader_poly::find_vertex(next, face.vertices[triangle.c]);
-        if (a == nullptr || b == nullptr || c == nullptr) {
-          return false;
-        }
         geometry.indices[write_index++] =
             static_cast<std::uint32_t>(vertex_offset + triangle.a);
-        if (triangle_orientation(a->position, b->position, c->position,
-                                 normal) >= 0.0F) {
+        if (triangle_orientation(face_positions[triangle.a],
+                                 face_positions[triangle.b],
+                                 face_positions[triangle.c], normal) >= 0.0) {
           geometry.indices[write_index++] =
               static_cast<std::uint32_t>(vertex_offset + triangle.b);
           geometry.indices[write_index++] =
@@ -221,6 +324,138 @@ bool try_update_flat_document_mesh_positions(
 
   return vertex_offset == geometry.vertices.size() &&
          index_offset == geometry.indices.size();
+}
+
+/**
+ * Compiles the complete face neighborhood of affected normal corners through
+ * the canonical owner. A fan connects only corners with the same authored
+ * vertex ID, so every face incident to a dirty face's vertices is sufficient;
+ * flat and collapsed faces remain present for their normal/edge contribution.
+ */
+bool try_update_prepared_document_mesh_positions(
+    const quader_poly::Document &next, MeshAsset &projected,
+    const MeshProjectionPositionUpdatePlan &plan) {
+  QDR_PROFILE_SCOPE("Mesh projection retained partial face update");
+  if (!plan.eligible || !plan.source_document ||
+      !same_topology_layout(*plan.source_document, next)) {
+    return false;
+  }
+  const auto &previous = *projected.authored_polygon_document;
+  for (std::size_t index = 0U; index < next.vertices.size(); ++index) {
+    if (!plan.movable_vertices[index] &&
+        (!same_position(next.vertices[index].position,
+                        plan.source_document->vertices[index].position) ||
+         !same_position(previous.vertices[index].position,
+                        plan.source_document->vertices[index].position))) {
+      return false;
+    }
+  }
+  const MeshGeometryPayload &current_geometry = projected.geometry();
+  if (current_geometry.primitives.size() != plan.primitives.size() ||
+      current_geometry.vertices.size() != plan.compiled_source_ids.size() ||
+      current_geometry.indices.size() != plan.index_count) {
+    return false;
+  }
+  for (std::size_t index = 0U; index < plan.primitives.size(); ++index) {
+    const auto &actual = current_geometry.primitives[index];
+    const auto &expected = plan.primitives[index];
+    if (actual.index_offset != expected.index_offset ||
+        actual.index_count != expected.index_count ||
+        actual.material_slot != expected.material_slot) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0U; index < plan.compiled_source_ids.size(); ++index) {
+    if (current_geometry.vertices[index].source_vertex_id !=
+        plan.compiled_source_ids[index]) {
+      return false;
+    }
+  }
+
+  // This is an immutable compiler input, not another editable document. Keep
+  // the full vertex table and authored edge policy so ID resolution and local
+  // non-manifold incidence match the authoritative source exactly.
+  quader_poly::Document neighborhood;
+  neighborhood.vertices = next.vertices;
+  neighborhood.next_vertex_id = next.next_vertex_id;
+  neighborhood.next_face_id = next.next_face_id;
+  neighborhood.hard_normal_edges = next.hard_normal_edges;
+  neighborhood.soft_normal_edges = next.soft_normal_edges;
+  neighborhood.faces.reserve(plan.faces.size());
+  for (const auto &range : plan.faces) {
+    neighborhood.faces.push_back(next.faces[range.face_index]);
+  }
+  quader_poly::CompiledMesh &compiled = canonical_compilation_scratch();
+  {
+    QDR_PROFILE_SCOPE("Mesh projection compile affected normal neighborhood");
+    quader_poly::compile_document_into(neighborhood, compiled);
+  }
+  partial_compiled_face_count.fetch_add(plan.faces.size(),
+                                        std::memory_order_relaxed);
+  if (compiled.primitives.size() != plan.faces.size()) return false;
+
+  MeshGeometryPayload &geometry = projected.edit_geometry();
+  std::size_t compiled_vertex_offset = 0U;
+  for (std::size_t index = 0U; index < plan.faces.size(); ++index) {
+    const auto &range = plan.faces[index];
+    const auto &face = next.faces[range.face_index];
+    const auto &primitive = plan.primitives[range.face_index];
+    const auto &compiled_primitive = compiled.primitives[index];
+    if (compiled_vertex_offset + face.vertices.size() > compiled.vertices.size() ||
+        compiled_primitive.index_count != primitive.index_count ||
+        compiled_primitive.material_slot != primitive.material_slot ||
+        static_cast<std::size_t>(compiled_primitive.index_offset) +
+                compiled_primitive.index_count > compiled.indices.size()) {
+      return false;
+    }
+    for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+      const auto &compiled_vertex = compiled.vertices[compiled_vertex_offset + corner];
+      if (compiled_vertex.source_vertex_id != face.vertices[corner]) {
+        return false;
+      }
+      if (range.dirty) {
+        geometry.vertices[range.vertex_offset + corner] =
+            from_compiled_vertex(compiled_vertex);
+      }
+    }
+    if (range.dirty) {
+      for (std::size_t triangle_index = 0U; triangle_index < primitive.index_count;
+           ++triangle_index) {
+        const std::uint32_t compiled_index =
+            compiled.indices[compiled_primitive.index_offset + triangle_index];
+        if (compiled_index < compiled_vertex_offset ||
+            compiled_index >= compiled_vertex_offset + face.vertices.size()) {
+          return false;
+        }
+        geometry.indices[primitive.index_offset + triangle_index] =
+            static_cast<std::uint32_t>(range.vertex_offset + compiled_index -
+                                       compiled_vertex_offset);
+      }
+    } else {
+      for (const std::size_t corner : range.normal_corners) {
+        geometry.vertices[range.vertex_offset + corner].normal =
+            from_runtime(compiled.vertices[compiled_vertex_offset + corner].normal);
+      }
+    }
+    compiled_vertex_offset += face.vertices.size();
+  }
+  return compiled_vertex_offset == compiled.vertices.size();
+}
+
+bool try_update_partial_document_mesh_positions(
+    const quader_poly::Document &previous,
+    const quader_poly::Document &next, MeshAsset &projected) {
+  std::vector<std::uint32_t> changed_vertices;
+  for (std::size_t index = 0U; index < next.vertices.size(); ++index) {
+    if (!same_position(previous.vertices[index].position,
+                       next.vertices[index].position)) {
+      changed_vertices.push_back(next.vertices[index].id);
+    }
+  }
+  if (changed_vertices.empty()) return false;
+  const auto plan = MeshProjectionService::prepare_position_update_plan(
+      projected, changed_vertices);
+  return plan && try_update_prepared_document_mesh_positions(next, projected, *plan);
 }
 
 MeshAsset
@@ -423,16 +658,7 @@ void replace_geometry_from_compiled(
     MeshGeometryPayload &geometry) {
   geometry.vertices.resize(compiled.vertices.size());
   for (std::size_t index = 0; index < compiled.vertices.size(); ++index) {
-    const quader_poly::CompiledVertex &vertex = compiled.vertices[index];
-    geometry.vertices[index] = MeshVertex{
-        .position = from_runtime(vertex.position),
-        .normal = from_runtime(vertex.normal),
-        .uv = {vertex.uv0.x, vertex.uv0.y},
-        .rgba = vertex.color,
-        .source_vertex_id = vertex.source_vertex_id,
-        .uv_carrier = vertex.uv_carrier,
-        .uv_geometric_normal = vertex.uv_geometric_normal,
-    };
+    geometry.vertices[index] = from_compiled_vertex(compiled.vertices[index]);
   }
 
   geometry.indices.resize(compiled.indices.size());
@@ -451,7 +677,156 @@ void replace_geometry_from_compiled(
   }
 }
 
+MeshAsset project_document_mesh_positions(quader_poly::Document next_authored,
+                                          const MeshAsset &current,
+                                          bool topology_retained,
+                                          const MeshProjectionPositionUpdatePlan *plan = nullptr) {
+  MeshAsset projected = current;
+  if (topology_retained) {
+    // Smoothing depends on canonical face normals and authored connectivity.
+    // Preserve it only for proven translations with exactly equal normals;
+    // generated UVs and tessellation still use their usual owners.
+    const bool flat_faces = std::ranges::all_of(
+        next_authored.faces, [](const quader_poly::Face &face) {
+          return face.normal_shading == quader_poly::SurfaceShading::Flat;
+        });
+    const bool exact_translation = !flat_faces && is_exact_document_translation(
+        *current.authored_polygon_document, next_authored);
+    if ((flat_faces || exact_translation) &&
+        try_update_retained_document_mesh_positions(
+            *current.authored_polygon_document, next_authored, projected,
+            exact_translation)) {
+      (exact_translation ? retained_translation_count : retained_flat_face_count)
+          .fetch_add(1, std::memory_order_relaxed);
+      projected.replace_authored_polygon_document(std::move(next_authored));
+      return projected;
+    }
+
+    projected = current;
+    const bool partial_updated = plan != nullptr
+        ? try_update_prepared_document_mesh_positions(next_authored, projected, *plan)
+        : try_update_partial_document_mesh_positions(
+              *current.authored_polygon_document, next_authored, projected);
+    if (partial_updated) {
+      retained_partial_count.fetch_add(1, std::memory_order_relaxed);
+      if (plan != nullptr) {
+        partial_plan_reuse_count.fetch_add(1, std::memory_order_relaxed);
+      }
+      projected.replace_authored_polygon_document(std::move(next_authored));
+      return projected;
+    }
+  }
+
+  if (plan != nullptr) {
+    partial_plan_fallback_count.fetch_add(1, std::memory_order_relaxed);
+  }
+  quader_poly::CompiledMesh &compiled = canonical_compilation_scratch();
+  quader_poly::compile_document_into(next_authored, compiled);
+  full_compile_count.fetch_add(1, std::memory_order_relaxed);
+
+  projected = current;
+  replace_geometry_from_compiled(compiled, projected.edit_geometry());
+  projected.has_stable_cpu_topology = true;
+  projected.replace_authored_polygon_document(std::move(next_authored));
+  return projected;
+}
+
 } // namespace
+
+std::shared_ptr<const MeshProjectionPositionUpdatePlan>
+MeshProjectionService::prepare_position_update_plan(
+    const MeshAsset &current,
+    std::span<const std::uint32_t> movable_vertex_ids) {
+  QDR_PROFILE_SCOPE("Mesh projection prepare position update plan");
+  partial_plan_build_count.fetch_add(1, std::memory_order_relaxed);
+  if (!current.has_stable_cpu_topology || !current.has_authored_polygon_document ||
+      !current.authored_polygon_document || movable_vertex_ids.empty()) {
+    return nullptr;
+  }
+  auto plan = std::make_shared<MeshProjectionPositionUpdatePlan>();
+  plan->source_document = current.authored_polygon_document;
+  const auto &source = *plan->source_document;
+  const auto &geometry = current.geometry();
+  std::uint64_t face_visits = 0U;
+  const auto prepare = [&]() {
+    if (source.faces.size() < 2U || geometry.primitives.size() != source.faces.size()) {
+      return false;
+    }
+    const std::unordered_set<std::uint32_t> movable_ids(
+        movable_vertex_ids.begin(), movable_vertex_ids.end());
+    plan->movable_vertices.resize(source.vertices.size(), 0U);
+    for (std::size_t index = 0U; index < source.vertices.size(); ++index) {
+      plan->movable_vertices[index] = movable_ids.contains(source.vertices[index].id);
+    }
+    std::vector<std::uint8_t> dirty_faces(source.faces.size(), 0U);
+    std::unordered_set<quader_poly::ElementId> normal_vertices;
+    std::unordered_set<quader_poly::ElementId> face_ids;
+    face_ids.reserve(source.faces.size());
+    std::size_t dirty_face_count = 0U;
+    for (std::size_t index = 0U; index < source.faces.size(); ++index) {
+      ++face_visits;
+      const auto &face = source.faces[index];
+      // The canonical normal map resolves duplicate IDs globally. Never let
+      // a subset change which malformed source face wins that resolution.
+      if (!face_ids.insert(face.id).second) return false;
+      if (std::ranges::any_of(face.vertices, [&](quader_poly::ElementId id) {
+            return movable_ids.contains(id);
+          })) {
+        dirty_faces[index] = 1U;
+        ++dirty_face_count;
+        normal_vertices.insert(face.vertices.begin(), face.vertices.end());
+      }
+    }
+    if (dirty_face_count == 0U || dirty_face_count == source.faces.size()) return false;
+
+    std::size_t vertex_offset = 0U;
+    std::size_t index_offset = 0U;
+    for (std::size_t index = 0U; index < source.faces.size(); ++index) {
+      ++face_visits;
+      const auto &face = source.faces[index];
+      const auto &primitive = geometry.primitives[index];
+      if (vertex_offset + face.vertices.size() > geometry.vertices.size() ||
+          primitive.index_offset != index_offset ||
+          primitive.material_slot != face.material_slot ||
+          index_offset + primitive.index_count > geometry.indices.size()) {
+        return false;
+      }
+      MeshProjectionPositionUpdatePlan::FaceRange range{
+          .face_index = index,
+          .vertex_offset = vertex_offset,
+          .dirty = dirty_faces[index] != 0U};
+      bool included = range.dirty;
+      for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+        if (geometry.vertices[vertex_offset + corner].source_vertex_id !=
+            face.vertices[corner]) {
+          return false;
+        }
+        if (normal_vertices.contains(face.vertices[corner])) {
+          included = true;
+          if (!range.dirty) range.normal_corners.push_back(corner);
+        }
+      }
+      if (included) plan->faces.push_back(std::move(range));
+      vertex_offset += face.vertices.size();
+      index_offset += primitive.index_count;
+    }
+    if (plan->faces.size() == source.faces.size() ||
+        vertex_offset != geometry.vertices.size() ||
+        index_offset != geometry.indices.size()) {
+      return false;
+    }
+    plan->primitives = geometry.primitives;
+    plan->compiled_source_ids.reserve(geometry.vertices.size());
+    for (const auto &vertex : geometry.vertices) {
+      plan->compiled_source_ids.push_back(vertex.source_vertex_id);
+    }
+    plan->index_count = geometry.indices.size();
+    return true;
+  };
+  plan->eligible = prepare();
+  partial_plan_face_visit_count.fetch_add(face_visits, std::memory_order_relaxed);
+  return plan;
+}
 
 quader_poly::Transform3 MeshProjectionService::texture_mapping_transform(
     const QMat4 &matrix) {
@@ -511,7 +886,8 @@ std::optional<MeshAsset> MeshProjectionService::compile_sdk_document_mesh(
 std::optional<MeshAsset>
 MeshProjectionService::update_sdk_document_mesh_positions(
     const quader::modeling::PolygonDocument &document,
-    const MeshAsset &current) {
+    const MeshAsset &current,
+    const MeshProjectionPositionUpdatePlan *plan) {
   QDR_PROFILE_FUNCTION();
   if (!current.has_stable_cpu_topology ||
       !current.has_authored_polygon_document ||
@@ -527,26 +903,38 @@ MeshProjectionService::update_sdk_document_mesh_positions(
     return std::nullopt;
   }
 
-  // Flat editable meshes can update only the face ranges touched by the
-  // transformed vertices. This preserves the canonical compiler result while
-  // avoiding a full derived-buffer rebuild for every object in a large edit
-  // selection. Any layout, degeneracy, or smooth-normal case drops to the
-  // complete compiler below.
-  MeshAsset projected = current;
-  if (try_update_flat_document_mesh_positions(
-          *current.authored_polygon_document, next_authored, projected)) {
-    projected.replace_authored_polygon_document(std::move(next_authored));
-    return projected;
-  }
+  return project_document_mesh_positions(std::move(next_authored), current, true, plan);
+}
 
-  quader_poly::CompiledMesh &compiled = canonical_compilation_scratch();
-  quader_poly::compile_document_into(next_authored, compiled);
+MeshAsset MeshProjectionService::update_polygon_document_mesh_positions(
+    quader_poly::Document document, const MeshAsset &current,
+    const MeshProjectionPositionUpdatePlan *plan) {
+  QDR_PROFILE_FUNCTION();
+  const bool topology_retained = current.has_stable_cpu_topology &&
+      current.has_authored_polygon_document && current.authored_polygon_document &&
+      same_topology_layout(*current.authored_polygon_document, document);
+  return project_document_mesh_positions(std::move(document), current,
+                                         topology_retained, plan);
+}
 
-  projected = current;
-  MeshGeometryPayload &geometry = projected.edit_geometry();
-  replace_geometry_from_compiled(compiled, geometry);
-  projected.replace_authored_polygon_document(std::move(next_authored));
-  return projected;
+MeshProjectionPositionUpdateStats
+MeshProjectionService::position_update_stats() noexcept {
+  return {
+      .retained_translation_count =
+          retained_translation_count.load(std::memory_order_relaxed),
+      .retained_flat_face_count =
+          retained_flat_face_count.load(std::memory_order_relaxed),
+      .retained_partial_count =
+          retained_partial_count.load(std::memory_order_relaxed),
+      .partial_compiled_face_count =
+          partial_compiled_face_count.load(std::memory_order_relaxed),
+      .full_compile_count = full_compile_count.load(std::memory_order_relaxed),
+      .partial_plan_build_count = partial_plan_build_count.load(std::memory_order_relaxed),
+      .partial_plan_face_visit_count =
+          partial_plan_face_visit_count.load(std::memory_order_relaxed),
+      .partial_plan_reuse_count = partial_plan_reuse_count.load(std::memory_order_relaxed),
+      .partial_plan_fallback_count =
+          partial_plan_fallback_count.load(std::memory_order_relaxed)};
 }
 
 void MeshProjectionService::apply_mesh_texture_mapping(

@@ -9,6 +9,7 @@
 #include "editor/viewport/viewport_surface_occlusion_policy.hpp"
 
 #include "assets/curve_asset_payload.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/interactions/viewport_segment_projection.hpp"
 #include "editor/interactions/selection_lasso.hpp"
 #include "editor/modeling/modeling_viewport_camera_adapter.hpp"
@@ -23,10 +24,15 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <numeric>
 #include <ranges>
-#include <set>
+#include <tuple>
+#include <system_error>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace quader {
 
@@ -154,6 +160,38 @@ struct SelectionIdentityKey final {
 
   [[nodiscard]] auto operator<=>(const SelectionIdentityKey &) const =
       default;
+};
+
+/** Hashes the same provider-neutral identity used by marquee deduplication. */
+struct SelectionIdentityHash final {
+  [[nodiscard]] std::size_t operator()(const SelectionIdentityKey &key) const noexcept {
+    const std::array values{
+        static_cast<std::uint64_t>(key.domain), static_cast<std::uint64_t>(key.entity),
+        static_cast<std::uint64_t>(key.modeling_object_id),
+        static_cast<std::uint64_t>(key.component_kind),
+        static_cast<std::uint64_t>(key.vertex), static_cast<std::uint64_t>(key.edge_a),
+        static_cast<std::uint64_t>(key.edge_b), static_cast<std::uint64_t>(key.face),
+        static_cast<std::uint64_t>(key.sub_selection_kind),
+        static_cast<std::uint64_t>(key.sub_index),
+        static_cast<std::uint64_t>(key.sub_generation),
+        static_cast<std::uint64_t>(key.sub_role)};
+    std::uint64_t result = 0u;
+    constexpr std::uint64_t kMixingConstant = 0x9e3779b97f4a7c15ull;
+    for (const std::uint64_t value : values) {
+      result ^= value + kMixingConstant + (result << 6u) + (result >> 2u);
+    }
+    return static_cast<std::size_t>(result ^ (result >> 32u));
+  }
+};
+
+/** Retains comparator facts without sorting or repeatedly decoding hit payloads. */
+struct RankedMarqueeHit final {
+  const ViewportSceneHitCandidate *candidate = nullptr;
+  double depth_bucket = 0.0;
+  std::uint8_t priority = 0u;
+  double pick_bucket = 0.0;
+  EntityId entity = kInvalidEntityId;
+  std::array<std::uint64_t, 4> stable_key{};
 };
 
 [[nodiscard]] std::optional<SelectionIdentityKey> selection_identity_key(
@@ -356,11 +394,75 @@ struct SceneHitRayInterval final {
              : std::nullopt;
 }
 
+/** Reuses identical surface rays only while one frozen marquee is collected. */
+class MarqueeSurfaceDepthCache final {
+public:
+  explicit MarqueeSurfaceDepthCache(std::size_t expected_rays) {
+    if (expected_rays != 0u) {
+      depths_.reserve(expected_rays);
+    }
+  }
+
+  [[nodiscard]] std::optional<float> nearest_depth(
+      const SceneSurfaceQuerySnapshot &surfaces, QVec2 screen_position,
+      const ViewportRay &ray, SceneSurfaceQueryScratch &scratch) {
+    const std::uint64_t key =
+        (static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(screen_position.x)) << 32u) |
+        std::bit_cast<std::uint32_t>(screen_position.y);
+    const auto [entry, inserted] = depths_.try_emplace(key);
+    if (inserted) {
+      const auto surface = surfaces.nearest_hit(
+          {.world_origin = ray.origin,
+           .world_direction = ray.direction,
+           .eligibility = SceneSurfaceEligibility::RenderVisible}, scratch);
+      if (surface.has_value()) {
+        entry->second = surface->distance;
+      }
+    }
+    return entry->second;
+  }
+
+private:
+  std::unordered_map<std::uint64_t, std::optional<float>> depths_;
+};
+
+/** Keeps one valid witness's exact ray and its original equal-depth priority. */
+struct PreparedMarqueeWitness final {
+  const ModelingSelectionVisibilityWitness *witness;
+  ViewportRay ray;
+  double depth;
+  std::size_t original_index;
+};
+
+[[nodiscard]] std::optional<PreparedMarqueeWitness> prepare_marquee_witness(
+    const ViewportSceneProjectionCamera &camera,
+    const ModelingSelectionVisibilityWitness &witness,
+    std::size_t original_index) {
+  if (!finite_vector(witness.world_position) ||
+      !std::isfinite(witness.screen_position.x) ||
+      !std::isfinite(witness.screen_position.y)) {
+    return std::nullopt;
+  }
+  ViewportRay ray = camera.ray_from_viewport_point(witness.screen_position);
+  const float direction_length = length(ray.direction);
+  if (!std::isfinite(direction_length) || direction_length <= 1.0e-6f) {
+    return std::nullopt;
+  }
+  ray.direction = ray.direction / direction_length;
+  const double depth = static_cast<double>(
+      dot(witness.world_position - ray.origin, ray.direction));
+  if (!std::isfinite(depth) || depth < 0.0) {
+    return std::nullopt;
+  }
+  return PreparedMarqueeWitness{&witness, ray, depth, original_index};
+}
+
 [[nodiscard]] std::optional<ViewportSceneHitCandidate>
 visible_resolved_marquee_candidate(
     const ViewportSceneMarqueeHitQuery &query,
     const ResolvedSelectionHit &hit,
-    SceneSurfaceQueryScratch *scratch) {
+    SceneSurfaceQueryScratch *scratch,
+    MarqueeSurfaceDepthCache &surface_depths) {
   ViewportSceneHitCandidate candidate = viewport_scene_hit_candidate(hit);
   if (query.scene_surfaces == nullptr) {
     if (hit.world_position.has_value()) {
@@ -375,54 +477,136 @@ visible_resolved_marquee_candidate(
     return std::nullopt;
   }
 
-  std::optional<double> nearest_visible_depth;
-  QVec3 nearest_visible_world{};
-  for (const ModelingSelectionVisibilityWitness &witness :
-       hit.visibility_witnesses) {
-    if (!finite_vector(witness.world_position) ||
-        !std::isfinite(witness.screen_position.x) ||
-        !std::isfinite(witness.screen_position.y)) {
-      continue;
-    }
-    ViewportRay ray =
-        query.camera.ray_from_viewport_point(witness.screen_position);
-    const float direction_length = length(ray.direction);
-    if (!std::isfinite(direction_length) || direction_length <= 1.0e-6f) {
-      continue;
-    }
-    ray.direction = ray.direction / direction_length;
-    const double witness_depth = static_cast<double>(
-        dot(witness.world_position - ray.origin, ray.direction));
-    if (!std::isfinite(witness_depth) || witness_depth < 0.0) {
-      continue;
-    }
-    if (!query.include_occluded_resolved_modeling_hits) {
-      const std::optional<SceneSurfaceHit> surface =
-          query.scene_surfaces->nearest_hit(
-              {
-                  .world_origin = ray.origin,
-                  .world_direction = ray.direction,
-                  .eligibility = SceneSurfaceEligibility::RenderVisible,
-              },
-              *scratch);
-      if (surface.has_value() &&
-          witness_depth >
-              surface->distance + kViewportSurfaceOcclusionTolerance) {
-        continue;
+  if (query.include_occluded_resolved_modeling_hits) {
+    std::optional<PreparedMarqueeWitness> nearest;
+    for (std::size_t index = 0u; index < hit.visibility_witnesses.size(); ++index) {
+      const auto prepared = prepare_marquee_witness(
+          query.camera, hit.visibility_witnesses[index], index);
+      if (prepared.has_value() &&
+          (!nearest.has_value() || prepared->depth < nearest->depth)) {
+        nearest = prepared;
       }
     }
-    if (!nearest_visible_depth.has_value() ||
-        witness_depth < *nearest_visible_depth) {
-      nearest_visible_depth = witness_depth;
-      nearest_visible_world = witness.world_position;
+    if (!nearest.has_value()) {
+      return std::nullopt;
+    }
+    candidate.world_position = nearest->witness->world_position;
+    candidate.ray_distance = nearest->depth;
+    return candidate;
+  }
+
+  // Native marquee witnesses fit in eighteen slots. Keep arbitrary provider
+  // lists supported without allocating for the ordinary mesh case.
+  constexpr std::size_t kInlineWitnessCount = 18u;
+  std::array<PreparedMarqueeWitness, kInlineWitnessCount> inline_witnesses;
+  std::vector<PreparedMarqueeWitness> overflow_witnesses;
+  std::span<PreparedMarqueeWitness> prepared = inline_witnesses;
+  if (hit.visibility_witnesses.size() > inline_witnesses.size()) {
+    overflow_witnesses.resize(hit.visibility_witnesses.size());
+    prepared = overflow_witnesses;
+  }
+  std::size_t count = 0u;
+  for (std::size_t index = 0u; index < hit.visibility_witnesses.size(); ++index) {
+    if (const auto witness = prepare_marquee_witness(
+            query.camera, hit.visibility_witnesses[index], index)) {
+      prepared[count++] = *witness;
     }
   }
-  if (!nearest_visible_depth.has_value()) {
-    return std::nullopt;
+  prepared = prepared.first(count);
+  std::ranges::sort(prepared, [](const PreparedMarqueeWitness &left,
+                                const PreparedMarqueeWitness &right) {
+    return std::tie(left.depth, left.original_index) <
+           std::tie(right.depth, right.original_index);
+  });
+  // The old strict-less-than minimum chose the first original witness on an
+  // equal depth. Sorting that index second preserves its exact world position.
+  for (const PreparedMarqueeWitness &witness : prepared) {
+    const auto surface_depth = surface_depths.nearest_depth(
+        *query.scene_surfaces, witness.witness->screen_position, witness.ray, *scratch);
+    if (!surface_depth.has_value() ||
+        witness.depth <= *surface_depth + kViewportSurfaceOcclusionTolerance) {
+      candidate.world_position = witness.witness->world_position;
+      candidate.ray_distance = witness.depth;
+      return candidate;
+    }
   }
-  candidate.world_position = nearest_visible_world;
-  candidate.ray_distance = *nearest_visible_depth;
-  return candidate;
+  return std::nullopt;
+}
+
+void append_visible_marquee_modeling_hits(
+    const ViewportSceneMarqueeHitQuery &query, SceneSurfaceQueryScratch *scratch,
+    std::vector<ViewportSceneHitCandidate> &hits) {
+  constexpr std::size_t kMaximumWorkers = 8u;
+  constexpr std::size_t kMinimumParallelHits = 8192u;
+  constexpr std::size_t kHitsPerWorker = 4096u;
+  const std::size_t count = query.resolved_selection_hits.size();
+  std::size_t worker_count = 1u;
+  // Orthographic depth layers often share identical screen rays. Retain that
+  // cross-mesh reuse in one cache instead of duplicating it between workers.
+  if (query.scene_surfaces != nullptr && !query.include_occluded_resolved_modeling_hits &&
+      !query.camera.orthographic() && count >= kMinimumParallelHits) {
+    worker_count = std::min(count / kHitsPerWorker,
+        std::clamp<std::size_t>(std::thread::hardware_concurrency(), 1u, kMaximumWorkers));
+  }
+  if (worker_count == 1u) {
+    MarqueeSurfaceDepthCache surface_depths(
+        query.scene_surfaces != nullptr && !query.include_occluded_resolved_modeling_hits ? count : 0u);
+    for (const ResolvedSelectionHit &hit : query.resolved_selection_hits) {
+      if (auto visible = visible_resolved_marquee_candidate(query, hit, scratch, surface_depths)) {
+        hits.push_back(std::move(*visible));
+      }
+    }
+    return;
+  }
+
+  std::vector<std::optional<ViewportSceneHitCandidate>> visible_hits(count);
+  std::array<std::exception_ptr, kMaximumWorkers> failures{};
+  const auto collect_range = [&](std::size_t worker) {
+    try {
+      QDR_PROFILE_SCOPE("Marquee visibility worker");
+      const std::size_t begin = (count / worker_count) * worker +
+                                std::min(worker, count % worker_count);
+      const std::size_t end = begin + count / worker_count +
+                              (worker < count % worker_count ? 1u : 0u);
+      SceneSurfaceQueryScratch worker_scratch;
+      MarqueeSurfaceDepthCache surface_depths(end - begin);
+      for (std::size_t index = begin; index < end; ++index) {
+        visible_hits[index] = visible_resolved_marquee_candidate(
+            query, query.resolved_selection_hits[index], &worker_scratch, surface_depths);
+      }
+    } catch (...) {
+      failures[worker] = std::current_exception();
+    }
+  };
+  std::vector<std::jthread> workers;
+  workers.reserve(worker_count - 1u);
+  std::size_t next_worker = 1u;
+  for (; next_worker < worker_count; ++next_worker) {
+    try {
+      workers.emplace_back(collect_range, next_worker);
+    } catch (const std::system_error &) {
+      // Worker exhaustion does not change selection; finish unstarted ranges
+      // on this thread while already-started readers finish their own slots.
+      break;
+    }
+  }
+  collect_range(0u);
+  for (; next_worker < worker_count; ++next_worker) {
+    collect_range(next_worker);
+  }
+  for (std::jthread &worker : workers) {
+    worker.join();
+  }
+  for (const std::exception_ptr &failure : failures) {
+    if (failure) {
+      std::rethrow_exception(failure);
+    }
+  }
+  for (auto &visible : visible_hits) {
+    if (visible.has_value()) {
+      hits.push_back(std::move(*visible));
+    }
+  }
 }
 
 void append_mesh_hits(const SceneSurfaceQuerySnapshot *scene_surfaces,
@@ -894,6 +1078,7 @@ resolve_viewport_scene_ray_hit(const ViewportSceneRayHitQuery &query) {
 
 std::vector<ViewportSceneHitCandidate> collect_viewport_scene_marquee_hits(
     const ViewportSceneMarqueeHitQuery &query) {
+  QDR_PROFILE_FUNCTION();
   struct ProjectedCandidate final {
     ViewportSceneHitCandidate hit;
     quader_editor_core::RectangleProjectedObject projected;
@@ -1204,12 +1389,9 @@ std::vector<ViewportSceneHitCandidate> collect_viewport_scene_marquee_hits(
       hits.push_back(projected_candidates[static_cast<std::size_t>(id)].hit);
     }
   }
-  for (const ResolvedSelectionHit &hit : query.resolved_selection_hits) {
-    const std::optional<ViewportSceneHitCandidate> visible =
-        visible_resolved_marquee_candidate(query, hit, surface_scratch);
-    if (visible.has_value()) {
-      hits.push_back(*visible);
-    }
+  {
+    QDR_PROFILE_SCOPE("Marquee test modeling witness visibility");
+    append_visible_marquee_modeling_hits(query, surface_scratch, hits);
   }
   return resolve_viewport_scene_marquee_hits(hits);
 }
@@ -1410,24 +1592,38 @@ std::vector<ViewportSceneHitCandidate> collect_viewport_scene_lasso_hits(
 
 std::vector<ViewportSceneHitCandidate> resolve_viewport_scene_marquee_hits(
     std::span<const ViewportSceneHitCandidate> candidates) {
-  std::vector<ViewportSceneHitCandidate> result;
-  result.reserve(candidates.size());
+  QDR_PROFILE_FUNCTION();
+  std::vector<RankedMarqueeHit> ranked;
+  ranked.reserve(candidates.size());
   for (const ViewportSceneHitCandidate &candidate : candidates) {
     if (viewport_scene_hit_candidate_valid(candidate)) {
-      result.push_back(candidate);
+      ranked.push_back({
+          .candidate = &candidate,
+          .depth_bucket = canonical_tie_bucket(candidate.ray_distance, kSceneHitDepthTieTolerance),
+          .priority = exact_tie_priority(candidate.kind),
+          .pick_bucket = canonical_tie_bucket(candidate.pick_distance_pixels, kSceneHitPickTieTolerance),
+          .entity = candidate.entity,
+          .stable_key = stable_source_key(candidate)});
     }
   }
-  std::ranges::sort(result, viewport_scene_hit_precedes);
+  // Match viewport_scene_hit_precedes exactly, including its equivalence
+  // classes. Input position is deliberately not an additional tie-breaker.
+  std::ranges::sort(ranked, [](const RankedMarqueeHit &left, const RankedMarqueeHit &right) {
+    return std::tie(left.depth_bucket, left.priority, left.pick_bucket, left.entity, left.stable_key) <
+           std::tie(right.depth_bucket, right.priority, right.pick_bucket, right.entity, right.stable_key);
+  });
   std::vector<ViewportSceneHitCandidate> unique;
-  unique.reserve(result.size());
-  std::set<SelectionIdentityKey> membership;
-  for (ViewportSceneHitCandidate &candidate : result) {
+  unique.reserve(ranked.size());
+  std::unordered_set<SelectionIdentityKey, SelectionIdentityHash> membership;
+  membership.reserve(ranked.size());
+  for (const RankedMarqueeHit &rank : ranked) {
+    const ViewportSceneHitCandidate &candidate = *rank.candidate;
     const std::optional<SelectionIdentityKey> identity =
         selection_identity_key(candidate);
     if (!identity.has_value() || !membership.insert(*identity).second) {
       continue;
     }
-    unique.push_back(std::move(candidate));
+    unique.push_back(candidate);
   }
   return unique;
 }

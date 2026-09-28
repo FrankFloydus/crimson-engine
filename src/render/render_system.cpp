@@ -11,6 +11,7 @@
 #include "diagnostics/profile.hpp"
 #include "render/material_preview_renderer.hpp"
 #include "render/material_thumbnail_renderer.hpp"
+#include "render/overlay/selected_mesh_outline_mask_cache.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
@@ -263,6 +264,15 @@ bool RenderSystem::initialize(void *native_window,
   if (!material_library_.initialize(*engine_, executable_dir)) {
     return fail("Unable to initialize Filament material library");
   }
+  if (engine_->getBackend() == filament::Engine::Backend::VULKAN) {
+    auto mask_cache = std::make_unique<SelectedMeshOutlineMaskCache>();
+    if (mask_cache->initialize(*engine_,
+                               material_library_.selected_mesh_outline_mask())) {
+      selected_mesh_outline_mask_cache_ = std::move(mask_cache);
+    } else {
+      LOG_WARN("GPU selection outlines are unavailable; using CPU outlines");
+    }
+  }
   solid_color_texture_ = load_png_texture(
       *engine_, resource_root_ / "textures" / "default_texture.png",
       PngTextureLoadOptions{
@@ -310,6 +320,7 @@ void RenderSystem::shutdown() {
     }
     texture_registry_.clear();
     environment_library_.shutdown();
+    selected_mesh_outline_mask_cache_.reset();
     material_library_.shutdown();
     if (solid_color_texture_ != nullptr) {
       engine_->destroy(solid_color_texture_);
@@ -397,6 +408,12 @@ void RenderSystem::complete_presentation_frame(
           swap_chain_submissions, frame_performance_stats_);
   if (presented && renderer_ != nullptr) {
     update_gpu_frame_performance_stats();
+    QDR_PROFILE_PLOT("Quader GPU timing available",
+                     static_cast<std::int64_t>(frame_performance_stats_.gpu_frame_ms_available));
+    if (frame_performance_stats_.gpu_frame_ms_available) {
+      QDR_PROFILE_PLOT("Quader reported GPU frame (ms)",
+                       frame_performance_stats_.gpu_frame_ms);
+    }
   }
 }
 
@@ -746,6 +763,11 @@ void RenderSystem::initialize_viewport_renderer(
                                material_library_.ground_grid(),
                                material_library_.overlay_stencil_reset(),
                                grid_layer_mask, surface);
+  if (selected_mesh_outline_mask_cache_ != nullptr) {
+    (void)viewport_renderer.configure_selected_mesh_outlines(
+        *selected_mesh_outline_mask_cache_,
+        material_library_.selected_mesh_outline_composite(), grid_layer_mask);
+  }
 }
 
 void RenderSystem::render_viewport(ViewportRenderer &viewport_renderer) {

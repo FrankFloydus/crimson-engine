@@ -2703,5 +2703,94 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   EXPECT_EQ(snapshots.stats().selection_build_count, active_builds);
 }
 
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     GpuMeshOutlinesBypassCpuGeometryAcrossCameraMovesAndPreserveOtherOverlays) {
+  ViewportOverlayFrame selection_frame;
+  selection_frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SelectedEdge,
+      .start = {-1.0f, -1.0f, 0.0f}, .end = {1.0f, -1.0f, 0.0f},
+      .style_role = ViewportOverlayStyleRole::SelectionWire,
+      .source = ViewportOverlaySource::Selection,
+      .element = {.object_id = 1},
+  });
+  selection_frame.lines.push_back({
+      .layer = ViewportOverlayLayer::ToolPreviewLine,
+      .start = {-2.0f, 2.0f, 0.0f}, .end = {2.0f, 2.0f, 0.0f},
+      .style_role = ViewportOverlayStyleRole::ExplicitColor,
+      .source = ViewportOverlaySource::Tool,
+  });
+  StaticSelectionFrameProvider selection_provider(selection_frame);
+  ViewportOverlayFrame volatile_frame = selection_frame;
+  CurveToolPreviewState curve;
+  RenderOverlaySelectionSnapshot scene;
+  auto geometry = std::make_shared<MeshGeometryPayload>();
+  geometry->vertices = {
+      {.position = {-1.0f, -1.0f, 0.0f}},
+      {.position = {1.0f, -1.0f, 0.0f}},
+      {.position = {0.0f, 1.0f, 0.0f}},
+  };
+  geometry->indices = {0u, 1u, 2u};
+  RenderOverlaySelectedObjectSnapshot selected;
+  selected.selection_revision = 1u;
+  selected.meshes.push_back({
+      .entity = 1u, .mesh_id = 1u, .mesh_revision = 1u,
+      .geometry_payload = geometry, .geometry_content_id = geometry->content_id(),
+      .selected = true, .vertices = geometry->vertices, .indices = geometry->indices,
+  });
+  auto request = submission_request(selection_provider, scene, volatile_frame, curve);
+  request.scene_selection_mode = RenderOverlaySelectionMode::Object;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Object;
+  request.selected_mesh_outline_snapshot = &selected;
+  request.gpu_mesh_outlines = true;
+  request.camera = {
+      .eye = {0.0f, 0.0f, 5.0f}, .forward = {0.0f, 0.0f, -1.0f},
+      .right = {1.0f, 0.0f, 0.0f}, .up = {0.0f, 1.0f, 0.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .projection = ViewportOverlayProjection::Perspective,
+  };
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  ASSERT_TRUE(coordinator.submit(request, settings, target).persistent_submitted);
+  const auto expect_preserved_overlays = [&] {
+    for (const auto *frame : {&target.persistent_frame, &target.dynamic_frame}) {
+      EXPECT_TRUE(std::ranges::any_of(frame->lines, [](const auto &line) {
+        return line.source == ViewportOverlaySource::Tool;
+      }));
+      EXPECT_FALSE(std::ranges::any_of(frame->lines, [](const auto &line) {
+        return line.source == ViewportOverlaySource::MeshOutline ||
+               (line.source == ViewportOverlaySource::Selection && line.element.object_id == 1);
+      }));
+    }
+    EXPECT_TRUE(std::ranges::any_of(target.dynamic_frame.points, [](const auto &point) {
+      return point.source == ViewportOverlaySource::Gizmo;
+    }));
+  };
+  expect_preserved_overlays();
+  for (int frame = 0; frame < 32; ++frame) {
+    request.camera.eye.x = static_cast<float>(frame + 1) * 0.01f;
+    (void)coordinator.submit(request, settings, target);
+    expect_preserved_overlays();
+  }
+  const auto gpu_work = coordinator.work_counters();
+  EXPECT_EQ(gpu_work.mesh_outline_source_refresh_count, 0u);
+  EXPECT_EQ(gpu_work.mesh_outline_topology_build_count, 0u);
+  EXPECT_EQ(gpu_work.mesh_outline_camera_classification_count, 0u);
+  EXPECT_EQ(selection_provider.build_count, 1);
+
+  // Backend fallback still owns the same semantic silhouette when GPU masks
+  // are unavailable; toggling the path must not retain the empty GPU stream.
+  request.gpu_mesh_outlines = false;
+  (void)coordinator.submit(request, settings, target);
+  EXPECT_TRUE(std::ranges::any_of(target.dynamic_frame.lines, [](const auto &line) {
+    return line.source == ViewportOverlaySource::MeshOutline;
+  }));
+  const auto cpu_work = coordinator.work_counters();
+  EXPECT_GT(cpu_work.mesh_outline_source_refresh_count, 0u);
+  EXPECT_GT(cpu_work.mesh_outline_topology_build_count, 0u);
+  EXPECT_GT(cpu_work.mesh_outline_camera_classification_count, 0u);
+}
+
 } // namespace
 } // namespace quader

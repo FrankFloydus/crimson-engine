@@ -10,7 +10,9 @@
 #include "editor/session/scene_session.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/material_binding_service.hpp"
+#include "render/instance_renderable_cache.hpp"
 #include "render/mesh_renderable_cache.hpp"
+#include "render/overlay/instanced_wire_render_backend.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/texture_binding_service.hpp"
@@ -25,6 +27,7 @@
 
 #include <filament/Camera.h>
 #include <filament/Renderer.h>
+#include <filament/RenderableManager.h>
 #include <filament/SwapChain.h>
 #include <filament/View.h>
 #include <filament/Viewport.h>
@@ -35,10 +38,12 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <iostream>
 #include <vector>
 
 namespace quader {
@@ -445,6 +450,235 @@ TEST(RenderTextureLifetimeTests, VulkanMaterialEditAndRetirementStress) {
   harness.cache().shutdown();
   ASSERT_TRUE(harness.frame());
   EXPECT_EQ(harness.stats().resource_count, 0u);
+}
+
+TEST(RenderTextureLifetimeTests, InstanceRetirementPreservesRetainedChunks) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  TexturedTriangle triangle;
+  std::vector<RenderSceneInstancePrimitiveRecord> records;
+  constexpr std::size_t kMeshCount = 256u;
+  for (std::size_t index = 0u; index < kMeshCount; ++index) {
+    RenderSceneInstancePrimitiveRecord record;
+    record.key.geometry_payload = index + 1u;
+    record.key.index_count = 3u;
+    record.mesh = triangle.record.mesh;
+    record.primitive.index_count = 3u;
+    record.material = triangle.record.material;
+    record.local_bounds = MeshRenderableFactory::compute_local_bounds(record.mesh);
+    record.occurrences.push_back({.entity_id = index + 1u,
+                                  .occurrence = index + 1u});
+    records.push_back(std::move(record));
+  }
+  InstanceRenderableCache instances;
+  instances.initialize(harness.factory(), 1u);
+  ASSERT_TRUE(instances.sync(records));
+  ASSERT_TRUE(harness.frame());
+  EXPECT_EQ(instances.stats().chunk_count, kMeshCount * 3u);
+  EXPECT_EQ(harness.stats().material_consumer_count, kMeshCount * 3u);
+  const auto geometry_uploads = harness.factory().geometry_cache_stats().upload_count;
+
+  records.resize(kMeshCount / 2u);
+  std::vector<MeshVertex> deformed(triangle.record.mesh.vertices.begin(),
+                                   triangle.record.mesh.vertices.end());
+  for (MeshVertex &vertex : deformed) vertex.position.x += 0.25f;
+  for (auto &record : records) {
+    record.key.geometry_payload += kMeshCount;
+    ++record.mesh.mesh_revision;
+    record.mesh.vertices = deformed;
+    record.local_bounds = MeshRenderableFactory::compute_local_bounds(record.mesh);
+  }
+  std::ranges::reverse(records);
+  ASSERT_TRUE(instances.sync(records));
+  ASSERT_TRUE(harness.frame());
+  EXPECT_EQ(instances.stats().chunk_count, records.size() * 3u);
+  EXPECT_EQ(harness.stats().material_consumer_count, records.size() * 3u);
+  EXPECT_EQ(harness.factory().geometry_cache_stats().upload_count, geometry_uploads + 1u);
+  EXPECT_EQ(instances.stats().geometry_rebind_count, records.size() * 3u);
+  EXPECT_EQ(instances.stats().proxy_creation_count, kMeshCount * 3u);
+  EXPECT_EQ(instances.stats().proxy_retirement_count, records.size() * 3u);
+  EXPECT_FALSE(instances.sync(records));
+  EXPECT_EQ(harness.stats().material_consumer_count, records.size() * 3u);
+  EXPECT_EQ(instances.stats().geometry_rebind_count, records.size() * 3u);
+
+  // Material changes still rebuild their owning passes, while unsupported
+  // topology changes take the same fallback without touching other chunks.
+  ++records.front().key.material_payload;
+  records.front().material.primary_material.document.roughness = 0.93f;
+  ASSERT_TRUE(instances.sync(records));
+  EXPECT_EQ(instances.stats().proxy_creation_count, kMeshCount * 3u + 3u);
+  EXPECT_EQ(instances.stats().proxy_retirement_count, records.size() * 3u + 3u);
+  EXPECT_EQ(instances.stats().geometry_rebind_count, records.size() * 3u);
+  const std::array<std::uint32_t, 3u> reversed_indices{0u, 2u, 1u};
+  records.front().mesh.indices = reversed_indices;
+  records.front().key.geometry_payload += kMeshCount;
+  ASSERT_TRUE(instances.sync(records));
+  EXPECT_EQ(instances.stats().proxy_creation_count, kMeshCount * 3u + 6u);
+  EXPECT_EQ(instances.stats().proxy_retirement_count, records.size() * 3u + 6u);
+  EXPECT_EQ(instances.stats().geometry_rebind_count, records.size() * 3u);
+  instances.shutdown();
+  ASSERT_TRUE(harness.frame());
+  EXPECT_EQ(harness.engine().getRenderableManager().getComponentCount(), 0u);
+  EXPECT_EQ(harness.stats().resource_count, 0u);
+  EXPECT_EQ(harness.stats().upload_count, harness.stats().destroy_count);
+}
+
+TEST(RenderTextureLifetimeTests, InstanceGeometryRebindRetainsGpuOwnersAndRejectsWholeInvalidBatch) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  TexturedTriangle triangle;
+  const std::array<QMat4, 1u> transforms{QMat4{}};
+  const MeshPrimitiveSpan primitive{.index_count = 3u};
+  const auto bounds = MeshRenderableFactory::compute_local_bounds(triangle.record.mesh);
+  std::vector<MeshRenderableProxy> proxies;
+  for (std::size_t index = 0u; index < 3u; ++index) {
+    proxies.push_back(harness.factory().create_explicit_instances(
+        triangle.record.mesh, &triangle.record.material, primitive, transforms,
+        bounds, false, false, false, kViewportRenderedSceneLayerMask));
+    ASSERT_TRUE(proxies.back().entity);
+  }
+  std::vector<MeshVertex> deformed(triangle.record.mesh.vertices.begin(),
+                                   triangle.record.mesh.vertices.end());
+  deformed.front().position.x -= 0.25f;
+  auto replacement_mesh = triangle.record.mesh;
+  replacement_mesh.vertices = deformed;
+  ++replacement_mesh.mesh_revision;
+  std::vector<MeshRenderableFactory::InstanceGeometryRebind> requests;
+  std::vector<utils::Entity> entities;
+  std::vector<filament::InstanceBuffer *> instance_buffers;
+  std::vector<filament::MaterialInstance *> materials;
+  const auto *previous_vertex_buffer = proxies.front().vertex_buffer;
+  for (auto &proxy : proxies) {
+    requests.push_back({.proxy = &proxy, .mesh = &replacement_mesh,
+                        .primitive = primitive, .world_bounds = bounds});
+    entities.push_back(proxy.entity);
+    instance_buffers.push_back(proxy.instance_buffer);
+    materials.push_back(proxy.material_instances.front());
+  }
+  ASSERT_TRUE(harness.factory().try_rebind_instance_geometry(requests));
+  EXPECT_NE(proxies.front().vertex_buffer, previous_vertex_buffer);
+  for (std::size_t index = 0u; index < proxies.size(); ++index) {
+    EXPECT_EQ(proxies[index].entity, entities[index]);
+    EXPECT_EQ(proxies[index].instance_buffer, instance_buffers[index]);
+    EXPECT_EQ(proxies[index].material_instances.front(), materials[index]);
+    EXPECT_EQ(proxies[index].mesh_revision, replacement_mesh.mesh_revision);
+  }
+  ASSERT_TRUE(harness.frame());
+
+  const auto *rebound_vertex_buffer = proxies.front().vertex_buffer;
+  const auto upload_count = harness.factory().geometry_cache_stats().upload_count;
+  const std::array<std::uint32_t, 3u> reversed_indices{0u, 2u, 1u};
+  auto invalid_mesh = replacement_mesh;
+  invalid_mesh.indices = reversed_indices;
+  requests.back().mesh = &invalid_mesh;
+  EXPECT_FALSE(harness.factory().try_rebind_instance_geometry(requests));
+  EXPECT_EQ(harness.factory().geometry_cache_stats().upload_count, upload_count);
+  for (const auto &proxy : proxies) EXPECT_EQ(proxy.vertex_buffer, rebound_vertex_buffer);
+  harness.factory().destroy_renderable_components(entities);
+  for (auto &proxy : proxies) harness.factory().destroy_detached(proxy);
+  ASSERT_TRUE(harness.frame());
+  EXPECT_EQ(harness.stats().material_consumer_count, 0u);
+}
+
+TEST(RenderTextureLifetimeTests, VulkanLargeSceneShutdownRetiresMeshResources) {
+  if (qEnvironmentVariable("QUADER_RUN_VULKAN_TEXTURE_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_TEXTURE_TESTS=1 for large GPU teardown.";
+  }
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize(filament::Engine::Backend::VULKAN, 32u));
+  EXPECT_TRUE(harness.engine().getFeatureFlag("engine.debug.assert_material_instance_in_use")
+                  .value_or(false));
+  TexturedTriangle triangle;
+  std::vector<MeshVertex> vertices(triangle.record.mesh.vertices.begin(),
+                                    triangle.record.mesh.vertices.end());
+  triangle.record.mesh.vertices = vertices;
+  constexpr std::size_t kMeshCount = 6400u;
+  for (std::size_t index = 0u; index < kMeshCount; ++index) {
+    triangle.record.entity_id = index + 1u;
+    triangle.record.mesh.mesh_id = index + 1u;
+    for (MeshVertex &vertex : vertices) {
+      vertex.position.z = static_cast<float>(index) * 0.0001f;
+    }
+    harness.cache().sync_mesh(triangle.record);
+    if (index % 32u == 31u) {
+      harness.engine().flush();
+    }
+  }
+  ASSERT_TRUE(harness.frame());
+  ASSERT_EQ(harness.engine().getRenderableManager().getComponentCount(), kMeshCount * 3u);
+  ASSERT_EQ(harness.factory().geometry_cache_stats().resource_count, kMeshCount);
+
+  const auto retirement_start = std::chrono::steady_clock::now();
+  harness.cache().shutdown();
+  const auto proxy_retired = std::chrono::steady_clock::now();
+  harness.factory().shutdown();
+  ASSERT_TRUE(harness.engine().flushAndWait(10'000'000'000ull));
+  harness.engine().pumpMessageQueues();
+  const auto completed = std::chrono::steady_clock::now();
+  EXPECT_EQ(harness.engine().getRenderableManager().getComponentCount(), 0u);
+  EXPECT_EQ(harness.stats().resource_count, 0u);
+  EXPECT_EQ(harness.stats().upload_count, harness.stats().destroy_count);
+  EXPECT_EQ(harness.factory().geometry_cache_stats().resource_count, 0u);
+  // Teardown remains idempotent when owner destructors run after explicit close.
+  harness.cache().shutdown();
+  harness.factory().shutdown();
+  std::cout << "Large scene GPU shutdown: meshes=" << kMeshCount
+            << " proxies=" << kMeshCount * 3u << " proxy_retire_ms="
+            << std::chrono::duration<double, std::milli>(proxy_retired - retirement_start).count()
+            << " geometry_and_drain_ms="
+            << std::chrono::duration<double, std::milli>(completed - proxy_retired).count()
+            << std::endl;
+}
+
+TEST(RenderTextureLifetimeTests, VulkanLargeWireRetirementReleasesPrunedAndLiveResources) {
+  if (qEnvironmentVariable("QUADER_RUN_VULKAN_TEXTURE_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_TEXTURE_TESTS=1 for large wire teardown.";
+  }
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize(filament::Engine::Backend::VULKAN, 32u));
+  FilamentMaterialLibrary library;
+  ASSERT_TRUE(library.initialize(harness.engine(),
+      std::filesystem::path(qEnvironmentVariable("QT_PLUGIN_PATH").toStdWString())));
+  auto *wire_scene = harness.engine().createScene();
+  InstancedWireRenderBackend wires;
+  wires.initialize(harness.engine(), *wire_scene, library.selected_object_line(), 1u);
+  const std::array<MeshWireSegment, 1u> segments{{
+      {.start = {-1.0f, 0.0f, 0.0f}, .end = {1.0f, 0.0f, 0.0f}}}};
+  RenderInstanceBatchChunk chunk;
+  chunk.world_transforms.emplace_back();
+  InstancedWireBatchStyle style;
+  style.layer_mask = kViewportOverlayLayerMask;
+  std::vector<InstancedWireRenderBackend::BatchProxy> proxies;
+  constexpr std::size_t kWireCount = 6400u;
+  proxies.reserve(kWireCount);
+  for (std::size_t index = 0u; index < kWireCount; ++index) {
+    auto proxy = wires.create_batch({.signature = index + 1u,
+                                     .color = 0xffffffffu,
+                                     .segments = segments}, chunk, style);
+    ASSERT_TRUE(wires.valid(proxy));
+    proxies.push_back(std::move(proxy));
+    if (index % 32u == 31u) {
+      harness.engine().flush();
+    }
+  }
+  ASSERT_TRUE(harness.engine().flushAndWait(10'000'000'000ull));
+  const auto retirement_start = std::chrono::steady_clock::now();
+  wires.destroy_batches(std::span(proxies).first(kWireCount / 2u));
+  wires.prune_unused_geometry_resources(std::span(proxies).subspan(kWireCount / 2u));
+  EXPECT_EQ(wires.stats().unique_geometry_resource_count, kWireCount / 2u);
+  for (const auto &proxy : std::span(proxies).subspan(kWireCount / 2u)) {
+    EXPECT_TRUE(wires.valid(proxy));
+  }
+  wires.destroy_batches(proxies);
+  wires.shutdown();
+  harness.engine().destroy(wire_scene);
+  library.shutdown();
+  ASSERT_TRUE(harness.engine().flushAndWait(10'000'000'000ull));
+  EXPECT_EQ(harness.engine().getRenderableManager().getComponentCount(), 0u);
+  std::cout << "Large wire GPU retirement: batches=" << kWireCount << " retire_ms="
+            << std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - retirement_start).count()
+            << std::endl;
 }
 
 TEST(RenderTextureLifetimeTests, VulkanSingleEdgeBevelSettingsUpdateScenePixels) {

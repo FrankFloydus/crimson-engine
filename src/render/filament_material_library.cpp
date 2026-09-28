@@ -44,6 +44,12 @@ bool FilamentMaterialLibrary::initialize(
     LOG_INFO("Loading selected object line material");
     selected_object_line_material_ =
         load(material_dir / std::string(kSelectedObjectLineMaterialFile));
+    LOG_INFO("Loading selected mesh outline mask material");
+    selected_mesh_outline_mask_material_ =
+        load(material_dir / std::string(kSelectedMeshOutlineMaskMaterialFile));
+    LOG_INFO("Loading selected mesh outline composite material");
+    selected_mesh_outline_composite_material_ =
+        load(material_dir / std::string(kSelectedMeshOutlineCompositeMaterialFile));
     LOG_INFO("Loading edit wire line material");
     edit_wire_line_material_ =
         load(material_dir / std::string(kEditWireLineMaterialFile));
@@ -78,6 +84,8 @@ void FilamentMaterialLibrary::shutdown() {
     destroy(instance_selection_fill_material_);
     destroy(overlay_line_material_);
     destroy(selected_object_line_material_);
+    destroy(selected_mesh_outline_mask_material_);
+    destroy(selected_mesh_outline_composite_material_);
     destroy(edit_wire_line_material_);
     destroy(overlay_point_material_);
     destroy(overlay_icon_material_);

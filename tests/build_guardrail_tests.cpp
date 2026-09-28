@@ -5459,12 +5459,17 @@ TEST(BuildGuardrailTests,
   const std::string update = source_slice(
       source, "bool MeshRenderableFactory::update_dynamic_geometry(",
       "template <typename Resource>");
+  const std::string prepare = source_slice(
+      source, "MeshRenderableFactory::prepare_dynamic_geometry_update(",
+      "bool MeshRenderableFactory::update_dynamic_geometry(");
 
-  expect_contains(update, "build_render_vertices(mesh, dynamic_positions)");
-  expect_contains(update, "pack_dynamic_static_vertices(render_vertices)");
+  expect_contains(prepare, "build_render_vertices(mesh, dynamic_positions)");
+  expect_contains(prepare, "pack_dynamic_static_vertices(render_vertices)");
+  expect_contains(prepare, "std::vector<std::uint32_t> indices(mesh.indices.begin(), mesh.indices.end())");
+  expect_contains(update, "prepare_dynamic_geometry_update(mesh, dynamic_positions)");
   expect_contains(update, "setBufferAt(");
   expect_contains(update, "*engine_, 0");
   expect_contains(update, "*engine_, 1");
   expect_contains(update, "proxy.index_buffer->setBuffer(");
-  expect_contains(update, "FilamentBufferDescriptorFactory::span(mesh.indices)");
+  expect_contains(update, "std::move(prepared->indices)");
 }

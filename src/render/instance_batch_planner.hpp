@@ -107,8 +107,9 @@ enum class RenderInstanceBatchUpdateKind : std::uint8_t {
  * semantic slots, its occurrence/chunk order is preserved so transform,
  * visibility, bounds, and one-payload-per-chunk geometry updates cannot
  * reshuffle retained slots. Geometry-token changes still classify as rebuilds
- * so the affected proxy can bind current buffers. A null or incompatible
- * retained layout rebuilds the spatial Morton plan.
+ * so the affected proxy can bind current buffers. Merged payload populations
+ * rebuild if retaining the former chunks would require extra draws. A null or
+ * incompatible retained layout rebuilds the spatial Morton plan.
  */
 [[nodiscard]] RenderInstanceBatchPlan plan_render_instance_batches(
     std::span<const RenderInstancePrimitiveOccurrence> occurrences,

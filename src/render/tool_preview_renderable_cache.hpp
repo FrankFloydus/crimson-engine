@@ -38,6 +38,8 @@ struct ToolPreviewCacheWorkCounters final {
   std::uint64_t retired_proxy_destroy_attempts = 0u;
   std::uint64_t explicit_instance_chunk_creations = 0u;
   std::uint64_t explicit_instance_prefix_updates = 0u;
+  std::uint64_t dynamic_geometry_preparations = 0u;
+  std::uint64_t parallel_dynamic_geometry_batches = 0u;
 };
 
 /** One active-prefix slice backed by a retained fixed-capacity InstanceBuffer. */
@@ -237,6 +239,9 @@ public:
     static bool group_submission_unchanged(
         const PreviewGroup &group,
         const RenderToolPreviewMeshRecord &preview_mesh);
+    static bool group_positions_changed(
+        const PreviewGroup &group,
+        const RenderToolPreviewMeshRecord &preview_mesh);
     bool group_dynamic_update_is_valid(
         const PreviewGroup &group,
         const RenderToolPreviewMeshRecord &preview_mesh) const;
@@ -259,14 +264,16 @@ public:
         PreviewGeneration &generation,
         const std::vector<RenderToolPreviewMeshRecord> &meshes,
         std::vector<std::size_t> &candidate_indices,
-        bool allow_explicit_count_change);
+        bool allow_explicit_count_change, bool &preparation_failed);
     GenerationMatchResult match_generation_groups(
         const PreviewGeneration &generation,
         std::span<const RenderToolPreviewMeshRecord *const> renderable_meshes,
         std::vector<std::size_t> &candidate_indices);
     [[nodiscard]] bool update_group(
         PreviewGroup &group,
-        const RenderToolPreviewMeshRecord &preview_mesh);
+        const RenderToolPreviewMeshRecord &preview_mesh,
+        std::shared_ptr<MeshRenderableFactory::DynamicGeometryUpdate> prepared = {},
+        const RenderInstanceBounds *prepared_bounds = nullptr);
     void publish_generation_subset(
         PreviewGeneration &generation,
         std::vector<std::size_t> candidate_indices);

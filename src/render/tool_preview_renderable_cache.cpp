@@ -13,10 +13,12 @@
 #include "render/render_signature_builder.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cassert>
 #include <numeric>
 #include <span>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -70,6 +72,62 @@ preview_dynamic_positions(const RenderToolPreviewMeshRecord &preview_mesh) {
   return preview_mesh.dynamic_position_payload
              ? std::span<const QVec3>(*preview_mesh.dynamic_position_payload)
              : std::span<const QVec3>{};
+}
+
+/// Pins each CPU job's immutable geometry and producer-owned position stream
+/// until every worker has joined and the render thread consumes its result.
+struct PreparedPreviewGeometry final {
+  std::size_t submission_index = 0u;
+  RenderMeshAssetSnapshot mesh;
+  std::shared_ptr<const std::vector<QVec3>> position_owner;
+  RenderInstanceBounds bounds;
+  std::shared_ptr<MeshRenderableFactory::DynamicGeometryUpdate> upload;
+};
+
+bool prepare_preview_geometry(std::vector<PreparedPreviewGeometry> &jobs,
+                              bool &parallel) {
+  QDR_PROFILE_SCOPE("Tool preview prepare dynamic geometry uploads");
+  constexpr std::size_t kParallelThreshold = 32u;
+  constexpr std::size_t kMaximumWorkers = 8u;
+  const std::size_t worker_count = jobs.size() < kParallelThreshold ? 1u :
+      std::min(jobs.size(), std::clamp<std::size_t>(
+          std::thread::hardware_concurrency(), 1u, kMaximumWorkers));
+  parallel = worker_count > 1u;
+  const auto prepare = [&](std::size_t index) {
+    PreparedPreviewGeometry &job = jobs[index];
+    const std::span<const QVec3> positions = job.position_owner
+        ? std::span<const QVec3>(*job.position_owner) : std::span<const QVec3>{};
+    job.upload = MeshRenderableFactory::prepare_dynamic_geometry_update(job.mesh, positions);
+    job.bounds = positions.empty()
+        ? MeshRenderableFactory::compute_local_bounds(job.mesh)
+        : MeshRenderableFactory::compute_local_bounds(positions);
+  };
+  try {
+    if (!parallel) {
+      for (std::size_t index = 0u; index < jobs.size(); ++index) prepare(index);
+    } else {
+      std::atomic<std::size_t> next_job{0u};
+      std::vector<std::jthread> workers;
+      workers.reserve(worker_count);
+      for (std::size_t worker = 0u; worker < worker_count; ++worker) {
+        workers.emplace_back([&] {
+          for (;;) {
+            const std::size_t index = next_job.fetch_add(1u, std::memory_order_relaxed);
+            if (index >= jobs.size()) return;
+            try {
+              prepare(index);
+            } catch (...) {
+              jobs[index].upload.reset();
+            }
+          }
+        });
+      }
+      // jthread destruction joins before the immutable results are inspected.
+    }
+  } catch (...) {
+    return false;
+  }
+  return std::ranges::all_of(jobs, [](const auto &job) { return job.upload != nullptr; });
 }
 
 bool same_float_bits(float left, float right) {
@@ -374,10 +432,11 @@ ToolPreviewSubmissionResult ToolPreviewRenderableCache::set_meshes(
   }
 
   std::vector<std::size_t> candidate_indices;
+  bool preparation_failed = false;
   if (current_generation_) {
     QDR_PROFILE_SCOPE("Tool preview match current generation");
     if (prepare_generation(*current_generation_, meshes, candidate_indices,
-                           false)) {
+                           false, preparation_failed)) {
       publish_generation_subset(*current_generation_,
                                 std::move(candidate_indices));
       mesh_signature_ = next_signature;
@@ -386,12 +445,13 @@ ToolPreviewSubmissionResult ToolPreviewRenderableCache::set_meshes(
           !active_material_uniforms_are_current(*current_generation_);
       return ToolPreviewSubmissionResult::Published;
     }
+    if (preparation_failed) return ToolPreviewSubmissionResult::Failed;
   }
 
   if (warm_generation_) {
     QDR_PROFILE_SCOPE("Tool preview match warm generation");
     if (prepare_generation(*warm_generation_, meshes, candidate_indices,
-                           true)) {
+                           true, preparation_failed)) {
       // The candidate is made visible first. No frame can observe a source
       // hidden without either the old or new preview surface present.
       publish_generation_subset(*warm_generation_,
@@ -406,6 +466,7 @@ ToolPreviewSubmissionResult ToolPreviewRenderableCache::set_meshes(
           !active_material_uniforms_are_current(*current_generation_);
       return ToolPreviewSubmissionResult::Published;
     }
+    if (preparation_failed) return ToolPreviewSubmissionResult::Failed;
   }
 
   std::unique_ptr<PreviewGeneration> candidate;
@@ -741,9 +802,10 @@ bool ToolPreviewRenderableCache::prepare_generation(
     PreviewGeneration &generation,
     const std::vector<RenderToolPreviewMeshRecord> &meshes,
     std::vector<std::size_t> &candidate_indices,
-    bool allow_explicit_count_change) {
+    bool allow_explicit_count_change, bool &preparation_failed) {
   QDR_PROFILE_FUNCTION();
   candidate_indices.clear();
+  preparation_failed = false;
 
   // Steady modal ticks preserve submission order and the active group set.
   // Validate that common case without allocating lookup tables or hashing
@@ -774,10 +836,37 @@ bool ToolPreviewRenderableCache::prepare_generation(
     if (ordered_active_match) {
       QDR_PROFILE_SCOPE("Tool preview ordered active fast path");
       candidate_indices = generation.active_group_indices;
+      std::vector<PreparedPreviewGeometry> prepared;
+      bool parallel = false;
+      try {
+        prepared.reserve(meshes.size());
+        for (std::size_t index = 0u; index < meshes.size(); ++index) {
+          const PreviewGroup &group = generation.groups[candidate_indices[index]];
+          if (!group.explicit_instances && group_positions_changed(group, meshes[index])) {
+            prepared.push_back({.submission_index = index,
+                .mesh = render_mesh_asset_snapshot(kInvalidAssetId, meshes[index].mesh),
+                .position_owner = meshes[index].dynamic_position_payload});
+          }
+        }
+        if (!prepare_preview_geometry(prepared, parallel)) {
+          preparation_failed = true;
+          return false;
+        }
+      } catch (...) {
+        preparation_failed = true;
+        return false;
+      }
+      work_counters_.dynamic_geometry_preparations += prepared.size();
+      work_counters_.parallel_dynamic_geometry_batches += parallel ? 1u : 0u;
+      std::size_t prepared_index = 0u;
       for (std::size_t index = 0u; index < meshes.size(); ++index) {
         PreviewGroup &group = generation.groups[candidate_indices[index]];
         if (!group_submission_unchanged(group, meshes[index])) {
-          if (!update_group(group, meshes[index])) {
+          const PreparedPreviewGeometry *job = prepared_index < prepared.size() &&
+              prepared[prepared_index].submission_index == index
+                  ? &prepared[prepared_index++] : nullptr;
+          if (!update_group(group, meshes[index], job ? job->upload : nullptr,
+                            job ? &job->bounds : nullptr)) {
             return false;
           }
         }
@@ -946,24 +1035,15 @@ ToolPreviewRenderableCache::match_generation_groups(
 
 bool ToolPreviewRenderableCache::update_group(
     PreviewGroup &group,
-    const RenderToolPreviewMeshRecord &preview_mesh) {
+    const RenderToolPreviewMeshRecord &preview_mesh,
+    std::shared_ptr<MeshRenderableFactory::DynamicGeometryUpdate> prepared,
+    const RenderInstanceBounds *prepared_bounds) {
   QDR_PROFILE_FUNCTION();
-  const bool identity_changed =
-      group.source_object_id != preview_mesh.source_object_id ||
-      group.source_entity != preview_mesh.source_entity ||
-      group.visibility_entity != preview_mesh.visibility_entity ||
-      group.layout_key != preview_mesh.layout_key;
   const std::uint64_t geometry_signature =
       preview_geometry_signature(preview_mesh);
   const std::shared_ptr<const MeshGeometryPayload> topology_payload =
       preview_mesh.mesh.geometry_payload();
-  const bool positions_changed =
-      preview_mesh.dynamic_positions &&
-      (identity_changed ||
-       group.position_revision != preview_mesh.position_revision ||
-       group.geometry_signature != geometry_signature ||
-       (!preview_mesh.dynamic_position_payload &&
-        group.topology_payload.get() != topology_payload.get()));
+  const bool positions_changed = group_positions_changed(group, preview_mesh);
 
   if (group.explicit_instances) {
     if (!group_explicit_update_is_valid(group, preview_mesh)) {
@@ -1073,11 +1153,12 @@ bool ToolPreviewRenderableCache::update_group(
       const std::span<const QVec3> positions =
           preview_dynamic_positions(preview_mesh);
       const RenderInstanceBounds local_bounds =
-          positions.empty()
+          prepared_bounds != nullptr ? *prepared_bounds : positions.empty()
               ? MeshRenderableFactory::compute_local_bounds(mesh_snapshot)
               : MeshRenderableFactory::compute_local_bounds(positions);
       const bool updated = factory_->update_dynamic_geometry(
-          group.rendered_prototype, mesh_snapshot, positions, &local_bounds);
+          group.rendered_prototype, mesh_snapshot, positions, &local_bounds,
+          std::move(prepared));
       if (!updated) {
         return false;
       }
@@ -1713,6 +1794,20 @@ bool ToolPreviewRenderableCache::group_submission_unchanged(
          group.dynamic_positions == preview_mesh.dynamic_positions &&
          preview_transforms_equal(group.transforms, preview_mesh) &&
          preview_texture_mappings_equal(group.sampling_from_local, preview_mesh);
+}
+
+bool ToolPreviewRenderableCache::group_positions_changed(
+    const PreviewGroup &group,
+    const RenderToolPreviewMeshRecord &preview_mesh) {
+  return preview_mesh.dynamic_positions &&
+      (group.source_object_id != preview_mesh.source_object_id ||
+       group.source_entity != preview_mesh.source_entity ||
+       group.visibility_entity != preview_mesh.visibility_entity ||
+       group.layout_key != preview_mesh.layout_key ||
+       group.position_revision != preview_mesh.position_revision ||
+       group.geometry_signature != preview_geometry_signature(preview_mesh) ||
+       (!preview_mesh.dynamic_position_payload &&
+        group.topology_payload.get() != preview_mesh.mesh.geometry_payload().get()));
 }
 
 bool ToolPreviewRenderableCache::group_dynamic_update_is_valid(

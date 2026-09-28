@@ -12,13 +12,56 @@
 #include "render/overlay/overlay_mesh_types.hpp"
 #include "render/overlay/overlay_face_fill_composition.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace quader {
 
-class OverlayDepthStampPointVisibilityFilter;
+/// Reports retained source-face acceleration work independently of camera queries.
+struct OverlayDepthStampPointVisibilityStats {
+  std::uint64_t build_count = 0u;
+  std::uint64_t viewport_skip_count = 0u;
+  std::uint64_t ray_query_count = 0u;
+  std::uint64_t query_batch_count = 0u;
+  std::uint64_t parallel_query_batch_count = 0u;
+  std::uint64_t queried_point_count = 0u;
+  std::size_t object_count = 0u;
+  std::size_t triangle_count = 0u;
+};
+
+/// Owns source-face acceleration shared by editable point layers in one pane.
+/// Camera changes repeat visibility queries without extracting or indexing faces.
+class OverlayDepthStampPointVisibilityFilter final {
+public:
+  OverlayDepthStampPointVisibilityFilter();
+  ~OverlayDepthStampPointVisibilityFilter();
+  OverlayDepthStampPointVisibilityFilter(
+      const OverlayDepthStampPointVisibilityFilter &) = delete;
+  OverlayDepthStampPointVisibilityFilter &operator=(
+      const OverlayDepthStampPointVisibilityFilter &) = delete;
+
+  void prepare(const ViewportOverlayFrame &frame,
+               const OverlayFrameSignatures &signatures,
+               const ViewportOverlayCamera &camera,
+               bool allow_viewport_ray_skips = true);
+  void invalidate();
+  [[nodiscard]] bool point_visible(const ViewportOverlayPoint &point) const;
+  /// Returns frame-indexed flags; the owned span lasts until the next evaluation.
+  /// Workers share immutable BVHs and join before any visibility is published.
+  [[nodiscard]] std::span<const std::uint8_t> evaluate(
+      const ViewportOverlayFrame &frame, const OverlayFrameSignatures &signatures,
+      const ViewportOverlayCamera &camera, bool allow_viewport_ray_skips = true,
+      bool allow_parallel_queries = true);
+  [[nodiscard]] OverlayDepthStampPointVisibilityStats stats() const;
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 
 /**
  * Enumerates OverlayDepthFunc values used by the render layer.
@@ -111,6 +154,7 @@ struct OverlayPointBatch {
     float inner_radius = 0.0f;
     float depth_bias = 0.0f;
     float near_plane = 0.05f;
+    std::vector<std::size_t> visibility_point_indices;
 };
 
 /**
@@ -155,7 +199,8 @@ public:
   static std::uint64_t
   layer_build_signature(const OverlayFrameSignatures &signatures,
                         const ViewportOverlayCamera &camera,
-                        ViewportOverlayLayer layer);
+                        ViewportOverlayLayer layer,
+                        bool retain_point_geometry = false);
   static bool layer_build_depends_on_camera(ViewportOverlayLayer layer);
   static bool
   layer_has_renderable_primitives(const OverlayFrameSignatures &signatures,
@@ -169,7 +214,10 @@ public:
   build_layer(const ViewportOverlayFrame &frame,
               const ViewportOverlayCamera &camera, ViewportOverlayLayer layer,
               const OverlayFrameSignatures *signatures = nullptr,
-              std::uint16_t blend_order_bias = 0u);
+              std::uint16_t blend_order_bias = 0u,
+              OverlayDepthStampPointVisibilityFilter *point_visibility = nullptr,
+              bool allow_viewport_ray_skips = true,
+              bool retain_point_geometry = false);
 
 private:
     /**
@@ -205,8 +253,7 @@ private:
     static std::vector<const ViewportOverlayPoint *>
     points_for_layer(const ViewportOverlayFrame &frame,
                      ViewportOverlayLayer layer,
-                     const OverlayDepthStampPointVisibilityFilter *visibility,
-                     const ViewportOverlayCamera &camera);
+                     const OverlayDepthStampPointVisibilityFilter *visibility);
     static std::vector<const ViewportOverlayIcon *>
     icons_for_layer(const ViewportOverlayFrame &frame,
                     ViewportOverlayLayer layer);
@@ -218,7 +265,7 @@ private:
                       const std::vector<const ViewportOverlayPoint *> &points,
                       const ViewportOverlayCamera &camera,
                       ViewportOverlayLayer layer, std::uint16_t &blend_order,
-                      bool outline);
+                      bool outline, const ViewportOverlayPoint *frame_points = nullptr);
     static void
     append_icon_pass(OverlayLayerBuildPlan &plan,
                      const std::vector<const ViewportOverlayIcon *> &icons,

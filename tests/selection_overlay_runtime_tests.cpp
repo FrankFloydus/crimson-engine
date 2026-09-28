@@ -18,6 +18,7 @@
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "render/filament_material_library.hpp"
+#include "render/overlay/selected_mesh_outline_mask_cache.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/png_texture_loader.hpp"
@@ -28,6 +29,7 @@
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
+#include "editor/viewport/viewport_scene_projection.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
@@ -100,6 +102,7 @@ public:
     (void)engine_->flushAndWait(5'000'000'000ULL);
     engine_->pumpMessageQueues();
     view_.shutdown();
+    mesh_outline_masks_.shutdown();
     bridge_.shutdown();
     registry_.clear();
     materials_.shutdown();
@@ -137,6 +140,9 @@ public:
     view_.initialize(*engine_, *scene_, registry_, materials_.ground_grid(),
                      materials_.overlay_stencil_reset(),
                      viewport_grid_layer_mask(0u), surface_);
+    if (!mesh_outline_masks_.initialize(*engine_, materials_.selected_mesh_outline_mask()) ||
+        !view_.configure_selected_mesh_outlines(mesh_outline_masks_,
+            materials_.selected_mesh_outline_composite(), viewport_grid_layer_mask(0u))) return false;
     camera_.set_viewport_size(kWidth, kHeight);
     camera_.set_view_direction({0.0f, 0.0f, -1.0f});
     camera_.set_clip_planes(0.001f, 200.0f);
@@ -307,6 +313,28 @@ public:
     return point_at_plane(image_pixel, z);
   }
 
+  bool create_outline_depth_quad(const std::array<MeshVertex, 4u> &points) {
+    QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    quader_poly::Document document;
+    // overlay_audit_world_point accounts for the mirrored readback, so this
+    // image-space order produces a front surface toward positive camera Z.
+    const std::array vertices{
+        quader_poly::add_vertex(document, points[0].position),
+        quader_poly::add_vertex(document, points[1].position),
+        quader_poly::add_vertex(document, points[2].position),
+        quader_poly::add_vertex(document, points[3].position)};
+    (void)quader_poly::add_face(document, vertices);
+    const auto object = api.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Sloped outline depth regression"});
+    const auto material = api.assets().add_material(QuaderMaterialAsset{
+        .name = "Sloped outline neutral gray", .base_color = {0.18f, 0.18f, 0.18f}, .roughness = 1.0f});
+    if (!object.ok() || !material.ok() ||
+        !api.assets().assign_material_to_entity(object.value().entity, material.value().id).ok()) return false;
+    bridge_.sync(session_.scene(), session_.assets());
+    return true;
+  }
+
   void set_overlay_audit_frame(ViewportOverlayFrame frame) {
     overlay_audit_frame_.frame = std::move(frame);
     ++revision_;
@@ -317,7 +345,10 @@ public:
   }
 
   void present_overlay_audit_frame(float raster_scale = 1.0f,
-      ViewportOverlaySelectionContext context = ViewportOverlaySelectionContext::Object) {
+      ViewportOverlaySelectionContext context = ViewportOverlaySelectionContext::Object,
+      bool publish_dynamic_frame = false) {
+    ViewportOverlayFrame dynamic_frame;
+    if (publish_dynamic_frame) dynamic_frame.lines = overlay_audit_frame_.frame.lines;
     last_submission_ = bridge_.submit_viewport_overlay(
         {.layer_mask = viewport_grid_layer_mask(0u),
          .raster_scale = raster_scale,
@@ -325,6 +356,11 @@ public:
          .selection_source = {.source_identity = 108u,
                               .selection_revision = revision_},
          .selection_frame_provider = &overlay_audit_frame_,
+         .volatile_modeling_overlay_frame = publish_dynamic_frame ? &dynamic_frame : nullptr,
+         .volatile_modeling_source = publish_dynamic_frame
+             ? ViewportOverlayVolatileModelingSourceStamp{
+                 .source_identity = 109u, .publication_revision = revision_}
+             : ViewportOverlayVolatileModelingSourceStamp{},
          .scene_selection_mode = context == ViewportOverlaySelectionContext::Vertex
              ? RenderOverlaySelectionMode::Component : RenderOverlaySelectionMode::Object,
          .style_selection_context = context,
@@ -632,12 +668,66 @@ public:
     return present_component_sample(ViewportOverlaySelectionContext::Edge, scale);
   }
 
+  bool create_component_transform_sample(ViewportOverlaySelectionContext context) {
+    auto &editor = array_editor();
+    quader_poly::Document document;
+    const std::array front{
+        quader_poly::add_vertex(document, {-1.2f, -0.6f, 0.0f}),
+        quader_poly::add_vertex(document, {-0.6f, -0.6f, 0.0f}),
+        quader_poly::add_vertex(document, {-0.6f, 0.6f, 0.0f}),
+        quader_poly::add_vertex(document, {-1.2f, 0.6f, 0.0f})};
+    const auto face = quader_poly::add_face(document, front);
+    const std::array rear{
+        quader_poly::add_vertex(document, {-1.4f, -0.25f, -0.3f}),
+        quader_poly::add_vertex(document, {1.4f, -0.25f, -0.3f}),
+        quader_poly::add_vertex(document, {1.4f, 0.25f, -0.3f}),
+        quader_poly::add_vertex(document, {-1.4f, 0.25f, -0.3f})};
+    (void)quader_poly::add_face(document, rear);
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Retained component transform pixel regression"});
+    if (!object.ok()) return false;
+    QuaderComponentSelectionArgs selection{.object = object.value()};
+    QuaderSelectionMode mode = QuaderSelectionMode::Face;
+    if (context == ViewportOverlaySelectionContext::Vertex) {
+      mode = QuaderSelectionMode::Vertex;
+      selection.kind = QuaderComponentKind::Vertex;
+      selection.vertices.assign(front.begin(), front.end());
+    } else if (context == ViewportOverlaySelectionContext::Edge) {
+      mode = QuaderSelectionMode::Edge;
+      selection.kind = QuaderComponentKind::Edge;
+      selection.edges = {{front[0], front[3]}, {front[1], front[2]}};
+    } else {
+      selection.kind = QuaderComponentKind::Face;
+      selection.faces = {static_cast<QuaderElementId>(face)};
+    }
+    if (!editor.selection().set_mode(mode).ok() ||
+        !editor.selection().select_components(selection).ok() ||
+        !camera_.restore_perspective_pose({
+            .eye = {0.0f, 0.0f, 4.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}})) {
+      return false;
+    }
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
+  }
+
+  bool present_component_transform_sample(ViewportOverlaySelectionContext context,
+                                          const ViewportSettings &settings) {
+    return present_component_sample(context, 1.0f, settings, true);
+  }
+
   bool present_component_sample(ViewportOverlaySelectionContext context,
                                 float scale = 1.0f,
-                                const ViewportSettings &settings = ViewportSettings::defaults()) {
+                                const ViewportSettings &settings = ViewportSettings::defaults(),
+                                bool sync_preview = false) {
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session_));
     if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok()) {
+      return false;
+    }
+    if (sync_preview && !QuaderRenderApiRuntimeAccess::sync_tool_previews(
+                            array_editor().render(), bridge_).ok()) {
       return false;
     }
     const auto &modeling = session_.modeling();
@@ -982,12 +1072,15 @@ public:
              .selected_mesh_outline_only = true, .style = style}).ok()) return false;
     const auto &scene = QuaderRenderApiRuntimeAccess::build_scene_overlay_snapshot(
         editor.render(), active_snapshots_);
+    const bool gpu_outlines = view_.update_selected_mesh_outlines(
+        active_snapshots_.selected_object_snapshot(), &scene, style, true);
     last_submission_ = bridge_.submit_viewport_overlay(
         {.layer_mask = viewport_grid_layer_mask(0u),
          .raster_scale = scale,
          .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
          .scene_overlay_snapshot = &scene,
          .selected_mesh_outline_snapshot = active_snapshots_.selected_object_snapshot(),
+         .gpu_mesh_outlines = gpu_outlines,
          .scene_selection_mode = groups ? RenderOverlaySelectionMode::Group : RenderOverlaySelectionMode::Object,
          .style_selection_context = groups ? ViewportOverlaySelectionContext::Group : ViewportOverlaySelectionContext::Object,
          .overlays_visible = true,
@@ -1003,6 +1096,40 @@ public:
   void sync_selected_object_snapshot(
       const RenderOverlaySelectedObjectSnapshot &snapshot) {
     bridge_.sync_scene_asset_overlays(snapshot, {}, {});
+  }
+
+  void sync_render_scene(const SceneSession &session) {
+    bridge_.sync(session.scene(), session.assets());
+  }
+
+  bool present_mesh_outline_snapshot(const RenderOverlaySelectedObjectSnapshot &snapshot,
+                                     float scale = 1.0f, bool gpu = true,
+                                     bool visible = true) {
+    const auto settings = ViewportSettings::defaults();
+    const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings, scale);
+    if (!view_.update_selected_mesh_outlines(&snapshot, nullptr, style, gpu && visible)) return false;
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u),
+         .raster_scale = scale,
+         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .selected_mesh_outline_snapshot = &snapshot,
+         .gpu_mesh_outlines = gpu,
+         .scene_selection_mode = RenderOverlaySelectionMode::Object,
+         .style_selection_context = ViewportOverlaySelectionContext::Object,
+         .overlays_visible = visible,
+         .selection_dimensions_visible = false}, settings);
+    return true;
+  }
+
+  SelectedMeshOutlineMaskWorkStats mesh_outline_work() const {
+    return mesh_outline_masks_.work_stats();
+  }
+
+  bool render_one_frame() {
+    if (!begin_frame()) return false;
+    view_.render(*renderer_);
+    renderer_->endFrame();
+    return true;
   }
 
   std::size_t renderable_count() const {
@@ -1055,7 +1182,7 @@ public:
     return result;
   }
 
-  QImage capture() {
+  QImage capture(bool warm_up = true) {
     const auto destroy_target = [this](filament::RenderTarget *target) {
       if (target != nullptr) engine_->destroy(target);
     };
@@ -1069,7 +1196,7 @@ public:
                                     .build(*engine_));
       if (!texture_read_target) return {};
     }
-    for (int frame = 0; frame < 5; ++frame) {
+    for (int frame = 0; frame < (warm_up ? 5 : 0); ++frame) {
       if (!begin_frame()) return {};
       view_.render(*renderer_);
       renderer_->endFrame();
@@ -1186,6 +1313,7 @@ private:
   FilamentMaterialLibrary materials_;
   TextureRegistry registry_;
   SceneRenderBridge bridge_;
+  SelectedMeshOutlineMaskCache mesh_outline_masks_;
   ViewportRenderer view_;
   ViewportCameraController camera_;
   SelectionRuntimeFrame selected_vertex_frame_;
@@ -1205,6 +1333,198 @@ int cyan_pixels(const QImage &image, QVec2 center) {
     }
   }
   return count;
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanMeshMaskOutlinesPreserveUnionOcclusionActiveStyleAndVisibility) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-mesh-mask-outline-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) ASSERT_TRUE(QDir().mkpath(output));
+  const auto color_delta = [](const QImage &image, const QImage &base, QRect region) {
+    long long total = 0;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+      for (int x = region.left(); x <= region.right(); ++x) {
+        const QColor pixel = image.pixelColor(x, y), background = base.pixelColor(x, y);
+        total += std::abs(pixel.red() - background.red()) +
+            std::abs(pixel.green() - background.green()) + std::abs(pixel.blue() - background.blue());
+      }
+    }
+    return total;
+  };
+  for (const auto surface : {ViewportRenderSurface::Swapchain, ViewportRenderSurface::Texture}) {
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(-0.02f, true, surface));
+    for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+      SCOPED_TRACE(static_cast<int>(surface));
+      SCOPED_TRACE(static_cast<int>(projection));
+      ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+      RenderOverlaySelectedObjectSnapshot snapshot;
+      snapshot.selection_revision = 1u;
+      snapshot.selected_mesh_outline_only = true;
+      ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot));
+      const QImage background = harness.capture(false);
+      ASSERT_FALSE(background.isNull());
+      std::array<std::array<MeshVertex, 4u>, 6u> vertices;
+      const std::array<std::uint32_t, 6u> indices{0u, 1u, 2u, 0u, 2u, 3u};
+      const auto append_quad = [&](std::size_t index, QRect rectangle, float z, bool active) {
+        const std::array<QVec2, 4u> pixels{{
+            {float(rectangle.left()), float(rectangle.top())},
+            {float(rectangle.right()), float(rectangle.top())},
+            {float(rectangle.right()), float(rectangle.bottom())},
+            {float(rectangle.left()), float(rectangle.bottom())}}};
+        for (std::size_t corner = 0; corner < pixels.size(); ++corner) {
+          vertices[index][corner].position = harness.overlay_audit_world_point(pixels[corner], z);
+        }
+        snapshot.meshes.push_back({
+            .entity = static_cast<EntityId>(index + 1), .mesh_id = static_cast<AssetId>(index + 1),
+            .mesh_revision = 1u, .selected = true, .active_selected = active,
+            .vertices = vertices[index], .indices = indices});
+      };
+      append_quad(0u, {70, 120, 91, 121}, 0.1f, false);
+      append_quad(1u, {120, 120, 131, 121}, 0.1f, false);
+      append_quad(2u, {70, 300, 181, 121}, -0.1f, false);
+      append_quad(3u, {400, 120, 161, 121}, 0.1f, true);
+      append_quad(4u, {400, 300, 161, 121}, 0.1f, false);
+      append_quad(5u, {400, 300, 161, 121}, -0.1f, true);
+      ++snapshot.selection_revision;
+      QImage initial;
+      for (const float scale : {1.0f, 2.0f, 1.0f}) {
+        ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale));
+        // The first rendered frame after target allocation or style changes
+        // must already match the settled presentation; warmups hide stale masks.
+        const QImage image = harness.capture(false);
+        ASSERT_FALSE(image.isNull());
+        EXPECT_EQ(harness.capture(), image);
+        const auto visible = color_delta(image, background, {63, 145, 15, 60});
+        const auto hidden = color_delta(image, background, {63, 325, 15, 60});
+        EXPECT_GT(visible, 0);
+        EXPECT_GT(hidden, 0) << "Occluded selected silhouettes retain their X-ray companion.";
+        EXPECT_LT(hidden, visible) << "Occluded silhouettes use reduced alpha.";
+        const QColor ordinary_boundary = image.pixelColor(70, 180);
+        const QColor active_boundary = image.pixelColor(400, 180);
+        EXPECT_GT(active_boundary.red() + active_boundary.green() + active_boundary.blue(),
+                  ordinary_boundary.red() + ordinary_boundary.green() + ordinary_boundary.blue())
+            << "The active selected boundary remains brighter over the same backdrop.";
+        for (const int offset : {-1, 0, 1}) {
+          const QColor ordinary = image.pixelColor(70 + offset, 180);
+          const QColor ordinary_over_active = image.pixelColor(400 + offset, 360);
+          EXPECT_NEAR(ordinary.red(), ordinary_over_active.red(), 1)
+              << "An aligned active silhouette behind a visible ordinary one must not replace its boundary.";
+          EXPECT_NEAR(ordinary.green(), ordinary_over_active.green(), 1);
+          EXPECT_NEAR(ordinary.blue(), ordinary_over_active.blue(), 1);
+        }
+        EXPECT_EQ(color_delta(image, background, {113, 145, 15, 60}), 0)
+            << "An overlapping selected quad must not leave an internal boundary.";
+        EXPECT_EQ(color_delta(image, background, {153, 145, 15, 60}), 0);
+        if (scale == 1.0f) {
+          if (initial.isNull()) initial = image;
+          else EXPECT_EQ(initial, image) << "Scale-down restores the exact retained presentation.";
+        }
+        const auto work = harness.mesh_outline_work();
+        ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale));
+        EXPECT_EQ(harness.mesh_outline_work().geometry_builds, work.geometry_builds);
+        EXPECT_EQ(harness.mesh_outline_work().uploaded_vertices, work.uploaded_vertices);
+        EXPECT_EQ(harness.capture(false), image);
+        ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale, true, false));
+        EXPECT_EQ(harness.capture(false), background);
+        EXPECT_EQ(harness.mesh_outline_work().geometry_builds, work.geometry_builds);
+        ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale));
+        EXPECT_EQ(harness.capture(false), image);
+        if (!output.isEmpty()) {
+          ASSERT_TRUE(image.save(QDir(output).filePath(QStringLiteral("mesh-mask-%1-%2-%3.png")
+              .arg(static_cast<int>(surface)).arg(static_cast<int>(projection)).arg(int(scale * 100)))));
+        }
+      }
+      snapshot.meshes.clear();
+      ++snapshot.selection_revision;
+      ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot));
+      EXPECT_EQ(harness.capture(false), background) << "Deselecting clears both retained mask targets.";
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanSlopedMeshInnerOutlineUsesItsOwnSurfaceDepth) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-sloped-outline-depth-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+    std::array<std::array<MeshVertex, 4u>, 2u> vertices;
+    const std::array<std::uint32_t, 6u> indices{0u, 2u, 1u, 0u, 3u, 2u};
+    RenderOverlaySelectedObjectSnapshot snapshot;
+    snapshot.selection_revision = 1u;
+    snapshot.selected_mesh_outline_only = true;
+    for (std::size_t index = 0u; index < vertices.size(); ++index) {
+      const float left = index == 0u ? 80.0f : 370.0f;
+      const std::array<QVec2, 4u> pixels{{
+          {left, 100.0f}, {left + 190.0f, 100.0f},
+          {left + 190.0f, 300.0f}, {left, 300.0f}}};
+      for (std::size_t corner = 0u; corner < pixels.size(); ++corner) {
+        const float z = index == 0u ? (corner == 0u || corner == 3u ? -1.0f : 1.0f) : 0.0f;
+        vertices[index][corner].position = harness.overlay_audit_world_point(pixels[corner], z);
+      }
+      ASSERT_TRUE(harness.create_outline_depth_quad(vertices[index]));
+      snapshot.meshes.push_back({
+          .entity = static_cast<EntityId>(index + 1u), .mesh_id = static_cast<AssetId>(index + 1u),
+          .mesh_revision = 1u, .selected = true, .vertices = vertices[index], .indices = indices});
+    }
+    ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, 1.0f, true, false));
+    const QImage background = harness.capture();
+    ASSERT_FALSE(background.isNull());
+    ASSERT_NE(background.pixelColor(180, 180), background.pixelColor(320, 400));
+    ASSERT_NE(background.pixelColor(470, 180), background.pixelColor(320, 400));
+    for (const float scale : {1.0f, 2.0f}) {
+      SCOPED_TRACE(static_cast<int>(projection));
+      SCOPED_TRACE(scale);
+      ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale));
+      const QImage image = harness.capture();
+      ASSERT_FALSE(image.isNull());
+      int reference_signal = 0;
+      for (const int y : {140, 180, 220, 260}) {
+        for (const int offset : {0, 1}) {
+          const QColor sloped = image.pixelColor(80 + offset, y);
+          const QColor flat = image.pixelColor(370 + offset, y);
+          const QColor sloped_base = background.pixelColor(80 + offset, y);
+          const QColor flat_base = background.pixelColor(370 + offset, y);
+          if (offset == 0) {
+            // This pixel has complete ribbon coverage and the authored ordinary
+            // color has a fully opaque red channel. Matching two half-alpha
+            // results must not make a broken depth comparison pass this test.
+            EXPECT_NEAR(flat.red(), 255, 2)
+                << "The flat reference must use the full-alpha visible pass.";
+          }
+          reference_signal += std::abs(flat.red() - flat_base.red()) +
+              std::abs(flat.green() - flat_base.green()) + std::abs(flat.blue() - flat_base.blue());
+          EXPECT_NEAR(sloped.red() - sloped_base.red(), flat.red() - flat_base.red(), 2)
+              << "A sloped surface must not classify its own inner outline as occluded.";
+          EXPECT_NEAR(sloped.green() - sloped_base.green(), flat.green() - flat_base.green(), 2);
+          EXPECT_NEAR(sloped.blue() - sloped_base.blue(), flat.blue() - flat_base.blue(), 2);
+        }
+      }
+      EXPECT_GT(reference_signal, 0) << "The probes must actually cover the visible outline.";
+      const QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+      if (!output.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(output));
+        ASSERT_TRUE(image.save(QDir(output).filePath(QStringLiteral("sloped-mesh-outline-%1-%2.png")
+            .arg(static_cast<int>(projection)).arg(int(scale * 100)))));
+      }
+    }
+  }
 }
 
 TEST(SelectionOverlayRuntimeTests,
@@ -1318,13 +1638,17 @@ TEST(SelectionOverlayRuntimeTests,
       [](const auto &mesh) {
         return mesh.has_triangle_geometry() && mesh.mesh_id != kInvalidAssetId;
       });
+  const auto benchmark_snapshot = snapshot;
   const QImage background = harness.capture();
   ASSERT_FALSE(background.isNull());
   const std::size_t background_renderables = harness.renderable_count();
   const auto started = std::chrono::steady_clock::now();
   harness.sync_selected_object_snapshot(snapshot);
   const auto submitted = std::chrono::steady_clock::now();
-  EXPECT_EQ(harness.renderable_count(), background_renderables + mesh_count * 4u);
+  const std::size_t selected_renderables = harness.renderable_count();
+  EXPECT_GT(selected_renderables, background_renderables);
+  EXPECT_LT(selected_renderables, background_renderables + mesh_count)
+      << "Selected face geometry must use bounded batches, not one proxy set per mesh.";
   // This executes beginFrame's material preparation as well as actual draws;
   // it catches the original command-stream overflow after bulk allocation.
   const QImage selected = harness.capture();
@@ -1333,7 +1657,7 @@ TEST(SelectionOverlayRuntimeTests,
   for (int iteration = 0; iteration < 100; ++iteration) {
     harness.sync_selected_object_snapshot(snapshot);
   }
-  EXPECT_EQ(harness.renderable_count(), background_renderables + mesh_count * 4u);
+  EXPECT_EQ(harness.renderable_count(), selected_renderables);
   EXPECT_EQ(harness.capture(), selected);
 
   ++snapshot.transform_revision;
@@ -1370,6 +1694,77 @@ TEST(SelectionOverlayRuntimeTests,
             << ", retire_ms="
             << std::chrono::duration<double, std::milli>(retired - retire_started).count()
             << '\n';
+
+  if (copied_project != nullptr) {
+    const auto &session = *copied_project->active_scene()->session;
+    const auto bounds = ViewportSceneProjection::selection_bounds(session.modeling());
+    ASSERT_TRUE(bounds.has_value());
+    auto framed = session.viewport_workspace().camera(ViewportPaneId::Perspective);
+    framed.set_viewport_size(SelectionOverlayRuntimeHarness::kWidth, SelectionOverlayRuntimeHarness::kHeight);
+    framed.focus_bounds(bounds->min, bounds->max, 1.4f);
+    const auto pose = framed.pose();
+    harness.sync_render_scene(session);
+    harness.sync_selected_object_snapshot(benchmark_snapshot);
+    constexpr std::size_t kCameraSteps = 8u;
+    for (const bool gpu : {false, true}) {
+      harness.set_sample_camera(session.viewport_workspace().camera(ViewportPaneId::Perspective));
+      ASSERT_TRUE(harness.present_mesh_outline_snapshot(benchmark_snapshot, 1.0f, gpu));
+      ASSERT_TRUE(harness.render_one_frame());
+      ASSERT_TRUE(harness.finish_gpu_work());
+      const auto retained_work = harness.mesh_outline_work();
+      std::array<double, kCameraSteps> submission_times{}, render_times{};
+      for (std::size_t step = 0u; step < kCameraSteps; ++step) {
+        auto camera = framed;
+        const float angle = float(step) * 2.0f * std::acos(-1.0f) / float(kCameraSteps);
+        const float cosine = std::cos(angle), sine = std::sin(angle);
+        const auto rotate_y = [cosine, sine](QVec3 point) {
+          return QVec3{point.x * cosine + point.z * sine, point.y,
+                       -point.x * sine + point.z * cosine};
+        };
+        if (step != 0u) {
+          ASSERT_TRUE(camera.restore_perspective_pose({
+              .eye = pose.target + rotate_y(pose.eye - pose.target),
+              .target = pose.target, .up = rotate_y(pose.up)}));
+        }
+        auto start = std::chrono::steady_clock::now();
+        harness.set_sample_camera(camera);
+        ASSERT_TRUE(harness.present_mesh_outline_snapshot(benchmark_snapshot, 1.0f, gpu));
+        submission_times[step] = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+        start = std::chrono::steady_clock::now();
+        ASSERT_TRUE(harness.render_one_frame());
+        render_times[step] = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+        ASSERT_TRUE(harness.finish_gpu_work());
+        EXPECT_EQ(harness.mesh_outline_work().geometry_builds, retained_work.geometry_builds);
+        EXPECT_EQ(harness.mesh_outline_work().uploaded_vertices, retained_work.uploaded_vertices);
+        const auto camera_pose = camera.pose();
+        std::cout << "LARGE_SELECTION_GPU_CAMERA path=" << (gpu ? "gpu_mask" : "cpu_fallback")
+                  << " step=" << step << " submit_ms=" << submission_times[step]
+                  << " render_cpu_ms=" << render_times[step]
+                  << " eye=" << camera_pose.eye.x << ',' << camera_pose.eye.y << ',' << camera_pose.eye.z
+                  << " renderables=" << harness.renderable_count() << std::endl;
+      }
+      const auto print_times = [gpu](const char *phase, std::array<double, kCameraSteps> samples) {
+        double total = 0.0;
+        for (const auto sample : samples) total += sample;
+        std::sort(samples.begin(), samples.end());
+        std::cout << "LARGE_SELECTION_GPU_REGIME path=" << (gpu ? "gpu_mask" : "cpu_fallback")
+                  << " phase=" << phase << " samples=" << samples.size()
+                  << " mean_ms=" << total / samples.size() << " median_ms=" << samples[samples.size() / 2u]
+                  << " max_ms=" << samples.back() << std::endl;
+      };
+      print_times("submission", submission_times);
+      print_times("render_cpu", render_times);
+      if (!output.isEmpty()) {
+        const QImage framed_selection = harness.capture();
+        ASSERT_FALSE(framed_selection.isNull());
+        ASSERT_TRUE(framed_selection.save(QDir(output).filePath(gpu
+            ? QStringLiteral("large-selection-framed-gpu.png")
+            : QStringLiteral("large-selection-framed-cpu.png"))));
+      }
+    }
+  }
 }
 
 TEST(SelectionOverlayRuntimeTests,
@@ -1556,6 +1951,66 @@ TEST(SelectionOverlayRuntimeTests, VulkanPointVisibilityIgnoresNearClippedOcclud
         EXPECT_FALSE(harness.last_submission().dynamic_submitted);
       }
     }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanPointClipUniformsRefreshWithUnrelatedFrameChanges) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-retained-point-clip-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    SCOPED_TRACE(projection == ViewportProjection::Perspective ? "perspective" : "orthographic");
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.0f, projection, 0.1f));
+    ViewportOverlayFrame frame;
+    harness.append_overlay_audit_occluder(frame, -0.2f);
+    frame.points.push_back({
+        .layer = ViewportOverlayLayer::UnselectedVertex,
+        .position = harness.overlay_audit_world_point({320.0f, 240.0f}, 0.5f),
+        .color = rgba8(40, 225, 255), .size_pixels = 9.0f,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::ComponentSelection,
+        .element = {.object_id = 1, .vertex_id = 0}});
+    harness.set_overlay_audit_frame(frame);
+    harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex, true);
+    ASSERT_TRUE(harness.last_submission().persistent_submitted);
+    ASSERT_TRUE(harness.last_submission().dynamic_submitted);
+    const auto visible = harness.capture();
+    ASSERT_FALSE(visible.isNull());
+    EXPECT_GE(cyan_pixels(visible, {320.0f, 240.0f}), 9);
+
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.0f, projection, 0.6f));
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::ToolHandle,
+        .start = {-0.2f, -0.2f, 0.0f},
+        .end = {0.2f, -0.2f, 0.0f},
+        .color = rgba8(255, 80, 40),
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool});
+    harness.set_overlay_audit_frame(frame);
+    harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex, true);
+    ASSERT_TRUE(harness.last_submission().persistent_submitted);
+    ASSERT_TRUE(harness.last_submission().dynamic_submitted);
+    const auto clipped = harness.capture();
+    ASSERT_FALSE(clipped.isNull());
+    EXPECT_EQ(cyan_pixels(clipped, {320.0f, 240.0f}), 0);
+
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.0f, projection, 0.1f));
+    frame.lines.front().end.x += 0.1f;
+    harness.set_overlay_audit_frame(frame);
+    harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex, true);
+    ASSERT_TRUE(harness.last_submission().persistent_submitted);
+    ASSERT_TRUE(harness.last_submission().dynamic_submitted);
+    const auto restored = harness.capture();
+    ASSERT_FALSE(restored.isNull());
+    EXPECT_GE(cyan_pixels(restored, {320.0f, 240.0f}), 9);
   }
 }
 
@@ -1976,6 +2431,128 @@ int yellow_pixels(const QImage &image, QVec2 center) {
     }
   }
   return count;
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanComponentPositionStreamsMoveRetainedPointsEdgesFacesAndDepth) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-retained-component-transform-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  auto settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace,
+                                 {.r = 1.0f, .g = 0.0f, .b = 1.0f, .a = 0.6f}));
+  for (const auto &[context, label] :
+       std::array<std::pair<ViewportOverlaySelectionContext, const char *>, 3>{{
+           {ViewportOverlaySelectionContext::Vertex, "vertex"},
+           {ViewportOverlaySelectionContext::Edge, "edge"},
+           {ViewportOverlaySelectionContext::Face, "face"}}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_component_transform_sample(context));
+    const auto present = [&] {
+      return harness.present_component_transform_sample(context, settings);
+    };
+    const auto selected_pixel = [&](float delta) {
+      return harness.cutting_preview_pixel({
+          -1.2f + delta,
+          context == ViewportOverlaySelectionContext::Vertex ? -0.6f : 0.0f,
+          0.0f});
+    };
+    const auto wire_pixel = [&](float delta) {
+      return harness.cutting_preview_pixel({-0.9f + delta, -0.6f, 0.0f});
+    };
+    const auto rear_pixel = [&](float delta) {
+      return harness.cutting_preview_pixel({-0.9f + delta, 0.25f, -0.3f});
+    };
+    const auto has_face_tint = [&](const QImage &image, float delta) {
+      const auto pixel = harness.cutting_preview_pixel({-0.9f + delta, 0.0f, 0.0f});
+      const QColor color = image.pixelColor(int(pixel.x), int(pixel.y));
+      return color.red() > color.green() + 20 &&
+             color.blue() > color.green() + 20;
+    };
+    const auto capture = [&](const char *phase) {
+      QImage image = harness.capture();
+      EXPECT_FALSE(image.isNull());
+      const QString path = QDir(directory).filePath(
+          QStringLiteral("component_stream_%1_%2.png")
+              .arg(QString::fromLatin1(label), QString::fromLatin1(phase)));
+      EXPECT_TRUE(image.save(path));
+      return image;
+    };
+    const auto expect_current = [&](const QImage &image, float delta) {
+      EXPECT_GE(yellow_pixels(image, selected_pixel(delta)), 3)
+          << "The selected point or edge must follow the current packed positions.";
+      EXPECT_EQ(cyan_pixels(image, rear_pixel(delta)), 0)
+          << "The moved source surface must occlude the stationary rear wire.";
+      if (context == ViewportOverlaySelectionContext::Face) {
+        EXPECT_TRUE(has_face_tint(image, delta))
+            << "The selected face fill must move with its retained triangle bindings.";
+      } else {
+        EXPECT_GE(cyan_pixels(image, wire_pixel(delta)), 3)
+            << "The unselected source wire must follow its source vertices.";
+      }
+    };
+    ASSERT_TRUE(present());
+    ASSERT_NO_FATAL_FAILURE(expect_current(capture("baseline"), 0.0f));
+    auto &modeling = harness.modeling();
+    ASSERT_TRUE(modeling.begin_transform_preview(false).ok);
+    std::uint64_t retained_builds = 0u;
+    std::uint64_t retained_signature = 0u;
+    float previous_delta = 0.0f;
+    for (const float delta : {0.9f, 1.8f}) {
+      SCOPED_TRACE(delta);
+      ASSERT_TRUE(modeling.update_transform_translate_preview({delta, 0.0f, 0.0f}).ok);
+      ASSERT_TRUE(present());
+      if (retained_builds == 0u) {
+        retained_builds = harness.selection_frame_builds();
+        retained_signature = modeling.selection_overlay_signature();
+      } else {
+        EXPECT_EQ(harness.selection_frame_builds(), retained_builds);
+        EXPECT_EQ(modeling.selection_overlay_signature(), retained_signature);
+        EXPECT_FALSE(harness.last_submission().persistent_submitted)
+            << "Changing only packed positions must keep the semantic frame retained.";
+      }
+      const QImage image = capture(delta < 1.0f ? "first" : "second");
+      ASSERT_NO_FATAL_FAILURE(expect_current(image, delta));
+      EXPECT_EQ(yellow_pixels(image, selected_pixel(previous_delta)), 0);
+      EXPECT_GE(cyan_pixels(image, rear_pixel(previous_delta)), 3)
+          << "The old source surface must no longer occlude the rear wire.";
+      if (context == ViewportOverlaySelectionContext::Face) {
+        EXPECT_FALSE(has_face_tint(image, previous_delta));
+      } else {
+        EXPECT_EQ(cyan_pixels(image, wire_pixel(previous_delta)), 0);
+      }
+      ASSERT_TRUE(present());
+      EXPECT_EQ(harness.selection_frame_builds(), retained_builds);
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      previous_delta = delta;
+    }
+    // A camera rebuild must reapply the same packed positions to all layers.
+    ASSERT_TRUE(harness.pan_face_fill_camera(0.1f));
+    ASSERT_TRUE(present());
+    EXPECT_EQ(harness.selection_frame_builds(), retained_builds);
+    EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    ASSERT_NO_FATAL_FAILURE(expect_current(capture("camera"), previous_delta));
+    ASSERT_TRUE(modeling.cancel_transform_preview().ok);
+    ASSERT_TRUE(present());
+    EXPECT_GT(harness.selection_frame_builds(), retained_builds);
+    const QImage restored = capture("cancel");
+    ASSERT_NO_FATAL_FAILURE(expect_current(restored, 0.0f));
+    EXPECT_EQ(yellow_pixels(restored, selected_pixel(previous_delta)), 0);
+  }
 }
 
 int loop_preview_green_pixels(const QImage &image, QVec2 center,

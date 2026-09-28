@@ -256,9 +256,10 @@ bool allowed_public_behavior_harness_use(std::string_view relative,
     return false;
   }
   // The canvas API fixture owns a standalone session and observes publication
-  // counters/failures. Editing, selection and history still use the public API.
+  // counters/failures through one read-only diagnostic accessor. Editing,
+  // selection and history still use the public API.
   const std::string trimmed = trim(std::string(line));
-  const std::array<std::string_view, 9> fixture_access{
+  const std::array<std::string_view, 8> fixture_access{
       "#include \"api/quader_api_session_internal_access.hpp\"",
       "#include \"editor/modeling/services/modeling_session_service.hpp\"",
       "SceneSession session;",
@@ -266,8 +267,7 @@ bool allowed_public_behavior_harness_use(std::string_view relative,
       "harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(point);",
       "harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(ModelingSdkProjectionFailurePoint::None);",
       "harness.session.modeling().set_modeling_sdk_projection_failure_for_tests(",
-      "const auto before = harness.session.modeling().modeling_sdk_projection_stats_for_tests();",
-      "const auto after = harness.session.modeling().modeling_sdk_projection_stats_for_tests();",
+      "return session.modeling().modeling_sdk_projection_stats_for_tests();",
   };
   return std::find(fixture_access.begin(), fixture_access.end(), trimmed) !=
          fixture_access.end();

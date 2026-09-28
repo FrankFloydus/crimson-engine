@@ -9,6 +9,7 @@
 #include "render/mesh_renderable_factory.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/texture_binding_service.hpp"
+#include "render/tool_preview_renderable_cache.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <gtest/gtest.h>
@@ -37,6 +38,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -116,6 +118,7 @@ public:
     if (proxy_) {
       factory_.destroy(*proxy_);
     }
+    previews_.shutdown();
     factory_.shutdown();
     materials_.shutdown();
     textures_.shutdown();
@@ -325,6 +328,53 @@ public:
     return image;
   }
 
+  RenderMaterialBindingSnapshot preview_material() const { return material_; }
+
+  std::optional<SurfaceGridImage> render_preview_meshes(
+      const std::vector<RenderToolPreviewMeshRecord> &meshes) {
+    if (!previews_.initialized()) previews_.initialize(factory_, materials_, 64u);
+    if (previews_.set_meshes(meshes) == ToolPreviewSubmissionResult::Failed) return std::nullopt;
+    camera_->setProjection(filament::Camera::Projection::ORTHO,
+                           -1.5, 1.5, -1.5, 1.5, 0.1, 20.0);
+    camera_->lookAt({0.0, 0.0, 4.0}, {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
+    return read_current_mesh();
+  }
+
+  ToolPreviewCacheWorkCounters preview_counters() const {
+    return previews_.work_counters();
+  }
+
+  std::optional<SurfaceGridImage> render_mesh_snapshot(
+      const RenderMeshAssetSnapshot &mesh, bool dynamic_geometry = false,
+      std::span<const QVec3> positions = {}) {
+    previews_.shutdown();
+    if (proxy_) factory_.destroy(*proxy_);
+    proxy_.emplace(factory_.create(1u, mesh, &material_, {}, false, true,
+        kViewportRenderedSceneLayerMask, false, false,
+        kViewportDefaultRenderableChannel, dynamic_geometry, positions));
+    if (!proxy_->entity) return std::nullopt;
+    for (auto *instance : proxy_->material_instances) {
+      instance->setParameter("surfaceGridEnabled", 0.0f);
+    }
+    camera_->setProjection(filament::Camera::Projection::ORTHO,
+                           -1.5, 1.5, -1.5, 1.5, 0.1, 20.0);
+    camera_->lookAt({0.0, 0.0, 4.0}, {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
+    return read_current_mesh();
+  }
+
+  bool update_prepared_mesh(const RenderMeshAssetSnapshot &mesh,
+      std::span<const QVec3> positions,
+      std::shared_ptr<MeshRenderableFactory::DynamicGeometryUpdate> prepared) {
+    return proxy_.has_value() && factory_.update_dynamic_geometry(
+        *proxy_, mesh, positions, nullptr, std::move(prepared));
+  }
+
+  std::optional<SurfaceGridImage> read_current_mesh() {
+    SurfaceGridImage image;
+    if (!read_surface(&image)) return std::nullopt;
+    return image;
+  }
+
   QVec2 project_grid_position(QVec3 world_position) const {
     const auto clip = camera_->getProjectionMatrix() * camera_->getViewMatrix() *
         filament::math::double4{world_position.x, world_position.y,
@@ -484,12 +534,119 @@ private:
   TextureBindingService textures_;
   MaterialBindingService materials_;
   MeshRenderableFactory factory_;
+  ToolPreviewRenderableCache previews_;
   RenderMaterialBindingSnapshot material_;
   std::optional<MeshRenderableProxy> proxy_;
   std::array<MeshVertex, 4u> vertices_{};
   const std::array<std::uint32_t, 6u> indices_{0u, 1u, 2u, 0u, 2u, 3u};
   std::uint64_t mesh_revision_ = 0u;
 };
+
+TEST(RenderNormalMappingRuntimeTests,
+     PreparedDynamicUpdatesMatchCanonicalPixelsAndRetainUnchangedGroups) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_NORMAL_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_NORMAL_TESTS=1 for windowless Vulkan coverage";
+  }
+  NormalMappingHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  MeshAsset original;
+  MeshGeometryPayload geometry;
+  geometry.vertices = {
+      {.position = {-1.0f, -1.0f, 0.0f}, .normal = {0, 0, 1}, .uv = {0, 0},
+       .rgba = 0xffffffffu, .source_vertex_id = 1u},
+      {.position = {1.0f, -1.0f, 0.0f}, .normal = {0, 0, 1}, .uv = {1, 0},
+       .rgba = 0xffffffffu, .source_vertex_id = 2u},
+      {.position = {1.0f, 1.0f, 0.0f}, .normal = {0, 0, 1}, .uv = {1, 1},
+       .rgba = 0xffffffffu, .source_vertex_id = 3u},
+      {.position = {-1.0f, 1.0f, 0.0f}, .normal = {0, 0, 1}, .uv = {0, 1},
+       .rgba = 0xffffffffu, .source_vertex_id = 4u}};
+  geometry.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+  geometry.primitives = {{.index_count = 6u}};
+  original.replace_geometry(std::move(geometry));
+  MeshAsset changed = original;
+  auto &deformed = changed.edit_geometry();
+  deformed.indices = {0u, 1u, 3u, 1u, 2u, 3u};
+  for (std::size_t index = 0u; index < deformed.vertices.size(); ++index) {
+    auto &vertex = deformed.vertices[index];
+    vertex.normal = normalize(QVec3{0.2f + 0.15f * static_cast<float>(index), 0.3f, 1.0f});
+    vertex.uv = {vertex.uv.y, 1.0f - vertex.uv.x};
+    vertex.uv_geometric_normal = vertex.normal;
+  }
+  deformed.vertices[2].position = {0.65f, 0.8f, 0.25f};
+  auto positions = std::make_shared<std::vector<QVec3>>();
+  for (const auto &vertex : changed.geometry().vertices) positions->push_back(vertex.position);
+
+  constexpr std::size_t kGroupCount = 64u;
+  std::vector<RenderToolPreviewMeshRecord> previews(kGroupCount);
+  for (std::size_t index = 0u; index < previews.size(); ++index) {
+    auto &preview = previews[index];
+    preview.source_object_id = static_cast<int>(index + 1u);
+    preview.source_entity = static_cast<EntityId>(index + 1u);
+    preview.mesh = original;
+    preview.material = harness.preview_material();
+    preview.material_reference = preview.material.component.material;
+    preview.dynamic_positions = true;
+    preview.layout_key = 1u;
+    preview.position_revision = 1u;
+    if (index != 0u) preview.transform.values[12] = 4.0f * static_cast<float>(index);
+  }
+  const auto baseline = harness.render_preview_meshes(previews);
+  ASSERT_TRUE(baseline.has_value());
+  const auto before = harness.preview_counters();
+  for (auto &preview : previews) {
+    preview.mesh = changed;
+    preview.position_revision = 2u;
+    preview.dynamic_position_payload = positions;
+  }
+  const auto prepared_image = harness.render_preview_meshes(previews);
+  ASSERT_TRUE(prepared_image.has_value());
+  const auto updated = harness.preview_counters();
+  EXPECT_EQ(updated.dynamic_geometry_preparations - before.dynamic_geometry_preparations,
+            kGroupCount);
+  if (std::thread::hardware_concurrency() > 1u) {
+    EXPECT_EQ(updated.parallel_dynamic_geometry_batches - before.parallel_dynamic_geometry_batches, 1u);
+  }
+  ASSERT_TRUE(harness.render_preview_meshes(previews).has_value());
+  EXPECT_EQ(harness.preview_counters().dynamic_geometry_preparations,
+            updated.dynamic_geometry_preparations);
+  ++previews.back().position_revision;
+  ASSERT_TRUE(harness.render_preview_meshes(previews).has_value());
+  EXPECT_EQ(harness.preview_counters().dynamic_geometry_preparations,
+            updated.dynamic_geometry_preparations + 1u);
+  EXPECT_EQ(harness.preview_counters().parallel_dynamic_geometry_batches,
+            updated.parallel_dynamic_geometry_batches);
+
+  const auto snapshot = render_mesh_asset_snapshot(1u, changed);
+  const auto canonical = harness.render_mesh_snapshot(snapshot);
+  ASSERT_TRUE(canonical.has_value());
+  ASSERT_EQ(canonical->rgba.size(), prepared_image->rgba.size());
+  float changed_pixel = 0.0f;
+  for (std::size_t index = 0u; index < canonical->rgba.size(); ++index) {
+    EXPECT_NEAR(prepared_image->rgba[index], canonical->rgba[index], 0.004f) << index;
+    changed_pixel = std::max(changed_pixel,
+        std::abs(prepared_image->rgba[index] - baseline->rgba[index]));
+  }
+  EXPECT_GT(changed_pixel, 0.1f);
+
+  const auto original_snapshot = render_mesh_asset_snapshot(1u, original);
+  ASSERT_TRUE(harness.render_mesh_snapshot(original_snapshot, true).has_value());
+  std::shared_ptr<MeshRenderableFactory::DynamicGeometryUpdate> upload;
+  std::jthread worker([&] {
+    upload = MeshRenderableFactory::prepare_dynamic_geometry_update(snapshot, *positions);
+  });
+  worker.join();
+  ASSERT_NE(upload, nullptr);
+  EXPECT_FALSE(harness.update_prepared_mesh(original_snapshot, *positions, upload));
+  const std::vector<QVec3> other_positions = *positions;
+  EXPECT_FALSE(harness.update_prepared_mesh(snapshot, other_positions, upload));
+  ASSERT_TRUE(harness.update_prepared_mesh(snapshot, *positions, upload));
+  EXPECT_FALSE(harness.update_prepared_mesh(snapshot, *positions, upload));
+  const auto dynamic_image = harness.read_current_mesh();
+  ASSERT_TRUE(dynamic_image.has_value());
+  for (std::size_t index = 0u; index < canonical->rgba.size(); ++index) {
+    EXPECT_NEAR(dynamic_image->rgba[index], canonical->rgba[index], 0.004f) << index;
+  }
+}
 
 TEST(RenderNormalMappingRuntimeTests,
      PackedAndTransformedChartsPreserveNormalDirectionsOnEveryFaceAxis) {

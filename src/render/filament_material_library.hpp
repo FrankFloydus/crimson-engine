@@ -45,6 +45,12 @@ public:
     filament::Material &selected_object_line() {
       return *selected_object_line_material_;
     }
+    filament::Material &selected_mesh_outline_mask() {
+      return *selected_mesh_outline_mask_material_;
+    }
+    filament::Material &selected_mesh_outline_composite() {
+      return *selected_mesh_outline_composite_material_;
+    }
     filament::Material &edit_wire_line() { return *edit_wire_line_material_; }
     filament::Material &overlay_point() { return *overlay_point_material_; }
     filament::Material &overlay_icon() { return *overlay_icon_material_; }
@@ -64,6 +70,8 @@ public:
     filament::Material *instance_selection_fill_material_ = nullptr;
     filament::Material *overlay_line_material_ = nullptr;
     filament::Material *selected_object_line_material_ = nullptr;
+    filament::Material *selected_mesh_outline_mask_material_ = nullptr;
+    filament::Material *selected_mesh_outline_composite_material_ = nullptr;
     filament::Material *edit_wire_line_material_ = nullptr;
     filament::Material *overlay_point_material_ = nullptr;
     filament::Material *overlay_icon_material_ = nullptr;

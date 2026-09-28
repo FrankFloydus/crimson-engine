@@ -210,6 +210,95 @@ struct StagedInstanceProxy final {
   MeshRenderableProxy proxy;
 };
 
+/// Matches a stable occurrence layout while allowing only its geometry token
+/// to change. The factory subsequently validates the actual primitive topology.
+struct GeometryRebindLayoutHash final {
+  std::size_t operator()(const PersistentChunkLayoutRef &layout) const noexcept {
+    auto key = layout.chunk->key;
+    key.geometry_payload = 0u;
+    RenderSignatureBuilder signature;
+    signature.add_value(PrimitiveKeyHash{}(key));
+    for (const std::uint64_t occurrence : layout.chunk->occurrences) {
+      signature.add_value(occurrence);
+    }
+    signature.add_size(layout.chunk->world_transforms.size())
+        .add_size(layout.chunk->visibility.size());
+    return static_cast<std::size_t>(signature.value());
+  }
+};
+
+/// Keeps primitive/pass identity and occurrence ordering exact for rebinding.
+struct GeometryRebindLayoutEqual final {
+  bool operator()(const PersistentChunkLayoutRef &left,
+                  const PersistentChunkLayoutRef &right) const {
+    auto left_key = left.chunk->key;
+    auto right_key = right.chunk->key;
+    left_key.geometry_payload = 0u;
+    right_key.geometry_payload = 0u;
+    return left_key == right_key &&
+           left.chunk->occurrences == right.chunk->occurrences &&
+           left.chunk->world_transforms.size() == right.chunk->world_transforms.size() &&
+           left.chunk->visibility.size() == right.chunk->visibility.size();
+  }
+};
+
+std::vector<std::size_t> match_geometry_rebind_candidates(
+    std::span<const RenderInstanceBatchChunk> old_chunks,
+    std::span<const instance_renderable_cache_detail::ChunkProxyReuseCandidate> old_candidates,
+    std::span<const RenderInstanceBatchChunk> next_chunks,
+    std::vector<std::size_t> &old_proxy_by_chunk) {
+  const std::size_t no_proxy = old_candidates.size();
+  std::vector<bool> reserved(old_candidates.size(), false);
+  for (const std::size_t index : old_proxy_by_chunk) {
+    if (index != no_proxy) reserved[index] = true;
+  }
+  std::unordered_map<PersistentChunkLayoutRef, PersistentChunkCandidateBucket,
+                     GeometryRebindLayoutHash, GeometryRebindLayoutEqual> candidates;
+  candidates.reserve(old_chunks.size());
+  for (std::size_t index = 0u;
+       index < old_chunks.size() && index < old_candidates.size(); ++index) {
+    if (!reserved[index] && old_candidates[index].valid &&
+        old_candidates[index].instance_capacity >= old_chunks[index].world_transforms.size()) {
+      candidates[{.chunk = &old_chunks[index]}].old_indices.push_back(index);
+    }
+  }
+  std::vector<std::size_t> matches;
+  for (std::size_t index = 0u; index < next_chunks.size(); ++index) {
+    if (old_proxy_by_chunk[index] != no_proxy) continue;
+    const auto found = candidates.find({.chunk = &next_chunks[index]});
+    if (found == candidates.end()) continue;
+    auto &bucket = found->second;
+    if (bucket.first_unprobed == bucket.old_indices.size()) continue;
+    old_proxy_by_chunk[index] = bucket.old_indices[bucket.first_unprobed++];
+    matches.push_back(index);
+  }
+  return matches;
+}
+
+std::size_t destroy_proxy_generation(MeshRenderableFactory &factory,
+                                     std::span<MeshRenderableProxy> proxies) {
+  std::vector<utils::Entity> entities;
+  entities.reserve(proxies.size());
+  for (const MeshRenderableProxy &proxy : proxies) {
+    if (proxy.entity) {
+      entities.push_back(proxy.entity);
+    }
+  }
+  {
+    QDR_PROFILE_SCOPE("Instance retire renderable components");
+    factory.destroy_renderable_components(entities);
+  }
+  {
+    QDR_PROFILE_SCOPE("Instance release retired materials and buffers");
+    for (MeshRenderableProxy &proxy : proxies) {
+      if (proxy.entity) {
+        factory.destroy_detached(proxy);
+      }
+    }
+  }
+  return entities.size();
+}
+
 } // namespace
 
 namespace instance_renderable_cache_detail {
@@ -363,9 +452,7 @@ void InstanceRenderableCache::shutdown() {
 
 void InstanceRenderableCache::clear() {
   if (factory_ != nullptr) {
-    for (MeshRenderableProxy &proxy : proxies_) {
-      factory_->destroy(proxy);
-    }
+    stats_.proxy_retirement_count += destroy_proxy_generation(*factory_, proxies_);
   }
   proxies_.clear();
   plan_ = {};
@@ -640,6 +727,34 @@ bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
 
   std::vector<StagedInstanceProxy> staged;
   staged.reserve(prepared.plan.chunks.size());
+  std::vector<std::size_t> staged_by_chunk(prepared.plan.chunks.size(), no_proxy);
+  const auto geometry_matches = match_geometry_rebind_candidates(
+      plan_.chunks, old_candidates, prepared.plan.chunks, old_proxy_by_chunk);
+  std::vector<MeshRenderableFactory::InstanceGeometryRebind> geometry_rebinds;
+  geometry_rebinds.reserve(geometry_matches.size());
+  for (const std::size_t next_index : geometry_matches) {
+    const auto *record = prepared.records_by_chunk[next_index];
+    if (record == nullptr) {
+      old_proxy_by_chunk[next_index] = no_proxy;
+      continue;
+    }
+    const auto &chunk = prepared.plan.chunks[next_index];
+    auto primitive = record->primitive;
+    primitive.index_offset = chunk.key.index_offset;
+    primitive.index_count = chunk.key.index_count;
+    geometry_rebinds.push_back({.proxy = &proxies_[old_proxy_by_chunk[next_index]],
+                                .mesh = &record->mesh,
+                                .primitive = primitive,
+                                .world_bounds = chunk.world_bounds});
+  }
+  const auto stage_proxy = [&](std::size_t next_index) {
+    MeshRenderableProxy proxy = create_chunk_proxy(prepared, next_index);
+    if (!proxy.entity || proxy.instance_buffer == nullptr) return false;
+    staged_by_chunk[next_index] = staged.size();
+    staged.push_back({.proxy = std::move(proxy)});
+    ++stats_.proxy_creation_count;
+    return true;
+  };
   {
     QDR_PROFILE_SCOPE("Instance rebuild create affected chunks");
     for (std::size_t next_index = 0u;
@@ -647,14 +762,41 @@ bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
       if (old_proxy_by_chunk[next_index] != no_proxy) {
         continue;
       }
-      MeshRenderableProxy proxy = create_chunk_proxy(prepared, next_index);
-      if (!proxy.entity || proxy.instance_buffer == nullptr) {
+      if (!stage_proxy(next_index)) {
         for (StagedInstanceProxy &replacement : staged) {
           factory_->destroy(replacement.proxy);
         }
         return false;
       }
-      staged.push_back({.proxy = std::move(proxy)});
+    }
+  }
+
+  if (!geometry_rebinds.empty()) {
+    QDR_PROFILE_SCOPE("Instance rebuild rebind compatible geometry");
+    bool rebound = false;
+    try {
+      rebound = factory_->try_rebind_instance_geometry(geometry_rebinds);
+    } catch (...) {
+      for (StagedInstanceProxy &replacement : staged) {
+        factory_->destroy(replacement.proxy);
+      }
+      throw;
+    }
+    if (rebound) {
+      stats_.geometry_rebind_count += geometry_rebinds.size();
+    } else {
+      // Batch validation rejects unsupported topology before touching any old
+      // proxy. Stage only those candidates through the existing rebuild path.
+      for (const std::size_t next_index : geometry_matches) {
+        if (old_proxy_by_chunk[next_index] == no_proxy) continue;
+        old_proxy_by_chunk[next_index] = no_proxy;
+        if (!stage_proxy(next_index)) {
+          for (StagedInstanceProxy &replacement : staged) {
+            factory_->destroy(replacement.proxy);
+          }
+          return false;
+        }
+      }
     }
   }
 
@@ -685,7 +827,6 @@ bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
 
   std::vector<MeshRenderableProxy> next_proxies;
   next_proxies.reserve(prepared.plan.chunks.size());
-  std::size_t staged_index = 0u;
   for (std::size_t next_index = 0u;
        next_index < prepared.plan.chunks.size(); ++next_index) {
     const std::size_t old_index = old_proxy_by_chunk[next_index];
@@ -693,17 +834,12 @@ bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
       next_proxies.emplace_back(std::move(proxies_[old_index]));
       continue;
     }
-    next_proxies.emplace_back(std::move(staged[staged_index].proxy));
-    ++staged_index;
+    next_proxies.emplace_back(std::move(staged[staged_by_chunk[next_index]].proxy));
   }
 
   {
     QDR_PROFILE_SCOPE("Instance rebuild destroy stale chunks");
-    for (MeshRenderableProxy &proxy : proxies_) {
-      if (proxy.entity) {
-        factory_->destroy(proxy);
-      }
-    }
+    stats_.proxy_retirement_count += destroy_proxy_generation(*factory_, proxies_);
   }
   const bool created_chunks = !staged.empty();
   proxies_ = std::move(next_proxies);

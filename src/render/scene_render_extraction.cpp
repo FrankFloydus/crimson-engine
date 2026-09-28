@@ -37,7 +37,131 @@
 #include <utility>
 
 namespace quader {
+
+/// Retains derived bindings under exact authored keys, independent of grouping.
+struct RenderSceneMaterialBindingCache final {
+  /// Pins both the uncanonicalized source key and its resolved render binding.
+  struct Entry final {
+    std::optional<MaterialComponent> source;
+    RenderMaterialBindingSnapshot binding;
+  };
+
+  std::unordered_multimap<std::uint64_t, std::shared_ptr<const Entry>> entries;
+};
+
 namespace {
+
+std::uint64_t material_reference_cache_signature(MaterialReference reference) {
+  RenderSignatureBuilder signature;
+  signature.add_value(static_cast<std::uint64_t>(reference.kind()));
+  if (reference.project_owned()) {
+    signature.add_string(reference.project_asset().str());
+  } else {
+    signature.add_value(reference.embedded_asset());
+  }
+  return signature.value();
+}
+
+std::uint64_t material_component_cache_signature(
+    const MaterialComponent *component) {
+  if (component == nullptr) {
+    return 0u;
+  }
+  // Slot iteration order is not semantic. Exact source equality below keeps
+  // commutative-hash collisions from ever aliasing distinct bindings.
+  std::uint64_t slot_signature = 0u;
+  for (const auto &[slot, reference] : component->material_slots) {
+    slot_signature ^= RenderSignatureBuilder{}
+                          .add_value(slot)
+                          .add_value(material_reference_cache_signature(reference))
+                          .value();
+  }
+  return RenderSignatureBuilder{}
+      .add_value(material_reference_cache_signature(component->material))
+      .add_size(component->material_slots.size())
+      .add_value(slot_signature)
+      .value();
+}
+
+/// Builds a bounded immutable cache while sharing still-valid prior entries.
+class SceneMaterialBindingBuilder final {
+public:
+  SceneMaterialBindingBuilder(
+      RenderSceneSnapshot &snapshot, const RenderSceneSnapshot *previous,
+      const AssetRegistry &assets,
+      const RenderProjectMaterialResolver *resolver)
+      : assets_(assets), resolver_(resolver), work_(snapshot.extraction_work),
+        cache_(std::make_shared<RenderSceneMaterialBindingCache>()),
+        uses_default_(
+            !release_has_feature(ReleaseFeature::Materials) ||
+            (resolver != nullptr &&
+             resolver->default_material_override() != nullptr)) {
+    constexpr RenderSourceDependencyMask kMaterialDependencies =
+        RenderSourceDependencyMask::from({
+            RenderSourceDependency::SceneBinding,
+            RenderSourceDependency::MaterialCatalogRevision,
+            RenderSourceDependency::ProjectMaterialRevision,
+        });
+    if (previous != nullptr && render_source_dependencies_match(
+                                   *previous, snapshot,
+                                   kMaterialDependencies)) {
+      previous_ = previous->material_binding_cache.get();
+      if (previous_ != nullptr) {
+        cache_->entries.reserve(previous_->entries.size());
+      }
+    }
+    snapshot.material_binding_cache = cache_;
+  }
+
+  const RenderMaterialBindingSnapshot &binding(
+      const MaterialComponent *component) {
+    const MaterialComponent *key = uses_default_ ? nullptr : component;
+    const std::uint64_t signature = material_component_cache_signature(key);
+    if (const auto entry = find(*cache_, signature, key)) {
+      ++work_.material_binding_reuse_count;
+      return entry->binding;
+    }
+    if (previous_ != nullptr) {
+      if (const auto entry = find(*previous_, signature, key)) {
+        cache_->entries.emplace(signature, entry);
+        ++work_.material_binding_reuse_count;
+        return entry->binding;
+      }
+    }
+    auto entry = std::make_shared<RenderSceneMaterialBindingCache::Entry>();
+    if (key != nullptr) {
+      entry->source = *key;
+    }
+    entry->binding = build_render_material_binding_snapshot(
+        assets_, component, resolver_);
+    cache_->entries.emplace(signature, entry);
+    ++work_.material_binding_build_count;
+    return entry->binding;
+  }
+
+private:
+  static std::shared_ptr<const RenderSceneMaterialBindingCache::Entry> find(
+      const RenderSceneMaterialBindingCache &cache, std::uint64_t signature,
+      const MaterialComponent *component) {
+    const auto [begin, end] = cache.entries.equal_range(signature);
+    for (auto entry = begin; entry != end; ++entry) {
+      const auto &source = entry->second->source;
+      if ((component == nullptr && !source.has_value()) ||
+          (component != nullptr && source.has_value() &&
+           *component == *source)) {
+        return entry->second;
+      }
+    }
+    return nullptr;
+  }
+
+  const AssetRegistry &assets_;
+  const RenderProjectMaterialResolver *resolver_;
+  RenderSceneExtractionWork &work_;
+  std::shared_ptr<RenderSceneMaterialBindingCache> cache_;
+  const RenderSceneMaterialBindingCache *previous_ = nullptr;
+  bool uses_default_ = false;
+};
 
 bool local_visibility_allows(
     const ViewportLocalVisibilitySnapshot *local_visibility,
@@ -241,6 +365,7 @@ void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
   snapshot.lights = previous.lights;
   snapshot.live_mesh_entities = previous.live_mesh_entities;
   snapshot.live_light_entities = previous.live_light_entities;
+  snapshot.material_binding_cache = previous.material_binding_cache;
   snapshot.reused_previous_records = true;
   for (RenderSceneMeshRecord &mesh : snapshot.meshes) {
     mesh.mesh_dirty = false;
@@ -733,13 +858,13 @@ void append_instance_primitive_records(
 RenderSceneMeshRecord make_render_scene_mesh_record(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId entity_id, const MeshComponent &component,
-    const RenderProjectMaterialResolver *project_material_resolver,
+    SceneMaterialBindingBuilder &material_bindings,
     const RenderSceneSnapshot *previous);
 RenderSceneMeshRecord make_render_scene_curve_solid_record(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId entity_id, const CurveComponent &component,
     CurveSolidGeometryCache &geometry_cache,
-    const RenderProjectMaterialResolver *project_material_resolver,
+    SceneMaterialBindingBuilder &material_bindings,
     const RenderSceneSnapshot *previous);
 
 RenderSceneSnapshot build_render_scene_snapshot(
@@ -777,6 +902,8 @@ RenderSceneSnapshot build_render_scene_snapshot(
     return snapshot;
   }
 
+  SceneMaterialBindingBuilder material_bindings(
+      snapshot, previous, assets, options.project_material_resolver);
   const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
       mesh_projection = document.mesh_occurrence_projection();
   std::vector<RenderSceneMeshRecord> ordinary_meshes;
@@ -796,7 +923,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
     if (component != nullptr) {
       ordinary_meshes.push_back(make_render_scene_mesh_record(
           document, assets, placement->geometry_entity, *component,
-          options.project_material_resolver, previous));
+          material_bindings, previous));
     }
   }
 
@@ -829,7 +956,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
         component != nullptr && component->solidify) {
       solid_curve_meshes.push_back(make_render_scene_curve_solid_record(
           document, assets, entity_id, *component,
-          curve_solid_geometry_cache, options.project_material_resolver,
+          curve_solid_geometry_cache, material_bindings,
           previous));
     }
 
@@ -909,7 +1036,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
     }
     RenderSceneMeshRecord source = make_render_scene_mesh_record(
         document, assets, group.geometry_entity, *component,
-        options.project_material_resolver, nullptr);
+        material_bindings, nullptr);
     std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
     occurrences.reserve(group.participant_indices.size());
     for (const std::size_t index : group.participant_indices) {
@@ -1100,12 +1227,11 @@ void append_instance_primitive_records(
 RenderSceneMeshRecord make_render_scene_mesh_record(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId entity_id, const MeshComponent &component,
-    const RenderProjectMaterialResolver *project_material_resolver,
+    SceneMaterialBindingBuilder &material_bindings,
     const RenderSceneSnapshot *previous) {
   const MaterialComponent *scene_material = document.material(entity_id);
-  const RenderMaterialBindingSnapshot material =
-      build_render_material_binding_snapshot(
-          assets, scene_material, project_material_resolver);
+  const RenderMaterialBindingSnapshot &material =
+      material_bindings.binding(scene_material);
   const MeshAsset *asset = assets.mesh(component.mesh);
   const QMat4 world_transform = document.world_transform_matrix(entity_id);
   RenderSceneMeshRecord entry{
@@ -1134,7 +1260,7 @@ RenderSceneMeshRecord make_render_scene_curve_solid_record(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId entity_id, const CurveComponent &component,
     CurveSolidGeometryCache &geometry_cache,
-    const RenderProjectMaterialResolver *project_material_resolver,
+    SceneMaterialBindingBuilder &material_bindings,
     const RenderSceneSnapshot *previous) {
   const CurveAsset *asset = assets.curve(component.curve);
   std::shared_ptr<const MeshGeometryPayload> geometry;
@@ -1167,9 +1293,8 @@ RenderSceneMeshRecord make_render_scene_curve_solid_record(
   }
 
   const MaterialComponent *scene_material = document.material(entity_id);
-  const RenderMaterialBindingSnapshot material =
-      build_render_material_binding_snapshot(
-          assets, scene_material, project_material_resolver);
+  const RenderMaterialBindingSnapshot &material =
+      material_bindings.binding(scene_material);
   const QMat4 world_transform = document.world_transform_matrix(entity_id);
   RenderSceneMeshRecord entry{
       .entity_id = entity_id,

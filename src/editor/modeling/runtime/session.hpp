@@ -265,12 +265,23 @@ struct PickScreenContext {
   double far_plane = 1000000.0;
 };
 
+/** Counts screen-picking broad-phase and visibility work without timing dependencies. */
+struct PickScreenWorkCounters {
+  std::size_t projected_object_bounds = 0u;
+  std::size_t visibility_object_tests = 0u;
+  std::size_t visibility_queries = 0u;
+  std::size_t visibility_ray_queries = 0u;
+  std::size_t visibility_cache_hits = 0u;
+  std::size_t surface_geometry_queries = 0u;
+};
+
 /** Stores the Pick Request data contract used by the modeling runtime domain. */
 struct PickRequest {
   quader_poly::Ray ray;
   quader_poly::PickOptions options;
   int target_object_id = -1;
   std::optional<PickScreenContext> screen_context;
+  PickScreenWorkCounters *screen_work_counters = nullptr;
 };
 
 struct PickCycleState;

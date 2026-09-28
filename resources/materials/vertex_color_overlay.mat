@@ -5,6 +5,10 @@ material {
     depthWrite : false,
     depthCulling : false,
     doubleSided : true,
+    parameters : [
+        { type : bool, name : useUniformColor },
+        { type : float4, name : uniformColor }
+    ],
     requires : [
         color
     ]
@@ -13,7 +17,8 @@ material {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec4 vertexColor = getColor();
+        vec4 vertexColor = materialParams.useUniformColor
+                ? materialParams.uniformColor : getColor();
         material.baseColor = vec4(vertexColor.rgb * vertexColor.a, vertexColor.a);
     }
 }

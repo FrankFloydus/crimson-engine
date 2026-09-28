@@ -341,6 +341,8 @@ void destroy_overlay_proxy_resources(filament::Engine &engine,
     utils::EntityManager::get().destroy(to_filament_entity(proxy.entity_id));
     proxy.entity_id = 0u;
   }
+  proxy.visibility_point_indices.clear();
+  proxy.point_visibility_stream.clear();
 }
 
 template <typename Vertex, typename ConfigureAttributes,
@@ -381,6 +383,7 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
     }
   } else if constexpr (std::is_same_v<Vertex, OverlayPointVertex>) {
     proxy.primary_position_stream4.reserve(mesh.vertices.size());
+    proxy.point_visibility_stream.assign(mesh.vertices.size(), 1.0f);
     for (const Vertex &vertex : mesh.vertices) {
       proxy.primary_position_stream4.push_back(vertex.center);
     }
@@ -398,12 +401,13 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
   }
 
   filament::VertexBuffer::Builder vertex_builder;
-  const std::uint8_t buffer_count =
-      !proxy.position_stream3.empty() ||
-              !proxy.primary_position_stream4.empty()
-          ? static_cast<std::uint8_t>(
-                proxy.secondary_position_stream4.empty() ? 2u : 3u)
-          : 1u;
+  std::uint8_t buffer_count = 1u;
+  if (kind == OverlayRenderableProxyKind::Point) {
+    buffer_count = 3u;
+  } else if (!proxy.position_stream3.empty() ||
+             !proxy.primary_position_stream4.empty()) {
+    buffer_count = proxy.secondary_position_stream4.empty() ? 2u : 3u;
+  }
   vertex_builder.vertexCount(static_cast<std::uint32_t>(mesh.vertices.size()))
       .bufferCount(buffer_count);
   configure_attributes(vertex_builder);
@@ -419,7 +423,11 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
         engine, 1, FilamentBufferDescriptorFactory::vector(
                        proxy.primary_position_stream4));
   }
-  if (!proxy.secondary_position_stream4.empty()) {
+  if (!proxy.point_visibility_stream.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 2,
+        FilamentBufferDescriptorFactory::vector(proxy.point_visibility_stream));
+  } else if (!proxy.secondary_position_stream4.empty()) {
     proxy.vertex_buffer->setBufferAt(
         engine, 2, FilamentBufferDescriptorFactory::vector(
                        proxy.secondary_position_stream4));
@@ -729,6 +737,46 @@ bool OverlayProxyFactory::update_position_streams(
          upload_proxy_position_streams(*engine_, proxy);
 }
 
+bool OverlayProxyFactory::update_point_visibility(
+    OverlayRenderableProxy &proxy,
+    std::span<const std::uint8_t> frame_visibility) {
+  QDR_PROFILE_FUNCTION();
+  if (engine_ == nullptr || proxy.vertex_buffer == nullptr ||
+      proxy.kind != OverlayRenderableProxyKind::Point ||
+      proxy.visibility_point_indices.empty() ||
+      proxy.point_visibility_stream.size() != proxy.vertex_count) {
+    return false;
+  }
+
+  constexpr std::size_t kVerticesPerPoint = 4u;
+  bool changed = false;
+  const std::size_t point_count =
+      proxy.point_visibility_stream.size() / kVerticesPerPoint;
+  for (std::size_t point_index = 0u; point_index < point_count; ++point_index) {
+    float visibility = 1.0f;
+    if (point_index < proxy.visibility_point_indices.size()) {
+      const std::size_t frame_index =
+          proxy.visibility_point_indices[point_index];
+      if (frame_index < frame_visibility.size()) {
+        visibility = frame_visibility[frame_index] != 0u ? 1.0f : 0.0f;
+      }
+    }
+    const std::size_t vertex_offset = point_index * kVerticesPerPoint;
+    if (proxy.point_visibility_stream[vertex_offset] == visibility) {
+      continue;
+    }
+    std::fill_n(proxy.point_visibility_stream.begin() + vertex_offset,
+                kVerticesPerPoint, visibility);
+    changed = true;
+  }
+  if (changed) {
+    proxy.vertex_buffer->setBufferAt(
+        *engine_, 2,
+        FilamentBufferDescriptorFactory::vector(proxy.point_visibility_stream));
+  }
+  return changed;
+}
+
 void OverlayProxyFactory::update_camera_state(
     const std::vector<OverlayRenderableProxy> &proxies,
     const ViewportOverlayCamera &camera) {
@@ -961,6 +1009,8 @@ void OverlayProxyFactory::create_point_proxy(
             .attribute(filament::VertexAttribute::CUSTOM0, 1,
                        AttributeType::FLOAT4,
                        0, sizeof(OverlayFloat4))
+            .attribute(filament::VertexAttribute::CUSTOM1, 2,
+                       AttributeType::FLOAT, 0, sizeof(float))
             .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
                        offsetof(OverlayPointVertex, uv),
                        sizeof(OverlayPointVertex))
@@ -976,6 +1026,7 @@ void OverlayProxyFactory::create_point_proxy(
         material.setParameter("nearPlane", batch.near_plane);
         material.setParameter("depthBias", batch.depth_bias);
       });
+  proxies.back().visibility_point_indices = batch.visibility_point_indices;
 }
 
 void OverlayProxyFactory::create_icon_proxy(
@@ -1077,6 +1128,16 @@ void OverlayProxyFactory::update_point_proxy(OverlayRenderableProxy &proxy,
                                              const OverlayPointBatch &batch,
                                              std::uint8_t layer_mask) {
   update_canonical_quad_proxy_vertices(*engine_, proxy, batch.mesh, layer_mask);
+  proxy.visibility_point_indices = batch.visibility_point_indices;
+  if (proxy.point_visibility_stream.size() != batch.mesh.vertices.size() ||
+      std::any_of(proxy.point_visibility_stream.begin(),
+                  proxy.point_visibility_stream.end(),
+                  [](float visibility) { return visibility != 1.0f; })) {
+    proxy.point_visibility_stream.assign(batch.mesh.vertices.size(), 1.0f);
+    proxy.vertex_buffer->setBufferAt(
+        *engine_, 2,
+        FilamentBufferDescriptorFactory::vector(proxy.point_visibility_stream));
+  }
   configure_overlay_material(*proxy.material_instance, batch.state);
   proxy.material_instance->setParameter("innerRadius", batch.inner_radius);
   proxy.material_instance->setParameter("pointSize", batch.size_pixels);

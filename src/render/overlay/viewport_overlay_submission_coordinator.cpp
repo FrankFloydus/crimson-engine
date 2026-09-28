@@ -727,11 +727,15 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
           settings, request.raster_scale))
           .add_value(request.construction_object_id)
           .add_bool(uses_mesh_outlines(request))
+          .add_bool(request.gpu_mesh_outlines)
           .value();
-  const ViewportOverlayFrame &mesh_outline = mesh_outline_source_.frame(
-      uses_mesh_outlines(request) ? request.selected_mesh_outline_snapshot : nullptr,
+  const ViewportOverlayFrame empty_mesh_outline;
+  const ViewportOverlayFrame &mesh_outline = request.gpu_mesh_outlines
+      ? empty_mesh_outline : mesh_outline_source_.frame(
+      uses_mesh_outlines(request) && !request.gpu_mesh_outlines
+          ? request.selected_mesh_outline_snapshot : nullptr,
       request.camera, request.viewport_index,
-      uses_mesh_outlines(request) && request.scene_overlay_requested
+      uses_mesh_outlines(request) && !request.gpu_mesh_outlines && request.scene_overlay_requested
           ? request.scene_overlay_snapshot : nullptr,
       viewport_overlay_line_width_pixels(ViewportOverlayLayer::SelectedEdge,
           settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize)) * request.raster_scale);
@@ -916,7 +920,8 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     };
   }
   const ViewportOverlayDynamicSubmissionStamp dynamic_stamp{
-      .mesh_outline_revision = mesh_outline_source_.revision(request.viewport_index),
+      .mesh_outline_revision = request.gpu_mesh_outlines ? 0u
+          : mesh_outline_source_.revision(request.viewport_index),
       .point_light_radius = point_light_radius,
       .selection_dimensions = dimension_stamp,
       .dynamic_tools = request.dynamic_tool_source,
@@ -1093,6 +1098,10 @@ void ViewportOverlaySubmissionCoordinator::set_active_viewports(
 ViewportOverlaySubmissionWorkCounters
 ViewportOverlaySubmissionCoordinator::work_counters() const {
   ViewportOverlaySubmissionWorkCounters counters = work_counters_;
+  const auto outline_stats = mesh_outline_source_.work_stats();
+  counters.mesh_outline_source_refresh_count = outline_stats.source_refreshes;
+  counters.mesh_outline_topology_build_count = outline_stats.topology_builds;
+  counters.mesh_outline_camera_classification_count = outline_stats.camera_classifications;
   counters.curve_overlay_build_count = curve_overlay_source_.build_count();
   return counters;
 }

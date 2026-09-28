@@ -15,6 +15,7 @@
 #define QDR_PROFILE_FRAME_MARK() FrameMark
 #define QDR_PROFILE_MESSAGE(message) TracyMessageL(message)
 #define QDR_PROFILE_MESSAGE_DYNAMIC(message, size) TracyMessage(message, size)
+#define QDR_PROFILE_PLOT(name, value) TracyPlot(name, value)
 #else
 #define QDR_PROFILE_SCOPE(name) ((void)0)
 #define QDR_PROFILE_FUNCTION() ((void)0)
@@ -23,4 +24,5 @@
 #define QDR_PROFILE_FRAME_MARK() ((void)0)
 #define QDR_PROFILE_MESSAGE(message) ((void)0)
 #define QDR_PROFILE_MESSAGE_DYNAMIC(message, size) ((void)0)
+#define QDR_PROFILE_PLOT(name, value) ((void)0)
 #endif

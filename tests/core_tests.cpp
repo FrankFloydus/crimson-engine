@@ -42,6 +42,7 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/modeling_viewport_camera_adapter.hpp"
 #include "editor/modeling/radial_array_layout.hpp"
+#include "editor/modeling/services/modeling_selection_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
@@ -18966,6 +18967,112 @@ TEST(ModelingSessionServiceTests,
             mesh_position_fingerprint(*box_preview));
 }
 
+TEST(ModelingSelectionServiceTests,
+     MarqueeFactsRetainExactDocumentsAndReleaseReplacedGeometry) {
+  ModelingSelectionService service;
+  quader_poly::Document document;
+  const auto lower_left =
+      quader_poly::add_vertex(document, {-1.0f, -1.0f, 0.0f});
+  const auto lower_right =
+      quader_poly::add_vertex(document, {1.0f, -1.0f, 0.0f});
+  const auto upper_right =
+      quader_poly::add_vertex(document, {1.0f, 1.0f, 0.0f});
+  const auto upper_left =
+      quader_poly::add_vertex(document, {-1.0f, 1.0f, 0.0f});
+  (void)quader_poly::add_face(
+      document, std::array{lower_left, lower_right, upper_right, upper_left},
+      0u);
+  std::vector<quader_editor_core::PolygonObject> objects{
+      {.id = 11, .document = std::move(document)}};
+  objects.push_back(objects.front());
+  objects.back().id = 12;
+  const std::weak_ptr<const quader_poly::Document> original_document =
+      objects.front().document.topology_payload();
+  ModelingBoxSelectRequest request{
+      .camera = test_orthographic_viewport_camera(),
+      .start = {0.0f, 0.0f},
+      .end = {100.0f, 100.0f},
+      .select_backfaces = false,
+  };
+  const auto project = [&] {
+    return service.rectangle_projected_hits_request(
+        objects, {}, quader_editor_core::SelectionMode::Face, request);
+  };
+  const auto first = project();
+  ASSERT_EQ(first.faces.size(), 2u);
+  EXPECT_TRUE(first.faces.front().front_facing);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), 1u);
+  EXPECT_EQ(service.rectangle_pick_facts_reuse_count(), 1u);
+
+  // Participant identity, selection, camera and component mode do not alter
+  // the shared document's incidence or authored-facing facts.
+  objects.front().selected = true;
+  objects.front().id = 21;
+  request.camera.origin.x += 3.0f;
+  request.select_backfaces = true;
+  const auto vertices = service.rectangle_projected_hits_request(
+      objects, {}, quader_editor_core::SelectionMode::Vertex, request);
+  ASSERT_EQ(vertices.vertices.size(), 8u);
+  EXPECT_EQ(vertices.vertices.front().object_id, 21);
+  EXPECT_TRUE(vertices.vertices.front().front_facing);
+  const auto edges = service.rectangle_projected_hits_request(
+      objects, {}, quader_editor_core::SelectionMode::Edge, request);
+  EXPECT_EQ(edges.edges.size(), 8u);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), 1u);
+  EXPECT_EQ(service.rectangle_pick_facts_reuse_count(), 5u);
+
+  // A position edit detaches the document even when counts and IDs match.
+  for (auto &vertex : objects.front().document.edit().vertices) {
+    vertex.position.x += 4.0f;
+  }
+  const auto moved = project();
+  ASSERT_EQ(moved.faces.size(), 2u);
+  EXPECT_NEAR(moved.faces.front().screen_position.x -
+                  moved.faces.back().screen_position.x,
+              4.0f, 0.001f);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), 2u);
+  EXPECT_FALSE(original_document.expired());
+  objects.back().document = objects.front().document;
+  (void)project();
+  // The earlier edge-mode query also pinned this source in the existing edge
+  // cache. Its outer participant refresh/invalidation owns that separate pin.
+  EXPECT_FALSE(original_document.expired());
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), 2u);
+
+  // Equal-size topology replacement changes facing and must not borrow the
+  // old Face pointers retained by DocumentPickQuery.
+  const std::weak_ptr<const quader_poly::Document> moved_document =
+      objects.front().document.topology_payload();
+  auto &face_vertices = objects.front().document.edit().faces.front().vertices;
+  std::reverse(face_vertices.begin(), face_vertices.end());
+  objects.back().document = objects.front().document;
+  const auto reversed = project();
+  ASSERT_EQ(reversed.faces.size(), 2u);
+  EXPECT_FALSE(reversed.faces.front().front_facing);
+  EXPECT_FALSE(reversed.faces.back().front_facing);
+  EXPECT_TRUE(moved_document.expired());
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), 3u);
+
+  objects.front().document.edit().faces.front().material_slot = 7u;
+  objects.back().document = objects.front().document;
+  const auto reassigned = project();
+  EXPECT_FALSE(reassigned.faces.front().front_facing);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), 4u);
+  service.invalidate_picking_cache();
+  EXPECT_TRUE(original_document.expired());
+  const auto rebuilt = project();
+  EXPECT_FALSE(rebuilt.faces.front().front_facing);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), 5u);
+
+  const std::weak_ptr<const quader_poly::Document> removed_document =
+      objects.front().document.topology_payload();
+  objects.clear();
+  EXPECT_FALSE(removed_document.expired());
+  EXPECT_TRUE(project().faces.empty());
+  EXPECT_TRUE(removed_document.expired());
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), 5u);
+}
+
 TEST(ModelingSessionServiceTests,
      RepeatedBoxSelectionDoesNotReprojectStableMeshGeometry) {
   SceneDocument scene;
@@ -19004,6 +19111,7 @@ TEST(ModelingSessionServiceTests,
       service.rectangle_selection_universe_build_count();
   const std::uint64_t resolutions_before =
       service.rectangle_selection_resolution_build_count();
+  const std::uint64_t facts_before = service.rectangle_pick_facts_build_count();
   const ModelingSelectionSummary first = service.box_select(request, baseline);
   ASSERT_GT(first.selected_face_count, 0u);
   const std::uint64_t builds_after_first =
@@ -19018,6 +19126,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(rectangle_builds_after_first, rectangle_builds_before + 1u);
   EXPECT_EQ(universe_builds_after_first, universe_builds_before + 1u);
   EXPECT_EQ(resolutions_after_first, resolutions_before + 1u);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 1u);
 
   for (int sample = 0; sample < 32; ++sample) {
     request.end.x = 65.0f + static_cast<float>(sample) * 0.01f;
@@ -19033,6 +19142,7 @@ TEST(ModelingSessionServiceTests,
             universe_builds_after_first);
   EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
             resolutions_after_first);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 1u);
 
   request.camera.orthographic_size += 1.0;
   (void)service.box_select(request, baseline);
@@ -19044,6 +19154,8 @@ TEST(ModelingSessionServiceTests,
             universe_builds_after_first);
   EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
             resolutions_after_first + 1u);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 1u);
+  EXPECT_EQ(service.rectangle_pick_facts_reuse_count(), 1u);
 
   ASSERT_TRUE(scene.set_selectable(mesh.object.entity, false));
   const ModelingSelectionSummary unselectable =
@@ -19057,6 +19169,19 @@ TEST(ModelingSessionServiceTests,
             universe_builds_after_first + 1u);
   EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
             resolutions_after_first + 2u);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 1u);
+
+  ASSERT_TRUE(scene.set_selectable(mesh.object.entity, true));
+  EXPECT_EQ(service.box_select(request, baseline).selected_face_count,
+            first.selected_face_count);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 2u);
+  ASSERT_TRUE(scene.set_visible(mesh.object.entity, false));
+  EXPECT_EQ(service.box_select(request, baseline).selected_face_count, 0u);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 2u);
+  ASSERT_TRUE(scene.set_visible(mesh.object.entity, true));
+  EXPECT_EQ(service.box_select(request, baseline).selected_face_count,
+            first.selected_face_count);
+  EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 3u);
 }
 
 TEST(ModelingSessionServiceTests,
@@ -19117,6 +19242,7 @@ TEST(ModelingSessionServiceTests,
       return std::size_t{0U};
     }
   };
+  const std::uint64_t facts_before = service.rectangle_pick_facts_build_count();
 
   for (const ModeExpectation &expectation : expectations) {
     ASSERT_TRUE(service.set_selection_mode(expectation.mode).ok);
@@ -19138,6 +19264,7 @@ TEST(ModelingSessionServiceTests,
               expectation.reflected_two_sided_count);
     EXPECT_EQ(service.rectangle_picking_projection_build_count(),
               front_only_projection_builds);
+    EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 2u);
   }
 }
 

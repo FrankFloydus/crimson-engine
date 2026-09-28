@@ -12,9 +12,30 @@
 #include <quader/modeling/mesh/polygon_document.hpp>
 #include <quader/modeling/payloads.hpp>
 
+#include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 
 namespace quader {
+
+/** Immutable affected-face connectivity and compiled ranges for one gesture. */
+struct MeshProjectionPositionUpdatePlan;
+
+/** Cumulative projection work and immutable gesture-plan preparation. */
+struct MeshProjectionPositionUpdateStats {
+  std::uint64_t retained_translation_count = 0;
+  std::uint64_t retained_flat_face_count = 0;
+  std::uint64_t retained_partial_count = 0;
+  /** Includes neighborhood work followed by a full-layout fallback. */
+  std::uint64_t partial_compiled_face_count = 0;
+  std::uint64_t full_compile_count = 0;
+  std::uint64_t partial_plan_build_count = 0;
+  /** Face visits while constructing neighborhoods, excluding layout checks. */
+  std::uint64_t partial_plan_face_visit_count = 0;
+  std::uint64_t partial_plan_reuse_count = 0;
+  std::uint64_t partial_plan_fallback_count = 0;
+};
 
 /**
  * Builds derived mesh snapshots from runtime polygon mesh data.
@@ -59,15 +80,32 @@ public:
       const quader::modeling::MeshPayload &payload,
       const quader::modeling::PolygonDocument &authored_document);
   /**
-   * Canonically recompiles a topology-retained committed transform into the
-   * current asset's detached buffers. Every derived vertex attribute and index
-   * is refreshed; only vector allocations and unchanged authored layout are
-   * retained.
+   * Projects topology-retained positions into detached buffers. Flat faces and
+   * exact whole-mesh translations with unchanged canonical face normals retain
+   * their unaffected attributes. Partial edits compile the complete affected
+   * normal neighborhood; unsupported layouts use the full compiler.
    */
   [[nodiscard]] static std::optional<MeshAsset>
   update_sdk_document_mesh_positions(
       const quader::modeling::PolygonDocument &document,
-      const MeshAsset &current);
+      const MeshAsset &current,
+      const MeshProjectionPositionUpdatePlan *plan = nullptr);
+  /**
+   * Caches the complete normal neighborhood of a fixed movable vertex set.
+   * Unsupported layouts are retained as ineligible plans; all updates still
+   * validate their source/layout and use canonical compilation on mismatch.
+   */
+  [[nodiscard]] static std::shared_ptr<const MeshProjectionPositionUpdatePlan>
+  prepare_position_update_plan(
+      const MeshAsset &current,
+      std::span<const std::uint32_t> movable_vertex_ids);
+  /** Projects an exported authored document once, with canonical fallback. */
+  [[nodiscard]] static MeshAsset update_polygon_document_mesh_positions(
+      quader_poly::Document document, const MeshAsset &current,
+      const MeshProjectionPositionUpdatePlan *plan = nullptr);
+  /** Excludes separate compile calls and updates rejected before derivation. */
+  [[nodiscard]] static MeshProjectionPositionUpdateStats
+  position_update_stats() noexcept;
   /** Bakes occurrence sampling into a detached export-only compiled payload. */
   static void apply_mesh_texture_mapping(MeshAsset &mesh,
                                         const QMat4 &sampling_from_local);

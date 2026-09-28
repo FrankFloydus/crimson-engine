@@ -31,6 +31,7 @@
 namespace quader {
 
 class CurveSolidGeometryCache;
+struct RenderSceneMaterialBindingCache;
 struct CurveSamplePayload;
 
 /**
@@ -215,6 +216,12 @@ using RenderSelectedLightOverlaySnapshotRecord =
 using RenderToolOverlaySnapshotRecord = ViewportOverlayFrame;
 using OverlaySnapshot = RenderOverlaySelectionSnapshot;
 
+/// Counts material derivation work performed by one scene extraction.
+struct RenderSceneExtractionWork final {
+  std::size_t material_binding_build_count = 0u;
+  std::size_t material_binding_reuse_count = 0u;
+};
+
 /**
  * Snapshot consumed by render sync/cache invalidation and rebuild.
  */
@@ -232,6 +239,10 @@ struct RenderSceneSnapshot : RenderSourceStamp {
   std::vector<RenderSceneLightRecord> lights;
   std::unordered_set<EntityId> live_mesh_entities;
   std::unordered_set<EntityId> live_light_entities;
+  // Bindings survive geometry-only edits, including sources routed into
+  // instance batches. The opaque cache retains only this snapshot's bindings.
+  std::shared_ptr<const RenderSceneMaterialBindingCache> material_binding_cache;
+  RenderSceneExtractionWork extraction_work;
 };
 
 /**

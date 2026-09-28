@@ -10,17 +10,22 @@
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/viewport_segment_projection.hpp>
 
+#include <quader/modeling/neutral/geometry/bvh.hpp>
 #include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_picking_helpers.hpp>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -790,14 +795,6 @@ quader_poly::PickResult pick_component_with_world_metric(
     candidate.distance = quader::dot(
         candidate.position - candidate_local_ray.origin,
         candidate_local_ray.direction);
-    if (screen_context != nullptr) {
-      if (screen_visible && !screen_visible(candidate, candidate_ray)) {
-        return;
-      }
-    } else if (source_wire_component_is_occluded_by_object_faces(
-                   object, *precomputed_surface_hit, candidate)) {
-      return;
-    }
     constexpr float kMetricEpsilon = quader_poly::document_internal::kEpsilon;
     if (best.hit) {
       if (pick_distance > best_pick_distance + kMetricEpsilon) {
@@ -813,6 +810,16 @@ quader_poly::PickResult pick_component_with_world_metric(
           return;
         }
       }
+    }
+    // Only an already-visible winner can reject a later candidate. Keep the
+    // original ranking and iteration order before the expensive visibility ray.
+    if (screen_context != nullptr) {
+      if (screen_visible && !screen_visible(candidate, candidate_ray)) {
+        return;
+      }
+    } else if (source_wire_component_is_occluded_by_object_faces(
+                   object, *precomputed_surface_hit, candidate)) {
+      return;
     }
     best = candidate;
     best_pick_distance = pick_distance;
@@ -1322,6 +1329,34 @@ std::optional<quader_poly::Ray> screen_bounded_ray(
       ray.origin + direction * static_cast<float>(distance), direction};
 }
 
+/** Preserves every authored ray bit, including signed zero and NaN payloads. */
+struct ScreenPickRayKey {
+  std::array<std::uint32_t, 6> components;
+
+  explicit ScreenPickRayKey(const quader_poly::Ray &ray)
+      : components{std::bit_cast<std::uint32_t>(ray.origin.x),
+                   std::bit_cast<std::uint32_t>(ray.origin.y),
+                   std::bit_cast<std::uint32_t>(ray.origin.z),
+                   std::bit_cast<std::uint32_t>(ray.direction.x),
+                   std::bit_cast<std::uint32_t>(ray.direction.y),
+                   std::bit_cast<std::uint32_t>(ray.direction.z)} {}
+
+  [[nodiscard]] bool operator==(const ScreenPickRayKey &) const = default;
+};
+
+/** Hashes exact ray keys without quantizing neighboring component rays. */
+struct ScreenPickRayHash {
+  [[nodiscard]] std::size_t operator()(const ScreenPickRayKey &key) const noexcept {
+    std::size_t result = 0u;
+    for (const std::uint32_t component : key.components) {
+      result ^= std::hash<std::uint32_t>{}(component) +
+                static_cast<std::size_t>(0x9e3779b9u) +
+                (result << 6u) + (result >> 2u);
+    }
+    return result;
+  }
+};
+
 std::vector<PickHitRecord> pick_screen_hits(
     const std::vector<PolygonObject> &objects, const PickRequest &request,
     std::span<const PickObjectBounds> object_bounds,
@@ -1336,6 +1371,8 @@ std::vector<PickHitRecord> pick_screen_hits(
   struct ScreenObjectPick {
     int index = -1;
     const PickObjectTransform *transform = nullptr;
+    const PickObjectBounds *bounds = nullptr;
+    const PickObjectFaceGeometry *geometry = nullptr;
     quader_poly::PickOptions options;
     std::unique_ptr<quader_poly::document_internal::DocumentPickFacts> facts;
   };
@@ -1354,6 +1391,10 @@ std::vector<PickHitRecord> pick_screen_hits(
         (transform != nullptr &&
          pick_object_transform_reverses_face_winding(*transform));
     prepared.push_back({.index = index, .transform = transform,
+                        .bounds = cached_bounds_for_object(
+                            object_bounds, index, objects[index]),
+                        .geometry = cached_face_geometry_for_object(
+                            face_geometry, index, objects[index]),
                         .options = local_options});
   }
   const auto ensure_facts = [&](ScreenObjectPick &context)
@@ -1366,26 +1407,27 @@ std::vector<PickHitRecord> pick_screen_hits(
     return *context.facts;
   };
   const auto surface_for_object = [&](ScreenObjectPick &context,
-                                      const quader_poly::Ray &ray)
+                                      const quader_poly::Ray &ray,
+                                      const quader_poly::Ray &clipped_ray)
       -> std::optional<PickHitRecord> {
-    const auto clipped = screen_bounded_ray(screen, ray);
-    if (!clipped.has_value()) {
-      return std::nullopt;
+    if (request.screen_work_counters != nullptr) {
+      ++request.screen_work_counters->visibility_object_tests;
     }
     const auto &object = objects[context.index];
     quader_poly::PickOptions surface_options = context.options;
     surface_options.mode = quader_poly::SelectionMode::Face;
     if (!ray_intersects_object_pick_bounds(
-            object, *clipped, surface_options,
-            cached_bounds_for_object(object_bounds, context.index, object),
+            object, clipped_ray, surface_options, context.bounds,
             context.transform)) {
       return std::nullopt;
     }
-    const auto local_ray = object_space_pick_ray(*clipped, context.transform);
+    const auto local_ray = object_space_pick_ray(clipped_ray, context.transform);
     quader_poly::PickResult hit;
-    if (const auto *cached_geometry = cached_face_geometry_for_object(
-            face_geometry, context.index, object)) {
-      hit = quader_poly::pick_face_geometry(cached_geometry->triangle_span(),
+    if (request.screen_work_counters != nullptr) {
+      ++request.screen_work_counters->surface_geometry_queries;
+    }
+    if (context.geometry != nullptr) {
+      hit = quader_poly::pick_face_geometry(context.geometry->triangle_span(),
                                             local_ray, surface_options);
     } else {
       hit = ensure_facts(context).surface_hit(local_ray);
@@ -1405,21 +1447,11 @@ std::vector<PickHitRecord> pick_screen_hits(
     return make_pick_hit_record(object, context.index, surface_request, hit,
                                 context.transform);
   };
-  const auto nearest_surface = [&](const quader_poly::Ray &ray)
-      -> std::optional<PickHitRecord> {
-    std::optional<PickHitRecord> nearest;
-    for (auto &context : prepared) {
-      const auto hit = surface_for_object(context, ray);
-      if (hit.has_value() &&
-          (!nearest.has_value() || pick_hit_depth_less(*hit, *nearest))) {
-        nearest = hit;
-      }
-    }
-    return nearest;
-  };
   const auto object_may_hit_cursor = [&](const ScreenObjectPick &context) {
-    const auto *bounds = cached_bounds_for_object(
-        object_bounds, context.index, objects[context.index]);
+    if (request.screen_work_counters != nullptr) {
+      ++request.screen_work_counters->projected_object_bounds;
+    }
+    const auto *bounds = context.bounds;
     if (bounds == nullptr) {
       return true;
     }
@@ -1434,6 +1466,7 @@ std::vector<PickHitRecord> pick_screen_hits(
                          std::numeric_limits<float>::max()};
     quader::QVec2 maximum{std::numeric_limits<float>::lowest(),
                          std::numeric_limits<float>::lowest()};
+    bool projection_incomplete = false;
     for (int corner = 0; corner < 8; ++corner) {
       const quader::QVec3 point{
           (corner & 1) != 0 ? bounds->max.x : bounds->min.x,
@@ -1449,14 +1482,16 @@ std::vector<PickHitRecord> pick_screen_hits(
         minimum.y = std::min(minimum.y, projected.y);
         maximum.x = std::max(maximum.x, projected.x);
         maximum.y = std::max(maximum.y, projected.y);
+      } else {
+        projection_incomplete = true;
       }
     }
     if (max_depth < screen.near_plane || min_depth > screen.far_plane) {
       return false;
     }
-    // A perspective box crossing the near plane needs clipped edge bounds;
-    // accept it conservatively and let exact candidates perform that clipping.
-    if (min_depth <= screen.near_plane) {
+    // Near-plane crossings and unprojectable corners need clipped bounds;
+    // retain them for the exact candidate and visibility queries.
+    if (min_depth <= screen.near_plane || projection_incomplete) {
       return true;
     }
     const double radius = request.options.mode == quader_poly::SelectionMode::Vertex
@@ -1466,16 +1501,111 @@ std::vector<PickHitRecord> pick_screen_hits(
            screen.screen_position.y >= minimum.y - radius &&
            screen.screen_position.y <= maximum.y + radius;
   };
+  if (request.options.mode != quader_poly::SelectionMode::Face) {
+    // Every component visibility ray lies inside this cursor-radius square.
+    // Filter once so each candidate also avoids unrelated scene occluders.
+    std::erase_if(prepared, [&](const ScreenObjectPick &context) {
+      return !object_may_hit_cursor(context);
+    });
+  }
+  quader_geometry::QBoundsBvh<float> visibility_bounds;
+  quader_geometry::QBvhTraversalScratch visibility_scratch;
+  std::vector<std::size_t> unbounded_indices;
+  if (request.options.mode != quader_poly::SelectionMode::Face &&
+      prepared.size() > 8u) {
+    std::vector<quader_geometry::QAabb3<float>> bounds;
+    std::vector<std::size_t> indices;
+    bounds.reserve(prepared.size());
+    indices.reserve(prepared.size());
+    for (std::size_t index = 0u; index < prepared.size(); ++index) {
+      const auto *cached_bounds = prepared[index].bounds;
+      if (cached_bounds == nullptr) {
+        unbounded_indices.push_back(index);
+        continue;
+      }
+      const quader_geometry::QAabb3<float> bound{
+          to_geometry_vec3(cached_bounds->min),
+          to_geometry_vec3(cached_bounds->max)};
+      if (!quader_geometry::aabb_is_valid(bound) ||
+          !std::isfinite(bound.min.x) || !std::isfinite(bound.min.y) ||
+          !std::isfinite(bound.min.z) || !std::isfinite(bound.max.x) ||
+          !std::isfinite(bound.max.y) || !std::isfinite(bound.max.z)) {
+        unbounded_indices.push_back(index);
+        continue;
+      }
+      bounds.push_back(bound);
+      indices.push_back(index);
+    }
+    (void)visibility_bounds.build(bounds, indices);
+  }
+  std::unordered_map<ScreenPickRayKey, std::optional<PickHitRecord>,
+                     ScreenPickRayHash> surface_hits;
+  std::vector<std::size_t> surface_candidates;
+  const auto nearest_surface = [&](const quader_poly::Ray &ray)
+      -> std::optional<PickHitRecord> {
+    if (request.screen_work_counters != nullptr) {
+      ++request.screen_work_counters->visibility_queries;
+    }
+    const ScreenPickRayKey key(ray);
+    const auto [entry, inserted] = surface_hits.try_emplace(key);
+    if (!inserted) {
+      if (request.screen_work_counters != nullptr) {
+        ++request.screen_work_counters->visibility_cache_hits;
+      }
+      return entry->second;
+    }
+    if (request.screen_work_counters != nullptr) {
+      ++request.screen_work_counters->visibility_ray_queries;
+    }
+    const auto clipped_ray = screen_bounded_ray(screen, ray);
+    if (!clipped_ray.has_value()) {
+      return std::nullopt;
+    }
+    const auto consider_surface = [&](ScreenObjectPick &context) {
+      const auto hit = surface_for_object(context, ray, *clipped_ray);
+      if (hit.has_value() &&
+          (!entry->second.has_value() ||
+           pick_hit_depth_less(*hit, *entry->second))) {
+        entry->second = hit;
+      }
+    };
+    const auto finite_vector = [](quader::QVec3 value) {
+      return std::isfinite(value.x) && std::isfinite(value.y) &&
+             std::isfinite(value.z);
+    };
+    if (!visibility_bounds.empty() && finite_vector(clipped_ray->origin) &&
+        finite_vector(clipped_ray->direction)) {
+      surface_candidates.assign(unbounded_indices.begin(),
+                                unbounded_indices.end());
+      (void)visibility_bounds.for_each_ray_candidate(
+          to_geometry_ray(*clipped_ray), {}, visibility_scratch,
+          [&](std::size_t index, std::size_t,
+              const quader_geometry::QRayAabbHit<float> &, float &) {
+            surface_candidates.push_back(index);
+            return true;
+          });
+      // The epsilon-based surface comparison is order-sensitive. The BVH only
+      // excludes bounds misses; retain the original participant reduction order.
+      std::sort(surface_candidates.begin(), surface_candidates.end());
+      for (const std::size_t index : surface_candidates) {
+        consider_surface(prepared[index]);
+      }
+    } else {
+      for (auto &context : prepared) {
+        consider_surface(context);
+      }
+    }
+    return entry->second;
+  };
   std::vector<PickHitRecord> hits;
   hits.reserve(prepared.size());
   for (auto &context : prepared) {
     if (request.options.mode == quader_poly::SelectionMode::Face) {
-      if (auto hit = surface_for_object(context, request.ray)) {
-        hits.push_back(std::move(*hit));
+      if (const auto clipped_ray = screen_bounded_ray(screen, request.ray)) {
+        if (auto hit = surface_for_object(context, request.ray, *clipped_ray)) {
+          hits.push_back(std::move(*hit));
+        }
       }
-      continue;
-    }
-    if (!object_may_hit_cursor(context)) {
       continue;
     }
     const auto &object = objects[context.index];

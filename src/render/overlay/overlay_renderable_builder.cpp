@@ -20,7 +20,9 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <optional>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -127,14 +129,6 @@ bool line_uses_edit_wire_batch(const ViewportOverlayLine &line) {
          line.layer == ViewportOverlayLayer::HoverEdge;
 }
 
-QVec3 overlay_camera_forward(const ViewportOverlayCamera &camera) {
-  QVec3 forward = normalize(camera.forward);
-  if (length_squared(forward) <= kOverlayVisibilityEpsilon) {
-    forward = {0.0f, 0.0f, -1.0f};
-  }
-  return forward;
-}
-
 quader_geometry::QVec3f neutral_point(QVec3 value) {
   return {value.x, value.y, value.z};
 }
@@ -148,26 +142,55 @@ quader_geometry::QVec3f neutral_point(QVec3 value) {
  * costs O(points * log(triangles)) queries instead of the former quadratic
  * point-by-triangle scan.
  */
-class OverlayDepthStampPointVisibilityFilter final {
-public:
-  explicit OverlayDepthStampPointVisibilityFilter(
-      const ViewportOverlayFrame &frame) {
+struct OverlayDepthStampPointVisibilityFilter::Impl final {
+  /** Owns one object's source triangles, acceleration data, and orientation. */
+  struct StampSet final {
+    std::vector<quader_geometry::QTriangle3<float>> triangles;
+    quader_geometry::QTriangleBvh<float> bvh;
+    mutable quader_geometry::QBvhTraversalScratch traversal_scratch;
+    QVec3 centroid;
+    std::size_t vertex_count = 0u;
+    bool inside_out = false;
+  };
+
+  /// Each worker owns traversal storage and counters; source BVHs stay immutable.
+  struct QueryWorker final {
+    quader_geometry::QBvhTraversalScratch traversal_scratch;
+    OverlayDepthStampPointVisibilityStats work;
+    std::exception_ptr failure;
+  };
+
+  /// Resolves frame indices and object lookups only when the semantic frame changes.
+  struct QueryPoint final {
+    std::size_t frame_index = 0u;
+    const StampSet *stamps = nullptr;
+  };
+
+  void rebuild(const ViewportOverlayFrame &frame) {
     QDR_PROFILE_FUNCTION();
+    stamps_by_object.clear();
+    query_points.clear();
+    query_frame_valid = false;
+    visibility_valid = false;
+    work.object_count = 0u;
+    work.triangle_count = 0u;
+    ++work.build_count;
     for (const ViewportOverlayTriangle &triangle : frame.triangles) {
       if (triangle.layer != ViewportOverlayLayer::SourceWireDepthStamp ||
           triangle.element.object_id < 0) {
         continue;
       }
-      StampSet &set = stamps_by_object_[triangle.element.object_id];
-      set.source_triangles.push_back(&triangle);
+      StampSet &set = stamps_by_object[triangle.element.object_id];
       set.triangles.push_back({neutral_point(triangle.a),
                                neutral_point(triangle.b),
                                neutral_point(triangle.c)});
       set.centroid += triangle.a + triangle.b + triangle.c;
       set.vertex_count += 3u;
+      ++work.triangle_count;
     }
 
-    for (auto &[object_id, set] : stamps_by_object_) {
+    work.object_count = stamps_by_object.size();
+    for (auto &[object_id, set] : stamps_by_object) {
       (void)object_id;
       if (set.vertex_count == 0u) {
         continue;
@@ -182,54 +205,58 @@ public:
     }
   }
 
-  [[nodiscard]] bool empty() const { return stamps_by_object_.empty(); }
-
-  [[nodiscard]] bool point_visible(
-      const ViewportOverlayPoint &point,
-      const ViewportOverlayCamera &camera) const {
-    const StampSet *stamps = stamps_for(point.element.object_id);
-    return stamps == nullptr || stamps->inside_out ||
-           point_visible(point.position, camera, *stamps);
-  }
-
-private:
-  /** Owns one object's source triangles, acceleration data, and orientation. */
-  struct StampSet final {
-    std::vector<const ViewportOverlayTriangle *> source_triangles;
-    std::vector<quader_geometry::QTriangle3<float>> triangles;
-    quader_geometry::QTriangleBvh<float> bvh;
-    mutable quader_geometry::QBvhTraversalScratch traversal_scratch;
-    QVec3 centroid;
-    std::size_t vertex_count = 0u;
-    bool inside_out = false;
-  };
-
-  [[nodiscard]] const StampSet *stamps_for(int object_id) const {
-    const auto found = stamps_by_object_.find(object_id);
-    return found == stamps_by_object_.end() ? nullptr : &found->second;
+  void resolve_query_points(const ViewportOverlayFrame &frame,
+                            const OverlayFrameSignatures &signatures) {
+    if (query_frame_valid && query_frame_signature == signatures.frame_signature) return;
+    RenderSignatureBuilder point_signature;
+    point_signature.add_size(frame.points.size());
+    for (const auto &point : frame.points) {
+      point_signature.add_value(static_cast<std::uint64_t>(point.layer));
+    }
+    for (std::size_t index = 0u; index < signatures.point_counts.size(); ++index) {
+      if (signatures.point_counts[index] != 0u) {
+        point_signature.add_value(signatures.layer_signatures[index]);
+      }
+    }
+    query_frame_signature = signatures.frame_signature;
+    if (query_frame_valid && query_point_signature == point_signature.value()) return;
+    query_points.clear();
+    query_points.reserve(frame.points.size());
+    visibility.assign(frame.points.size(), 1u);
+    for (std::size_t index = 0u; index < frame.points.size(); ++index) {
+      const auto &point = frame.points[index];
+      if (!overlay_layer_uses_depth_stamp_point_visibility(point.layer)) continue;
+      const auto found = stamps_by_object.find(point.element.object_id);
+      if (found == stamps_by_object.end() || found->second.inside_out) continue;
+      query_points.push_back({.frame_index = index, .stamps = &found->second});
+    }
+    query_point_signature = point_signature.value();
+    query_frame_valid = true;
+    visibility_valid = false;
   }
 
   [[nodiscard]] static float inside_out_score(const StampSet &stamps) {
     float score = 0.0f;
-    for (const ViewportOverlayTriangle *triangle : stamps.source_triangles) {
-      const QVec3 normal =
-          cross(triangle->b - triangle->a, triangle->c - triangle->a);
-      const QVec3 triangle_centroid =
-          (triangle->a + triangle->b + triangle->c) / 3.0f;
+    for (const auto &triangle : stamps.triangles) {
+      const QVec3 a{triangle.a.x, triangle.a.y, triangle.a.z};
+      const QVec3 b{triangle.b.x, triangle.b.y, triangle.b.z};
+      const QVec3 c{triangle.c.x, triangle.c.y, triangle.c.z};
+      const QVec3 normal = cross(b - a, c - a);
+      const QVec3 triangle_centroid = (a + b + c) / 3.0f;
       score += dot(normal, triangle_centroid - stamps.centroid);
     }
     return score;
   }
 
   [[nodiscard]] static bool point_visible(
-      QVec3 point, const ViewportOverlayCamera &raw_camera,
-      const StampSet &stamps) {
+      QVec3 point, const ViewportOverlayCamera &camera,
+      const StampSet &stamps,
+      OverlayDepthStampPointVisibilityStats &work,
+      quader_geometry::QBvhTraversalScratch &traversal_scratch) {
     if (stamps.bvh.empty()) {
       return true;
     }
-    const ViewportOverlayCamera camera =
-        OverlayCameraProjector::sanitized_camera(raw_camera);
-    const QVec3 forward = overlay_camera_forward(camera);
+    const QVec3 forward = camera.forward;
     QVec3 origin;
     QVec3 direction;
     float target_distance = 0.0f;
@@ -268,13 +295,186 @@ private:
     options.min_distance = clip_distance;
     options.max_distance = max_distance;
     options.intersection_epsilon = kOverlayVisibilityEpsilon;
+    ++work.ray_query_count;
     return !stamps.bvh.any_hit(
         {neutral_point(origin), neutral_point(direction)}, options,
-        stamps.traversal_scratch);
+        traversal_scratch);
   }
 
-  std::unordered_map<int, StampSet> stamps_by_object_;
+  [[nodiscard]] bool outside_viewport(const ViewportOverlayPoint &point) const {
+    if (!projector.has_value()) {
+      return false;
+    }
+    const OverlayViewPoint view = projector->view_point_for(point.position);
+    if (projector->near_plane_distance(view) < 0.0f) {
+      // The point shader discards the entire marker before its near plane.
+      return true;
+    }
+    const OverlayProjectedPoint projected = projector->project(view);
+    if (!projected.valid) {
+      return false;
+    }
+    const float size = viewport_overlay_point_size_pixels(
+        point.layer, point.size_pixels);
+    const float outline_growth = point.outline_growth_pixels.value_or(
+        viewport_overlay_point_outline_growth_pixels(point.layer));
+    // Include the larger outline quad and the shader's half-pixel circular
+    // coverage, plus one physical pixel for conservative raster rounding.
+    const float radius =
+        std::max(1.0f, size + std::max(0.0f, outline_growth)) * 0.5f + 1.5f;
+    return projected.pixel.x < -radius || projected.pixel.y < -radius ||
+           projected.pixel.x > camera.viewport_size.x + radius ||
+           projected.pixel.y > camera.viewport_size.y + radius;
+  }
+
+  std::unordered_map<int, StampSet> stamps_by_object;
+  ViewportOverlayCamera camera;
+  std::optional<OverlayCameraProjector> projector;
+  OverlayDepthStampPointVisibilityStats work;
+  std::uint64_t source_signature = 0u;
+  bool source_valid = false;
+  bool allow_viewport_ray_skips = true;
+  std::vector<QueryPoint> query_points;
+  std::vector<QueryWorker> query_workers;
+  std::vector<std::uint8_t> visibility;
+  std::uint64_t query_frame_signature = 0u;
+  std::uint64_t query_point_signature = 0u;
+  std::uint64_t visibility_camera_signature = 0u;
+  bool query_frame_valid = false;
+  bool visibility_valid = false;
+  bool visibility_allows_viewport_skips = true;
 };
+
+OverlayDepthStampPointVisibilityFilter::OverlayDepthStampPointVisibilityFilter() =
+    default;
+
+OverlayDepthStampPointVisibilityFilter::~OverlayDepthStampPointVisibilityFilter() =
+    default;
+
+void OverlayDepthStampPointVisibilityFilter::prepare(
+    const ViewportOverlayFrame &frame, const OverlayFrameSignatures &signatures,
+    const ViewportOverlayCamera &camera, bool allow_viewport_ray_skips) {
+  if (!impl_) {
+    impl_ = std::make_unique<Impl>();
+  }
+  const auto source_signature = signatures.layer_signatures[
+      overlay_layer_index(ViewportOverlayLayer::SourceWireDepthStamp)];
+  if (!impl_->source_valid || impl_->source_signature != source_signature) {
+    impl_->rebuild(frame);
+    impl_->source_signature = source_signature;
+    impl_->source_valid = true;
+  }
+  // Query rays use only this immutable layer camera. In particular, near-plane
+  // clipping must not normalize the camera basis separately for every marker.
+  impl_->camera = OverlayCameraProjector::sanitized_camera(camera);
+  impl_->projector.emplace(impl_->camera);
+  impl_->allow_viewport_ray_skips = allow_viewport_ray_skips;
+}
+
+void OverlayDepthStampPointVisibilityFilter::invalidate() {
+  if (impl_) {
+    impl_->source_valid = false;
+    impl_->stamps_by_object.clear();
+    impl_->query_points.clear();
+    impl_->query_frame_valid = false;
+    impl_->visibility_valid = false;
+    impl_->work.object_count = 0u;
+    impl_->work.triangle_count = 0u;
+  }
+}
+
+bool OverlayDepthStampPointVisibilityFilter::point_visible(
+    const ViewportOverlayPoint &point) const {
+  if (!impl_ || !impl_->source_valid) {
+    return true;
+  }
+  if (impl_->allow_viewport_ray_skips && impl_->outside_viewport(point)) {
+    ++impl_->work.viewport_skip_count;
+    // Keep the marker and its position-stream binding: a component preview
+    // can move this offscreen base point onscreen without rebuilding topology.
+    // Raster clipping handles it until then, so no CPU occlusion ray is needed.
+    return true;
+  }
+  const auto found = impl_->stamps_by_object.find(point.element.object_id);
+  return found == impl_->stamps_by_object.end() || found->second.inside_out ||
+         Impl::point_visible(point.position, impl_->camera, found->second,
+                             impl_->work, found->second.traversal_scratch);
+}
+
+std::span<const std::uint8_t> OverlayDepthStampPointVisibilityFilter::evaluate(
+    const ViewportOverlayFrame &frame, const OverlayFrameSignatures &signatures,
+    const ViewportOverlayCamera &camera, bool allow_viewport_ray_skips,
+    bool allow_parallel_queries) {
+  QDR_PROFILE_SCOPE("Overlay evaluate retained point visibility");
+  prepare(frame, signatures, camera, allow_viewport_ray_skips);
+  impl_->resolve_query_points(frame, signatures);
+  const auto camera_signature = OverlayRenderableBuilder::camera_signature(impl_->camera);
+  if (impl_->visibility_valid &&
+      impl_->visibility_camera_signature == camera_signature &&
+      impl_->visibility_allows_viewport_skips == allow_viewport_ray_skips) {
+    return impl_->visibility;
+  }
+
+  constexpr std::size_t kMinimumParallelPoints = 4096u;
+  constexpr std::size_t kPointsPerWorker = 2048u;
+  constexpr std::size_t kMaximumWorkers = 8u;
+  const std::size_t available_workers = std::max(1u, std::thread::hardware_concurrency());
+  const std::size_t worker_count = allow_parallel_queries &&
+          impl_->query_points.size() >= kMinimumParallelPoints
+      ? std::max<std::size_t>(1u, std::min({kMaximumWorkers, available_workers,
+                                          impl_->query_points.size() / kPointsPerWorker}))
+      : 1u;
+  impl_->visibility_valid = false;
+  impl_->query_workers.resize(worker_count);
+  const auto query_range = [&](std::size_t worker_index) {
+    auto &worker = impl_->query_workers[worker_index];
+    worker.work = {};
+    worker.failure = nullptr;
+    try {
+      const std::size_t first = impl_->query_points.size() * worker_index / worker_count;
+      const std::size_t end = impl_->query_points.size() * (worker_index + 1u) / worker_count;
+      for (std::size_t index = first; index < end; ++index) {
+        const auto &query = impl_->query_points[index];
+        const auto &point = frame.points[query.frame_index];
+        bool visible = true;
+        if (allow_viewport_ray_skips && impl_->outside_viewport(point)) {
+          ++worker.work.viewport_skip_count;
+        } else {
+          visible = Impl::point_visible(point.position, impl_->camera, *query.stamps,
+                                        worker.work, worker.traversal_scratch);
+        }
+        impl_->visibility[query.frame_index] = visible ? 1u : 0u;
+      }
+    } catch (...) {
+      worker.failure = std::current_exception();
+    }
+  };
+  {
+    std::vector<std::jthread> workers;
+    workers.reserve(worker_count - 1u);
+    for (std::size_t index = 1u; index < worker_count; ++index) {
+      workers.emplace_back(query_range, index);
+    }
+    query_range(0u);
+  }
+  for (const auto &worker : impl_->query_workers) {
+    if (worker.failure) std::rethrow_exception(worker.failure);
+    impl_->work.viewport_skip_count += worker.work.viewport_skip_count;
+    impl_->work.ray_query_count += worker.work.ray_query_count;
+  }
+  ++impl_->work.query_batch_count;
+  impl_->work.parallel_query_batch_count += worker_count > 1u ? 1u : 0u;
+  impl_->work.queried_point_count += impl_->query_points.size();
+  impl_->visibility_camera_signature = camera_signature;
+  impl_->visibility_allows_viewport_skips = allow_viewport_ray_skips;
+  impl_->visibility_valid = true;
+  return impl_->visibility;
+}
+
+OverlayDepthStampPointVisibilityStats
+OverlayDepthStampPointVisibilityFilter::stats() const {
+  return impl_ ? impl_->work : OverlayDepthStampPointVisibilityStats{};
+}
 
 std::uint64_t
 OverlayRenderableBuilder::frame_signature(const ViewportOverlayFrame &frame) {
@@ -333,9 +533,15 @@ std::uint64_t OverlayRenderableBuilder::layer_build_signature(
 
 std::uint64_t OverlayRenderableBuilder::layer_build_signature(
     const OverlayFrameSignatures &signatures,
-    const ViewportOverlayCamera &camera, ViewportOverlayLayer layer) {
+    const ViewportOverlayCamera &camera, ViewportOverlayLayer layer,
+    bool retain_point_geometry) {
   RenderSignatureBuilder signature;
   signature.add_value(layer_signature(signatures, layer));
+  if (retain_point_geometry && overlay_layer_can_build_points(layer)) {
+    // Camera/source-face visibility lives in a separate flag stream. Point
+    // topology, centers, colors and source bindings follow only their owner.
+    return signature.add_bool(true).value();
+  }
   if (overlay_layer_uses_depth_stamp_point_visibility(layer)) {
     // Filtered point geometry also depends on other faces of its source mesh.
     // Keep that dependency when stamps move, appear, or disappear while the
@@ -373,7 +579,9 @@ OverlayRenderState OverlayRenderableBuilder::make_state(
 OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     const ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
     ViewportOverlayLayer layer, const OverlayFrameSignatures *signatures,
-    std::uint16_t blend_order_bias) {
+    std::uint16_t blend_order_bias,
+    OverlayDepthStampPointVisibilityFilter *point_visibility,
+    bool allow_viewport_ray_skips, bool retain_point_geometry) {
   QDR_PROFILE_FUNCTION();
   OverlayLayerBuildPlan plan;
   const ViewportOverlayCamera sanitized_camera =
@@ -559,24 +767,28 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
   }
 
   if (overlay_layer_can_build_points(layer)) {
-    std::optional<OverlayDepthStampPointVisibilityFilter> visibility;
-    if (overlay_layer_uses_depth_stamp_point_visibility(layer) &&
+    OverlayDepthStampPointVisibilityFilter local_visibility;
+    OverlayDepthStampPointVisibilityFilter *visibility = nullptr;
+    if (!retain_point_geometry && overlay_layer_uses_depth_stamp_point_visibility(layer) &&
         frame_signatures.has_source_wire_depth_stamp) {
-      visibility.emplace(frame);
+      visibility = point_visibility != nullptr ? point_visibility
+                                                : &local_visibility;
+      visibility->prepare(frame, frame_signatures, sanitized_camera,
+                          allow_viewport_ray_skips);
     }
     const std::vector<const ViewportOverlayPoint *> points = [&]() {
       QDR_PROFILE_SCOPE("Overlay collect layer points");
-      return points_for_layer(frame, layer,
-                              visibility ? &*visibility : nullptr,
-                              sanitized_camera);
+      return points_for_layer(frame, layer, visibility);
     }();
     {
       QDR_PROFILE_SCOPE("Overlay build point outline pass");
-      append_point_pass(plan, points, camera, layer, blend_order, true);
+      append_point_pass(plan, points, camera, layer, blend_order, true,
+                        retain_point_geometry ? frame.points.data() : nullptr);
     }
     {
       QDR_PROFILE_SCOPE("Overlay build point fill pass");
-      append_point_pass(plan, points, camera, layer, blend_order, false);
+      append_point_pass(plan, points, camera, layer, blend_order, false,
+                        retain_point_geometry ? frame.points.data() : nullptr);
     }
   }
   if (overlay_layer_can_build_icons(layer)) {
@@ -608,13 +820,12 @@ OverlayRenderableBuilder::lines_for_layer(
 std::vector<const ViewportOverlayPoint *>
 OverlayRenderableBuilder::points_for_layer(
     const ViewportOverlayFrame &frame, ViewportOverlayLayer layer,
-    const OverlayDepthStampPointVisibilityFilter *visibility,
-    const ViewportOverlayCamera &camera) {
+    const OverlayDepthStampPointVisibilityFilter *visibility) {
   std::vector<const ViewportOverlayPoint *> points;
   points.reserve(frame.points.size());
   for (const ViewportOverlayPoint &point : frame.points) {
     if (point.layer == layer &&
-        (visibility == nullptr || visibility->point_visible(point, camera))) {
+        (visibility == nullptr || visibility->point_visible(point))) {
       points.push_back(&point);
     }
   }
@@ -664,7 +875,8 @@ void OverlayRenderableBuilder::append_point_pass(
     OverlayLayerBuildPlan &plan,
     const std::vector<const ViewportOverlayPoint *> &points,
     const ViewportOverlayCamera &camera, ViewportOverlayLayer layer,
-    std::uint16_t &blend_order, bool outline) {
+    std::uint16_t &blend_order, bool outline,
+    const ViewportOverlayPoint *frame_points) {
   // An inward-facing room needs the same scene-depth test as an outward mesh.
   // Camera containment must never turn editable vertices into X-ray handles;
   // the GPU retains visible corners while rejecting walls in front of them.
@@ -736,6 +948,13 @@ void OverlayRenderableBuilder::append_point_pass(
         batch_points, camera, key.size_pixels, depth_bias,
         kOverlayVertexOutlineColor, override_color);
     if (!mesh.empty()) {
+      std::vector<std::size_t> visibility_point_indices;
+      if (frame_points != nullptr) {
+        visibility_point_indices.reserve(batch_points.size());
+        for (const auto *point : batch_points) {
+          visibility_point_indices.push_back(static_cast<std::size_t>(point - frame_points));
+        }
+      }
       plan.point_batches.push_back({
           .mesh = std::move(mesh),
           .state = make_state_with_depth_mode(
@@ -748,6 +967,7 @@ void OverlayRenderableBuilder::append_point_pass(
                   : 0.0f,
           .depth_bias = depth_bias,
           .near_plane = OverlayCameraProjector::sanitized_camera(camera).near_plane,
+          .visibility_point_indices = std::move(visibility_point_indices),
       });
     }
   }

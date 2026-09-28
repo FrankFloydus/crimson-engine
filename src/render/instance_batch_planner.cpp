@@ -258,6 +258,17 @@ bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
     return false;
   }
 
+  std::size_t required_chunk_count = 0u;
+  for (const PrimitiveGroup &group : groups) {
+    required_chunk_count += group.occurrences.size() / max_instances_per_chunk +
+        (group.occurrences.size() % max_instances_per_chunk != 0u);
+  }
+  if (previous.chunks.size() != required_chunk_count) {
+    // Geometry edits can split a shared batch, then undo can merge its payloads.
+    // Retaining those old slots would otherwise keep every split draw forever.
+    return false;
+  }
+
   std::unordered_map<PrimitiveSlotKey, const PrimitiveGroup::Occurrence *,
                      PrimitiveSlotKeyHash>
       occurrence_by_slot;

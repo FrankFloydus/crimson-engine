@@ -69,6 +69,8 @@ struct ModelingSdkProjectionStats {
   std::uint64_t selection_topology_build_count = 0;
   std::uint64_t face_texture_summary_build_count = 0;
   std::uint64_t face_texture_canvas_build_count = 0;
+  std::uint64_t face_texture_canvas_document_query_count = 0;
+  std::uint64_t face_texture_canvas_document_copy_count = 0;
   std::uint64_t uv_peel_summary_build_count = 0;
   std::uint64_t uv_peel_preparation_count = 0;
   std::uint64_t full_scene_reset_count = 0;
@@ -539,6 +541,17 @@ public:
   selected_face_texture_settings(bool include_whole_meshes = false) const;
   [[nodiscard]] modeling::Result<modeling::FaceTextureCanvasChart>
   face_texture_canvas(const ModelingFaceTextureTransferTarget &target) const;
+  /// Retains one document per object and returns each face result in input order.
+  [[nodiscard]] std::vector<modeling::Result<modeling::FaceTextureCanvasChart>>
+  face_texture_canvases(
+      std::span<const ModelingFaceTextureActionTarget> targets) const;
+  using FaceTextureCanvasVisitor = std::function<bool(
+      std::size_t, std::size_t,
+      modeling::Result<modeling::FaceTextureCanvasChart>)>;
+  /// Visits canonical charts in input order until the consumer returns false.
+  void visit_face_texture_canvases(
+      std::span<const ModelingFaceTextureActionTarget> targets,
+      const FaceTextureCanvasVisitor &visitor) const;
   [[nodiscard]] ModelingCommandResult refresh_face_texture_gesture(
       const ModelingFaceTextureTransferTarget &target,
       const modeling::FaceTextureCanvasMap &map,

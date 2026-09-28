@@ -138,6 +138,14 @@ public:
                              const ViewportSettings &settings);
     void update_shaded_lighting(const MeshRenderableProxy &proxy,
                                 const ViewportSettings &settings);
+    /// Opaque CPU upload storage; preparation never accesses Filament resources.
+    struct DynamicGeometryUpdate;
+    /// Callers keep borrowed inputs alive and immutable until the prepared
+    /// result is consumed once; snapshot-owned geometry is pinned internally.
+    [[nodiscard]] static std::shared_ptr<DynamicGeometryUpdate>
+    prepare_dynamic_geometry_update(
+        const RenderMeshAssetSnapshot &mesh,
+        std::span<const QVec3> dynamic_positions = {});
     /// Refreshes every mutable stream of a topology-retained preview. The
     /// vertex/index counts stay fixed, while deformation-derived normals,
     /// tangent frames, UVs, surface-grid projections, and triangulation may
@@ -146,7 +154,8 @@ public:
                                  const RenderMeshAssetSnapshot &mesh,
                                  std::span<const QVec3> dynamic_positions = {},
                                  const RenderInstanceBounds *
-                                     local_bounds_override = nullptr);
+                                     local_bounds_override = nullptr,
+                                 std::shared_ptr<DynamicGeometryUpdate> prepared = {});
     /// Rebinds one or more existing static renderables to a replacement
     /// immutable geometry payload without recreating their entities or
     /// material instances. Every proxy is validated and every replacement
@@ -154,10 +163,24 @@ public:
     bool try_rebind_static_geometry(
         std::span<MeshRenderableProxy *> proxies,
         const RenderMeshAssetSnapshot &mesh);
+    /// Borrows one primitive's replacement geometry and complete world bounds.
+    struct InstanceGeometryRebind final {
+      MeshRenderableProxy *proxy = nullptr;
+      const RenderMeshAssetSnapshot *mesh = nullptr;
+      MeshPrimitiveSpan primitive;
+      RenderInstanceBounds world_bounds;
+    };
+    /// Validates the complete batch and acquires every immutable replacement
+    /// before rebinding, retaining entities, materials and InstanceBuffers.
+    bool try_rebind_instance_geometry(
+        std::span<const InstanceGeometryRebind> requests);
     void remove_from_scene(const MeshRenderableProxy &proxy);
     /// Detaches an already-collected proxy generation with one Filament scene
     /// call so retirement cost does not scale in renderer API calls.
     void remove_from_scene(std::span<const utils::Entity> entities);
+    /// Retires all borrowing renderable components before their materials are
+    /// released. Proxy-owned buffers, transforms and entity IDs remain valid.
+    void destroy_renderable_components(std::span<const utils::Entity> entities);
     void destroy(MeshRenderableProxy& proxy);
     void destroy_detached(MeshRenderableProxy &proxy);
 
@@ -201,6 +224,7 @@ public:
     filament::Scene* scene_ = nullptr;
     MaterialBindingService *material_binding_ = nullptr;
     std::unique_ptr<GeometryCacheState> geometry_cache_;
+    std::size_t pending_resource_retirements_ = 0u;
 };
 
 } // namespace quader

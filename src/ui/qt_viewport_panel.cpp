@@ -1901,6 +1901,15 @@ void QtViewportPanel::prepare_viewports(
         viewport_grid_layer_mask(viewport_index);
     const bool scene_overlay_requested =
         scene_overlay_requests[viewport_index];
+    const bool retained_mesh_outlines =
+        render_bridge.tool_preview_suppression().empty();
+    const bool gpu_mesh_outlines = renderer.update_selected_mesh_outlines(
+        selected_mesh_outline_only ? snapshot_cache.selected_object_snapshot() : nullptr,
+        selected_mesh_outline_only ? scene_overlay_snapshot : nullptr,
+        ViewportOverlayStyleResolver::persistent_style_snapshot(
+            pane_settings, pane_viewport_pixel_scale),
+        selected_mesh_outline_only && overlays_visible && retained_mesh_outlines) &&
+        retained_mesh_outlines;
     ViewportOverlaySubmissionResult overlay_submission =
         render_bridge.submit_viewport_overlay(
             ViewportOverlaySubmissionRequest{
@@ -1916,6 +1925,7 @@ void QtViewportPanel::prepare_viewports(
                 .selected_mesh_outline_snapshot =
                     selected_mesh_outline_only
                         ? snapshot_cache.selected_object_snapshot() : nullptr,
+                .gpu_mesh_outlines = gpu_mesh_outlines,
                 .volatile_modeling_overlay_frame =
                     volatile_modeling_overlay.frame.get(),
                 .volatile_modeling_source = {

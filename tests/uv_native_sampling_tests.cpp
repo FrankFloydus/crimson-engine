@@ -7,13 +7,17 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
 #include "assets/texture_asset.hpp"
 #include "editor/instances/scene_instance_service.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "render/mesh_quad_uv_interpolation.hpp"
+#include "scene/scene_document.hpp"
 #include "scene/scene_texture_mapping.hpp"
 #include "scene/scene_transform.hpp"
 
@@ -24,13 +28,94 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace quader {
 namespace {
+
+TEST(FaceTextureCanvasProjectionTests, BatchedChartsPreserveIndividualFailuresAndInputOrder) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectRuntimeMap object_map;
+  ModelingMeshSyncService mesh_sync;
+  ModelingSdkProjectionAdapter projection(scene, assets, object_map, mesh_sync);
+  const auto first = projection.create_box({.bounds = {.min = {}, .max = {128, 64, 32}}});
+  const auto second = projection.create_box({.bounds = {.min = {}, .max = {64, 32, 16}}});
+  ASSERT_TRUE(first.ok) << first.message;
+  ASSERT_TRUE(second.ok) << second.message;
+  const auto first_world = scene.world_transform_matrix(first.object.entity);
+  const auto second_world = scene.world_transform_matrix(second.object.entity);
+  const auto scalar = [&](int object, modeling::FaceId face, const QMat4 &world) {
+    return projection.face_texture_canvas({
+        .modeling_object_id = object, .face = face,
+        .world_from_local = world, .sampling_from_local = world});
+  };
+  const auto first_chart = scalar(first.object.modeling_object_id, {1, 1}, first_world);
+  const auto next_chart = scalar(first.object.modeling_object_id, {2, 1}, first_world);
+  const auto other_chart = scalar(second.object.modeling_object_id, {1, 1}, second_world);
+  ASSERT_TRUE(first_chart.ok()) << first_chart.error_message();
+  ASSERT_TRUE(next_chart.ok()) << next_chart.error_message();
+  ASSERT_TRUE(other_chart.ok()) << other_chart.error_message();
+  const std::array targets{
+      ModelingFaceTextureActionTarget{
+          .modeling_object_id = first.object.modeling_object_id,
+          .world_from_local = first_world, .sampling_from_local = first_world,
+          .faces = {{.face = {1, 1}}, {.face = {9999, 1}}, {.face = {2, 1}}}},
+      ModelingFaceTextureActionTarget{
+          .modeling_object_id = -123, .faces = {{.face = {1, 1}}}},
+      ModelingFaceTextureActionTarget{
+          .modeling_object_id = second.object.modeling_object_id,
+          .world_from_local = second_world, .sampling_from_local = second_world,
+          .faces = {{.face = {1, 1}}}},
+      ModelingFaceTextureActionTarget{
+          .modeling_object_id = first.object.modeling_object_id,
+          .world_from_local = first_world, .sampling_from_local = first_world,
+          .faces = {{.face = {2, 1}}}}};
+  const auto before = projection.stats();
+  const auto charts = projection.face_texture_canvases(targets);
+  const auto after = projection.stats();
+  ASSERT_EQ(charts.size(), 6u);
+  EXPECT_EQ(after.face_texture_canvas_document_query_count -
+                before.face_texture_canvas_document_query_count, 1u);
+  EXPECT_EQ(after.face_texture_canvas_document_copy_count -
+                before.face_texture_canvas_document_copy_count, 2u);
+  EXPECT_EQ(after.face_texture_canvas_build_count - before.face_texture_canvas_build_count, 6u);
+  const auto expect_chart = [](const auto &actual, const auto &expected) {
+    ASSERT_TRUE(actual.ok()) << actual.error_message();
+    EXPECT_EQ(actual.value().outline, expected.value().outline);
+    EXPECT_EQ(actual.value().map, expected.value().map);
+    EXPECT_EQ(actual.value().mapping_usable, expected.value().mapping_usable);
+    EXPECT_EQ(actual.value().disabled_reason, expected.value().disabled_reason);
+  };
+  expect_chart(charts[0], first_chart);
+  ASSERT_FALSE(charts[1].ok());
+  EXPECT_EQ(charts[1].error().code, modeling::ErrorCode::StaleId);
+  expect_chart(charts[2], next_chart);
+  ASSERT_FALSE(charts[3].ok());
+  EXPECT_EQ(charts[3].error().code, modeling::ErrorCode::InvalidId);
+  expect_chart(charts[4], other_chart);
+  expect_chart(charts[5], next_chart);
+  std::size_t visited = 0;
+  projection.visit_face_texture_canvases(targets,
+      [&](std::size_t object_index, std::size_t face_index, auto chart) {
+        EXPECT_EQ(object_index, 0u);
+        EXPECT_EQ(face_index, visited);
+        if (visited == 0u) {
+          expect_chart(chart, first_chart);
+        } else {
+          EXPECT_FALSE(chart.ok());
+        }
+        return ++visited < 2u;
+      });
+  EXPECT_EQ(visited, 2u);
+  EXPECT_EQ(projection.stats().face_texture_canvas_build_count -
+                after.face_texture_canvas_build_count, 2u);
+}
 
 /// Keeps the observable rendered corner attributes independent of face IDs.
 struct DisplayedUvCorner {
@@ -955,6 +1040,725 @@ TEST_F(UvNativeSamplingTests, MixedMaterialNumericRotationKeepsDimensionsAndPrio
   EXPECT_FLOAT_EQ(tall_after.rotation_degrees, tall_settings.rotation_degrees);
   EXPECT_NEAR(wide_after.shift_uv.x, wide_settings.shift_uv.x - 1.0f / 512.0f, 0.000001f);
   EXPECT_NEAR(tall_after.shift_uv.x, tall_settings.shift_uv.x - 1.0f / 128.0f, 0.000001f);
+}
+
+quader_poly::Document translated_projection_fixture(
+    quader_poly::SurfaceShading shading, bool authored_uvs) {
+  quader_poly::Document document;
+  const std::array points{
+      QVec3{0, 0, 0}, QVec3{2, 0, 0}, QVec3{2, 2, 0},
+      QVec3{0, 2, 0}, QVec3{4, 0, 1}, QVec3{4, 2, 1}};
+  std::array<quader_poly::ElementId, 6> vertices;
+  for (std::size_t index = 0u; index < points.size(); ++index) {
+    vertices[index] = quader_poly::add_vertex(document, points[index]);
+  }
+  (void)quader_poly::add_face(
+      document, std::array{vertices[0], vertices[1], vertices[2], vertices[3]});
+  (void)quader_poly::add_face(
+      document, std::array{vertices[1], vertices[4], vertices[5], vertices[2]});
+  for (auto &face : document.faces) {
+    face.normal_shading = shading;
+    face.texture_transform = {
+        .scale = {-0.7f, 1.3f}, .shift_uv = {0.23f, -0.17f},
+        .rotation_degrees = 37.0f};
+    if (authored_uvs) {
+      face.uvs = {{0.1f, 0.2f}, {1.8f, 0.15f}, {1.5f, 2.7f}, {0.2f, 1.1f}};
+    }
+  }
+  return document;
+}
+
+void expect_canonical_projection(const MeshGeometryPayload &actual,
+                                 const MeshGeometryPayload &expected) {
+  ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+  ASSERT_EQ(actual.indices, expected.indices);
+  ASSERT_EQ(actual.primitives, expected.primitives);
+  for (std::size_t index = 0u; index < actual.vertices.size(); ++index) {
+    SCOPED_TRACE(index);
+    const MeshVertex &left = actual.vertices[index];
+    const MeshVertex &right = expected.vertices[index];
+    for (const auto pair : std::array{
+             std::pair{left.position, right.position},
+             std::pair{left.normal, right.normal},
+             std::pair{left.uv_geometric_normal, right.uv_geometric_normal}}) {
+      EXPECT_EQ(pair.first.x, pair.second.x);
+      EXPECT_EQ(pair.first.y, pair.second.y);
+      EXPECT_EQ(pair.first.z, pair.second.z);
+    }
+    EXPECT_EQ(left.uv.x, right.uv.x);
+    EXPECT_EQ(left.uv.y, right.uv.y);
+    for (std::size_t component = 0u; component < left.uv_carrier.size(); ++component) {
+      EXPECT_EQ(left.uv_carrier[component], right.uv_carrier[component]);
+    }
+    EXPECT_EQ(left.source_vertex_id, right.source_vertex_id);
+    EXPECT_EQ(left.rgba, right.rgba);
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     WholeMeshTranslationMatchesCanonicalNormalsAndBothUvPolicies) {
+  for (const auto shading : std::array{
+           quader_poly::SurfaceShading::Authored,
+           quader_poly::SurfaceShading::Smooth,
+           quader_poly::SurfaceShading::Flat}) {
+    for (const bool authored_uvs : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(shading));
+      SCOPED_TRACE(authored_uvs);
+      const auto source = translated_projection_fixture(shading, authored_uvs);
+      const auto before = MeshProjectionService::sdk_document_from_polygon_document(
+                              source).or_throw();
+      const auto initial = MeshProjectionService::compile_sdk_document_mesh(before);
+      ASSERT_TRUE(initial.has_value());
+      auto moved = source;
+      for (auto &vertex : moved.vertices) {
+        vertex.position += QVec3{4.0f, -2.0f, 8.0f};
+      }
+      const auto after = MeshProjectionService::sdk_document_from_polygon_document(
+                             moved).or_throw();
+      const auto stats_before = MeshProjectionService::position_update_stats();
+      const auto retained =
+          MeshProjectionService::update_sdk_document_mesh_positions(after, *initial);
+      const auto canonical = MeshProjectionService::compile_sdk_document_mesh(after);
+      ASSERT_TRUE(retained.has_value());
+      ASSERT_TRUE(canonical.has_value());
+      expect_canonical_projection(retained->geometry(), canonical->geometry());
+      const auto restored =
+          MeshProjectionService::update_sdk_document_mesh_positions(before, *retained);
+      ASSERT_TRUE(restored.has_value());
+      expect_canonical_projection(restored->geometry(), initial->geometry());
+      const auto stats_after = MeshProjectionService::position_update_stats();
+      const bool flat = shading == quader_poly::SurfaceShading::Flat;
+      EXPECT_EQ(stats_after.retained_translation_count -
+                    stats_before.retained_translation_count, flat ? 0U : 2U);
+      EXPECT_EQ(stats_after.retained_flat_face_count -
+                    stats_before.retained_flat_face_count, flat ? 2U : 0U);
+      EXPECT_EQ(stats_after.full_compile_count, stats_before.full_compile_count);
+    }
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     PartialComponentAndReflectedUpdatesKeepCanonicalDerivedGeometry) {
+  for (const bool authored_uvs : {false, true}) {
+    const auto source = translated_projection_fixture(
+        quader_poly::SurfaceShading::Authored, authored_uvs);
+    const auto before = MeshProjectionService::sdk_document_from_polygon_document(
+                            source).or_throw();
+    const auto initial = MeshProjectionService::compile_sdk_document_mesh(before);
+    ASSERT_TRUE(initial.has_value());
+    for (const bool reflection : {false, true}) {
+      SCOPED_TRACE(authored_uvs);
+      SCOPED_TRACE(reflection);
+      auto changed = source;
+      if (reflection) {
+        for (auto &vertex : changed.vertices) vertex.position.x = -vertex.position.x;
+      } else {
+        changed.vertices[2].position += QVec3{0.5f, 0.25f, 1.0f};
+      }
+      const auto after = MeshProjectionService::sdk_document_from_polygon_document(
+                             changed).or_throw();
+      const auto stats_before = MeshProjectionService::position_update_stats();
+      const auto retained =
+          MeshProjectionService::update_sdk_document_mesh_positions(after, *initial);
+      const auto canonical = MeshProjectionService::compile_sdk_document_mesh(after);
+      ASSERT_TRUE(retained.has_value());
+      ASSERT_TRUE(canonical.has_value());
+      expect_canonical_projection(retained->geometry(), canonical->geometry());
+      const auto stats_after = MeshProjectionService::position_update_stats();
+      EXPECT_EQ(stats_after.full_compile_count - stats_before.full_compile_count, 1U);
+      EXPECT_EQ(stats_after.retained_translation_count,
+                stats_before.retained_translation_count);
+    }
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     RoundedTranslationAndCollinearFaceFallbackMatchCanonical) {
+  for (const bool collinear_corner : {false, true}) {
+    SCOPED_TRACE(collinear_corner);
+    auto source = translated_projection_fixture(
+        quader_poly::SurfaceShading::Authored, false);
+    if (collinear_corner) {
+      const auto midpoint = quader_poly::add_vertex(source, {1.0f, 0.0f, 0.0f});
+      source.faces.front().vertices.insert(
+          source.faces.front().vertices.begin() + 1, midpoint);
+    }
+    const auto before = MeshProjectionService::sdk_document_from_polygon_document(
+                            source).or_throw();
+    const auto initial = MeshProjectionService::compile_sdk_document_mesh(before);
+    ASSERT_TRUE(initial.has_value());
+    auto moved = source;
+    for (auto &vertex : moved.vertices) {
+      vertex.position.x += collinear_corner ? 4.0f : 0.025f;
+    }
+    const auto after = MeshProjectionService::sdk_document_from_polygon_document(
+                           moved).or_throw();
+    const auto stats_before = MeshProjectionService::position_update_stats();
+    const auto retained =
+        MeshProjectionService::update_sdk_document_mesh_positions(after, *initial);
+    const auto canonical = MeshProjectionService::compile_sdk_document_mesh(after);
+    ASSERT_TRUE(retained.has_value());
+    ASSERT_TRUE(canonical.has_value());
+    expect_canonical_projection(retained->geometry(), canonical->geometry());
+    const auto stats_after = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(stats_after.full_compile_count - stats_before.full_compile_count, 1U);
+    EXPECT_EQ(stats_after.retained_translation_count,
+              stats_before.retained_translation_count);
+  }
+}
+
+void append_remote_projection_faces(quader_poly::Document &document) {
+  for (int index = 0; index < 6; ++index) {
+    const float x = 20.0f + 4.0f * static_cast<float>(index);
+    const std::array vertices{
+        quader_poly::add_vertex(document, {x, 0.0f, 0.0f}),
+        quader_poly::add_vertex(document, {x + 2.0f, 0.0f, 0.0f}),
+        quader_poly::add_vertex(document, {x + 2.0f, 2.0f, 0.0f}),
+        quader_poly::add_vertex(document, {x, 2.0f, 0.0f})};
+    (void)quader_poly::add_face(document, vertices);
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     PartialNormalNeighborhoodMatchesCanonicalAcrossCreasesAndOverrides) {
+  for (const bool authored_uvs : {false, true}) {
+    for (const bool flat_neighbor : {false, true}) {
+      for (int edge_policy = 0; edge_policy < 3; ++edge_policy) {
+        SCOPED_TRACE(authored_uvs);
+        SCOPED_TRACE(flat_neighbor);
+        SCOPED_TRACE(edge_policy);
+        auto source = translated_projection_fixture(
+            quader_poly::SurfaceShading::Authored, authored_uvs);
+        if (flat_neighbor) {
+          source.faces.front().normal_shading = quader_poly::SurfaceShading::Flat;
+        }
+        const auto shared_edge = quader_poly::make_edge(
+            source.faces.front().vertices[1], source.faces.front().vertices[2]);
+        if (edge_policy == 1) source.hard_normal_edges.push_back(shared_edge);
+        if (edge_policy == 2) source.soft_normal_edges.push_back(shared_edge);
+        append_remote_projection_faces(source);
+        const auto before = MeshProjectionService::sdk_document_from_polygon_document(
+                                source).or_throw();
+        auto retained = MeshProjectionService::compile_sdk_document_mesh(before);
+        ASSERT_TRUE(retained.has_value());
+        auto planned = *retained;
+        const std::array movable_vertex_ids{
+            source.vertices[4].id, source.vertices[5].id};
+        const auto plan_stats_before = MeshProjectionService::position_update_stats();
+        const auto plan = MeshProjectionService::prepare_position_update_plan(
+            planned, movable_vertex_ids);
+        ASSERT_TRUE(plan);
+        const auto plan_stats = MeshProjectionService::position_update_stats();
+        EXPECT_EQ(plan_stats.partial_plan_build_count -
+                      plan_stats_before.partial_plan_build_count, 1U);
+        EXPECT_GT(plan_stats.partial_plan_face_visit_count,
+                  plan_stats_before.partial_plan_face_visit_count);
+        for (const float angle : {30.0f, 50.0f, 39.99f, 40.0f, 0.0f, 140.0f}) {
+          SCOPED_TRACE(angle);
+          auto changed = source;
+          const float radians = angle * 3.14159265358979323846f / 180.0f;
+          for (const std::size_t vertex_index : {4U, 5U}) {
+            changed.vertices[vertex_index].position.x = 2.0f + 2.0f * std::cos(radians);
+            changed.vertices[vertex_index].position.z = 2.0f * std::sin(radians);
+          }
+          const auto after = MeshProjectionService::sdk_document_from_polygon_document(
+                                 changed).or_throw();
+          const auto stats_before = MeshProjectionService::position_update_stats();
+          retained = MeshProjectionService::update_sdk_document_mesh_positions(
+              after, *retained);
+          const auto canonical = MeshProjectionService::compile_sdk_document_mesh(after);
+          ASSERT_TRUE(retained.has_value());
+          ASSERT_TRUE(canonical.has_value());
+          expect_canonical_projection(retained->geometry(), canonical->geometry());
+          const auto stats_after = MeshProjectionService::position_update_stats();
+          EXPECT_EQ(stats_after.full_compile_count, stats_before.full_compile_count);
+          EXPECT_EQ(stats_after.retained_partial_count -
+                        stats_before.retained_partial_count, 1U);
+          EXPECT_EQ(stats_after.partial_compiled_face_count -
+                        stats_before.partial_compiled_face_count, 2U);
+          const auto planned_update =
+              MeshProjectionService::update_sdk_document_mesh_positions(
+                  after, planned, plan.get());
+          ASSERT_TRUE(planned_update.has_value());
+          expect_canonical_projection(planned_update->geometry(), canonical->geometry());
+          planned = *planned_update;
+          const auto planned_stats = MeshProjectionService::position_update_stats();
+          EXPECT_EQ(planned_stats.partial_plan_build_count, stats_after.partial_plan_build_count);
+          EXPECT_EQ(planned_stats.partial_plan_face_visit_count,
+                    stats_after.partial_plan_face_visit_count);
+          EXPECT_EQ(planned_stats.partial_plan_reuse_count -
+                        stats_after.partial_plan_reuse_count, 1U);
+          EXPECT_EQ(planned_stats.partial_plan_fallback_count,
+                    stats_after.partial_plan_fallback_count);
+          EXPECT_EQ(planned_stats.full_compile_count, stats_after.full_compile_count);
+        }
+      }
+    }
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     PartialDeformationsMatchCanonicalTriangulationUvsAndWinding) {
+  for (const bool authored_uvs : {false, true}) {
+    auto source = translated_projection_fixture(
+        quader_poly::SurfaceShading::Authored, authored_uvs);
+    append_remote_projection_faces(source);
+    const auto before = MeshProjectionService::sdk_document_from_polygon_document(
+                            source).or_throw();
+    const auto initial = MeshProjectionService::compile_sdk_document_mesh(before);
+    ASSERT_TRUE(initial.has_value());
+    for (int deformation = 0; deformation < 4; ++deformation) {
+      SCOPED_TRACE(authored_uvs);
+      SCOPED_TRACE(deformation);
+      auto changed = source;
+      if (deformation == 0) {
+        changed.vertices[2].position = {-0.5f, 0.5f, 0.0f};
+      } else {
+        for (const std::size_t vertex_index : {4U, 5U}) {
+          auto &position = changed.vertices[vertex_index].position;
+          if (deformation == 1) {
+            position = {position.z, position.y, -position.x};
+          } else if (deformation == 2) {
+            position.x *= 0.25f;
+            position.y *= 1.5f;
+            position.z *= 2.0f;
+          } else {
+            position.x = -position.x;
+          }
+        }
+      }
+      const auto after = MeshProjectionService::sdk_document_from_polygon_document(
+                             changed).or_throw();
+      const std::vector<std::uint32_t> movable_vertex_ids = deformation == 0
+          ? std::vector<std::uint32_t>{source.vertices[2].id}
+          : std::vector<std::uint32_t>{source.vertices[4].id, source.vertices[5].id};
+      const auto plan = MeshProjectionService::prepare_position_update_plan(
+          *initial, movable_vertex_ids);
+      ASSERT_TRUE(plan);
+      const auto stats_before = MeshProjectionService::position_update_stats();
+      const auto retained =
+          MeshProjectionService::update_sdk_document_mesh_positions(after, *initial);
+      const auto canonical = MeshProjectionService::compile_sdk_document_mesh(after);
+      ASSERT_TRUE(retained.has_value());
+      ASSERT_TRUE(canonical.has_value());
+      expect_canonical_projection(retained->geometry(), canonical->geometry());
+      EXPECT_EQ(MeshProjectionService::position_update_stats().full_compile_count,
+                stats_before.full_compile_count);
+      if (deformation == 0) {
+        EXPECT_NE(retained->geometry().indices, initial->geometry().indices);
+      }
+      const auto restored =
+          MeshProjectionService::update_sdk_document_mesh_positions(before, *retained);
+      ASSERT_TRUE(restored.has_value());
+      expect_canonical_projection(restored->geometry(), initial->geometry());
+      const auto plan_stats = MeshProjectionService::position_update_stats();
+      const auto planned = MeshProjectionService::update_sdk_document_mesh_positions(
+          after, *initial, plan.get());
+      ASSERT_TRUE(planned.has_value());
+      expect_canonical_projection(planned->geometry(), canonical->geometry());
+      const auto planned_restore =
+          MeshProjectionService::update_sdk_document_mesh_positions(
+              before, *planned, plan.get());
+      ASSERT_TRUE(planned_restore.has_value());
+      expect_canonical_projection(planned_restore->geometry(), initial->geometry());
+      const auto planned_stats = MeshProjectionService::position_update_stats();
+      EXPECT_EQ(planned_stats.partial_plan_build_count, plan_stats.partial_plan_build_count);
+      EXPECT_EQ(planned_stats.partial_plan_face_visit_count,
+                plan_stats.partial_plan_face_visit_count);
+      EXPECT_EQ(planned_stats.partial_plan_reuse_count - plan_stats.partial_plan_reuse_count, 2U);
+      EXPECT_EQ(planned_stats.partial_plan_fallback_count, plan_stats.partial_plan_fallback_count);
+      EXPECT_EQ(planned_stats.full_compile_count, plan_stats.full_compile_count);
+    }
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     RetainedPositionPlanReusesMovableSupersetAcrossAbsoluteUpdatesAndRestore) {
+  auto source = translated_projection_fixture(
+      quader_poly::SurfaceShading::Authored, true);
+  append_remote_projection_faces(source);
+  auto current = MeshProjectionService::compile_polygon_document_mesh(source);
+  current.replace_authored_polygon_document(source);
+  const std::array movable_vertex_ids{
+      source.vertices[4].id, source.vertices[5].id};
+  const auto stats_before = MeshProjectionService::position_update_stats();
+  const auto plan = MeshProjectionService::prepare_position_update_plan(
+      current, movable_vertex_ids);
+  ASSERT_TRUE(plan);
+  const auto plan_stats = MeshProjectionService::position_update_stats();
+  EXPECT_EQ(plan_stats.partial_plan_build_count - stats_before.partial_plan_build_count, 1U);
+  EXPECT_GT(plan_stats.partial_plan_face_visit_count, stats_before.partial_plan_face_visit_count);
+  const std::array gestures{
+      std::array{QVec3{0.5f, 0.0f, 0.75f}, QVec3{0.5f, 0.0f, 0.75f}},
+      std::array{QVec3{0.75f, 0.0f, 1.25f}, QVec3{0.5f, 0.0f, 0.75f}},
+      std::array{QVec3{0.75f, 0.0f, 1.25f}, QVec3{}},
+      std::array{QVec3{}, QVec3{}},
+      std::array{QVec3{-0.25f, 0.0f, -0.5f}, QVec3{0.0f, 0.25f, 0.75f}}};
+  for (std::size_t gesture_index = 0U; gesture_index < gestures.size(); ++gesture_index) {
+    SCOPED_TRACE(gesture_index);
+    auto changed = source;
+    changed.vertices[4].position += gestures[gesture_index][0];
+    changed.vertices[5].position += gestures[gesture_index][1];
+    const auto pinned = current.geometry_payload();
+    const auto pinned_content = pinned->content_id();
+    const auto expected_current = MeshProjectionService::compile_polygon_document_mesh(
+        *current.authored_polygon_document);
+    const auto update_stats = MeshProjectionService::position_update_stats();
+    auto projected = MeshProjectionService::update_polygon_document_mesh_positions(
+        changed, current, plan.get());
+    const auto canonical = MeshProjectionService::compile_polygon_document_mesh(changed);
+    expect_canonical_projection(projected.geometry(), canonical.geometry());
+    EXPECT_EQ(current.geometry_payload(), pinned);
+    EXPECT_EQ(pinned->content_id(), pinned_content);
+    expect_canonical_projection(*pinned, expected_current.geometry());
+    const auto reused_stats = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(reused_stats.partial_plan_build_count, plan_stats.partial_plan_build_count);
+    EXPECT_EQ(reused_stats.partial_plan_face_visit_count, plan_stats.partial_plan_face_visit_count);
+    EXPECT_EQ(reused_stats.partial_plan_reuse_count - update_stats.partial_plan_reuse_count, 1U);
+    EXPECT_EQ(reused_stats.partial_plan_fallback_count, plan_stats.partial_plan_fallback_count);
+    EXPECT_EQ(reused_stats.full_compile_count, plan_stats.full_compile_count);
+    current = std::move(projected);
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     FullNeighborhoodPositionPlanRetainsPreparationAcrossCanonicalFallbacks) {
+  const auto source = translated_projection_fixture(
+      quader_poly::SurfaceShading::Authored, true);
+  auto current = MeshProjectionService::compile_polygon_document_mesh(source);
+  current.replace_authored_polygon_document(source);
+  const std::array movable_vertex_ids{source.vertices[4].id, source.vertices[5].id};
+  const auto stats_before = MeshProjectionService::position_update_stats();
+  const auto plan = MeshProjectionService::prepare_position_update_plan(current, movable_vertex_ids);
+  ASSERT_TRUE(plan);
+  const auto plan_stats = MeshProjectionService::position_update_stats();
+  EXPECT_EQ(plan_stats.partial_plan_build_count - stats_before.partial_plan_build_count, 1U);
+  EXPECT_GT(plan_stats.partial_plan_face_visit_count, stats_before.partial_plan_face_visit_count);
+  for (const float height : {0.5f, -0.5f, 1.0f}) {
+    SCOPED_TRACE(height);
+    auto changed = source;
+    changed.vertices[4].position.z = height;
+    changed.vertices[5].position.z = height;
+    const auto update_stats = MeshProjectionService::position_update_stats();
+    auto projected = MeshProjectionService::update_polygon_document_mesh_positions(
+        changed, current, plan.get());
+    const auto canonical = MeshProjectionService::compile_polygon_document_mesh(changed);
+    expect_canonical_projection(projected.geometry(), canonical.geometry());
+    const auto fallback_stats = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(fallback_stats.partial_plan_build_count, plan_stats.partial_plan_build_count);
+    EXPECT_EQ(fallback_stats.partial_plan_face_visit_count, plan_stats.partial_plan_face_visit_count);
+    EXPECT_EQ(fallback_stats.partial_plan_fallback_count - update_stats.partial_plan_fallback_count, 1U);
+    EXPECT_EQ(fallback_stats.full_compile_count - update_stats.full_compile_count, 1U);
+    current = std::move(projected);
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     IncompatiblePositionPlanFallsBackWithoutMutatingPinnedSourceOrPlan) {
+  enum class PlanInvalidation {
+    AuthoredUv,
+    Shading,
+    Crease,
+    AuthoredLayout,
+    CompiledLayout,
+    OutsideMovableCandidate,
+    OutsideMovableCurrent,
+  };
+  auto source = translated_projection_fixture(
+      quader_poly::SurfaceShading::Authored, true);
+  append_remote_projection_faces(source);
+  auto initial = MeshProjectionService::compile_polygon_document_mesh(source);
+  initial.replace_authored_polygon_document(source);
+  const std::array movable_vertex_ids{
+      source.vertices[4].id, source.vertices[5].id};
+  const auto plan = MeshProjectionService::prepare_position_update_plan(
+      initial, movable_vertex_ids);
+  ASSERT_TRUE(plan);
+  const auto plan_stats = MeshProjectionService::position_update_stats();
+  for (const auto invalidation : std::array{
+           PlanInvalidation::AuthoredUv, PlanInvalidation::Shading,
+           PlanInvalidation::Crease, PlanInvalidation::AuthoredLayout,
+           PlanInvalidation::CompiledLayout, PlanInvalidation::OutsideMovableCandidate,
+           PlanInvalidation::OutsideMovableCurrent}) {
+    SCOPED_TRACE(static_cast<int>(invalidation));
+    auto changed = source;
+    changed.vertices[4].position.z += 0.5f;
+    auto current = initial;
+    switch (invalidation) {
+    case PlanInvalidation::AuthoredUv:
+      changed.faces.front().uvs.front().x += 0.125f;
+      break;
+    case PlanInvalidation::Shading:
+      changed.faces.front().normal_shading = quader_poly::SurfaceShading::Flat;
+      break;
+    case PlanInvalidation::Crease:
+      changed.hard_normal_edges.push_back(quader_poly::make_edge(
+          changed.faces.front().vertices[1], changed.faces.front().vertices[2]));
+      break;
+    case PlanInvalidation::AuthoredLayout:
+      std::rotate(changed.faces.front().vertices.begin(),
+                  changed.faces.front().vertices.begin() + 1,
+                  changed.faces.front().vertices.end());
+      break;
+    case PlanInvalidation::CompiledLayout:
+      current.edit_geometry().vertices.front().source_vertex_id = source.vertices.back().id;
+      break;
+    case PlanInvalidation::OutsideMovableCandidate:
+      changed.vertices.back().position.z += 0.5f;
+      break;
+    case PlanInvalidation::OutsideMovableCurrent: {
+      auto prior = source;
+      prior.vertices.back().position.z += 0.5f;
+      current = MeshProjectionService::compile_polygon_document_mesh(prior);
+      current.replace_authored_polygon_document(std::move(prior));
+      break;
+    }
+    }
+    const auto pinned = current.geometry_payload();
+    const auto pinned_copy = *pinned;
+    const auto authored_pin = current.authored_polygon_document;
+    const auto update_stats = MeshProjectionService::position_update_stats();
+    const auto rejected_plan_projection =
+        MeshProjectionService::update_polygon_document_mesh_positions(changed, current, plan.get());
+    const auto canonical = MeshProjectionService::compile_polygon_document_mesh(changed);
+    expect_canonical_projection(rejected_plan_projection.geometry(), canonical.geometry());
+    EXPECT_EQ(current.geometry_payload(), pinned);
+    EXPECT_EQ(current.authored_polygon_document, authored_pin);
+    expect_canonical_projection(*pinned, pinned_copy);
+    const auto fallback_stats = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(fallback_stats.partial_plan_fallback_count - update_stats.partial_plan_fallback_count, 1U);
+    EXPECT_EQ(fallback_stats.full_compile_count - update_stats.full_compile_count, 1U);
+    EXPECT_EQ(fallback_stats.partial_plan_reuse_count, update_stats.partial_plan_reuse_count);
+
+    auto compatible = source;
+    compatible.vertices[4].position.z += 0.75f;
+    const auto recovered = MeshProjectionService::update_polygon_document_mesh_positions(
+        compatible, initial, plan.get());
+    const auto canonical_recovered = MeshProjectionService::compile_polygon_document_mesh(compatible);
+    expect_canonical_projection(recovered.geometry(), canonical_recovered.geometry());
+    const auto recovered_stats = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(recovered_stats.partial_plan_build_count, plan_stats.partial_plan_build_count);
+    EXPECT_EQ(recovered_stats.partial_plan_face_visit_count, plan_stats.partial_plan_face_visit_count);
+    EXPECT_EQ(recovered_stats.partial_plan_reuse_count - fallback_stats.partial_plan_reuse_count, 1U);
+    EXPECT_EQ(recovered_stats.partial_plan_fallback_count, fallback_stats.partial_plan_fallback_count);
+    EXPECT_EQ(recovered_stats.full_compile_count, fallback_stats.full_compile_count);
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     PartialNormalNeighborhoodPreservesCollapsedAndNonmanifoldIncidence) {
+  auto source = translated_projection_fixture(
+      quader_poly::SurfaceShading::Authored, false);
+  const auto shared_a = source.faces.front().vertices[1];
+  const auto shared_b = source.faces.front().vertices[2];
+  const auto collapsed_vertex =
+      quader_poly::add_vertex(source, {2.0f, 1.0f, 0.0f});
+  (void)quader_poly::add_face(
+      source, std::array{shared_a, shared_b, collapsed_vertex});
+  const auto disconnected_a =
+      quader_poly::add_vertex(source, {1.0f, -2.0f, 0.0f});
+  const auto disconnected_b =
+      quader_poly::add_vertex(source, {3.0f, -2.0f, 1.0f});
+  (void)quader_poly::add_face(
+      source, std::array{shared_a, disconnected_a, disconnected_b});
+  source.soft_normal_edges.push_back(quader_poly::make_edge(shared_a, shared_b));
+  append_remote_projection_faces(source);
+  // SDK import rejects nonmanifold edges. Exercise the native compiler's
+  // defensive incidence handling directly without weakening that validation.
+  auto retained = MeshProjectionService::compile_polygon_document_mesh(source);
+  retained.replace_authored_polygon_document(source);
+  auto planned = retained;
+  const std::array movable_vertex_ids{
+      source.vertices[4].id, source.vertices[5].id, source.vertices[6].id};
+  const auto plan = MeshProjectionService::prepare_position_update_plan(
+      planned, movable_vertex_ids);
+  ASSERT_TRUE(plan);
+  for (const float height : {0.5f, -0.5f, 0.0f}) {
+    SCOPED_TRACE(height);
+    auto changed = source;
+    changed.vertices[6].position.z = height;
+    changed.vertices[4].position.z = 0.5f;
+    changed.vertices[5].position.z = 0.5f;
+    const auto stats_before = MeshProjectionService::position_update_stats();
+    retained = MeshProjectionService::update_polygon_document_mesh_positions(
+        changed, retained);
+    const auto canonical = MeshProjectionService::compile_polygon_document_mesh(changed);
+    expect_canonical_projection(retained.geometry(), canonical.geometry());
+    const auto stats_after = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(stats_after.full_compile_count, stats_before.full_compile_count);
+    EXPECT_EQ(stats_after.retained_partial_count -
+                  stats_before.retained_partial_count, 1U);
+    EXPECT_EQ(stats_after.partial_compiled_face_count -
+                  stats_before.partial_compiled_face_count, 4U);
+    planned = MeshProjectionService::update_polygon_document_mesh_positions(
+        changed, planned, plan.get());
+    expect_canonical_projection(planned.geometry(), canonical.geometry());
+    const auto planned_stats = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(planned_stats.partial_plan_build_count, stats_after.partial_plan_build_count);
+    EXPECT_EQ(planned_stats.partial_plan_face_visit_count,
+              stats_after.partial_plan_face_visit_count);
+    EXPECT_EQ(planned_stats.partial_plan_reuse_count - stats_after.partial_plan_reuse_count, 1U);
+    EXPECT_EQ(planned_stats.partial_plan_fallback_count, stats_after.partial_plan_fallback_count);
+    EXPECT_EQ(planned_stats.full_compile_count, stats_after.full_compile_count);
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     PartialNgonDeformationAndCollapsedLayoutUseCanonicalProjection) {
+  quader_poly::Document source;
+  std::vector<quader_poly::ElementId> vertices;
+  for (const QVec3 position : std::array{
+           QVec3{0.0f, 0.0f, 0.0f}, QVec3{3.0f, 0.0f, 0.0f},
+           QVec3{4.0f, 2.0f, 0.0f}, QVec3{2.0f, 4.0f, 0.0f},
+           QVec3{0.0f, 2.0f, 0.0f}}) {
+    vertices.push_back(quader_poly::add_vertex(source, position));
+  }
+  (void)quader_poly::add_face(source, vertices);
+  source.faces.front().uvs = {
+      {0.0f, 0.0f}, {2.0f, 0.1f}, {3.0f, 2.0f}, {1.0f, 3.0f}, {-0.2f, 1.0f}};
+  append_remote_projection_faces(source);
+  const auto before = MeshProjectionService::sdk_document_from_polygon_document(
+                          source).or_throw();
+  const auto initial = MeshProjectionService::compile_sdk_document_mesh(before);
+  ASSERT_TRUE(initial.has_value());
+  const auto pinned = initial->geometry_payload();
+  const auto pinned_copy = *pinned;
+  const auto plan = MeshProjectionService::prepare_position_update_plan(*initial, vertices);
+  ASSERT_TRUE(plan);
+  for (const bool collapse : {false, true}) {
+    SCOPED_TRACE(collapse);
+    auto changed = source;
+    if (collapse) {
+      for (std::size_t index = 0U; index < vertices.size(); ++index) {
+        changed.vertices[index].position = {static_cast<float>(index), 0.0f, 0.0f};
+      }
+    } else {
+      changed.vertices[2].position = {0.5f, 1.0f, 0.25f};
+    }
+    const auto after = MeshProjectionService::sdk_document_from_polygon_document(
+                           changed).or_throw();
+    const auto stats_before = MeshProjectionService::position_update_stats();
+    const auto retained =
+        MeshProjectionService::update_sdk_document_mesh_positions(after, *initial);
+    const auto canonical = MeshProjectionService::compile_sdk_document_mesh(after);
+    ASSERT_TRUE(retained.has_value());
+    ASSERT_TRUE(canonical.has_value());
+    expect_canonical_projection(retained->geometry(), canonical->geometry());
+    if (collapse) {
+      EXPECT_LT(canonical->geometry().primitives.size(),
+                initial->geometry().primitives.size());
+      EXPECT_EQ(MeshProjectionService::position_update_stats().full_compile_count -
+                    stats_before.full_compile_count, 1U);
+    }
+    const auto restored =
+        MeshProjectionService::update_sdk_document_mesh_positions(before, *retained);
+    ASSERT_TRUE(restored.has_value());
+    expect_canonical_projection(restored->geometry(), initial->geometry());
+    const auto update_stats = MeshProjectionService::position_update_stats();
+    const auto planned = MeshProjectionService::update_sdk_document_mesh_positions(
+        after, *initial, plan.get());
+    ASSERT_TRUE(planned.has_value());
+    expect_canonical_projection(planned->geometry(), canonical->geometry());
+    const auto planned_stats = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(planned_stats.partial_plan_build_count, update_stats.partial_plan_build_count);
+    EXPECT_EQ(planned_stats.partial_plan_face_visit_count, update_stats.partial_plan_face_visit_count);
+    EXPECT_EQ(planned_stats.partial_plan_fallback_count - update_stats.partial_plan_fallback_count,
+              collapse ? 1U : 0U);
+    EXPECT_EQ(planned_stats.full_compile_count - update_stats.full_compile_count, collapse ? 1U : 0U);
+    const auto planned_restore = MeshProjectionService::update_sdk_document_mesh_positions(
+        before, *planned, plan.get());
+    ASSERT_TRUE(planned_restore.has_value());
+    expect_canonical_projection(planned_restore->geometry(), initial->geometry());
+    const auto recovered = MeshProjectionService::update_sdk_document_mesh_positions(
+        before, *initial, plan.get());
+    ASSERT_TRUE(recovered.has_value());
+    expect_canonical_projection(recovered->geometry(), pinned_copy);
+    EXPECT_EQ(initial->geometry_payload(), pinned);
+    expect_canonical_projection(*pinned, pinned_copy);
+  }
+}
+
+TEST(MeshProjectionPositionTests,
+     RejectedSdkCandidateLeavesPinnedGeometryAndPositionPlanReusable) {
+  auto source = translated_projection_fixture(
+      quader_poly::SurfaceShading::Authored, true);
+  append_remote_projection_faces(source);
+  const auto before = MeshProjectionService::sdk_document_from_polygon_document(source).or_throw();
+  const auto initial = MeshProjectionService::compile_sdk_document_mesh(before);
+  ASSERT_TRUE(initial.has_value());
+  const auto pinned = initial->geometry_payload();
+  const auto pinned_copy = *pinned;
+  const std::array movable_vertex_ids{source.vertices[4].id, source.vertices[5].id};
+  const auto plan = MeshProjectionService::prepare_position_update_plan(*initial, movable_vertex_ids);
+  ASSERT_TRUE(plan);
+  const auto plan_stats = MeshProjectionService::position_update_stats();
+  auto incompatible = source;
+  incompatible.faces.pop_back();
+  const auto incompatible_sdk =
+      MeshProjectionService::sdk_document_from_polygon_document(incompatible).or_throw();
+  EXPECT_FALSE(MeshProjectionService::update_sdk_document_mesh_positions(
+      incompatible_sdk, *initial, plan.get()).has_value());
+  EXPECT_EQ(initial->geometry_payload(), pinned);
+  expect_canonical_projection(*pinned, pinned_copy);
+  auto compatible = source;
+  compatible.vertices[4].position.z += 0.5f;
+  const auto compatible_sdk =
+      MeshProjectionService::sdk_document_from_polygon_document(compatible).or_throw();
+  const auto recovered = MeshProjectionService::update_sdk_document_mesh_positions(
+      compatible_sdk, *initial, plan.get());
+  const auto canonical = MeshProjectionService::compile_sdk_document_mesh(compatible_sdk);
+  ASSERT_TRUE(recovered.has_value());
+  ASSERT_TRUE(canonical.has_value());
+  expect_canonical_projection(recovered->geometry(), canonical->geometry());
+  const auto recovered_stats = MeshProjectionService::position_update_stats();
+  EXPECT_EQ(recovered_stats.partial_plan_build_count, plan_stats.partial_plan_build_count);
+  EXPECT_EQ(recovered_stats.partial_plan_face_visit_count, plan_stats.partial_plan_face_visit_count);
+  EXPECT_EQ(recovered_stats.partial_plan_reuse_count - plan_stats.partial_plan_reuse_count, 1U);
+  EXPECT_EQ(initial->geometry_payload(), pinned);
+  expect_canonical_projection(*pinned, pinned_copy);
+}
+
+TEST(MeshProjectionPositionTests,
+     ExportedDocumentProjectionPreservesAuthoredPinAndCanonicalFallback) {
+  auto source = translated_projection_fixture(
+      quader_poly::SurfaceShading::Authored, true);
+  append_remote_projection_faces(source);
+  const auto before = MeshProjectionService::sdk_document_from_polygon_document(
+                          source).or_throw();
+  const auto initial = MeshProjectionService::compile_sdk_document_mesh(before);
+  ASSERT_TRUE(initial.has_value());
+  for (const bool changed_texture : {false, true}) {
+    SCOPED_TRACE(changed_texture);
+    auto changed = source;
+    changed.vertices[4].position.z = 0.5f;
+    if (changed_texture) changed.faces.front().uvs.front().x += 0.125f;
+    const auto after = MeshProjectionService::sdk_document_from_polygon_document(
+                           changed).or_throw();
+    auto exported = MeshProjectionService::polygon_document_from_sdk_document(after);
+    ASSERT_TRUE(exported.has_value());
+    const auto stats_before = MeshProjectionService::position_update_stats();
+    const auto projected =
+        MeshProjectionService::update_polygon_document_mesh_positions(
+            std::move(*exported), *initial);
+    const auto canonical = MeshProjectionService::compile_sdk_document_mesh(after);
+    ASSERT_TRUE(canonical.has_value());
+    expect_canonical_projection(projected.geometry(), canonical->geometry());
+    EXPECT_TRUE(projected.has_stable_cpu_topology);
+    EXPECT_TRUE(projected.has_authored_polygon_document);
+    ASSERT_TRUE(projected.authored_polygon_document);
+    EXPECT_NE(projected.authored_polygon_document, initial->authored_polygon_document);
+    EXPECT_EQ(projected.authored_polygon_document->vertices[4].position.z, 0.5f);
+    EXPECT_EQ(projected.authored_polygon_document->faces.front().uvs.front().x,
+              changed.faces.front().uvs.front().x);
+    const auto stats_after = MeshProjectionService::position_update_stats();
+    EXPECT_EQ(stats_after.full_compile_count - stats_before.full_compile_count,
+              changed_texture ? 1U : 0U);
+    EXPECT_EQ(stats_after.retained_partial_count - stats_before.retained_partial_count,
+              changed_texture ? 0U : 1U);
+  }
+  const auto original_canonical = MeshProjectionService::compile_sdk_document_mesh(before);
+  ASSERT_TRUE(original_canonical.has_value());
+  expect_canonical_projection(initial->geometry(), original_canonical->geometry());
 }
 
 } // namespace

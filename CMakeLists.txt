@@ -775,6 +775,8 @@ quader_register_filament_material(vertex_color_overlay_material resources/materi
 quader_register_filament_material(quader_instance_selection_fill_material resources/materials/quader_instance_selection_fill.mat quader_instance_selection_fill)
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line resources/materials/overlay_line_coverage.glsl)
 quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line resources/materials/instance_edit.glsl resources/materials/overlay_line_coverage.glsl)
+quader_register_filament_material(quader_selection_mask_material resources/materials/quader_selection_mask.mat quader_selection_mask)
+quader_register_filament_material(quader_selection_outline_material resources/materials/quader_selection_outline.mat quader_selection_outline)
 quader_register_filament_material(quader_edit_wire_line_material resources/materials/quader_edit_wire_line.mat quader_edit_wire_line resources/materials/overlay_line_coverage.glsl)
 quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
 quader_register_filament_material(quader_overlay_icon_material resources/materials/quader_overlay_icon.mat quader_overlay_icon)
@@ -863,6 +865,8 @@ add_library(quader_render STATIC
     src/render/overlay/viewport_box_overlay_builder.cpp
     src/render/overlay/viewport_primitive_creation_overlay_builder.cpp
     src/render/overlay/selected_mesh_outline_cache.cpp
+    src/render/overlay/selected_mesh_outline_mask_cache.cpp
+    src/render/overlay/selected_mesh_outline_renderer.cpp
     src/render/overlay/viewport_selection_marquee_overlay_builder.cpp
     src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp
     src/render/overlay/viewport_scene_overlay_builder.cpp
@@ -1735,6 +1739,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_quick_menu_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
+        tests/modeling_selection_performance_tests.cpp
         tests/operation_input_hint_tests.cpp
         tests/transform_operation_input_hint_tests.cpp
         tests/qt_contextual_input_hints_tests.cpp
@@ -1774,6 +1779,7 @@ if(QUADER_BUILD_TESTS)
         tests/primitive_cube_interaction_tests.cpp
         tests/primitive_cube_overlay_tests.cpp
         tests/selected_mesh_outline_cache_tests.cpp
+        tests/selected_mesh_outline_mask_cache_tests.cpp
         tests/selected_mesh_outline_presentation_tests.cpp
         tests/curve_solid_render_tests.cpp
         tests/qdr_binary_container_tests.cpp
@@ -1785,6 +1791,7 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_legacy_local_frame_upgrade_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
+        tests/overlay_depth_point_visibility_tests.cpp
         tests/light_renderable_cache_tests.cpp
         tests/light_properties_tests.cpp
         tests/lasso_overlay_tests.cpp
@@ -1798,6 +1805,7 @@ if(QUADER_BUILD_TESTS)
         tests/scene_transform_tests.cpp
         tests/selection_mode_adapter_tests.cpp
         tests/selection_overlay_runtime_tests.cpp
+        tests/dense_component_frame_runtime_tests.cpp
         tests/selection_tool_settings_tests.cpp
         tests/viewport_interaction_controller_tests.cpp
         tests/viewport_transform_trackball_overlay_tests.cpp

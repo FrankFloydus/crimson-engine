@@ -7,14 +7,20 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <gtest/gtest.h>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
 #include <limits>
 #include <utility>
 
@@ -24,6 +30,10 @@ namespace {
 struct FaceTextureCanvasHarness final {
   SceneSession session;
   QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+
+  ModelingSdkProjectionStats projection_stats() {
+    return session.modeling().modeling_sdk_projection_stats_for_tests();
+  }
 
   QuaderModelingObjectRef create_box() {
     const auto created = editor.modeling().create_box(
@@ -94,6 +104,113 @@ void expect_face_scale(QuaderEditorApi &editor, QuaderModelingObjectRef object,
   EXPECT_FLOAT_EQ(face->scale.y, expected.y);
 }
 
+TEST(FaceTextureCanvasPerformanceTests, ClonedLargeSceneSelectedFaceSettings) {
+  const char *source = std::getenv("QUADER_TEST_LARGE_SELECTION_PROJECT");
+  if (source == nullptr || *source == '\0') {
+    GTEST_SKIP() << "Set QUADER_TEST_LARGE_SELECTION_PROJECT to measure a cloned project.";
+  }
+  const std::filesystem::path source_project = std::filesystem::u8path(source);
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_project));
+  const char *source_scene = std::getenv("QUADER_TEST_LARGE_SELECTION_SCENE");
+  const auto original_scene = source_scene != nullptr && *source_scene != '\0'
+      ? std::filesystem::u8path(source_scene)
+      : source_project.parent_path() / "Scenes" / "one.qdr";
+  std::error_code error;
+  const auto relative_scene = std::filesystem::relative(
+      original_scene, source_project.parent_path(), error);
+  ASSERT_FALSE(error) << error.message();
+  ASSERT_FALSE(relative_scene.empty());
+  ASSERT_FALSE(relative_scene.is_absolute());
+  ASSERT_EQ(std::find(relative_scene.begin(), relative_scene.end(),
+                      std::filesystem::path("..")), relative_scene.end());
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path root(temporary.path().toStdWString());
+  const auto project_root = root / source_project.parent_path().filename();
+  std::filesystem::copy(source_project.parent_path(), project_root,
+      std::filesystem::copy_options::recursive |
+          std::filesystem::copy_options::skip_symlinks, error);
+  ASSERT_FALSE(error) << error.message();
+  ProjectSession project(root / "recent-scenes.json");
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+      "resources/modeling_assets");
+  QuaderEditorApi editor(project);
+  const auto opened_project = editor.project().open(project_root / source_project.filename());
+  ASSERT_TRUE(opened_project.ok()) << opened_project.error_message();
+  const auto opened_scene = editor.scene_documents().open_native_path(project_root / relative_scene);
+  ASSERT_TRUE(opened_scene.ok()) << opened_scene.error_message();
+  auto &modeling = project.active_scene()->session->modeling();
+  ASSERT_GE(modeling.modeling_sdk_object_count_for_tests(), 6'000u);
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  const auto bounds = modeling.selection_bounds();
+  ASSERT_TRUE(bounds.has_value());
+  const QVec3 extent = bounds->max - bounds->min;
+  const QVec3 center = (bounds->min + bounds->max) * 0.5f;
+  const float framing_size = std::max({extent.x, extent.y, extent.z, 1.0f});
+  const QuaderViewportCamera camera{
+      .orthographic = true, .origin = {center.x, center.y, bounds->max.z + framing_size},
+      .x_axis = {1.0f, 0.0f, 0.0f}, .y_axis = {0.0f, 1.0f, 0.0f},
+      .z_axis = {0.0f, 0.0f, 1.0f}, .viewport_size = {100.0f, 100.0f},
+      .orthographic_size = framing_size * 1.1 + 1.0, .fov_degrees = 60.0};
+  const auto elapsed = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+  };
+  for (int sample = 0; sample < 3; ++sample) {
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto selected_components = editor.selection().box_select({
+        .camera = camera, .start = camera.viewport_size, .end = {},
+        .edit = QuaderSelectionEdit::Replace, .rule = QuaderBoxSelectionRule::Crossing,
+        .select_backfaces = true});
+    ASSERT_TRUE(selected_components.ok()) << selected_components.error_message();
+    const auto selected = editor.selection().summary();
+    ASSERT_GE(selected.selected_object_count, 6'000u);
+    ASSERT_GT(selected.selected_face_count, 0u);
+    const auto before = modeling.modeling_sdk_projection_stats_for_tests();
+    auto start = std::chrono::steady_clock::now();
+    const auto settings = editor.modeling().face_texture_settings();
+    const double settings_ms = elapsed(start);
+    start = std::chrono::steady_clock::now();
+    const auto canvas = editor.modeling().face_texture_canvas();
+    const double canvas_ms = elapsed(start);
+    const auto after = modeling.modeling_sdk_projection_stats_for_tests();
+    EXPECT_EQ(settings.selected_face_count, selected.selected_face_count);
+    EXPECT_EQ(canvas.selected_face_count, selected.selected_face_count);
+    EXPECT_FALSE(canvas.editable);
+    EXPECT_TRUE(canvas.outline.empty());
+    start = std::chrono::steady_clock::now();
+    for (int frame = 0; frame < 32; ++frame) {
+      EXPECT_EQ(editor.modeling().face_texture_settings().selection_token,
+                settings.selection_token);
+      EXPECT_EQ(editor.modeling().face_texture_canvas().selection_token,
+                canvas.selection_token);
+    }
+    const double unchanged_ms = elapsed(start);
+    const auto retained = modeling.modeling_sdk_projection_stats_for_tests();
+    EXPECT_EQ(retained.face_texture_canvas_build_count, after.face_texture_canvas_build_count);
+    EXPECT_EQ(retained.face_texture_canvas_document_query_count,
+              after.face_texture_canvas_document_query_count);
+    EXPECT_EQ(retained.face_texture_canvas_document_copy_count,
+              after.face_texture_canvas_document_copy_count);
+    std::cout << "FACE_TEXTURE_SETTINGS sample=" << sample
+              << " objects=" << selected.selected_object_count
+              << " faces=" << selected.selected_face_count
+              << " rotation_mixed=" << settings.rotation_mixed
+              << " rotation_degrees=" << settings.rotation_degrees
+              << " settings_ms=" << settings_ms << " canvas_ms=" << canvas_ms
+              << " unchanged_32_ms=" << unchanged_ms
+              << " charts=" << after.face_texture_canvas_build_count -
+                                     before.face_texture_canvas_build_count
+              << " document_queries=" << after.face_texture_canvas_document_query_count -
+                                              before.face_texture_canvas_document_query_count
+              << " document_copies=" << after.face_texture_canvas_document_copy_count -
+                                             before.face_texture_canvas_document_copy_count
+              << std::endl;
+  }
+}
+
 TEST(FaceTextureCanvasApiTests, OnlyOneFaceEnablesCanvasAndMissingImageKeepsOutline) {
   FaceTextureCanvasHarness harness;
   auto &editor = harness.editor;
@@ -115,6 +232,174 @@ TEST(FaceTextureCanvasApiTests, OnlyOneFaceEnablesCanvasAndMissingImageKeepsOutl
   EXPECT_TRUE(multiple.outline.empty());
   ASSERT_TRUE(editor.selection().clear().ok());
   EXPECT_TRUE(editor.modeling().face_texture_canvas().outline.empty());
+}
+
+TEST(FaceTextureCanvasApiTests, SelectedChartsAcquireDocumentsOncePerObject) {
+  FaceTextureCanvasHarness harness;
+  const auto first = harness.create_box();
+  const auto second = harness.create_box();
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.selection().select_faces(first, {1, 2, 3}).ok());
+  ASSERT_TRUE(editor.selection().select_faces(second, {1, 2}, QuaderSelectionEdit::Add).ok());
+  const auto before = harness.projection_stats();
+  const auto settings = editor.modeling().face_texture_settings();
+  EXPECT_EQ(settings.selected_face_count, 5u);
+  EXPECT_TRUE(settings.editable) << settings.disabled_reason;
+  const auto after = harness.projection_stats();
+  EXPECT_GT(after.face_texture_canvas_build_count - before.face_texture_canvas_build_count, 0u);
+  EXPECT_LE(after.face_texture_canvas_build_count - before.face_texture_canvas_build_count, 5u);
+  EXPECT_EQ(after.face_texture_canvas_document_query_count -
+                before.face_texture_canvas_document_query_count, 1u);
+  EXPECT_EQ(after.face_texture_canvas_document_copy_count -
+                before.face_texture_canvas_document_copy_count, 2u);
+  const auto canvas = editor.modeling().face_texture_canvas();
+  EXPECT_EQ(canvas.selected_face_count, 5u);
+  EXPECT_FALSE(canvas.editable);
+  EXPECT_TRUE(canvas.outline.empty());
+  const auto retained = harness.projection_stats();
+  EXPECT_EQ(retained.face_texture_canvas_document_query_count,
+            after.face_texture_canvas_document_query_count);
+  EXPECT_EQ(retained.face_texture_canvas_document_copy_count,
+            after.face_texture_canvas_document_copy_count);
+
+  ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+  const auto single = editor.modeling().face_texture_canvas();
+  EXPECT_TRUE(single.editable) << single.disabled_reason;
+  EXPECT_EQ(single.object_id, first.modeling_object_id);
+  EXPECT_EQ(single.face_id, 1);
+  EXPECT_EQ(single.outline.size(), 4u);
+}
+
+
+
+TEST(FaceTextureCanvasApiTests, MixedAnglesStopPresentationAndRotationPreparesEveryFace) {
+  FaceTextureCanvasHarness harness;
+  auto &editor = harness.editor;
+  std::array<QuaderModelingObjectRef, 3> objects;
+  constexpr std::array<double, 3> kAngles{10.0, -25.0, 75.0};
+  for (std::size_t index = 0; index < objects.size(); ++index) {
+    objects[index] = harness.create_box();
+    ASSERT_TRUE(editor.modeling().set_face_texture_setting({
+        .field = QuaderFaceTextureField::Rotate, .value = kAngles[index],
+        .selection_token = editor.modeling().face_texture_settings().selection_token}).ok());
+  }
+  ASSERT_TRUE(editor.selection().select_face(objects[0], 1).ok());
+  ASSERT_TRUE(editor.selection().select_face(objects[1], 1, QuaderSelectionEdit::Add).ok());
+  ASSERT_TRUE(editor.selection().select_face(objects[2], 1, QuaderSelectionEdit::Add).ok());
+  const auto before = harness.projection_stats();
+  const auto settings = editor.modeling().face_texture_settings();
+  ASSERT_TRUE(settings.editable) << settings.disabled_reason;
+  EXPECT_TRUE(settings.rotation_mixed);
+  EXPECT_NEAR(settings.rotation_degrees, kAngles[0], 1.0e-4);
+  EXPECT_EQ(settings.selected_face_count, 3u);
+  const auto presented = harness.projection_stats();
+  EXPECT_EQ(presented.face_texture_canvas_build_count - before.face_texture_canvas_build_count, 2u);
+  EXPECT_TRUE(editor.modeling().face_texture_canvas().outline.empty());
+  EXPECT_TRUE(editor.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_EQ(harness.projection_stats().face_texture_canvas_build_count,
+            presented.face_texture_canvas_build_count);
+
+  const auto history = editor.history().snapshot();
+  const auto rotated = editor.modeling().set_face_texture_setting({
+      .field = QuaderFaceTextureField::Rotate, .value = 35.0,
+      .selection_token = settings.selection_token});
+  ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+  EXPECT_TRUE(rotated.changed());
+  const auto edited = harness.projection_stats();
+  // The edit consumes every face map; the undo command then captures the new
+  // uniform presentation, which also needs all three faces to prove equality.
+  EXPECT_EQ(edited.face_texture_canvas_build_count - presented.face_texture_canvas_build_count,
+            2u * objects.size());
+  const auto result = editor.modeling().face_texture_settings();
+  EXPECT_FALSE(result.rotation_mixed);
+  EXPECT_NEAR(result.rotation_degrees, 35.0, 1.0e-4);
+  EXPECT_EQ(harness.projection_stats().face_texture_canvas_build_count,
+            edited.face_texture_canvas_build_count);
+  for (const auto &object : objects) {
+    const auto mesh = editor.query().compiled_object_mesh(object);
+    ASSERT_TRUE(mesh.has_value());
+    const auto face = std::ranges::find(mesh->face_textures, 1,
+                                      &QuaderMeshFaceTexture::face);
+    ASSERT_NE(face, mesh->face_textures.end());
+    EXPECT_FLOAT_EQ(face->rotation_degrees, 35.0f);
+  }
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto restored = editor.modeling().face_texture_settings();
+  EXPECT_TRUE(restored.rotation_mixed);
+  EXPECT_NEAR(restored.rotation_degrees, kAngles[0], 1.0e-4);
+  EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_FALSE(editor.modeling().face_texture_settings().rotation_mixed);
+  EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, 35.0, 1.0e-4);
+}
+
+TEST(FaceTextureCanvasApiTests, MixedPresentationRejectsTokensAfterLockCleanupAndReselection) {
+  FaceTextureCanvasHarness harness;
+  auto &editor = harness.editor;
+  const auto first = harness.create_box();
+  const auto second = harness.create_box();
+  ASSERT_TRUE(editor.modeling().set_face_texture_setting({
+      .field = QuaderFaceTextureField::Rotate, .value = 25.0,
+      .selection_token = editor.modeling().face_texture_settings().selection_token}).ok());
+  const auto third = harness.create_box();
+  ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+  ASSERT_TRUE(editor.selection().select_face(second, 1, QuaderSelectionEdit::Add).ok());
+  ASSERT_TRUE(editor.selection().select_face(third, 1, QuaderSelectionEdit::Add).ok());
+  const auto original = editor.modeling().face_texture_settings();
+  ASSERT_TRUE(original.rotation_mixed);
+
+  // Public locking republishes scene selection and clears component selection.
+  // A mixed presentation must not let its former token edit those former faces.
+  ASSERT_TRUE(editor.scene().set_locked(third.entity, true).ok());
+  const auto remaining = editor.modeling().face_texture_settings();
+  EXPECT_EQ(remaining.selected_face_count, 0u);
+  EXPECT_FALSE(remaining.rotation_mixed);
+  EXPECT_FALSE(remaining.editable);
+  EXPECT_EQ(remaining.block_reason, QuaderFaceTextureBlockReason::NoSelection);
+  const auto before = harness.projection_stats();
+  const auto rejected = editor.modeling().set_face_texture_setting({
+      .field = QuaderFaceTextureField::Rotate, .value = 60.0,
+      .selection_token = original.selection_token});
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_EQ(harness.projection_stats().face_texture_canvas_build_count,
+            before.face_texture_canvas_build_count);
+
+  ASSERT_TRUE(editor.scene().set_locked(third.entity, false).ok());
+  ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+  ASSERT_TRUE(editor.modeling().face_texture_canvas().editable);
+  const auto reselection = harness.projection_stats();
+  const auto stale = editor.modeling().set_face_texture_setting({
+      .field = QuaderFaceTextureField::Rotate, .value = 60.0,
+      .selection_token = original.selection_token});
+  EXPECT_FALSE(stale.ok());
+  EXPECT_EQ(harness.projection_stats().face_texture_canvas_build_count,
+            reselection.face_texture_canvas_build_count);
+}
+
+TEST(FaceTextureCanvasApiTests, UniformAngleNoOpDoesNotMaterializeRotationMaps) {
+  FaceTextureCanvasHarness harness;
+  const auto first = harness.create_box();
+  const auto second = harness.create_box();
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+  ASSERT_TRUE(editor.selection().select_face(second, 1, QuaderSelectionEdit::Add).ok());
+  const auto settings = editor.modeling().face_texture_settings();
+  ASSERT_FALSE(settings.rotation_mixed);
+  ASSERT_TRUE(settings.editable);
+  const auto history = editor.history().snapshot();
+  const auto before = harness.projection_stats();
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    const auto unchanged = editor.modeling().set_face_texture_setting({
+        .field = QuaderFaceTextureField::Rotate, .value = settings.rotation_degrees,
+        .selection_token = settings.selection_token});
+    ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+    EXPECT_FALSE(unchanged.changed());
+  }
+  const auto after = harness.projection_stats();
+  EXPECT_EQ(after.face_texture_canvas_build_count, before.face_texture_canvas_build_count);
+  EXPECT_EQ(after.face_texture_canvas_document_query_count,
+            before.face_texture_canvas_document_query_count);
+  expect_same_history(editor.history().snapshot(), history);
 }
 
 TEST(FaceTextureCanvasApiTests, GesturePreviewsFromBaselineAndCreatesExactlyOneUndoEntry) {
@@ -369,14 +654,18 @@ TEST(FaceTextureCanvasApiTests, UnchangedQueriesDoNotExtractGeometryOrRepublish)
   auto &editor = harness.editor;
   ASSERT_TRUE(editor.modeling().face_texture_canvas().editable);
   const auto revision = editor.modeling().face_texture_settings_revision();
-  const auto before = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  const auto before = harness.projection_stats();
   for (int frame = 0; frame != 32; ++frame) {
     EXPECT_EQ(editor.modeling().face_texture_settings_revision(), revision);
     EXPECT_TRUE(editor.modeling().face_texture_canvas().editable);
     EXPECT_TRUE(editor.modeling().face_texture_settings().editable);
   }
-  const auto after = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  const auto after = harness.projection_stats();
   EXPECT_EQ(after.face_texture_canvas_build_count, before.face_texture_canvas_build_count);
+  EXPECT_EQ(after.face_texture_canvas_document_query_count,
+            before.face_texture_canvas_document_query_count);
+  EXPECT_EQ(after.face_texture_canvas_document_copy_count,
+            before.face_texture_canvas_document_copy_count);
   EXPECT_EQ(after.face_texture_summary_build_count, before.face_texture_summary_build_count);
   EXPECT_EQ(after.mesh_compile_count, before.mesh_compile_count);
   EXPECT_EQ(after.asset_publication_count, before.asset_publication_count);
@@ -390,7 +679,7 @@ TEST(FaceTextureCanvasApiTests, IdleCancellationPreservesRevisionsAndRetainedQue
   const auto revision = editor.modeling().face_texture_settings_revision();
   const auto settings = editor.modeling().face_texture_settings();
   const auto history = editor.history().snapshot();
-  const auto before = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  const auto before = harness.projection_stats();
   for (int attempt = 0; attempt != 3; ++attempt) {
     const auto canceled = editor.modeling().cancel_face_texture_gesture();
     ASSERT_TRUE(canceled.ok()) << canceled.error_message();
@@ -400,8 +689,12 @@ TEST(FaceTextureCanvasApiTests, IdleCancellationPreservesRevisionsAndRetainedQue
     EXPECT_TRUE(editor.modeling().face_texture_canvas().editable);
     expect_same_history(editor.history().snapshot(), history);
   }
-  const auto after = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  const auto after = harness.projection_stats();
   EXPECT_EQ(after.face_texture_canvas_build_count, before.face_texture_canvas_build_count);
+  EXPECT_EQ(after.face_texture_canvas_document_query_count,
+            before.face_texture_canvas_document_query_count);
+  EXPECT_EQ(after.face_texture_canvas_document_copy_count,
+            before.face_texture_canvas_document_copy_count);
   EXPECT_EQ(after.face_texture_summary_build_count, before.face_texture_summary_build_count);
   EXPECT_EQ(after.mesh_compile_count, before.mesh_compile_count);
   EXPECT_EQ(after.asset_publication_count, before.asset_publication_count);

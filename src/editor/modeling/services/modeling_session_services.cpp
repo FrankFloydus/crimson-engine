@@ -1023,6 +1023,7 @@ ModelingSelectionService::scene_target_for_picking_participant(
 
 void ModelingSelectionService::invalidate_picking_cache() const {
   picking_cache_ = {};
+  rectangle_pick_facts_cache_.clear();
   rectangle_projection_cache_ = {};
   lasso_projection_cache_ = {};
   rectangle_universe_cache_ = {};
@@ -1034,9 +1035,21 @@ ModelingSelectionService::transformed_picking_projection_build_count() const {
   return transformed_picking_projection_build_count_;
 }
 
+std::uint64_t ModelingSelectionService::world_picking_geometry_build_count() const {
+  return world_picking_geometry_build_count_;
+}
+
 std::uint64_t
 ModelingSelectionService::rectangle_picking_projection_build_count() const {
   return rectangle_picking_projection_build_count_;
+}
+
+std::uint64_t ModelingSelectionService::rectangle_pick_facts_build_count() const {
+  return rectangle_pick_facts_build_count_;
+}
+
+std::uint64_t ModelingSelectionService::rectangle_pick_facts_reuse_count() const {
+  return rectangle_pick_facts_reuse_count_;
 }
 
 std::uint64_t
@@ -1119,9 +1132,8 @@ ModelingSelectionService::cached_local_picking_objects(
     return picking_cache_.objects;
   }
 
-  picking_cache_.world_objects_valid = false;
-
   if (geometry_changed) {
+    picking_cache_.world_objects_valid = false;
     if (modeling_content_changed) {
       picking_cache_.shared_local_bounds.clear();
     }
@@ -1168,6 +1180,18 @@ ModelingSelectionService::cached_local_picking_objects(
       cached.component_edit_target = runtime->second->component_edit_target;
       cached.selection = runtime->second->selection;
     }
+    if (picking_cache_.world_objects_valid) {
+      // Selection changes leave the participant order, transforms and baked
+      // documents intact; refresh only the metadata consumed by picking.
+      for (std::size_t index = 0; index < picking_cache_.objects.size();
+           ++index) {
+        const auto &local = picking_cache_.objects[index];
+        auto &world = picking_cache_.world_objects[index];
+        world.selected = local.selected;
+        world.component_edit_target = local.component_edit_target;
+        world.selection = local.selection;
+      }
+    }
   }
   picking_cache_.content_revision = content_revision;
   picking_cache_.selection_revision = selection_revision;
@@ -1199,6 +1223,7 @@ ModelingSelectionService::cached_scene_transformed_objects_for_picking(
   if (picking_cache_.world_objects_valid) {
     return picking_cache_.world_objects;
   }
+  ++world_picking_geometry_build_count_;
   picking_cache_.world_objects = local_objects;
   const std::size_t participant_count = std::min(
       picking_cache_.world_objects.size(),
@@ -2171,6 +2196,31 @@ ModelingSelectionService::cached_document_edges(
   return *entry->second.edges;
 }
 
+const quader_poly::DocumentPickQuery &
+ModelingSelectionService::cached_rectangle_pick_facts(
+    const quader_editor_core::PolygonObject &object,
+    bool reverse_face_winding) const {
+  const auto document = object.document.topology_payload();
+  const auto storage = reinterpret_cast<std::uintptr_t>(document.get());
+  auto [entry, inserted] = rectangle_pick_facts_cache_.try_emplace(storage);
+  if (inserted) entry->second.document = document;
+  entry->second.generation = rectangle_pick_facts_generation_;
+  auto &query = entry->second.queries[reverse_face_winding ? 1u : 0u];
+  if (!query) {
+    QDR_PROFILE_SCOPE("Box selection build retained document pick facts");
+    quader_poly::PickOptions options;
+    options.reverse_face_winding = reverse_face_winding;
+    // Marquee consumes only const facing/incidence predicates. Selection mode
+    // and backface admission are applied after these geometry facts are built.
+    query = std::make_shared<const quader_poly::DocumentPickQuery>(
+        *entry->second.document, options);
+    ++rectangle_pick_facts_build_count_;
+  } else {
+    ++rectangle_pick_facts_reuse_count_;
+  }
+  return *query;
+}
+
 const quader_editor_core::RectangleSelectionUniverse &
 ModelingSelectionService::rectangle_selection_universe(
     const ModelingSelectionProjectionSnapshot &session,
@@ -2309,6 +2359,9 @@ ModelingSelectionService::rectangle_projected_hits_request(
   std::vector<std::uint8_t> projected_vertex_valid;
   std::vector<QVec3> world_vertices;
   std::vector<std::uint8_t> world_vertex_valid;
+  if (selection_mode != quader_editor_core::SelectionMode::Object) {
+    ++rectangle_pick_facts_generation_;
+  }
   for (std::size_t object_index = 0;
        object_index < picking_objects.size(); ++object_index) {
     const quader_editor_core::PolygonObject &object =
@@ -2318,15 +2371,13 @@ ModelingSelectionService::rectangle_projected_hits_request(
                 object_transforms[object_index].object_id == object.id
             ? &object_transforms[object_index]
             : nullptr;
-    quader_poly::PickOptions facing_options;
-    facing_options.reverse_face_winding =
+    const bool reverse_face_winding =
         object_transform != nullptr &&
         quader_editor_core::pick_object_transform_reverses_face_winding(
             *object_transform);
-    std::unique_ptr<quader_poly::DocumentPickQuery> pick_facts;
+    const quader_poly::DocumentPickQuery *pick_facts = nullptr;
     if (selection_mode != quader_editor_core::SelectionMode::Object) {
-      pick_facts = std::make_unique<quader_poly::DocumentPickQuery>(
-          object.document, facing_options);
+      pick_facts = &cached_rectangle_pick_facts(object, reverse_face_winding);
     }
     std::size_t projected_vertex_capacity =
         static_cast<std::size_t>(object.document.read().next_vertex_id);
@@ -2605,6 +2656,13 @@ ModelingSelectionService::rectangle_projected_hits_request(
       }
       hits_request.vertices.push_back(projected_vertex);
     }
+  }
+  if (selection_mode != quader_editor_core::SelectionMode::Object) {
+    // Bound retained storage to the current participant set, while preserving
+    // both winding variants for documents reused by multiple occurrences.
+    std::erase_if(rectangle_pick_facts_cache_, [this](const auto &entry) {
+      return entry.second.generation != rectangle_pick_facts_generation_;
+    });
   }
   return hits_request;
 }
@@ -2957,7 +3015,19 @@ ModelingSelectionService::apply_resolved_rectangle_selection(
       same_rectangle_hits(rectangle_resolution_cache_.hits,
                           rectangle_request.hits)) {
     QDR_PROFILE_SCOPE("Box selection resolution cache hit");
-    return {};
+    if (rectangle_resolution_cache_.validated_selection_revision ==
+        session.selection_revision()) {
+      return {};
+    }
+    // Cached policy inputs do not prove the SDK still holds their result:
+    // clearing selection or undo can restore the same gesture baseline.
+    const ModelingSelectionProjectionApplyResult applied =
+        apply_rectangle_selection(
+            session, rectangle_resolution_cache_.resolved_selection);
+    rectangle_resolution_cache_.validated_selection_revision =
+        applied.changed ? std::nullopt
+                        : std::optional{session.selection_revision()};
+    return applied;
   }
 
   ++rectangle_selection_resolution_build_count_;
@@ -2976,6 +3046,10 @@ ModelingSelectionService::apply_resolved_rectangle_selection(
   rectangle_resolution_cache_.operation = operation;
   rectangle_resolution_cache_.baseline = baseline;
   rectangle_resolution_cache_.hits = rectangle_request.hits;
+  rectangle_resolution_cache_.resolved_selection = result.selection;
+  rectangle_resolution_cache_.validated_selection_revision =
+      applied.changed ? std::nullopt
+                      : std::optional{session.selection_revision()};
   return applied;
 }
 

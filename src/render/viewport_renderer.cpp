@@ -11,6 +11,7 @@
 #include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/render_layers.hpp"
+#include "render/overlay/selected_mesh_outline_mask_cache.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/scene_tone_mapper.hpp"
 #include "scene/light_properties.hpp"
@@ -235,12 +236,52 @@ void ViewportRenderer::initialize(filament::Engine &engine,
   resize(640, 480);
 }
 
+bool ViewportRenderer::configure_selected_mesh_outlines(
+    SelectedMeshOutlineMaskCache &cache, filament::Material &material,
+    std::uint8_t pane_layer_mask) {
+  if (!engine_ || !scene_ || !cache.scene() ||
+      engine_->getBackend() != filament::Engine::Backend::VULKAN) {
+    return false;
+  }
+  if (!selected_mesh_outline_renderer_.initialize(
+          *engine_, *scene_, *cache.scene(), material, pane_layer_mask)) {
+    return false;
+  }
+  selected_mesh_outline_cache_ = &cache;
+  selected_mesh_outline_renderer_.resize(width_, height_);
+  camera_presentation_signature_.reset();
+  return true;
+}
+
+bool ViewportRenderer::update_selected_mesh_outlines(
+    const RenderOverlaySelectedObjectSnapshot *snapshot,
+    const RenderOverlaySelectionSnapshot *hierarchy,
+    const ViewportPersistentOverlayStyleSnapshot &style, bool visible) {
+  if (!selected_mesh_outline_cache_ ||
+      !selected_mesh_outline_renderer_.initialized()) {
+    return false;
+  }
+  selected_mesh_outline_cache_->sync(snapshot, hierarchy);
+  if (!selected_mesh_outline_cache_->ready()) {
+    selected_mesh_outline_renderer_.set_visible(false);
+    return false;
+  }
+  selected_mesh_outline_renderer_.set_style(style);
+  selected_mesh_outline_renderer_.set_geometry_available(
+      selected_mesh_outline_cache_->has_geometry(false),
+      selected_mesh_outline_cache_->has_geometry(true));
+  selected_mesh_outline_renderer_.set_visible(visible);
+  return true;
+}
+
 void ViewportRenderer::shutdown() {
     reset_presentation_cache();
     if (!engine_) {
         return;
     }
 
+    selected_mesh_outline_renderer_.shutdown();
+    selected_mesh_outline_cache_ = nullptr;
     render_target_.shutdown();
     overlay_render_target_.shutdown();
     grid_renderer_.shutdown();
@@ -288,6 +329,7 @@ void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
     QDR_PROFILE_FUNCTION();
     width_ = std::max(1u, width);
     height_ = std::max(1u, height);
+    selected_mesh_outline_renderer_.resize(width_, height_);
     if (surface_ == ViewportRenderSurface::Texture) {
       render_target_.resize(width_, height_, view_,
                             scene_texture_sample_color_space_);
@@ -330,6 +372,7 @@ float ViewportRenderer::texture_max_v() const {
 void ViewportRenderer::update_camera(
     const ViewportCameraController &controller) {
   QDR_PROFILE_FUNCTION();
+  selected_mesh_outline_renderer_.update_camera(controller);
   if (!camera_ || !overlay_camera_) {
     return;
   }
@@ -604,6 +647,7 @@ void ViewportRenderer::set_material_debug_mode(
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
     QDR_PROFILE_FUNCTION();
+    selected_mesh_outline_renderer_.render_masks(renderer);
     // Diagnostics need the lit mesh layer but use the editor backdrop. Hide
     // only the skybox during this view's submission, then restore it before
     // another pane uses the shared scene. Filament snapshots it during render.

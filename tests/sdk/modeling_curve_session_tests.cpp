@@ -8,6 +8,7 @@
 
 #include <quader/modeling/modeling.hpp>
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <utility>
@@ -1672,7 +1673,7 @@ TEST(ModelingSessionPreviewScalingTests,
             2U);
   EXPECT_EQ(after_begin.mesh_payload_build_count -
                 before_begin.mesh_payload_build_count,
-            1U);
+            0U);
 
   const SessionPreviewCheckpoint checkpoint =
       session.capture_preview_checkpoint(begun.preview_id).or_throw();
@@ -1716,11 +1717,16 @@ TEST(ModelingSessionPreviewScalingTests,
             2U);
   EXPECT_EQ(after_update.mesh_payload_build_count -
                 after_base_read.mesh_payload_build_count,
-            1U);
+            0U);
 
   ASSERT_TRUE(session.commit_preview_transaction(begun.preview_id).ok());
+  EXPECT_TRUE(session.document_copy(target).or_throw().has_same_geometry(second));
   ASSERT_TRUE(session.undo().ok());
+  EXPECT_TRUE(session.document_copy(target).or_throw().has_same_geometry(prototype));
   ASSERT_TRUE(session.redo().ok());
+  EXPECT_TRUE(session.document_copy(target).or_throw().has_same_geometry(second));
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count,
+            before_begin.mesh_payload_build_count);
 
   const auto exercise_index = [&](ModelingSession &candidate) {
     PolygonDocument current = candidate.document_copy(target).or_throw();
@@ -1730,7 +1736,10 @@ TEST(ModelingSessionPreviewScalingTests,
                                     current, OperationResult{})
             .or_throw();
     EXPECT_TRUE(candidate.preview_document_copy(preview, target).ok());
+    const auto before_cancel = candidate.preview_work_stats();
     EXPECT_TRUE(candidate.cancel_preview(preview).ok());
+    EXPECT_EQ(candidate.preview_work_stats().mesh_payload_build_count,
+              before_cancel.mesh_payload_build_count);
   };
   exercise_index(session);
   ModelingSession copied = session;
@@ -1746,6 +1755,117 @@ TEST(ModelingSessionPreviewScalingTests,
   const ModelingSession snapshot = session.current_workspace_checkpoint();
   session.restore_snapshot_preserving_identity_high_water(snapshot);
   exercise_index(session);
+}
+
+TEST_F(ModelingCurveSessionTests,
+       PreviewPayloadMaterializesOnlyAcceptedConsumedCandidates) {
+  const PolygonDocument original = session_.document_copy(mesh_).or_throw();
+  const auto before = session_.preview_work_stats().mesh_payload_build_count;
+  const auto [first, first_receipt] = translated_mesh({0.25F, 0.5F, 0.75F});
+  const PreviewId preview = session_.begin_document_preview(
+      mesh_, "modeling.preview.lazy_payload", first, first_receipt).or_throw();
+  const auto first_summary = session_.preview_summary();
+  const auto checkpoint = session_.capture_preview_checkpoint(preview).or_throw();
+  const auto [second, second_receipt] = translated_mesh({1.25F, -0.5F, 2.25F});
+  ASSERT_TRUE(session_.update_document_preview(preview, second, second_receipt).ok());
+  const auto second_summary = session_.preview_summary();
+  EXPECT_GT(second_summary.content_revision, first_summary.content_revision);
+  EXPECT_TRUE(session_.preview_document_copy(preview).or_throw().has_same_geometry(second));
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before);
+
+  const auto expect_payload = [&](const ToolPreviewPayload &payload,
+                                  const PolygonDocument &document,
+                                  std::uint64_t revision) {
+    const MeshPayload canonical = document.compile_mesh().or_throw();
+    ASSERT_TRUE(payload.valid);
+    EXPECT_EQ(payload.mesh.content_revision, revision);
+    EXPECT_EQ(payload.mesh.indices, canonical.indices);
+    ASSERT_EQ(payload.mesh.vertices.size(), canonical.vertices.size());
+    const auto expect_vector = [](Vec3 actual, Vec3 expected) {
+      EXPECT_FLOAT_EQ(actual.x, expected.x);
+      EXPECT_FLOAT_EQ(actual.y, expected.y);
+      EXPECT_FLOAT_EQ(actual.z, expected.z);
+    };
+    for (std::size_t index = 0; index < canonical.vertices.size(); ++index) {
+      const auto &actual = payload.mesh.vertices[index];
+      const auto &expected = canonical.vertices[index];
+      EXPECT_EQ(actual.source_vertex, expected.source_vertex);
+      expect_vector(actual.position, expected.position);
+      expect_vector(actual.normal, expected.normal);
+      expect_vector(actual.uv_geometric_normal, expected.uv_geometric_normal);
+      EXPECT_FLOAT_EQ(actual.uv0.x, expected.uv0.x);
+      EXPECT_FLOAT_EQ(actual.uv0.y, expected.uv0.y);
+      EXPECT_EQ(actual.uv_carrier, expected.uv_carrier);
+      EXPECT_EQ(actual.color, expected.color);
+    }
+    ASSERT_EQ(payload.mesh.primitives.size(), canonical.primitives.size());
+    for (std::size_t index = 0; index < canonical.primitives.size(); ++index) {
+      EXPECT_EQ(payload.mesh.primitives[index].index_offset,
+                canonical.primitives[index].index_offset);
+      EXPECT_EQ(payload.mesh.primitives[index].index_count,
+                canonical.primitives[index].index_count);
+      EXPECT_EQ(payload.mesh.primitives[index].material,
+                canonical.primitives[index].material);
+    }
+    const auto authored = document.authored_payload().or_throw();
+    EXPECT_EQ(payload.overlay.selection_revision, document.selection_revision());
+    ASSERT_FALSE(payload.overlay.records.empty());
+    for (const auto &record : payload.overlay.records) {
+      EXPECT_EQ(record.kind, SemanticOverlayKind::Wire);
+      ASSERT_GE(record.points.size(), 3U);
+      expect_vector(record.points.front(), record.points.back());
+      for (const Vec3 point : record.points) {
+        EXPECT_TRUE(std::ranges::any_of(authored.positions, [point](Vec3 position) {
+          return point.x == position.x && point.y == position.y && point.z == position.z;
+        }));
+      }
+    }
+  };
+
+  const auto [third, third_receipt] = translated_mesh({-0.75F, 1.5F, 0.25F});
+  OperationResult rejected_receipt = third_receipt;
+  rejected_receipt.success = false;
+  rejected_receipt.error_code = ErrorCode::ValidationFailed;
+  EXPECT_FALSE(session_.update_document_preview(preview, third, rejected_receipt).ok());
+  expect_same_preview_summary(session_.preview_summary(), second_summary);
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before);
+
+  const auto transaction = session_.preview_transaction_payload(preview).or_throw();
+  ASSERT_EQ(transaction.objects.size(), 1U);
+  const auto *second_payload = std::get_if<ToolPreviewPayload>(&transaction.objects.front().payload);
+  ASSERT_NE(second_payload, nullptr);
+  expect_payload(*second_payload, second, second_summary.content_revision);
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before + 1U);
+  expect_payload(session_.preview_payload(preview).or_throw(), second,
+                 second_summary.content_revision);
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before + 1U);
+  EXPECT_FALSE(session_.update_document_preview(preview, third, rejected_receipt).ok());
+  expect_payload(session_.preview_payload().or_throw(), second,
+                 second_summary.content_revision);
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before + 1U);
+
+  ASSERT_TRUE(session_.update_document_preview(preview, third, third_receipt).ok());
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before + 1U);
+  expect_payload(session_.preview_payload().or_throw(), third,
+                 session_.preview_summary().content_revision);
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before + 2U);
+
+  ASSERT_TRUE(session_.restore_preview_checkpoint(checkpoint).ok());
+  expect_same_preview_summary(session_.preview_summary(), first_summary);
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before + 2U);
+  expect_payload(session_.preview_payload(preview).or_throw(), first,
+                 first_summary.content_revision);
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before + 3U);
+
+  ASSERT_TRUE(session_.update_document_preview(preview, second, second_receipt).ok());
+  ASSERT_TRUE(session_.commit_preview(preview).ok());
+  EXPECT_EQ(session_.preview_work_stats().mesh_payload_build_count, before + 3U);
+  EXPECT_TRUE(session_.document_copy(mesh_).or_throw().has_same_geometry(second));
+  EXPECT_EQ(session_.undo_depth(), 1U);
+  ASSERT_TRUE(session_.undo().ok());
+  EXPECT_TRUE(session_.document_copy(mesh_).or_throw().has_same_geometry(original));
+  ASSERT_TRUE(session_.redo().ok());
+  EXPECT_TRUE(session_.document_copy(mesh_).or_throw().has_same_geometry(second));
 }
 
 TEST(ModelingSessionPreviewScalingTests,

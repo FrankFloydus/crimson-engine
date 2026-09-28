@@ -6,25 +6,35 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
+#include "api/quader_editor_api.hpp"
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/placement/snap_to_floor_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "scene/scene_document.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
 #include <gtest/gtest.h>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <array>
+#include <barrier>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <ranges>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -227,6 +237,7 @@ TEST(SceneSurfaceQueryTests,
       harness.add_formal_instance(first_mesh);
   const quader::SceneSurfaceQuerySnapshot with_occurrences =
       harness.query.snapshot();
+  EXPECT_EQ(with_occurrences.landmarks().size(), 28u);
   const quader::SceneSurfaceQueryStats occurrence_stats =
       harness.query.stats();
   EXPECT_EQ(occurrence_stats.participant_count, 4u);
@@ -264,6 +275,8 @@ TEST(SceneSurfaceQueryTests,
   ASSERT_EQ(cold_stats.snapshot_build_count, 1u);
   ASSERT_EQ(cold_stats.tlas_build_count, 1u);
   ASSERT_EQ(cold_stats.blas_build_count, 1u);
+  EXPECT_EQ(cold_stats.landmark_build_count, 0u);
+  EXPECT_EQ(cold_stats.landmark_count, 0u);
 
   const quader::SceneSurfaceQuerySnapshot warm = harness.query.snapshot();
   EXPECT_EQ(harness.query.stats().snapshot_build_count,
@@ -298,6 +311,8 @@ TEST(SceneSurfaceQueryTests,
   EXPECT_EQ(rebuilt_stats.snapshot_build_count, 2u);
   EXPECT_EQ(rebuilt_stats.tlas_build_count, 2u);
   EXPECT_EQ(rebuilt_stats.blas_build_count, 1u);
+  EXPECT_EQ(rebuilt_stats.landmark_build_count, 0u);
+  EXPECT_EQ(rebuilt_stats.landmark_count, 0u);
 
   (void)harness.query.snapshot();
   EXPECT_EQ(harness.query.stats().snapshot_build_count,
@@ -306,6 +321,127 @@ TEST(SceneSurfaceQueryTests,
             rebuilt_stats.tlas_build_count);
   EXPECT_EQ(harness.query.stats().blas_build_count,
             rebuilt_stats.blas_build_count);
+}
+
+TEST(SceneSurfaceQueryTests,
+     TransformChangesRetainLiveGeometryBeyondTheRecentlyHiddenCache) {
+  SceneSurfaceQueryHarness harness;
+  constexpr std::size_t kGeometryCount = 128u;
+  quader::EntityId moving_entity = quader::kInvalidEntityId;
+  quader::AssetId changed_mesh = quader::kInvalidAssetId;
+  for (std::size_t index = 0u; index < kGeometryCount; ++index) {
+    const quader::AssetId mesh =
+        harness.add_mesh(make_surface_mesh(static_cast<float>(index)));
+    const quader::EntityId entity = harness.add_mesh_entity(
+        mesh, "Retained Surface", {static_cast<float>(index) * 5.0f, 0.0f, 0.0f});
+    if (index == 0u) {
+      moving_entity = entity;
+      changed_mesh = mesh;
+    }
+  }
+  const quader::SceneSurfaceQuerySnapshot initial = harness.query.snapshot();
+  EXPECT_EQ(initial.participants().size(), kGeometryCount);
+  ASSERT_EQ(harness.query.stats().unique_geometry_count, kGeometryCount);
+  ASSERT_EQ(harness.query.stats().blas_build_count, kGeometryCount);
+  for (std::size_t step = 1u; step <= 5u; ++step) {
+    ASSERT_TRUE(harness.session.scene().set_transform(
+        moving_entity, quader::TransformComponent{
+                           .position = {0.0f, static_cast<float>(step), 0.0f}}));
+    const auto moved = harness.query.snapshot();
+    EXPECT_EQ(moved.participants().size(), kGeometryCount);
+    EXPECT_EQ(harness.query.stats().blas_build_count, kGeometryCount);
+    EXPECT_EQ(harness.query.stats().landmark_build_count, 0u);
+  }
+  ASSERT_TRUE(harness.session.assets().replace_mesh(
+      changed_mesh, make_surface_mesh(static_cast<float>(kGeometryCount))));
+  (void)harness.query.snapshot();
+  EXPECT_EQ(harness.query.stats().blas_build_count, kGeometryCount + 1u);
+}
+
+TEST(SceneSurfaceQueryTests,
+     DelayedLandmarksKeepFrozenPayloadsAndTransformsAfterOwnerDestruction) {
+  quader::SceneSurfaceQuerySnapshot original;
+  quader::SceneSurfaceQuerySnapshot changed;
+  quader::EntityId entity = quader::kInvalidEntityId;
+  {
+    SceneSurfaceQueryHarness harness;
+    const quader::AssetId mesh = harness.add_mesh(make_surface_mesh());
+    entity = harness.add_mesh_entity(mesh, "Frozen Landmarks", {0.0f, 1.0f, 0.0f});
+    original = harness.query.snapshot();
+    ASSERT_TRUE(harness.session.scene().set_transform(
+        entity, quader::TransformComponent{.position = {0.0f, 3.0f, 0.0f}}));
+    ASSERT_TRUE(harness.session.assets().replace_mesh(mesh, make_surface_mesh(2.0f)));
+    changed = harness.query.snapshot();
+    EXPECT_EQ(harness.query.stats().landmark_build_count, 0u);
+    ASSERT_TRUE(harness.session.scene().destroy_entity(entity));
+    harness.query.invalidate();
+    EXPECT_EQ(harness.query.stats().landmark_count, 0u);
+  }
+
+  const auto original_landmarks = original.landmarks();
+  const auto changed_landmarks = changed.landmarks();
+  ASSERT_EQ(original_landmarks.size(), 7u);
+  ASSERT_EQ(changed_landmarks.size(), original_landmarks.size());
+  for (std::size_t index = 0u; index < original_landmarks.size(); ++index) {
+    const auto &before = original_landmarks[index];
+    const auto &after = changed_landmarks[index];
+    EXPECT_EQ(before.participant.display_entity, entity);
+    EXPECT_EQ(before.participant, after.participant);
+    EXPECT_EQ(before.kind, after.kind);
+    EXPECT_EQ(before.element_key, after.element_key);
+    EXPECT_FLOAT_EQ(before.world_position.y, 1.0f);
+    EXPECT_FLOAT_EQ(after.world_position.y, 5.0f);
+    EXPECT_FLOAT_EQ(before.world_normal.y, -1.0f);
+    EXPECT_FLOAT_EQ(after.world_normal.y, -1.0f);
+    if (index < 3u) {
+      EXPECT_EQ(before.kind, quader::SceneSurfaceLandmarkKind::Vertex);
+      EXPECT_EQ(before.element_key, index);
+    } else if (index < 6u) {
+      EXPECT_EQ(before.kind, quader::SceneSurfaceLandmarkKind::EdgeMidpoint);
+      if (index > 3u) {
+        EXPECT_LT(original_landmarks[index - 1u].element_key, before.element_key);
+      }
+    } else {
+      EXPECT_EQ(before.kind, quader::SceneSurfaceLandmarkKind::FaceCenter);
+      EXPECT_EQ(before.element_key, 0u);
+    }
+  }
+  EXPECT_EQ(original.landmarks().data(), original_landmarks.data());
+  EXPECT_EQ(changed.landmarks().data(), changed_landmarks.data());
+}
+
+TEST(SceneSurfaceQueryTests, ConcurrentLandmarkReadersBuildOneFrozenResult) {
+  SceneSurfaceQueryHarness harness;
+  const quader::AssetId mesh = harness.add_mesh(make_surface_mesh());
+  (void)harness.add_mesh_entity(mesh, "Concurrent Landmarks", {0.0f, 1.0f, 0.0f});
+  const auto snapshot = harness.query.snapshot();
+  EXPECT_EQ(harness.query.stats().landmark_build_count, 0u);
+  constexpr std::size_t kReaderCount = 8u;
+  std::array<std::span<const quader::SceneSurfaceLandmark>, kReaderCount> results;
+  std::barrier start(static_cast<std::ptrdiff_t>(kReaderCount + 1u));
+  std::vector<std::jthread> readers;
+  readers.reserve(kReaderCount);
+  for (std::size_t index = 0u; index < kReaderCount; ++index) {
+    readers.emplace_back([&, index] {
+      start.arrive_and_wait();
+      results[index] = snapshot.landmarks();
+    });
+  }
+  start.arrive_and_wait();
+  EXPECT_TRUE(harness.session.assets().replace_mesh(mesh, make_surface_mesh(4.0f)));
+  readers.clear();
+  for (const auto landmarks : results) {
+    ASSERT_EQ(landmarks.size(), 7u);
+    EXPECT_EQ(landmarks.data(), results.front().data());
+    EXPECT_FLOAT_EQ(landmarks.front().world_position.y, 1.0f);
+  }
+  EXPECT_EQ(harness.query.stats().landmark_build_count, 1u);
+  EXPECT_EQ(harness.query.stats().landmark_count, 7u);
+  EXPECT_EQ(snapshot.landmarks().data(), results.front().data());
+  EXPECT_EQ(harness.query.stats().landmark_build_count, 1u);
+  (void)harness.query.snapshot();
+  EXPECT_EQ(harness.query.stats().landmark_count, 0u);
+  EXPECT_EQ(harness.query.stats().landmark_build_count, 1u);
 }
 
 TEST(SceneSurfaceQueryTests,
@@ -653,6 +789,112 @@ TEST(SceneSurfaceQueryTests,
                   camera, curve, screen.position,
                   harness.session.scene_surface_query().snapshot(), true)
                   .has_value());
+}
+
+TEST(SceneSurfaceQueryTests, LargeSceneSingleMeshTransformSnapshotWorkload) {
+  const char *source = std::getenv("QUADER_TEST_LARGE_SELECTION_PROJECT");
+  if (source == nullptr || *source == '\0') {
+    GTEST_SKIP() << "Set QUADER_TEST_LARGE_SELECTION_PROJECT to measure a cloned project.";
+  }
+  const std::filesystem::path source_project = std::filesystem::u8path(source);
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_project));
+  const char *source_scene = std::getenv("QUADER_TEST_LARGE_SELECTION_SCENE");
+  const std::filesystem::path original_scene =
+      source_scene != nullptr && *source_scene != '\0'
+          ? std::filesystem::u8path(source_scene)
+          : source_project.parent_path() / "Scenes" / "one.qdr";
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path root(temporary.path().toStdWString());
+  const std::filesystem::path project_root =
+      root / source_project.parent_path().filename();
+  std::error_code error;
+  std::filesystem::copy(
+      source_project.parent_path(), project_root,
+      std::filesystem::copy_options::recursive |
+          std::filesystem::copy_options::skip_symlinks,
+      error);
+  ASSERT_FALSE(error) << error.message();
+  const std::filesystem::path relative_scene = std::filesystem::relative(
+      original_scene, source_project.parent_path(), error);
+  ASSERT_FALSE(error) << error.message();
+  quader::ProjectSession project(root / "recent-scenes.json");
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+                            "resources/modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  const auto opened_project =
+      editor.project().open(project_root / source_project.filename());
+  ASSERT_TRUE(opened_project.ok()) << opened_project.error_message();
+  const auto opened_scene =
+      editor.scene_documents().open_native_path(project_root / relative_scene);
+  ASSERT_TRUE(opened_scene.ok()) << opened_scene.error_message();
+  const auto entities = editor.query().entities();
+  const auto moving_entity = std::ranges::find_if(
+      entities, [](const quader::QuaderEntitySnapshot &entity) {
+        return entity.has_mesh && entity.visible && entity.selectable &&
+               !entity.locked && !entity.is_instance_definition;
+      });
+  ASSERT_NE(moving_entity, entities.end());
+  auto &query = project.active_scene()->session->scene_surface_query();
+  const auto elapsed_milliseconds = [](auto start) {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+  };
+  auto start = std::chrono::steady_clock::now();
+  auto snapshot = query.snapshot();
+  const double cold_snapshot_milliseconds = elapsed_milliseconds(start);
+  ASSERT_FALSE(snapshot.participants().empty());
+  const quader::SceneSurfaceQueryStats initial_stats = query.stats();
+  std::cout << "SCENE_SURFACE_QUERY cold_snapshot_ms="
+            << cold_snapshot_milliseconds
+            << " participants=" << initial_stats.participant_count
+            << " triangles=" << initial_stats.triangle_count
+            << " unique_geometry=" << initial_stats.unique_geometry_count
+            << " moving_entity=" << moving_entity->id << std::endl;
+
+  constexpr std::size_t kTransformSteps = 10u;
+  double snapshot_milliseconds = 0.0;
+  double landmark_milliseconds = 0.0;
+  for (std::size_t step = 0u; step < kTransformSteps; ++step) {
+    quader::QuaderTransform transform = moving_entity->transform;
+    transform.position.x += static_cast<float>(step + 1u) * 0.25f;
+    const auto moved = editor.scene().set_transform(moving_entity->id, transform);
+    ASSERT_TRUE(moved.ok()) << moved.error_message();
+    ASSERT_TRUE(moved.changed());
+    start = std::chrono::steady_clock::now();
+    snapshot = query.snapshot();
+    const double snapshot_step_milliseconds = elapsed_milliseconds(start);
+    const quader::SceneSurfaceQueryStats query_stats = query.stats();
+    start = std::chrono::steady_clock::now();
+    const std::size_t landmark_count = snapshot.landmarks().size();
+    const double landmark_step_milliseconds = elapsed_milliseconds(start);
+    snapshot_milliseconds += snapshot_step_milliseconds;
+    landmark_milliseconds += landmark_step_milliseconds;
+    EXPECT_EQ(query_stats.participant_count, initial_stats.participant_count);
+    EXPECT_EQ(query_stats.triangle_count, initial_stats.triangle_count);
+    EXPECT_GT(landmark_count, 0u);
+    std::cout << "SCENE_SURFACE_QUERY_STEP step=" << step
+              << " snapshot_ms=" << snapshot_step_milliseconds
+              << " landmarks_ms=" << landmark_step_milliseconds
+              << " landmarks_before_access=" << query_stats.landmark_count
+              << " landmarks=" << landmark_count
+              << " landmark_builds=" << query.stats().landmark_build_count
+              << " blas_builds=" << query_stats.blas_build_count << std::endl;
+  }
+  const quader::SceneSurfaceQueryStats final_stats = query.stats();
+  EXPECT_EQ(final_stats.snapshot_build_count,
+            initial_stats.snapshot_build_count + kTransformSteps);
+  EXPECT_EQ(final_stats.blas_build_count, initial_stats.blas_build_count);
+  EXPECT_EQ(final_stats.landmark_build_count,
+            initial_stats.landmark_build_count + kTransformSteps);
+  EXPECT_EQ(query.snapshot().revision(), snapshot.revision());
+  std::cout << "SCENE_SURFACE_QUERY_RESULT steps=" << kTransformSteps
+            << " snapshot_mean_ms=" << snapshot_milliseconds / kTransformSteps
+            << " landmarks_mean_ms=" << landmark_milliseconds / kTransformSteps
+            << " snapshot_builds=" << final_stats.snapshot_build_count
+            << " landmark_builds=" << final_stats.landmark_build_count
+            << " blas_builds=" << final_stats.blas_build_count << std::endl;
 }
 
 } // namespace

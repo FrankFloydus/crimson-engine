@@ -8,6 +8,7 @@
 
 #include "render/overlay/overlay_mesh_types.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -55,7 +56,9 @@ struct OverlayRenderableProxy {
           primary_position_stream4(
               std::move(other.primary_position_stream4)),
           secondary_position_stream4(
-              std::move(other.secondary_position_stream4)) {}
+              std::move(other.secondary_position_stream4)),
+          visibility_point_indices(std::move(other.visibility_point_indices)),
+          point_visibility_stream(std::move(other.point_visibility_stream)) {}
     OverlayRenderableProxy& operator=(OverlayRenderableProxy&&) noexcept = delete;
 
     std::uint32_t entity_id = 0;
@@ -71,6 +74,9 @@ struct OverlayRenderableProxy {
     std::vector<OverlayFloat3> position_stream3;
     std::vector<OverlayFloat4> primary_position_stream4;
     std::vector<OverlayFloat4> secondary_position_stream4;
+    // One frame-point index per canonical four-vertex marker quad.
+    std::vector<std::size_t> visibility_point_indices;
+    std::vector<float> point_visibility_stream;
 };
 
 } // namespace quader
