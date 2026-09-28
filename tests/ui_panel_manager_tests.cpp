@@ -95,7 +95,7 @@ TEST(UIPanelManagerTests, ViewportSettingsAreAbsentFromTheDockCatalog) {
     EXPECT_STRNE(ui_panel_key(id), "Tool Settings");
   }
 
-  EXPECT_EQ(kUiDockPanelIds.size(), 5U);
+  EXPECT_EQ(kUiDockPanelIds.size(), 6U);
 }
 
 TEST(UIPanelManagerTests, LegacyToolSettingsVisibilityIsIgnoredAndNotSaved) {
@@ -240,7 +240,7 @@ TEST(UIPanelManagerTests, FaceTextureUsesTheSharedDockPanelContract) {
     found = found || id == UIPanelId::FaceTexture;
   }
   EXPECT_TRUE(found);
-  EXPECT_EQ(kUiDockPanelIds.size(), 5U);
+  EXPECT_EQ(kUiDockPanelIds.size(), 6U);
   EXPECT_STREQ(ui_panel_stable_id(UIPanelId::FaceTexture), "face_texture");
   EXPECT_STREQ(ui_panel_key(UIPanelId::FaceTexture), "Face Texture");
   EXPECT_STREQ(ui_panel_localization_key(UIPanelId::FaceTexture),

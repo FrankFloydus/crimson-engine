@@ -10,6 +10,7 @@
 #include "render/filament_environment_library.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/render_performance_stats.hpp"
+#include "render/material_evaluation_snapshot.hpp"
 #include "render/texture_registry.hpp"
 
 #include <filament/Engine.h>
@@ -40,6 +41,8 @@ enum class SwapChainPresentationColorSpace {
 
 class RenderSystem;
 class MaterialPreviewRenderer;
+class MaterialThumbnailRenderer;
+struct MaterialThumbnailReadback;
 class SceneRenderBridge;
 class ViewportRenderer;
 class RenderVulkanPlatform;
@@ -129,6 +132,10 @@ public:
                                       ViewportRenderSurface surface);
     [[nodiscard]] bool initialize_material_preview_renderer(
         MaterialPreviewRenderer &preview_renderer);
+    [[nodiscard]] std::shared_ptr<const MaterialThumbnailReadback>
+    submit_material_thumbnail(RenderMaterialEvaluationSnapshot snapshot,
+                               std::uint32_t size);
+    void poll_material_thumbnails();
     void render_viewport(ViewportRenderer &viewport_renderer);
     void render_viewport(ViewportRenderer &viewport_renderer,
                          RenderAdditionalSwapChain &surface);
@@ -159,6 +166,7 @@ public:
     filament::Scene* scene_ = nullptr;
     FilamentEnvironmentLibrary environment_library_;
     FilamentMaterialLibrary material_library_;
+    std::unique_ptr<MaterialThumbnailRenderer> material_thumbnail_renderer_;
     // Borrowed by scene and preview material instances; destroyed at shutdown.
     filament::Texture *solid_color_texture_ = nullptr;
     TextureRegistry texture_registry_;

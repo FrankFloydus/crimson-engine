@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_standard_material_editor_window.hpp"
+#include "ui/qt_asset_browser.hpp"
 
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
@@ -20,6 +21,8 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QEvent>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -402,6 +405,13 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
     controls.clear = new QToolButton(row);
     controls.clear->setObjectName(
         QStringLiteral("standardMaterialEditor.%1.clear").arg(stable_name));
+    controls.drop_target = row;
+    for (QWidget *target : {row, static_cast<QWidget *>(controls.preview),
+                            static_cast<QWidget *>(controls.path),
+                            static_cast<QWidget *>(controls.browse)}) {
+      target->setAcceptDrops(true);
+      target->installEventFilter(this);
+    }
     row_layout->addWidget(controls.preview);
     auto *details_layout = new QVBoxLayout();
     qt_settings_detail::set_scalable_spacing(*details_layout, 4);
@@ -924,6 +934,11 @@ void QtStandardMaterialEditorWindow::set_texture_action_callback(
   texture_action_ = std::move(callback);
 }
 
+void QtStandardMaterialEditorWindow::set_texture_asset_dropped_callback(
+    TextureAssetDroppedCallback callback) {
+  texture_asset_dropped_ = std::move(callback);
+}
+
 void QtStandardMaterialEditorWindow::set_texture_transform_edited_callback(
     TextureTransformEditedCallback callback) {
   texture_transform_edited_ = std::move(callback);
@@ -1044,6 +1059,35 @@ bool QtStandardMaterialEditorWindow::event(QEvent *event) {
 
 bool QtStandardMaterialEditorWindow::eventFilter(QObject *watched,
                                                  QEvent *event) {
+  if (event != nullptr && texture_asset_dropped_ &&
+      (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove ||
+       event->type() == QEvent::Drop)) {
+    for (std::size_t index = 0u; index < texture_controls_.size(); ++index) {
+      const auto &controls = texture_controls_[index];
+      if (watched != controls.drop_target && watched != controls.preview &&
+          watched != controls.path && watched != controls.browse) {
+        continue;
+      }
+      auto *drop = static_cast<QDropEvent *>(event);
+      QString texture_id;
+      std::uint64_t generation = 0u;
+      const bool valid = controls.browse->isEnabled() &&
+          qt_asset_browser_texture_drag(drop->mimeData(), texture_id, generation);
+      const auto id = valid ? ProjectAssetId::parse(texture_id.toStdString())
+                            : std::nullopt;
+      if (!id.has_value()) {
+        drop->ignore();
+        return true;
+      }
+      drop->setDropAction(Qt::CopyAction);
+      drop->accept();
+      if (event->type() == QEvent::Drop) {
+        const auto callback = texture_asset_dropped_;
+        callback(static_cast<QtStandardMaterialTextureSlot>(index), *id, generation);
+      }
+      return true;
+    }
+  }
   if (watched == texture_inspector_window_ && event != nullptr &&
       event->type() == QEvent::Hide) {
     texture_inspector_window_->clear();

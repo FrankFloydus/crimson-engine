@@ -48,19 +48,19 @@ protected:
         QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         "Retained selection");
     ASSERT_TRUE(first_result.ok()) << first_result.error_message();
-    first = first_result.value();
+    first_ = first_result.value();
     const auto second_result = editor().modeling().create_box_mesh(
         QuaderBounds{.min = {3.0f, 0.0f, 0.0f}, .max = {5.0f, 2.0f, 2.0f}},
         "Restricted action target");
     ASSERT_TRUE(second_result.ok()) << second_result.error_message();
-    second = second_result.value();
-    ASSERT_TRUE(first.select().replace().ok());
+    second_ = second_result.value();
+    ASSERT_TRUE(first_.select().replace().ok());
   }
 
-  QuaderEditorApi &editor() { return standalone.editor(); }
-  QuaderStandaloneEditor standalone;
-  QuaderMeshHandle first;
-  QuaderMeshHandle second;
+  QuaderEditorApi &editor() { return standalone_.editor(); }
+  QuaderStandaloneEditor standalone_;
+  QuaderMeshHandle first_;
+  QuaderMeshHandle second_;
 };
 
 TEST_F(PublicReleaseModelingTests,
@@ -84,7 +84,7 @@ TEST_F(PublicReleaseModelingTests,
     EXPECT_EQ(editor().viewports().selected_tool(), tool);
     EXPECT_EQ(editor().selection().summary().content_revision, content_before);
     EXPECT_EQ(editor().history().snapshot().undo_label, history_before.undo_label);
-    ASSERT_TRUE(first.select().replace().ok());
+    ASSERT_TRUE(first_.select().replace().ok());
     ASSERT_EQ(editor().selection().summary().mode, QuaderSelectionMode::Object);
     const auto history_after_selection = editor().history().snapshot();
     const auto reactivated = editor().commands().execute(command_id);
@@ -101,9 +101,9 @@ TEST_F(PublicReleaseModelingTests,
        ComponentHelpersRejectBeforeReplacingSelectionOrCancelingPreview) {
   ASSERT_TRUE(editor().modeling().begin_transform_preview().ok());
   ASSERT_TRUE(editor().modeling().update_transform_translate({0.5f, 0.0f, 0.0f}).ok());
-  const auto vertices = second.vertices().only({0, 1, 2});
-  const auto edges = second.edges().only({{0, 1}, {1, 2}});
-  const auto faces = second.faces().only({0});
+  const auto vertices = second_.vertices().only({0, 1, 2});
+  const auto edges = second_.edges().only({{0, 1}, {1, 2}});
+  const auto faces = second_.faces().only({0});
   expect_release_rejection(editor(), [&] { return vertices.radial_align(); });
   expect_release_rejection(editor(), [&] { return edges.radial_align(); });
   expect_release_rejection(editor(), [&] { return faces.radial_align(); });
@@ -111,10 +111,10 @@ TEST_F(PublicReleaseModelingTests,
   expect_release_rejection(editor(), [&] { return edges.bevel({}).begin_result(); });
   expect_release_rejection(editor(), [&] { return faces.slice({}).begin_result(); });
   expect_release_rejection(editor(), [&] { return faces.thicken({}).begin_result(); });
-  expect_release_rejection(editor(), [&] { return second.select().snap_to_floor(); });
+  expect_release_rejection(editor(), [&] { return second_.select().snap_to_floor(); });
   expect_release_rejection(editor(), [&] { return vertices.snap_to_floor(); });
   expect_release_rejection(editor(), [&] { return faces.assign_material_slot(1u); });
-  expect_release_rejection(editor(), [&] { return second.materials().assign_slot(1u); });
+  expect_release_rejection(editor(), [&] { return second_.materials().assign_slot(1u); });
   ASSERT_TRUE(editor().modeling().cancel_transform_preview().ok());
 }
 
@@ -123,11 +123,11 @@ TEST_F(PublicReleaseModelingTests, InstancingRejectionsPreservePendingToolAndPre
   const auto expect_rejections = [&] {
     EXPECT_FALSE(modeling.can_create_instance_from_selection());
     EXPECT_FALSE(modeling.can_flatten_selected_instances());
-    EXPECT_FALSE(modeling.can_enter_instance_edit(first.id()));
+    EXPECT_FALSE(modeling.can_enter_instance_edit(first_.id()));
     EXPECT_FALSE(modeling.can_exit_instance_edit());
     expect_release_rejection(editor(), [&] { return modeling.create_instance_from_selection(); });
     expect_release_rejection(editor(), [&] { return modeling.flatten_selected_instances(); });
-    expect_release_rejection(editor(), [&] { return modeling.enter_instance_edit(first.id()); });
+    expect_release_rejection(editor(), [&] { return modeling.enter_instance_edit(first_.id()); });
     expect_release_rejection(editor(), [&] { return modeling.exit_instance_edit(); });
   };
   ASSERT_TRUE(modeling.begin_transform_preview().ok());
@@ -182,18 +182,18 @@ TEST_F(PublicReleaseModelingTests, RestrictedOperationEntryPointsPreserveState) 
   expect_release_rejection(editor(), [&] { return modeling.create_curve({}); });
   expect_release_rejection(editor(), [&] { return modeling.create_linear_array({}); });
   expect_release_rejection(editor(), [&] { return modeling.create_radial_array({}); });
-  expect_release_rejection(editor(), [&] { return modeling.begin_curve_preview(first.ref()); });
-  expect_release_rejection(editor(), [&] { return modeling.set_curve_closed(first.ref(), true); });
+  expect_release_rejection(editor(), [&] { return modeling.begin_curve_preview(first_.ref()); });
+  expect_release_rejection(editor(), [&] { return modeling.set_curve_closed(first_.ref(), true); });
 }
 
 TEST_F(PublicReleaseModelingTests, MaterialAndUvWritesCannotDisturbGeometry) {
   auto &modeling = editor().modeling();
   expect_release_rejection(editor(), [&] { return modeling.apply_material({}); });
   expect_release_rejection(editor(), [&] { return modeling.assign_material_slot_to_selection(1u); });
-  expect_release_rejection(editor(), [&] { return modeling.assign_material_slot_to_face(first.ref(), 0, 1u); });
+  expect_release_rejection(editor(), [&] { return modeling.assign_material_slot_to_face(first_.ref(), 0, 1u); });
   expect_release_rejection(editor(), [&] { return modeling.set_face_texture_setting({}); });
   expect_release_rejection(editor(), [&] { return modeling.apply_face_texture_action({}); });
-  expect_release_rejection(editor(), [&] { return modeling.transfer_face_texture_to_face(first.id(), 0); });
+  expect_release_rejection(editor(), [&] { return modeling.transfer_face_texture_to_face(first_.id(), 0); });
   expect_release_rejection(editor(), [&] { return modeling.begin_face_texture_gesture({}); });
   expect_release_rejection(editor(), [&] { return modeling.set_face_texture_treat_as_one(true); });
   expect_release_rejection(editor(), [&] { return modeling.set_uv_peel_options({}); });
@@ -417,7 +417,7 @@ TEST(PublicReleaseQuickExtrusionTests, SemanticShiftMoveDragKeepsGeometryAndHist
 TEST_F(PublicReleaseModelingTests, ModelingTransformsNormalsAndClipboardStillWork) {
   auto &modeling = editor().modeling();
   const auto count_before = modeling.objects().size();
-  const auto translated = first.transform().translate({1.0f, 0.0f, 0.0f});
+  const auto translated = first_.transform().translate({1.0f, 0.0f, 0.0f});
   ASSERT_TRUE(translated.ok()) << translated.error_message();
   // Apply nonuniform world scale before rotation to keep the result TRS-representable.
   const auto scaled = modeling.scale_selection({1.1f, 1.0f, 1.0f});

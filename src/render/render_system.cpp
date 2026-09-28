@@ -10,6 +10,7 @@
 #include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/material_preview_renderer.hpp"
+#include "render/material_thumbnail_renderer.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
@@ -297,6 +298,7 @@ void RenderSystem::shutdown() {
     // Complete all queued creation/presentation work before invalidating native
     // surfaces or their backend callback records.
     engine_->flushAndWait();
+    material_thumbnail_renderer_.reset();
     while (!additional_surfaces_.empty()) {
       destroy_additional_surface(*additional_surfaces_.back());
     }
@@ -708,6 +710,31 @@ bool RenderSystem::initialize_material_preview_renderer(
       resource_root_);
 }
 
+std::shared_ptr<const MaterialThumbnailReadback>
+RenderSystem::submit_material_thumbnail(RenderMaterialEvaluationSnapshot snapshot,
+                                        std::uint32_t size) {
+  if (engine_ == nullptr || !material_library_.initialized() ||
+      solid_color_texture_ == nullptr) {
+    return {};
+  }
+  if (material_thumbnail_renderer_ == nullptr) {
+    auto renderer = std::make_unique<MaterialThumbnailRenderer>();
+    if (!renderer->initialize(*engine_, material_library_.quader_mesh(),
+                              material_library_.quader_mesh_lit(),
+                              *solid_color_texture_, resource_root_)) {
+      return {};
+    }
+    material_thumbnail_renderer_ = std::move(renderer);
+  }
+  return material_thumbnail_renderer_->submit(std::move(snapshot), size);
+}
+
+void RenderSystem::poll_material_thumbnails() {
+  if (material_thumbnail_renderer_ != nullptr) {
+    material_thumbnail_renderer_->poll();
+  }
+}
+
 void RenderSystem::initialize_viewport_renderer(
     ViewportRenderer &viewport_renderer, std::uint8_t grid_layer_mask,
     ViewportRenderSurface surface) {
@@ -752,10 +779,10 @@ void RenderSystem::apply_scene_settings(
   if (!engine_ || !scene_) {
     return;
   }
-  static const SceneEnvironmentSettings default_environment;
+  static const SceneEnvironmentSettings kDefaultEnvironment;
   environment_library_.apply(release_has_feature(ReleaseFeature::Environment)
                                  ? settings.environment
-                                 : default_environment);
+                                 : kDefaultEnvironment);
 }
 
 } // namespace quader

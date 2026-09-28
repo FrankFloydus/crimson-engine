@@ -37,6 +37,7 @@ Actual target dependencies live in [CMakeLists.txt](CMakeLists.txt) and
 | [src/api](src/api/AGENTS.md) | `QuaderEditorApi` whole-editor intent; `QuaderApi` document/modeling facades; typed commands, handles and batches |
 | [src/sdk/core/modeling](src/sdk/core/modeling/AGENTS.md) | Portable mesh/curve documents, operations, typed IDs, validation/remaps, sessions, preview/history, QDR document IO and neutral snapshots |
 | [src/editor](src/editor/AGENTS.md) | Native commands, tools, modeling publication, history integration, selection, metadata and project/scene sessions |
+| [src/editor/assets](src/editor/assets/project_asset_service.hpp) | Project asset discovery and mixed-asset transactions; delegates scene/material truth to existing owners and OS recycling to an injected port |
 | [src/scene](src/scene/AGENTS.md) | `SceneDocument`, live entities/components, hierarchy, transforms and stable editor-object identity |
 | [src/assets](src/assets/AGENTS.md) | `AssetRegistry`, mesh/material/texture identity, validation and copy-on-write assets |
 | [src/io](src/io/AGENTS.md) | Native QDR projects/scenes, hydration, asset dependencies, durable filesystem writes and recovery |

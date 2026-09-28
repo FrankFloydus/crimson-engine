@@ -265,28 +265,28 @@ TEST(PublicReleaseRenderTests, DefaultImageCacheRetiresOldTexturesAndReusesStabl
 TEST(PublicReleaseRenderTests, RejectsExcludedShadingAndSanitizesRestoredModes) {
   ASSERT_EQ(current_product_release(), kPublicRelease01);
   QuaderViewportApi viewports;
-  constexpr auto pane = ViewportPaneId::Perspective;
-  ASSERT_TRUE(viewports.set_shading_mode(pane, QuaderShadingMode::Solid).ok());
-  constexpr std::array blocked{
+  constexpr auto kPane = ViewportPaneId::Perspective;
+  ASSERT_TRUE(viewports.set_shading_mode(kPane, QuaderShadingMode::Solid).ok());
+  constexpr std::array kBlocked{
       QuaderShadingMode::Rendered, QuaderShadingMode::DiffuseOnly,
       QuaderShadingMode::SpecularOnly, QuaderShadingMode::Albedo,
       QuaderShadingMode::Roughness, QuaderShadingMode::Metalness,
       QuaderShadingMode::Normal};
-  for (const auto mode : blocked) {
-    const auto result = viewports.set_shading_mode(pane, mode);
+  for (const auto mode : kBlocked) {
+    const auto result = viewports.set_shading_mode(kPane, mode);
     EXPECT_FALSE(result.ok());
     EXPECT_FALSE(result.changed());
-    EXPECT_EQ(viewports.shading_mode(pane), QuaderShadingMode::Solid);
+    EXPECT_EQ(viewports.shading_mode(kPane), QuaderShadingMode::Solid);
   }
   for (const auto mode : {QuaderShadingMode::Wireframe, QuaderShadingMode::Shaded,
                           QuaderShadingMode::Solid}) {
-    EXPECT_TRUE(viewports.set_shading_mode(pane, mode).ok());
-    EXPECT_EQ(viewports.shading_mode(pane), mode);
+    EXPECT_TRUE(viewports.set_shading_mode(kPane, mode).ok());
+    EXPECT_EQ(viewports.shading_mode(kPane), mode);
   }
   ViewportWorkspaceService workspace;
-  workspace.pane(pane).perspective_shading = ViewportShadingMode::Rendered;
-  EXPECT_EQ(workspace.shading_mode(pane), ViewportShadingMode::Shaded);
-  EXPECT_FALSE(workspace.set_shading_mode(pane, ViewportShadingMode::Albedo));
+  workspace.pane(kPane).perspective_shading = ViewportShadingMode::Rendered;
+  EXPECT_EQ(workspace.shading_mode(kPane), ViewportShadingMode::Shaded);
+  EXPECT_FALSE(workspace.set_shading_mode(kPane, ViewportShadingMode::Albedo));
   workspace.pane(ViewportPaneId::Top).orthographic_shading =
       ViewportShadingMode::Normal;
   EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Top),

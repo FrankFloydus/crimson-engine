@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_viewport_input_types.hpp"
+#include "api/quader_command_ids.hpp"
 
 #include <QObject>
 
@@ -26,6 +27,7 @@ using QtViewportToolStateProvider = std::function<ViewportToolState()>;
 using QtApplicationCommandInputOwnerProvider = std::function<bool()>;
 using QtCommandInputContextProvider =
     std::function<QuaderViewportKeybindingContext()>;
+using QtAssetBrowserActionHandler = std::function<bool(QuaderCommandId)>;
 
 [[nodiscard]] ViewportToolState
 qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
@@ -67,6 +69,8 @@ public:
   void set_outliner_input_owner_provider(
       QtApplicationCommandInputOwnerProvider provider);
   void set_input_context_provider(QtCommandInputContextProvider provider);
+  /** Routes resolved asset clipboard intent to its widget, never to the scene. */
+  void set_asset_browser_action_handler(QtAssetBrowserActionHandler handler);
 
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
@@ -83,9 +87,10 @@ private:
   QtApplicationCommandInputOwnerProvider command_input_owner_provider_;
   QtApplicationCommandInputOwnerProvider outliner_input_owner_provider_;
   QtCommandInputContextProvider input_context_provider_;
+  QtAssetBrowserActionHandler asset_browser_action_handler_;
   bool text_input_sequence_pending_ = false;
   std::uint64_t binding_generation_ = 0;
-  // A consumed settings press retains its release across focus/runtime changes.
+  // Scoped command presses retain their release across focus/runtime changes.
   std::unordered_set<int> consumed_settings_keys_;
 };
 

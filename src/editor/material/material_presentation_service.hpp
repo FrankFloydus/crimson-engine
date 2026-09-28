@@ -18,6 +18,7 @@ namespace quader {
 
 class ProjectSession;
 class SceneSession;
+struct ProjectFileSystemWorkStats;
 
 /** Classifies the backing document represented by a presentation item. */
 enum class MaterialPresentationKind : std::uint8_t {
@@ -30,6 +31,7 @@ enum class MaterialPresentationKind : std::uint8_t {
 struct MaterialPresentationRevision final {
   std::uint64_t project_activation_generation = 0u;
   std::uint64_t project_material_revision = 0u;
+  std::uint64_t project_texture_revision = 0u;
   std::uint64_t active_scene_id = 0u;
   std::uint64_t embedded_material_revision = 0u;
 
@@ -68,7 +70,8 @@ public:
   revision(const ProjectSession &project, const SceneSession *scene);
 
   [[nodiscard]] static MaterialPresentationSnapshot
-  snapshot(ProjectSession &project, const SceneSession *scene);
+  snapshot(ProjectSession &project, const SceneSession *scene,
+           ProjectFileSystemWorkStats *file_system_work = nullptr);
 };
 
 } // namespace quader

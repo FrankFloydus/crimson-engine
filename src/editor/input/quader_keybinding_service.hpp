@@ -1158,9 +1158,28 @@ public:
              const QuaderKeybindingRule *right) {
             return rule_precedes(*right, *left);
           });
+      const QuaderKeybindingRule *strongest_prefix = nullptr;
+      for (const QuaderKeybindingRule *candidate : prefix_matches) {
+        if ((!eligible || eligible(candidate->target_id)) &&
+            (strongest_prefix == nullptr ||
+             rule_precedes(*strongest_prefix, *candidate))) {
+          strongest_prefix = candidate;
+        }
+      }
       for (const QuaderKeybindingRule *candidate : exact_matches) {
         if (eligible && !eligible(candidate->target_id)) {
           continue;
+        }
+        if (strongest_prefix != nullptr &&
+            strongest_prefix->source == "user" &&
+            candidate->source == "default" &&
+            strongest_prefix->weight > candidate->weight) {
+          // A newly added compiled shortcut must not take the first chord
+          // of an existing user sequence. No stored override is rewritten.
+          return {
+              .kind = QuaderKeybindingDispatch::Kind::PendingChord,
+              .shortcut = keybinding_detail::format_shortcut(sequence),
+          };
         }
         return {
             .kind = QuaderKeybindingDispatch::Kind::ExactMatch,
@@ -1169,13 +1188,11 @@ public:
         };
       }
 
-      for (const QuaderKeybindingRule *candidate : prefix_matches) {
-        if (!eligible || eligible(candidate->target_id)) {
-          return {
-              .kind = QuaderKeybindingDispatch::Kind::PendingChord,
-              .shortcut = keybinding_detail::format_shortcut(sequence),
-          };
-        }
+      if (strongest_prefix != nullptr) {
+        return {
+            .kind = QuaderKeybindingDispatch::Kind::PendingChord,
+            .shortcut = keybinding_detail::format_shortcut(sequence),
+        };
       }
 
       return {};

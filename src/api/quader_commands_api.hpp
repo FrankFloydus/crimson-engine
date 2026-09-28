@@ -97,6 +97,8 @@ struct QuaderViewportKeybindingContext {
   bool outliner_focused = false;
   /** Ordinary main-editor panel input, including an embedded material browser. */
   bool editor_focused = false;
+  /** Asset item browsing owns clipboard commands separately from the scene. */
+  bool asset_browser_focused = false;
 };
 
 /**
@@ -195,6 +197,10 @@ public:
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool viewport_focused, bool text_input_active,
         QuaderViewportKeybindingContext input_context = {});
+    /** Probes the asset browser's canonical shortcuts before Qt activation. */
+    [[nodiscard]] QuaderViewportKeybindingDispatch
+    resolve_asset_browser_input_binding(const QuaderInputChord &chord,
+                                        bool text_input_active) const;
     /**
      * Probes one edge without consuming sequence state and returns an enabled
      * global command when it is an exact match. Native hosts use this to run

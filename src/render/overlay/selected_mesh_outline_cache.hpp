@@ -20,6 +20,8 @@ struct SelectedMeshOutlineWorkStats {
   std::uint64_t source_refreshes = 0;
   std::uint64_t topology_builds = 0;
   std::uint64_t camera_classifications = 0;
+  std::uint64_t visibility_classifications = 0;
+  std::uint64_t occurrence_bounds_tests = 0;
 };
 
 /// Retains welded adjacency across panes and projects separate ordinary/active silhouettes.
@@ -33,7 +35,8 @@ public:
   [[nodiscard]] const ViewportOverlayFrame &frame(
       const RenderOverlaySelectedObjectSnapshot *snapshot,
       const ViewportOverlayCamera &camera, std::size_t pane,
-      const RenderOverlaySelectionSnapshot *hierarchy = nullptr);
+      const RenderOverlaySelectionSnapshot *hierarchy = nullptr,
+      float outline_width_pixels = kOverlaySelectionWireLineWidthPixels);
   [[nodiscard]] std::uint64_t revision(std::size_t pane) const;
   [[nodiscard]] SelectedMeshOutlineWorkStats work_stats() const;
   void reset();

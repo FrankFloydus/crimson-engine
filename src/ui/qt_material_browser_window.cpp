@@ -1617,6 +1617,9 @@ void QtMaterialBrowserWindow::clear_materials() {
 }
 
 void QtMaterialBrowserWindow::set_folders(std::vector<QString> folders) {
+  if (purpose_ == QtMaterialBrowserPurpose::FaceAssignment) {
+    return;
+  }
   std::vector<QString> normalized;
   for (QString &folder : folders) {
     folder = normalized_folder(std::move(folder));
@@ -1724,6 +1727,9 @@ void QtMaterialBrowserWindow::set_material_paste_available(bool available) {
 }
 
 QString QtMaterialBrowserWindow::selected_folder() const {
+  if (purpose_ == QtMaterialBrowserPurpose::FaceAssignment) {
+    return QStringLiteral("Materials");
+  }
   const auto *item = folder_tree_->currentItem();
   return item == nullptr ? QStringLiteral("Materials")
                         : item->data(0, kFolderPathRole).toString();
@@ -1896,7 +1902,8 @@ int QtMaterialBrowserWindow::tile_size() const {
 }
 
 bool QtMaterialBrowserWindow::sidebar_visible() const {
-  return folders_button_->isChecked();
+  return purpose_ != QtMaterialBrowserPurpose::FaceAssignment &&
+         folders_button_->isChecked();
 }
 
 int QtMaterialBrowserWindow::sidebar_width() const {
@@ -1904,6 +1911,7 @@ int QtMaterialBrowserWindow::sidebar_width() const {
 }
 
 void QtMaterialBrowserWindow::set_sidebar_visible(bool visible, bool notify) {
+  visible = visible && purpose_ != QtMaterialBrowserPurpose::FaceAssignment;
   const bool changed = sidebar_visible() != visible || folder_tree_->isHidden() == visible;
   const QSignalBlocker blocker(folders_button_);
   folders_button_->setChecked(visible);
@@ -2175,6 +2183,13 @@ void QtMaterialBrowserWindow::refresh_content_page() {
 void QtMaterialBrowserWindow::update_purpose_presentation() {
   const bool normal =
       purpose_ != QtMaterialBrowserPurpose::Picker;
+  const bool has_folders = purpose_ != QtMaterialBrowserPurpose::FaceAssignment;
+  folders_button_->setVisible(has_folders);
+  if (!has_folders) {
+    folders_.clear();
+    set_sidebar_visible(false, false);
+    proxy_->set_folder({});
+  }
   setWindowTitle(normal ? labels_.window_title : labels_.picker_window_title);
   if (import_button_ != nullptr) {
     import_button_->setVisible(normal);
@@ -2196,9 +2211,9 @@ void QtMaterialBrowserWindow::update_purpose_presentation() {
   list_view_->setSelectionMode(selection_mode);
   grid_view_->setDragEnabled(normal);
   list_view_->setDragEnabled(normal);
-  folder_tree_->setDragEnabled(normal);
-  folder_tree_->setAcceptDrops(normal);
-  static_cast<MaterialFolderTree *>(folder_tree_)->organization_enabled = normal;
+  folder_tree_->setDragEnabled(normal && has_folders);
+  folder_tree_->setAcceptDrops(normal && has_folders);
+  static_cast<MaterialFolderTree *>(folder_tree_)->organization_enabled = normal && has_folders;
   if (!normal) {
     static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_drag_active(false);
     static_cast<MaterialFolderTree *>(folder_tree_)->set_hint_drag_hovering(false);
@@ -2251,6 +2266,10 @@ void QtMaterialBrowserWindow::select_material(
 }
 
 void QtMaterialBrowserWindow::set_selected_folder(QString folder) {
+  if (purpose_ == QtMaterialBrowserPurpose::FaceAssignment) {
+    proxy_->set_folder({});
+    return;
+  }
   folder = normalized_folder(std::move(folder));
   while (!folder.isEmpty()) {
     for (QTreeWidgetItemIterator it(folder_tree_); *it != nullptr; ++it) {

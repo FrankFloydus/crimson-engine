@@ -203,6 +203,9 @@ public:
       QuaderStandardMaterialTextureTransformComponent component, float value);
   QuaderApiVoidResult import_texture(QuaderStandardMaterialTextureSlot slot,
                                      const std::filesystem::path &source_path);
+  /// Assigns an existing project texture without copying its source image.
+  QuaderApiVoidResult set_texture(QuaderStandardMaterialTextureSlot slot,
+                                  ProjectAssetId texture_id);
   QuaderApiVoidResult clear_texture(QuaderStandardMaterialTextureSlot slot);
   QuaderApiVoidResult save();
   QuaderApiVoidResult save_as(ProjectRelativePath path);

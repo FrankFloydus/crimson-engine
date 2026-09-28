@@ -28,7 +28,7 @@ struct ProjectMaterialAssetDestination final {
   ProjectRelativePath path;
 };
 
-/// Requires an exact existing folder under Materials without directory aliases.
+/// Requires an exact existing project folder without directory aliases.
 [[nodiscard]] ProjectIoResult<std::filesystem::path>
 resolve_material_destination_folder(const ProjectFileSystem &file_system,
                                     std::string_view destination_folder);

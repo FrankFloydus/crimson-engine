@@ -46,8 +46,6 @@ struct QtMainMenuContext {
   std::function<bool()> tool_toolbar_visible;
   std::function<void(bool)> set_tool_toolbar_visible;
   std::function<void()> viewport_settings_changed;
-  std::function<void()> show_material_browser;
-  std::function<bool()> material_browser_available;
   std::function<void()> show_material_find_replace;
   std::function<bool()> material_find_replace_available;
   std::function<void()> show_autosave_recovery;

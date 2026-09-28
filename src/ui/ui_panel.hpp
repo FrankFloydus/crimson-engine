@@ -23,6 +23,7 @@ enum class UIPanelId {
   Console,
   Layers,
   FaceTexture,
+  AssetBrowser,
   Count,
 };
 
@@ -39,12 +40,13 @@ inline bool ui_panel_available(UIPanelId id) noexcept {
 
 inline constexpr std::size_t kUiPanelCount =
     static_cast<std::size_t>(UIPanelId::Count);
-inline constexpr std::array<UIPanelId, 5> kUiDockPanelIds = {
+inline constexpr std::array<UIPanelId, 6> kUiDockPanelIds = {
     UIPanelId::Outliner,
     UIPanelId::Inspector,
     UIPanelId::Layers,
     UIPanelId::FaceTexture,
     UIPanelId::Console,
+    UIPanelId::AssetBrowser,
 };
 
 inline const char *ui_panel_key(UIPanelId id) {
@@ -61,6 +63,8 @@ inline const char *ui_panel_key(UIPanelId id) {
     return "Layers";
   case UIPanelId::FaceTexture:
     return "Face Texture";
+  case UIPanelId::AssetBrowser:
+    return "Asset Browser";
   case UIPanelId::Count:
     break;
   }
@@ -81,6 +85,8 @@ inline const char *ui_panel_stable_id(UIPanelId id) {
     return "layers";
   case UIPanelId::FaceTexture:
     return "face_texture";
+  case UIPanelId::AssetBrowser:
+    return "asset_browser";
   case UIPanelId::Count:
     break;
   }
@@ -96,6 +102,7 @@ inline bool ui_panel_default_visible(UIPanelId id) {
   case UIPanelId::FaceTexture:
     return true;
   case UIPanelId::Console:
+  case UIPanelId::AssetBrowser:
     return false;
   case UIPanelId::Count:
     break;
@@ -117,6 +124,8 @@ inline const char *ui_panel_localization_key(UIPanelId id) {
     return "ui.panel.layers";
   case UIPanelId::FaceTexture:
     return "ui.panel.face_texture";
+  case UIPanelId::AssetBrowser:
+    return "ui.panel.asset_browser";
   case UIPanelId::Count:
     break;
   }

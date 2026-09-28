@@ -844,8 +844,10 @@ TEST(ProjectMaterialCatalogTests,
       }
     }
   }
-  EXPECT_NE(original_revisions[0], original_revisions[1])
-      << "identical encoded bytes still distinguish sRGB from linear storage";
+  EXPECT_EQ(original_revisions[0], original_revisions[1])
+      << "decoded image identity is independent of the material slot's interpretation";
+  EXPECT_EQ(standard.base_color_texture->color_space, ProjectTextureColorSpace::Srgb);
+  EXPECT_EQ(standard.roughness_texture->color_space, ProjectTextureColorSpace::Linear);
 }
 
 TEST(ProjectMaterialCatalogTests,
@@ -930,6 +932,19 @@ TEST(ProjectMaterialCatalogTests,
       ProjectManifestStore::create_in_empty_directory(case_root);
   ASSERT_TRUE(case_workspace.ok()) << case_workspace.error().message;
   ASSERT_TRUE(std::filesystem::create_directory(case_root / "materials"));
+  // Folder names no longer have a prescribed Materials spelling. A reference
+  // still must match the actual filesystem casing under the common root.
+  ASSERT_TRUE(ProjectMaterialCatalog::scan(case_workspace.value().file_system).ok());
+  write_text(case_root / "materials" / "albedo.png", "image");
+  ProjectMaterialDocument wrong_case = first;
+  standard_material(wrong_case).base_color_texture = ProjectMaterialTextureSlot{
+      .id = ProjectAssetId::generate(),
+      .project_relative_path = "Materials/albedo.png",
+      .color_space = ProjectTextureColorSpace::Srgb,
+  };
+  ASSERT_TRUE(QmatCodec::write_atomic(case_workspace.value().file_system,
+                                      project_path("materials/case.qmat"),
+                                      wrong_case).ok());
   ProjectIoResult<ProjectMaterialCatalog> case_catalog =
       ProjectMaterialCatalog::scan(case_workspace.value().file_system);
   ASSERT_FALSE(case_catalog.ok());
@@ -1120,7 +1135,7 @@ TEST(ProjectMaterialWorkspaceTests,
   ASSERT_NE(project.manifest(), nullptr);
 
   const std::string manifest_text = read_text(project.manifest_path());
-  EXPECT_NE(manifest_text.find("\"version\": 4"), std::string::npos);
+  EXPECT_NE(manifest_text.find("\"version\": 5"), std::string::npos);
   EXPECT_EQ(manifest_text.find("\"activeMaterial\""),
             std::string::npos);
 
@@ -1152,7 +1167,7 @@ TEST(ProjectMaterialWorkspaceTests,
 }
 
 TEST(ProjectMaterialWorkspaceTests,
-     OpensV1ManifestBackfillsAssetsAndMigratesToV4) {
+     OpensV1ManifestBackfillsAssetsAndDefersV5UntilAuthoredSave) {
   ScopedMaterialTestDirectory temporary("migration");
   const std::filesystem::path root =
       temporary.make_empty_project("Legacy");
@@ -1189,9 +1204,21 @@ TEST(ProjectMaterialWorkspaceTests,
       root / "Materials" / "default_material.qmat"));
   EXPECT_TRUE(std::filesystem::is_regular_file(
       root / "Textures" / "default_albedo.png"));
+  EXPECT_EQ(read_text(created.value().manifest_path), legacy_manifest);
+  EXPECT_EQ(project.manifest()->loaded_version(), 1u);
+  const auto default_texture_id = *ProjectAssetId::parse(kDefaultProjectAlbedoTextureId);
+  ASSERT_NE(project.manifest()->find_texture(default_texture_id), nullptr);
+
+  const auto saved_scene = project.create_scene_asset(project_path("Saved.qdr"));
+  ASSERT_TRUE(saved_scene.ok()) << saved_scene.error().message;
   EXPECT_NE(read_text(created.value().manifest_path)
-                .find("\"version\": 4"),
+                .find("\"version\": 5"),
             std::string::npos);
+  const auto persisted = ProjectManifestStore::open(created.value().manifest_path);
+  ASSERT_TRUE(persisted.ok()) << persisted.error().message;
+  EXPECT_EQ(persisted.value().manifest.loaded_version(), 5u);
+  EXPECT_NE(persisted.value().manifest.find_scene(saved_scene.value().id), nullptr);
+  EXPECT_NE(persisted.value().manifest.find_texture(default_texture_id), nullptr);
 }
 
 TEST(ProjectMaterialWorkspaceTests,
@@ -1308,7 +1335,7 @@ TEST(ProjectMaterialWorkspaceTests,
   ASSERT_TRUE(ProjectManifestStore::save_atomic(*project.workspace()).ok());
   const auto saved_manifest = read_text(manifest);
   EXPECT_EQ(saved_manifest.find("\"activeMaterial\""), std::string::npos);
-  EXPECT_NE(saved_manifest.find("\"version\": 4"), std::string::npos);
+  EXPECT_NE(saved_manifest.find("\"version\": 5"), std::string::npos);
   ASSERT_TRUE(project.close(true).ok);
   ASSERT_TRUE(project.open(manifest).ok);
   EXPECT_NE(project.material_catalog().find(alternate.id), nullptr);

@@ -558,6 +558,41 @@ TEST_F(BridgeReaderTests, MovedMaterialUsesUuidAndReportsItsCurrentSourceFingerp
             scene_fingerprint.content_hash);
 }
 
+TEST_F(BridgeReaderTests, TextureCatalogResolvesMovedImagesAndRetiredIds) {
+  write_project_material();
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial);
+  const auto texture_id = *ProjectAssetId::parse(kTexture);
+  const auto moved = relative_path("relocated.PNG");
+  write_bytes(root_ / moved.native_path(), "encoded moved texture");
+  ASSERT_TRUE(workspace_.manifest.register_texture({.id = texture_id, .path = moved}).ok());
+  save_manifest();
+  open_project();
+  open_scene();
+  const auto index = material_index(QUADER_BRIDGE_MATERIAL_PROJECT);
+  QuaderBridgeMaterialView material{};
+  ASSERT_EQ(api_->material_view(scene_, index, &material, &error_), 1) << error_.message;
+  EXPECT_STREQ(material.textures[0].id, kTexture);
+  EXPECT_STREQ(material.textures[0].source_path, "relocated.PNG");
+  ASSERT_EQ(api_->read_texture(scene_, index, 0u, &blob_, &error_), 1) << error_.message;
+  QuaderBridgeBlobView view{};
+  ASSERT_EQ(api_->blob_view(blob_, &view, &error_), 1) << error_.message;
+  EXPECT_EQ(view.byte_count, std::string_view("encoded moved texture").size());
+  api_->release_blob(blob_);
+  blob_ = nullptr;
+  api_->release_scene(scene_);
+  scene_ = nullptr;
+  api_->release_project(project_);
+  project_ = nullptr;
+  const std::array retired{texture_id};
+  ASSERT_TRUE(workspace_.manifest.mark_textures_deleted(retired).ok());
+  save_manifest();
+  open_project();
+  open_scene();
+  ASSERT_EQ(api_->material_view(scene_, material_index(QUADER_BRIDGE_MATERIAL_PROJECT),
+                                &material, &error_), 1) << error_.message;
+  EXPECT_EQ(material.textures[0].present, 0u);
+}
+
 TEST_F(BridgeReaderTests, ReusedDependencyPathResolvesOriginalUuidWithoutUsingNewOccupant) {
   write_project_material();
   add_scene(kFirstScene, "Scenes/first.qdr", make_document(true), kProjectMaterial);

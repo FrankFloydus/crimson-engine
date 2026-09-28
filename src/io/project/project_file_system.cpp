@@ -125,7 +125,8 @@ ProjectFileSystem ProjectFileSystem::begin_resolution_batch(
 }
 
 ProjectIoResult<std::filesystem::path>
-ProjectFileSystem::resolve(const ProjectRelativePath &path) const {
+ProjectFileSystem::resolve_physical_location(
+    const ProjectRelativePath &path) const {
   if (!valid()) {
     return ProjectIoResult<std::filesystem::path>::failure(
         ProjectIoErrorCode::InvalidWorkspaceState,
@@ -139,6 +140,10 @@ ProjectFileSystem::resolve(const ProjectRelativePath &path) const {
 
   const std::filesystem::path candidate =
       (root_ / path.native_path()).lexically_normal();
+  if (resolution_batch_cache_ != nullptr &&
+      resolution_batch_cache_->work_stats != nullptr) {
+    ++resolution_batch_cache_->work_stats->physical_path_resolutions;
+  }
   std::error_code error;
   const std::filesystem::path resolved =
       std::filesystem::weakly_canonical(candidate, error);
@@ -161,7 +166,8 @@ ProjectFileSystem::resolve(const ProjectRelativePath &path) const {
         case_result.error().code, case_result.error().message,
         case_result.error().path);
   }
-  return ProjectIoResult<std::filesystem::path>::success(candidate);
+  return ProjectIoResult<std::filesystem::path>::success(
+      resolved.lexically_normal());
 }
 
 ProjectIoResult<std::filesystem::path>
@@ -261,30 +267,14 @@ ProjectFileSystem::resolve_for_write_in_directory(
 }
 
 ProjectIoResult<std::filesystem::path>
-ProjectFileSystem::resolve_physical_location(
-    const ProjectRelativePath &path) const {
-  ProjectIoResult<std::filesystem::path> resolved = resolve(path);
-  if (!resolved.ok()) {
-    return resolved;
-  }
-
-  std::error_code error;
-  const std::filesystem::path physical =
-      std::filesystem::weakly_canonical(resolved.value(), error);
-  if (error) {
-    return ProjectIoResult<std::filesystem::path>::failure(
-        ProjectIoErrorCode::IoFailure,
-        filesystem_error_message("Could not resolve physical project path",
-                                 error),
-        resolved.value());
-  }
-  if (!path_is_within(physical, root_)) {
-    return ProjectIoResult<std::filesystem::path>::failure(
-        ProjectIoErrorCode::SymlinkEscape,
-        "Project path resolves outside the project root.", resolved.value());
+ProjectFileSystem::resolve(const ProjectRelativePath &path) const {
+  ProjectIoResult<std::filesystem::path> physical =
+      resolve_physical_location(path);
+  if (!physical.ok()) {
+    return physical;
   }
   return ProjectIoResult<std::filesystem::path>::success(
-      physical.lexically_normal());
+      (root_ / path.native_path()).lexically_normal());
 }
 
 ProjectIoResult<bool> ProjectFileSystem::refers_to_same_location(
@@ -357,6 +347,10 @@ ProjectFileSystem::relative_from_absolute(
         filesystem_error_message("Could not resolve absolute path", error),
         path);
   }
+  if (resolution_batch_cache_ != nullptr &&
+      resolution_batch_cache_->work_stats != nullptr) {
+    ++resolution_batch_cache_->work_stats->physical_path_resolutions;
+  }
   const std::filesystem::path resolved =
       std::filesystem::weakly_canonical(absolute_path, error);
   if (error) {
@@ -375,12 +369,26 @@ ProjectFileSystem::relative_from_absolute(
   // another ancestor alias. Keep in-project spelling when it is already
   // relative to this root, including intentional internal links and casing.
   std::filesystem::path relative = absolute_path.lexically_relative(root_);
-  if (relative.empty() || *relative.begin() == "..") {
+  const bool has_lexical_project_root =
+      !relative.empty() && *relative.begin() != "..";
+  if (!has_lexical_project_root) {
     relative = resolved.lexically_relative(root_);
   }
   ProjectIoResult<ProjectRelativePath> parsed =
       ProjectRelativePath::parse(relative);
   if (!parsed.ok()) {
+    return parsed;
+  }
+  if (has_lexical_project_root) {
+    // The physical target was checked above. Preserve the original in-project
+    // spelling and validate its case without resolving the same target twice.
+    const ProjectIoResult<void> case_result =
+        validate_existing_component_case(parsed.value());
+    if (!case_result.ok()) {
+      return ProjectIoResult<ProjectRelativePath>::failure(
+          case_result.error().code, case_result.error().message,
+          case_result.error().path);
+    }
     return parsed;
   }
   const ProjectIoResult<std::filesystem::path> validated =

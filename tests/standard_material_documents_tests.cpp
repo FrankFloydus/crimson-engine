@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "assets/default_material_catalog.hpp"
+#include "editor/material/material_presentation_service.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
@@ -289,7 +290,8 @@ TEST(StandardMaterialDocumentsTests,
 TEST(StandardMaterialDocumentsTests,
      NewSaveAsRegistersNewAssetAndPreservesImportedSourceBytes) {
   StandardMaterialDocumentsHarness harness("new-save-as");
-  const auto manifest_before = read_bytes(harness.project().manifest_path());
+  const auto manifest_before = ProjectManifestStore::open(harness.project().manifest_path());
+  ASSERT_TRUE(manifest_before.ok()) << manifest_before.error().message;
   int opened_events = 0;
   int dirty_events = 0;
   int saved_events = 0;
@@ -416,13 +418,24 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_EQ(registered->project_relative_path,
             current.value().path->portable_string());
   EXPECT_FALSE(harness.project().has_dirty_scenes());
-  EXPECT_EQ(read_bytes(harness.project().manifest_path()), manifest_before);
+  const auto manifest_after = ProjectManifestStore::open(harness.project().manifest_path());
+  ASSERT_TRUE(manifest_after.ok()) << manifest_after.error().message;
+  EXPECT_EQ(manifest_after.value().manifest.id(), manifest_before.value().manifest.id());
+  EXPECT_TRUE(std::ranges::equal(manifest_after.value().manifest.scenes(),
+                                manifest_before.value().manifest.scenes()));
+  EXPECT_TRUE(std::ranges::equal(manifest_after.value().manifest.open_scene_paths(),
+                                manifest_before.value().manifest.open_scene_paths()));
+  EXPECT_EQ(manifest_after.value().manifest.active_scene_path(),
+            manifest_before.value().manifest.active_scene_path());
 
   for (const QuaderStandardMaterialTextureReference *texture :
        {&*current.value().material.base_color_texture,
         &*current.value().material.roughness_texture,
         &*current.value().material.metallic_texture,
         &*current.value().material.normal_texture}) {
+    const auto *persisted_texture = manifest_after.value().manifest.find_texture(texture->id);
+    ASSERT_NE(persisted_texture, nullptr);
+    EXPECT_EQ(persisted_texture->path.portable_string(), texture->project_relative_path);
     EXPECT_EQ(read_bytes(harness.root() / texture->project_relative_path),
               original);
   }
@@ -571,7 +584,7 @@ TEST(StandardMaterialDocumentsTests,
                    .ok());
   EXPECT_FALSE(harness.editor()
                    .standard_material_documents()
-                   .save_as(project_path("Scenes/not_a_material.qmat"))
+                   .save_as(project_path(".quader/not_a_material.qmat"))
                    .ok());
   const auto unchanged =
       harness.editor().standard_material_documents().current();
@@ -1244,7 +1257,7 @@ TEST(StandardMaterialDocumentsTests,
   ASSERT_TRUE(documents.update_base_color_preview(
                            session_id, {0.25f, 0.5f, 0.75f})
                   .ok());
-  EXPECT_FALSE(documents.save_as(project_path("Scenes/preview.qmat")).ok());
+  EXPECT_FALSE(documents.save_as(project_path(".quader/preview.qmat")).ok());
   EXPECT_EQ(read_bytes(harness.root() / kDefaultProjectMaterialPath),
             saved_bytes);
   EXPECT_FALSE(std::filesystem::exists(harness.root() / "Materials" /
@@ -1402,6 +1415,62 @@ TEST(StandardMaterialDocumentsTests,
 }
 
 TEST(StandardMaterialDocumentsTests,
+     MaterialPresentationBatchReusesDirectoryValidationAndReadsFreshSources) {
+  StandardMaterialDocumentsHarness harness("presentation-batch");
+  const auto default_id = ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  const auto *original = harness.project().material_catalog().find(*default_id);
+  ASSERT_NE(original, nullptr);
+  const auto definition = original->material;
+  const auto *standard = definition.standard_material();
+  ASSERT_NE(standard, nullptr);
+  const auto *albedo = standard->texture(StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(albedo, nullptr);
+  ASSERT_TRUE(albedo->has_value());
+  constexpr std::size_t kCopies = 32u;
+  const auto *workspace = harness.project().workspace();
+  ASSERT_NE(workspace, nullptr);
+  for (std::size_t index = 0; index < kCopies; ++index) {
+    auto material = definition;
+    material.id = ProjectAssetId::generate();
+    material.name = "Batch material " + std::to_string(index);
+    const auto path = project_path("Materials/batch-" + std::to_string(index) + ".qmat");
+    const auto written = QmatCodec::create_atomic(workspace->file_system, path, material);
+    ASSERT_TRUE(written.ok()) << written.error().message;
+  }
+  ASSERT_TRUE(harness.editor().project_assets().assets(true).ok());
+  ProjectFileSystemWorkStats work;
+  const auto snapshot = MaterialPresentationService::snapshot(harness.project(), nullptr, &work);
+  ASSERT_EQ(snapshot.materials.size(), kCopies + 1u);
+  std::size_t directory_count = 1u;
+  const auto albedo_path = project_path((*albedo)->project_relative_path);
+  for (const auto &component : albedo_path.native_path().parent_path()) {
+    (void)component;
+    ++directory_count;
+  }
+  EXPECT_EQ(work.directory_case_enumerations, directory_count);
+  EXPECT_GE(work.component_case_lookups, kCopies);
+  for (const auto &material : snapshot.materials) {
+    const auto direct = harness.project().material_preview(material.reference.project_asset());
+    ASSERT_TRUE(direct.ok()) << direct.error().message;
+    EXPECT_EQ(material.encoded_albedo, direct.value().encoded_bytes);
+    EXPECT_EQ(material.content_revision, direct.value().content_revision);
+  }
+  const auto source_path = workspace->file_system.resolve_existing_file(albedo_path);
+  ASSERT_TRUE(source_path.ok());
+  auto source = read_bytes(source_path.value());
+  source.push_back(std::byte{0});
+  write_bytes(source_path.value(), source);
+  const auto fresh = MaterialPresentationService::snapshot(harness.project(), nullptr, &work);
+  ASSERT_EQ(fresh.materials.size(), snapshot.materials.size());
+  EXPECT_EQ(work.directory_case_enumerations, directory_count);
+  for (std::size_t index = 0; index < fresh.materials.size(); ++index) {
+    EXPECT_EQ(fresh.materials[index].encoded_albedo, source);
+    EXPECT_NE(fresh.materials[index].content_revision, snapshot.materials[index].content_revision);
+  }
+}
+
+TEST(StandardMaterialDocumentsTests,
      MaterialPresentationSnapshotCombinesProjectAndActiveSceneOwners) {
   StandardMaterialDocumentsHarness harness("presentation-snapshot");
   const auto revision =
@@ -1443,6 +1512,17 @@ TEST(StandardMaterialDocumentsTests,
       EXPECT_FALSE(item.editable);
     }
   }
+  ASSERT_TRUE(harness.editor().project_assets().assets(true).ok());
+  const auto texture_revision =
+      harness.editor().project_assets().material_presentation_revision();
+  ASSERT_TRUE(texture_revision.ok());
+  EXPECT_EQ(texture_revision.value().project_material_revision,
+            revision.value().project_material_revision);
+  EXPECT_GT(texture_revision.value().project_texture_revision,
+            revision.value().project_texture_revision);
+  const auto refreshed = harness.editor().project_assets().material_presentations();
+  ASSERT_TRUE(refreshed.ok());
+  EXPECT_EQ(refreshed.value().revision, texture_revision.value());
 }
 
 TEST(StandardMaterialDocumentsTests,
@@ -1722,6 +1802,143 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_EQ(read_bytes(harness.root() / normal_path), original);
   EXPECT_EQ(read_bytes(first_source), original);
   EXPECT_EQ(read_bytes(second_source), original);
+}
+
+TEST(StandardMaterialDocumentsTests,
+     ExistingTextureAssignmentSharesDecodedBytesAcrossSlotInterpretations) {
+  StandardMaterialDocumentsHarness harness("shared-texture-slots");
+  auto &documents = harness.editor().standard_material_documents();
+  ASSERT_TRUE(documents.new_material().ok());
+  ASSERT_FALSE(harness.project().manifest()->textures().empty());
+  const auto texture_id = harness.project().manifest()->textures().front().id;
+  const auto files_before = regular_file_count(harness.root() / "Textures");
+  ASSERT_TRUE(documents.set_texture(QuaderStandardMaterialTextureSlot::Albedo,
+                                    texture_id).ok());
+  ASSERT_TRUE(documents.set_texture(QuaderStandardMaterialTextureSlot::Roughness,
+                                    texture_id).ok());
+  const auto preview = documents.preview();
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  ASSERT_TRUE(preview.value().textures[0].has_value());
+  ASSERT_TRUE(preview.value().textures[1].has_value());
+  EXPECT_EQ(preview.value().textures[0]->rgba8, preview.value().textures[1]->rgba8);
+  EXPECT_EQ(preview.value().textures[0]->color_space, QuaderProjectTextureColorSpace::Srgb);
+  EXPECT_EQ(preview.value().textures[1]->color_space, QuaderProjectTextureColorSpace::Linear);
+  EXPECT_EQ(preview.value().textures[0]->content_revision,
+            preview.value().textures[1]->content_revision);
+  ASSERT_TRUE(documents.save_as(project_path("shared.qmat")).ok());
+  const auto current = documents.current();
+  ASSERT_TRUE(current.ok());
+  EXPECT_EQ(regular_file_count(harness.root() / "Textures"), files_before);
+  const auto albedo = harness.project().material_texture_image(
+      current.value().id, StandardMaterialTextureSlot::Albedo);
+  const auto roughness = harness.project().material_texture_image(
+      current.value().id, StandardMaterialTextureSlot::Roughness);
+  ASSERT_NE(albedo, nullptr);
+  EXPECT_EQ(albedo, roughness);
+  ProjectSessionRenderMaterialResolver renderer(harness.project());
+  const auto rendered = renderer.resolve(current.value().id);
+  ASSERT_TRUE(rendered.has_value());
+  const auto *standard = rendered->evaluation.standard_material();
+  ASSERT_NE(standard, nullptr);
+  ASSERT_TRUE(standard->textures[0].present());
+  ASSERT_TRUE(standard->textures[1].present());
+  EXPECT_EQ(standard->textures[0].color_space, TextureColorSpace::Srgb);
+  EXPECT_EQ(standard->textures[1].color_space, TextureColorSpace::Linear);
+  EXPECT_FALSE(documents.set_texture(QuaderStandardMaterialTextureSlot::Albedo,
+                                     texture_id).changed());
+}
+
+TEST(StandardMaterialDocumentsTests,
+     TextureMoveRefreshesSavedAndDraftConsumersAndSaveUpdatesPathHint) {
+  StandardMaterialDocumentsHarness harness("texture-move");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto default_id = *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(documents.open(default_id).ok());
+  const auto initial = documents.current();
+  ASSERT_TRUE(initial.value().material.base_color_texture.has_value());
+  const auto texture_id = initial.value().material.base_color_texture->id;
+  const auto original_path = initial.value().material.base_color_texture->project_relative_path;
+  const auto before = documents.preview();
+  ASSERT_TRUE(before.ok());
+  ASSERT_TRUE(before.value().textures[0].has_value());
+  ASSERT_TRUE(documents.set_roughness(0.23f).ok());
+  const auto draft_revision = documents.current_revision().value().draft_revision;
+  const auto moved = project_path("moved.png");
+  std::filesystem::rename(harness.root() / original_path,
+                          harness.root() / moved.native_path());
+  auto manifest = *harness.project().manifest();
+  ASSERT_TRUE(manifest.relocate_texture(texture_id, moved).ok());
+  auto catalog = ProjectMaterialCatalog::scan(harness.project().workspace()->file_system,
+                                              nullptr, &manifest);
+  ASSERT_TRUE(catalog.ok()) << catalog.error().message;
+  ASSERT_TRUE(harness.project().install_material_catalog(catalog.take_value(), manifest).ok);
+  const auto after = documents.preview();
+  ASSERT_TRUE(after.ok());
+  ASSERT_TRUE(after.value().textures[0].has_value());
+  EXPECT_EQ(*after.value().textures[0]->rgba8, *before.value().textures[0]->rgba8);
+  EXPECT_GT(documents.current_revision().value().draft_revision, draft_revision);
+  EXPECT_FLOAT_EQ(documents.current().value().material.roughness, 0.23f);
+  EXPECT_TRUE(documents.current().value().dirty);
+  const auto info = harness.project().material_albedo_texture_info(default_id);
+  ASSERT_TRUE(info.ok()) << info.error().message;
+  EXPECT_EQ(info.value().project_relative_path, moved);
+  auto original = QmatCodec::read(harness.project().workspace()->file_system,
+                                   project_path(kDefaultProjectMaterialPath));
+  ASSERT_TRUE(original.ok());
+  EXPECT_EQ(original.value().material.standard_material()->base_color_texture->project_relative_path,
+            original_path);
+  ASSERT_TRUE(documents.save().ok());
+  auto saved = QmatCodec::read(harness.project().workspace()->file_system,
+                              project_path(kDefaultProjectMaterialPath));
+  ASSERT_TRUE(saved.ok());
+  EXPECT_EQ(saved.value().material.standard_material()->base_color_texture->project_relative_path,
+            "moved.png");
+}
+
+TEST(StandardMaterialDocumentsTests,
+     CommittedTextureDeletionPreservesUnrelatedDraftAndPendingReplacement) {
+  StandardMaterialDocumentsHarness harness("texture-deletion-draft");
+  auto &documents = harness.editor().standard_material_documents();
+  const auto material_id = *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(documents.open(material_id).ok());
+  const auto initial = documents.current();
+  ASSERT_TRUE(initial.value().material.base_color_texture.has_value());
+  const auto texture_id = initial.value().material.base_color_texture->id;
+  ASSERT_TRUE(documents.set_roughness(0.23f).ok());
+  ASSERT_TRUE(documents.import_texture(QuaderStandardMaterialTextureSlot::Albedo,
+      source_resource_root() / "materials" / "default" / "default_albedo.png").ok());
+  const auto staged = documents.current().value().pending_texture_sources[0];
+  const auto pending = documents.preview();
+  ASSERT_TRUE(pending.ok());
+  ASSERT_TRUE(pending.value().textures[0].has_value());
+  auto saved = QmatCodec::read(harness.project().workspace()->file_system,
+                              project_path(kDefaultProjectMaterialPath));
+  ASSERT_TRUE(saved.ok());
+  saved.value().material.standard_material()->base_color_texture.reset();
+  ASSERT_TRUE(QmatCodec::write_atomic(harness.project().workspace()->file_system,
+      project_path(kDefaultProjectMaterialPath), saved.value().material).ok());
+  const std::array retired{texture_id};
+  auto manifest = *harness.project().manifest();
+  ASSERT_TRUE(manifest.mark_textures_deleted(retired).ok());
+  auto catalog = ProjectMaterialCatalog::scan(harness.project().workspace()->file_system,
+                                              nullptr, &manifest);
+  ASSERT_TRUE(catalog.ok());
+  ASSERT_TRUE(harness.project().install_material_catalog(catalog.take_value(), manifest).ok);
+  const auto *entry = harness.project().material_catalog().find(material_id);
+  ASSERT_NE(entry, nullptr);
+  harness.project().standard_material_editor().reconcile_deleted_textures(retired,
+                                                                           entry->content_revision);
+  const auto current = documents.current();
+  ASSERT_TRUE(current.ok());
+  EXPECT_FALSE(current.value().material.base_color_texture.has_value());
+  EXPECT_EQ(current.value().pending_texture_sources[0], staged);
+  EXPECT_FLOAT_EQ(current.value().material.roughness, 0.23f);
+  EXPECT_TRUE(current.value().dirty);
+  EXPECT_EQ(documents.preview().value().textures[0]->rgba8, pending.value().textures[0]->rgba8);
+  EXPECT_FALSE(documents.set_texture(QuaderStandardMaterialTextureSlot::Normal, texture_id).ok());
+  ASSERT_TRUE(documents.save().ok());
+  EXPECT_TRUE(documents.current().value().material.base_color_texture.has_value());
+  EXPECT_NE(documents.current().value().material.base_color_texture->id, texture_id);
 }
 
 } // namespace

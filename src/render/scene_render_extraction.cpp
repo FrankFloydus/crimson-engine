@@ -369,7 +369,7 @@ std::vector<MeshPrimitiveSpan> coalesced_render_mesh_primitive_spans(
 }
 
 const RenderMaterialAssetSnapshot &packaged_default_render_material() {
-  static const RenderMaterialAssetSnapshot snapshot = [] {
+  static const RenderMaterialAssetSnapshot kSnapshot = [] {
     RenderMaterialAssetSnapshot material;
     material.document = make_default_quader_material();
     // The snapshot's private packaged texture has no scene-owned asset ID.
@@ -389,7 +389,7 @@ const RenderMaterialAssetSnapshot &packaged_default_render_material() {
     material.textures.push_back(std::move(albedo));
     return material;
   }();
-  return snapshot;
+  return kSnapshot;
 }
 
 RenderMaterialBindingSnapshot build_render_material_binding_snapshot(

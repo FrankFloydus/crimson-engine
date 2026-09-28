@@ -1420,7 +1420,7 @@ TEST(OopArchitectureGuardrailTests,
       project_session, "ProjectSession::material_texture_image(",
       "OpenSceneSession *ProjectSession::find(");
   const auto cache_lookup = cached_texture.find("material_texture_images_.find");
-  const auto texture_read = cached_texture.find("material_texture(material_id, slot)");
+  const auto texture_read = cached_texture.find("quader_io::read_file_bytes_shared");
   const auto image_decode = cached_texture.find("ProjectImageDecoder::decode");
   ASSERT_NE(cache_lookup, std::string::npos);
   ASSERT_NE(texture_read, std::string::npos);

@@ -5363,6 +5363,163 @@ TEST(EditorApiTests,
   std::filesystem::remove(path);
 }
 
+TEST(EditorApiTests,
+     AssetBrowserDefaultPreservesStoredMappingsSequencesAndUnassignments) {
+  /// Owns the uniquely named project and override file used by this test.
+  struct TemporaryProject {
+    std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("quader-asset-bindings-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    ~TemporaryProject() {
+      std::error_code ignored;
+      std::filesystem::remove_all(root, ignored);
+    }
+  } temporary;
+  ASSERT_TRUE(std::filesystem::create_directories(temporary.root / "Project"));
+  const auto path = temporary.root / "keybindings.json";
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.root / "Project").ok());
+  editor.ui().set_runtime_hooks({.toggle_asset_browser = [] {
+    return quader::QuaderApiVoidResult{.ok = true, .changed = true};
+  }});
+  ASSERT_TRUE(editor.commands().descriptor(
+      quader::quader_command::kUiAssetBrowser)->enabled);
+  const auto load = [&](const std::string &contents) {
+    {
+      std::ofstream stored(path);
+      ASSERT_TRUE(stored.is_open());
+      stored << contents;
+    }
+    const auto result = editor.commands().set_keybinding_storage_path(path);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_EQ(read_text_file(path), contents)
+        << "Loading compiled additions must not rewrite stored overrides";
+  };
+
+  load(R"([{"command":"viewport.selection_mode.face","key":"Ctrl+Space"},{"command":"-edit.undo"}])");
+  ASSERT_FALSE(HasFatalFailure());
+  const auto chord = single_input_chord("Ctrl+Space");
+  EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
+      chord, {}, false).has_value());
+  const auto selection = editor.commands().dispatch_viewport_input_binding(
+      chord, {}, true, false);
+  ASSERT_EQ(selection.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(selection.shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
+  EXPECT_EQ(selection.shortcut.selection_mode, quader::ViewportSelectionMode::Face);
+  EXPECT_TRUE(editor.commands().shortcut_for(quader::quader_command::kEditUndo).empty());
+
+  load(R"([{"command":"viewport.selection_mode.face","key":"Ctrl+Space Ctrl+S"},{"command":"-edit.undo"}])");
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
+      chord, {}, false).has_value());
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                chord, {}, true, false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
+      single_input_chord("Ctrl+S"), {}, false).has_value());
+  const auto sequence = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+S"), {}, true, false);
+  ASSERT_EQ(sequence.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(sequence.shortcut.selection_mode, quader::ViewportSelectionMode::Face);
+
+  load(R"([{"command":"ui.asset_browser","key":"Ctrl+Alt+Space"},{"command":"-edit.undo"}])");
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kUiAssetBrowser),
+            "Ctrl+Alt+Space");
+  EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
+      chord, {}, false).has_value());
+  EXPECT_EQ(editor.commands().resolve_immediate_global_command(
+                single_input_chord("Ctrl+Alt+Space"), {}, false),
+            std::optional<std::string>{"ui.asset_browser"});
+
+  load(R"([{"command":"-ui.asset_browser"},{"command":"edit.undo","key":"Ctrl+Space"}])");
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_TRUE(editor.commands().shortcut_for(
+      quader::quader_command::kUiAssetBrowser).empty());
+  EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kEditUndo),
+            "Ctrl+Space");
+}
+
+TEST(EditorApiTests,
+     AssetBrowserInputOwnsCanonicalClipboardBindingsAcrossSceneModes) {
+  CommandTestHarness harness;
+  auto &commands = harness.editor.commands();
+  ASSERT_TRUE(commands.set_keybinding_storage_path({}).ok());
+  const quader::QuaderViewportKeybindingContext browser_context{
+      .navigation_active = true,
+      .editor_focused = true,
+      .asset_browser_focused = true};
+  const std::array bindings{
+      std::pair{"Ctrl+X", quader::quader_command::kCutSelection},
+      std::pair{"Ctrl+C", quader::quader_command::kCopySelection},
+      std::pair{"Ctrl+V", quader::quader_command::kPasteSelection},
+      std::pair{"Ctrl+D", quader::quader_command::kDuplicateSelection},
+      std::pair{"Delete", quader::quader_command::kDeleteSelection}};
+  for (const auto mode : {quader::ViewportSelectionMode::Vertex,
+                          quader::ViewportSelectionMode::Edge,
+                          quader::ViewportSelectionMode::Face,
+                          quader::ViewportSelectionMode::Object,
+                          quader::ViewportSelectionMode::Group}) {
+    const quader::ViewportToolState state{.selection_mode = mode};
+    for (const auto &[shortcut, command] : bindings) {
+      SCOPED_TRACE(shortcut);
+      const auto dispatch = commands.dispatch_viewport_input_binding(
+          single_input_chord(shortcut), state, false, false, browser_context);
+      ASSERT_EQ(dispatch.kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::Command);
+      EXPECT_EQ(dispatch.command_id, command.string());
+      EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                    single_input_chord(shortcut), state, false, true,
+                    browser_context).kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    }
+  }
+  for (const char *shortcut : {"Ctrl+Z", "Shift+B", "1"}) {
+    EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                  single_input_chord(shortcut), {}, false, false,
+                  browser_context).kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+  for (const auto &[shortcut, command] : {
+           std::pair{"Ctrl+N", quader::quader_command::kSceneDocumentNew},
+           std::pair{"Ctrl+S", quader::quader_command::kSceneDocumentSave}}) {
+    const auto dispatch = commands.dispatch_viewport_input_binding(
+        single_input_chord(shortcut), {}, false, false, browser_context);
+    EXPECT_EQ(dispatch.command_id, command.string());
+  }
+  EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                single_input_chord("Ctrl+S"), {}, false, true,
+                browser_context).command_id,
+            quader::quader_command::kSceneDocumentSave.string());
+
+  ASSERT_TRUE(commands.set_shortcut(quader::quader_command::kCutSelection,
+                                   "Ctrl+K Ctrl+X").ok());
+  const auto prefix = single_input_chord("Ctrl+K");
+  const auto suffix = single_input_chord("Ctrl+X");
+  EXPECT_EQ(commands.resolve_asset_browser_input_binding(prefix, false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                prefix, {}, false, false, browser_context).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  const auto probe = commands.resolve_asset_browser_input_binding(suffix, false);
+  EXPECT_EQ(probe.command_id, quader::quader_command::kCutSelection.string());
+  EXPECT_TRUE(commands.has_pending_keybinding_chord());
+  const auto completed = commands.dispatch_viewport_input_binding(
+      suffix, {}, false, false, browser_context);
+  EXPECT_EQ(completed.command_id,
+            quader::quader_command::kCutSelection.string());
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
+
+  ASSERT_TRUE(commands.remove_shortcut(quader::quader_command::kCutSelection).ok());
+  EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                prefix, {}, false, false, browser_context).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+}
+
 TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus) {
   const std::filesystem::path path =
       keybinding_test_path("global-command-shortcuts");
@@ -23053,9 +23210,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 222u);
+  EXPECT_EQ(commands.size(), 223u);
 #else
-  EXPECT_EQ(commands.size(), 221u);
+  EXPECT_EQ(commands.size(), 222u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

@@ -57,6 +57,16 @@ bool QuaderUIApi::command_search_available() const noexcept {
   return static_cast<bool>(hooks_.show_command_search);
 }
 
+QuaderApiVoidResult QuaderUIApi::toggle_asset_browser() {
+  return hooks_.toggle_asset_browser
+             ? hooks_.toggle_asset_browser()
+             : unavailable("Asset Browser is not available.");
+}
+
+bool QuaderUIApi::asset_browser_available() const noexcept {
+  return static_cast<bool>(hooks_.toggle_asset_browser);
+}
+
 bool QuaderUIApi::panel_visible(std::string_view panel) const {
   if (((panel == "face_texture" || panel == "Face Texture") &&
        !release_has_feature(ReleaseFeature::UvEditing)) ||

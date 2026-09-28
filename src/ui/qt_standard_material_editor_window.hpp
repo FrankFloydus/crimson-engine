@@ -7,6 +7,7 @@
 #pragma once
 
 #include "ui/qt_ui_scale_metrics.hpp"
+#include "assets/project_asset_id.hpp"
 
 #include <QColor>
 #include <QImage>
@@ -276,6 +277,8 @@ public:
   using DiffuseModelEditedCallback = std::function<void(QtStandardMaterialDiffuseModel)>;
   using TextureActionCallback = std::function<void(
       QtStandardMaterialTextureSlot, QtStandardMaterialTextureAction)>;
+  using TextureAssetDroppedCallback = std::function<void(
+      QtStandardMaterialTextureSlot, ProjectAssetId, std::uint64_t)>;
   using TextureTransformEditedCallback =
       std::function<void(QtStandardMaterialTextureTransformComponent, double)>;
   using PreviewResetCallback = std::function<void()>;
@@ -307,6 +310,7 @@ public:
       NormalConventionEditedCallback callback);
   void set_diffuse_model_edited_callback(DiffuseModelEditedCallback callback);
   void set_texture_action_callback(TextureActionCallback callback);
+  void set_texture_asset_dropped_callback(TextureAssetDroppedCallback callback);
   void set_texture_transform_edited_callback(
       TextureTransformEditedCallback callback);
   void set_preview_reset_callback(PreviewResetCallback callback);
@@ -362,6 +366,7 @@ private:
 
   /// Groups the stock Qt controls belonging to one texture slot row.
   struct TextureControls final {
+    QWidget *drop_target = nullptr;
     QLabel *label = nullptr;
     QToolButton *preview = nullptr;
     QLabel *path = nullptr;
@@ -475,6 +480,7 @@ private:
   NormalConventionEditedCallback normal_convention_edited_;
   DiffuseModelEditedCallback diffuse_model_edited_;
   TextureActionCallback texture_action_;
+  TextureAssetDroppedCallback texture_asset_dropped_;
   TextureTransformEditedCallback texture_transform_edited_;
   PreviewResetCallback preview_reset_;
   PresentationStateChangedCallback presentation_state_changed_;

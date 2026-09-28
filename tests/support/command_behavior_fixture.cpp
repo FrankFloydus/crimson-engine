@@ -459,6 +459,11 @@ private:
               ++external_calls_;
               return runtime_result(false, "Command Search test hook");
             },
+        .toggle_asset_browser =
+            [this] {
+              ++external_calls_;
+              return runtime_result(false, "Asset Browser test hook");
+            },
     });
   }
 

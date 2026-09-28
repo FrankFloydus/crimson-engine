@@ -10,6 +10,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "assets/default_material_catalog.hpp"
+#include "editor/assets/project_asset_service.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/history/editor_history_service.hpp"
@@ -1219,8 +1220,7 @@ TEST(ProjectSessionWorkspace,
   };
 
   for (const std::string_view destination :
-       {"Root.qdr", "Materials/Rejected.qdr", ".quader/Rejected.qdr",
-        "Scenes2/Rejected.qdr"}) {
+       {".quader/Rejected.qdr", ".quader/Internal/Rejected.qdr"}) {
     SCOPED_TRACE(destination);
     const auto relative = project_path(destination);
     const auto absolute = project.root() / relative.native_path();
@@ -1242,7 +1242,7 @@ TEST(ProjectSessionWorkspace,
         const auto rejected = project.save_as(scene->session_id, relative);
         EXPECT_FALSE(rejected.ok);
         EXPECT_FALSE(rejected.changed);
-        EXPECT_NE(rejected.message.find("Scenes"), std::string::npos);
+        EXPECT_NE(rejected.message.find("project"), std::string::npos);
       } else {
         const auto rejected = route == 1
             ? editor.scene_documents().save_as(scene->session_id, relative)
@@ -1252,7 +1252,7 @@ TEST(ProjectSessionWorkspace,
                 : editor.scene_documents().save_as(scene->session_id);
         EXPECT_FALSE(rejected.ok());
         EXPECT_FALSE(rejected.changed());
-        EXPECT_NE(rejected.error_message().find("Scenes"), std::string::npos);
+        EXPECT_NE(rejected.error_message().find("project"), std::string::npos);
       }
       expect_unchanged();
       EXPECT_EQ(project.manifest()->find_scene(relative), nullptr);
@@ -1284,20 +1284,20 @@ TEST(ProjectSessionWorkspace,
           : editor.scene_documents().save_as_native_path(scene->session_id, absolute);
       EXPECT_FALSE(rejected.ok());
       EXPECT_FALSE(rejected.changed());
-      EXPECT_NE(rejected.error_message().find("Scenes"), std::string::npos);
+      EXPECT_NE(rejected.error_message().find("project"), std::string::npos);
       expect_unchanged();
       EXPECT_EQ(read_file_bytes(absolute), destination_bytes);
     }
   }
 }
 
-TEST(ProjectSessionWorkspace, SaveAsAcceptsDeeplyNestedScenesDestinations) {
+TEST(ProjectSessionWorkspace, SaveAsAcceptsDeeplyNestedMixedAssetDestinations) {
   ScopedProjectSessionDirectory temporary("nested-scene-save");
   ProjectSession project;
   QuaderEditorApi editor(project);
   ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
   const auto tab = project.active_scene_id();
-  const auto relative = project_path("Scenes/Chapter/Maps/Interior/Room.qdr");
+  const auto relative = project_path("Worlds/Chapter/Maps/Interior/Room.qdr");
   const auto absolute = project.root() / relative.native_path();
   std::filesystem::create_directories(absolute.parent_path());
   const auto saved = editor.scene_documents().save_as_native_path(tab, absolute);
@@ -1311,86 +1311,426 @@ TEST(ProjectSessionWorkspace, SaveAsAcceptsDeeplyNestedScenesDestinations) {
   EXPECT_EQ(SceneId::from_bytes(document.scene_uuid), project.find(tab)->scene_id);
 }
 
-TEST(ProjectSessionWorkspace,
-     LegacySceneOutsideScenesOpensButRequiresSaveAsBeforeSavingOrDirtyClose) {
-  ScopedProjectSessionDirectory temporary("legacy-scene-save-scope");
+TEST(ProjectSessionWorkspace, SceneAssetCreationDoesNotReplaceOrCleanTheDraft) {
+  ScopedProjectSessionDirectory temporary("detached-scene-asset");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Resident Draft"}).ok());
+  auto *resident = project.active_scene();
+  const auto id = resident->scene_id;
+  const auto generation = project.activation_generation();
+  const auto stamp = resident->session->content_revision_stamp();
+  const auto history = resident->session->history().undo_count();
+  const auto path = project_path("New Scene.qdr");
+  const auto created = project.create_scene_asset(path);
+  ASSERT_TRUE(created.ok()) << created.error().message;
+  EXPECT_EQ(project.open_scenes().size(), 1u);
+  EXPECT_EQ(project.active_scene(), resident);
+  EXPECT_EQ(project.activation_generation(), generation);
+  EXPECT_EQ(resident->scene_id, id);
+  EXPECT_FALSE(resident->saved());
+  EXPECT_TRUE(resident->dirty());
+  EXPECT_EQ(resident->session->content_revision_stamp(), stamp);
+  EXPECT_EQ(resident->session->history().undo_count(), history);
+  const auto read = QdrDocumentReader::read_project_document(project.root() / path.native_path());
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_EQ(SceneId::from_bytes(read.scene_uuid), created.value().id);
+  const auto snapshot = qdr_project_write_snapshot_from_document(read.document);
+  ASSERT_TRUE(snapshot.ok());
+  EXPECT_TRUE(snapshot.value().entities.empty());
+  EXPECT_NE(created.value().id, id);
+  EXPECT_FALSE(project.create_scene_asset(path).ok());
+}
+
+TEST(ProjectSessionWorkspace, SavedSceneDuplicationAndDraftCopyHaveSeparateSources) {
+  ScopedProjectSessionDirectory temporary("scene-copy-sources");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Saved Entity"}).ok());
+  const auto tab = project.active_scene_id();
+  const auto source = project_path("Source.qdr");
+  ASSERT_TRUE(editor.scene_documents().save_as(tab, source).ok());
+  const auto identity = project.find(tab)->scene_id;
+  const auto source_bytes = read_file_bytes(project.root() / source.native_path());
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Unsaved Entity"}).ok());
+  const auto stamp = project.find(tab)->session->content_revision_stamp();
+  const auto history = project.find(tab)->session->history().undo_count();
+  const auto clone_id = SceneId::generate();
+  const auto copy_path = project_path("Saved Copy.qdr");
+  const auto copied = project.stage_scene_asset_copy(source,
+      project.root() / copy_path.native_path(), clone_id);
+  ASSERT_TRUE(copied.ok()) << copied.error().message;
+  const auto saved_copy = QdrDocumentReader::read_project_document(project.root() / copy_path.native_path());
+  ASSERT_TRUE(saved_copy.ok) << saved_copy.message;
+  EXPECT_EQ(SceneId::from_bytes(saved_copy.scene_uuid), clone_id);
+  const auto saved_snapshot = qdr_project_write_snapshot_from_document(saved_copy.document);
+  ASSERT_TRUE(saved_snapshot.ok());
+  EXPECT_EQ(saved_snapshot.value().entities.size(), 1u);
+  const auto draft_path = project_path("Draft Copy.qdr");
+  ASSERT_TRUE(editor.scene_documents().save_copy(tab, draft_path).ok());
+  const auto draft_copy = QdrDocumentReader::read_project_document(project.root() / draft_path.native_path());
+  ASSERT_TRUE(draft_copy.ok) << draft_copy.message;
+  const auto draft_snapshot = qdr_project_write_snapshot_from_document(draft_copy.document);
+  ASSERT_TRUE(draft_snapshot.ok());
+  EXPECT_EQ(draft_snapshot.value().entities.size(), 2u);
+  EXPECT_NE(SceneId::from_bytes(draft_copy.scene_uuid), identity);
+  EXPECT_EQ(project.find(tab)->scene_id, identity);
+  EXPECT_EQ(project.find(tab)->path, source);
+  EXPECT_EQ(project.find(tab)->session->content_revision_stamp(), stamp);
+  EXPECT_EQ(project.find(tab)->session->history().undo_count(), history);
+  EXPECT_TRUE(project.find(tab)->dirty());
+  EXPECT_EQ(read_file_bytes(project.root() / source.native_path()), source_bytes);
+  EXPECT_EQ(project.open_scenes().size(), 1u);
+}
+
+TEST(ProjectSessionWorkspace, AssetRelocationKeepsResidentIdentityHistoryAndRecentOrder) {
+  ScopedProjectSessionDirectory temporary("scene-asset-relocation");
+  ProjectSession project(temporary.path() / "recent.json");
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto first = project.active_scene_id();
+  const auto source = project_path("Scenes/First.qdr");
+  ASSERT_TRUE(editor.scene_documents().save_as(first, source).ok());
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Retained Draft"}).ok());
+  auto *resident = project.find(first);
+  const auto identity = resident->scene_id;
+  const auto stamp = resident->session->content_revision_stamp();
+  const auto history = resident->session->history().undo_count();
+  ASSERT_TRUE(editor.scene_documents().new_scene().ok());
+  const auto second = project.active_scene_id();
+  ASSERT_TRUE(editor.scene_documents().save_as(second, project_path("Second.qdr")).ok());
+  const auto recent_before = project.recent_scenes();
+  ASSERT_EQ(recent_before.size(), 2u);
+  const auto generation = project.activation_generation();
+  const auto destination = project_path("Renamed.qdr");
+  auto candidate = *project.manifest();
+  ASSERT_TRUE(candidate.unregister_scene(identity).ok());
+  ASSERT_TRUE(candidate.register_scene({.id = identity, .path = destination}).ok());
+  ASSERT_TRUE(project.prepare_asset_manifest(candidate).ok);
+  std::filesystem::rename(project.root() / source.native_path(),
+                          project.root() / destination.native_path());
+  ASSERT_TRUE(project.install_asset_manifest(std::move(candidate)).ok);
+  EXPECT_EQ(project.find(first), resident);
+  EXPECT_EQ(resident->scene_id, identity);
+  EXPECT_EQ(resident->path, destination);
+  EXPECT_EQ(resident->display_name, "Renamed");
+  EXPECT_TRUE(resident->dirty());
+  EXPECT_EQ(resident->session->content_revision_stamp(), stamp);
+  EXPECT_EQ(resident->session->history().undo_count(), history);
+  EXPECT_EQ(project.active_scene_id(), second);
+  EXPECT_EQ(project.activation_generation(), generation);
+  EXPECT_EQ(project.open_scenes()[0]->session_id, first);
+  const auto recent_after = project.recent_scenes();
+  ASSERT_EQ(recent_after.size(), 2u);
+  EXPECT_EQ(recent_after[0].scene_id, recent_before[0].scene_id);
+  EXPECT_EQ(recent_after[1].scene_id, identity);
+  EXPECT_EQ(recent_after[1].scene_path, destination);
+  EXPECT_EQ(recent_after[1].scene_name, "Renamed");
+}
+
+TEST(ProjectSessionWorkspace, CaseOnlySceneAssetRenamePreservesTheOpenDraft) {
+  ScopedProjectSessionDirectory temporary("case-only-scene-rename");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto tab = project.active_scene_id();
+  const auto source = project_path("Original.qdr");
+  const auto destination = project_path("original.qdr");
+  ASSERT_TRUE(editor.scene_documents().save_as(tab, source).ok());
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Retained Draft"}).ok());
+  const auto identity = project.find(tab)->scene_id;
+  const auto stamp = project.find(tab)->session->content_revision_stamp();
+  auto candidate = *project.manifest();
+  ASSERT_TRUE(candidate.unregister_scene(identity).ok());
+  ASSERT_TRUE(candidate.register_scene({.id = identity, .path = destination}).ok());
+  const auto prepared = project.prepare_asset_manifest(candidate);
+  ASSERT_TRUE(prepared.ok) << prepared.message;
+  const auto staging = project.root() / "case-rename-stage";
+  std::filesystem::rename(project.root() / source.native_path(), staging);
+  std::filesystem::rename(staging, project.root() / destination.native_path());
+  const auto installed = project.install_asset_manifest(std::move(candidate));
+  ASSERT_TRUE(installed.ok) << installed.message;
+  EXPECT_EQ(project.find(tab)->scene_id, identity);
+  EXPECT_EQ(project.find(tab)->path, destination);
+  EXPECT_EQ(project.find(tab)->display_name, "original");
+  EXPECT_EQ(project.find(tab)->session->content_revision_stamp(), stamp);
+  EXPECT_TRUE(project.find(tab)->dirty());
+}
+
+TEST(ProjectSessionWorkspace, OpenRecoversCommittedCaseRenameBeforeValidatingScenePaths) {
+  ScopedProjectSessionDirectory temporary("recover-case-scene-rename");
+  ProjectSession project;
+  ASSERT_TRUE(project.create(temporary.make_empty_child("Project")).ok);
+  const auto source = project_path("Original.qdr");
+  const auto destination = project_path("original.qdr");
+  ASSERT_TRUE(project.save_as(project.active_scene_id(), source).ok);
+  const auto identity = project.active_scene()->scene_id;
+  const auto root = project.root();
+  const auto manifest_path = project.manifest_path();
+  auto candidate = *project.manifest();
+  ASSERT_TRUE(candidate.unregister_scene(identity).ok());
+  ASSERT_TRUE(candidate.register_scene({.id = identity, .path = destination}).ok());
+  ASSERT_TRUE(project.prepare_asset_manifest(candidate).ok);
+  ASSERT_TRUE(project.close().ok);
+  const auto baseline_bytes = read_file_bytes(manifest_path);
+  const std::string baseline(baseline_bytes.begin(), baseline_bytes.end());
+  const auto staging = root / "case-rename-stage";
+  std::filesystem::rename(root / source.native_path(), staging);
+  std::filesystem::rename(staging, root / destination.native_path());
+
+  // File-action compensation has separate service coverage. This journal isolates
+  // the committed metadata publication needed before physical spelling checks.
+  std::filesystem::create_directories(root / ".quader");
+  const auto journal_path = root / ".quader" /
+      ("asset-organization-" + std::string(ProjectAssetId::generate().str()) + ".json");
+  const nlohmann::json journal{
+      {"version", 1}, {"state", "committed"},
+      {"project", std::string(candidate.id().str())},
+      {"manifest", "Project.qproj"}, {"baseline", baseline},
+      {"candidate", ProjectManifestStore::serialize(candidate)},
+      {"actions", nlohmann::json::array()},
+  };
+  std::ofstream(journal_path, std::ios::binary) << journal.dump(2);
+  const auto interrupted = ProjectManifestStore::open(manifest_path);
+  ASSERT_FALSE(interrupted.ok());
+  EXPECT_EQ(interrupted.error().code, ProjectIoErrorCode::PathCaseCollision);
+
+  const auto reopened = project.open(manifest_path);
+  ASSERT_TRUE(reopened.ok) << reopened.message;
+  ASSERT_NE(project.active_scene(), nullptr);
+  EXPECT_EQ(project.active_scene()->scene_id, identity);
+  EXPECT_EQ(project.active_scene()->path, destination);
+  ASSERT_NE(project.manifest()->find_scene(identity), nullptr);
+  EXPECT_EQ(project.manifest()->find_scene(identity)->path, destination);
+  EXPECT_FALSE(std::filesystem::exists(journal_path));
+  const auto persisted = ProjectManifestStore::open(manifest_path);
+  ASSERT_TRUE(persisted.ok()) << persisted.error().message;
+  EXPECT_EQ(persisted.value().manifest.active_scene_path(), destination);
+}
+
+TEST(ProjectSessionWorkspace, ProjectGenerationIgnoresSceneTabTransitions) {
+  ScopedProjectSessionDirectory temporary("project-generation");
+  ProjectSession project;
+  EXPECT_EQ(project.project_generation(), 0u);
+  ASSERT_TRUE(project.create(temporary.make_empty_child("Project")).ok);
+  const auto created = project.project_generation();
+  EXPECT_EQ(created, 1u);
+  const auto first = project.active_scene_id();
+  ASSERT_TRUE(project.save_as(first, project_path("First.qdr")).ok);
+  ASSERT_TRUE(project.new_scene().ok);
+  const auto second = project.active_scene_id();
+  ASSERT_TRUE(project.save_as(second, project_path("Second.qdr")).ok);
+  ASSERT_TRUE(project.activate(first).ok);
+  ASSERT_TRUE(project.close_scene(second).ok);
+  EXPECT_EQ(project.project_generation(), created);
+  const auto manifest = project.manifest_path();
+  ASSERT_TRUE(project.open(manifest).ok);
+  EXPECT_EQ(project.project_generation(), created + 1u);
+  ASSERT_TRUE(project.close().ok);
+  EXPECT_EQ(project.project_generation(), created + 2u);
+  EXPECT_FALSE(project.close().changed);
+  EXPECT_EQ(project.project_generation(), created + 2u);
+}
+
+TEST(ProjectSessionWorkspace, FailedAssetCatalogPreparationPreservesManifestAndOpenScenePaths) {
+  ScopedProjectSessionDirectory temporary("asset-publication-failure");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto tab = project.active_scene_id();
+  const auto source = project_path("Before.qdr");
+  ASSERT_TRUE(editor.scene_documents().save_as(tab, source).ok());
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Dirty Draft"}).ok());
+  auto *scene = project.find(tab);
+  const auto identity = scene->scene_id;
+  const auto stamp = scene->session->content_revision_stamp();
+  const auto history = scene->session->history().undo_count();
+  const auto manifest = ProjectManifestStore::serialize(*project.manifest());
+  const auto manifest_bytes = read_file_bytes(project.manifest_path());
+  const auto source_bytes = read_file_bytes(project.root() / source.native_path());
+  const auto duplicate_texture_id = ProjectAssetId::generate();
+  for (const auto *name : {"ExternalA", "ExternalB"}) {
+    const std::string image = std::string(name) + ".png";
+    std::filesystem::copy_file(
+        project.root() / project_path(kDefaultProjectAlbedoTexturePath).native_path(),
+        project.root() / image);
+    ProjectMaterialDocument material{
+        .id = ProjectAssetId::generate(), .name = name};
+    material.standard_material()->base_color_texture = ProjectMaterialTextureSlot{
+        .id = duplicate_texture_id, .project_relative_path = image};
+    ASSERT_TRUE(QmatCodec::write_atomic(project.workspace()->file_system,
+        project_path(std::string(name) + ".qmat"), material).ok());
+  }
+  const auto rejected = project.project_assets().rename(source, "After");
+  EXPECT_FALSE(rejected.ok);
+  EXPECT_EQ(project.find(tab), scene);
+  EXPECT_EQ(scene->scene_id, identity);
+  EXPECT_EQ(scene->path, source);
+  EXPECT_EQ(scene->display_name, "Before");
+  EXPECT_TRUE(scene->dirty());
+  EXPECT_EQ(scene->session->content_revision_stamp(), stamp);
+  EXPECT_EQ(scene->session->history().undo_count(), history);
+  EXPECT_EQ(ProjectManifestStore::serialize(*project.manifest()), manifest);
+  EXPECT_EQ(read_file_bytes(project.manifest_path()), manifest_bytes);
+  EXPECT_EQ(read_file_bytes(project.root() / source.native_path()), source_bytes);
+  EXPECT_FALSE(std::filesystem::exists(project.root() / "After.qdr"));
+}
+
+TEST(ProjectSessionWorkspace, SceneDraftCopyPreflightsThenAcceptsPendingCurveEdits) {
+  ScopedProjectSessionDirectory temporary("scene-copy-pending-curve");
   ProjectSession project;
   QuaderEditorApi editor(project);
   ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
   const auto object = create_saved_transition_curve(project, editor);
-  const auto original_path = project_path("Scenes/Source.qdr");
-  const auto legacy_path = project_path("Legacy.qdr");
-  const auto legacy_absolute = project.root() / legacy_path.native_path();
-  std::filesystem::copy_file(project.root() / original_path.native_path(),
-                             legacy_absolute);
-  const auto opened = editor.scene_documents().open(legacy_path);
-  ASSERT_TRUE(opened.ok()) << opened.error_message();
-  OpenSceneSession *legacy = project.find(opened.value());
-  ASSERT_NE(legacy, nullptr);
-  ASSERT_TRUE(editor.scene().rename(object.entity, "Legacy Unsaved Edit").ok());
-  ASSERT_TRUE(editor.selection().select_object(object.entity).ok());
+  auto *scene = project.active_scene();
+  const auto identity = scene->scene_id;
+  const auto source = *scene->path;
+  const auto saved_bytes = read_file_bytes(project.root() / source.native_path());
+  const auto history = scene->session->history().undo_count();
   ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
-  CurveToolService &curve = legacy->session->curve();
+  auto &curve = scene->session->curve();
   ASSERT_TRUE(curve.preview_state().document.has_value());
   ASSERT_TRUE(select_and_begin_curve_control_drag(
       curve, {.point = curve.preview_state().document->points()[0].id}));
   ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
-  const auto preview = *curve.preview_state().document;
-  const auto identity = legacy->scene_id;
-  const auto stamp = legacy->session->content_revision_stamp();
-  const auto bytes = read_file_bytes(legacy_absolute);
-  const auto manifest = ProjectManifestStore::serialize(*project.manifest());
+  const auto pending = *curve.preview_state().document;
+  ASSERT_TRUE(project.scene_has_pending_edits(scene->session_id));
+  EXPECT_FALSE(editor.scene_documents().save_copy(
+      scene->session_id, project_path(".quader/Rejected.qdr")).ok());
+  EXPECT_TRUE(curve.dragging());
+  const auto destination = project_path("Curve Copy.qdr");
+  const auto copied = editor.scene_documents().save_copy(scene->session_id, destination);
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  EXPECT_EQ(project.active_scene(), scene);
+  EXPECT_EQ(scene->scene_id, identity);
+  EXPECT_EQ(scene->path, source);
+  EXPECT_TRUE(scene->dirty());
+  EXPECT_EQ(scene->session->history().undo_count(), history + 1u);
+  EXPECT_FALSE(project.scene_has_pending_edits(scene->session_id));
+  const auto read = QdrDocumentReader::read_project_document(project.root() / destination.native_path());
+  ASSERT_TRUE(read.ok) << read.message;
+  const auto snapshot = qdr_project_write_snapshot_from_document(read.document);
+  ASSERT_TRUE(snapshot.ok());
+  ASSERT_EQ(snapshot.value().curves.size(), 1u);
+  EXPECT_TRUE(snapshot.value().curves[0].document->has_same_geometry(pending));
+  EXPECT_EQ(read_file_bytes(project.root() / source.native_path()), saved_bytes);
+  EXPECT_TRUE(editor.modeling().curve_snapshot(object).value().document.has_same_geometry(pending));
+}
+
+TEST(ProjectSessionWorkspace, SceneAssetRemovalClosesApprovedTabsOnlyAfterManifestCommit) {
+  ScopedProjectSessionDirectory temporary("scene-removal-publication");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto first = project.active_scene_id();
+  ASSERT_TRUE(editor.scene_documents().save_as(first, project_path("First.qdr")).ok());
+  ASSERT_TRUE(editor.scene_documents().new_scene().ok());
+  const auto second = project.active_scene_id();
+  ASSERT_TRUE(editor.scene_documents().save_as(second, project_path("Second.qdr")).ok());
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Dirty Removed Scene"}).ok());
+  const auto removed_id = project.find(second)->scene_id;
+  const auto approved = std::array{removed_id};
+  auto candidate = *project.manifest();
+  ASSERT_TRUE(candidate.unregister_scene(removed_id).ok());
+  EXPECT_FALSE(project.prepare_asset_manifest(candidate).ok);
+  ASSERT_TRUE(project.prepare_asset_manifest(candidate, approved).ok);
+  const auto generation = project.activation_generation();
+  {
+    ScopedManifestWriteFailure blocked(project.manifest_path());
+    ASSERT_TRUE(blocked.ready()) << blocked.message();
+    EXPECT_FALSE(project.install_asset_manifest(candidate, approved).ok);
+    ASSERT_NE(project.find(second), nullptr);
+    EXPECT_TRUE(project.find(second)->dirty());
+    EXPECT_EQ(project.active_scene_id(), second);
+    EXPECT_EQ(project.activation_generation(), generation);
+  }
+  ASSERT_TRUE(project.install_asset_manifest(std::move(candidate), approved).ok);
+  EXPECT_EQ(project.find(second), nullptr);
+  EXPECT_EQ(project.open_scenes().size(), 1u);
+  EXPECT_EQ(project.active_scene_id(), first);
+  EXPECT_EQ(project.activation_generation(), generation + 1u);
+  EXPECT_EQ(project.manifest()->open_scene_paths().size(), 1u);
+}
+
+TEST(ProjectSessionWorkspace, FailedSceneAssetCreationLeavesNoFileOrTab) {
+  ScopedProjectSessionDirectory temporary("scene-asset-create-rollback");
+  ProjectSession project;
+  ASSERT_TRUE(project.create(temporary.make_empty_child("Project")).ok);
+  const auto tab = project.active_scene_id();
+  const auto destination = project_path("Failed.qdr");
+  {
+    ScopedManifestWriteFailure blocked(project.manifest_path());
+    ASSERT_TRUE(blocked.ready()) << blocked.message();
+    EXPECT_FALSE(project.create_scene_asset(destination).ok());
+  }
+  EXPECT_EQ(project.manifest()->find_scene(destination), nullptr);
+  EXPECT_FALSE(std::filesystem::exists(project.root() / destination.native_path()));
+  EXPECT_EQ(project.active_scene_id(), tab);
+  EXPECT_EQ(project.open_scenes().size(), 1u);
+}
+
+TEST(ProjectSessionWorkspace, OpeningLegacyManifestDefersMigrationUntilSceneSave) {
+  ScopedProjectSessionDirectory temporary("legacy-migration-deferred");
+  ProjectSession project;
+  ASSERT_TRUE(project.create(temporary.make_empty_child("Project")).ok);
+  ASSERT_TRUE(project.save_as(project.active_scene_id(), project_path("Scene.qdr")).ok);
+  const auto manifest_path = project.manifest_path();
+  ASSERT_TRUE(project.close().ok);
+  auto encoded = nlohmann::json::parse(read_file_bytes(manifest_path));
+  encoded["version"] = 4u;
+  encoded.erase("textures");
+  encoded.erase("deletedTextureIds");
+  {
+    std::ofstream output(manifest_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(output.is_open());
+    output << encoded.dump(2);
+  }
+  const auto legacy_bytes = read_file_bytes(manifest_path);
+  ASSERT_TRUE(project.open(manifest_path).ok);
+  EXPECT_EQ(read_file_bytes(manifest_path), legacy_bytes);
+  EXPECT_EQ(project.manifest()->loaded_version(), 4u);
+  ASSERT_TRUE(project.save(project.active_scene_id()).ok);
+  const auto migrated = nlohmann::json::parse(read_file_bytes(manifest_path));
+  EXPECT_EQ(migrated["version"], kQuaderProjectManifestVersion);
+  EXPECT_TRUE(migrated.contains("textures"));
+  EXPECT_EQ(project.manifest()->loaded_version(), kQuaderProjectManifestVersion);
+}
+
+TEST(ProjectSessionWorkspace,
+     SceneAtProjectRootSavesAndClosesThroughThePublicLifecycle) {
+  ScopedProjectSessionDirectory temporary("root-scene-save");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto tab = project.active_scene_id();
+  const auto path = project_path("Root Scene.qdr");
+  ASSERT_TRUE(editor.scene_documents().save_as(tab, path).ok());
+  const auto identity = project.find(tab)->scene_id;
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Authored Edit"}).ok());
+  ASSERT_TRUE(project.preflight_save(tab).ok);
+  ASSERT_TRUE(editor.scene_documents().save(tab).ok());
+  EXPECT_EQ(project.find(tab)->scene_id, identity);
+  EXPECT_FALSE(project.find(tab)->dirty());
+  const auto read = QdrDocumentReader::read_project_document(project.root() / path.native_path());
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_EQ(SceneId::from_bytes(read.scene_uuid), identity);
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Save On Close"}).ok());
   int prompts = 0;
   editor.scene_documents().set_runtime_hooks({
-      .confirm_dirty_scene = [&](const QuaderSceneDocumentInfo &,
-                                 std::string_view action_id) {
-        EXPECT_EQ(action_id, "scene.close");
+      .confirm_dirty_scene = [&](const QuaderSceneDocumentInfo &, std::string_view) {
         ++prompts;
         return QuaderDirtySceneDecision::Save;
       },
   });
-  for (int route = 0; route < 4; ++route) {
-    SCOPED_TRACE(route);
-    if (route < 2) {
-      const auto rejected = route == 0 ? project.preflight_save(opened.value())
-                                       : project.save(opened.value());
-      EXPECT_FALSE(rejected.ok);
-      EXPECT_FALSE(rejected.changed);
-    } else {
-      const auto rejected = route == 2
-          ? editor.scene_documents().save(opened.value())
-          : editor.scene_documents().close(opened.value());
-      EXPECT_FALSE(rejected.ok());
-      EXPECT_FALSE(rejected.changed());
-    }
-    EXPECT_TRUE(curve.active());
-    EXPECT_TRUE(curve.dragging());
-    EXPECT_TRUE(legacy->session->modeling().curve_document_preview_active());
-    ASSERT_TRUE(curve.preview_state().document.has_value());
-    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(preview));
-  }
+  ASSERT_TRUE(editor.scene_documents().close(tab).ok());
   EXPECT_EQ(prompts, 1);
-  EXPECT_EQ(project.active_scene(), legacy);
-  EXPECT_EQ(legacy->scene_id, identity);
-  EXPECT_EQ(legacy->path, legacy_path);
-  EXPECT_TRUE(legacy->dirty());
-  EXPECT_EQ(legacy->session->content_revision_stamp(), stamp);
-  EXPECT_EQ(read_file_bytes(legacy_absolute), bytes);
-  EXPECT_EQ(ProjectManifestStore::serialize(*project.manifest()), manifest);
-
-  const auto destination = project_path("Scenes/Migrated.qdr");
-  const auto migrated = editor.scene_documents().save_as(opened.value(), destination);
-  ASSERT_TRUE(migrated.ok()) << migrated.error_message();
-  EXPECT_EQ(legacy->path, destination);
-  EXPECT_NE(legacy->scene_id, identity);
-  EXPECT_FALSE(legacy->dirty());
-  EXPECT_EQ(read_file_bytes(legacy_absolute), bytes);
-  EXPECT_TRUE(editor.scene_documents().close(opened.value()).ok());
-  EXPECT_EQ(prompts, 1);
+  EXPECT_EQ(project.find(tab), nullptr);
 }
 
 TEST(ProjectSessionWorkspace,
-     SaveAllPreflightsLegacyDestinationsBeforeEarlierWritesOrUnsavedPrompts) {
+     SaveAllPreflightsReservedDestinationsBeforeEarlierWritesOrUnsavedPrompts) {
   for (int route = 0; route < 3; ++route) {
     SCOPED_TRACE(route);
     ScopedProjectSessionDirectory temporary("save-all-scene-scope");
@@ -1412,6 +1752,8 @@ TEST(ProjectSessionWorkspace,
     const auto legacy = editor.scene_documents().open(legacy_path);
     ASSERT_TRUE(legacy.ok()) << legacy.error_message();
     ASSERT_TRUE(editor.scene().create_entity({.name = "Legacy Unsaved Edit"}).ok());
+    // A stale resident path must still be rejected before another tab is saved.
+    project.find(legacy.value())->path = project_path(".quader/Invalid.qdr");
     const auto first_bytes = read_file_bytes(first_absolute);
     const auto legacy_bytes = read_file_bytes(project.root() / legacy_path.native_path());
     const auto manifest_bytes = read_file_bytes(project.manifest_path());

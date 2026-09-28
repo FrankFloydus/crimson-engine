@@ -447,7 +447,6 @@ struct QtMainMenu::Impl {
     file_menu = nullptr;
     window_menu = nullptr;
     autosave_recovery_action = nullptr;
-    material_browser_action = nullptr;
     material_find_replace_action = nullptr;
     selection_toolbar_action = nullptr;
     snapping_toolbar_action = nullptr;
@@ -483,7 +482,6 @@ struct QtMainMenu::Impl {
   QMenu *file_menu = nullptr;
   QMenu *window_menu = nullptr;
   QAction *autosave_recovery_action = nullptr;
-  QAction *material_browser_action = nullptr;
   QAction *material_find_replace_action = nullptr;
   QAction *selection_toolbar_action = nullptr;
   QAction *snapping_toolbar_action = nullptr;
@@ -1376,12 +1374,21 @@ struct QtMainMenu::Impl {
       if (!ui_panel_available(id)) {
         continue;
       }
-      QAction *action = panels->addAction(qtext(context.localization,
-                                                ui_panel_localization_key(id),
-                                                ui_panel_key(id)));
+      const std::string shortcut = id == UIPanelId::AssetBrowser
+          ? context.editor.get().commands().shortcut_for(quader_command::kUiAssetBrowser)
+          : std::string{};
+      QAction *action = panels->addAction(action_text(context.localization,
+          ui_panel_localization_key(id), ui_panel_key(id), shortcut));
       action->setObjectName(
           QStringLiteral("panel_%1")
               .arg(QString::fromUtf8(ui_panel_stable_id(id))));
+      if (id == UIPanelId::AssetBrowser) {
+        const auto command_id = quader_command::kUiAssetBrowser.string();
+        action->setProperty(
+            kCommandIdProperty,
+            QString::fromUtf8(command_id.data(),
+                              static_cast<qsizetype>(command_id.size())));
+      }
       action->setCheckable(true);
       QObject::connect(action, &QAction::toggled, connection_context.get(),
                        [this, id](bool visible) {
@@ -1400,24 +1407,6 @@ struct QtMainMenu::Impl {
     window_menu = menu;
     menu->setObjectName(QStringLiteral("menu_window"));
 
-    if (release_has_feature(ReleaseFeature::Materials)) {
-      material_browser_action = menu->addAction(
-          qtext(context.localization, "ui.menu.view.material_browser",
-                "Material Browser"));
-      material_browser_action->setObjectName(
-          QStringLiteral("action_material_browser"));
-      QObject::connect(material_browser_action, &QAction::triggered,
-                       connection_context.get(), [this]() {
-                         QDR_PROFILE_SCOPE(
-                             "Qt main menu dispatch presentation action");
-                         if (context.show_material_browser) {
-                           context.show_material_browser();
-                         }
-                       });
-    }
-    if (!menu->actions().isEmpty()) {
-      menu->addSeparator();
-    }
     build_toolbar_submenu(*menu);
     build_panel_submenu(*menu);
   }
@@ -1505,6 +1494,11 @@ struct QtMainMenu::Impl {
         const bool visible =
             context.panel_visible ? context.panel_visible(entry.panel) : false;
         present_checked(*entry.action, visible);
+        if (entry.panel == UIPanelId::AssetBrowser) {
+          present_text(*entry.action, action_text(context.localization,
+              ui_panel_localization_key(entry.panel), ui_panel_key(entry.panel),
+              context.editor.get().commands().shortcut_for(quader_command::kUiAssetBrowser)));
+        }
       }
     }
 
@@ -1556,16 +1550,7 @@ struct QtMainMenu::Impl {
                             ? context.texture_toolbar_visible()
                             : false);
       }
-      if (material_browser_action != nullptr) {
-        present_text(*material_browser_action,
-                     qtext(context.localization,
-                           "ui.menu.view.material_browser",
-                           "Material Browser"));
-        present_enabled(*material_browser_action,
-                        context.material_browser_available
-                            ? context.material_browser_available()
-                            : false);
-      }
+
     }
 
     if (&menu == object_menu && material_find_replace_action != nullptr) {

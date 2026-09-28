@@ -10,15 +10,23 @@
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "assets/asset_registry.hpp"
+#include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <gtest/gtest.h>
+#include <QTemporaryDir>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
 #include <limits>
 #include <span>
 #include <utility>
@@ -267,6 +275,7 @@ TEST(SelectedMeshOutlineCacheTests, RoundMeshesDiscardFacetWiresAndRespectCamera
     const auto revision = cache.revision(0);
     for (int i = 0; i < 30; ++i) (void)cache.frame(&snapshot, camera, 0);
     EXPECT_EQ(cache.work_stats().camera_classifications, work.camera_classifications);
+    EXPECT_EQ(cache.work_stats().occurrence_bounds_tests, work.occurrence_bounds_tests);
     EXPECT_EQ(cache.work_stats().topology_builds, work.topology_builds);
     EXPECT_EQ(cache.revision(0), revision);
     camera.fov_degrees = 40;
@@ -274,6 +283,7 @@ TEST(SelectedMeshOutlineCacheTests, RoundMeshesDiscardFacetWiresAndRespectCamera
     (void)cache.frame(&snapshot, camera, 0);
     EXPECT_EQ(cache.work_stats().camera_classifications, work.camera_classifications);
     camera.eye.x = -5;
+    camera.fov_degrees = 130;
     EXPECT_FALSE(cache.frame(&snapshot, camera, 0).lines.empty());
     EXPECT_GT(cache.revision(0), revision);
     EXPECT_EQ(cache.work_stats().topology_builds, work.topology_builds);
@@ -293,12 +303,18 @@ TEST(SelectedMeshOutlineCacheTests, RoundMeshesDiscardFacetWiresAndRespectCamera
     camera.up = {0, 1, 0};
     EXPECT_FALSE(cache.frame(&snapshot, camera, 1).lines.empty());
     const auto ortho_work = cache.work_stats();
-    camera.eye = {100, 200, 300};
+    camera.eye = {1, 2, 300};
     camera.orthographic_size = 100;
     camera.fov_degrees = 75;
     (void)cache.frame(&snapshot, camera, 1);
     EXPECT_EQ(cache.work_stats().camera_classifications, ortho_work.camera_classifications);
     EXPECT_EQ(cache.work_stats().topology_builds, work.topology_builds);
+    camera.eye = {100, 200, 300};
+    EXPECT_TRUE(cache.frame(&snapshot, camera, 1).lines.empty());
+    EXPECT_EQ(cache.work_stats().camera_classifications, ortho_work.camera_classifications + 1);
+    camera.eye = {0, 1, 20};
+    EXPECT_FALSE(cache.frame(&snapshot, camera, 1).lines.empty());
+    EXPECT_EQ(cache.work_stats().camera_classifications, ortho_work.camera_classifications + 2);
     ASSERT_TRUE(session.primitive_creation().set_setting(kPrimitiveFlipFacesSetting, 1).ok);
     snapshot = build_render_overlay_selected_object_snapshot(session.scene(), session.assets(), true);
     EXPECT_FALSE(cache.frame(&snapshot, camera, 0).lines.empty());
@@ -353,6 +369,121 @@ ViewportOverlayCamera front_orthographic() {
   camera.right = {1, 0, 0};
   camera.up = {0, 1, 0};
   return camera;
+}
+
+TEST(SelectedMeshOutlineCacheTests, FramingChangesRetainOrRestoreVisibleOccurrences) {
+  const auto payload = outline_quad();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  for (const float x : {0.0f, 10.0f}) {
+    snapshot.meshes.push_back({.geometry_payload = payload,
+        .world_transform = compose_transform({.position = {x, 0, 0}}), .selected = true,
+        .vertices = payload->vertices, .indices = payload->indices});
+  }
+  auto camera = front_orthographic();
+  camera.viewport_size = {400, 400};
+  camera.orthographic_size = 4;
+  SelectedMeshOutlineCache cache;
+  ASSERT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
+  const auto work = cache.work_stats();
+  for (int repeat = 0; repeat < 30; ++repeat) (void)cache.frame(&snapshot, camera, 0);
+  EXPECT_EQ(cache.work_stats().occurrence_bounds_tests, work.occurrence_bounds_tests);
+  EXPECT_EQ(cache.work_stats().visibility_classifications, work.visibility_classifications);
+  EXPECT_EQ(cache.work_stats().camera_classifications, work.camera_classifications);
+  camera.orthographic_size = 6;
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
+  EXPECT_EQ(cache.work_stats().camera_classifications, work.camera_classifications);
+  EXPECT_EQ(cache.work_stats().visibility_classifications, work.visibility_classifications + 1);
+  camera.eye.x = 10;
+  const auto &moved = cache.frame(&snapshot, camera, 0);
+  ASSERT_EQ(moved.lines.size(), 4u);
+  for (const auto &line : moved.lines) EXPECT_GE(line.start.x, 9);
+  camera.eye.x = 20;
+  EXPECT_TRUE(cache.frame(&snapshot, camera, 0).lines.empty());
+  camera.eye.x = 0;
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
+  camera.projection = ViewportOverlayProjection::Perspective;
+  camera.fov_degrees = 30;
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
+  camera.fov_degrees = 100;
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 8u);
+  camera.fov_degrees = 60;
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
+  camera.viewport_size.x = 800;
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 8u);
+  camera.right = {0, 1, 0};
+  camera.up = {-1, 0, 0};
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
+  camera.right = {1, 0, 0};
+  camera.up = {0, 1, 0};
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 8u);
+  EXPECT_EQ(cache.work_stats().topology_builds, 1u);
+  EXPECT_EQ(cache.work_stats().source_refreshes, work.source_refreshes);
+}
+
+TEST(SelectedMeshOutlineCacheTests, FrustumRetainsViewportStraddlingOccluders) {
+  const std::array<OutlineBox, 2> boxes{{
+      {{-20, -20, -1}, {20, 20, 1}}, {{-1, -1, 3}, {1, 1, 4}},
+  }};
+  SceneSession session;
+  ASSERT_NO_FATAL_FAILURE(seed_outline_boxes(session, boxes, true));
+  auto selected = build_render_overlay_selected_object_snapshot(session.scene(), session.assets(), true);
+  auto hierarchy = build_render_overlay_selection_snapshot(session.scene(), session.assets());
+  SelectedMeshOutlineCache cache;
+  auto camera = front_orthographic();
+  camera.viewport_size = {400, 400};
+  camera.orthographic_size = 4;
+  for (const auto projection : {ViewportOverlayProjection::Orthographic,
+                                ViewportOverlayProjection::Perspective}) {
+    camera.projection = projection;
+    const auto &frame = cache.frame(&selected, camera, 0, &hierarchy);
+    ASSERT_NO_FATAL_FAILURE(expect_box_union_silhouette(frame, camera, boxes));
+    for (const auto &line : frame.lines) {
+      EXPECT_LE(line.start.z, 1);
+      EXPECT_LE(line.end.z, 1);
+    }
+  }
+}
+
+TEST(SelectedMeshOutlineCacheTests, FrustumRetainsMirroredNearClippedGeometry) {
+  const auto payload = outline_quad();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  snapshot.meshes.push_back({.geometry_payload = payload,
+      .world_transform = compose_transform({.rotation = {0, 0.3826834f, 0, 0.9238795f},
+                                           .scale = {-2, 3, 1}}), .selected = true,
+      .vertices = payload->vertices, .indices = payload->indices});
+  auto camera = front_orthographic();
+  camera.projection = ViewportOverlayProjection::Perspective;
+  camera.eye = {0, 0, 2};
+  camera.near_plane = 2;
+  camera.viewport_size = {400, 400};
+  SelectedMeshOutlineCache cache;
+  const auto &frame = cache.frame(&snapshot, camera, 0);
+  ASSERT_EQ(frame.lines.size(), 3u);
+  for (const auto &line : frame.lines) {
+    EXPECT_GE(dot(line.start - camera.eye, camera.forward), camera.near_plane - 1e-5f);
+    EXPECT_GE(dot(line.end - camera.eye, camera.forward), camera.near_plane - 1e-5f);
+  }
+  camera.eye.x = 100;
+  EXPECT_TRUE(cache.frame(&snapshot, camera, 0).lines.empty());
+  camera.eye.x = 0;
+  EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 3u);
+  EXPECT_EQ(cache.work_stats().topology_builds, 1u);
+}
+
+TEST(SelectedMeshOutlineCacheTests, FrustumMatchesMinimumOrthographicRendererExtent) {
+  const auto payload = outline_quad();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  snapshot.meshes.push_back({.geometry_payload = payload,
+      .world_transform = compose_transform({.position = {0.000075f, 0, 0},
+                                           .scale = {0.000003f, 0.000003f, 1}}), .selected = true,
+      .vertices = payload->vertices, .indices = payload->indices});
+  auto camera = front_orthographic();
+  camera.viewport_size = {400, 400};
+  SelectedMeshOutlineCache cache;
+  for (const float size : {0.0f, 0.0001f, 0.00015f}) {
+    camera.orthographic_size = size;
+    EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
+  }
 }
 
 TEST(SelectedMeshOutlineCacheTests, ActiveObjectKeepsSilhouetteInsideOtherSelectedCoverage) {
@@ -632,6 +763,38 @@ TEST(SelectedMeshOutlineCacheTests, FullyCoveredProjectionHasNoContourEvenForSep
   }
 }
 
+TEST(SelectedMeshOutlineCacheTests, DenseCoverageRetainsPartialBoundariesAndHoles) {
+  std::vector<OutlineBox> boxes{
+      {{-3, -3, -0.5f}, {-1, 3, 0.5f}},
+      {{1, -3, -0.5f}, {3, 3, 0.5f}},
+      {{-3, -3, -0.5f}, {3, -1, 0.5f}},
+      {{-3, 1, -0.5f}, {3, 3, 0.5f}},
+      // Coverage on either end of this foreground strip must leave the gaps visible.
+      {{-5, -0.1f, 1}, {5, 0.1f, 1.2f}},
+  };
+  for (int index = 0; index < 96; ++index) {
+    const float y = -2.8f + static_cast<float>(index % 24) * 0.2f;
+    const float z = -0.4f + static_cast<float>(index / 24) * 0.1f;
+    boxes.push_back({{-2.8f, y, z}, {-1.2f, y + 0.4f, z + 0.1f}});
+  }
+  SceneSession session;
+  ASSERT_NO_FATAL_FAILURE(seed_outline_boxes(session, boxes, false));
+  auto selected = build_render_overlay_selected_object_snapshot(session.scene(), session.assets(), true);
+  SelectedMeshOutlineCache cache;
+  auto camera = front_orthographic();
+  for (const auto projection : {ViewportOverlayProjection::Orthographic,
+                                ViewportOverlayProjection::Perspective}) {
+    camera.projection = projection;
+    camera.eye = {0, 0, 20};
+    ASSERT_NO_FATAL_FAILURE(expect_box_union_silhouette(
+        cache.frame(&selected, camera, 0), camera, boxes));
+    const auto work = cache.work_stats();
+    for (int repeat = 0; repeat < 30; ++repeat) (void)cache.frame(&selected, camera, 0);
+    EXPECT_EQ(cache.work_stats().camera_classifications, work.camera_classifications);
+    EXPECT_EQ(cache.work_stats().topology_builds, work.topology_builds);
+  }
+}
+
 TEST(SelectedMeshOutlineCacheTests, PerspectiveForwardAndNearPlaneInvalidateCoverageWithoutRebuildingTopology) {
   auto payload = std::make_shared<MeshGeometryPayload>();
   payload->vertices = {{{-1, -1, 0}}, {{1, -1, 0}}, {{1, 1, 0}}, {{-1, 1, 0}}};
@@ -704,9 +867,10 @@ public:
   explicit OutlineSelectionProvider(SceneSession &session) : session_(session) {}
   ViewportOverlayFrame build_selection_overlay_frame() const override {
     ++builds;
-    return session_.modeling().selection_overlay_frame();
+    return session_.modeling().selection_overlay_frame(options);
   }
   mutable int builds = 0;
+  ModelingSelectionOverlayOptions options;
 private:
   SceneSession &session_;
 };
@@ -722,6 +886,40 @@ public:
       ViewportOverlayCamera) override { dynamic = std::move(frame); }
   ViewportOverlayFrame persistent, dynamic;
 };
+
+TEST(SelectedMeshOutlineCacheTests, SubmissionUsesRasterWidthForOffscreenRibbonPadding) {
+  const auto payload = outline_quad();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  snapshot.meshes.push_back({.geometry_payload = payload,
+      .world_transform = compose_transform({.position = {2.05f, 0, 0}, .scale = {0.01f, 0.5f, 1}}),
+      .selected = true, .active_selected = true,
+      .vertices = payload->vertices, .indices = payload->indices});
+  ViewportOverlaySubmissionRequest request;
+  request.camera = front_orthographic();
+  request.camera.viewport_size = {400, 400};
+  request.camera.orthographic_size = 4;
+  request.overlays_visible = true;
+  request.selection_dimensions_visible = false;
+  request.selected_mesh_outline_snapshot = &snapshot;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  auto settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::SelectionEdgeLineSize, 2));
+  OutlineRecordingTarget target;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  (void)coordinator.submit(request, settings, target);
+  EXPECT_TRUE(target.dynamic.lines.empty());
+  request.raster_scale = 4;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  ASSERT_EQ(target.dynamic.lines.size(), 4u);
+  for (const auto &line : target.dynamic.lines) {
+    EXPECT_FLOAT_EQ(line.width_pixels, 8);
+    EXPECT_EQ(line.style_role, ViewportOverlayStyleRole::ActiveSelectionWire);
+  }
+  EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  request.raster_scale = 1;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  EXPECT_TRUE(target.dynamic.lines.empty());
+}
 
 TEST(SelectedMeshOutlineCacheTests, SubmissionRetainsFillAndControlsWithNoInternalSelectionWire) {
   SceneSession session;
@@ -772,6 +970,7 @@ TEST(SelectedMeshOutlineCacheTests, SubmissionRetainsFillAndControlsWithNoIntern
   for (int i = 0; i < 30; ++i) EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
   EXPECT_EQ(provider.builds, 1);
   request.camera.eye.x = -5;
+  request.camera.fov_degrees = 130;
   const auto moved = coordinator.submit(request, settings, target);
   EXPECT_TRUE(moved.dynamic_submitted);
   EXPECT_FALSE(moved.persistent_submitted);
@@ -834,6 +1033,10 @@ TEST(SelectedMeshOutlineCacheTests, GroupMembersUseOutlinesAndKeepBoundsWithStab
   EXPECT_EQ(cache.work_stats().source_refreshes, work.source_refreshes);
   EXPECT_EQ(cache.work_stats().camera_classifications, work.camera_classifications);
   camera.eye.x = -5;
+  camera.fov_degrees = 130;
+  camera.forward = normalize(QVec3{0, 3.5f, 0} - camera.eye);
+  camera.right = normalize(cross(camera.forward, QVec3{0, 1, 0}));
+  camera.up = cross(camera.right, camera.forward);
   (void)cache.frame(&selected, camera, 0, &hierarchy);
   EXPECT_EQ(cache.work_stats().topology_builds, work.topology_builds);
   EXPECT_EQ(cache.work_stats().camera_classifications, work.camera_classifications + 1);
@@ -877,6 +1080,95 @@ TEST(SelectedMeshOutlineCacheTests, GroupMembersUseOutlinesAndKeepBoundsWithStab
   (void)coordinator.submit(request, settings, target);
   EXPECT_TRUE(target.persistent.lines.empty());
   EXPECT_TRUE(target.dynamic.lines.empty());
+}
+
+TEST(SelectedMeshOutlineCacheTests, LargeSceneSelectAllRetainsSubmittedOverlays) {
+  const char *source = std::getenv("QUADER_TEST_LARGE_SELECTION_PROJECT");
+  if (source == nullptr || *source == '\0') {
+    GTEST_SKIP() << "Set QUADER_TEST_LARGE_SELECTION_PROJECT to measure a cloned project.";
+  }
+  const std::filesystem::path source_project = std::filesystem::u8path(source);
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_project));
+  const char *source_scene = std::getenv("QUADER_TEST_LARGE_SELECTION_SCENE");
+  const std::filesystem::path original_scene = source_scene != nullptr && *source_scene != '\0'
+      ? std::filesystem::u8path(source_scene)
+      : source_project.parent_path() / "Scenes" / "one.qdr";
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path root(temporary.path().toStdWString());
+  const auto project_root = root / source_project.parent_path().filename();
+  std::error_code error;
+  std::filesystem::copy(source_project.parent_path(), project_root,
+      std::filesystem::copy_options::recursive |
+          std::filesystem::copy_options::skip_symlinks, error);
+  ASSERT_FALSE(error) << error.message();
+  const auto relative_scene = std::filesystem::relative(
+      original_scene, source_project.parent_path(), error);
+  ASSERT_FALSE(error) << error.message();
+  ProjectSession project(root / "recent-scenes.json");
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+      "resources/modeling_assets");
+  QuaderEditorApi editor(project);
+  const auto opened_project = editor.project().open(project_root / source_project.filename());
+  ASSERT_TRUE(opened_project.ok()) << opened_project.error_message();
+  const auto opened = editor.scene_documents().open_native_path(project_root / relative_scene);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  auto &session = *project.active_scene()->session;
+  const auto mark = [](const char *phase, std::chrono::steady_clock::time_point start) {
+    const double milliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+    std::cout << "LARGE_SELECTION " << phase << "_ms=" << milliseconds << std::endl;
+  };
+  auto start = std::chrono::steady_clock::now();
+  const auto selected = editor.selection().select_all();
+  mark("select_all", start);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  ASSERT_GE(session.scene().selected_entities().size(), 6'000u);
+  start = std::chrono::steady_clock::now();
+  RenderOverlaySnapshotCache snapshots;
+  (void)snapshots.update_persistent(session.scene(), session.assets(), true, 0, {},
+      {}, nullptr, false, {}, {}, true);
+  const auto &hierarchy = snapshots.selection_snapshot(session.scene(), session.assets());
+  mark("snapshot", start);
+  const auto *objects = snapshots.selected_object_snapshot();
+  ASSERT_NE(objects, nullptr);
+  std::size_t triangles = 0;
+  for (const auto &mesh : objects->meshes) triangles += mesh.indices.size() / 3;
+  std::cout << "LARGE_SELECTION meshes=" << objects->meshes.size()
+            << " triangles=" << triangles << std::endl;
+  OutlineSelectionProvider provider(session);
+  provider.options.suppress_persistent_object_selection = true;
+  OutlineRecordingTarget target;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  ViewportOverlaySubmissionRequest request;
+  request.camera = ViewportCameraAdapter::overlay_camera(
+      session.viewport_workspace().camera(ViewportPaneId::Perspective), {1280, 720});
+  request.overlays_visible = request.scene_overlay_requested = true;
+  request.selection_dimensions_visible = false;
+  request.selection_frame_provider = &provider;
+  request.selected_mesh_outline_snapshot = objects;
+  request.scene_overlay_snapshot = &hierarchy;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Object;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  const auto settings = ViewportSettings::defaults();
+  start = std::chrono::steady_clock::now();
+  const auto first = coordinator.submit(request, settings, target);
+  mark("first_submission", start);
+  EXPECT_TRUE(first.dynamic_submitted);
+  EXPECT_FALSE(target.dynamic.lines.empty());
+  const auto work = coordinator.work_counters();
+  start = std::chrono::steady_clock::now();
+  for (int i = 0; i < 30; ++i) EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  mark("unchanged_30", start);
+  EXPECT_EQ(provider.builds, 1);
+  request.camera.eye.x += 1;
+  start = std::chrono::steady_clock::now();
+  (void)coordinator.submit(request, settings, target);
+  mark("camera_move", start);
+  EXPECT_EQ(provider.builds, 1);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+      work.dynamic_source_compose_count);
 }
 
 } // namespace

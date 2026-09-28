@@ -281,6 +281,41 @@ ProjectIoResult<void> RecentSceneStore::remember(
 }
 
 ProjectIoResult<void>
+RecentSceneStore::synchronize_project(
+    const ProjectManifest &manifest,
+    const std::filesystem::path &manifest_path) const {
+  auto loaded = load();
+  if (!loaded.ok()) {
+    return ProjectIoResult<void>::failure(loaded.error().code,
+        loaded.error().message, loaded.error().path);
+  }
+  auto entries = loaded.take_value();
+  const RecentSceneEntry project{.manifest_path = manifest_path};
+  bool changed = false;
+  for (auto &entry : entries) {
+    if (!same_project(entry, project)) continue;
+    const auto *scene = manifest.find_scene(entry.scene_id);
+    if (scene == nullptr) continue;
+    const auto stem = scene->path.native_path().stem().generic_u8string();
+    const std::string name(stem.begin(), stem.end());
+    if (entry.scene_path != scene->path || entry.scene_name != name ||
+        entry.project_name != manifest.name()) {
+      entry.scene_path = scene->path;
+      entry.scene_name = name;
+      entry.project_name = manifest.name();
+      changed = true;
+    }
+  }
+  std::erase_if(entries, [&](const RecentSceneEntry &entry) {
+    const bool removed = same_project(entry, project) &&
+                         manifest.find_scene(entry.scene_id) == nullptr;
+    changed |= removed;
+    return removed;
+  });
+  return changed ? save(entries) : ProjectIoResult<void>::success();
+}
+
+ProjectIoResult<void>
 RecentSceneStore::save(std::span<const RecentSceneEntry> entries) const {
   Json scenes = Json::array();
   for (const auto &entry : entries.first(std::min(entries.size(), kMaximumEntries))) {

@@ -23,11 +23,11 @@ class DefaultMaterialTextureStoreTests : public ::testing::Test {
 protected:
   static void SetUpTestSuite() {
     ASSERT_EQ(QCoreApplication::instance(), nullptr);
-    application_ = std::make_unique<QCoreApplication>(argc_, argv_);
+    application = std::make_unique<QCoreApplication>(argc, argv);
     QCoreApplication::addLibraryPath(QCoreApplication::applicationDirPath());
   }
 
-  static void TearDownTestSuite() { application_.reset(); }
+  static void TearDownTestSuite() { application.reset(); }
 
   std::filesystem::path path(const char *name) const {
     return std::filesystem::path(directory_.path().toStdWString()) / name;
@@ -50,10 +50,10 @@ protected:
   QTemporaryDir directory_;
 
 private:
-  inline static int argc_ = 1;
-  inline static char name_[] = "quader-default-texture-tests";
-  inline static char *argv_[] = {name_, nullptr};
-  inline static std::unique_ptr<QCoreApplication> application_;
+  inline static int argc = 1;
+  inline static char name[] = "quader-default-texture-tests";
+  inline static char *argv[] = {name, nullptr};
+  inline static std::unique_ptr<QCoreApplication> application;
 };
 
 TEST_F(DefaultMaterialTextureStoreTests,

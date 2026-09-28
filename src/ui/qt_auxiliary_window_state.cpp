@@ -52,6 +52,21 @@ QtAuxiliaryWindowState::load(const std::filesystem::path &path) {
       settings.value(QStringLiteral("sidebarWidth"), 200).toInt();
   settings.endGroup();
 
+  // Preserve useful Material Browser preferences without inheriting its
+  // floating geometry; the Asset Browser is part of the saved dock layout.
+  settings.beginGroup(QStringLiteral("AssetBrowser"));
+  state.asset_browser_grid_mode = settings.value(
+      QStringLiteral("gridMode"), state.material_browser_grid_mode).toBool();
+  state.asset_browser_tile_size = settings.value(
+      QStringLiteral("tileSize"), state.material_browser_tile_size).toInt();
+  state.asset_browser_sidebar_visible = settings.value(
+      QStringLiteral("sidebarVisible"), state.material_browser_sidebar_visible).toBool();
+  state.asset_browser_sidebar_width = settings.value(
+      QStringLiteral("sidebarWidth"), state.material_browser_sidebar_width).toInt();
+  state.asset_browser_layout_migrated =
+      settings.value(QStringLiteral("layoutMigrated"), false).toBool();
+  settings.endGroup();
+
   settings.beginGroup(QStringLiteral("FaceTexture"));
   state.face_texture_browser_grid_mode =
       settings.value(QStringLiteral("gridMode"), true).toBool();
@@ -104,6 +119,14 @@ bool QtAuxiliaryWindowState::save(const std::filesystem::path &path) const {
   settings.setValue(QStringLiteral("tileSize"), material_browser_tile_size);
   settings.setValue(QStringLiteral("sidebarVisible"), material_browser_sidebar_visible);
   settings.setValue(QStringLiteral("sidebarWidth"), material_browser_sidebar_width);
+  settings.endGroup();
+
+  settings.beginGroup(QStringLiteral("AssetBrowser"));
+  settings.setValue(QStringLiteral("gridMode"), asset_browser_grid_mode);
+  settings.setValue(QStringLiteral("tileSize"), asset_browser_tile_size);
+  settings.setValue(QStringLiteral("sidebarVisible"), asset_browser_sidebar_visible);
+  settings.setValue(QStringLiteral("sidebarWidth"), asset_browser_sidebar_width);
+  settings.setValue(QStringLiteral("layoutMigrated"), asset_browser_layout_migrated);
   settings.endGroup();
 
   settings.beginGroup(QStringLiteral("FaceTexture"));

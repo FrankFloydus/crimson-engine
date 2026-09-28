@@ -12,6 +12,7 @@
 #include "core/localization_service.hpp"
 #include "core/release_features.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
@@ -36,6 +37,7 @@
 #include "ui/ui_system.hpp"
 
 #include <QAction>
+#include <QAbstractAnimation>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -51,6 +53,8 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QPushButton>
+#include <QPropertyAnimation>
+#include <QStackedWidget>
 #include <QStyle>
 #include <QTemporaryDir>
 #include <QToolBar>
@@ -101,6 +105,67 @@ private:
   char *argv_[2] = {application_name_, nullptr};
   std::unique_ptr<QApplication> application_;
 };
+
+TEST_F(PublicReleaseUiTests, AssetBrowserOpensAtItsFinalDockGeometry) {
+  QTemporaryDir project_root;
+  ASSERT_TRUE(project_root.isValid());
+  RenderSystem renderer;
+  ProjectSession project;
+  project.set_resource_root(resource_root() / "modeling_assets");
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(
+      std::filesystem::path(project_root.path().toStdWString())).ok());
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &scene = *project.active_scene()->session;
+  UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resource_root()));
+  auto *window = ui.main_window();
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(), kInvalidAssetId);
+  auto *stack = qobject_cast<QStackedWidget *>(window->centralWidget());
+  auto *workspace = window->findChild<QWidget *>(QStringLiteral("sceneWorkspace"));
+  auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+  ASSERT_NE(stack, nullptr);
+  ASSERT_NE(workspace, nullptr);
+  ASSERT_NE(dock, nullptr);
+  // Use the real Qt dock layout without initializing a rendering device.
+  stack->setCurrentWidget(workspace);
+  window->resize(1600, 1000);
+  window->setAnimated(false);
+  ASSERT_TRUE(editor.ui().show_panel("outliner").ok());
+  ASSERT_TRUE(editor.ui().show_panel("inspector").ok());
+  window->show();
+  QCoreApplication::processEvents();
+  window->setAnimated(true);
+  for (int transition = 0; transition < 3; ++transition) {
+    ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+    const QRect opening_geometry = dock->geometry();
+    EXPECT_EQ(window->dockWidgetArea(dock), Qt::BottomDockWidgetArea);
+    EXPECT_LE(opening_geometry.left(), window->contentsRect().left() + 2);
+    EXPECT_GE(opening_geometry.right(), window->contentsRect().right() - 2);
+    EXPECT_TRUE(window->isAnimated());
+    for (auto *animation : window->findChildren<QPropertyAnimation *>()) {
+      EXPECT_FALSE(animation->state() == QAbstractAnimation::Running &&
+                   animation->propertyName() == QByteArrayLiteral("geometry"));
+    }
+    QCoreApplication::processEvents();
+    EXPECT_EQ(dock->geometry(), opening_geometry);
+  }
+  const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review));
+    EXPECT_TRUE(window->grab().save(QDir(review).filePath(
+        QStringLiteral("asset-browser-public-open.png"))));
+  }
+  ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+  window->addDockWidget(Qt::RightDockWidgetArea, dock);
+  ASSERT_TRUE(editor.ui().focus_panel("asset_browser").ok());
+  EXPECT_EQ(window->dockWidgetArea(dock), Qt::RightDockWidgetArea);
+  ui.shutdown();
+}
 
 TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunchers) {
   const auto paths = UISettings::resolve_paths(resource_root());
@@ -155,6 +220,10 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
                 QStringLiteral("dock_outliner")), nullptr);
   EXPECT_NE(ui.main_window()->findChild<QDockWidget *>(
                 QStringLiteral("dock_inspector")), nullptr);
+  EXPECT_NE(ui.main_window()->findChild<QDockWidget *>(
+                QStringLiteral("dock_asset_browser")), nullptr);
+  EXPECT_NE(ui.main_window()->findChild<QWidget *>(
+                QStringLiteral("assetBrowser")), nullptr);
   for (const char *name : {"dock_layers", "panel_layers",
                            "dock_face_texture", "face_texture.panel",
                            "textureToolbar", "materialBrowser.window",
@@ -373,10 +442,10 @@ TEST_F(PublicReleaseUiTests,
   EXPECT_NE(managed, source);
   EXPECT_TRUE(std::filesystem::is_regular_file(managed));
   EXPECT_EQ(UISettings::load(paths.settings_file).default_material_texture(), managed);
-  constexpr auto document_domains = kAllCommandObservableDomains &
+  constexpr auto kDocumentDomains = kAllCommandObservableDomains &
       ~command_observable_domain_mask(CommandObservableDomain::Preferences);
   const auto difference = diff_command_observable_state(
-      before, capture_command_observable_state(editor), document_domains);
+      before, capture_command_observable_state(editor), kDocumentDomains);
   EXPECT_TRUE(difference.empty()) << difference.summary;
   const auto after_bytes = QdrDocumentWriter::serialize_project_document_bytes(session.document());
   EXPECT_EQ(after_bytes, scene_bytes);

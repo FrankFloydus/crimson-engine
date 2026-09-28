@@ -32,6 +32,8 @@ public:
     QuaderApiVoidResult focus_panel(std::string_view panel);
     QuaderApiVoidResult show_command_search();
     [[nodiscard]] bool command_search_available() const noexcept;
+    QuaderApiVoidResult toggle_asset_browser();
+    [[nodiscard]] bool asset_browser_available() const noexcept;
     [[nodiscard]] bool panel_visible(std::string_view panel) const;
     QuaderApiVoidResult notify(QuaderNotification notification);
     [[nodiscard]] QuaderConsoleApi& console();

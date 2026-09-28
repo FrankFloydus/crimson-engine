@@ -17,6 +17,7 @@ namespace filament {
 class Engine;
 class Material;
 class Renderer;
+class RenderTarget;
 class Texture;
 } // namespace filament
 
@@ -26,6 +27,12 @@ using MaterialPreviewTextureSlot = RenderStandardMaterialTextureSlot;
 using MaterialPreviewTextureSnapshot =
     RenderMaterialTextureEvaluationSnapshot;
 using StandardMaterialPreviewSnapshot = RenderMaterialEvaluationSnapshot;
+
+/// Keeps the asset sphere's fixed lighting separate from interactive previews.
+enum class MaterialPreviewLightingPreset : std::uint8_t {
+  Interactive,
+  AssetThumbnail,
+};
 
 /**
  * Owns the Filament scene and GPU resources for one isolated material preview.
@@ -44,13 +51,17 @@ public:
       filament::Engine &engine, filament::Material &shaded_mesh_material,
       filament::Material &rendered_mesh_material,
       filament::Texture &solid_color_texture,
-      const std::filesystem::path &resource_root);
+      const std::filesystem::path &resource_root,
+      MaterialPreviewLightingPreset lighting =
+          MaterialPreviewLightingPreset::Interactive);
   void shutdown();
 
   void resize(std::uint32_t width, std::uint32_t height);
   void set_preview_state(const MaterialPreviewState &state);
   void set_material(StandardMaterialPreviewSnapshot snapshot);
   void render(filament::Renderer &renderer);
+  void render_offscreen(filament::Renderer &renderer,
+                        filament::RenderTarget &target);
 
   [[nodiscard]] bool initialized() const noexcept;
   [[nodiscard]] std::uint32_t width() const noexcept;

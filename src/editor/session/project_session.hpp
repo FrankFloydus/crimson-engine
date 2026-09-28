@@ -21,6 +21,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -31,6 +32,9 @@ class ProjectAutosaveService;
 class ProjectAssetDependencyService;
 class ProjectMaterialUsageService;
 class ProjectMaterialDeletionService;
+class ProjectAssetService;
+class ProjectAssetDeletionService;
+struct QdrProjectWriteSnapshot;
 
 /// Owns one heap-stable scene document resident in the project workspace.
 struct OpenSceneSession final {
@@ -89,6 +93,32 @@ public:
   [[nodiscard]] ProjectSessionResult close(bool discard_dirty = false);
 
   [[nodiscard]] ProjectSessionResult new_scene();
+  /// Creates a saved empty asset without allocating or activating a scene tab.
+  [[nodiscard]] ProjectIoResult<ProjectSceneCatalogEntry>
+  create_scene_asset(ProjectRelativePath path);
+  /// Accepts pending edits and saves a separate asset without rebinding or cleaning the source.
+  [[nodiscard]] ProjectIoResult<ProjectSceneCatalogEntry>
+  save_copy(SceneSessionId id, ProjectRelativePath path);
+  /// Publishes a bridge record from committed asset bytes, never resident drafts.
+  [[nodiscard]] ProjectIoResult<void>
+  publish_scene_asset(const ProjectRelativePath &path) const;
+  /// Copies saved scene contents to a transaction staging file with a fresh ID.
+  [[nodiscard]] ProjectIoResult<void> stage_scene_asset_copy(
+      const ProjectRelativePath &source, const std::filesystem::path &staging_path,
+      const SceneId &new_scene_id,
+      std::span<const std::pair<ProjectAssetId, ProjectAssetId>> material_remaps = {}) const;
+  /// Prepares resident tab paths by identity without mutating live state.
+  [[nodiscard]] ProjectSessionResult prepare_asset_manifest(
+      ProjectManifest &manifest,
+      std::span<const SceneId> approved_removed_scenes = {}) const;
+  /// Persists a prepared asset transaction before updating paths or closing tabs.
+  [[nodiscard]] ProjectSessionResult install_asset_manifest(
+      ProjectManifest manifest,
+      std::span<const SceneId> approved_removed_scenes = {});
+  /// Publishes a prepared durable transaction without writing its manifest again.
+  void publish_asset_manifest(
+      ProjectManifest manifest,
+      std::span<const SceneId> approved_removed_scenes = {});
   [[nodiscard]] ProjectSessionResult open_scene(ProjectRelativePath path);
   [[nodiscard]] ProjectSessionResult activate(SceneSessionId id);
   /// Accepts pending edits before a document transition or dirty-state prompt.
@@ -111,10 +141,17 @@ public:
   [[nodiscard]] const ProjectAssetDependencyService &dependencies() const noexcept;
   [[nodiscard]] ProjectMaterialUsageService &material_usage() noexcept;
   [[nodiscard]] const ProjectMaterialUsageService &material_usage() const noexcept;
+  [[nodiscard]] ProjectAssetService &project_assets();
   [[nodiscard]] ProjectSessionResult close_scene(SceneSessionId id,
                                                  bool discard_dirty = false);
   [[nodiscard]] ProjectSessionResult install_material_catalog(
-      ProjectMaterialCatalog material_catalog);
+      ProjectMaterialCatalog material_catalog,
+      std::optional<ProjectManifest> candidate_manifest = std::nullopt);
+  /// Installs a validated catalog after its containing transaction committed.
+  void publish_material_catalog(ProjectMaterialCatalog material_catalog,
+                                bool invalidate_texture_content = true);
+  /// Refreshes disk-backed assets and decoded-image consumers without saving.
+  [[nodiscard]] ProjectSessionResult refresh_asset_catalog();
 
   void set_resource_root(std::filesystem::path resource_root);
   // Applies the user policy to every resident scene and future scene sessions.
@@ -127,6 +164,7 @@ public:
     return find(active_scene_id_) != nullptr;
   }
   [[nodiscard]] bool has_dirty_scenes() const;
+  [[nodiscard]] bool scene_has_pending_edits(SceneSessionId id) const;
   [[nodiscard]] bool has_dirty_material() const;
   [[nodiscard]] StandardMaterialEditSessionService &standard_material_editor();
   [[nodiscard]] const StandardMaterialEditSessionService &
@@ -156,6 +194,9 @@ public:
   [[nodiscard]] std::shared_ptr<const ProjectMaterialTextureSnapshot>
   material_texture_image(ProjectAssetId material_id,
                          StandardMaterialTextureSlot slot) const;
+  /// Shares decoded image bytes by canonical identity, independent of slot use.
+  [[nodiscard]] std::shared_ptr<const ProjectMaterialTextureSnapshot>
+  texture_image(const ProjectMaterialTextureSlot &texture) const;
   /// Resolves one committed albedo through validated project storage.
   [[nodiscard]] ProjectIoResult<ProjectMaterialAlbedoTextureInfo>
   material_albedo_texture_info(ProjectAssetId material_id) const;
@@ -172,6 +213,10 @@ public:
   [[nodiscard]] std::uint64_t activation_generation() const noexcept {
     return activation_generation_;
   }
+  /// Changes only when the project workspace is replaced or closed.
+  [[nodiscard]] std::uint64_t project_generation() const noexcept {
+    return project_generation_;
+  }
   [[nodiscard]] OpenSceneSession *find(SceneSessionId id);
   [[nodiscard]] const OpenSceneSession *find(SceneSessionId id) const;
   [[nodiscard]] OpenSceneSession *active_scene();
@@ -184,6 +229,10 @@ public:
 
 private:
   friend class ProjectMaterialDeletionService;
+  friend class ProjectAssetService;
+  friend class ProjectAssetDeletionService;
+  [[nodiscard]] ProjectIoResult<ProjectSceneCatalogEntry> write_scene_asset(
+      ProjectRelativePath path, const QdrProjectWriteSnapshot &snapshot);
   [[nodiscard]] ProjectSessionResult open_workspace(
       const std::filesystem::path &manifest_path, bool discard_existing_dirty,
       std::optional<ProjectRelativePath> required_scene,
@@ -238,6 +287,7 @@ private:
   std::unordered_set<std::uint32_t> free_slot_membership_;
   SceneSessionId active_scene_id_;
   std::uint64_t activation_generation_ = 0u;
+  std::uint64_t project_generation_ = 0u;
   std::size_t history_max_steps_ = EditorHistoryService::kDefaultMaxSteps;
   std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;
   std::shared_ptr<ExtrudeSessionDefaults> extrude_defaults_;
@@ -254,6 +304,7 @@ private:
   std::unique_ptr<ProjectAutosaveService> autosave_;
   std::unique_ptr<ProjectAssetDependencyService> dependencies_;
   std::unique_ptr<ProjectMaterialUsageService> material_usage_;
+  std::unique_ptr<ProjectAssetService> project_asset_service_;
   std::filesystem::path resource_root_;
   std::filesystem::path empty_path_;
   RecentSceneStore recent_scene_store_;

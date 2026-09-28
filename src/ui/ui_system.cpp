@@ -42,6 +42,8 @@
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_asset_browser.hpp"
+#include "ui/qt_asset_thumbnail_cache.hpp"
 #include "ui/qt_material_find_replace_dialog.hpp"
 #include "ui/qt_material_preview_surface.hpp"
 #include "ui/qt_project_home_page.hpp"
@@ -265,12 +267,12 @@ std::string localized_release_message(
   if (message == release_feature_unavailable_message()) {
     return localization.text("release.feature_unavailable", message);
   }
-  constexpr std::string_view prefix = "This file requires Quader ";
-  if (!message.starts_with(prefix) || !message.ends_with('.')) {
+  constexpr std::string_view kPrefix = "This file requires Quader ";
+  if (!message.starts_with(kPrefix) || !message.ends_with('.')) {
     return message;
   }
   const std::string_view label = std::string_view(message).substr(
-      prefix.size(), message.size() - prefix.size() - 1u);
+      kPrefix.size(), message.size() - kPrefix.size() - 1u);
   bool valid_label = label == "Internal Full";
   if (const auto separator = label.find('.');
       !valid_label && separator != std::string_view::npos) {
@@ -290,9 +292,9 @@ std::string localized_release_message(
   }
   std::string localized = localization.text(
       "release.file_requires", "This file requires Quader {release}.");
-  constexpr std::string_view token = "{release}";
-  if (const auto position = localized.find(token); position != std::string::npos) {
-    localized.replace(position, token.size(), label);
+  constexpr std::string_view kToken = "{release}";
+  if (const auto position = localized.find(kToken); position != std::string::npos) {
+    localized.replace(position, kToken.size(), label);
   }
   return localized;
 }
@@ -697,14 +699,9 @@ bool UISystem::initialize(RenderSystem &render_system,
   QObject::connect(auxiliary_window_save_timer_, &QTimer::timeout,
                    main_window_.get(),
                    [this]() { save_auxiliary_window_state(); });
+  material_browser_import_message_box_ =
+      new QtRetainedMessageBox(main_window_.get());
   if (release_has_feature(ReleaseFeature::Materials)) {
-    material_browser_window_ =
-        new QtMaterialBrowserWindow(main_window_.get());
-    material_browser_window_->resize(
-        initial_ui_metrics.size(QSize(760, 520)));
-    material_browser_window_->set_purpose(
-        QtMaterialBrowserPurpose::Management);
-    configure_material_browser(*material_browser_window_);
     if (face_texture_panel_ != nullptr) {
       configure_material_browser(face_texture_panel_->browser());
     }
@@ -728,9 +725,7 @@ bool UISystem::initialize(RenderSystem &render_system,
     material_texture_info_window_ =
         new QtTextureInfoWindow(main_window_.get(), initial_ui_metrics);
     material_texture_info_window_->hide();
-    material_browser_import_message_box_ =
-        new QtRetainedMessageBox(material_browser_window_);
-    material_browser_window_->hide();
+
     material_find_replace_dialog_ =
         new QtMaterialFindReplaceDialog(main_window_.get());
     material_find_replace_dialog_->resize(
@@ -964,6 +959,17 @@ bool UISystem::initialize(RenderSystem &render_system,
         [this](QtStandardMaterialTextureSlot slot,
                QtStandardMaterialTextureAction action) {
           handle_standard_material_texture(slot, action);
+        });
+    standard_material_editor_window_->set_texture_asset_dropped_callback(
+        [this](QtStandardMaterialTextureSlot slot, ProjectAssetId id,
+               std::uint64_t generation) {
+          if (editor_ == nullptr || !editor_->project().has_project()) return;
+          const auto revision = editor_->project_assets().asset_revision();
+          if (!revision.ok() || revision.value().project_generation != generation) return;
+          const auto result = editor_->standard_material_documents().set_texture(
+              domain_texture_slot(slot), id);
+          present_lifecycle_result(result);
+          refresh_standard_material_editor();
         });
     standard_material_editor_window_->set_texture_transform_edited_callback(
         [this](QtStandardMaterialTextureTransformComponent component,
@@ -1367,12 +1373,6 @@ void UISystem::install_runtime_hooks(
                 (void)save_viewport_settings();
                 synchronize_settings_surfaces(true);
               },
-          .show_material_browser = [this]() { show_material_browser(); },
-          .material_browser_available =
-              [this]() {
-                return !home_visible_ && editor_ != nullptr &&
-                       editor_->project().has_project();
-              },
           .show_material_find_replace =
               [this]() { show_material_find_replace(); },
           .material_find_replace_available =
@@ -1465,6 +1465,9 @@ void UISystem::install_runtime_hooks(
               return runtime_status(viewport_panel_ != nullptr &&
                                     viewport_panel_->focus_active_pane());
             }
+            if (*id == UIPanelId::AssetBrowser) {
+              set_panel_visible(*id, true);
+            }
             return runtime_status(panels_.focus(*id));
           },
       .show_command_search =
@@ -1478,6 +1481,14 @@ void UISystem::install_runtime_hooks(
             command_palette_->open_palette();
             return runtime_status(false);
           },
+      .toggle_asset_browser = [this]() {
+        if (home_visible_ || editor_ == nullptr || !editor_->project().has_project()) {
+          return runtime_failure(localization_.text(
+              "ui.asset_browser.no_project", "Open a project to browse its assets."));
+        }
+        toggle_asset_browser();
+        return runtime_status(true);
+      },
       .notify =
           [this](QuaderNotification notification) {
             present_status_notification(std::move(notification));
@@ -1866,6 +1877,21 @@ void UISystem::install_runtime_hooks(
     command_event_filter_->set_outliner_input_owner_provider([this]() {
       return qt_outliner_owns_command_input(outliner_panel_);
     });
+    command_event_filter_->set_asset_browser_action_handler(
+        [this](QuaderCommandId command) {
+          if (asset_browser_ == nullptr) return false;
+          if (command.string() == quader_command::kCutSelection.string())
+            return asset_browser_->handle_action(QtAssetBrowserAction::Cut);
+          if (command.string() == quader_command::kCopySelection.string())
+            return asset_browser_->handle_action(QtAssetBrowserAction::Copy);
+          if (command.string() == quader_command::kPasteSelection.string())
+            return asset_browser_->handle_action(QtAssetBrowserAction::Paste);
+          if (command.string() == quader_command::kDuplicateSelection.string())
+            return asset_browser_->handle_action(QtAssetBrowserAction::Duplicate);
+          if (command.string() == quader_command::kDeleteSelection.string())
+            return asset_browser_->handle_action(QtAssetBrowserAction::Delete);
+          return false;
+        });
     command_event_filter_->set_input_context_provider([this]() {
       QuaderViewportKeybindingContext context =
           viewport_panel_ != nullptr ? viewport_panel_->command_input_context()
@@ -2171,8 +2197,7 @@ void UISystem::refresh_face_texture_browser_selection() {
 }
 
 void UISystem::refresh_material_browser_usage() {
-  if (material_browser_window_ == nullptr || editor_ == nullptr ||
-      !editor_->project().has_project()) {
+  if (editor_ == nullptr || !editor_->project().has_project()) {
     return;
   }
   if (face_texture_panel_ != nullptr) {
@@ -2182,12 +2207,7 @@ void UISystem::refresh_material_browser_usage() {
         material_clipboard_.project_generation == material_browser_project_generation_ &&
         !material_clipboard_.material_ids.empty());
   }
-  material_browser_window_->set_project_generation(material_browser_project_generation_);
-  material_browser_window_->set_material_paste_available(
-      material_clipboard_.mode != MaterialClipboardMode::Empty &&
-      material_clipboard_.project_generation ==
-          material_browser_project_generation_ &&
-      !material_clipboard_.material_ids.empty());
+
 
   if (material_browser_catalog_signature_ !=
       material_presentation_catalog_revision_) {
@@ -2216,7 +2236,9 @@ void UISystem::refresh_material_browser_usage() {
   if (dependencies.ok() &&
       material_browser_dependency_revision_ != dependencies.value()) {
     material_browser_dependency_revision_ = dependencies.value();
-    material_browser_window_->set_dependency_revision(dependencies.value().revision);
+    if (material_browser_window_ != nullptr) {
+      material_browser_window_->set_dependency_revision(dependencies.value().revision);
+    }
     if (face_texture_panel_ != nullptr) {
       face_texture_panel_->browser().set_dependency_revision(dependencies.value().revision);
     }
@@ -2250,7 +2272,9 @@ void UISystem::refresh_material_browser_usage() {
       }
     }
   }
-  material_browser_window_->set_material_usage(presentation);
+  if (material_browser_window_ != nullptr) {
+    material_browser_window_->set_material_usage(presentation);
+  }
   if (face_texture_panel_ != nullptr) {
     face_texture_panel_->browser().set_material_usage(std::move(presentation));
   }
@@ -2279,6 +2303,18 @@ void UISystem::observe_material_presentation_events() {
     return;
   }
   material_presentation_observed_event_generation_ = generation;
+  if (editor_ != nullptr && material_presentation_cache_valid_ &&
+      material_presentation_catalog_attempt_) {
+    const auto owner = editor_->project_assets().material_presentation_revision();
+    if (owner.ok() &&
+        owner.value() == material_presentation_catalog_attempt_->owner_revision) {
+      // Project asset events also cover scenes and folders. With texture
+      // contents included in the owner stamp, an unchanged material catalog
+      // needs no full projection or image reads for those notifications.
+      material_presentation_catalog_attempt_->event_generation = generation;
+      return;
+    }
+  }
   material_presentation_cache_valid_ = false;
   inspector_material_query_presenter_.invalidate();
 }
@@ -2389,6 +2425,7 @@ void UISystem::refresh_material_presentation_cache() {
   // Record the attempted owner/event inputs before querying. A failed project
   // catalog read therefore stays gated until a real owner or event changes.
   material_presentation_catalog_attempt_ = catalog_stamp;
+  ++material_presentation_snapshot_build_count_;
   QuaderApiResult<QuaderMaterialPresentationSnapshot> materials =
       editor_->project_assets().material_presentations();
   if (!materials.succeeded()) {
@@ -3056,6 +3093,9 @@ void UISystem::shutdown() {
   if (material_preview_surface_ != nullptr) {
     material_preview_surface_->shutdown();
   }
+  if (asset_thumbnails_ != nullptr) {
+    asset_thumbnails_->shutdown();
+  }
   panels_.set_visibility_changed_callback({});
   panels_.set_presentation_changed_callback({});
   if (command_palette_ != nullptr) {
@@ -3082,6 +3122,18 @@ void UISystem::shutdown() {
   inspector_panel_ = nullptr;
   layer_panel_ = nullptr;
   console_panel_ = nullptr;
+  asset_browser_ = nullptr;
+  asset_thumbnails_.reset();
+  asset_thumbnail_picker_.clear();
+  asset_thumbnail_picker_current_ = {};
+  asset_browser_visible_thumbnail_ids_.clear();
+  asset_picker_visible_thumbnail_ids_.clear();
+  asset_thumbnail_dock_presented_ = false;
+  asset_thumbnail_picker_presented_ = false;
+  asset_thumbnail_provider_ = {};
+  asset_browser_revision_ = 0u;
+  asset_browser_generation_ = 0u;
+  asset_clipboard_paths_.clear();
   settings_dialog_ = nullptr;
   material_browser_window_ = nullptr;
   material_texture_info_window_ = nullptr;
@@ -3123,6 +3175,7 @@ void UISystem::shutdown() {
   material_presentation_folders_.clear();
   material_browser_project_identity_.clear();
   material_presentation_catalog_revision_ = 0;
+  material_presentation_snapshot_build_count_ = 0;
   face_texture_panel_presenter_.invalidate();
   material_presentation_catalog_attempt_.reset();
   material_presentation_context_observation_.reset();
@@ -3194,6 +3247,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     QDR_PROFILE_SCOPE("UI refresh project workspace");
     refresh_project_workspace(false);
   }
+  refresh_asset_browser();
   validate_material_find_replace_context();
   const bool retained_material_surface_visible =
       panel_presented(UIPanelId::FaceTexture) ||
@@ -3506,7 +3560,12 @@ bool UISystem::needs_continuous_rendering() const {
       standard_material_editor_window_->isVisible() &&
       !standard_material_editor_window_->isMinimized() &&
       material_preview_surface_->needs_rendering();
-  return scene_continuous || preview_pending;
+  const bool asset_preview_pending =
+      ((!home_visible_ && panel_presented(UIPanelId::AssetBrowser)) ||
+       (asset_thumbnail_picker_ && asset_thumbnail_picker_->isVisible())) &&
+      asset_thumbnails_ != nullptr &&
+      asset_thumbnails_->pending_count() != 0u;
+  return scene_continuous || preview_pending || asset_preview_pending;
 }
 
 void *UISystem::native_window_handle() const {
@@ -3603,6 +3662,16 @@ void UISystem::create_docks() {
   outliner_panel_ = new OutlinerPanel(main_window_.get());
   inspector_panel_ = new InspectorPanel(main_window_.get());
   console_panel_ = new ConsolePanel(main_window_.get());
+  asset_browser_ = new QtAssetBrowser(main_window_.get());
+  asset_browser_->set_material_authoring_available(
+      release_has_feature(ReleaseFeature::Materials));
+  asset_browser_->set_action_callback(
+      [this](QtAssetBrowserActionRequest request) {
+        handle_asset_browser_action(std::move(request));
+      });
+  asset_browser_->set_presentation_state_changed_callback(
+      [this]() { schedule_auxiliary_window_state_save(); });
+  configure_asset_browser();
   tool_settings_panel_ = new QtToolSettingsPanel(main_window_.get());
   tool_settings_panel_->set_localization(localization_);
   viewport_panel_->set_settings_panel(tool_settings_panel_);
@@ -3619,6 +3688,11 @@ void UISystem::create_docks() {
   }
   QDockWidget &console = create_dock(
       UIPanelId::Console, *console_panel_, Qt::BottomDockWidgetArea);
+  QDockWidget &asset_browser = create_dock(
+      UIPanelId::AssetBrowser, *asset_browser_, Qt::BottomDockWidgetArea);
+  main_window_->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
+  main_window_->setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
+  main_window_->tabifyDockWidget(&console, &asset_browser);
   if (layers != nullptr) {
     main_window_->splitDockWidget(&inspector, layers, Qt::Vertical);
   }
@@ -3645,7 +3719,8 @@ void UISystem::create_docks() {
     main_window_->resizeDocks(vertical_docks, vertical_sizes, Qt::Vertical);
   }
   inspector.raise();
-  main_window_->resizeDocks({&console}, {metrics.px(220)}, Qt::Vertical);
+  main_window_->resizeDocks({&console, &asset_browser},
+                            {metrics.px(260), metrics.px(260)}, Qt::Vertical);
 }
 
 QDockWidget &UISystem::create_dock(UIPanelId id, QWidget &content,
@@ -3694,23 +3769,30 @@ void UISystem::restore_window_state() {
     texture_dock->setObjectName(QStringLiteral("dock_face_texture"));
     auxiliary_window_state_.face_texture_layout_migrated = true;
   }
+  if (!auxiliary_window_state_.asset_browser_layout_migrated) {
+    if (QDockWidget *browser = panels_.dock(UIPanelId::AssetBrowser)) {
+      main_window_->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
+      main_window_->setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
+      if (QDockWidget *console = panels_.dock(UIPanelId::Console);
+          console != nullptr && !console->isFloating() &&
+          main_window_->dockWidgetArea(console) == Qt::BottomDockWidgetArea) {
+        main_window_->tabifyDockWidget(console, browser);
+      }
+      auxiliary_window_state_.asset_browser_layout_migrated = true;
+    }
+  }
   if (settings_dialog_ != nullptr &&
       !auxiliary_window_state_.settings_dialog_geometry.isEmpty()) {
     (void)settings_dialog_->restoreGeometry(
         auxiliary_window_state_.settings_dialog_geometry);
   }
-  if (material_browser_window_ != nullptr) {
-    if (!auxiliary_window_state_.material_browser_geometry.isEmpty()) {
-      (void)material_browser_window_->restoreGeometry(
-          auxiliary_window_state_.material_browser_geometry);
-    }
-    material_browser_window_->restore_presentation_state(
-        auxiliary_window_state_.material_browser_grid_mode
-            ? QtMaterialBrowserViewMode::Grid
-            : QtMaterialBrowserViewMode::List,
-        auxiliary_window_state_.material_browser_tile_size,
-        auxiliary_window_state_.material_browser_sidebar_visible,
-        auxiliary_window_state_.material_browser_sidebar_width);
+  if (asset_browser_ != nullptr) {
+    asset_browser_->restore_presentation_state(
+        auxiliary_window_state_.asset_browser_grid_mode
+            ? QtAssetBrowserViewMode::Grid : QtAssetBrowserViewMode::List,
+        auxiliary_window_state_.asset_browser_tile_size,
+        auxiliary_window_state_.asset_browser_sidebar_visible,
+        auxiliary_window_state_.asset_browser_sidebar_width);
   }
   if (face_texture_panel_ != nullptr) {
     face_texture_panel_->browser().restore_presentation_state(
@@ -3932,18 +4014,12 @@ void UISystem::save_auxiliary_window_state() {
     auxiliary_window_state_.settings_dialog_geometry =
         settings_dialog_->saveGeometry();
   }
-  if (material_browser_window_ != nullptr) {
-    auxiliary_window_state_.material_browser_geometry =
-        material_browser_window_->saveGeometry();
-    auxiliary_window_state_.material_browser_grid_mode =
-        material_browser_window_->view_mode() ==
-        QtMaterialBrowserViewMode::Grid;
-    auxiliary_window_state_.material_browser_tile_size =
-        material_browser_window_->tile_size();
-    auxiliary_window_state_.material_browser_sidebar_visible =
-        material_browser_window_->sidebar_visible();
-    auxiliary_window_state_.material_browser_sidebar_width =
-        material_browser_window_->sidebar_width();
+  if (asset_browser_ != nullptr) {
+    auxiliary_window_state_.asset_browser_grid_mode =
+        asset_browser_->view_mode() == QtAssetBrowserViewMode::Grid;
+    auxiliary_window_state_.asset_browser_tile_size = asset_browser_->tile_size();
+    auxiliary_window_state_.asset_browser_sidebar_visible = asset_browser_->sidebar_visible();
+    auxiliary_window_state_.asset_browser_sidebar_width = asset_browser_->sidebar_width();
   }
   if (face_texture_panel_ != nullptr) {
     const auto &browser = face_texture_panel_->browser();
@@ -4708,39 +4784,9 @@ bool UISystem::save_standard_material(bool save_as) {
   if (!save_as && current.value().path.has_value()) {
     result = editor_->standard_material_documents().save();
   } else {
-    PlatformFileDialogOptions options;
-    options.owner_window_handle = native_window_handle();
-    options.initial_directory = editor_->project().root() / "Materials";
-    if (current.value().path.has_value()) {
-      const std::filesystem::path filename =
-          current.value().path->native_path().filename();
-      options.initial_file_name =
-          filename.stem().wstring() + L"_copy" + filename.extension().wstring();
-      options.initial_directory =
-          editor_->project().root() /
-          current.value().path->native_path().parent_path();
-    } else {
-      const auto suggested = ProjectRelativePath::parse_portable(
-          current.value().name + ".qmat");
-      options.initial_file_name =
-          suggested.ok() &&
-                  !suggested.value().native_path().has_parent_path()
-              ? suggested.value().native_path()
-              : std::filesystem::path("Material.qmat");
-    }
-    const std::optional<std::filesystem::path> selected =
-        platform_save_material_file_dialog(options);
-    if (!selected.has_value()) {
-      return false;
-    }
     const std::optional<ProjectRelativePath> relative =
-        project_relative_dialog_path(*selected, editor_->project().root());
-    if (!relative.has_value()) {
-      present_standard_material_error(localization_.text(
-          "ui.standard_material_editor.path_outside_project",
-          "Choose a material inside the current project."));
-      return false;
-    }
+        choose_project_material_path(current.value());
+    if (!relative.has_value()) return false;
     result = editor_->standard_material_documents().save_as(*relative);
   }
   present_lifecycle_result(result);
@@ -4850,16 +4896,8 @@ void UISystem::handle_standard_material_texture(
     result = editor_->standard_material_documents().clear_texture(
         domain_texture_slot(slot));
   } else {
-    PlatformFileDialogOptions options;
-    options.owner_window_handle = native_window_handle();
-    options.initial_directory = editor_->project().root() / "Textures";
-    const std::optional<std::filesystem::path> selected =
-        platform_open_texture_file_dialog(options);
-    if (!selected.has_value()) {
-      return;
-    }
-    result = editor_->standard_material_documents().import_texture(
-        domain_texture_slot(slot), *selected);
+    select_project_material_texture(slot);
+    return;
   }
   present_lifecycle_result(result);
   refresh_standard_material_editor();
@@ -4880,6 +4918,7 @@ void UISystem::handle_standard_material_texture_transform(
 
 void UISystem::refresh_localized_chrome() {
   QDR_PROFILE_SCOPE("UI refresh localized chrome");
+  refresh_asset_browser_labels();
   toolbar_owner_presenter_.invalidate();
   toolbar_tool_presenter_.invalidate();
   toolbar_transform_presenter_.invalidate();
@@ -4900,6 +4939,7 @@ void UISystem::refresh_localized_chrome() {
   update_title(UIPanelId::Layers);
   update_title(UIPanelId::FaceTexture);
   update_title(UIPanelId::Console);
+  update_title(UIPanelId::AssetBrowser);
   if (face_texture_panel_ != nullptr) {
     face_texture_panel_->set_localization(localization_);
   }
@@ -5423,6 +5463,9 @@ void UISystem::apply_ui_scale_to_retained_surfaces(
   if (settings_dialog_ != nullptr) {
     settings_dialog_->apply_ui_scale(metrics);
   }
+  if (asset_browser_ != nullptr) {
+    asset_browser_->apply_ui_scale(metrics);
+  }
   if (material_browser_window_ != nullptr) {
     material_browser_window_->apply_ui_scale(metrics);
   }
@@ -5800,13 +5843,30 @@ void UISystem::show_material_texture_info(ProjectAssetId material_id,
 
 void UISystem::refresh_material_texture_info() {
   if (material_texture_info_window_ == nullptr ||
-      !material_texture_info_window_->isVisible() ||
-      material_texture_info_catalog_revision_ ==
-          material_presentation_catalog_revision_) {
+      !material_texture_info_window_->isVisible()) {
     return;
   }
   const TextureInfoContext *context =
       material_texture_info_window_->current_context();
+  if (context != nullptr && context->material_identity.empty()) {
+    const auto revision = editor_->project_assets().asset_revision();
+    if (!revision.ok() ||
+        revision.value().project_generation != context->activation_generation) {
+      material_texture_info_window_->clear();
+      material_texture_info_window_->hide();
+      return;
+    }
+    if (revision.value().revision != context->dependency_revision) {
+      if (const auto id = ProjectAssetId::parse(context->texture_identity)) {
+        show_asset_texture_info(*id, false);
+      }
+    }
+    return;
+  }
+  if (material_texture_info_catalog_revision_ ==
+      material_presentation_catalog_revision_) {
+    return;
+  }
   const std::optional<ProjectAssetId> material_id =
       context != nullptr
           ? ProjectAssetId::parse(context->material_identity)
@@ -5831,7 +5891,7 @@ void UISystem::refresh_material_texture_info() {
 void UISystem::handle_material_browser_action(
     QtMaterialBrowserWindow &source, QtMaterialBrowserActionRequest request) {
   const QPointer<QtMaterialBrowserWindow> browser(&source);
-  if (editor_ == nullptr || material_browser_window_ == nullptr ||
+  if (editor_ == nullptr ||
       !editor_->project().has_project() ||
       request.project_generation != material_browser_project_generation_ ||
       request.project_generation !=
@@ -5969,7 +6029,9 @@ void UISystem::handle_material_browser_action(
         .material_ids = std::move(selected),
         .sources = std::move(sources),
     };
-    material_browser_window_->set_material_paste_available(true);
+    if (material_browser_window_ != nullptr) {
+      material_browser_window_->set_material_paste_available(true);
+    }
     if (face_texture_panel_ != nullptr) {
       face_texture_panel_->browser().set_material_paste_available(true);
     }
@@ -5981,7 +6043,9 @@ void UISystem::handle_material_browser_action(
             material_browser_project_generation_ ||
         material_clipboard_.material_ids.empty()) {
       material_clipboard_ = {};
-      material_browser_window_->set_material_paste_available(false);
+      if (material_browser_window_ != nullptr) {
+        material_browser_window_->set_material_paste_available(false);
+      }
       if (face_texture_panel_ != nullptr) {
         face_texture_panel_->browser().set_material_paste_available(false);
       }
@@ -6003,7 +6067,9 @@ void UISystem::handle_material_browser_action(
             });
     if (!clipboard_current) {
       material_clipboard_ = {};
-      material_browser_window_->set_material_paste_available(false);
+      if (material_browser_window_ != nullptr) {
+        material_browser_window_->set_material_paste_available(false);
+      }
       if (face_texture_panel_ != nullptr) {
         face_texture_panel_->browser().set_material_paste_available(false);
       }
@@ -6030,7 +6096,9 @@ void UISystem::handle_material_browser_action(
         request.destination_folder.toStdString());
     if (result.succeeded()) {
       material_clipboard_ = {};
-      material_browser_window_->set_material_paste_available(false);
+      if (material_browser_window_ != nullptr) {
+        material_browser_window_->set_material_paste_available(false);
+      }
       if (face_texture_panel_ != nullptr) {
         face_texture_panel_->browser().set_material_paste_available(false);
       }
@@ -6176,7 +6244,9 @@ void UISystem::delete_materials(std::vector<ProjectAssetId> material_ids) {
     };
     if (std::ranges::any_of(material_clipboard_.material_ids, removed)) {
       material_clipboard_ = {};
-      material_browser_window_->set_material_paste_available(false);
+      if (material_browser_window_ != nullptr) {
+        material_browser_window_->set_material_paste_available(false);
+      }
     }
     if (material_texture_info_window_ != nullptr) {
       const TextureInfoContext *context =
@@ -6302,7 +6372,9 @@ void UISystem::delete_material_folder(QString folder) {
     };
     if (std::ranges::any_of(material_clipboard_.material_ids, removed)) {
       material_clipboard_ = {};
-      material_browser_window_->set_material_paste_available(false);
+      if (material_browser_window_ != nullptr) {
+        material_browser_window_->set_material_paste_available(false);
+      }
     }
   }
   finish_material_folder_operation(result);
@@ -6310,7 +6382,7 @@ void UISystem::delete_material_folder(QString folder) {
 
 void UISystem::import_material_textures(
     QtMaterialBrowserWindow &source, QString destination_folder) {
-  if (editor_ == nullptr || material_browser_window_ == nullptr ||
+  if (editor_ == nullptr ||
       !editor_->project().has_project() || material_browser_project_generation_ !=
           material_browser_project_generation_signal_->load(std::memory_order_acquire)) {
     return;
@@ -6429,7 +6501,25 @@ bool UISystem::panel_presented(UIPanelId id) const {
 }
 
 void UISystem::set_panel_visible(UIPanelId id, bool visible) {
+  if (id != UIPanelId::AssetBrowser || main_window_ == nullptr) {
+    (void)panels_.set_visible(id, visible);
+    return;
+  }
+  if (visible) {
+    // Prepare the retained model before exposing the dock. A synchronous
+    // catalog refresh between show and raise leaves native viewport geometry
+    // half-way through Qt's animated dock transition.
+    refresh_asset_browser(!panel_presented(id));
+  }
+  const bool animated = main_window_->isAnimated();
+  main_window_->setAnimated(false);
   (void)panels_.set_visible(id, visible);
+  if (visible) {
+    if (QDockWidget *dock = panels_.dock(id)) dock->raise();
+  }
+  if (QLayout *layout = main_window_->layout()) (void)layout->activate();
+  main_window_->setAnimated(animated);
+  refresh_asset_thumbnails();
 }
 
 } // namespace quader

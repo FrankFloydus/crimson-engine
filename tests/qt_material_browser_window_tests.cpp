@@ -395,8 +395,13 @@ TEST(QtMaterialBrowserWindowTests,
       EXPECT_EQ(browser.centralWidget()->layout()->contentsMargins(),
                 metrics.margins(QMargins(6, 6, 6, 6)));
       EXPECT_GE(search->height(), metrics.px(28));
-      EXPECT_GE(folders->visualItemRect(folders->topLevelItem(0)).height(),
-                metrics.px(26));
+      if (host == QtMaterialBrowserHost::Windowed) {
+        EXPECT_GE(folders->visualItemRect(folders->topLevelItem(0)).height(),
+                  metrics.px(26));
+      } else {
+        EXPECT_TRUE(folders->isHidden());
+        EXPECT_FALSE(browser.sidebar_visible());
+      }
       EXPECT_EQ(list->verticalHeader()->defaultSectionSize(), metrics.px(26));
       EXPECT_LE(std::abs(search->geometry().center().y() -
                          filter->geometry().center().y()), 1);
@@ -1394,7 +1399,7 @@ TEST(QtMaterialBrowserWindowTests,
 }
 
 TEST(QtMaterialBrowserWindowTests,
-     EmbeddedUsagePopupAppliesImmediatelyAndChipPreservesFolderAndSearch) {
+     EmbeddedUsagePopupAppliesImmediatelyAndChipPreservesFlatCatalogSearch) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char name[] = "quader-embedded-material-usage-tests";
@@ -1464,7 +1469,10 @@ TEST(QtMaterialBrowserWindowTests,
   ASSERT_NE(grid, nullptr);
   ASSERT_NE(empty, nullptr);
   ASSERT_NE(status, nullptr);
-  search->setText(QStringLiteral("oak"));
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
+  EXPECT_FALSE(browser.sidebar_visible());
+  EXPECT_EQ(grid->model()->rowCount(), 3);
+  search->setText(QStringLiteral("Materials/Wood"));
   EXPECT_EQ(grid->model()->rowCount(), 2);
   EXPECT_FALSE(chip->isVisible());
   EXPECT_TRUE(active_filters->isHidden());
@@ -1617,8 +1625,8 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_FALSE(filter->isChecked());
   EXPECT_FALSE(filter->toolTip().contains(QStringLiteral("1 active")));
   EXPECT_EQ(owner.focusWidget(), filter);
-  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
-  EXPECT_EQ(search->text(), QStringLiteral("oak"));
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
+  EXPECT_EQ(search->text(), QStringLiteral("Materials/Wood"));
   EXPECT_EQ(grid->model()->rowCount(), 2);
   EXPECT_EQ(catalog_resets, 0);
 
@@ -1637,7 +1645,7 @@ TEST(QtMaterialBrowserWindowTests,
   });
   EXPECT_TRUE(status->isHidden());
   EXPECT_EQ(assignments, 0)
-      << "usage, folder and search presentation never assigns a material";
+      << "usage and search presentation never assigns a material";
 }
 
 TEST(QtMaterialBrowserWindowTests,
@@ -2977,7 +2985,8 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(grid->selectionModel()->selectedRows().front(),
             grid->selectionModel()->currentIndex());
   EXPECT_EQ(search->text(), QStringLiteral("  OAK  "));
-  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
+  EXPECT_FALSE(browser.sidebar_visible());
   EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
   application.processEvents();
   EXPECT_TRUE(grid->viewport()->rect().intersects(
@@ -3039,19 +3048,20 @@ TEST(QtMaterialBrowserWindowTests,
   };
 
   browser.set_selected_folder(QStringLiteral("Materials/Wood"));
-  search->setText(QStringLiteral("Materials/"));
+  search->setText(QStringLiteral("Materials/Wood"));
   choose_usage(true);
   ASSERT_TRUE(browser.reveal_material(steel.reference));
   EXPECT_EQ(browser.selected_material(), steel.reference);
   EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
-  EXPECT_EQ(search->text(), QStringLiteral("Materials/"));
+  EXPECT_TRUE(search->text().isEmpty());
+  EXPECT_FALSE(browser.sidebar_visible());
   EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
 
   browser.set_selected_folder(QStringLiteral("Materials/Wood"));
   search->setText(QStringLiteral("steel"));
   ASSERT_TRUE(browser.reveal_material(pine.reference));
   EXPECT_EQ(browser.selected_material(), pine.reference);
-  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
   EXPECT_TRUE(search->text().isEmpty());
   EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::All);
 
@@ -3059,7 +3069,7 @@ TEST(QtMaterialBrowserWindowTests,
   choose_usage(false);
   ASSERT_TRUE(browser.reveal_material(oak.reference));
   EXPECT_EQ(browser.selected_material(), oak.reference);
-  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
   EXPECT_EQ(search->text(), QStringLiteral("oak"));
   EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::All);
   choose_usage(true);
@@ -3067,7 +3077,7 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_FALSE(browser.reveal_material(QuaderMaterialReference::project(
       required_project_id("dddddddd-dddd-dddd-dddd-dddddddddddd"))));
   EXPECT_EQ(browser.selected_material(), oak.reference);
-  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
   EXPECT_EQ(search->text(), QStringLiteral("oak"));
   EXPECT_EQ(browser.usage_mode(), QtMaterialBrowserUsageMode::Used);
   EXPECT_TRUE(filter->isChecked());
@@ -3158,7 +3168,9 @@ TEST(QtMaterialBrowserWindowTests,
   }
   EXPECT_TRUE(grid->dragEnabled());
   EXPECT_TRUE(list->dragEnabled());
-  EXPECT_TRUE(tree->acceptDrops());
+  EXPECT_FALSE(tree->acceptDrops());
+  EXPECT_TRUE(tree->isHidden());
+  EXPECT_TRUE(folders->isHidden());
   EXPECT_EQ(grid->selectionMode(), QAbstractItemView::ExtendedSelection);
   EXPECT_EQ(grid->model(), list->model());
   EXPECT_EQ(grid->selectionModel(), list->selectionModel());
@@ -3219,16 +3231,15 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(assignment_count, 2);
 
   browser.set_selected_folder(QStringLiteral("Materials/Wood"));
-  EXPECT_EQ(grid->model()->rowCount(), 1);
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+  EXPECT_EQ(browser.selected_folder(), QStringLiteral("Materials"));
   QString imported_to;
   browser.set_import_textures_callback(
       [&](QString destination) { imported_to = std::move(destination); });
   import_button->click();
-  EXPECT_EQ(imported_to, QStringLiteral("Materials/Wood"));
+  EXPECT_EQ(imported_to, QStringLiteral("Materials"));
   browser.set_selected_folder(QStringLiteral("Materials/Empty"));
-  EXPECT_EQ(grid->model()->rowCount(), 0);
-  send_key(*grid, Qt::Key_Return);
-  EXPECT_EQ(assignment_count, 2);
+  EXPECT_EQ(grid->model()->rowCount(), 2);
   browser.set_selected_folder(QStringLiteral("Materials"));
   browser.set_selected_material(oak.reference);
   search->setText(QStringLiteral("oak"));
@@ -3243,7 +3254,7 @@ TEST(QtMaterialBrowserWindowTests,
       search->mapTo(&browser, search->rect().center()).y();
   const int grid_bottom = grid->mapTo(&browser, grid->rect().bottomLeft()).y();
   for (QWidget *control : std::vector<QWidget *>{
-           folders, search, filter, import_button, thumbnail_size}) {
+           search, filter, import_button, thumbnail_size}) {
     const QRect bounds(control->mapTo(&browser, QPoint{}), control->size());
     EXPECT_TRUE(control->isVisible());
     EXPECT_TRUE(browser.rect().contains(bounds))

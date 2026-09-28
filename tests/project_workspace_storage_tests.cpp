@@ -606,6 +606,69 @@ TEST(ProjectFileSystem, ConvertsShortRootAliasesForExistingAndUnsavedScenes) {
 }
 #endif
 
+TEST(ProjectFileSystem, ResolvesPhysicalAndDialogPathsOncePerRequest) {
+  ScopedProjectTestDirectory temporary("single-path-resolution");
+  ASSERT_TRUE(std::filesystem::create_directory(temporary.path() / "Scenes"));
+  write_text_file(temporary.path() / "Scenes" / "Existing.qdr", "QDRB");
+  const auto opened = ProjectFileSystem::open(temporary.path());
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  const ProjectFileSystem &files = opened.value();
+
+  for (const char *name : {"Scenes/Existing.qdr", "Scenes/Unsaved.qdr"}) {
+    const auto path = ProjectRelativePath::parse(name);
+    ASSERT_TRUE(path.ok());
+    const auto absolute = files.root() / path.value().native_path();
+    ProjectFileSystemWorkStats work;
+    ProjectFileSystem batch = files.begin_resolution_batch(&work);
+
+    const auto physical = batch.resolve_physical_location(path.value());
+    ASSERT_TRUE(physical.ok()) << physical.error().message;
+    EXPECT_EQ(physical.value(), absolute);
+    EXPECT_EQ(work.physical_path_resolutions, 1u);
+
+    batch = files.begin_resolution_batch(&work);
+    const auto converted = batch.relative_from_absolute(absolute);
+    ASSERT_TRUE(converted.ok()) << converted.error().message;
+    EXPECT_EQ(converted.value(), path.value());
+    EXPECT_EQ(work.physical_path_resolutions, 1u);
+  }
+}
+
+TEST(ProjectFileSystem, RechecksPhysicalLinkTargetsWithinResolutionBatch) {
+  ScopedProjectTestDirectory temporary("retargeted-path-resolution");
+  const auto project_root = temporary.path() / "Project";
+  const auto internal = project_root / "Scenes";
+  const auto outside = temporary.path() / "Outside";
+  ASSERT_TRUE(std::filesystem::create_directories(internal));
+  ASSERT_TRUE(std::filesystem::create_directory(outside));
+  const auto link = project_root / "Alias";
+  std::error_code error;
+  std::filesystem::create_directory_symlink(internal, link, error);
+  if (error) {
+    GTEST_SKIP() << "Directory links unavailable: " << error.message();
+  }
+  const auto opened = ProjectFileSystem::open(project_root);
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  ProjectFileSystemWorkStats work;
+  const auto batch = opened.value().begin_resolution_batch(&work);
+  const auto path = ProjectRelativePath::parse("Alias/Room.qdr");
+  ASSERT_TRUE(path.ok());
+
+  const auto physical = batch.resolve_physical_location(path.value());
+  ASSERT_TRUE(physical.ok()) << physical.error().message;
+  EXPECT_EQ(physical.value(), opened.value().root() / "Scenes" / "Room.qdr");
+  EXPECT_EQ(work.physical_path_resolutions, 1u);
+
+  ASSERT_TRUE(std::filesystem::remove(link, error));
+  ASSERT_FALSE(error) << error.message();
+  std::filesystem::create_directory_symlink(outside, link, error);
+  ASSERT_FALSE(error) << error.message();
+  const auto escaped = batch.resolve_physical_location(path.value());
+  ASSERT_FALSE(escaped.ok());
+  EXPECT_EQ(escaped.error().code, ProjectIoErrorCode::SymlinkEscape);
+  EXPECT_EQ(work.physical_path_resolutions, 2u);
+}
+
 TEST(ProjectFileSystem,
      ResolutionBatchEnumeratesOneLargeSceneDirectoryOnlyOnce) {
   ScopedProjectTestDirectory temporary("path-batch-scale");
@@ -638,6 +701,7 @@ TEST(ProjectFileSystem,
 
   EXPECT_EQ(work.directory_case_enumerations, 2u);
   EXPECT_EQ(work.component_case_lookups, kSceneCount * 2u);
+  EXPECT_EQ(work.physical_path_resolutions, kSceneCount);
   EXPECT_LE(work.directory_case_entries_visited, kSceneCount + 4u)
       << "case validation must index the root and Scenes directory once, "
          "not enumerate all siblings once per scene";

@@ -8,6 +8,7 @@
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "io/project/qmat_codec.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 
 #include <gtest/gtest.h>
@@ -103,7 +104,8 @@ TEST_F(ProjectMaterialOrganizationTests,
   folder("Materials", "Dev");
   folder("Materials/Dev", "Empty");
   const std::vector<std::string> expected{
-      "Materials", "Materials/Dev", "Materials/Dev/Empty", "Materials/Wood"};
+      "Materials", "Materials/Dev", "Materials/Dev/Empty", "Materials/Wood",
+      "Scenes", "Textures"};
   EXPECT_EQ(folder_paths(), expected);
   EXPECT_NE(project_.material_catalog().content_revision(), before);
   const auto manifest = editor_.project().manifest_path();
@@ -132,7 +134,16 @@ TEST_F(ProjectMaterialOrganizationTests,
     EXPECT_TRUE(standard->base_color_texture->project_relative_path.starts_with(
         "Textures/"));
   }
-  EXPECT_EQ(folder_paths().size(), 3u);
+  const auto *second_standard = project_.material_catalog().find(second)->material.standard_material();
+  ASSERT_NE(second_standard, nullptr);
+  ASSERT_TRUE(second_standard->base_color_texture.has_value());
+  const auto collision_texture = ProjectRelativePath::parse_portable(
+      second_standard->base_color_texture->project_relative_path);
+  ASSERT_TRUE(collision_texture.ok());
+  const std::vector<std::string> expected{
+      "Materials", "Materials/Dev", "Materials/Dev/Wood", "Scenes", "Textures",
+      collision_texture.value().native_path().parent_path().generic_string()};
+  EXPECT_EQ(folder_paths(), expected);
 }
 
 TEST_F(ProjectMaterialOrganizationTests,
@@ -140,7 +151,7 @@ TEST_F(ProjectMaterialOrganizationTests,
   const std::array sources{image()};
   const auto revision = project_.material_catalog().content_revision();
   const auto count = project_.material_catalog().entries().size();
-  for (std::string_view folder : {"Textures", "Materials/Missing",
+  for (std::string_view folder : {".quader", "../Textures", "Materials/Missing",
                                   "Materials/../Textures", "materials",
                                   "Materials/.", "Materials//Missing"}) {
     const auto result = editor_.project_assets().import_textures_as_materials(
@@ -152,6 +163,17 @@ TEST_F(ProjectMaterialOrganizationTests,
   EXPECT_EQ(project_.material_catalog().entries().size(), count);
   EXPECT_FALSE(std::filesystem::exists(root_ / "Materials" / "oak.qmat"));
   EXPECT_FALSE(std::filesystem::exists(root_ / "Textures" / "oak.png"));
+}
+
+TEST_F(ProjectMaterialOrganizationTests,
+       MaterialImportsUseAnyAuthoredProjectFolderIncludingRoot) {
+  const auto root_material = import_image({}, "root.png");
+  ASSERT_TRUE(root_material.valid());
+  EXPECT_EQ(material_path(root_material), "root.qmat");
+  const auto mixed_material = import_image("Textures", "mixed.png");
+  ASSERT_TRUE(mixed_material.valid());
+  EXPECT_EQ(material_path(mixed_material), "Textures/mixed.qmat");
+  EXPECT_TRUE(std::filesystem::exists(root_ / "Textures/mixed.png"));
 }
 
 TEST_F(ProjectMaterialOrganizationTests,
@@ -186,7 +208,8 @@ TEST_F(ProjectMaterialOrganizationTests, FolderRenameCanChangeOnlyItsCasing) {
       "Materials/wood", "Wood");
   ASSERT_TRUE(renamed.ok()) << renamed.error_message();
   EXPECT_EQ(material_path(id), "Materials/Wood/oak.qmat");
-  const std::vector<std::string> expected{"Materials", "Materials/Wood"};
+  const std::vector<std::string> expected{
+      "Materials", "Materials/Wood", "Scenes", "Textures"};
   EXPECT_EQ(folder_paths(), expected);
 }
 
@@ -260,8 +283,11 @@ TEST_F(ProjectMaterialOrganizationTests,
     EXPECT_FALSE(editor_.project_assets().create_material_folder(
         "Materials", name).ok()) << name;
   }
-  EXPECT_FALSE(editor_.project_assets().create_material_folder(
-      "Materials", "dev").ok());
+  const auto collision = editor_.project_assets().create_material_folder(
+      "Materials", "dev");
+  EXPECT_TRUE(collision.ok()) << collision.error_message();
+  EXPECT_TRUE(std::filesystem::is_directory(root_ / "Materials/Dev"));
+  EXPECT_TRUE(std::filesystem::is_directory(root_ / "Materials/dev_2"));
   std::ofstream(root_ / "Materials/Dev/Wood/notes.txt") << "Keep this file";
   const auto revision = project_.material_catalog().content_revision();
   EXPECT_FALSE(editor_.project_assets().move_material_folder(
@@ -312,6 +338,36 @@ TEST_F(ProjectMaterialOrganizationTests, ExternalCatalogChangesRejectStaleMoveIn
   EXPECT_FALSE(result.changed());
   EXPECT_EQ(project_.material_catalog().content_revision(), revision);
   EXPECT_EQ(material_path(id), "Materials/oak.qmat");
+  ASSERT_TRUE(editor_.project_assets().assets(true).ok());
+  const auto refreshed = editor_.project_assets().move_materials(ids, "Materials/Target");
+  ASSERT_TRUE(refreshed.ok()) << refreshed.error_message();
+  EXPECT_EQ(material_path(id), "Materials/Target/oak.qmat");
+}
+
+TEST_F(ProjectMaterialOrganizationTests,
+       ExternalMaterialEditsRejectLazySnapshotMovesUntilExplicitRefresh) {
+  folder("Materials", "Target");
+  const auto id = import_image();
+  const auto before = *project_.material_catalog().find(id);
+  auto externally_edited = before.material;
+  externally_edited.standard_material()->roughness = 0.25f;
+  ASSERT_TRUE(QmatCodec::write_atomic(project_.workspace()->file_system,
+      before.path, externally_edited).ok());
+  const std::array ids{id};
+  const auto rejected = editor_.project_assets().move_materials(ids, "Materials/Target");
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  ASSERT_NE(project_.material_catalog().find(id), nullptr);
+  EXPECT_EQ(*project_.material_catalog().find(id), before);
+  EXPECT_FALSE(std::filesystem::exists(root_ / "Materials/Target/oak.qmat"));
+  const auto retained = QmatCodec::read(project_.workspace()->file_system, before.path);
+  ASSERT_TRUE(retained.ok());
+  EXPECT_EQ(retained.value().material, externally_edited);
+  ASSERT_TRUE(editor_.project_assets().assets(true).ok());
+  const auto refreshed = editor_.project_assets().move_materials(ids, "Materials/Target");
+  ASSERT_TRUE(refreshed.ok()) << refreshed.error_message();
+  EXPECT_EQ(project_.material_catalog().find(id)->material, externally_edited);
+  EXPECT_EQ(material_path(id), "Materials/Target/oak.qmat");
 }
 
 TEST_F(ProjectMaterialOrganizationTests, NoReplaceMovePreservesCompetingDestination) {

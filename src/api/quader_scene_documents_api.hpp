@@ -88,6 +88,8 @@ public:
   QuaderApiVoidResult save(SceneSessionId id);
   QuaderApiVoidResult save_active();
   QuaderApiVoidResult save_as(SceneSessionId id, ProjectRelativePath path);
+  /// Saves a separate scene asset without switching or cleaning the source draft.
+  QuaderApiVoidResult save_copy(SceneSessionId id, ProjectRelativePath path);
   QuaderApiVoidResult save_as(SceneSessionId id);
   QuaderApiVoidResult save_as_native_path(
       SceneSessionId id, const std::filesystem::path &path);

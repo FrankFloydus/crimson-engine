@@ -376,11 +376,11 @@ TEST_F(MeshTransformBakeTests, ShearedUnselectedChildRetainsChannelsAndWorldPlac
 }
 
 TEST_F(MeshTransformBakeTests, BakingRetainsShearedParentingCompensation) {
-  constexpr std::array modes{QuaderTransformBakeMode::Transforms,
+  constexpr std::array kModes{QuaderTransformBakeMode::Transforms,
                              QuaderTransformBakeMode::Location,
                              QuaderTransformBakeMode::Rotation,
                              QuaderTransformBakeMode::Scale};
-  for (const auto mode : modes) {
+  for (const auto mode : kModes) {
     SCOPED_TRACE(static_cast<int>(mode));
     const auto target = mesh("Compensated Bake", true);
     TransformComponent transform{

@@ -732,7 +732,9 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       uses_mesh_outlines(request) ? request.selected_mesh_outline_snapshot : nullptr,
       request.camera, request.viewport_index,
       uses_mesh_outlines(request) && request.scene_overlay_requested
-          ? request.scene_overlay_snapshot : nullptr);
+          ? request.scene_overlay_snapshot : nullptr,
+      viewport_overlay_line_width_pixels(ViewportOverlayLayer::SelectedEdge,
+          settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize)) * request.raster_scale);
   const bool selection_overlay_visible =
       request.overlays_visible && request.selection_frame_provider != nullptr;
   if (selection_overlay_visible) {

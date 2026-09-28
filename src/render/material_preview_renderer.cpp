@@ -26,6 +26,7 @@
 #include <filament/MaterialInstance.h>
 #include <filament/RenderableManager.h>
 #include <filament/Renderer.h>
+#include <filament/RenderTarget.h>
 #include <filament/Scene.h>
 #include <filament/Texture.h>
 #include <filament/TextureSampler.h>
@@ -214,9 +215,16 @@ struct MaterialPreviewRenderer::Impl final {
                   filament::Material &shaded_mesh_material,
                   filament::Material &rendered_mesh_material,
                   filament::Texture &solid_color_texture,
-                  const std::filesystem::path &resource_root) {
+                  const std::filesystem::path &resource_root,
+                  MaterialPreviewLightingPreset new_lighting) {
     shutdown();
     engine = &new_engine;
+    lighting = new_lighting;
+    if (lighting == MaterialPreviewLightingPreset::AssetThumbnail) {
+      state = MaterialPreviewState{};
+      state.set_environment("lightroom_14b");
+      state.set_show_environment_background(false);
+    }
     scene = engine->createScene();
     view = engine->createView();
     camera_entity = utils::EntityManager::get().create();
@@ -281,6 +289,10 @@ struct MaterialPreviewRenderer::Impl final {
     view->setPostProcessingEnabled(true);
     view->setAntiAliasing(filament::AntiAliasing::FXAA);
     view->setDithering(filament::Dithering::TEMPORAL);
+    if (lighting == MaterialPreviewLightingPreset::AssetThumbnail) {
+      view->setDithering(filament::Dithering::NONE);
+      view->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
+    }
     view->setShadowingEnabled(false);
     view->setVisibleLayers(kViewportAllLayerMask, kViewportAllLayerMask);
     view->setMaterialGlobal(
@@ -290,6 +302,12 @@ struct MaterialPreviewRenderer::Impl final {
     environment.initialize(*engine, *scene, resource_root);
     apply_environment();
     create_key_light();
+    if (lighting == MaterialPreviewLightingPreset::AssetThumbnail) {
+      create_thumbnail_light(fill_light, {0.82f, 0.90f, 1.0f},
+                             18000.0f, {0.75f, -0.2f, -0.65f});
+      create_thumbnail_light(rim_light, {1.0f, 0.92f, 0.82f},
+                             45000.0f, {0.25f, -0.55f, 0.8f});
+    }
 
     for (MaterialPreviewMeshKind kind :
          {MaterialPreviewMeshKind::Sphere, MaterialPreviewMeshKind::Box,
@@ -314,6 +332,8 @@ struct MaterialPreviewRenderer::Impl final {
     }
 
     environment.shutdown();
+    destroy_light(fill_light);
+    destroy_light(rim_light);
     if (scene != nullptr && key_light) {
       scene->remove(key_light);
     }
@@ -529,6 +549,35 @@ struct MaterialPreviewRenderer::Impl final {
     }
   }
 
+  void create_thumbnail_light(utils::Entity &light,
+                              filament::math::float3 color, float intensity,
+                              filament::math::float3 direction) {
+    light = utils::EntityManager::get().create();
+    filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
+        .color(color)
+        .intensity(intensity)
+        .direction(direction)
+        .castShadows(false)
+        .build(*engine, light);
+    if (engine->getLightManager().hasComponent(light)) {
+      scene->addEntity(light);
+    }
+  }
+
+  void destroy_light(utils::Entity &light) {
+    if (!light) {
+      return;
+    }
+    if (scene != nullptr) {
+      scene->remove(light);
+    }
+    if (engine->getLightManager().hasComponent(light)) {
+      engine->getLightManager().destroy(light);
+    }
+    utils::EntityManager::get().destroy(light);
+    light.clear();
+  }
+
   void resize(std::uint32_t new_width, std::uint32_t new_height) {
     width = std::max(1u, new_width);
     height = std::max(1u, new_height);
@@ -740,6 +789,10 @@ struct MaterialPreviewRenderer::Impl final {
   utils::Entity camera_entity;
   filament::Camera *camera = nullptr;
   utils::Entity key_light;
+  utils::Entity fill_light;
+  utils::Entity rim_light;
+  MaterialPreviewLightingPreset lighting =
+      MaterialPreviewLightingPreset::Interactive;
   FilamentEnvironmentLibrary environment;
   MaterialPreviewMeshLibrary mesh_library;
   std::array<PreviewGpuMesh, kPreviewMeshCount> meshes;
@@ -765,10 +818,11 @@ bool MaterialPreviewRenderer::initialize(
     filament::Engine &engine, filament::Material &shaded_mesh_material,
     filament::Material &rendered_mesh_material,
     filament::Texture &solid_color_texture,
-    const std::filesystem::path &resource_root) {
+    const std::filesystem::path &resource_root,
+    MaterialPreviewLightingPreset lighting) {
   return impl_->initialize(engine, shaded_mesh_material,
                            rendered_mesh_material, solid_color_texture,
-                           resource_root);
+                           resource_root, lighting);
 }
 
 void MaterialPreviewRenderer::shutdown() { impl_->shutdown(); }
@@ -795,6 +849,14 @@ void MaterialPreviewRenderer::set_material(
 
 void MaterialPreviewRenderer::render(filament::Renderer &renderer) {
   impl_->render(renderer);
+}
+
+void MaterialPreviewRenderer::render_offscreen(
+    filament::Renderer &renderer, filament::RenderTarget &target) {
+  if (impl_->view != nullptr) {
+    impl_->view->setRenderTarget(&target);
+    renderer.renderStandaloneView(impl_->view);
+  }
 }
 
 bool MaterialPreviewRenderer::initialized() const noexcept {

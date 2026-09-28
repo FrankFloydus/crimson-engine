@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "api/quader_project_assets_api_internal_access.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/project_material_persistence.hpp"
 #include "editor/material/project_material_texture_snapshot.hpp"
@@ -783,7 +784,8 @@ TEST(ProjectMaterialPublicApiTests,
   ASSERT_TRUE(draft_before.value().dirty);
   const QuaderHistorySnapshot history_before =
       harness.editor().query().history();
-  const auto manifest_before = read_bytes(harness.manifest_path());
+  const auto manifest_before = ProjectManifestStore::open(harness.manifest_path());
+  ASSERT_TRUE(manifest_before.ok()) << manifest_before.error().message;
   const bool dirty_before = harness.editor().project().dirty();
 
   const std::vector<std::byte> original =
@@ -823,6 +825,8 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_FALSE(imported.value().failed.front().error_message.empty());
   ASSERT_EQ(assets_events.size(), 1u);
   EXPECT_FALSE(assets_events.front().project_asset_id.has_value());
+  const auto manifest_after = ProjectManifestStore::open(harness.manifest_path());
+  ASSERT_TRUE(manifest_after.ok()) << manifest_after.error().message;
 
   std::vector<ProjectAssetId> imported_ids;
   imported_ids.reserve(imported.value().imported.size());
@@ -858,6 +862,11 @@ TEST(ProjectMaterialPublicApiTests,
     EXPECT_FLOAT_EQ(standard->roughness, 1.0f);
     EXPECT_FLOAT_EQ(standard->metallic, 0.0f);
     ASSERT_TRUE(standard->base_color_texture.has_value());
+    const auto *persisted_texture = manifest_after.value().manifest.find_texture(
+        standard->base_color_texture->id);
+    ASSERT_NE(persisted_texture, nullptr);
+    EXPECT_EQ(persisted_texture->path.portable_string(),
+              standard->base_color_texture->project_relative_path);
     EXPECT_EQ(standard->base_color_texture->color_space,
               ProjectTextureColorSpace::Srgb);
     EXPECT_EQ(project_path(standard->base_color_texture->project_relative_path)
@@ -881,7 +890,13 @@ TEST(ProjectMaterialPublicApiTests,
   EXPECT_NE(imported.value().imported[0].material.project_relative_path,
             imported.value().imported[2].material.project_relative_path);
 
-  EXPECT_EQ(read_bytes(harness.manifest_path()), manifest_before);
+  EXPECT_EQ(manifest_after.value().manifest.id(), manifest_before.value().manifest.id());
+  EXPECT_TRUE(std::ranges::equal(manifest_after.value().manifest.scenes(),
+                                manifest_before.value().manifest.scenes()));
+  EXPECT_TRUE(std::ranges::equal(manifest_after.value().manifest.open_scene_paths(),
+                                manifest_before.value().manifest.open_scene_paths()));
+  EXPECT_EQ(manifest_after.value().manifest.active_scene_path(),
+            manifest_before.value().manifest.active_scene_path());
   const QuaderApiResult<QuaderStandardMaterialDocumentInfo> draft_after =
       harness.editor().standard_material_documents().current();
   ASSERT_TRUE(draft_after.ok()) << draft_after.error_message();
@@ -3347,6 +3362,24 @@ TEST(ProjectMaterialBehaviorTests,
   };
   harness.install_and_reopen(std::array{amber});
   auto &editor = harness.editor();
+  QuaderProjectAssetsApiInternalAccess::set_recycle_port(editor.project_assets(),
+      [&harness](std::span<const std::filesystem::path> paths) {
+        const auto bin = harness.root() / ".quader/test-recycle";
+        std::filesystem::create_directories(bin);
+        ProjectAssetRecycleResult result{.ok = true};
+        for (const auto &path : paths) {
+          std::error_code error;
+          std::filesystem::rename(path, bin / path.filename(), error);
+          result.items.push_back({.original_path = path, .recycled = !error,
+                                   .message = error.message()});
+          if (error) {
+            result.ok = false;
+            result.message = error.message();
+            break;
+          }
+        }
+        return result;
+      });
   const std::array removed{amber.material.id};
   const auto deletion = editor.project_assets().preview_delete_materials(removed);
   ASSERT_TRUE(deletion.ok()) << deletion.error_message();

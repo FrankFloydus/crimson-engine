@@ -83,6 +83,23 @@ Retention tests: [editor limits](tests/editor_history_limit_tests.cpp),
 
 ## Project persistence and compatibility
 
+- Asset Browser operations share the project folder tree. Project-root containment includes
+  physical aliases; hidden storage and unsupported folder contents cannot be moved or copied
+  through the asset facade. Detached Scene creation writes an asset without activating a tab.
+  Copies read saved content and receive fresh identities; moves preserve identities and drafts.
+  Creation and organization publish incremental browser snapshots without rescanning unrelated assets.
+  Retain unchanged thumbnail pixels and Qt row identities; folder-only changes must not invalidate
+  material images. A mixed move retains roots already at the destination, and registering a scene
+  updates the identities of unchanged physical copies too. See
+  [asset service regressions](tests/project_asset_service_tests.cpp).
+- Manifest v5 owns texture identities and legacy aliases. Legacy discovery remains in memory
+  until an authored save. Slot color interpretation is separate from shared decoded pixels.
+  Texture deletion clears saved and draft references separately, retaining unrelated draft edits.
+- Asset deletion journals verified backups, recycles original paths through the injected shell
+  port, and publishes only after success. Partial recycling rolls back; failed recovery retains
+  repair data. Restoring files from the Recycle Bin does not restore cleared external assignments.
+  See [asset operations](src/editor/assets/project_asset_service.cpp),
+  [deletion](src/editor/assets/project_asset_deletion_service.cpp) and their focused tests.
 - Workspace create/open and structural manifest edits stage their replacements. A failed write keeps
   the current tabs, identity, path, and active session. Canonical/equivalent physical paths detect
   case and junction/symlink aliases; string equality is insufficient for duplicate-open/Save As.
@@ -381,6 +398,11 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   using a bounds BVH. Per-mesh front/back edges alone leave interior contours on intersecting meshes
   and concave/disconnected payloads; depth bias cannot repair that. Perspective clipping restores
   world endpoints with perspective-correct interpolation. Holes in the combined silhouette remain.
+  Index only occurrences that can reach the viewport, testing all eight transformed bounds corners
+  against side planes padded for the actual raster-scaled ribbon caps and feather. Keep straddling
+  or uncertain bounds whole. Framing changes recheck membership; unchanged membership can retain
+  silhouettes across pan/zoom, while entering or leaving the viewport republishes the retained
+  submission. Match the renderer's minimum orthographic extent at extreme zoom.
   Selected groups feed their hierarchy mesh snapshots into the same cache, deduplicating nested
   selections; inherited selection also suppresses native facet wires. Group bounds remain visible.
   Coverage: [outline projection](tests/selected_mesh_outline_cache_tests.cpp) and

@@ -354,10 +354,10 @@ bool capture_keybinding_and_choose_conflict(
                          EXPECT_EQ(box->windowTitle(),
                                    QStringLiteral("Keybinding Conflict"));
                          EXPECT_EQ(
-                             box->text(),
+                             box->text().toStdString(),
                              QStringLiteral(
                                  "This input mapping clashes with “%1”.")
-                                 .arg(conflicting_action));
+                                 .arg(conflicting_action).toStdString());
                          EXPECT_TRUE(box->informativeText().isEmpty());
                          auto *replace = box->findChild<QPushButton *>(
                              QStringLiteral(
@@ -3679,21 +3679,23 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(table->model(), nullptr);
   ASSERT_NE(reset_all, nullptr);
 
-  const std::string delete_target =
-      std::string(quader_command::kDeleteSelection.string());
+  // Keep this dialog-lifecycle fixture scoped to editor commands. Asset
+  // clipboard commands also apply in the browser and may overlap navigation.
+  const std::string edited_target =
+      std::string(quader_command::kViewportFrameSelection.string());
   const std::string move_target =
       editor.commands().command_id_for_tool_activation("move");
-  int delete_row = -1;
+  int edited_row = -1;
   for (int row = 0; row < table->model()->rowCount(); ++row) {
     if (table->model()
             ->data(table->model()->index(row, 0), Qt::UserRole)
-            .toString() == QString::fromStdString(delete_target)) {
-      delete_row = row;
+            .toString() == QString::fromStdString(edited_target)) {
+      edited_row = row;
       break;
     }
   }
-  ASSERT_GE(delete_row, 0);
-  table->selectRow(delete_row);
+  ASSERT_GE(edited_row, 0);
+  table->selectRow(edited_row);
   QCoreApplication::processEvents();
 
   EXPECT_TRUE(capture_keybinding_and_choose_conflict(
@@ -3704,10 +3706,10 @@ TEST(QtSettingsDialogTests,
       QStringLiteral("Activate Move Tool"), true,
       expect_conflict_identity));
   auto catalog = editor.commands().keybinding_catalog();
-  const QuaderKeybindingCatalogEntry *deleted =
-      find_keybinding_catalog_entry(catalog, delete_target);
-  ASSERT_NE(deleted, nullptr);
-  EXPECT_NE(deleted->shortcut, "W");
+  const QuaderKeybindingCatalogEntry *edited =
+      find_keybinding_catalog_entry(catalog, edited_target);
+  ASSERT_NE(edited, nullptr);
+  EXPECT_NE(edited->shortcut, "W");
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
             0u);
 
@@ -3716,12 +3718,12 @@ TEST(QtSettingsDialogTests,
       QStringLiteral("Activate Move Tool"), false,
       expect_conflict_identity));
   catalog = editor.commands().keybinding_catalog();
-  deleted = find_keybinding_catalog_entry(catalog, delete_target);
+  edited = find_keybinding_catalog_entry(catalog, edited_target);
   const QuaderKeybindingCatalogEntry *move =
       find_keybinding_catalog_entry(catalog, move_target);
-  ASSERT_NE(deleted, nullptr);
+  ASSERT_NE(edited, nullptr);
   ASSERT_NE(move, nullptr);
-  EXPECT_EQ(deleted->shortcut, "W");
+  EXPECT_EQ(edited->shortcut, "W");
   EXPECT_TRUE(move->shortcut.empty());
   EXPECT_TRUE(move->customized);
   EXPECT_TRUE(move->unassigned);
@@ -3737,9 +3739,9 @@ TEST(QtSettingsDialogTests,
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
             1u);
   catalog = editor.commands().keybinding_catalog();
-  deleted = find_keybinding_catalog_entry(catalog, delete_target);
-  ASSERT_NE(deleted, nullptr);
-  EXPECT_EQ(deleted->shortcut, "W");
+  edited = find_keybinding_catalog_entry(catalog, edited_target);
+  ASSERT_NE(edited, nullptr);
+  EXPECT_EQ(edited->shortcut, "W");
 
   EXPECT_TRUE(choose_reset_all_confirmation(
       dialog, *reset_all,
@@ -3748,11 +3750,11 @@ TEST(QtSettingsDialogTests,
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
             2u);
   catalog = editor.commands().keybinding_catalog();
-  deleted = find_keybinding_catalog_entry(catalog, delete_target);
+  edited = find_keybinding_catalog_entry(catalog, edited_target);
   move = find_keybinding_catalog_entry(catalog, move_target);
-  ASSERT_NE(deleted, nullptr);
+  ASSERT_NE(edited, nullptr);
   ASSERT_NE(move, nullptr);
-  EXPECT_EQ(deleted->shortcut, deleted->default_shortcut);
+  EXPECT_EQ(edited->shortcut, edited->default_shortcut);
   EXPECT_EQ(move->shortcut, move->default_shortcut);
 
   dialog.reject();
@@ -6107,9 +6109,9 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   LocalizationService localization = loaded_localization();
   QMenuBar menu_bar;
   QtMainMenu menu;
-  int material_browser_requests = 0;
-  bool material_browser_available = false;
+  int asset_browser_toggles = 0;
   UISettings panel_settings = UISettings::defaults();
+  panel_settings.set_panel_visible(UIPanelId::AssetBrowser, false);
   menu.initialize(
       menu_bar,
       QtMainMenuContext{
@@ -6122,14 +6124,11 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
                 return panel_settings.is_panel_visible(id);
               },
           .set_panel_visible =
-              [&panel_settings](UIPanelId id, bool visible) {
+              [&panel_settings, &asset_browser_toggles](UIPanelId id, bool visible) {
                 panel_settings.set_panel_visible(id, visible);
-              },
-          .show_material_browser =
-              [&material_browser_requests]() { ++material_browser_requests; },
-          .material_browser_available =
-              [&material_browser_available]() {
-                return material_browser_available;
+                if (id == UIPanelId::AssetBrowser) {
+                  ++asset_browser_toggles;
+                }
               },
       });
   // Menu descriptors are intentionally synchronized on demand; initialization
@@ -6166,17 +6165,26 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   EXPECT_TRUE(local_visibility_action->shortcut().isEmpty());
   EXPECT_EQ(local_visibility_action->text(),
             QStringLiteral("Toggle Local View\tBackslash"));
-  auto *material_browser_action =
-      menu_bar.findChild<QAction *>(QStringLiteral("action_material_browser"));
-  ASSERT_NE(material_browser_action, nullptr);
-  EXPECT_FALSE(material_browser_action->isEnabled());
-  material_browser_available = true;
+  auto *asset_browser_action =
+      menu_bar.findChild<QAction *>(QStringLiteral("panel_asset_browser"));
+  auto *panels_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_window_panels"));
+  ASSERT_NE(asset_browser_action, nullptr);
+  ASSERT_NE(panels_menu, nullptr);
+  EXPECT_TRUE(panels_menu->actions().contains(asset_browser_action));
+  EXPECT_TRUE(asset_browser_action->isCheckable());
+  EXPECT_FALSE(asset_browser_action->isChecked());
+  EXPECT_TRUE(asset_browser_action->shortcut().isEmpty());
+  EXPECT_EQ(asset_browser_action->text(),
+            QStringLiteral("Asset Browser\tCtrl+Space"));
+  asset_browser_action->trigger();
+  EXPECT_EQ(asset_browser_toggles, 1);
+  EXPECT_TRUE(panel_settings.is_panel_visible(UIPanelId::AssetBrowser));
+  asset_browser_action->trigger();
+  EXPECT_EQ(asset_browser_toggles, 2);
+  EXPECT_FALSE(panel_settings.is_panel_visible(UIPanelId::AssetBrowser));
   menu.refresh();
-  EXPECT_TRUE(material_browser_action->isEnabled());
-  EXPECT_EQ(material_browser_action->text(),
-            QStringLiteral("Material Browser"));
-  material_browser_action->trigger();
-  EXPECT_EQ(material_browser_requests, 1);
+  EXPECT_FALSE(asset_browser_action->isChecked());
   auto *face_texture_action =
       menu_bar.findChild<QAction *>(QStringLiteral("panel_face_texture"));
   ASSERT_NE(face_texture_action, nullptr);
@@ -6209,11 +6217,18 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
                   .set_shortcut(quader_command::kViewportLayoutTwoVertical,
                                 "Ctrl+Alt+2")
                   .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader_command::kUiAssetBrowser,
+                                "Ctrl+Alt+Space")
+                  .ok());
   menu.refresh();
   EXPECT_EQ(editor.commands().shortcut_for(
                 quader_command::kToolsActivatePivot), "Ctrl+Alt+P");
   EXPECT_EQ(editor.commands().shortcut_for(
                 quader_command::kViewportLayoutTwoVertical), "Ctrl+Alt+2");
+  EXPECT_EQ(asset_browser_action->text(),
+            QStringLiteral("Asset Browser\tCtrl+Alt+Space"));
+  EXPECT_TRUE(asset_browser_action->shortcut().isEmpty());
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
   ASSERT_TRUE(editor.commands()

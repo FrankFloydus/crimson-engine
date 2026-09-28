@@ -182,10 +182,10 @@ ProjectSessionRenderMaterialResolver::resolve(ProjectAssetId id) const {
     const ProjectMaterialTextureSlot &definition = **texture;
     render_standard->textures[index] =
         RenderMaterialTextureEvaluationSnapshot{
-            .project_texture_id = definition.id,
+            .project_texture_id = cached->texture_id,
             .identity_revision =
                 saved_revision ^
-                render_project_asset_identity_revision(definition.id),
+                render_project_asset_identity_revision(cached->texture_id),
             .content_revision = cached->content_revision,
             .color_space =
                 definition.color_space == ProjectTextureColorSpace::Srgb

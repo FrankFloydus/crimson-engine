@@ -344,6 +344,7 @@ struct QuaderUIRuntimeHooks {
   std::function<QuaderApiVoidResult(std::string_view, bool)> set_panel_visible;
   std::function<QuaderApiVoidResult(std::string_view)> focus_panel;
   std::function<QuaderApiVoidResult()> show_command_search;
+  std::function<QuaderApiVoidResult()> toggle_asset_browser;
   std::function<QuaderApiVoidResult(QuaderNotification)> notify;
 };
 

@@ -32,6 +32,8 @@ file except through prior written authorization from Francesco Di Blasi.
   occluded depth passes; the hidden pass scales authored alpha without changing component
   visibility. Keep both material instances synchronized through retained camera/style updates
   and destroy them together. Line bias must remain bounded in view space across camera distances.
+  Conservative occurrence culling must include the resolved raster width, cap and feather extent;
+  retain viewport-straddling geometry and recheck membership when the camera framing changes.
 - Vulkan face tints share the stencil policy in `overlay/overlay_face_fill_composition.*`:
   coverage chooses hover/removal over active over ordinary selection, then consumes one
   authored-alpha tint per pixel. Zero-alpha fills neither claim nor consume coverage.
@@ -49,6 +51,12 @@ file except through prior written authorization from Francesco Di Blasi.
   and backend-confirmed presentation modes. Retire pending GPU work before swapchain replacement;
   callback publication must stay thread-safe. Preview surfaces honor `needs_initial_frame()` after
   recreation even when their content is unchanged.
+- Bulk selected-object resource creation and retirement must submit bounded command batches before
+  `beginFrame`; a single large selection can exhaust Filament's command arena while the GPU is idle.
+  Detach the complete retiring set of renderables before releasing their materials, avoiding
+  repeated material-lifetime validation scans. Keep unchanged synchronization free of submissions.
+  See `SelectedObjectOverlayCache` and the
+  6,400-mesh regression in `tests/selection_overlay_runtime_tests.cpp`.
 - VSync requires the maintained Filament patch and matching headers/libraries. Dependency upgrades
   must preserve provenance checks and test actual presentation modes, not only timer intervals.
 

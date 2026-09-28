@@ -45,6 +45,17 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
+void detach_entry_renderables(filament::Engine &engine,
+                              const SelectedObjectOverlayCache::Entry &entry) {
+  // Filament validates each material destruction against every live renderable.
+  // Detach the complete retiring set before freeing its materials, so a large
+  // deselection does not repeatedly scan its own remaining overlay proxies.
+  auto &renderables = engine.getRenderableManager();
+  for (const auto &proxy : entry.face_proxies) {
+    if (proxy.entity) renderables.destroy(proxy.entity);
+  }
+}
+
 filament::math::mat4f make_transform(const QMat4 &transform) {
   const glm::mat4 glm_transform = to_glm(transform);
   filament::math::mat4f result;
@@ -109,16 +120,6 @@ void configure_overlay_material(filament::MaterialInstance &material,
                             state.polygon_offset_constant);
   apply_overlay_face_fill_stencil(material, state.face_fill_class,
                                   state.face_fill_pass, stencil_enabled);
-}
-
-const RenderOverlayMeshSnapshot *find_overlay_mesh_snapshot(
-    const std::vector<RenderOverlayMeshSnapshot> &meshes, EntityId entity) {
-  const auto found =
-      std::find_if(meshes.begin(), meshes.end(),
-                   [entity](const RenderOverlayMeshSnapshot &mesh) {
-                     return mesh.entity == entity;
-                   });
-  return found == meshes.end() ? nullptr : &*found;
 }
 
 filament::Box bounds_for_mesh_vertices(std::span<const MeshVertex> vertices) {
@@ -359,38 +360,47 @@ void SelectedObjectOverlayCache::sync(
     if (face_fills_enabled) {
       std::unordered_set<EntityId> live_entities;
       live_entities.reserve(states.size());
-      for (const SelectedEntityState &state : states) {
-        QDR_PROFILE_SCOPE("Selected object overlay sync entity");
-        live_entities.insert(state.entity);
-        auto existing = entries_.find(state.entity);
-        const bool rebuild =
-            existing == entries_.end() ||
-            existing->second.mesh_id != state.mesh_id ||
-            existing->second.mesh_revision != state.mesh_revision;
-        if (rebuild) {
-          if (existing != entries_.end()) {
-            destroy_entry(existing->second);
-            entries_.erase(existing);
-          }
-          const RenderOverlayMeshSnapshot *mesh =
-              find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
-          if (mesh == nullptr) {
-            continue;
-          }
-          Entry entry = create_entry(*mesh, snapshot.style);
-          existing = entries_.emplace(state.entity, std::move(entry)).first;
+      std::vector<EntityId> replacements;
+      for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
+        if (!mesh.has_triangle_geometry() || mesh.mesh_id == kInvalidAssetId) {
+          continue;
         }
-        const RenderOverlayMeshSnapshot *mesh =
-            find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
-        if (mesh != nullptr) {
-          update_entry_face_color(existing->second, *mesh, snapshot.style);
-          update_entry_transform(existing->second, mesh->world_transform);
+        live_entities.insert(mesh.entity);
+        const auto existing = entries_.find(mesh.entity);
+        if (existing != entries_.end() &&
+            (existing->second.mesh_id != mesh.mesh_id ||
+             existing->second.mesh_revision != mesh.mesh_revision)) {
+          replacements.push_back(mesh.entity);
+          detach_entry_renderables(*engine_, existing->second);
+          record_resource_change();
         }
       }
       remove_except(live_entities);
+      for (const EntityId entity : replacements) {
+        const auto existing = entries_.find(entity);
+        if (existing != entries_.end()) {
+          destroy_entry(existing->second);
+          entries_.erase(existing);
+        }
+      }
+      entries_.reserve(states.size());
+      for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
+        if (!mesh.has_triangle_geometry() || mesh.mesh_id == kInvalidAssetId) {
+          continue;
+        }
+        QDR_PROFILE_SCOPE("Selected object overlay sync entity");
+        auto existing = entries_.find(mesh.entity);
+        if (existing == entries_.end()) {
+          Entry entry = create_entry(mesh, snapshot.style);
+          existing = entries_.emplace(mesh.entity, std::move(entry)).first;
+        }
+        update_entry_face_color(existing->second, mesh, snapshot.style);
+        update_entry_transform(existing->second, mesh.world_transform);
+      }
     } else {
       destroy_face_entries();
     }
+    flush_resource_commands();
 
     synced_states_ = states;
     synced_source_stamp_ = snapshot;
@@ -494,6 +504,7 @@ SelectedObjectOverlayCache::create_entry(
   }
 
   update_entry_transform(entry, mesh.world_transform);
+  record_resource_change();
   return entry;
 }
 
@@ -527,6 +538,7 @@ void SelectedObjectOverlayCache::update_entry_face_color(
   }
   entry.face_color = color;
   entry.face_fill_class = fill_class;
+  record_resource_change();
 }
 
 void SelectedObjectOverlayCache::destroy_entry(Entry &entry) {
@@ -535,6 +547,7 @@ void SelectedObjectOverlayCache::destroy_entry(Entry &entry) {
   }
   entry.face_proxies.clear();
   destroy_transform_root(entry);
+  record_resource_change();
 }
 
 void SelectedObjectOverlayCache::destroy_proxy(Proxy &proxy,
@@ -571,11 +584,17 @@ void SelectedObjectOverlayCache::destroy_proxy(Proxy &proxy,
 }
 
 void SelectedObjectOverlayCache::destroy_face_entries() {
+  for (const auto &[entity, entry] : entries_) {
+    (void)entity;
+    detach_entry_renderables(*engine_, entry);
+    record_resource_change();
+  }
   for (auto &[entityId, entry] : entries_) {
     (void)entityId;
     destroy_entry(entry);
   }
   entries_.clear();
+  flush_resource_commands();
 }
 
 void SelectedObjectOverlayCache::destroy_transform_root(Entry &entry) {
@@ -624,14 +643,10 @@ void SelectedObjectOverlayCache::update_entry_transforms(
   }
   filament::TransformManager &transforms = engine_->getTransformManager();
   transforms.openLocalTransformTransaction();
-  for (const SelectedEntityState &state : synced_states_) {
-    const auto existing = entries_.find(state.entity);
+  for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
+    const auto existing = entries_.find(mesh.entity);
     if (existing != entries_.end()) {
-      const RenderOverlayMeshSnapshot *mesh =
-          find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
-      if (mesh != nullptr) {
-        update_entry_transform(existing->second, mesh->world_transform);
-      }
+      update_entry_transform(existing->second, mesh.world_transform);
     }
   }
   transforms.commitLocalTransformTransaction();
@@ -653,6 +668,12 @@ void SelectedObjectOverlayCache::set_visible(bool visible) {
 
 void SelectedObjectOverlayCache::remove_except(
     const std::unordered_set<EntityId> &live_entities) {
+  for (const auto &[entity, entry] : entries_) {
+    if (!live_entities.contains(entity)) {
+      detach_entry_renderables(*engine_, entry);
+      record_resource_change();
+    }
+  }
   for (auto it = entries_.begin(); it != entries_.end();) {
     if (!live_entities.contains(it->first)) {
       destroy_entry(it->second);
@@ -660,6 +681,23 @@ void SelectedObjectOverlayCache::remove_except(
     } else {
       ++it;
     }
+  }
+}
+
+void SelectedObjectOverlayCache::record_resource_change() {
+  // Each entry emits a fixed four-proxy resource command sequence. Buffer
+  // payloads are retained outside Filament's command arena. Submit bounded
+  // groups before a large selection can overrun that arena prior to beginFrame.
+  constexpr std::size_t kResourceChangesPerSubmission = 64u;
+  if (++pending_resource_changes_ >= kResourceChangesPerSubmission) {
+    flush_resource_commands();
+  }
+}
+
+void SelectedObjectOverlayCache::flush_resource_commands() {
+  if (engine_ != nullptr && pending_resource_changes_ != 0u) {
+    engine_->flush();
+    pending_resource_changes_ = 0u;
   }
 }
 

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_standard_material_documents_api.hpp"
+#include "api/quader_standard_material_presentation.hpp"
 
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_status_internal.hpp"
@@ -189,6 +190,11 @@ StandardMaterialEditSessionService *service(QuaderApiSession session) {
 }
 
 } // namespace
+
+QuaderStandardMaterialDefinition quader_standard_material_definition(
+    const ProjectStandardMaterialDefinition &material) {
+  return to_public_material(material);
+}
 
 QuaderStandardMaterialDocumentsApi::QuaderStandardMaterialDocumentsApi(
     QuaderApiSession session)
@@ -480,6 +486,16 @@ QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::import_texture(
   }
   QUADER_STANDARD_MATERIAL_MUTATION(
       editor->import_texture(*internal, source_path));
+}
+
+QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::set_texture(
+    QuaderStandardMaterialTextureSlot slot, ProjectAssetId texture_id) {
+  const auto internal = to_internal_texture_slot(slot);
+  if (!internal.has_value()) {
+    return status(session_, false, false,
+                  "The Standard Material texture slot is invalid.");
+  }
+  QUADER_STANDARD_MATERIAL_MUTATION(editor->set_texture(*internal, texture_id));
 }
 
 QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::clear_texture(

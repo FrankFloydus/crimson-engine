@@ -151,19 +151,25 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
        {"api", "core", "diagnostics", "editor_input", "viewport"}},
       {"editor_material",
        {"src/editor/material/"},
-       {"assets", "core", "editor_commands", "editor_material",
+       {"assets", "core", "editor_assets", "editor_commands", "editor_material",
         "editor_modeling", "editor_session", "io_project", "io_qdr",
         "mesh_polygon", "scene",
         "release_features"}},
       {"editor_session",
        {"src/editor/session/"},
-       {"assets", "core", "diagnostics", "editor_array", "editor_commands",
+       {"assets", "core", "diagnostics", "editor_array", "editor_assets", "editor_commands",
         "editor_history", "editor_instances", "editor_modeling",
         "editor_pivot", "editor_material",
         "editor_curve",
         "editor_placement", "editor_selection", "editor_session",
         "editor_tools", "editor_transform_bake", "io_project", "io_qdr", "scene", "viewport",
         "release_features"}},
+      // Project asset transactions coordinate existing scene/material owners;
+      // OS recycling remains an injected port implemented by platform.
+      {"editor_assets",
+       {"src/editor/assets/"},
+       {"assets", "core", "editor_assets", "editor_material", "editor_session",
+        "io_project", "io_qdr", "scene", "release_features"}},
       {"editor_interactions",
        {"src/editor/interactions/"},
        {"diagnostics", "editor_interactions", "editor_modeling",
@@ -276,6 +282,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
         "core",
         "diagnostics",
         "editor_array",
+        "editor_assets",
         "editor_commands",
         "editor_curve",
         "editor_history",
@@ -354,6 +361,18 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
 
 const std::vector<IncludeException> &allowed_include_exceptions() {
   static const std::vector<IncludeException> kExceptions = {
+      {"src/editor/assets/project_asset_deletion_service.cpp",
+       "editor/modeling/services/modeling_session_service.hpp",
+       "Deletion observes pending preview revisions to reject live edits made "
+       "during shell recycling, without mutating the modeling service."},
+      {"src/ui/qt_project_asset_dialog.cpp",
+       "io/project/project_file_system.hpp",
+       "The rooted picker performs read-only physical containment validation "
+       "before closing; scene owners independently validate every mutation."},
+      {"src/platform/project_asset_recycle.hpp",
+       "io/project/project_asset_recycle.hpp",
+       "The Windows adapter implements the neutral project recycle port without "
+       "depending on project sessions or asset transaction owners."},
       {"src/ui/qt_settings_dialog.cpp",
        "editor/material/default_material_texture_store.hpp",
        "Settings stages and imports a shared appearance image through the "

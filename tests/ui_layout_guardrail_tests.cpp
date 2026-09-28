@@ -4194,7 +4194,7 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(refresh, ".material_preview(");
   expect_missing(refresh, "make_qt_material_thumbnail(");
   expect_contains(ui,
-                  "configure_material_browser(*material_browser_window_)");
+                  "configure_asset_browser()");
   expect_contains(ui,
                   "configure_material_browser(face_texture_panel_->browser())");
   expect_contains(ui, "apply_material_to_selected_faces(");

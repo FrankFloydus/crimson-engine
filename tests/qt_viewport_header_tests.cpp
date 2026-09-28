@@ -211,25 +211,25 @@ TEST(QtViewportChromeLayoutTests,
   panel.attach_workspace(workspace);
   panel.set_startup_presentation_blocked(false);
   std::vector<QAction *> actions;
-  constexpr std::array names{"tool_select", "tool_move", "tool_rotate", "tool_scale",
+  constexpr std::array kNames{"tool_select", "tool_move", "tool_rotate", "tool_scale",
                              "toggle_transform_space", "backfaceSelection",
                              "snappingEnabled", "gridSnapping", "vertexSnapping",
                              "rotationSnapping", "viewportGrid", "viewportGizmos",
                              "viewportMeshGrid", "viewportOverlays"};
-  constexpr std::array icons{"tool_select.png", "tool_move.png", "tool_rotate.png",
+  constexpr std::array kIcons{"tool_select.png", "tool_move.png", "tool_rotate.png",
                              "tool_scale.png", "tool_transform_local.png",
                              "selection_backface.png", "snapping_master.png",
                              "snapping_grid.png", "snapping_vertex.png",
                              "snapping_rotation.png", "viewport_grid.png",
                              "viewport_gizmos.png", "viewport_mesh_grid.png",
                              "viewport_overlays.png"};
-  for (std::size_t index = 0; index < names.size(); ++index) {
-    const char *name = names[index];
+  for (std::size_t index = 0; index < kNames.size(); ++index) {
+    const char *name = kNames[index];
     auto *action = new QAction(QString::fromUtf8(name), &panel);
     action->setObjectName(QString::fromUtf8(name));
     action->setCheckable(true);
     action->setIcon(QIcon(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons/") +
-                          QString::fromUtf8(icons[index])));
+                          QString::fromUtf8(kIcons[index])));
     actions.push_back(action);
   }
   QAction lasso(QStringLiteral("Lasso Select"), &panel);

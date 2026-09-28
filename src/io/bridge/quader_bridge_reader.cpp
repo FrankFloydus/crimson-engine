@@ -14,6 +14,7 @@
 #include "io/project/project_manifest.hpp"
 #include "io/project/project_material_catalog.hpp"
 #include "io/project/project_material_reference_resolver.hpp"
+#include "io/project/project_asset_resolver.hpp"
 #include "io/project/qmat_codec.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/shared_file_read.hpp"
@@ -372,7 +373,8 @@ void build_light_snapshot(QuaderBridgeScene &target) {
   // Legacy, relocated and permanently remapped references share one lazy scan.
   // The catalog validates identity uniqueness and project-path containment.
   if (!scene.material_catalog.has_value()) {
-    auto catalog = ProjectMaterialCatalog::scan(scene.storage.file_system);
+    auto catalog = ProjectMaterialCatalog::scan(
+        scene.storage.file_system, nullptr, &scene.storage.manifest);
     if (!catalog.ok()) {
       fail(catalog.error());
     }
@@ -411,9 +413,25 @@ void build_light_snapshot(QuaderBridgeScene &target) {
     for (uint32_t slot = 0u; slot < QUADER_BRIDGE_TEXTURE_COUNT; ++slot) {
       const auto *texture = standard->texture(static_cast<StandardMaterialTextureSlot>(slot));
       if (texture != nullptr && texture->has_value()) {
+        if (scene.storage.manifest.is_texture_deleted((*texture)->id)) {
+          descriptor->standard.texture(static_cast<StandardMaterialTextureSlot>(slot))->reset();
+          continue;
+        }
+        auto hint = ProjectRelativePath::parse_portable((*texture)->project_relative_path);
+        if (!hint.ok()) {
+          fail(hint.error());
+        }
+        auto path = resolve_project_texture_path(
+            scene.storage.manifest, (*texture)->id, hint.value());
+        if (!path.ok()) {
+          fail(path.error());
+        }
+        const auto *catalog_texture = scene.storage.manifest.find_texture((*texture)->id);
+        const ProjectAssetId canonical_id =
+            catalog_texture != nullptr ? catalog_texture->id : (*texture)->id;
         descriptor->texture_present[slot] = true;
-        descriptor->texture_ids[slot] = std::string((*texture)->id.str());
-        descriptor->texture_paths[slot] = (*texture)->project_relative_path;
+        descriptor->texture_ids[slot] = std::string(canonical_id.str());
+        descriptor->texture_paths[slot] = path.value().portable_string();
         descriptor->texture_srgb[slot] =
             (*texture)->color_space == ProjectTextureColorSpace::Srgb ? 1u : 0u;
       }

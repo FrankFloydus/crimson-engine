@@ -70,6 +70,7 @@ private:
       ui_panel_default_visible(UIPanelId::Console),
       ui_panel_default_visible(UIPanelId::Layers),
       ui_panel_default_visible(UIPanelId::FaceTexture),
+      ui_panel_default_visible(UIPanelId::AssetBrowser),
   };
   std::array<bool, kUiPanelCount> presented_{};
   VisibilityChangedCallback visibility_changed_;

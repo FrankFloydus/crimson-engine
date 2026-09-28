@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_material_persistence.hpp"
 
+#include "editor/assets/project_asset_service.hpp"
 #include "io/project/project_material_catalog.hpp"
 #include "io/project/qmat_codec.hpp"
 
@@ -94,14 +95,9 @@ ProjectIoResult<ProjectMaterialAssetDestination> make_unique_destination(
     std::string_view source_stem, std::string_view fallback_stem,
     std::string_view extension, bool numbered_collisions = false) {
 
-  // Check the owning directory separately so a casing error in Materials or
-  // Textures cannot be mistaken for a collision in the desired asset leaf.
-  const auto parent = ProjectRelativePath::parse_portable(directory);
-  if (!parent.ok()) {
-    return ProjectIoResult<ProjectMaterialAssetDestination>::failure(
-        parent.error().code, parent.error().message, parent.error().path);
-  }
-  const auto resolved_parent = file_system.resolve(parent.value());
+  // Check the owning directory separately so a parent casing error cannot be
+  // mistaken for a collision in the desired asset leaf.
+  const auto resolved_parent = resolve_project_asset_folder(file_system, directory);
   if (!resolved_parent.ok()) {
     return ProjectIoResult<ProjectMaterialAssetDestination>::failure(
         resolved_parent.error().code, resolved_parent.error().message,
@@ -120,7 +116,7 @@ ProjectIoResult<ProjectMaterialAssetDestination> make_unique_destination(
     const std::string filename =
         readable_filename(source_stem, fallback_stem, extension, suffix);
     const std::string portable_path =
-        std::string(directory) + "/" +
+        (directory.empty() ? std::string{} : std::string(directory) + "/") +
         (attempt == 0u || numbered_collisions
              ? std::string{}
              : std::string(id.str()) + "/") +
@@ -177,43 +173,7 @@ void append_rollback_error(std::string &message,
 ProjectIoResult<std::filesystem::path>
 resolve_material_destination_folder(const ProjectFileSystem &file_system,
                                     std::string_view destination_folder) {
-  const auto relative = ProjectRelativePath::parse_portable(destination_folder);
-  if (!relative.ok()) {
-    return ProjectIoResult<std::filesystem::path>::failure(
-        relative.error().code, relative.error().message, relative.error().path);
-  }
-  if (relative.value().portable_string() != destination_folder ||
-      (destination_folder != "Materials" &&
-       !destination_folder.starts_with("Materials/"))) {
-    return ProjectIoResult<std::filesystem::path>::failure(
-        ProjectIoErrorCode::InvalidRelativePath,
-        "Material destination must be an exact folder path under Materials.");
-  }
-  auto resolved = file_system.resolve(relative.value());
-  if (!resolved.ok()) {
-    return resolved;
-  }
-  const auto physical = file_system.resolve_physical_location(relative.value());
-  if (!physical.ok()) {
-    return physical;
-  }
-  if (physical.value() != resolved.value()) {
-    return ProjectIoResult<std::filesystem::path>::failure(
-        ProjectIoErrorCode::PathCaseCollision,
-        "Material folders must not use symbolic links or junction aliases.",
-        resolved.value());
-  }
-  std::error_code error;
-  const bool directory = std::filesystem::is_directory(resolved.value(), error);
-  if (error || !directory) {
-    return ProjectIoResult<std::filesystem::path>::failure(
-        error ? ProjectIoErrorCode::IoFailure
-              : ProjectIoErrorCode::DirectoryNotFound,
-        error ? "Could not inspect material destination folder: " + error.message()
-              : "Material destination folder does not exist.",
-        resolved.value());
-  }
-  return resolved;
+  return resolve_project_asset_folder(file_system, destination_folder);
 }
 
 ProjectIoResult<ProjectMaterialAssetDestination>

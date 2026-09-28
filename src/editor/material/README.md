@@ -8,10 +8,11 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Project material organization
 
-`ProjectMaterialCatalog` derives materials and folders from the physical `Materials` tree.
+`ProjectMaterialCatalog` derives materials and folders from the physical project tree.
 Empty folders participate in its revision. The Qt browser displays this projection and sends
 organization intent through `QuaderProjectAssetsApi`; it never edits files or owns a second catalog.
-Imports select a material destination while retaining the independent `Textures` storage policy.
+Asset Browser image imports create texture assets in the selected project folder. Explicit material
+editor imports continue to stage texture assignments until the material is saved.
 Catalog updates, imports and material saves do not select a material for later creation or assignment.
 New geometry uses the reserved Default Material unless its creation arguments supply a material;
 assignment always carries an explicit reference through the modeling API. Legacy manifest
@@ -26,8 +27,8 @@ Flip Texture actions continue to negate the corresponding scale value. The porta
 the editor publishes them together in one undoable operation. See the
 [native mirror regressions](../../../tests/face_texture_mirror_api_tests.cpp).
 
-`ProjectMaterialOrganizationService` validates complete folder/material moves through
-`ProjectFileSystem`, preserves material UUIDs and compensates failed publication. Moving an open
+`ProjectAssetService` validates complete mixed-asset folder moves through
+`ProjectFileSystem`, preserves asset UUIDs and compensates failed publication. Moving an open
 material retargets its draft path without discarding authored properties, pending images or previews.
 The native reader resolves moved UUIDs when a saved scene contains an obsolete material path.
 
@@ -64,14 +65,16 @@ Retained reads use owner revisions. Destructive previews additionally validate e
 incomplete reads are errors, not evidence that a material is unused. The confirmation revision binds
 folder deletion to the inspected graph. Shared texture files are not garbage-collected.
 
-`ProjectMaterialDeletionService` prepares saved changes from disk and resident binding changes
+`ProjectAssetDeletionService` prepares saved changes from disk and resident binding changes
 separately. It must never use `save_all()` to implement deletion: that would persist unrelated dirty
 edits and would not supply a coordinated transaction. Files and folder contents remain recoverable
 until the scene/manifest/catalog transaction commits. Opening a project recovers interrupted
 deletions before scanning the material catalog. Notifications describe committed sources only.
 
-Deletion is permanent, while existing per-scene undo histories remain available. Manifest v3 records
-deleted material UUIDs; `ProjectMaterialReferenceResolver` maps these identities to Default. Raw IDs
+Deletion recycles original asset paths through an injected Windows shell port; no permanent
+fallback is allowed. Recycle Bin restore recovers files, not assignments cleared in other assets.
+Existing per-scene undo histories remain available. Manifest v5 records deleted material and texture
+UUIDs; `ProjectMaterialReferenceResolver` maps deleted materials to Default. Raw IDs
 retained by old undo records resolve at consumer boundaries, and future scene saves normalize them.
 Do not rewrite old history commands, allocate replacement assets, create arbitrary redirect chains,
 or make exact catalog lookup pretend that deleted assets still exist. Clipboard, recovery, material

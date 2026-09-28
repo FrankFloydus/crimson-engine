@@ -129,6 +129,8 @@ private:
         const RenderOverlaySelectedObjectSnapshot &snapshot);
     void set_visible(bool visible);
     void remove_except(const std::unordered_set<EntityId> &live_entities);
+    void record_resource_change();
+    void flush_resource_commands();
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
@@ -140,6 +142,7 @@ private:
     bool synced_face_fills_enabled_ = false;
     bool has_synced_ = false;
     bool visible_ = true;
+    std::size_t pending_resource_changes_ = 0u;
 };
 
 } // namespace quader

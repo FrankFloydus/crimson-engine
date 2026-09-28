@@ -211,6 +211,8 @@ public:
           scene_documents, callback);
       QuaderProjectApiInternalAccess::set_binding_changed_callback(project,
                                                                    callback);
+      QuaderProjectAssetsApiInternalAccess::set_binding_changed_callback(
+          project_assets, callback);
     }
 
     void rebind(QuaderApiSession session) {

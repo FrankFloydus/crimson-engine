@@ -75,6 +75,8 @@ public:
     bool layers_visible_ = ui_panel_default_visible(UIPanelId::Layers);
     bool face_texture_visible_ =
         ui_panel_default_visible(UIPanelId::FaceTexture);
+    bool asset_browser_visible_ =
+        ui_panel_default_visible(UIPanelId::AssetBrowser);
 };
 
 } // namespace quader

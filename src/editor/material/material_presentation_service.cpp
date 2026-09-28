@@ -23,7 +23,8 @@ MaterialPresentationRevision MaterialPresentationService::revision(
   return {
       .project_activation_generation = project.activation_generation(),
       .project_material_revision =
-          project.material_catalog().content_revision(),
+          project.material_catalog().material_revision(),
+      .project_texture_revision = project.material_texture_revision(),
       .active_scene_id = project.active_scene_id().packed(),
       .embedded_material_revision =
           scene != nullptr ? scene->assets().material_catalog_revision() : 0u,
@@ -31,7 +32,8 @@ MaterialPresentationRevision MaterialPresentationService::revision(
 }
 
 MaterialPresentationSnapshot MaterialPresentationService::snapshot(
-    ProjectSession &project, const SceneSession *scene) {
+    ProjectSession &project, const SceneSession *scene,
+    ProjectFileSystemWorkStats *file_system_work) {
   MaterialPresentationSnapshot result{
       .revision = revision(project, scene),
   };
@@ -40,6 +42,10 @@ MaterialPresentationSnapshot MaterialPresentationService::snapshot(
   const std::size_t embedded_count =
       scene != nullptr ? scene->assets().material_count() : 0u;
   result.materials.reserve(project_materials.size() + embedded_count);
+  const auto *workspace = project.workspace();
+  const auto file_system = workspace != nullptr
+      ? workspace->file_system.begin_resolution_batch(file_system_work)
+      : ProjectFileSystem{};
 
   for (const ProjectMaterialCatalogEntry &entry : project_materials) {
     if (project.manifest() != nullptr &&
@@ -65,7 +71,9 @@ MaterialPresentationSnapshot MaterialPresentationService::snapshot(
         .editable = entry.material.kind == ProjectMaterialKind::Standard,
     };
     ProjectIoResult<ProjectMaterialPreview> preview =
-        project.material_preview(entry.material.id);
+        project.material_catalog().read_preview(
+            file_system, project.canonical_material_id(entry.material.id),
+            project.manifest());
     if (preview.ok()) {
       ProjectMaterialPreview value = preview.take_value();
       item.encoded_albedo = std::move(value.encoded_bytes);

@@ -52,11 +52,11 @@
 // Keep the resource entry point outside namespaces so static-library linking
 // retains the shared Home artwork for both executable profiles and tests.
 static void initialize_project_home_artwork() {
-  static const bool initialized = []() {
+  static const bool kInitialized = []() {
     Q_INIT_RESOURCE(quader_project_home_artwork);
     return true;
   }();
-  Q_UNUSED(initialized);
+  Q_UNUSED(kInitialized);
 }
 
 namespace quader {

@@ -426,6 +426,7 @@ add_library(quader_project_qdr_io STATIC
     src/io/project/project_manifest.cpp
     src/io/project/project_material_reference_resolver.cpp
     src/io/project/project_material_catalog.cpp
+    src/io/project/project_texture_catalog.cpp
     src/io/project/project_material_provisioner.cpp
     src/io/project/qmat_codec.cpp
     src/io/project/recent_project_store.cpp
@@ -531,6 +532,8 @@ if(QUADER_BUILD_QDR_TOOLS)
 endif()
 
 add_library(quader_project_session STATIC
+    src/editor/assets/project_asset_service.cpp
+    src/editor/assets/project_asset_deletion_service.cpp
     src/editor/instances/project_clipboard_service.cpp
     src/editor/material/material_presentation_service.cpp
     src/editor/material/project_asset_dependency_service.cpp
@@ -621,6 +624,7 @@ add_library(quader_api STATIC
     src/api/quader_preferences_api.cpp
     src/api/quader_project_api.cpp
     src/api/quader_project_assets_api.cpp
+    src/api/quader_project_asset_browser_api.cpp
     src/api/quader_standard_material_documents_api.cpp
     src/api/quader_query_api.cpp
     src/api/quader_scene_api.cpp
@@ -792,6 +796,7 @@ add_library(quader_platform STATIC
     src/platform/native_window_input.cpp
     src/platform/platform_file_dialog.cpp
     src/platform/platform_shell.cpp
+    src/platform/project_asset_recycle.cpp
     src/platform/raw_mouse_input.cpp
     src/platform/sentry_client.cpp
     src/platform/window_placement.cpp
@@ -813,6 +818,7 @@ if(WIN32)
             Comdlg32
             Ole32
             Shell32
+            Propsys
             User32)
 endif()
 
@@ -829,6 +835,7 @@ add_library(quader_render STATIC
     src/render/material_binding_service.cpp
     src/render/material_preview_mesh_library.cpp
     src/render/material_preview_renderer.cpp
+    src/render/material_thumbnail_renderer.cpp
     src/render/scene_tone_mapper.cpp
     src/render/material_compiler_service.cpp
     src/render/mesh_renderable_cache.cpp
@@ -980,6 +987,9 @@ add_library(quader_ui STATIC
     src/ui/qt_apply_cancel_input_filter.cpp
     src/ui/qt_main_menu.cpp
     src/ui/qt_material_browser_window.cpp
+    src/ui/qt_asset_browser.cpp
+    src/ui/qt_asset_thumbnail_cache.cpp
+    src/ui/qt_project_asset_dialog.cpp
     src/ui/qt_material_find_replace_dialog.cpp
     src/ui/qt_material_presentation.cpp
     src/ui/qt_multiresolution_icon.cpp
@@ -1028,6 +1038,7 @@ add_library(quader_ui STATIC
     src/ui/qt_viewport_surface.cpp
     src/ui/ui_panel_manager.cpp
     src/ui/ui_system.cpp
+    src/ui/ui_system_asset_browser.cpp
     src/ui/viewport_hover_controller.cpp
     src/ui/viewport_shortcut_controller.cpp
 )
@@ -1644,6 +1655,7 @@ if(QUADER_BUILD_TESTS)
         tests/render_fog_runtime_tests.cpp
         tests/render_vsync_runtime_tests.cpp
         tests/render_normal_mapping_runtime_tests.cpp
+        tests/material_thumbnail_runtime_tests.cpp
         tests/render_tangent_frame_tests.cpp
         tests/scene_tone_mapper_tests.cpp
         tests/render_texture_lifetime_tests.cpp
@@ -1690,6 +1702,9 @@ if(QUADER_BUILD_TESTS)
         tests/qt_command_palette_tests.cpp
         tests/qt_input_adapter_tests.cpp
         tests/qt_material_browser_window_tests.cpp
+        tests/qt_asset_browser_tests.cpp
+        tests/qt_asset_thumbnail_cache_tests.cpp
+        tests/qt_project_asset_dialog_tests.cpp
         tests/qt_face_texture_canvas_tests.cpp
         tests/qt_face_texture_panel_tests.cpp
         tests/qt_material_find_replace_dialog_tests.cpp
@@ -1741,6 +1756,10 @@ if(QUADER_BUILD_TESTS)
         tests/project_material_organization_tests.cpp
         tests/project_material_deletion_tests.cpp
         tests/project_material_folder_api_tests.cpp
+        tests/project_asset_browser_api_tests.cpp
+        tests/project_asset_service_tests.cpp
+        tests/project_asset_deletion_tests.cpp
+        tests/project_texture_catalog_tests.cpp
         tests/deleted_material_resolution_tests.cpp
         tests/qdr_dependency_metadata_tests.cpp
         tests/project_material_manifest_tests.cpp
@@ -1821,6 +1840,7 @@ if(QUADER_BUILD_TESTS)
         tests/public_release_modeling_tests.cpp
         tests/public_release_render_tests.cpp
         tests/public_release_scene_assets_tests.cpp
+        tests/public_release_asset_browser_tests.cpp
         tests/public_release_ui_tests.cpp
         tests/public_release_layers_tests.cpp
         tests/support/behavior_expect.cpp

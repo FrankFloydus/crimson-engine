@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_project_assets_api_internal_access.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/project_asset_dependency_service.hpp"
 #include "editor/material/project_material_deletion_service.hpp"
@@ -140,6 +141,25 @@ protected:
         "Materials/Keep/stone.qmat", surviving_material_id(), "Stone"));
     const auto opened = editor_.project().open(manifest_);
     ASSERT_TRUE(opened.ok()) << opened.error_message();
+    QuaderProjectAssetsApiInternalAccess::set_recycle_port(
+        editor_.project_assets(), [this](std::span<const std::filesystem::path> paths) {
+          const auto bin = root_ / ".quader/test-recycle";
+          std::filesystem::create_directories(bin);
+          ProjectAssetRecycleResult result{.ok = true};
+          for (const auto &path : paths) {
+            std::error_code error;
+            const auto destination = bin / std::to_string(recycle_count_++);
+            std::filesystem::rename(path, destination, error);
+            result.items.push_back({.original_path = path, .recycled = !error,
+                                     .message = error.message()});
+            if (error) {
+              result.ok = false;
+              result.message = error.message();
+              break;
+            }
+          }
+          return result;
+        });
     if (!editor_.scene_documents().has_active_scene()) {
       ASSERT_TRUE(editor_.scene_documents().new_scene().ok());
     }
@@ -150,6 +170,8 @@ protected:
     std::error_code ignored;
     std::filesystem::remove_all(root_, ignored);
   }
+
+  std::size_t recycle_count_ = 0u;
 
   void write_material(std::string_view path, ProjectAssetId id,
                       std::string name,
@@ -164,7 +186,9 @@ protected:
             .roughness = 0.65f,
             .base_color_texture = ProjectMaterialTextureSlot{
                 .id = *ProjectAssetId::parse(
-                    "179f551c-1298-420f-82ae-9fc014652c4b"),
+                    texture_path == "Textures/shared.png"
+                        ? "179f551c-1298-420f-82ae-9fc014652c4b"
+                        : "96d8795e-a660-480a-b823-e3662a5e095d"),
                 .project_relative_path = std::move(texture_path),
             },
         },
@@ -915,7 +939,7 @@ TEST_F(ProjectMaterialDeletionTests,
   ASSERT_EQ(nlohmann::json::parse(baseline_manifest)
                 .at("version")
                 .get<std::uint64_t>(),
-            4u);
+            kQuaderProjectManifestVersion);
   const std::array ids{deletion_material_id()};
   ASSERT_TRUE(workspace.value().manifest.mark_materials_deleted(ids).ok());
   ASSERT_TRUE(ProjectManifestStore::save_atomic(workspace.value()).ok());
@@ -1052,13 +1076,14 @@ TEST_F(ProjectMaterialDeletionTests, TransactionRootAliasCannotDeleteAnotherProj
   if (error) {
     GTEST_SKIP() << "Directory symlink creation is unavailable: " << error.message();
   }
-  const auto preview = editor_.project_assets().preview_delete_material_folder("Materials/Delete");
-  ASSERT_TRUE(preview.ok());
-  ASSERT_TRUE(preview.value().complete) << ::testing::PrintToString(preview.value().errors);
-  const auto deleted = editor_.project_assets().delete_material_folder(
-      "Materials/Delete", preview.value().revision);
-  EXPECT_FALSE(deleted.ok());
-  EXPECT_FALSE(deleted.changed());
+  // This alias belongs to the legacy journal owner; retain direct recovery
+  // coverage while the public facade now uses the generic recycling service.
+  ProjectMaterialDeletionService deletion(project_);
+  const auto preview = deletion.preview_folder("Materials/Delete");
+  ASSERT_TRUE(preview.complete) << ::testing::PrintToString(preview.errors);
+  const auto deleted = deletion.delete_folder("Materials/Delete", preview.revision);
+  EXPECT_FALSE(deleted.ok);
+  EXPECT_FALSE(deleted.changed);
   EXPECT_EQ(deletion_read_bytes(sentinel), "Preserve unrelated folder");
   EXPECT_TRUE(std::filesystem::exists(root_ / "Materials/Delete/wood.qmat"));
   ASSERT_TRUE(editor_.project().close().ok());
@@ -1152,7 +1177,7 @@ TEST_F(ProjectMaterialDeletionTests, CommittedRecoveryRetriesFailedSceneNotifica
   std::filesystem::rename(bridge_directory, root_ / ".quader/bridge/previous-scenes");
   ASSERT_NO_FATAL_FAILURE(deletion_write_bytes(bridge_directory, "Notification destination unavailable"));
   ASSERT_NO_FATAL_FAILURE(delete_folder());
-  const auto transaction_root = root_ / ".quader/material-deletions";
+  const auto transaction_root = root_ / ".quader/asset-deletions";
   ASSERT_TRUE(std::filesystem::is_directory(transaction_root));
   EXPECT_FALSE(std::filesystem::is_empty(transaction_root));
   const auto committed_bytes = deletion_read_bytes(root_ / "Scenes/Saved.qdr");

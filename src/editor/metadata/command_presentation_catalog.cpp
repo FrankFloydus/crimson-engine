@@ -862,6 +862,10 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Group::Layout, 170u, kPalette,
                  Palette::Searchable, Activation::Choice),
 
+    presentation(quader_command::kUiAssetBrowser, Domain::Window,
+                 Group::Display, 180u, kMenuPalette,
+                 Palette::Searchable, Activation::Toggle),
+
     // Help remains a small stable application surface.
     presentation(quader_command::kUiSearchCommands, Domain::Help,
                  Group::Discovery, 10u, Surface::MainMenu,

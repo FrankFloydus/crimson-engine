@@ -14,13 +14,18 @@
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "io/qdr/qdr_document_reader.hpp"
+#include "io/qdr/qdr_document_writer.hpp"
 #include "support/command_observable_state.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -110,6 +115,27 @@ TEST(PublicReleaseSceneAssetsTests, MaterialImportAndEditorRejectBeforeWritingFi
     return editor.project_assets().rename_material(default_material, "Unavailable");
   });
   expect_scene_asset_denied(editor, [&] {
+    return editor.project_assets().rename_material_folder("Missing", "Unavailable");
+  });
+  expect_scene_asset_denied(editor, [&] {
+    return editor.project_assets().move_material_folder("Missing", "");
+  });
+  expect_scene_asset_denied(editor, [&] {
+    return editor.project_assets().move_materials(std::array{default_material}, "");
+  });
+  expect_scene_asset_denied(editor, [&] {
+    return editor.project_assets().duplicate_materials(std::array{default_material});
+  });
+  expect_scene_asset_denied(editor, [&] {
+    return editor.project_assets().copy_materials(std::array{default_material}, "");
+  });
+  expect_scene_asset_denied(editor, [&] {
+    return editor.project_assets().delete_material_folder("Missing", 0u);
+  });
+  expect_scene_asset_denied(editor, [&] {
+    return editor.project_assets().delete_materials(std::array{default_material}, 0u);
+  });
+  expect_scene_asset_denied(editor, [&] {
     return editor.standard_material_documents().new_material();
   });
   expect_scene_asset_denied(editor, [&] {
@@ -118,6 +144,23 @@ TEST(PublicReleaseSceneAssetsTests, MaterialImportAndEditorRejectBeforeWritingFi
   EXPECT_EQ(project.material_catalog().entries().size(), material_count);
   EXPECT_FALSE(std::filesystem::exists(temporary.path() / "Materials" / "Unavailable"));
   EXPECT_FALSE(std::filesystem::exists(sources.front()));
+}
+
+TEST(PublicReleaseSceneAssetsTests, GenericProjectFoldersRemainAvailableForScenes) {
+  PublicSceneAssetsDirectory temporary;
+  ProjectSession project;
+  ASSERT_TRUE(project.create(temporary.path()).ok);
+  QuaderEditorApi editor(project);
+  auto &assets = editor.project_assets();
+  const auto created = assets.create_folder("", "Levels");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  EXPECT_TRUE(created.changed());
+  const auto renamed = assets.rename_asset("Levels", "Maps");
+  ASSERT_TRUE(renamed.ok()) << renamed.error_message();
+  EXPECT_TRUE(renamed.changed());
+  const auto scene = assets.create_scene_asset("Maps", "Main");
+  ASSERT_TRUE(scene.ok()) << scene.error_message();
+  EXPECT_TRUE(std::filesystem::exists(temporary.path() / "Maps/Main.qdr"));
 }
 
 TEST(PublicReleaseSceneAssetsTests, ExistingInstancesCannotBeEditedCopiedOrDuplicated) {
@@ -171,6 +214,64 @@ TEST(PublicReleaseSceneAssetsTests, ExistingInstancesCannotBeEditedCopiedOrDupli
   ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
   EXPECT_EQ(scene.instance_occurrence(occurrence)->definition, definition);
   EXPECT_EQ(scene.parent(mesh.value().entity), definition);
+}
+
+TEST(PublicReleaseSceneAssetsTests, CaseRenamedFullSceneRejectsBeforeRecoveryWrites) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "This compatibility probe uses Windows case-insensitive file access.";
+#else
+  PublicSceneAssetsDirectory temporary;
+  const auto root = temporary.path() / "Project";
+  std::filesystem::create_directory(root);
+  ProjectSession project;
+  ASSERT_TRUE(project.create(root).ok);
+  const auto source = ProjectRelativePath::parse_portable("Original.qdr").value();
+  const auto destination = ProjectRelativePath::parse_portable("original.qdr").value();
+  ASSERT_TRUE(project.save_as(project.active_scene_id(), source).ok);
+  const auto identity = project.active_scene()->scene_id;
+  const auto manifest_path = project.manifest_path();
+  auto candidate = *project.manifest();
+  ASSERT_EQ(candidate.minimum_product_release(), kPublicRelease01);
+  ASSERT_TRUE(candidate.unregister_scene(identity).ok());
+  ASSERT_TRUE(candidate.register_scene({.id = identity, .path = destination}).ok());
+  ASSERT_TRUE(project.prepare_asset_manifest(candidate).ok);
+  ASSERT_TRUE(project.close().ok);
+  const auto read_text = [](const std::filesystem::path &path) {
+    std::ifstream input(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(input), {});
+  };
+  const auto baseline = read_text(manifest_path);
+  const auto read = QdrDocumentReader::read_project_document(root / source.native_path());
+  ASSERT_TRUE(read.ok) << read.message;
+  auto snapshot = qdr_project_write_snapshot_from_document(read.document);
+  ASSERT_TRUE(snapshot.ok());
+  snapshot.value().minimum_product_release = kInternalFullRelease;
+  ASSERT_TRUE(QdrDocumentWriter::write_project_document_atomic(
+      root / source.native_path(), snapshot.value(), read.scene_uuid).ok);
+  const auto staging = root / "case-rename-stage";
+  std::filesystem::rename(root / source.native_path(), staging);
+  std::filesystem::rename(staging, root / destination.native_path());
+  std::filesystem::create_directories(root / ".quader");
+  const auto journal_path = root / ".quader" /
+      ("asset-organization-" + std::string(ProjectAssetId::generate().str()) + ".json");
+  const nlohmann::json journal{
+      {"version", 1}, {"state", "committed"},
+      {"project", std::string(candidate.id().str())},
+      {"manifest", "Project.qproj"}, {"baseline", baseline},
+      {"candidate", ProjectManifestStore::serialize(candidate)},
+      {"actions", nlohmann::json::array()},
+  };
+  std::ofstream(journal_path, std::ios::binary) << journal.dump(2);
+  const auto journal_before = read_text(journal_path);
+  const auto scene_before = read_text(root / destination.native_path());
+
+  const auto opened = project.open(manifest_path);
+  EXPECT_FALSE(opened.ok);
+  EXPECT_FALSE(project.has_project());
+  EXPECT_EQ(read_text(manifest_path), baseline);
+  EXPECT_EQ(read_text(journal_path), journal_before);
+  EXPECT_EQ(read_text(root / destination.native_path()), scene_before);
+#endif
 }
 
 } // namespace

@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -96,6 +97,11 @@ public:
   void retarget_saved_material(ProjectAssetId id, ProjectRelativePath path,
                                std::string saved_name,
                                std::uint64_t source_content_revision);
+  /// Reconciles committed dependency deletion without saving unrelated drafts.
+  void reconcile_deleted_textures(std::span<const ProjectAssetId> retired_ids,
+                                  std::uint64_t saved_content_revision = 0u);
+  /// Publishes dependency invalidation to retained draft/preview consumers.
+  void refresh_texture_catalog();
 
   [[nodiscard]] StandardMaterialEditResult set_name(std::string name);
   [[nodiscard]] StandardMaterialEditResult
@@ -133,6 +139,9 @@ public:
   [[nodiscard]] StandardMaterialEditResult
   import_texture(StandardMaterialTextureSlot slot,
                  const std::filesystem::path &source_path);
+  /// Assigns an existing project texture identity without importing its bytes.
+  [[nodiscard]] StandardMaterialEditResult
+  set_texture(StandardMaterialTextureSlot slot, ProjectAssetId texture_id);
   [[nodiscard]] StandardMaterialEditResult
   clear_texture(StandardMaterialTextureSlot slot);
   [[nodiscard]]

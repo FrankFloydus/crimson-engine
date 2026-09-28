@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_project_assets_api_internal_access.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/project_asset_dependency_service.hpp"
 #include "editor/session/project_session.hpp"
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -64,6 +66,26 @@ protected:
     project_.set_resource_root(resource_root());
     const auto created = editor_.project().create(root());
     ASSERT_TRUE(created.ok()) << created.error_message();
+    QuaderProjectAssetsApiInternalAccess::set_recycle_port(
+        editor_.project_assets(), [this](std::span<const std::filesystem::path> paths) {
+          const auto bin = temporary_.path() / "RecycleTest";
+          std::filesystem::create_directories(bin);
+          ProjectAssetRecycleResult result{.ok = true};
+          for (const auto &path : paths) {
+            std::error_code error;
+            const auto destination = bin / std::to_string(recycled_paths_.size());
+            std::filesystem::rename(path, destination, error);
+            result.items.push_back({.original_path = path, .recycled = !error,
+                                     .message = error.message()});
+            if (error) {
+              result.ok = false;
+              result.message = error.message();
+              break;
+            }
+            recycled_paths_.push_back(path);
+          }
+          return result;
+        });
     editor_.scene_documents().set_runtime_hooks({
         .confirm_dirty_scene = [](const QuaderSceneDocumentInfo &,
                                   std::string_view) {
@@ -139,6 +161,7 @@ protected:
   ScopedMaterialFolderDirectory temporary_;
   std::vector<QuaderEvent> assets_events_;
   std::vector<QuaderEvent> closed_material_events_;
+  std::vector<std::filesystem::path> recycled_paths_;
   ProjectSession project_;
   QuaderEditorApi editor_;
 };
@@ -146,34 +169,34 @@ protected:
 TEST_F(ProjectMaterialFolderApiTests,
        EmptyFoldersPublishRevisionsAndSurviveProjectReopening) {
   auto &assets = editor_.project_assets();
-  const auto before = assets.material_presentation_revision();
+  const auto before = assets.asset_revision();
   ASSERT_TRUE(before.ok());
   const auto created = assets.create_material_folder("Materials", "Dev");
   ASSERT_TRUE(created.ok()) << created.error_message();
   EXPECT_TRUE(created.changed());
   ASSERT_TRUE(assets.create_material_folder("Materials/Dev", "Empty").ok());
-  const auto snapshot = assets.material_presentations();
+  const auto snapshot = assets.assets();
   ASSERT_TRUE(snapshot.ok());
   EXPECT_FALSE(snapshot.changed());
-  EXPECT_NE(snapshot.value().revision, before.value());
-  EXPECT_NE(std::ranges::find(snapshot.value().material_folders,
+  EXPECT_NE(snapshot.value().revision, before.value().revision);
+  EXPECT_NE(std::ranges::find(snapshot.value().folders,
                              "Materials/Dev/Empty"),
-            snapshot.value().material_folders.end());
+            snapshot.value().folders.end());
   ASSERT_EQ(assets_events_.size(), 2u);
   EXPECT_TRUE(assets_events_.front().project_id.has_value());
   EXPECT_EQ(assets_events_.front().project_name, "FolderApi");
-  const auto stable_revision = assets.material_presentation_revision();
+  const auto stable_revision = assets.asset_revision();
   ASSERT_TRUE(stable_revision.ok());
-  EXPECT_EQ(stable_revision.value(), snapshot.value().revision);
+  EXPECT_EQ(stable_revision.value().revision, snapshot.value().revision);
 
   const auto manifest_path = editor_.project().manifest_path();
   ASSERT_TRUE(editor_.project().close().ok());
   ASSERT_TRUE(editor_.project().open(manifest_path).ok());
-  const auto reopened = assets.material_presentations();
+  const auto reopened = assets.assets();
   ASSERT_TRUE(reopened.ok());
-  EXPECT_NE(std::ranges::find(reopened.value().material_folders,
+  EXPECT_NE(std::ranges::find(reopened.value().folders,
                              "Materials/Dev/Empty"),
-            reopened.value().material_folders.end());
+            reopened.value().folders.end());
 }
 
 TEST_F(ProjectMaterialFolderApiTests,
@@ -447,6 +470,27 @@ TEST_F(ProjectMaterialFolderApiTests,
   EXPECT_EQ(copied.value().front().project_relative_path,
             "Materials/Target/Default Material Copy.qmat");
   EXPECT_EQ(assets_events_.size(), 2u);
+}
+
+TEST_F(ProjectMaterialFolderApiTests,
+       DirectoryTimestampChangesDoNotExpireSavedMaterialCopySelections) {
+  auto &assets = editor_.project_assets();
+  const auto material = import_material("Materials", "Timestamp");
+  ASSERT_TRUE(material.id.valid());
+  const auto snapshot = assets.assets();
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+  const auto directory = root() / "Materials";
+  std::error_code error;
+  const auto previous = std::filesystem::last_write_time(directory, error);
+  ASSERT_FALSE(error) << error.message();
+  std::filesystem::last_write_time(directory, previous + std::chrono::seconds(2), error);
+  ASSERT_FALSE(error) << error.message();
+
+  const auto copied = assets.duplicate_materials(std::array{material.id});
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  ASSERT_EQ(copied.value().size(), 1u);
+  EXPECT_EQ(copied.value().front().project_relative_path, "Materials/Timestamp Copy.qmat");
+  EXPECT_TRUE(material_info(material.id).has_value());
 }
 
 TEST_F(ProjectMaterialFolderApiTests,
@@ -782,6 +826,86 @@ TEST_F(ProjectMaterialFolderApiTests,
   expect_only_default_used();
   ASSERT_TRUE(documents.open(relative_path("Scenes/Closed.qdr")).ok());
   expect_only_default_used();
+}
+
+TEST_F(ProjectMaterialFolderApiTests,
+       LegacyMaterialOperationsShareMixedProjectFoldersAndRecycleOriginalPaths) {
+  auto &assets = editor_.project_assets();
+  ASSERT_TRUE(assets.create_material_folder("", "Content").ok());
+  const auto imported = import_material("Materials", "MovedWood");
+  ASSERT_TRUE(imported.id.valid());
+  ASSERT_TRUE(assets.move_materials(std::array{imported.id}, "Content").ok());
+  ASSERT_TRUE(assets.rename_material_folder("Content", "Shared").ok());
+  const auto renamed = assets.rename_material(imported.id, "Oak");
+  ASSERT_TRUE(renamed.ok()) << renamed.error_message();
+  EXPECT_EQ(renamed.value().project_relative_path, "Shared/Oak.qmat");
+  const auto duplicated = assets.duplicate_materials(std::array{imported.id});
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+  ASSERT_EQ(duplicated.value().size(), 1u);
+  EXPECT_EQ(duplicated.value().front().project_relative_path, "Shared/Oak Copy.qmat");
+  const auto copied = assets.copy_materials(std::array{imported.id}, "");
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  ASSERT_EQ(copied.value().size(), 1u);
+  EXPECT_EQ(copied.value().front().project_relative_path, "Oak Copy.qmat");
+
+  assets_events_.clear();
+  const auto preview = assets.preview_delete_materials(std::array{imported.id});
+  ASSERT_TRUE(preview.ok());
+  ASSERT_TRUE(preview.value().complete) << ::testing::PrintToString(preview.value().errors);
+  EXPECT_EQ(preview.value().material_names, std::vector<std::string>{"Oak"});
+  const auto deleted = assets.delete_materials(std::array{imported.id}, preview.value().revision);
+  ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+  EXPECT_EQ(assets_events_.size(), 1u);
+  EXPECT_EQ(recycled_paths_, std::vector<std::filesystem::path>{root() / "Shared/Oak.qmat"});
+  EXPECT_FALSE(material_info(imported.id).has_value());
+  EXPECT_TRUE(material_info(duplicated.value().front().id).has_value());
+  EXPECT_TRUE(material_info(copied.value().front().id).has_value());
+}
+
+TEST_F(ProjectMaterialFolderApiTests,
+       LegacyFolderDeletionCannotHideSceneOrTextureDependenciesFromItsPreview) {
+  auto &assets = editor_.project_assets();
+  ASSERT_TRUE(assets.create_material_folder("", "Mixed").ok());
+  const auto material = assets.create_material_asset("Mixed", "Surface");
+  ASSERT_TRUE(material.ok());
+  const auto scene = assets.create_scene_asset("Mixed", "Level");
+  ASSERT_TRUE(scene.ok());
+  const auto preview = assets.preview_delete_material_folder("Mixed");
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  EXPECT_FALSE(preview.value().complete);
+  EXPECT_FALSE(preview.value().errors.empty());
+  assets_events_.clear();
+  const auto deleted = assets.delete_material_folder("Mixed", preview.value().revision);
+  EXPECT_FALSE(deleted.ok());
+  EXPECT_FALSE(deleted.changed());
+  EXPECT_TRUE(recycled_paths_.empty());
+  EXPECT_TRUE(assets_events_.empty());
+  EXPECT_TRUE(std::filesystem::exists(root() / "Mixed/Surface.qmat"));
+  EXPECT_TRUE(std::filesystem::exists(root() / "Mixed/Level.qdr"));
+  const auto generic = assets.preview_delete_assets(std::array{std::string("Mixed")});
+  ASSERT_TRUE(generic.ok());
+  EXPECT_TRUE(generic.value().complete);
+  EXPECT_EQ(generic.value().scene_ids, std::vector{scene.value().scene_id});
+}
+
+TEST_F(ProjectMaterialFolderApiTests,
+       MissingRecyclePortCannotFallBackToPermanentMaterialDeletion) {
+  auto &assets = editor_.project_assets();
+  const auto imported = import_material("Materials", "KeepMe");
+  ASSERT_TRUE(imported.id.valid());
+  QuaderProjectAssetsApiInternalAccess::set_recycle_port(assets, {});
+  const auto preview = assets.preview_delete_materials(std::array{imported.id});
+  ASSERT_TRUE(preview.ok());
+  ASSERT_TRUE(preview.value().complete);
+  assets_events_.clear();
+  const auto deleted = assets.delete_materials(std::array{imported.id}, preview.value().revision);
+  EXPECT_FALSE(deleted.ok());
+  EXPECT_FALSE(deleted.changed());
+  EXPECT_FALSE(deleted.error_message().empty());
+  EXPECT_TRUE(assets_events_.empty());
+  EXPECT_TRUE(std::filesystem::exists(root() / imported.project_relative_path));
+  EXPECT_TRUE(material_info(imported.id).has_value());
+  EXPECT_FALSE(project_.manifest()->is_material_deleted(imported.id));
 }
 
 } // namespace

@@ -64,6 +64,10 @@ architecture migration program. Completed plans are in Git history; do not resta
 
 ## Ownership and implementation
 
+- Apply the repository's naming and source conventions from the first edit, including tests.
+  Read `.clang-tidy` and the [source naming guide](src/AGENTS.md#naming-from-the-first-edit)
+  before writing C++; pass this requirement to delegates. Do not defer compliance to a
+  pre-commit cleanup pass or copy noncompliant names from older code.
 - The app-owned portable modeling core at `src/sdk/core/modeling` is modeling truth.
   Its public namespace is `quader::modeling`, umbrella include
   `quader/modeling/modeling.hpp`, and consumer target `quader::modeling_sdk`.
@@ -224,6 +228,11 @@ verification policy below; web mockups and source-only assertions do not prove n
   the user explicitly requests that operation.
 - "Commit and push" without a scope means stage, commit and push the entire current worktree,
   including deletions and untracked files. Partial commits require explicit scope.
+- Keep commit/push fast: implementation, convention checks and required validation belong
+  before feature handoff. Reuse successful checks and builds when their inputs are unchanged;
+  a commit request alone does not justify another broad audit or rebuild. If changed inputs
+  remain unverified, run the smallest required check. Do not turn a commit request into
+  unrelated historical naming cleanup; report that debt separately.
 - Preserve the current app version unless the current request explicitly asks for a bump.
   `VERSION` is authoritative; `vcpkg.json` `version-string` must match, in unpadded `x.y.z`
   form (displayed as `vX.Y.Z`). For a requested bump, keep `0.1` and increment patch once
@@ -306,7 +315,10 @@ executable from another configuration as containing this task's changes.
   regressions also require a same-build, same-scene before/after measurement.
   Workflow timing claims must cite actual logs or a controlled measurement. `-MeasureFull` is an
   optional benchmark, not another required full pass during feature delivery.
-- Run `python tools/check_cpp_style.py` only before commit/push or an explicit C++ style audit.
+- Validate C++ naming during implementation, before final builds and handoff, using `.clang-tidy`.
+  `python tools/check_cpp_style.py` is the whole-repository audit; retain its successful scope
+  and recheck only subsequently changed files and affected headers with the same configuration.
+  Commit/push reuses that evidence instead of being the first naming check or repeating it.
 
 ## Keep documentation useful
 

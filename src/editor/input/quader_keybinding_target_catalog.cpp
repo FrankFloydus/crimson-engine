@@ -210,7 +210,7 @@ void QuaderKeybindingTargetCatalog::set_action_id(
 
 void QuaderKeybindingTargetCatalog::set_selection_modes(
     std::string_view target_id, std::uint32_t selection_mode_mask,
-    std::string_view viewport_when) {
+    std::string_view viewport_when, std::string_view alternate_when) {
   if (selection_mode_mask == 0u) {
     return;
   }
@@ -230,6 +230,10 @@ void QuaderKeybindingTargetCatalog::set_selection_modes(
     const std::string clause = selection_mode_when_clause(selection_mode_mask);
     if (!clause.empty()) {
       metadata.when.append(" && ").append(clause);
+    }
+    if (!alternate_when.empty()) {
+      metadata.when = "(" + metadata.when + ") || (" +
+                      std::string(alternate_when) + ")";
     }
     return;
   }

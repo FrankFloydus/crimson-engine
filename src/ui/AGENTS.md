@@ -22,18 +22,21 @@ file except through prior written authorization from Francesco Di Blasi.
   `scene().move_entities()` owning atomic hierarchy/order edits and history. The model must not
   apply Qt's trailing source-row removal after the scene has already moved those entities.
   Names depict visibility/lock state; the tree has no property checkbox columns.
-- The material browser presents the project catalog's physical folders, including empty ones.
-  All is a synthetic recursive filter and the root import/drop destination. Folder and material
-  drags carry a project generation; mutations go through `QuaderProjectAssetsApi`, and refreshed
-  owner snapshots supply the resulting tree. Permanent folder deletion requires the public
-  dependency preview and its matching revision. Picker mode only browses folders.
+- `QtAssetBrowser` presents scenes, materials, textures and physical project folders in a bottom
+  dock. Mutations go through `QuaderProjectAssetsApi`; owner snapshots supply the resulting tree.
+  Drags and clipboard requests carry project and catalog revisions. Recycling requires the public
+  dependency preview and its matching revision. `QtProjectAssetDialog` shares the folder projection
+  for project-rooted scene open/save; native owners enforce physical containment as well.
+  Clipboard uses canonical command dispatch while native text editors retain their own shortcuts.
+  Request material thumbnails from visible item painting only, never model layout or every frame;
+  `QtAssetThumbnailCache` bounds queued requests and retains generation/revision/DPI fences.
   Ctrl+wheel within a focused browser adjusts its existing thumbnail-size setting;
   ordinary wheel scrolling and input outside that browser retain their ownership.
 - `QtFaceTexturePanel` owns the single-face canvas and retained texture controls.
   Texture Settings keeps Scale U/V on one row, Shift U/V on the next, then Rotation,
   leaving vertical space for the canvas and material browser.
-  Both material-browser hosts reuse one implementation, but
-  only the embedded browser assigns explicit materials to selected faces. Canvas gestures use
+  Its embedded material browser has no folders or retained folder filtering and assigns explicit
+  materials to selected faces. Canvas gestures use
   the public modeling preview lifecycle; widget state never becomes UV or material truth.
   With no selected face, retain the bound controls with disabled actions, numeric fields,
   and field labels; numeric values show em dashes and the canvas stays empty. Unbinding still

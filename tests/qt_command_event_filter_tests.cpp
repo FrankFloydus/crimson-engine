@@ -114,6 +114,158 @@ TEST(QtCommandEventFilterTests,
 }
 
 TEST(QtCommandEventFilterTests,
+     AssetBrowserOwnsRemappedClipboardAndToggleWithoutEditingTheScene) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-asset-browser-command-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  EXPECT_FALSE(editor.ui().asset_browser_available());
+  EXPECT_FALSE(editor.ui().toggle_asset_browser().ok());
+  int toggles = 0;
+  editor.ui().set_runtime_hooks({
+      .toggle_asset_browser = [&toggles] {
+        ++toggles;
+        return quader::QuaderApiVoidResult{
+            .ok = true, .changed = true,
+            .mutation_kind = quader::QuaderMutationKind::Runtime};
+      }});
+  EXPECT_TRUE(editor.ui().asset_browser_available());
+  EXPECT_FALSE(editor.commands().descriptor(
+      quader::quader_command::kUiAssetBrowser)->enabled);
+  const auto project_root =
+      std::filesystem::path(temporary.path().toStdWString()) / "Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  ASSERT_TRUE(editor.project().create(project_root).ok());
+  EXPECT_TRUE(editor.commands().descriptor(
+      quader::quader_command::kUiAssetBrowser)->enabled);
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Preserved Scene Box");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  const auto active_scene = editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(active_scene.has_value());
+  const auto scene_path = editor.project().root() / "Scenes" / "Input.qdr";
+  ASSERT_TRUE(editor.scene_documents().save_as_native_path(
+      *active_scene, scene_path).ok());
+  ASSERT_TRUE(editor.scene().rename(box.value().entity, "Unsaved Scene Name").ok());
+  ASSERT_TRUE(editor.project().dirty());
+
+  std::vector<std::string> asset_actions;
+  quader::QtCommandEventFilter filter(editor, [] {
+    return quader::ViewportToolState{
+        .selection_mode = quader::ViewportSelectionMode::Vertex};
+  });
+  filter.set_asset_browser_action_handler(
+      [&asset_actions](quader::QuaderCommandId command) {
+        asset_actions.emplace_back(command.string());
+        return true;
+      });
+  application.installEventFilter(&filter);
+  QWidget window;
+  window.resize(400, 280);
+  QWidget asset_panel(&window);
+  asset_panel.setGeometry(0, 0, 400, 240);
+  asset_panel.setProperty("quaderAssetBrowserInput", true);
+  QTreeWidget tree(&asset_panel);
+  tree.setGeometry(0, 0, 400, 190);
+  tree.setSelectionMode(QAbstractItemView::ExtendedSelection);
+  tree.addTopLevelItem(new QTreeWidgetItem({QStringLiteral("One")}));
+  tree.addTopLevelItem(new QTreeWidgetItem({QStringLiteral("Two")}));
+  QLineEdit text_editor(&asset_panel);
+  text_editor.setGeometry(0, 195, 400, 32);
+  QWidget other_panel(&window);
+  other_panel.setGeometry(0, 245, 400, 30);
+  other_panel.setFocusPolicy(Qt::StrongFocus);
+  window.show();
+  window.activateWindow();
+  tree.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &tree);
+  send_key_press(tree, Qt::Key_Space, Qt::ControlModifier);
+  EXPECT_EQ(toggles, 1);
+  for (const int key : {Qt::Key_X, Qt::Key_C, Qt::Key_V, Qt::Key_D}) {
+    send_key_press(tree, key, Qt::ControlModifier);
+  }
+  send_key_press(tree, Qt::Key_Delete, Qt::NoModifier);
+  EXPECT_EQ(asset_actions, (std::vector<std::string>{
+      "edit.cut", "edit.copy", "edit.paste", "edit.duplicate", "edit.delete"}));
+  EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+  const auto status_before = editor.commands().last_status_revision();
+  send_key_press(tree, Qt::Key_Z, Qt::ControlModifier);
+  send_key_press(tree, Qt::Key_B, Qt::ShiftModifier);
+  EXPECT_EQ(editor.commands().last_status_revision(), status_before);
+  send_key_press(tree, Qt::Key_S, Qt::ControlModifier);
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_EQ(asset_actions.size(), 5u);
+  send_key_press(tree, Qt::Key_A, Qt::ControlModifier);
+  EXPECT_EQ(tree.selectedItems().size(), 2);
+
+  text_editor.setText(QStringLiteral("Material"));
+  text_editor.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_press(text_editor, Qt::Key_A, Qt::ControlModifier);
+  EXPECT_EQ(text_editor.selectedText(), QStringLiteral("Material"));
+  send_key_press(text_editor, Qt::Key_C, Qt::ControlModifier);
+  EXPECT_EQ(asset_actions.size(), 5u);
+  send_key_press(text_editor, Qt::Key_T, Qt::NoModifier, QStringLiteral("t"));
+  EXPECT_EQ(text_editor.text(), QStringLiteral("t"));
+  send_key_press(text_editor, Qt::Key_Space, Qt::ControlModifier);
+  EXPECT_EQ(toggles, 2);
+  EXPECT_EQ(text_editor.text(), QStringLiteral("t"));
+  ASSERT_TRUE(editor.scene().rename(box.value().entity, "Another Scene Name").ok());
+  ASSERT_TRUE(editor.project().dirty());
+  send_key_press(text_editor, Qt::Key_S, Qt::ControlModifier);
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_EQ(QApplication::focusWidget(), &text_editor);
+  EXPECT_EQ(text_editor.text(), QStringLiteral("t"));
+  EXPECT_EQ(asset_actions.size(), 5u);
+
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kUiAssetBrowser, "Ctrl+K Ctrl+B").ok());
+  tree.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  QKeyEvent prefix_override(QEvent::ShortcutOverride, Qt::Key_K,
+                            Qt::ControlModifier);
+  prefix_override.ignore();
+  QCoreApplication::sendEvent(&tree, &prefix_override);
+  EXPECT_TRUE(prefix_override.isAccepted());
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  send_key_press(tree, Qt::Key_K, Qt::ControlModifier);
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  send_key_press(tree, Qt::Key_B, Qt::ControlModifier);
+  EXPECT_EQ(toggles, 3);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  send_key_press(tree, Qt::Key_Space, Qt::ControlModifier);
+  EXPECT_EQ(toggles, 3);
+
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kDeleteSelection, "Alt+F11").ok());
+  send_key_press(tree, Qt::Key_Delete, Qt::NoModifier);
+  EXPECT_EQ(asset_actions.size(), 5u);
+  send_key_press(tree, Qt::Key_F11, Qt::AltModifier);
+  ASSERT_EQ(asset_actions.size(), 6u);
+  EXPECT_EQ(asset_actions.back(), "edit.delete");
+  filter.set_asset_browser_action_handler({});
+  send_key_press(tree, Qt::Key_F11, Qt::AltModifier);
+  EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+
+  ASSERT_TRUE(editor.commands().remove_shortcut(
+      quader::quader_command::kUiAssetBrowser).ok());
+  send_key_press(tree, Qt::Key_K, Qt::ControlModifier);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(toggles, 3);
+  application.removeEventFilter(&filter);
+}
+
+TEST(QtCommandEventFilterTests,
      NativeViewportReservesAltModeShortcutsBeforeMenuMnemonics) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

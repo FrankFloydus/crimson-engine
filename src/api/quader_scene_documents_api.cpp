@@ -497,6 +497,17 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_active() {
                           "No scene is active.");
 }
 
+QuaderApiVoidResult QuaderSceneDocumentsApi::save_copy(
+    SceneSessionId id, ProjectRelativePath path) {
+  if (impl_->project_session == nullptr) {
+    return status_for(impl_->status_session(), false, false,
+                      "Saving a scene asset copy requires an open project.");
+  }
+  const auto saved = impl_->project_session->save_copy(id, std::move(path));
+  return status_for(impl_->status_session(), saved.ok(), saved.ok(),
+                    saved.ok() ? "Scene copy saved." : saved.error().message);
+}
+
 QuaderApiVoidResult
 QuaderSceneDocumentsApi::save_as(SceneSessionId id, ProjectRelativePath path) {
   if (impl_->project_session == nullptr) {
@@ -573,15 +584,13 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_as_native_path(
                   })) {
     return status_for(impl_->status_session(), false, false,
                       "Scene Save As paths must not contain '..' components. "
-                      "Choose a file in the current project's Scenes folder "
-                      "or one of its subfolders.");
+                      "Choose a file inside the current project.");
   }
   const std::optional<ProjectRelativePath> relative =
       impl_->relative_dialog_path(path);
   if (!relative.has_value()) {
     return status_for(impl_->status_session(), false, false,
-                      "Scene files must be saved in the current project's "
-                      "Scenes folder or one of its subfolders.");
+                      "Scene files must be saved inside the current project.");
   }
   return save_as(id, *relative);
 }

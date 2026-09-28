@@ -14,6 +14,7 @@
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "render/filament_material_library.hpp"
@@ -34,6 +35,7 @@
 
 #include <backend/PixelBufferDescriptor.h>
 #include <filament/RenderTarget.h>
+#include <filament/Scene.h>
 #include <filament/SwapChain.h>
 
 #include <QCoreApplication>
@@ -41,6 +43,7 @@
 #include <QDir>
 #include <QImage>
 #include <QRect>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <array>
@@ -997,6 +1000,31 @@ public:
     return last_submission_;
   }
 
+  void sync_selected_object_snapshot(
+      const RenderOverlaySelectedObjectSnapshot &snapshot) {
+    bridge_.sync_scene_asset_overlays(snapshot, {}, {});
+  }
+
+  std::size_t renderable_count() const {
+    return scene_->getRenderableCount();
+  }
+
+  void set_sample_camera(const ViewportCameraController &camera) {
+    camera_ = camera;
+    camera_.set_viewport_size(kWidth, kHeight);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+  }
+
+  bool finish_gpu_work() {
+    return engine_->flushAndWait(5'000'000'000ULL);
+  }
+
+  bool material_lifetime_validation_enabled() const {
+    return engine_->getFeatureFlag("engine.debug.assert_material_instance_in_use")
+        .value_or(false);
+  }
+
   ViewportOverlayFrame build_selection_overlay_frame() const override {
     ++selection_frame_builds_;
     return session_.modeling().selection_overlay_frame();
@@ -1177,6 +1205,171 @@ int cyan_pixels(const QImage &image, QVec2 center) {
     }
   }
   return count;
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanSixThousandSelectedMeshesSubmitAndRetireWithoutCommandOverflow) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-large-selection-command-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  std::unique_ptr<QTemporaryDir> copied_directory;
+  std::unique_ptr<ProjectSession> copied_project;
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.prepare_overlay_audit_camera(
+      5.0f, ViewportProjection::Perspective));
+  const std::array<MeshVertex, 3> vertices{{
+      {.position = {-0.02f, -0.02f, 0.0f}},
+      {.position = {0.02f, -0.02f, 0.0f}},
+      {.position = {0.0f, 0.02f, 0.0f}},
+  }};
+  const std::array<std::uint32_t, 3> indices{0u, 1u, 2u};
+  constexpr std::size_t kMeshCount = 6400u;
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  snapshot.selection_revision = 1u;
+  snapshot.style = ViewportOverlayStyleResolver::persistent_style_snapshot(
+      ViewportSettings::defaults(), 1.0f);
+  snapshot.meshes.reserve(kMeshCount);
+  for (std::size_t index = 0u; index < kMeshCount; ++index) {
+    QMat4 transform;
+    transform.values[12] = (static_cast<float>(index % 80u) - 39.5f) * 0.05f;
+    transform.values[13] = (static_cast<float>(index / 80u) - 39.5f) * 0.05f;
+    snapshot.meshes.push_back({
+        .entity = static_cast<EntityId>(index + 1u),
+        .mesh_id = static_cast<AssetId>(index + 1u),
+        .mesh_revision = 1u,
+        .world_transform = transform,
+        .selected = true,
+        .active_selected = index == 0u,
+        .vertices = vertices,
+        .indices = indices,
+    });
+  }
+  float translation = 0.025f;
+  const QString source = qEnvironmentVariable("QUADER_TEST_LARGE_SELECTION_SCENE");
+  if (!source.isEmpty()) {
+    copied_directory = std::make_unique<QTemporaryDir>();
+    ASSERT_TRUE(copied_directory->isValid());
+    const std::filesystem::path root(copied_directory->path().toStdWString());
+    copied_project = std::make_unique<ProjectSession>(root / "recent-scenes.json");
+    copied_project->set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+                                      "resources/modeling_assets");
+    QuaderEditorApi editor(*copied_project);
+    std::error_code error;
+    std::filesystem::create_directories(root / "project", error);
+    ASSERT_FALSE(error) << error.message();
+    std::filesystem::path scene_path;
+    const QString project_source =
+        qEnvironmentVariable("QUADER_TEST_LARGE_SELECTION_PROJECT");
+    if (!project_source.isEmpty()) {
+      const std::filesystem::path source_manifest(project_source.toStdWString());
+      const auto project_root = root / source_manifest.parent_path().filename();
+      const auto relative_scene = std::filesystem::relative(
+          std::filesystem::path(source.toStdWString()),
+          source_manifest.parent_path(), error);
+      ASSERT_FALSE(error) << error.message();
+      ASSERT_FALSE(relative_scene.empty());
+      ASSERT_FALSE(relative_scene.is_absolute());
+      ASSERT_EQ(std::find(relative_scene.begin(), relative_scene.end(), ".."),
+                relative_scene.end());
+      // Keep scene UUID references valid by copying the complete authored
+      // project. Every open/save performed by the fixture targets this clone.
+      std::filesystem::copy(source_manifest.parent_path(), project_root,
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::skip_symlinks,
+                            error);
+      ASSERT_FALSE(error) << error.message();
+      const auto project_opened = editor.project().open(
+          project_root / source_manifest.filename());
+      ASSERT_TRUE(project_opened.ok()) << project_opened.error_message();
+      scene_path = editor.project().root() / relative_scene;
+    } else {
+      const auto created = editor.project().create(root / "project");
+      ASSERT_TRUE(created.ok()) << created.error_message();
+      scene_path = editor.project().root() / "Scenes" / "large.qdr";
+      std::filesystem::create_directories(scene_path.parent_path(), error);
+      ASSERT_FALSE(error) << error.message();
+      ASSERT_TRUE(std::filesystem::copy_file(
+          std::filesystem::path(source.toStdWString()), scene_path, error))
+          << error.message();
+    }
+    const auto opened = editor.scene_documents().open_native_path(scene_path);
+    ASSERT_TRUE(opened.ok()) << opened.error_message();
+    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto selected = editor.selection().select_all();
+    ASSERT_TRUE(selected.ok()) << selected.error_message();
+    const auto &session = *copied_project->active_scene()->session;
+    snapshot = build_render_overlay_selected_object_snapshot(
+        session.scene(), session.assets(), true, snapshot.style);
+    ASSERT_GE(snapshot.meshes.size(), 6000u);
+    ASSERT_TRUE(snapshot.instance_selection_fills.empty());
+    ASSERT_TRUE(snapshot.instance_selection_wires.empty());
+    const auto &camera = session.viewport_workspace().camera(ViewportPaneId::Perspective);
+    harness.set_sample_camera(camera);
+    translation = std::max(translation, camera.state().distance * 0.05f);
+  }
+  const std::size_t mesh_count = std::ranges::count_if(snapshot.meshes,
+      [](const auto &mesh) {
+        return mesh.has_triangle_geometry() && mesh.mesh_id != kInvalidAssetId;
+      });
+  const QImage background = harness.capture();
+  ASSERT_FALSE(background.isNull());
+  const std::size_t background_renderables = harness.renderable_count();
+  const auto started = std::chrono::steady_clock::now();
+  harness.sync_selected_object_snapshot(snapshot);
+  const auto submitted = std::chrono::steady_clock::now();
+  EXPECT_EQ(harness.renderable_count(), background_renderables + mesh_count * 4u);
+  // This executes beginFrame's material preparation as well as actual draws;
+  // it catches the original command-stream overflow after bulk allocation.
+  const QImage selected = harness.capture();
+  ASSERT_FALSE(selected.isNull());
+  EXPECT_NE(selected, background);
+  for (int iteration = 0; iteration < 100; ++iteration) {
+    harness.sync_selected_object_snapshot(snapshot);
+  }
+  EXPECT_EQ(harness.renderable_count(), background_renderables + mesh_count * 4u);
+  EXPECT_EQ(harness.capture(), selected);
+
+  ++snapshot.transform_revision;
+  for (auto &mesh : snapshot.meshes) mesh.world_transform.values[12] += translation;
+  harness.sync_selected_object_snapshot(snapshot);
+  const QImage moved = harness.capture();
+  ASSERT_FALSE(moved.isNull());
+  if (source.isEmpty()) EXPECT_NE(moved, selected);
+
+  snapshot.meshes.clear();
+  ++snapshot.selection_revision;
+  const auto idle_started = std::chrono::steady_clock::now();
+  ASSERT_TRUE(harness.finish_gpu_work());
+  const auto retire_started = std::chrono::steady_clock::now();
+  harness.sync_selected_object_snapshot(snapshot);
+  const auto retired = std::chrono::steady_clock::now();
+  EXPECT_EQ(harness.renderable_count(), background_renderables);
+  EXPECT_EQ(harness.capture(), background);
+  const QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(output));
+    ASSERT_TRUE(selected.save(QDir(output).filePath(source.isEmpty()
+        ? QStringLiteral("large-selection-synthetic.png")
+        : QStringLiteral("large-selection-copied-scene.png"))));
+  }
+  std::cout << "Large selection Vulkan resource submission: meshes=" << mesh_count
+            << ", source=" << (source.isEmpty() ? "synthetic" : "copied_scene")
+            << ", create_ms="
+            << std::chrono::duration<double, std::milli>(submitted - started).count()
+            << ", pre_retire_gpu_wait_ms="
+            << std::chrono::duration<double, std::milli>(retire_started - idle_started).count()
+            << ", material_lifetime_validation="
+            << harness.material_lifetime_validation_enabled()
+            << ", retire_ms="
+            << std::chrono::duration<double, std::milli>(retired - retire_started).count()
+            << '\n';
 }
 
 TEST(SelectionOverlayRuntimeTests,

@@ -61,9 +61,12 @@ artifact actually built. Allow ten minutes per process; asynchronous yields must
   `-AppBuildPreset vs2026-debug` is reserved for an explicitly requested Debug/Profile app.
 - `-MeasureFull` deliberately runs an additional full workflow for benchmarking. Use it only when
   that measurement is needed; existing logs can establish redundant work without rerunning it.
-- `check_cpp_style.py` validates C++ paths and `.clang-tidy` identifier policy. Run it only before
-  commit/push or when explicitly requested. `.build/cmake-tidy` is a disposable compile database,
-  not an alternate native app build.
+- `check_cpp_style.py` validates C++ paths and `.clang-tidy` identifier policy across the repository.
+  Naming compliance starts with the first edit; validate during implementation before final builds
+  and handoff. Retain successful results and recheck only changed files/affected headers with the
+  same configuration. Do not wait for a commit request to discover task-introduced naming errors,
+  repeat unchanged audits, or expand into unrelated legacy cleanup. `.build/cmake-tidy` is a
+  disposable compile database, not an alternate native app build.
 
 ## Regression Gate
 

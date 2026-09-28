@@ -33,6 +33,7 @@
 #include <QPointer>
 #include <QTabBar>
 #include <QTextEdit>
+#include <QVariant>
 #include <QWidget>
 #include <QWindow>
 
@@ -58,6 +59,16 @@ bool is_viewport_surface_container(const QWidget *widget) {
        current = current->parentWidget()) {
     if (current->objectName().startsWith(
             QStringLiteral("viewportSurfaceContainer_"))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool asset_browser_owns_input(const QWidget *widget) {
+  for (const QWidget *current = widget; current != nullptr;
+       current = current->parentWidget()) {
+    if (current->property("quaderAssetBrowserInput").toBool()) {
       return true;
     }
   }
@@ -293,6 +304,14 @@ bool is_scene_document_save_command(std::string_view command_id) {
          command_id == quader_command::kSceneDocumentSaveAll.string();
 }
 
+bool is_asset_browser_edit_command(std::string_view command_id) {
+  return command_id == quader_command::kCutSelection.string() ||
+         command_id == quader_command::kCopySelection.string() ||
+         command_id == quader_command::kPasteSelection.string() ||
+         command_id == quader_command::kDuplicateSelection.string() ||
+         command_id == quader_command::kDeleteSelection.string();
+}
+
 struct SettledEditorFocus final {
   QPointer<QWidget> editor;
   QPointer<QWidget> window;
@@ -442,6 +461,11 @@ void QtCommandEventFilter::set_input_context_provider(
   input_context_provider_ = std::move(provider);
 }
 
+void QtCommandEventFilter::set_asset_browser_action_handler(
+    QtAssetBrowserActionHandler handler) {
+  asset_browser_action_handler_ = std::move(handler);
+}
+
 bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
   if (qt_handle_numeric_text_edit_key(watched, event)) {
     reset_pending_chord();
@@ -473,6 +497,19 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       break;
     }
     QWidget *focus = QApplication::focusWidget();
+    if (asset_browser_owns_input(focus)) {
+      const auto &key = *static_cast<QKeyEvent *>(event);
+      const auto chord =
+          quader_input_chord_from_qt_key(key.key(), key.modifiers());
+      if (!chord.empty() &&
+          editor_->commands().resolve_asset_browser_input_binding(
+              chord, text_input_has_focus()).kind !=
+              QuaderViewportKeybindingDispatch::Kind::NoMatch) {
+        event->accept();
+        return true;
+      }
+      break;
+    }
     const bool tool_settings_focused =
         qt_object_belongs_to_tool_settings_panel(focus) ||
         (qt_object_belongs_to_face_texture_panel(focus) &&
@@ -518,14 +555,17 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return QObject::eventFilter(watched, event);
     }
     const bool text_input_active = text_input_has_focus();
+    const bool asset_browser_focused = asset_browser_owns_input(focus_widget);
     const bool tool_settings_focused =
         qt_object_belongs_to_tool_settings_panel(focus_widget) ||
         (qt_object_belongs_to_face_texture_panel(focus_widget) &&
          (text_input_active || focused_combo_box(focus_widget) != nullptr));
     const bool outliner_focused =
-        !text_input_active && qt_application_command_input_owner_active(
+        !asset_browser_focused && !text_input_active &&
+        qt_application_command_input_owner_active(
                                   outliner_input_owner_provider_);
-    const bool viewport_focused = !tool_settings_focused && !outliner_focused &&
+    const bool viewport_focused = !asset_browser_focused &&
+                                 !tool_settings_focused && !outliner_focused &&
                                  !text_input_active &&
                                  viewport_surface_has_focus(watched);
 
@@ -543,7 +583,8 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
                                 : QuaderViewportKeybindingContext{};
     input_context.outliner_focused = outliner_focused;
     input_context.editor_focused = !viewport_focused && !outliner_focused;
-    if (!viewport_focused && !text_input_active) {
+    input_context.asset_browser_focused = asset_browser_focused;
+    if (!viewport_focused && !text_input_active && !asset_browser_focused) {
       // A panel can publish selection before the next viewport frame samples it.
       state.selection_mode = app_selection_mode_to_viewport(
           to_modeling_selection_mode(editor_->selection().summary().mode));
@@ -690,7 +731,14 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return true;
     }
 
-    if (focused_widget_owns_key_press(
+    const bool asset_browser_toggle =
+        dispatch.kind == QuaderViewportKeybindingDispatch::Kind::Command &&
+        dispatch.command_id == quader_command::kUiAssetBrowser.string();
+    const bool asset_browser_prefix =
+        asset_browser_focused &&
+        dispatch.kind == QuaderViewportKeybindingDispatch::Kind::PendingChord;
+    if (!asset_browser_toggle && !asset_browser_prefix &&
+        focused_widget_owns_key_press(
             focus_widget, *static_cast<QKeyEvent *>(event), outliner_focused)) {
       // Preserve the documented key behavior of the focused Qt control,
       // including item-view Ctrl+A, range navigation, and activation.
@@ -699,9 +747,28 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     }
     switch (dispatch.kind) {
     case QuaderViewportKeybindingDispatch::Kind::PendingChord:
+      if (asset_browser_focused) {
+        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+      }
       event->accept();
       return true;
     case QuaderViewportKeybindingDispatch::Kind::Command: {
+      if (asset_browser_focused &&
+          is_asset_browser_edit_command(dispatch.command_id)) {
+        // Asset commands share the canonical mappings but have independent
+        // selection, clipboard and filesystem owners. Missing widget handlers
+        // must never turn these keys into edits on the active scene.
+        if (asset_browser_action_handler_) {
+          (void)asset_browser_action_handler_(
+              QuaderCommandId{dispatch.command_id});
+        }
+        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        event->accept();
+        return true;
+      }
+      if (asset_browser_toggle) {
+        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+      }
       const std::optional<SettledEditorFocus> settled_focus =
           text_input_active &&
                   is_scene_document_save_command(dispatch.command_id)

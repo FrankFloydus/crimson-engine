@@ -46,6 +46,7 @@ inline constexpr QuaderCommandId kParentToActive{"edit.parent_to_active"};
 inline constexpr QuaderCommandId kUnparentSelection{"edit.unparent"};
 
 inline constexpr QuaderCommandId kUiSearchCommands{"ui.search_commands"};
+inline constexpr QuaderCommandId kUiAssetBrowser{"ui.asset_browser"};
 
 #ifndef NDEBUG
 inline constexpr QuaderCommandId kDevCopySelectionJson{
@@ -450,6 +451,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kParentToActive,
     kUnparentSelection,
     kUiSearchCommands,
+    kUiAssetBrowser,
 #ifndef NDEBUG
     kDevCopySelectionJson,
 #endif

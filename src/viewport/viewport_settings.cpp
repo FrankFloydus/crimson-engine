@@ -350,7 +350,7 @@ float sanitize_float_setting(ViewportFloatSettingId id, float value) {
 
 std::span<const ViewportSettingsSectionDescriptor>
 viewport_settings_sections() {
-  static const auto sections = [] {
+  static const auto kAvailableSections = [] {
     std::vector<ViewportSettingsSectionDescriptor> available;
     for (const auto &section : kSections) {
       if (section.id != ViewportSettingsSectionId::Texturing ||
@@ -360,12 +360,12 @@ viewport_settings_sections() {
     }
     return available;
   }();
-  return sections;
+  return kAvailableSections;
 }
 
 std::span<const ViewportColorSettingDescriptor>
 viewport_color_settings() {
-  static const auto settings = [] {
+  static const auto kSettings = [] {
     std::vector<ViewportColorSettingDescriptor> available;
     for (const auto &setting : kColorSettings) {
       if (setting_available(setting.id)) {
@@ -374,7 +374,7 @@ viewport_color_settings() {
     }
     return available;
   }();
-  return settings;
+  return kSettings;
 }
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> &
@@ -384,7 +384,7 @@ viewport_float_settings() {
 
 std::span<const ViewportBoolSettingDescriptor>
 viewport_bool_settings() {
-  static const auto settings = [] {
+  static const auto kSettings = [] {
     std::vector<ViewportBoolSettingDescriptor> available;
     for (const auto &setting : kBoolSettings) {
       if (setting_available(setting.id)) {
@@ -393,7 +393,7 @@ viewport_bool_settings() {
     }
     return available;
   }();
-  return settings;
+  return kSettings;
 }
 
 const std::array<double, kViewportRotationSnapAngleCount> &

@@ -9,6 +9,8 @@
 #include "ui/qt_auxiliary_window_state.hpp"
 #include "ui/ui_settings.hpp"
 
+#include <QSettings>
+
 #include <filesystem>
 
 namespace {
@@ -113,4 +115,35 @@ TEST(QtAuxiliaryWindowStateTests, UISettingsOwnsAStableAuxiliaryStatePath) {
             "qt_auxiliary_windows.ini");
   EXPECT_NE(paths.qt_auxiliary_window_state_file,
             paths.qt_window_state_file);
+}
+
+TEST(QtAuxiliaryWindowStateTests, AssetBrowserMigratesPreferencesAndPersistsItsDockVisibility) {
+  const auto path = auxiliary_state_test_path();
+  std::filesystem::remove(path);
+  {
+    QSettings old(QString::fromStdWString(path.wstring()), QSettings::IniFormat);
+    old.setValue(QStringLiteral("MaterialBrowser/gridMode"), false);
+    old.setValue(QStringLiteral("MaterialBrowser/tileSize"), 192);
+    old.setValue(QStringLiteral("MaterialBrowser/sidebarVisible"), false);
+    old.setValue(QStringLiteral("MaterialBrowser/sidebarWidth"), 260);
+    old.setValue(QStringLiteral("MaterialBrowser/geometry"), QByteArray("old-window"));
+    old.sync();
+  }
+  auto state = quader::QtAuxiliaryWindowState::load(path);
+  EXPECT_FALSE(state.asset_browser_grid_mode);
+  EXPECT_EQ(state.asset_browser_tile_size, 192);
+  EXPECT_FALSE(state.asset_browser_sidebar_visible);
+  EXPECT_EQ(state.asset_browser_sidebar_width, 260);
+  state.asset_browser_tile_size = 80;
+  ASSERT_TRUE(state.save(path));
+  EXPECT_EQ(quader::QtAuxiliaryWindowState::load(path).asset_browser_tile_size, 80);
+  quader::UISettings settings = quader::UISettings::defaults();
+  EXPECT_FALSE(settings.is_panel_visible(quader::UIPanelId::AssetBrowser));
+  settings.set_panel_visible(quader::UIPanelId::AssetBrowser, true);
+  const auto settings_path = path.parent_path() / "quader_asset_browser_settings.ini";
+  ASSERT_TRUE(settings.save(settings_path));
+  EXPECT_TRUE(quader::UISettings::load(settings_path).is_panel_visible(
+      quader::UIPanelId::AssetBrowser));
+  std::filesystem::remove(path);
+  std::filesystem::remove(settings_path);
 }

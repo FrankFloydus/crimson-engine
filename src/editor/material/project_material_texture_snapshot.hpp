@@ -21,7 +21,6 @@ namespace quader {
 /// Immutable project texture data shared by editor properties and rendering.
 struct ProjectMaterialTextureSnapshot final {
   ProjectAssetId texture_id;
-  ProjectTextureColorSpace color_space = ProjectTextureColorSpace::Srgb;
   std::string project_relative_path;
   std::uint64_t content_revision = 0u;
   std::shared_ptr<const std::vector<std::byte>> encoded;

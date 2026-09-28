@@ -27,6 +27,8 @@
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
 
+#include <QPointer>
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -35,14 +37,17 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 class QDockWidget;
+class QIcon;
 class QLabel;
 class QMainWindow;
 class QStackedWidget;
+class QSize;
 class QTimer;
 class QWidget;
 
@@ -62,6 +67,8 @@ class QtCommandEventFilter;
 class QtCommandPalette;
 class QtMaterialFindReplaceDialog;
 class QtMaterialBrowserWindow;
+class QtAssetBrowser;
+class QtAssetThumbnailCache;
 class QtTextureInfoWindow;
 class QtFaceTexturePanel;
 class QtMaterialPreviewSurface;
@@ -81,6 +88,10 @@ class QtToolToolbar;
 class QtViewportDisplayToolbar;
 struct QtSettingsChange;
 struct QtMaterialBrowserActionRequest;
+struct QtAssetBrowserActionRequest;
+struct QtAssetBrowserItem;
+struct QtAssetBrowserSnapshot;
+struct QuaderSceneSavePathResult;
 class QtUiScaleApplicationController;
 class QtUiScaleMetrics;
 enum class QtStandardMaterialEditorFileAction : std::uint8_t;
@@ -131,6 +142,9 @@ public:
   [[nodiscard]] bool
   prepare_standard_material_project_transition(std::string_view action_id);
   void refresh_project_workspace(bool force = true);
+  [[nodiscard]] QuaderSceneSavePathResult choose_project_scene_path(
+      bool save, const QuaderSceneDocumentInfo *scene = nullptr,
+      std::span<const std::string> excluded_paths = {});
   void show_home();
   void show_workspace();
   void show();
@@ -144,6 +158,10 @@ public:
   [[nodiscard]] std::size_t render_viewports();
   [[nodiscard]] std::size_t render_surfaces(bool render_scene_viewports);
   [[nodiscard]] bool needs_continuous_rendering() const;
+  /// Counts complete material projections for retained-presentation diagnostics.
+  [[nodiscard]] std::uint64_t material_presentation_snapshot_build_count() const {
+    return material_presentation_snapshot_build_count_;
+  }
 
   [[nodiscard]] QMainWindow *main_window() const { return main_window_.get(); }
   [[nodiscard]] void *native_window_handle() const;
@@ -198,6 +216,8 @@ private:
   void open_standard_material_from_dialog();
   void new_standard_material();
   [[nodiscard]] bool save_standard_material(bool save_as);
+  [[nodiscard]] std::optional<ProjectRelativePath> choose_project_material_path(
+      const QuaderStandardMaterialDocumentInfo &material);
   [[nodiscard]] bool resolve_standard_material_document(bool close_after);
   void handle_standard_material_file_action(
       QtStandardMaterialEditorFileAction action);
@@ -216,6 +236,16 @@ private:
   void show_settings_dialog();
   void show_autosave_recovery();
   void show_material_browser();
+  void toggle_asset_browser();
+  void configure_asset_browser();
+  void refresh_asset_browser_labels();
+  void refresh_asset_browser(bool force = false);
+  void refresh_asset_thumbnails();
+  void retain_visible_asset_thumbnails();
+  [[nodiscard]] QtAssetBrowserSnapshot asset_browser_snapshot(bool refresh_files);
+  void handle_asset_browser_action(QtAssetBrowserActionRequest request);
+  void show_asset_texture_info(ProjectAssetId texture_id, bool activate = true);
+  void select_project_material_texture(QtStandardMaterialTextureSlot slot);
   void configure_material_browser(QtMaterialBrowserWindow &browser);
   void refresh_face_texture_browser_selection();
   void refresh_material_browser_usage();
@@ -278,6 +308,22 @@ private:
   QtSettingsDialog *settings_dialog_ = nullptr;
   std::uint64_t runtime_binding_generation_ = 0;
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
+  QtAssetBrowser *asset_browser_ = nullptr;
+  std::unique_ptr<QtAssetThumbnailCache> asset_thumbnails_;
+  QPointer<QtAssetBrowser> asset_thumbnail_picker_;
+  std::function<bool()> asset_thumbnail_picker_current_;
+  std::vector<ProjectAssetId> asset_browser_visible_thumbnail_ids_;
+  std::vector<ProjectAssetId> asset_picker_visible_thumbnail_ids_;
+  bool asset_thumbnail_dock_presented_ = false;
+  bool asset_thumbnail_picker_presented_ = false;
+  std::function<QIcon(const QtAssetBrowserItem &, QSize, qreal)>
+      asset_thumbnail_provider_;
+  std::uint64_t asset_browser_revision_ = 0u;
+  std::uint64_t asset_browser_generation_ = 0u;
+  std::vector<std::string> asset_clipboard_paths_;
+  std::vector<QuaderProjectAssetInfo> asset_clipboard_sources_;
+  std::uint64_t asset_clipboard_generation_ = 0u;
+  bool asset_clipboard_cut_ = false;
   QtTextureInfoWindow *material_texture_info_window_ = nullptr;
   std::uint64_t material_texture_info_catalog_revision_ = 0u;
   QtFaceTexturePanel *face_texture_panel_ = nullptr;
@@ -496,6 +542,7 @@ private:
   std::uint64_t material_presentation_signature_ = 0;
   std::uint64_t material_presentation_revision_ = 0;
   std::uint64_t material_presentation_catalog_revision_ = 0;
+  std::uint64_t material_presentation_snapshot_build_count_ = 0;
   std::optional<MaterialPresentationCatalogStamp>
       material_presentation_catalog_attempt_;
   std::optional<MaterialPresentationContextStamp>

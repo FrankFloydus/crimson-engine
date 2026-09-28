@@ -1026,6 +1026,8 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_preview(
     journal["state"] = "committed";
     write_journal(transaction_directory / "journal.json", journal);
     committed = true;
+    workspace.persisted_texture_metadata_fingerprint =
+        candidate.texture_metadata_fingerprint();
     workspace.manifest = std::move(candidate);
     project_->material_catalog_ = std::move(candidate_catalog);
     project_->invalidate_material_textures();
@@ -1473,6 +1475,8 @@ ProjectMaterialDeletionService::recover(ProjectWorkspaceStorage &workspace) {
                 "Committed material deletion recovery cannot validate the "
                 "current project manifest.");
           }
+          workspace.persisted_texture_metadata_fingerprint =
+              reopened.value().persisted_texture_metadata_fingerprint;
           workspace.manifest = reopened.take_value().manifest;
           if (std::ranges::any_of(
                   material_ids, [&](const ProjectAssetId id) {
@@ -1562,6 +1566,8 @@ ProjectMaterialDeletionService::recover(ProjectWorkspaceStorage &workspace) {
       if (!opened.ok()) {
         throw std::runtime_error(opened.error().message);
       }
+      workspace.persisted_texture_metadata_fingerprint =
+          opened.value().persisted_texture_metadata_fingerprint;
       workspace.manifest = opened.take_value().manifest;
     }
     return ProjectIoResult<void>::success(std::move(warnings));

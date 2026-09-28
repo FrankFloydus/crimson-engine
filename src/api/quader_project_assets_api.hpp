@@ -9,12 +9,15 @@
 #include "api/quader_api_result.hpp"
 #include "api/quader_api_session.hpp"
 #include "api/quader_materials_api.hpp"
+#include "api/quader_standard_material_documents_api.hpp"
 #include "io/project/project_types.hpp"
+#include "io/project/project_asset_recycle.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -26,6 +29,49 @@ namespace quader {
 
 class QuaderEventsApi;
 class QuaderProjectAssetsApiInternalAccess;
+
+/// Asset families exposed by the project browser; folders have no UUID.
+enum class QuaderProjectAssetKind : std::uint8_t {
+  Folder,
+  Scene,
+  Material,
+  Texture,
+};
+
+/// Immutable metadata for one physical asset or folder in the current project.
+struct QuaderProjectAssetInfo {
+  QuaderProjectAssetKind kind = QuaderProjectAssetKind::Folder;
+  ProjectAssetId asset_id;
+  SceneId scene_id;
+  std::string name;
+  std::string project_relative_path;
+  std::uint64_t content_revision = 0u;
+};
+
+/// Cheap owner observation used before copying the browser catalog.
+struct QuaderProjectAssetRevision {
+  ProjectId project_id;
+  std::uint64_t project_generation = 0u;
+  std::uint64_t revision = 0u;
+
+  friend bool operator==(const QuaderProjectAssetRevision &,
+                         const QuaderProjectAssetRevision &) = default;
+};
+
+/// Complete supported-asset projection; an empty folder path means project root.
+struct QuaderProjectAssetSnapshot : QuaderProjectAssetRevision {
+  std::vector<QuaderProjectAssetInfo> assets;
+  std::vector<std::string> folders;
+};
+
+/// Saved material evaluation, independent of the material editor's live draft.
+struct QuaderProjectMaterialThumbnailInfo {
+  ProjectAssetId material_id;
+  std::uint64_t content_revision = 0u;
+  QuaderStandardMaterialDefinition material;
+  std::array<std::optional<QuaderStandardMaterialPreviewTexture>, 4> textures;
+  std::array<std::string, 4> texture_diagnostics;
+};
 
 /// Selects the public editor and payload family for a project material.
 enum class QuaderProjectMaterialKind : std::uint8_t {
@@ -61,6 +107,7 @@ enum class QuaderMaterialPresentationKind : std::uint8_t {
 struct QuaderMaterialPresentationRevision {
   std::uint64_t project_activation_generation = 0u;
   std::uint64_t project_material_revision = 0u;
+  std::uint64_t project_texture_revision = 0u;
   std::uint64_t active_scene_id = 0u;
   std::uint64_t embedded_material_revision = 0u;
 
@@ -117,7 +164,7 @@ struct QuaderProjectSceneMaterialDependencies {
   std::vector<ProjectAssetId> material_ids;
 };
 
-/// Reviewed impact of permanently removing one project material folder.
+/// Reviewed impact of recycling one project material folder.
 struct QuaderMaterialFolderDeletionPreview {
   std::string project_relative_path;
   std::uint64_t revision = 0u;
@@ -130,7 +177,7 @@ struct QuaderMaterialFolderDeletionPreview {
   bool discards_material_draft = false;
 };
 
-/// Reviewed impact of permanently removing an explicit material selection.
+/// Reviewed impact of recycling an explicit material selection.
 struct QuaderMaterialDeletionPreview {
   std::uint64_t revision = 0u;
   bool complete = false;
@@ -157,6 +204,22 @@ struct QuaderProjectMaterialDependencies {
   bool draft = false;
   bool dirty = false;
   std::vector<QuaderProjectMaterialTextureDependency> textures;
+};
+
+/// Revision-bound impact of recycling a mixed asset or folder selection.
+struct QuaderProjectAssetDeletionPreview {
+  ProjectId project_id;
+  std::uint64_t revision = 0u;
+  bool complete = false;
+  std::vector<std::string> paths;
+  std::vector<SceneId> scene_ids;
+  std::vector<ProjectAssetId> material_ids;
+  std::vector<ProjectAssetId> texture_ids;
+  std::vector<QuaderProjectSceneMaterialDependencies> affected_scenes;
+  std::vector<QuaderProjectMaterialDependencies> affected_materials;
+  std::vector<SceneSessionId> dirty_scene_sessions;
+  std::vector<std::string> errors;
+  bool discards_material_draft = false;
 };
 
 /// Immutable project-wide dependency information; errors prevent safe deletion.
@@ -238,12 +301,49 @@ class QuaderProjectAssetsApi final {
 public:
   explicit QuaderProjectAssetsApi(QuaderApiSession session);
 
+  [[nodiscard]] QuaderApiResult<QuaderProjectAssetRevision>
+  asset_revision() const;
+  [[nodiscard]] QuaderApiResult<QuaderProjectAssetSnapshot>
+  assets(bool refresh_files = false) const;
+  [[nodiscard]] QuaderApiResult<QuaderProjectAssetInfo> create_scene_asset(
+      std::string_view folder, std::string_view name = "New Scene");
+  [[nodiscard]] QuaderApiResult<QuaderProjectAssetInfo> create_material_asset(
+      std::string_view folder, std::string_view name = "New Material");
+  QuaderApiVoidResult create_folder(std::string_view parent,
+                                   std::string_view name);
+  QuaderApiVoidResult rename_asset(std::string_view path,
+                                  std::string_view name,
+                                  ProjectId expected_project = {},
+                                  std::uint64_t expected_revision = 0u);
+  QuaderApiVoidResult move_assets(
+      std::span<const std::string> paths, std::string_view destination,
+      ProjectId expected_project = {}, std::uint64_t expected_revision = 0u);
+  [[nodiscard]] QuaderApiResult<std::vector<QuaderProjectAssetInfo>> copy_assets(
+      std::span<const std::string> paths, std::string_view destination,
+      ProjectId expected_project = {}, std::uint64_t expected_revision = 0u);
+  [[nodiscard]] QuaderApiResult<std::vector<QuaderProjectAssetInfo>>
+  duplicate_assets(std::span<const std::string> paths,
+                   ProjectId expected_project = {},
+                   std::uint64_t expected_revision = 0u);
+  [[nodiscard]] QuaderApiResult<std::vector<QuaderProjectAssetInfo>>
+  import_textures(std::span<const std::filesystem::path> sources,
+                  std::string_view destination);
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialThumbnailInfo>
+  material_thumbnail_info(ProjectAssetId material_id) const;
+  [[nodiscard]] QuaderApiResult<QuaderProjectAssetDeletionPreview>
+  preview_delete_assets(std::span<const std::string> paths) const;
+  QuaderApiVoidResult delete_assets(
+      std::span<const std::string> paths, std::uint64_t preview_revision,
+      std::span<const SceneSessionId> approved_dirty_scenes = {});
+
   [[nodiscard]] QuaderApiResult<std::vector<QuaderProjectMaterialInfo>>
   materials() const;
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialPreview>
   material_preview(ProjectAssetId material_id) const;
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialTextureInfo>
   material_albedo_texture_info(ProjectAssetId material_id) const;
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialTextureInfo>
+  texture_info(ProjectAssetId texture_id) const;
   [[nodiscard]] QuaderApiResult<QuaderMaterialPresentationRevision>
   material_presentation_revision() const;
   [[nodiscard]] QuaderApiResult<QuaderMaterialPresentationSnapshot>
@@ -299,6 +399,8 @@ private:
   friend class QuaderProjectAssetsApiInternalAccess;
   QuaderApiSession session_;
   QuaderEventsApi *events_ = nullptr;
+  ProjectAssetRecyclePort recycle_;
+  std::function<void(QuaderApiSession)> binding_changed_;
 };
 
 } // namespace quader

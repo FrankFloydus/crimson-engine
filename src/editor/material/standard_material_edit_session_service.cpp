@@ -10,6 +10,8 @@
 #include "core/qstr.hpp"
 #include "editor/material/project_material_persistence.hpp"
 #include "io/project/project_bridge_notifications.hpp"
+#include "io/project/project_texture_catalog.hpp"
+#include "io/project/project_asset_resolver.hpp"
 #include "editor/session/project_session.hpp"
 
 #include <algorithm>
@@ -37,14 +39,12 @@ bool finite_unit(float value) {
 }
 
 bool valid_material_path(const ProjectRelativePath &path) {
-  if (!path.valid() ||
+  if (!path.valid() || !project_asset_path_visible(path) ||
       QStr::to_ascii_lower(path.native_path().extension().string()) !=
           ".qmat") {
     return false;
   }
-  const auto first = path.native_path().begin();
-  return first != path.native_path().end() &&
-         QStr::to_ascii_lower(first->string()) == "materials";
+  return true;
 }
 
 } // namespace
@@ -70,6 +70,7 @@ struct StandardMaterialEditSessionService::Draft final {
   std::array<std::optional<StandardMaterialTexturePreview>, 4>
       decoded_previews;
   std::array<std::optional<CachedPreviewError>, 4> preview_errors;
+  std::uint64_t texture_catalog_revision = 0u;
 };
 
 StandardMaterialEditSessionService::StandardMaterialEditSessionService(
@@ -425,6 +426,73 @@ StandardMaterialEditSessionService::accept_base_color_preview() {
              : success(false);
 }
 
+void StandardMaterialEditSessionService::reconcile_deleted_textures(
+    std::span<const ProjectAssetId> retired_ids,
+    std::uint64_t saved_content_revision) {
+  auto *material = standard();
+  if (material == nullptr) {
+    return;
+  }
+  bool changed = false;
+  for (std::size_t index = 0; index < 4u; ++index) {
+    auto *slot = material->texture(static_cast<StandardMaterialTextureSlot>(index));
+    if (slot == nullptr || !slot->has_value() ||
+        std::ranges::find(retired_ids, (*slot)->id) == retired_ids.end()) {
+      continue;
+    }
+    slot->reset();
+    // A staged replacement image belongs to the draft, not the deleted asset.
+    if (!current_->pending[index].has_value()) {
+      current_->decoded_previews[index].reset();
+    }
+    current_->preview_errors[index].reset();
+    changed = true;
+  }
+  if (saved_content_revision != 0u &&
+      current_->snapshot.source_content_revision != saved_content_revision) {
+    current_->snapshot.source_content_revision = saved_content_revision;
+    changed = true;
+  }
+  if (changed) {
+    advance_draft_revision();
+    if (!current_->snapshot.dirty) {
+      current_->snapshot.clean_revision = current_->snapshot.draft_revision;
+    }
+  }
+}
+
+void StandardMaterialEditSessionService::refresh_texture_catalog() {
+  auto *material = standard();
+  if (material == nullptr || project_ == nullptr || project_->manifest() == nullptr) {
+    return;
+  }
+  bool affected = false;
+  for (std::size_t index = 0u; index < 4u; ++index) {
+    auto *slot = material->texture(static_cast<StandardMaterialTextureSlot>(index));
+    if (slot != nullptr && slot->has_value()) {
+      affected |= !current_->pending[index].has_value();
+      if (const auto *entry = project_->manifest()->find_texture((*slot)->id)) {
+        const auto path = entry->path.portable_string();
+        affected |= (*slot)->id != entry->id ||
+                    (*slot)->project_relative_path != path;
+        (*slot)->id = entry->id;
+        (*slot)->project_relative_path = path;
+      }
+    }
+    if (!current_->pending[index]) {
+      current_->decoded_previews[index].reset();
+      current_->preview_errors[index].reset();
+    }
+  }
+  current_->texture_catalog_revision = project_->material_texture_revision();
+  if (affected) {
+    advance_draft_revision();
+    if (!current_->snapshot.dirty) {
+      current_->snapshot.clean_revision = current_->snapshot.draft_revision;
+    }
+  }
+}
+
 StandardMaterialEditResult
 StandardMaterialEditSessionService::cancel_base_color_preview() {
   return current_ && current_->base_color_preview.has_value()
@@ -643,6 +711,43 @@ StandardMaterialEditResult StandardMaterialEditSessionService::import_texture(
   return mark_changed();
 }
 
+StandardMaterialEditResult StandardMaterialEditSessionService::set_texture(
+    StandardMaterialTextureSlot slot, ProjectAssetId texture_id) {
+  if (!release_has_feature(ReleaseFeature::Materials)) {
+    return failure(release_feature_unavailable_message());
+  }
+  auto *material = standard();
+  if (material == nullptr || slot_index(slot) >= 4u || project_ == nullptr ||
+      project_->manifest() == nullptr) {
+    return failure("Open a project and Standard Material before assigning textures.");
+  }
+  const auto *entry = project_->manifest()->find_texture(texture_id);
+  if (entry == nullptr || project_->manifest()->is_texture_deleted(texture_id)) {
+    return failure("Project texture is missing or unavailable.");
+  }
+  const ProjectMaterialTextureSlot value{
+      .id = entry->id,
+      .project_relative_path = entry->path.portable_string(),
+      .color_space = slot == StandardMaterialTextureSlot::Albedo
+                         ? ProjectTextureColorSpace::Srgb
+                         : ProjectTextureColorSpace::Linear,
+  };
+  if (project_->texture_image(value) == nullptr) {
+    return failure("Project texture could not be decoded.");
+  }
+  const std::size_t index = slot_index(slot);
+  auto *target = material->texture(slot);
+  if (*target == std::optional(value) && !current_->pending[index]) {
+    return success(false);
+  }
+  *target = value;
+  current_->pending[index].reset();
+  current_->snapshot.pending_texture_sources[index].reset();
+  current_->decoded_previews[index].reset();
+  current_->preview_errors[index].reset();
+  return mark_changed();
+}
+
 StandardMaterialEditResult StandardMaterialEditSessionService::clear_texture(
     StandardMaterialTextureSlot slot) {
   if (!release_has_feature(ReleaseFeature::Materials)) {
@@ -696,57 +801,33 @@ StandardMaterialEditSessionService::texture_preview(
     return ProjectIoResult<
         std::optional<StandardMaterialTexturePreview>>::success(std::nullopt);
   }
-  if (current_->decoded_previews[index].has_value() &&
-      current_->decoded_previews[index]->id == (*definition)->id) {
-    return ProjectIoResult<
-        std::optional<StandardMaterialTexturePreview>>::success(
-        current_->decoded_previews[index]);
+  if (current_->texture_catalog_revision != project_->material_texture_revision()) {
+    for (std::size_t cached_index = 0u; cached_index < 4u; ++cached_index) {
+      if (!current_->pending[cached_index].has_value()) {
+        current_->decoded_previews[cached_index].reset();
+        current_->preview_errors[cached_index].reset();
+      }
+    }
+    current_->texture_catalog_revision = project_->material_texture_revision();
   }
-  if (current_->preview_errors[index].has_value() &&
-      current_->preview_errors[index]->texture_id == (*definition)->id) {
-    const ProjectIoError &cached = current_->preview_errors[index]->error;
-    return ProjectIoResult<
-        std::optional<StandardMaterialTexturePreview>>::failure(
-        cached.code, cached.message, cached.path);
+  const auto image = project_->texture_image(**definition);
+  if (image == nullptr) {
+    return ProjectIoResult<std::optional<StandardMaterialTexturePreview>>::failure(
+        ProjectIoErrorCode::AssetNotFound,
+        "Project texture is missing, retired, or could not be decoded.");
   }
-  ProjectIoResult<ProjectMaterialTextureData> texture =
-      project_->material_texture(current_->snapshot.document.id, slot);
-  if (!texture.ok()) {
-    current_->preview_errors[index] = Draft::CachedPreviewError{
-        .texture_id = (*definition)->id,
-        .error = texture.error(),
-    };
-    return ProjectIoResult<
-        std::optional<StandardMaterialTexturePreview>>::failure(
-        texture.error().code, texture.error().message, texture.error().path);
-  }
-  ProjectIoResult<ProjectDecodedImage> decoded =
-      ProjectImageDecoder::decode(texture.value().encoded_bytes);
-  if (!decoded.ok()) {
-    current_->preview_errors[index] = Draft::CachedPreviewError{
-        .texture_id = (*definition)->id,
-        .error = decoded.error(),
-    };
-    return ProjectIoResult<
-        std::optional<StandardMaterialTexturePreview>>::failure(
-        decoded.error().code, decoded.error().message, decoded.error().path);
-  }
-  current_->preview_errors[index].reset();
-  ProjectDecodedImage image = decoded.take_value();
   current_->decoded_previews[index] = StandardMaterialTexturePreview{
-      .id = texture.value().id,
-      .color_space = texture.value().color_space,
-      .content_revision = texture.value().content_revision,
-      .rgba8 = std::make_shared<const std::vector<std::byte>>(
-          std::move(image.rgba8)),
-      .width = image.width,
-      .height = image.height,
-      .detected_format = std::move(image.detected_format),
-      .encoded_byte_size = image.encoded_byte_size,
-      .has_alpha_channel = image.has_alpha_channel,
+      .id = image->texture_id,
+      .color_space = (*definition)->color_space,
+      .content_revision = image->content_revision,
+      .rgba8 = image->decoded,
+      .width = image->width,
+      .height = image->height,
+      .detected_format = image->detected_format,
+      .encoded_byte_size = image->encoded_byte_size,
+      .has_alpha_channel = image->has_alpha_channel,
   };
-  return ProjectIoResult<
-      std::optional<StandardMaterialTexturePreview>>::success(
+  return ProjectIoResult<std::optional<StandardMaterialTexturePreview>>::success(
       current_->decoded_previews[index]);
 }
 
@@ -787,7 +868,7 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     return failure("This material was permanently deleted and cannot be saved.");
   }
   if (!valid_material_path(path)) {
-    return failure("Standard Materials must be saved below Materials/ as .qmat files.");
+    return failure("Standard Materials must be saved inside the project as .qmat files.");
   }
   const ProjectFileSystem &file_system = project_->workspace()->file_system;
   ProjectIoResult<std::filesystem::path> qmat_absolute =
@@ -827,6 +908,22 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     return failure("Only Standard Material drafts can be saved here.");
   }
 
+  ProjectManifest manifest = *project_->manifest();
+  for (std::size_t index = 0u; index < 4u; ++index) {
+    auto *texture = material->texture(static_cast<StandardMaterialTextureSlot>(index));
+    if (texture == nullptr || !texture->has_value()) {
+      continue;
+    }
+    if (manifest.is_texture_deleted((*texture)->id)) {
+      texture->reset();
+      continue;
+    }
+    if (const auto *entry = manifest.find_texture((*texture)->id)) {
+      (*texture)->id = entry->id;
+      (*texture)->project_relative_path = entry->path.portable_string();
+    }
+  }
+
   ProjectMaterialFileRollback rollback;
   const auto fail_with_rollback = [&rollback](std::string message) {
     const std::string rollback_message = rollback.rollback();
@@ -864,6 +961,11 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
       return fail_with_rollback(
           "Unsupported Standard Material texture slot.");
     }
+    auto registered = manifest.register_texture({
+        .id = destination.value().id, .path = destination.value().path});
+    if (!registered.ok()) {
+      return fail_with_rollback(registered.error().message);
+    }
     *target = ProjectMaterialTextureSlot{
         .id = destination.value().id,
         .project_relative_path = destination.value().path.portable_string(),
@@ -881,12 +983,12 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     return fail_with_rollback(qmat_written.error().message);
   }
   ProjectIoResult<ProjectMaterialCatalog> scanned =
-      ProjectMaterialCatalog::scan(file_system);
+      ProjectMaterialCatalog::scan(file_system, nullptr, &manifest);
   if (!scanned.ok()) {
     return fail_with_rollback(scanned.error().message);
   }
   ProjectSessionResult installed = project_->install_material_catalog(
-      scanned.take_value());
+      scanned.take_value(), std::move(manifest));
   if (!installed.ok) {
     return fail_with_rollback(installed.message);
   }

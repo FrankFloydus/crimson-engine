@@ -147,13 +147,13 @@ TEST(ProjectMaterialManifestTests,
 
   const std::string serialized =
       ProjectManifestStore::serialize(decoded.value());
-  EXPECT_NE(serialized.find("\"version\": 4"), std::string::npos);
+  EXPECT_NE(serialized.find("\"version\": 5"), std::string::npos);
   EXPECT_EQ(decoded.value().minimum_product_release(), kInternalFullRelease);
   EXPECT_EQ(serialized.find("\"activeMaterial\""), std::string::npos);
 }
 
 TEST(ProjectMaterialManifestTests,
-     ReadsV1AndWritesV4WithoutRetiredMaterialSelection) {
+     ReadsV1AndWritesV5WithoutRetiredMaterialSelection) {
   const ProjectId project_id = ProjectId::generate();
   ProjectIoResult<ProjectManifest> decoded =
       ProjectManifestStore::deserialize(
@@ -162,13 +162,13 @@ TEST(ProjectMaterialManifestTests,
 
   const std::string serialized =
       ProjectManifestStore::serialize(decoded.value());
-  EXPECT_NE(serialized.find("\"version\": 4"), std::string::npos);
+  EXPECT_NE(serialized.find("\"version\": 5"), std::string::npos);
   EXPECT_EQ(decoded.value().minimum_product_release(), kInternalFullRelease);
   EXPECT_EQ(serialized.find("\"activeMaterial\""), std::string::npos);
 }
 
 TEST(ProjectMaterialManifestTests,
-     V4PreservesStableSortedPermanentDeletionIdentities) {
+     V5PreservesStableSortedPermanentDeletionIdentities) {
   auto created = ProjectManifest::create(ProjectId::generate(), "Manifest");
   ASSERT_TRUE(created.ok());
   ProjectManifest manifest = created.take_value();
@@ -180,14 +180,14 @@ TEST(ProjectMaterialManifestTests,
       *ProjectAssetId::parse("30000000-0000-4000-8000-000000000003");
   EXPECT_EQ(nlohmann::json::parse(ProjectManifestStore::serialize(manifest))
                 .at("version"),
-            4u);
+            5u);
   ASSERT_TRUE(manifest.mark_materials_deleted(
                           std::array{third, first, third})
                   .ok());
   ASSERT_TRUE(manifest.mark_materials_deleted(std::array{second, first}).ok());
   const std::string serialized = ProjectManifestStore::serialize(manifest);
   const nlohmann::json document = nlohmann::json::parse(serialized);
-  EXPECT_EQ(document.at("version"), 4u);
+  EXPECT_EQ(document.at("version"), 5u);
   EXPECT_EQ(document.at("deletedMaterialIds"),
             nlohmann::json::array({std::string(first.str()),
                                    std::string(second.str()),
@@ -262,7 +262,7 @@ TEST(ProjectMaterialManifestTests,
     EXPECT_FALSE(decoded.ok());
     EXPECT_EQ(decoded.error().code, ProjectIoErrorCode::ManifestMalformed);
   }
-  for (const std::uint64_t version : {5ull, 4'294'967'299ull}) {
+  for (const std::uint64_t version : {6ull, 4'294'967'299ull}) {
     document["version"] = version;
     const auto decoded = ProjectManifestStore::deserialize(document.dump());
     EXPECT_FALSE(decoded.ok());
@@ -336,7 +336,7 @@ TEST(ProjectMaterialManifestTests,
       const auto saved = nlohmann::json::parse(
           ProjectManifestStore::serialize(decoded.value()));
       EXPECT_FALSE(saved.at("workspace").contains("activeMaterial"));
-      EXPECT_EQ(saved.at("version"), 4u);
+      EXPECT_EQ(saved.at("version"), 5u);
       EXPECT_EQ(saved.at("minimumProductRelease"), kInternalFullRelease);
       EXPECT_EQ(decoded.value().is_material_deleted(deleted), version == 3u);
     }
@@ -376,7 +376,7 @@ TEST(ProjectMaterialManifestTests,
   ASSERT_TRUE(reopened.close().ok);
   const auto persisted = nlohmann::json::parse(read_bytes(manifest_path));
   EXPECT_FALSE(persisted.at("workspace").contains("activeMaterial"));
-  EXPECT_EQ(persisted.at("version"), 4u);
+  EXPECT_EQ(persisted.at("version"), 5u);
 }
 
 TEST(ProjectMaterialManifestTests,

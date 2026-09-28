@@ -7,6 +7,9 @@
 #include "io/project/project_material_catalog.hpp"
 
 #include "core/qstr.hpp"
+#include "io/project/project_asset_resolver.hpp"
+#include "io/project/project_manifest.hpp"
+#include "io/project/project_texture_catalog.hpp"
 #include "io/shared_file_read.hpp"
 
 #include <algorithm>
@@ -200,9 +203,16 @@ ProjectIoResult<void> validate_no_physical_aliases(
 
 } // namespace
 
+ProjectIoResult<void> validate_project_asset_file_aliases(
+    const ProjectFileSystem &file_system,
+    std::span<const ProjectRelativePath> paths) {
+  return validate_no_physical_aliases(file_system, paths);
+}
+
 ProjectIoResult<ProjectMaterialCatalog>
 ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
-                             ProjectFileSystemWorkStats *work_stats) {
+                             ProjectFileSystemWorkStats *work_stats,
+                             const ProjectManifest *manifest) {
   if (!file_system.valid()) {
     return ProjectIoResult<ProjectMaterialCatalog>::failure(
         ProjectIoErrorCode::InvalidWorkspaceState,
@@ -212,44 +222,8 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
   ProjectFileSystem scan_file_system =
       file_system.begin_resolution_batch(work_stats);
   ProjectMaterialCatalog catalog;
-  ProjectIoResult<ProjectRelativePath> materials_relative =
-      ProjectRelativePath::parse_portable("Materials");
-  if (!materials_relative.ok()) {
-    return ProjectIoResult<ProjectMaterialCatalog>::failure(
-        materials_relative.error().code,
-        materials_relative.error().message,
-        materials_relative.error().path);
-  }
-  ProjectIoResult<std::filesystem::path> materials_resolved =
-      scan_file_system.resolve(materials_relative.value());
-  if (!materials_resolved.ok()) {
-    return ProjectIoResult<ProjectMaterialCatalog>::failure(
-        materials_resolved.error().code, materials_resolved.error().message,
-        materials_resolved.error().path);
-  }
-  const std::filesystem::path materials_root =
-      materials_resolved.take_value();
+  const std::filesystem::path materials_root = file_system.root();
   std::error_code error;
-  if (!std::filesystem::exists(materials_root, error)) {
-    if (error) {
-      return ProjectIoResult<ProjectMaterialCatalog>::failure(
-          ProjectIoErrorCode::IoFailure,
-          "Could not inspect project Materials directory: " +
-              error.message(),
-          materials_root);
-    }
-    return ProjectIoResult<ProjectMaterialCatalog>::success(
-        std::move(catalog));
-  }
-  if (!std::filesystem::is_directory(materials_root, error) || error) {
-    return ProjectIoResult<ProjectMaterialCatalog>::failure(
-        ProjectIoErrorCode::RootNotDirectory,
-        error ? "Could not inspect project Materials directory: " +
-                    error.message()
-              : "Project Materials path is not a directory.",
-        materials_root);
-  }
-  catalog.folders_.push_back(materials_relative.value());
 
   std::vector<ProjectRelativePath> paths;
   std::filesystem::recursive_directory_iterator iterator(
@@ -257,6 +231,16 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
   const std::filesystem::recursive_directory_iterator end;
   for (; !error && iterator != end; iterator.increment(error)) {
     const std::filesystem::directory_entry &entry = *iterator;
+    const auto lexical = ProjectRelativePath::parse(
+        entry.path().lexically_relative(materials_root));
+    if (!lexical.ok()) {
+      return ProjectIoResult<ProjectMaterialCatalog>::failure(
+          lexical.error().code, lexical.error().message, lexical.error().path);
+    }
+    if (!project_asset_path_visible(lexical.value())) {
+      iterator.disable_recursion_pending();
+      continue;
+    }
     const bool directory = entry.is_directory(error);
     if (error) {
       break;
@@ -348,7 +332,7 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
           path.native_path());
     }
 
-    const ProjectStandardMaterialDefinition *standard =
+    ProjectStandardMaterialDefinition *standard =
         decoded.value().material.standard_material();
     if (standard == nullptr) {
       catalog.warnings_.push_back(
@@ -358,10 +342,20 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
     }
 
     std::optional<ProjectIoError> texture_security_error;
-    const auto inspect_texture = [&](const auto &slot,
+    const auto inspect_texture = [&](auto &slot,
                                      std::string_view label) {
       if (!slot.has_value()) {
         return;
+      }
+      if (manifest != nullptr && manifest->is_texture_deleted(slot->id)) {
+        slot.reset();
+        return;
+      }
+      if (manifest != nullptr) {
+        if (const auto *texture_entry = manifest->find_texture(slot->id)) {
+          slot->id = texture_entry->id;
+          slot->project_relative_path = texture_entry->path.portable_string();
+        }
       }
       ProjectIoResult<ProjectRelativePath> relative =
           ProjectRelativePath::parse_portable(
@@ -419,13 +413,19 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
     revision = append_hash(revision, folder.portable_string());
     revision = append_hash(revision, std::uint64_t{0});
   }
+  std::uint64_t material_revision = 14'695'981'039'346'656'037ull;
   for (const ProjectMaterialCatalogEntry &entry : catalog.entries_) {
     revision = append_hash(revision, entry.material.id.str());
     revision = append_hash(revision, entry.path.portable_string());
     revision = append_hash(revision, entry.content_revision);
     revision = append_hash(revision, entry.file_size);
+    material_revision = append_hash(material_revision, entry.material.id.str());
+    material_revision = append_hash(material_revision, entry.path.portable_string());
+    material_revision = append_hash(material_revision, entry.content_revision);
+    material_revision = append_hash(material_revision, entry.file_size);
   }
   catalog.content_revision_ = revision;
+  catalog.material_revision_ = material_revision;
   return ProjectIoResult<ProjectMaterialCatalog>::success(
       std::move(catalog));
 }
@@ -440,9 +440,10 @@ ProjectMaterialCatalog::find(ProjectAssetId id) const noexcept {
 
 ProjectIoResult<ProjectMaterialPreview>
 ProjectMaterialCatalog::read_preview(const ProjectFileSystem &file_system,
-                                     ProjectAssetId id) const {
+                                     ProjectAssetId id,
+                                     const ProjectManifest *manifest) const {
   ProjectIoResult<ProjectMaterialTextureData> texture =
-      read_texture(file_system, id, StandardMaterialTextureSlot::Albedo);
+      read_texture(file_system, id, StandardMaterialTextureSlot::Albedo, manifest);
   if (!texture.ok()) {
     return ProjectIoResult<ProjectMaterialPreview>::failure(
         texture.error().code, texture.error().message,
@@ -457,7 +458,7 @@ ProjectMaterialCatalog::read_preview(const ProjectFileSystem &file_system,
 ProjectIoResult<ProjectMaterialTextureData>
 ProjectMaterialCatalog::read_texture(
     const ProjectFileSystem &file_system, ProjectAssetId id,
-    StandardMaterialTextureSlot kind) const {
+    StandardMaterialTextureSlot kind, const ProjectManifest *manifest) const {
   const ProjectMaterialCatalogEntry *entry = find(id);
   if (entry == nullptr) {
     return ProjectIoResult<ProjectMaterialTextureData>::failure(
@@ -499,6 +500,10 @@ ProjectMaterialCatalog::read_texture(
   }
   ProjectIoResult<ProjectRelativePath> relative =
       ProjectRelativePath::parse_portable((*slot)->project_relative_path);
+  if (manifest != nullptr) {
+    relative = resolve_project_texture_path(*manifest, (*slot)->id,
+        relative.ok() ? relative.value() : ProjectRelativePath{});
+  }
   if (!relative.ok()) {
     return ProjectIoResult<ProjectMaterialTextureData>::failure(
         relative.error().code, relative.error().message,
@@ -523,13 +528,12 @@ ProjectMaterialCatalog::read_texture(
   std::vector<std::byte> bytes = std::move(source.bytes);
   const std::string_view byte_view(
       reinterpret_cast<const char *>(bytes.data()), bytes.size());
-  // Texture storage depends on image content and its interpretation, not QMAT
-  // scalars, UV transforms or names. Those edits only update material bindings.
-  const std::uint64_t texture_revision = append_hash(
-      append_hash(14'695'981'039'346'656'037ull, byte_view),
-      static_cast<std::uint64_t>((*slot)->color_space));
+  // Source image identity is independent of a material slot's interpretation.
+  const std::uint64_t texture_revision =
+      append_hash(14'695'981'039'346'656'037ull, byte_view);
   return ProjectIoResult<ProjectMaterialTextureData>::success({
-      .id = (*slot)->id,
+      .id = manifest != nullptr && manifest->find_texture((*slot)->id) != nullptr
+                ? manifest->find_texture((*slot)->id)->id : (*slot)->id,
       .color_space = (*slot)->color_space,
       .encoded_bytes = std::move(bytes),
       .content_revision = texture_revision,

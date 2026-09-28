@@ -17,14 +17,15 @@
 namespace quader {
 
 /**
- * Deterministic diagnostics for the directory work performed while validating
- * project-path casing. A resolution batch enumerates each distinct directory
- * at most once; component lookups may still repeat because they are O(1).
+ * Deterministic diagnostics for project-path resolution and case validation.
+ * A resolution batch enumerates each distinct directory at most once;
+ * component lookups may still repeat because they are O(1).
  */
 struct ProjectFileSystemWorkStats final {
   std::size_t directory_case_enumerations = 0u;
   std::size_t directory_case_entries_visited = 0u;
   std::size_t component_case_lookups = 0u;
+  std::size_t physical_path_resolutions = 0u;
 };
 
 /**

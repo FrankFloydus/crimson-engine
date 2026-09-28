@@ -26,6 +26,11 @@ struct QtAuxiliaryWindowState {
   int material_browser_tile_size = 128;
   bool material_browser_sidebar_visible = true;
   int material_browser_sidebar_width = 200;
+  bool asset_browser_grid_mode = true;
+  int asset_browser_tile_size = 128;
+  bool asset_browser_sidebar_visible = true;
+  int asset_browser_sidebar_width = 200;
+  bool asset_browser_layout_migrated = false;
   bool face_texture_browser_grid_mode = true;
   int face_texture_browser_tile_size = 64;
   bool face_texture_browser_sidebar_visible = true;

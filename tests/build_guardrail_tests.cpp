@@ -3565,16 +3565,22 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_missing(workspace_refresh, ".materials()");
   expect_missing(workspace_refresh, ".material_preview(");
   expect_missing(workspace_refresh, ".material_presentations()");
-  const std::string show_material_browser = source_slice(
-      ui_system_source, "void UISystem::show_material_browser()",
-      "bool UISystem::panel_visible(");
-  const std::size_t browser_show =
-      show_material_browser.find("material_browser_window_->show()");
-  const std::size_t browser_refresh =
-      show_material_browser.find("refresh_project_workspace()");
-  ASSERT_NE(browser_show, std::string::npos);
-  ASSERT_NE(browser_refresh, std::string::npos);
-  EXPECT_LT(browser_show, browser_refresh);
+  const std::string asset_browser_source =
+      read_source_file("src/ui/ui_system_asset_browser.cpp");
+  const std::string browser_refresh = source_slice(
+      asset_browser_source, "void UISystem::refresh_asset_browser(",
+      "void UISystem::toggle_asset_browser(");
+  const auto asset_revision = browser_refresh.find("asset_revision()");
+  const auto asset_gate = browser_refresh.find("if (changed)");
+  const auto asset_snapshot = browser_refresh.find("asset_browser_snapshot(force)");
+  ASSERT_NE(asset_revision, std::string::npos);
+  ASSERT_NE(asset_gate, std::string::npos);
+  ASSERT_NE(asset_snapshot, std::string::npos);
+  EXPECT_LT(asset_revision, asset_gate);
+  EXPECT_LT(asset_gate, asset_snapshot);
+  expect_contains(browser_refresh, "panel_presented(UIPanelId::AssetBrowser)");
+  expect_missing(browser_refresh, ".assets(");
+  expect_missing(browser_refresh, "commands().available()");
   const std::string workspace_event_bindings = source_slice(
       ui_system_source, "void UISystem::bind_project_workspace_events(",
       "void UISystem::clear_project_workspace_events(");
@@ -3588,7 +3594,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
                   "project_workspace_refresh_signal_->store(true");
   expect_contains(ui_system_source, "clear_project_workspace_events()");
   expect_contains(ui_system_source,
-                  "configure_material_browser(*material_browser_window_)");
+                  "configure_asset_browser()");
   expect_contains(ui_system_source,
                   "configure_material_browser(face_texture_panel_->browser())");
   const std::string face_material_refresh = source_slice(

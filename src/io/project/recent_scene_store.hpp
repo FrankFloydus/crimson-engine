@@ -51,6 +51,11 @@ public:
            const std::filesystem::path &manifest_path, const SceneId &scene_id,
            std::string scene_name, const ProjectRelativePath &scene_path) const;
 
+  /// Updates moved scenes and removes deleted entries without changing MRU order.
+  [[nodiscard]] ProjectIoResult<void>
+  synchronize_project(const ProjectManifest &manifest,
+                      const std::filesystem::path &manifest_path) const;
+
 private:
   [[nodiscard]] ProjectIoResult<void>
   save(std::span<const RecentSceneEntry> entries) const;

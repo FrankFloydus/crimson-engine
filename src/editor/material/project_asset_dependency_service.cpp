@@ -9,6 +9,7 @@
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/project_material_reference_resolver.hpp"
+#include "io/project/project_asset_resolver.hpp"
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/shared_file_read.hpp"
@@ -124,7 +125,8 @@ ProjectMaterialAssetDependencies material_dependencies(
     std::optional<ProjectRelativePath> path, std::uint64_t content_revision,
     bool draft, bool dirty,
     const std::array<std::optional<std::filesystem::path>, 4> *pending,
-    const ProjectFileSystem &file_system, std::vector<std::string> &errors) {
+    const ProjectFileSystem &file_system, const ProjectManifest &manifest,
+    std::vector<std::string> &errors) {
   ProjectMaterialAssetDependencies result{
       .id = document.id,
       .path = std::move(path),
@@ -148,14 +150,19 @@ ProjectMaterialAssetDependencies material_dependencies(
   for (std::size_t index = 0u; index < kSlots.size(); ++index) {
     const auto &saved = *standard->texture(kSlots[index]);
     const bool has_pending = pending != nullptr && (*pending)[index].has_value();
-    if (!saved.has_value() && !has_pending) {
+    const bool has_saved = saved.has_value() && !manifest.is_texture_deleted(saved->id);
+    if (!has_saved && !has_pending) {
       continue;
     }
     ProjectMaterialTextureDependency dependency{.slot = kSlots[index]};
-    if (saved.has_value()) {
-      dependency.texture_id = saved->id;
+    if (has_saved) {
+      const auto *canonical = manifest.find_texture(saved->id);
+      dependency.texture_id = canonical != nullptr ? canonical->id : saved->id;
       auto relative = ProjectRelativePath::parse_portable(
           saved->project_relative_path);
+      if (relative.ok()) {
+        relative = resolve_project_texture_path(manifest, saved->id, relative.value());
+      }
       if (!relative.ok()) {
         errors.push_back(document.name + ": " + relative.error().message);
       } else {
@@ -200,6 +207,7 @@ struct ProjectAssetDependencyService::State final {
 
   [[nodiscard]] bool owners_match() const {
     if (invalidated || !retained || project.root() != root ||
+        project.material_texture_revision() != texture_revision ||
         project.activation_generation() != retained->project_generation ||
         project.material_catalog().content_revision() !=
             retained->catalog_revision) {
@@ -271,9 +279,16 @@ struct ProjectAssetDependencyService::State final {
           .content_hash = read.source_content_hash,
       });
       if (SceneId::from_bytes(read.scene_uuid) != entry.id) {
-        candidate.errors.push_back(entry.path.portable_string() +
-                                   ": scene identity differs from the project manifest.");
-        continue;
+        const bool resident_reseed = std::ranges::any_of(
+            project.open_scenes(), [&](const auto &scene) {
+              return scene != nullptr && scene->identity_dirty &&
+                     scene->scene_id == entry.id && scene->path == entry.path;
+            });
+        if (!resident_reseed) {
+          candidate.errors.push_back(entry.path.portable_string() +
+                                     ": scene identity differs from the project manifest.");
+          continue;
+        }
       }
       ProjectSceneAssetDependencies dependency{
           .scene_id = entry.id,
@@ -344,9 +359,9 @@ struct ProjectAssetDependencyService::State final {
   void add_materials(ProjectAssetDependencySnapshot &candidate,
                      const ProjectFileSystem &file_system, bool refresh_files) {
     if (refresh_files || !inspected_catalog.has_value() ||
-        inspected_catalog->content_revision() != candidate.catalog_revision) {
+        !retained || retained->catalog_revision != candidate.catalog_revision) {
       ++work.material_catalog_scan_count;
-      auto scanned = ProjectMaterialCatalog::scan(file_system);
+      auto scanned = ProjectMaterialCatalog::scan(file_system, nullptr, project.manifest());
       if (!scanned.ok()) {
         inspected_catalog.reset();
         candidate.errors.push_back(scanned.error().message);
@@ -357,7 +372,14 @@ struct ProjectAssetDependencyService::State final {
     const auto &catalog = inspected_catalog.has_value()
                               ? *inspected_catalog
                               : project.material_catalog();
-    if (catalog.content_revision() != candidate.catalog_revision) {
+    const auto &installed_catalog = project.material_catalog();
+    if (catalog.entries().size() != installed_catalog.entries().size() ||
+        std::ranges::any_of(catalog.entries(), [&](const auto &entry) {
+          const auto *installed = installed_catalog.find(entry.material.id);
+          return installed == nullptr || installed->path != entry.path ||
+                 installed->file_size != entry.file_size ||
+                 installed->content_revision != entry.content_revision;
+        })) {
       candidate.errors.push_back(
           "Material files changed outside the installed catalog. Refresh the "
           "material catalog before deleting a folder.");
@@ -373,13 +395,13 @@ struct ProjectAssetDependencyService::State final {
       });
       candidate.materials.push_back(material_dependencies(
           entry.material, entry.path, entry.content_revision, false, false,
-          nullptr, file_system, candidate.errors));
+          nullptr, file_system, *project.manifest(), candidate.errors));
     }
     const auto *draft = project.standard_material_editor().current();
     if (draft != nullptr) {
       candidate.materials.push_back(material_dependencies(
           draft->document, draft->path, draft->draft_revision, true, draft->dirty,
-          &draft->pending_texture_sources, file_system, candidate.errors));
+          &draft->pending_texture_sources, file_system, *project.manifest(), candidate.errors));
       draft_session = draft->session_id;
       draft_revision = draft->draft_revision;
       draft_path = draft->path;
@@ -426,13 +448,15 @@ struct ProjectAssetDependencyService::State final {
     }
     const auto &manifest = *project.manifest();
     if (decoded.value().id() != manifest.id() ||
+        decoded.value().texture_metadata_fingerprint() !=
+            project.workspace()->persisted_texture_metadata_fingerprint ||
         !equal_values<ProjectSceneCatalogEntry>(decoded.value().scenes(),
                                                 manifest.scenes()) ||
         !equal_values<ProjectAssetId>(decoded.value().deleted_material_ids(),
                                      manifest.deleted_material_ids())) {
       candidate.errors.push_back(
           "The project manifest changed on disk. Reopen the project before "
-          "deleting a material folder.");
+          "deleting project assets.");
     }
   }
 
@@ -465,7 +489,8 @@ struct ProjectAssetDependencyService::State final {
           project.workspace()->file_system.begin_resolution_batch();
       add_saved_scenes(candidate, file_system, refresh_files || invalidated);
       add_live_scenes(candidate);
-      add_materials(candidate, file_system, refresh_files || invalidated);
+      add_materials(candidate, file_system, refresh_files || invalidated ||
+                    project.material_texture_revision() != texture_revision);
       add_manifest(candidate, file_system);
       scenes.assign(manifest->scenes().begin(), manifest->scenes().end());
       deleted.assign(manifest->deleted_material_ids().begin(),
@@ -479,6 +504,7 @@ struct ProjectAssetDependencyService::State final {
       candidate.complete = candidate.errors.empty();
     }
     root = project.root();
+    texture_revision = project.material_texture_revision();
     invalidated = false;
     if (retained && same_snapshot(candidate, *retained)) {
       return retained;
@@ -500,6 +526,7 @@ struct ProjectAssetDependencyService::State final {
   std::optional<ProjectMaterialCatalog> inspected_catalog;
   MaterialEditSessionId draft_session;
   std::uint64_t draft_revision = 0u;
+  std::uint64_t texture_revision = 0u;
   std::optional<ProjectRelativePath> draft_path;
   bool draft_dirty = false;
   bool invalidated = true;

@@ -20,10 +20,15 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDataStream>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFormLayout>
 #include <QImage>
+#include <QIODevice>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -1520,6 +1525,59 @@ TEST(QtStandardMaterialEditorWindowTests,
   EXPECT_EQ(name->mapTo(scroll->widget(), QPoint()).x(),
             scale_u->mapTo(scroll->widget(), QPoint()).x());
   EXPECT_EQ(edits, 0);
+}
+
+TEST(QtStandardMaterialEditorWindowTests,
+     TextureSlotDropForwardsOneIdentityAndItsProjectGeneration) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-texture-drop";
+  char *argv[] = {name, nullptr};
+  QApplication application(argc, argv);
+  QtStandardMaterialEditorWindow window;
+  QtStandardMaterialEditorDocument document;
+  document.stable_id = QStringLiteral("drop-material");
+  document.session_generation = 1u;
+  document.name = QStringLiteral("Drop Material");
+  window.set_document(document);
+  auto *target = window.findChild<QToolButton *>(
+      QStringLiteral("standardMaterialEditor.normalTexture.browse"));
+  ASSERT_NE(target, nullptr);
+  const auto texture_id = *ProjectAssetId::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  int calls = 0;
+  window.set_texture_asset_dropped_callback(
+      [&](QtStandardMaterialTextureSlot slot, ProjectAssetId id, std::uint64_t generation) {
+        ++calls;
+        EXPECT_EQ(slot, QtStandardMaterialTextureSlot::Normal);
+        EXPECT_EQ(id, texture_id);
+        EXPECT_EQ(generation, 37u);
+      });
+  const auto deliver = [&](quint8 kind, quint32 count) {
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream << quint32{1u} << quint64{37u} << count;
+    for (quint32 index = 0; index < count; ++index) {
+      stream << QString::fromStdString(std::string(texture_id.str()))
+             << QStringLiteral("texture.png") << kind;
+    }
+    QMimeData mime;
+    mime.setData("application/x-quader-project-assets", bytes);
+    QDragEnterEvent enter(QPoint(2, 2), Qt::CopyAction, &mime,
+                          Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &enter);
+    QDropEvent drop(QPointF(2, 2), Qt::CopyAction, &mime,
+                    Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &drop);
+    return drop.isAccepted();
+  };
+  EXPECT_TRUE(deliver(3u, 1u));
+  EXPECT_EQ(calls, 1);
+  EXPECT_FALSE(deliver(2u, 1u));
+  EXPECT_FALSE(deliver(3u, 2u));
+  EXPECT_EQ(calls, 1);
+  window.clear_document();
+  EXPECT_FALSE(deliver(3u, 1u));
+  EXPECT_EQ(calls, 1);
 }
 
 } // namespace

@@ -17,6 +17,13 @@
 
 namespace quader {
 
+class ProjectManifest;
+
+/// Rejects case, symbolic-link and hard-link aliases among existing asset files.
+[[nodiscard]] ProjectIoResult<void> validate_project_asset_file_aliases(
+    const ProjectFileSystem &file_system,
+    std::span<const ProjectRelativePath> paths);
+
 /// Stores one validated QMAT and its deterministic catalog metadata.
 struct ProjectMaterialCatalogEntry final {
   ProjectMaterialDocument material;
@@ -47,13 +54,14 @@ class ProjectMaterialCatalog final {
 public:
   [[nodiscard]] static ProjectIoResult<ProjectMaterialCatalog>
   scan(const ProjectFileSystem &file_system,
-       ProjectFileSystemWorkStats *work_stats = nullptr);
+       ProjectFileSystemWorkStats *work_stats = nullptr,
+       const ProjectManifest *manifest = nullptr);
 
   [[nodiscard]] std::span<const ProjectMaterialCatalogEntry>
   entries() const noexcept {
     return entries_;
   }
-  /// Includes the Materials root and every validated folder, even when empty.
+  /// Includes every visible project folder, even when empty; root is implicit.
   [[nodiscard]] std::span<const ProjectRelativePath> folders() const noexcept {
     return folders_;
   }
@@ -63,15 +71,20 @@ public:
   [[nodiscard]] std::uint64_t content_revision() const noexcept {
     return content_revision_;
   }
+  /// Material rows only; folder organization does not change this projection.
+  [[nodiscard]] std::uint64_t material_revision() const noexcept {
+    return material_revision_;
+  }
   [[nodiscard]] const ProjectMaterialCatalogEntry *
   find(ProjectAssetId id) const noexcept;
 
   [[nodiscard]] ProjectIoResult<ProjectMaterialPreview>
   read_preview(const ProjectFileSystem &file_system,
-               ProjectAssetId id) const;
+               ProjectAssetId id, const ProjectManifest *manifest = nullptr) const;
   [[nodiscard]] ProjectIoResult<ProjectMaterialTextureData>
   read_texture(const ProjectFileSystem &file_system, ProjectAssetId id,
-               StandardMaterialTextureSlot slot) const;
+               StandardMaterialTextureSlot slot,
+               const ProjectManifest *manifest = nullptr) const;
 
 private:
   std::vector<ProjectMaterialCatalogEntry> entries_;
@@ -80,6 +93,7 @@ private:
       entry_index_by_id_;
   std::vector<std::string> warnings_;
   std::uint64_t content_revision_ = 0u;
+  std::uint64_t material_revision_ = 0u;
 };
 
 } // namespace quader

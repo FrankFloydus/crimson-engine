@@ -7,6 +7,7 @@
 #include "render/overlay/selected_mesh_outline_cache.hpp"
 
 #include "math/glm_bridge.hpp"
+#include "render/overlay/overlay_camera_projector.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 #include <quader/modeling/neutral/geometry/bvh.hpp>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 #include <utility>
 
@@ -54,6 +56,7 @@ struct OutlineTopology {
   std::shared_ptr<const MeshGeometryPayload> payload;
   std::vector<Edge> edges;
   std::vector<Face> faces;
+  std::array<QVec3, 8> bounds;
 };
 
 std::shared_ptr<OutlineTopology> build_topology(
@@ -66,6 +69,7 @@ std::shared_ptr<OutlineTopology> build_topology(
   positions.reserve(vertices.size());
   edges.reserve(indices.size());
   topology->faces.reserve(indices.size() / 3);
+  glm::vec3 minimum(std::numeric_limits<float>::infinity()), maximum(-minimum);
   for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
     if (indices[i] >= vertices.size() || indices[i + 1] >= vertices.size() ||
         indices[i + 2] >= vertices.size()) continue;
@@ -75,6 +79,10 @@ std::shared_ptr<OutlineTopology> build_topology(
     const QVec3 normal = cross(points[1] - points[0], points[2] - points[0]);
     const float magnitude = length(normal);
     if (!std::isfinite(magnitude) || magnitude <= 0) continue;
+    for (const auto point : points) {
+      minimum = glm::min(minimum, to_glm(point));
+      maximum = glm::max(maximum, to_glm(point));
+    }
     OutlineTopology::Face face{normal / magnitude, (points[0] + points[1] + points[2]) / 3.0f, {}, points};
     std::array<std::uint32_t, 3> welded;
     for (std::size_t j = 0; j < 3; ++j) {
@@ -95,8 +103,61 @@ std::shared_ptr<OutlineTopology> build_topology(
     }
     topology->faces.push_back(face);
   }
+  for (unsigned corner = 0; corner < topology->bounds.size(); ++corner) {
+    topology->bounds[corner] = {
+        corner & 1 ? maximum.x : minimum.x, corner & 2 ? maximum.y : minimum.y,
+        corner & 4 ? maximum.z : minimum.z};
+  }
   return topology;
 }
+
+/// Rejects only whole occurrences beyond one padded viewport side, before perspective division.
+struct OutlineFrustum {
+  std::array<glm::dvec4, 4> sides;
+
+  OutlineFrustum(const ViewportOverlayCamera &input, float width_pixels) {
+    const auto camera = OverlayCameraProjector::sanitized_camera(input);
+    // The shader extends square caps along both the line and its normal.
+    const double padding = std::sqrt(2.0) *
+        (std::max(1.0, static_cast<double>(width_pixels)) + kOverlayLineFeatherPixels) * 0.5;
+    const double aspect = camera.viewport_size.x / static_cast<double>(camera.viewport_size.y);
+    const bool perspective = camera.projection == ViewportOverlayProjection::Perspective;
+    const double half_height = perspective
+        ? std::tan(camera.fov_degrees * 3.14159265358979323846 / 360.0)
+        : std::max(0.0001, camera.orthographic_size * 0.5);
+    const double horizontal = half_height * aspect * (1 + 2 * padding / camera.viewport_size.x);
+    const double vertical = half_height * (1 + 2 * padding / camera.viewport_size.y);
+    const glm::dvec3 eye(to_glm(camera.eye)), right(to_glm(camera.right));
+    const glm::dvec3 up(to_glm(camera.up)), forward(to_glm(camera.forward));
+    for (std::size_t index = 0; index < sides.size(); ++index) {
+      const double extent = index < 2 ? horizontal : vertical;
+      const glm::dvec3 axis = (index < 2 ? right : up) * (index % 2 == 0 ? 1.0 : -1.0);
+      const glm::dvec3 normal = axis + (perspective ? forward * extent : glm::dvec3(0));
+      sides[index] = {normal, -glm::dot(normal, eye) + (perspective ? 0 : extent)};
+    }
+  }
+
+  bool intersects(const std::array<QVec3, 8> &bounds) const {
+    unsigned outside = 15;
+    for (const auto corner : bounds) {
+      if (!finite(corner)) return true;
+      unsigned corner_outside = 0;
+      for (std::size_t index = 0; index < sides.size(); ++index) {
+        const auto &plane = sides[index];
+        const auto normal = glm::dvec3(plane);
+        const glm::dvec3 point(to_glm(corner));
+        const double distance = glm::dot(normal, point) + plane.w;
+        const double tolerance = (glm::dot(glm::abs(normal), glm::abs(point)) +
+            std::abs(plane.w) + 1) * 1e-7;
+        if (!std::isfinite(distance)) return true;
+        if (distance < -tolerance) corner_outside |= 1u << index;
+      }
+      outside &= corner_outside;
+      if (outside == 0) return true;
+    }
+    return outside == 0;
+  }
+};
 
 bool same_lines(const ViewportOverlayFrame &a, const ViewportOverlayFrame &b) {
   return a.lines.size() == b.lines.size() && std::equal(a.lines.begin(), a.lines.end(),
@@ -195,6 +256,29 @@ struct OutlineCoverage {
 
   void build() { (void)bvh.build(bounds, centers, indices); }
 
+  /// Retains the exact interval union so traversal can stop once no outline remains.
+  bool add_covered_interval(Interval interval) {
+    if (interval.begin == 0 && interval.end == 1) {
+      covered.assign(1, interval);
+      return false;
+    }
+    const auto first = std::lower_bound(covered.begin(), covered.end(), interval.begin,
+        [](const Interval &existing, double begin) { return existing.end < begin; });
+    auto last = first;
+    while (last != covered.end() && last->begin <= interval.end) {
+      interval.begin = std::min(interval.begin, last->begin);
+      interval.end = std::max(interval.end, last->end);
+      ++last;
+    }
+    if (first == last) {
+      covered.insert(first, interval);
+    } else {
+      *first = interval;
+      covered.erase(first + 1, last);
+    }
+    return covered.size() != 1 || covered.front().begin != 0 || covered.front().end != 1;
+  }
+
   void find_covered(glm::dvec2 start, glm::dvec2 end, glm::dvec2 outside) {
     covered.clear();
     const glm::dvec2 direction = end - start;
@@ -227,12 +311,8 @@ struct OutlineCoverage {
             }
             if (interval.begin >= interval.end - 1e-10) return true;
           }
-          covered.push_back(interval);
-          return true;
+          return add_covered_interval(interval);
         });
-    std::sort(covered.begin(), covered.end(), [](const auto &a, const auto &b) {
-      return a.begin < b.begin;
-    });
   }
 };
 
@@ -377,8 +457,9 @@ struct SelectedMeshOutlineCache::Impl {
     std::shared_ptr<OutlineTopology> topology;
     QMat4 world, local;
     bool active_selected = false;
+    std::array<QVec3, 8> bounds;
   };
-  /// Excludes FOV, viewport dimensions and orthographic panning from silhouette classification.
+  /// Framing changes need silhouette classification only when visible membership changes.
   struct View {
     ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
     std::array<float, 3> direction_or_eye{};
@@ -389,10 +470,12 @@ struct SelectedMeshOutlineCache::Impl {
   /// Retains output and scratch capacity until the source or relevant camera facts change.
   struct Pane {
     View view;
+    std::array<float, 11> framing{};
     std::uint64_t source_revision = 0, revision = 0;
     bool valid = false;
     ViewportOverlayFrame frame, next;
     std::vector<std::uint8_t> facing;
+    std::vector<std::size_t> visible_occurrences, next_visible_occurrences;
     std::array<OutlineCoverage, 2> coverage;
     ActiveOutlineMerge active_merge;
   };
@@ -435,6 +518,10 @@ struct SelectedMeshOutlineCache::Impl {
       }
       occurrences.push_back({topology, mesh.world_transform, inverse(mesh.world_transform),
                              mesh.active_selected});
+      auto &occurrence = occurrences.back();
+      for (std::size_t index = 0; index < topology->bounds.size(); ++index) {
+        occurrence.bounds[index] = transform_point(mesh.world_transform, topology->bounds[index]);
+      }
     };
     if (next_visible) {
       for (const auto &mesh : snapshot->meshes) append(mesh);
@@ -463,18 +550,33 @@ SelectedMeshOutlineCache &SelectedMeshOutlineCache::operator=(SelectedMeshOutlin
 const ViewportOverlayFrame &SelectedMeshOutlineCache::frame(
     const RenderOverlaySelectedObjectSnapshot *snapshot,
     const ViewportOverlayCamera &camera, std::size_t pane_index,
-    const RenderOverlaySelectionSnapshot *hierarchy) {
+    const RenderOverlaySelectionSnapshot *hierarchy, float outline_width_pixels) {
   impl_->prepare(snapshot, hierarchy);
   auto &pane = impl_->panes.at(pane_index);
   const Impl::View view{camera.projection, position_key(
       camera.projection == ViewportOverlayProjection::Orthographic ? camera.forward : camera.eye),
       position_key(camera.forward),
       camera.projection == ViewportOverlayProjection::Perspective ? camera.near_plane : 0};
-  if (pane.valid && pane.source_revision == impl_->source_revision && pane.view == view) return pane.frame;
+  const std::array<float, 11> framing{camera.eye.x, camera.eye.y, camera.eye.z,
+      camera.right.x, camera.right.y, camera.right.z, camera.viewport_size.x,
+      camera.viewport_size.y, camera.orthographic_size, camera.fov_degrees, outline_width_pixels};
+  const bool same_view = pane.valid && pane.source_revision == impl_->source_revision && pane.view == view;
+  if (same_view && pane.framing == framing) return pane.frame;
+  const OutlineFrustum frustum(camera, outline_width_pixels);
+  pane.next_visible_occurrences.clear();
+  for (std::size_t index = 0; index < impl_->occurrences.size(); ++index) {
+    if (frustum.intersects(impl_->occurrences[index].bounds)) pane.next_visible_occurrences.push_back(index);
+  }
+  ++impl_->stats.visibility_classifications;
+  impl_->stats.occurrence_bounds_tests += impl_->occurrences.size();
+  pane.framing = framing;
+  if (same_view && pane.visible_occurrences == pane.next_visible_occurrences) return pane.frame;
+  pane.visible_occurrences.swap(pane.next_visible_occurrences);
   pane.next.lines.clear();
   const OutlineProjection projection(camera);
   for (auto &coverage : pane.coverage) coverage.clear();
-  for (const auto &occurrence : impl_->occurrences) {
+  for (const auto index : pane.visible_occurrences) {
+    const auto &occurrence = impl_->occurrences[index];
     auto &coverage = pane.coverage[occurrence.active_selected ? 1 : 0];
     for (const auto &face : occurrence.topology->faces) {
       std::array<glm::dvec3, 3> points;
@@ -485,7 +587,8 @@ const ViewportOverlayFrame &SelectedMeshOutlineCache::frame(
     }
   }
   for (auto &coverage : pane.coverage) coverage.build();
-  for (const auto &occurrence : impl_->occurrences) {
+  for (const auto occurrence_index : pane.visible_occurrences) {
+    const auto &occurrence = impl_->occurrences[occurrence_index];
     const QVec3 local_view = camera.projection == ViewportOverlayProjection::Orthographic
         ? transform_vector(occurrence.local, camera.forward * -1.0f)
         : transform_point(occurrence.local, camera.eye);

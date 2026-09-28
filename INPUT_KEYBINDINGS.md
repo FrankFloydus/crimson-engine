@@ -69,7 +69,7 @@ command behavior record and baseline requirements.
 
 A chord is physical input, not an action. Rules select a target through app-owned boolean contexts;
 `when` supports identifiers, `!`, `&&`, `||`, and parentheses. Important context families include
-`viewportFocus`, `outlinerFocus`, `editorFocus`, `viewport.hovered`, `viewport.orthographic`, `textInputActive`, `editorTextFocus`,
+`viewportFocus`, `outlinerFocus`, `editorFocus`, `assetBrowserFocus`, `viewport.hovered`, `viewport.orthographic`, `textInputActive`, `editorTextFocus`,
 `navigation.*`, `activeTool.*`, `modalTool.active`, `transformDrag.active`, and `selectionMode.*`.
 Read `viewport_keybinding_context()` and the registration context helpers before adding another key.
 
@@ -85,6 +85,16 @@ search runs only when no editor command matches. Text/delegate editors retain ed
 for document Save commands, which settle a focused main-editor field before serializing. Popups and
 auxiliary tool windows retain input ownership. Idle viewport frames clear only viewport-owned
 prefixes; they must preserve another editor panel's multi-key sequence.
+
+The Asset Browser uses the canonical `ui.asset_browser` command (Ctrl+Space by default), including
+from its search and rename editors. A focused widget below `quaderAssetBrowserInput` supplies
+`assetBrowserFocus`: Cut, Copy, Paste, Duplicate and Delete retain their canonical mappings and
+user overrides, but dispatch to the browser's asset owner independently of scene selection modes,
+tools and clipboard availability. Project/scene document lifecycle and command search remain available;
+scene object, tool and selection shortcuts are excluded before sequence resolution.
+Native text editing, item selection and navigation keep their ownership; browser toggling remains
+available from those controls. Browser prefixes have a distinct owner and are probed without mutation
+before Qt shortcut activation. See `tests/qt_command_event_filter_tests.cpp` and `tests/editor_api_tests.cpp`.
 
 Stable state such as selection mode, text focus, preview, or navigation belongs in context predicates.
 Transient command availability such as selection counts, clipboard contents, or undo history is checked
@@ -189,6 +199,9 @@ face clicks cannot alter a pending extrusion's source; the disk accepts Ctrl and
   text writer to `QuaderKeybindingService`.
 - Validate one complete candidate, persist it, then activate it and emit `KeybindingsCommit`.
   Flush/replacement failures preserve the previous file and live resolver/catalog.
+- New compiled defaults yield to eligible stored user mappings, including a stored multi-chord
+  prefix. Immediate global-command probes honor the winning viewport mapping before choosing an
+  execution adapter; they cannot preempt a user assignment by filtering its owner out first.
 - Persist only action groups whose effective mapping differs from defaults. Legacy target-level JSON
   remains loadable: latest assignment wins within a group, and stored `when` text is rebound to the
   current app-owned scope. Loading normalizes in memory without rewriting the legacy file.

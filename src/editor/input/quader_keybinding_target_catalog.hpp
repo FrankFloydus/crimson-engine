@@ -48,7 +48,8 @@ public:
   void set_action_id(std::string_view target_id, std::string action_id);
   void set_selection_modes(std::string_view target_id,
                            std::uint32_t selection_mode_mask,
-                           std::string_view viewport_when);
+                           std::string_view viewport_when,
+                           std::string_view alternate_when = {});
   void finalize_scope_metadata();
 
   [[nodiscard]] const QuaderKeybindingTargetMetadata *

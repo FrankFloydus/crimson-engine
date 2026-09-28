@@ -30,9 +30,16 @@ Standard v1/v2 parameters may specify `diffuseModel` as `burley` or `lambert`;
 missing values use Burley. Writers preserve the authored selection in v2, and unknown
 strings or non-string values are rejected. Strict named-image v3 remains Burley.
 
-Project manifest v4 stores a required nonzero unsigned `minimumProductRelease` alongside permanent
-`deletedMaterialIds`. Older v1/v2/v3 manifests remain readable and require Internal Full. Serialization
-always writes v4 while preserving the loaded release requirement; only authoring explicitly raises it.
+Project manifest v5 stores persistent texture UUIDs, paths, legacy aliases and permanent
+`deletedTextureIds`, together with the v4 `minimumProductRelease` and `deletedMaterialIds`.
+Older v1/v2/v3 manifests remain readable and require Internal Full; v4 retains its authored release.
+Texture discovery is an owner-level read-only candidate operation, never a per-slot filesystem scan.
+Initial legacy project opening defers format migration until an authored save or workspace mutation.
+Serialization writes v5 while preserving release and deletion metadata; only authoring raises release requirements.
+Texture resolution consults canonical and alias identities before QMAT path hints, and retired IDs never
+fall back to paths. Image identity and decoded bytes remain independent of slot color-space interpretation.
+Materials and supported source images may occupy any visible project folder; dot-prefixed bookkeeping
+and project manifests are excluded from authored asset discovery.
 Session owners enforce release compatibility before replacing live state or provisioning assets.
 Deleted UUIDs resolve only to the reserved Default Material through `ProjectMaterialReferenceResolver`.
 Catalog lookup remains exact: deleted assets cannot be edited or reassigned. Never discard release

@@ -13,6 +13,9 @@ verification, Release-only default handoff, and versioning. Read the tested owne
 
 ## Test Rules
 
+- Tests follow the [source naming conventions](../src/AGENTS.md#naming-from-the-first-edit)
+  from the first edit, including local `constexpr` names and fixture/static members. Do not
+  leave naming corrections for the commit request.
 - Use GoogleTest and deterministic, headless fixtures. Before a manual editor workflow, express
   its inspectable behavior through public APIs or `tests/support/BehaviorScenario` and assert the
   relevant document, mesh, selection, history, overlay, viewport, or render state.

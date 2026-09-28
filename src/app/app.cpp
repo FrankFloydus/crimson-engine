@@ -12,6 +12,8 @@
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
+#include "api/quader_project_assets_api_internal_access.hpp"
+#include "platform/project_asset_recycle.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/session/project_autosave_service.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
@@ -311,6 +313,8 @@ bool App::initialize(QApplication &application,
   project_session_.set_history_max_steps(
       static_cast<std::size_t>(ui_.session_settings().undo_steps));
   editor_ = std::make_unique<QuaderEditorApi>(project_session_);
+  QuaderProjectAssetsApiInternalAccess::set_recycle_port(
+      editor_->project_assets(), recycle_project_asset_paths);
   QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
       *editor_, [this](SceneSession &scene) { bind_active_scene(scene); });
   bind_active_scene(project_session_.fallback_scene());
@@ -347,9 +351,7 @@ bool App::initialize(QApplication &application,
       QuaderSceneDocumentsRuntimeHooks{
           .choose_open_scene_path =
               [this]() {
-                return platform_open_scene_file_dialog(
-                    scene_file_dialog_options(ui_.native_window_handle(),
-                                              editor_->project()));
+                return ui_.choose_project_scene_path(false).path;
               },
           .choose_save_scene_as_path =
               [this](SceneSessionId id) {
@@ -361,12 +363,8 @@ bool App::initialize(QApplication &application,
                     break;
                   }
                 }
-                const PlatformFileDialogResult result =
-                    platform_save_scene_file_dialog(scene_file_dialog_options(
-                        ui_.native_window_handle(), editor_->project(),
-                        selected.has_value() ? &*selected : nullptr));
-                return QuaderSceneSavePathResult{
-                    .path = result.path, .error_message = result.error_message};
+                return ui_.choose_project_scene_path(
+                    true, selected.has_value() ? &*selected : nullptr);
               },
           .confirm_dirty_scene =
               [this](const QuaderSceneDocumentInfo &scene,
