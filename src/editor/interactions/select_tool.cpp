@@ -526,28 +526,14 @@ public:
             return face.has_screen_position &&
                    rect_contains(request.rect, face.screen_position);
           }
-                if (face.has_screen_position && rect_contains(request.rect, face.screen_position)) {
-			return true;
-		}
-		for (const quader::QVec2 point : face.screen_vertices) {
-			if (rect_contains(request.rect, point)) {
-				return true;
-			}
-		}
-		if (face.screen_vertices.size() >= 2U) {
-			for (std::size_t index = 0; index < face.screen_vertices.size(); ++index) {
-				if (segment_intersects_rect(
-							request.rect,
-							face.screen_vertices[index],
-							face.screen_vertices[(index + 1U) % face.screen_vertices.size()])) {
-					return true;
-				}
-			}
-			if (any_rect_corner_inside_polygon(request.rect, face.screen_vertices)) {
-				return true;
-			}
-		}
-		return false;
+          // An averaged center can lie in the empty part of a concave face.
+          // Authored boundary geometry is authoritative when it is present;
+          // its edge/corner test retains concavity and gaps between faces.
+          if (!face.screen_vertices.empty()) {
+            return polygon_intersects_rect(request.rect, face.screen_vertices);
+          }
+          return face.has_screen_position &&
+                 rect_contains(request.rect, face.screen_position);
 	}
 
 	[[nodiscard]] bool projected_edge_matches(const RectangleProjectedEdge& edge, const RectangleProjectedHitsRequest& request) const

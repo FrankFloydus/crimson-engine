@@ -62,6 +62,15 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
       return OperationResult::failure("Select an edge to insert an edge loop.");
     }
 
+    if (!std::isfinite(factor_)) {
+        return OperationResult::failure("Edge loop insertion needs a finite placement factor.");
+    }
+    const OperationResult source_validation =
+        validate_authored_operation_candidate(document, document, true, true);
+    if (!source_validation.success) {
+        return source_validation;
+    }
+
     float factor = factor_;
     factor = std::clamp(factor, 0.01F, 0.99F);
     const Edge active_edge = make_edge(selection.active_edge.a, selection.active_edge.b);
@@ -84,12 +93,12 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
     for (const EdgeLoopFaceSplit& split : splits) {
         const Face* face = find_face_copy(original_faces, split.face_id);
         if (face == nullptr || face->vertices.size() != 4) {
-            continue;
+            return OperationResult::failure("Edge loop insertion encountered an invalid quad strip.");
         }
 
         const std::optional<std::size_t> edge_index = face_edge_index(*face, split.entry_edge);
         if (!edge_index.has_value()) {
-            continue;
+            return OperationResult::failure("Edge loop insertion encountered an invalid quad strip.");
         }
 
         const std::size_t i0 = *edge_index;
@@ -103,7 +112,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         const ElementId opposite_vertex = split_vertex_for_edge(candidate, split_vertices, opposite_edge, factor);
         if (entry_vertex == kInvalidElementId ||
             opposite_vertex == kInvalidElementId) {
-          continue;
+          return OperationResult::failure("Edge loop insertion could not split an authored edge.");
         }
 
         Face first_split_face;
@@ -151,8 +160,23 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         return split_face_ids.contains(face.id);
     });
     candidate.faces.insert(candidate.faces.end(), split_faces.begin(), split_faces.end());
-    prune_invalid_faces(candidate);
-    prune_unused_vertices(candidate);
+    // A stopped strip still splits its endpoint edges. Every incident polygon
+    // must reference the same new vertex, including triangles and ngon caps.
+    const bool has_unsplit_incident_face = std::ranges::any_of(
+        candidate.faces, [&split_vertices](const Face& face) {
+            for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+                const Edge edge = make_edge(face.vertices[index],
+                    face.vertices[(index + 1U) % face.vertices.size()]);
+                if (split_vertices.contains(edge_key(edge))) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    if (has_unsplit_incident_face &&
+        !apply_knife_edge_splits_to_faces(candidate, split_vertices)) {
+        return OperationResult::failure("Edge loop insertion could not update adjacent face boundaries.");
+    }
     restore_source_face_orientation(document, candidate);
     remap_normal_edge_states_after_edge_splits(
         document, candidate, split_vertices);
@@ -166,8 +190,10 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
     }
     (void)copy_edge_normal_modes(
         document, candidate, connector_normal_mode_copies);
-    if (!every_face_triangulates(candidate)) {
-        return OperationResult::failure("Edge loop insertion would create invalid face geometry.");
+    const OperationResult candidate_validation =
+        validate_authored_operation_candidate(document, candidate, true, true);
+    if (!candidate_validation.success) {
+        return candidate_validation;
     }
 
     document = std::move(candidate);

@@ -209,6 +209,28 @@ TEST_F(QtAssetBrowserTests, CreationMoveAndRemovalRetainUnchangedRowsAndFolderTr
   EXPECT_EQ(browser_->selected_items().front().id, QStringLiteral("texture"));
 }
 
+TEST_F(QtAssetBrowserTests, RepeatedDuplicateIdentitiesDoNotCorruptIncrementalRows) {
+  auto snapshot = browser_snapshot();
+  snapshot.items.push_back(browser_item(QStringLiteral("copy"),
+      QStringLiteral("First Copy.qdr"), QtAssetBrowserKind::Scene));
+  snapshot.items.push_back(browser_item(QStringLiteral("copy"),
+      QStringLiteral("Second Copy.qdr"), QtAssetBrowserKind::Scene));
+  for (int revision = 0; revision < 3; ++revision) {
+    ++snapshot.revision;
+    ASSERT_TRUE(browser_->set_snapshot(snapshot));
+    EXPECT_EQ(grid()->model()->rowCount(), 5);
+    EXPECT_EQ(browser_->snapshot().items.size(), 7U);
+  }
+  snapshot.items.pop_back();
+  ++snapshot.revision;
+  ASSERT_TRUE(browser_->set_snapshot(snapshot));
+  EXPECT_EQ(grid()->model()->rowCount(), 4);
+  EXPECT_EQ(browser_->snapshot().items.size(), 6U);
+  ++snapshot.revision;
+  ASSERT_TRUE(browser_->set_snapshot(snapshot));
+  EXPECT_EQ(grid()->model()->rowCount(), 4);
+}
+
 TEST_F(QtAssetBrowserTests, FolderAndSceneArtworkAreFilledAndUsageFilterIsAbsent) {
   EXPECT_EQ(browser_->findChild<QComboBox *>(QStringLiteral("assetBrowser.usageFilter")), nullptr);
   auto *tree = browser_->findChild<QTreeWidget *>(QStringLiteral("assetBrowser.folderTree"));

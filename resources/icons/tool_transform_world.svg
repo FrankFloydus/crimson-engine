@@ -1,0 +1,5 @@
+<!-- Copyright (c) 2026 Francesco Di Blasi. All rights reserved. Quader proprietary source; no permission to use, copy, modify or distribute without prior written authorization. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+<g transform="translate(4.8 1) scale(.9)"><g fill="none" stroke="#757F9B" stroke-width="4.4"><circle cx="72" cy="28" r="25"/><ellipse cx="72" cy="28" rx="11.5" ry="25"/><path d="M48.676192 19H95.323808M48.676192 37H95.323808"/></g><path d="M46 64V24" fill="none" stroke="#73BB46" stroke-width="6"/><path d="M46 11 34 29 46 24 58 29Z" fill="#63A23C"/><path d="M39 72 12 85" fill="none" stroke="#5B7FF5" stroke-width="6"/><path d="M3 89 12 70 12 81 24 91Z" fill="#354D89"/><path d="M55 73 80 85" fill="none" stroke="#A64B24" stroke-width="6"/><path d="M89 89 80 70 80 81 68 91Z" fill="#783C1F"/><path d="M46 58 58 64 46 70 34 64Z" fill="#BCC5DF"/><path d="M34 64 46 70 46 82 34 76Z" fill="#6C759C"/><path d="M46 70 58 64 58 76 46 82Z" fill="#383D56"/></g>
+</svg>
+

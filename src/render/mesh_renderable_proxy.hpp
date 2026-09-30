@@ -16,10 +16,15 @@
 #include <utils/Entity.h>
 
 #include <cstdint>
+#include <memory>
 #include <utility>
 #include <vector>
 
+namespace filament { class SkinningBuffer; }
+
 namespace quader {
+
+struct EditableMeshGeometryState;
 
 /**
  * Represents a Mesh Renderable Proxy value used by the render extraction and Filament resource layer.
@@ -50,6 +55,9 @@ struct MeshRenderableProxy {
     filament::VertexBuffer *vertex_buffer = nullptr;
     filament::IndexBuffer *index_buffer = nullptr;
     filament::InstanceBuffer *instance_buffer = nullptr;
+    // The combined geometry owner owns the palette. Render passes borrow it.
+    filament::SkinningBuffer *skinning_buffer = nullptr;
+    std::shared_ptr<const EditableMeshGeometryState> editable_geometry_state;
     std::vector<std::uint32_t> material_slots;
     std::vector<filament::MaterialInstance *> material_instances;
 
@@ -74,6 +82,8 @@ struct MeshRenderableProxy {
       vertex_buffer = std::exchange(other.vertex_buffer, nullptr);
       index_buffer = std::exchange(other.index_buffer, nullptr);
       instance_buffer = std::exchange(other.instance_buffer, nullptr);
+      skinning_buffer = std::exchange(other.skinning_buffer, nullptr);
+      editable_geometry_state = std::move(other.editable_geometry_state);
       material_slots = std::move(other.material_slots);
       material_instances = std::move(other.material_instances);
     }

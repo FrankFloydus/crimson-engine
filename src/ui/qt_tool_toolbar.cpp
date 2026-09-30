@@ -35,34 +35,33 @@
 namespace quader {
 namespace {
 
-/// Describes one requested toolbar tool, its icon, and group separation.
+/// Retains all tool sources while choosing the fixed modeling toolbar contents.
 struct ToolIconSpec {
   ViewportToolId tool;
   const char *icon_path;
-  bool separator_before = false;
+  bool toolbar_visible = true;
 };
 
 constexpr std::array<ToolIconSpec, 18> kToolIconSpecs{{
-    {ViewportToolId::Select, ":/quader/icons/tool_select.png"},
-    {ViewportToolId::LassoSelect, ":/quader/icons/tool_lasso.png"},
-    {ViewportToolId::Move, ":/quader/icons/tool_move.png"},
-    {ViewportToolId::Rotate, ":/quader/icons/tool_rotate.png"},
-    {ViewportToolId::Scale, ":/quader/icons/tool_scale.png"},
-    {ViewportToolId::Pivot, ":/quader/icons/tool_pivot.png"},
-    {ViewportToolId::CreatePrimitive,
-     ":/quader/icons/tool_create_box.png", true},
+    {ViewportToolId::Knife, ":/quader/icons/tool_knife.png"},
     {ViewportToolId::Extrude, ":/quader/icons/tool_extrude.png"},
     {ViewportToolId::InsertEdgeLoop,
      ":/quader/icons/tool_insert_edge_loop.png"},
-    {ViewportToolId::Knife, ":/quader/icons/tool_knife.png"},
-    {ViewportToolId::Cut, ":/quader/icons/tool_cut.png"},
+    {ViewportToolId::CreatePrimitive, ":/quader/icons/tool_create_box.png"},
     {ViewportToolId::Poly, ":/quader/icons/tool_poly.png"},
+    {ViewportToolId::Curve, nullptr},
     {ViewportToolId::Mirror, ":/quader/icons/tool_mirror.png"},
-    {ViewportToolId::UvPeel, ":/quader/icons/tool_uv_peel.png"},
+    {ViewportToolId::Cut, ":/quader/icons/tool_cut.png"},
     {ViewportToolId::LinearArray, ":/quader/icons/tool_linear_array.png"},
     {ViewportToolId::RadialArray, ":/quader/icons/tool_radial_array.png"},
     {ViewportToolId::PathArray, ":/quader/icons/tool_path_array.png"},
-    {ViewportToolId::Curve, nullptr},
+    {ViewportToolId::Pivot, ":/quader/icons/tool_pivot.png"},
+    {ViewportToolId::UvPeel, ":/quader/icons/tool_uv_peel.png"},
+    {ViewportToolId::Select, ":/quader/icons/tool_select.png", false},
+    {ViewportToolId::LassoSelect, ":/quader/icons/tool_lasso.png", false},
+    {ViewportToolId::Move, ":/quader/icons/tool_move.png", false},
+    {ViewportToolId::Rotate, ":/quader/icons/tool_rotate.png", false},
+    {ViewportToolId::Scale, ":/quader/icons/tool_scale.png", false},
 }};
 
 /// Keeps menu ordering independent of the serialized primitive enum values.
@@ -156,21 +155,13 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     if (!release_allows_tool(tool_id)) {
       continue;
     }
-    const bool pane_only = spec.tool == ViewportToolId::Select ||
-                           spec.tool == ViewportToolId::LassoSelect ||
-                           spec.tool == ViewportToolId::Move ||
-                           spec.tool == ViewportToolId::Rotate ||
-                           spec.tool == ViewportToolId::Scale;
     const std::string_view fallback = viewport_tool_label(spec.tool);
     const QIcon icon =
         spec.tool == ViewportToolId::Curve
             ? curve_tool_icon(palette())
             : qt_multiresolution_icon(QString::fromUtf8(spec.icon_path));
     QAction *action = new QAction(icon, QString::fromUtf8(fallback.data()), this);
-    if (!pane_only) {
-      if (spec.separator_before && !actions().empty()) {
-        addSeparator();
-      }
+    if (spec.toolbar_visible) {
       addAction(action);
     }
     action->setObjectName(
@@ -339,6 +330,12 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
   const auto runtime_tool_revision = editor.tools().active_tool_revision();
   const auto primitive_shape = editor.tools().preferred_primitive_shape();
   const auto keybindings_revision = editor.commands().keybindings_revision();
+  const auto revisions = editor.revisions();
+  const std::array<std::uint64_t, 8> availability_revisions{
+      revisions.project_revision, revisions.scene_revision,
+      revisions.scene_layer_revision, revisions.asset_revision,
+      revisions.modeling_content_revision, selection.content_revision,
+      selection.sub_selection_revision, editor.tools().availability_revision()};
   if (!force && synchronization_valid_ &&
       synchronized_editor_ == &editor &&
       synchronized_selected_tool_ == selected_tool &&
@@ -348,7 +345,8 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
       synchronized_selection_mode_ == selection.mode &&
       synchronized_selection_revision_ == selection.selection_revision &&
       synchronized_primitive_shape_ == primitive_shape &&
-      synchronized_keybindings_revision_ == keybindings_revision) {
+      synchronized_keybindings_revision_ == keybindings_revision &&
+      synchronized_availability_revisions_ == availability_revisions) {
     return;
   }
   synchronization_valid_ = true;
@@ -361,6 +359,7 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
   synchronized_selection_revision_ = selection.selection_revision;
   synchronized_primitive_shape_ = primitive_shape;
   synchronized_keybindings_revision_ = keybindings_revision;
+  synchronized_availability_revisions_ = availability_revisions;
 
   for (const ToolAction &entry : tool_actions_) {
     if (entry.action == nullptr) {

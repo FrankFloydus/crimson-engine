@@ -9,6 +9,7 @@
 #include <editor/interactions/interaction_api.hpp>
 
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -164,4 +165,150 @@ TEST(QdrModelingRuntimeToolViewportProjectionTests,
 	EXPECT_NEAR(local_ray.direction.x, 0.0F, 0.0001F);
 	EXPECT_NEAR(local_ray.direction.y, 0.0F, 0.0001F);
 	EXPECT_NEAR(local_ray.direction.z, -1.0F, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeToolViewportProjectionTests,
+     PreparedPerspectiveCameraKeepsFrozenProjectionAndRays) {
+  auto camera = front_camera();
+  camera.transform.origin = {};
+  camera.viewport_size = {800.0f, 400.0f};
+  camera.fov_degrees = 90.0;
+  const quader_editor_core::PreparedViewportProjection prepared(camera);
+  camera.transform.origin = {100.0f, 200.0f, 300.0f};
+  camera.transform.x_axis = {};
+  camera.viewport_size = {1.0f, 1.0f};
+  camera.fov_degrees = 1.0;
+
+  quader::QVec2 screen{};
+  for (int sample = 1; sample <= 4; ++sample) {
+    const auto distance = static_cast<float>(sample);
+    ASSERT_TRUE(prepared.project_point({4.0f * distance, distance, -2.0f * distance}, screen));
+    EXPECT_NEAR(screen.x, 800.0f, 0.0001f);
+    EXPECT_NEAR(screen.y, 100.0f, 0.0001f);
+    EXPECT_FALSE(prepared.point_is_behind_camera({0.0f, 0.0f, -distance}));
+  }
+  const auto ray = prepared.ray_from_screen_point({800.0f, 100.0f});
+  const double length = std::sqrt(21.0);
+  EXPECT_FLOAT_EQ(ray.origin.x, 0.0f);
+  EXPECT_FLOAT_EQ(ray.origin.y, 0.0f);
+  EXPECT_FLOAT_EQ(ray.origin.z, 0.0f);
+  EXPECT_NEAR(ray.direction.x, 4.0 / length, 0.000001);
+  EXPECT_NEAR(ray.direction.y, 1.0 / length, 0.000001);
+  EXPECT_NEAR(ray.direction.z, -2.0 / length, 0.000001);
+  EXPECT_TRUE(prepared.point_is_behind_camera({0.0f, 0.0f, 1.0f}));
+}
+
+TEST(QdrModelingRuntimeToolViewportProjectionTests,
+     PreparedAffineCameraPreservesShearedReflectedProjectionAndRays) {
+  auto camera = front_camera();
+  camera.affine_model_space = true;
+  camera.transform.origin = {3.0f, -4.0f, 2.0f};
+  camera.transform.x_axis = {-2.0f, 1.0f, 0.0f};
+  camera.transform.y_axis = {0.0f, 0.5f, 0.25f};
+  camera.transform.z_axis = {0.0f, 0.0f, 2.0f};
+  camera.viewport_size = {800.0f, 400.0f};
+  camera.fov_degrees = 90.0;
+  camera.orthographic_size = 8.0;
+  const quader::QVec3 point{4.0f, -2.0f, 0.0f};
+  quader::QVec2 screen{};
+  const quader_editor_core::PreparedViewportProjection perspective(camera);
+  ASSERT_TRUE(perspective.project_point(point, screen));
+  EXPECT_NEAR(screen.x, 400.0f, 0.0001f);
+  EXPECT_NEAR(screen.y, 175.0f, 0.0001f);
+  const auto perspective_ray = perspective.ray_from_screen_point(screen);
+  EXPECT_FLOAT_EQ(perspective_ray.origin.x, 3.0f);
+  EXPECT_FLOAT_EQ(perspective_ray.origin.y, -4.0f);
+  EXPECT_FLOAT_EQ(perspective_ray.origin.z, 2.0f);
+  EXPECT_NEAR(perspective_ray.direction.x, 1.0 / 3.0, 0.000001);
+  EXPECT_NEAR(perspective_ray.direction.y, 2.0 / 3.0, 0.000001);
+  EXPECT_NEAR(perspective_ray.direction.z, -2.0 / 3.0, 0.000001);
+
+  camera.projection = quader_editor_core::CameraProjection::Orthographic;
+  const quader_editor_core::PreparedViewportProjection orthographic(camera);
+  ASSERT_TRUE(orthographic.project_point(point, screen));
+  EXPECT_NEAR(screen.x, 400.0f, 0.0001f);
+  EXPECT_NEAR(screen.y, 175.0f, 0.0001f);
+  const auto orthographic_ray = orthographic.ray_from_screen_point(screen);
+  EXPECT_FLOAT_EQ(orthographic_ray.origin.x, 3.5f);
+  EXPECT_FLOAT_EQ(orthographic_ray.origin.y, -3.0f);
+  EXPECT_FLOAT_EQ(orthographic_ray.origin.z, 2.0f);
+  const double length = std::sqrt(21.0);
+  EXPECT_NEAR(orthographic_ray.direction.x, 1.0 / length, 0.000001);
+  EXPECT_NEAR(orthographic_ray.direction.y, 2.0 / length, 0.000001);
+  EXPECT_NEAR(orthographic_ray.direction.z, -4.0 / length, 0.000001);
+  EXPECT_FALSE(orthographic.point_is_behind_camera({3.0f, -4.0f, 100.0f}));
+}
+
+TEST(QdrModelingRuntimeToolViewportProjectionTests,
+     PreparedCameraPreservesNearThresholdAndNonfinitePointRejection) {
+  auto camera = front_camera();
+  camera.transform.origin = {};
+  const quader_editor_core::PreparedViewportProjection prepared(camera);
+  constexpr float kNearDistance = 0.0001f;
+  quader::QVec2 screen{17.0f, 19.0f};
+  EXPECT_FALSE(prepared.project_point({0.0f, 0.0f, -kNearDistance}, screen));
+  EXPECT_FLOAT_EQ(screen.x, 17.0f);
+  EXPECT_FLOAT_EQ(screen.y, 19.0f);
+  EXPECT_TRUE(prepared.point_is_behind_camera({0.0f, 0.0f, -kNearDistance}));
+  const float visible_distance = std::nextafter(kNearDistance, 1.0f);
+  ASSERT_TRUE(prepared.project_point({0.0f, 0.0f, -visible_distance}, screen));
+  EXPECT_FLOAT_EQ(screen.x, 400.0f);
+  EXPECT_FLOAT_EQ(screen.y, 300.0f);
+  EXPECT_FALSE(prepared.point_is_behind_camera({0.0f, 0.0f, -visible_distance}));
+  EXPECT_FALSE(prepared.project_point(
+      {std::numeric_limits<float>::infinity(), 0.0f, -1.0f}, screen));
+  EXPECT_FALSE(prepared.project_point(
+      {0.0f, std::numeric_limits<float>::quiet_NaN(), -1.0f}, screen));
+}
+
+TEST(QdrModelingRuntimeToolViewportProjectionTests,
+     PreparedOrthographicCameraRetainsDegenerateAxisAndExtentFallbacks) {
+  auto camera = front_camera();
+  camera.projection = quader_editor_core::CameraProjection::Orthographic;
+  camera.transform = {};
+  camera.transform.x_axis = {};
+  camera.transform.y_axis = {};
+  camera.transform.z_axis = {};
+  camera.viewport_size = {0.0f, -10.0f};
+  camera.orthographic_size = 0.0;
+  const quader_editor_core::PreparedViewportProjection prepared(camera);
+  quader::QVec2 screen{};
+  ASSERT_TRUE(prepared.project_point({0.0001f, -0.0001f, 100.0f}, screen));
+  EXPECT_NEAR(screen.x, 1.0f, 0.000001f);
+  EXPECT_NEAR(screen.y, 1.0f, 0.000001f);
+  EXPECT_FALSE(prepared.point_is_behind_camera({0.0f, 0.0f, 100.0f}));
+  const auto ray = prepared.ray_from_screen_point({1.0f, 1.0f});
+  EXPECT_FLOAT_EQ(ray.origin.x, 0.0001f);
+  EXPECT_FLOAT_EQ(ray.origin.y, -0.0001f);
+  EXPECT_FLOAT_EQ(ray.origin.z, 0.0f);
+  EXPECT_FLOAT_EQ(ray.direction.x, 0.0f);
+  EXPECT_FLOAT_EQ(ray.direction.y, 0.0f);
+  EXPECT_FLOAT_EQ(ray.direction.z, -1.0f);
+  EXPECT_FALSE(prepared.project_point(
+      {0.0f, std::numeric_limits<float>::infinity(), 0.0f}, screen));
+}
+
+TEST(QdrModelingRuntimeToolViewportProjectionTests,
+     PreparedSingularAffineCameraKeepsProjectionSpecificRayFallbacks) {
+  auto camera = front_camera();
+  camera.affine_model_space = true;
+  camera.transform.x_axis = {1.0f, 0.0f, 0.0f};
+  camera.transform.y_axis = {2.0f, 0.0f, 0.0f};
+  camera.transform.z_axis = {0.0f, 0.0f, 2.0f};
+  const quader_editor_core::PreparedViewportProjection perspective(camera);
+  const auto perspective_ray = perspective.ray_from_screen_point({700.0f, 100.0f});
+  EXPECT_FLOAT_EQ(perspective_ray.origin.z, 5.0f);
+  EXPECT_FLOAT_EQ(perspective_ray.direction.x, 0.0f);
+  EXPECT_FLOAT_EQ(perspective_ray.direction.y, 0.0f);
+  EXPECT_FLOAT_EQ(perspective_ray.direction.z, -2.0f);
+
+  camera.projection = quader_editor_core::CameraProjection::Orthographic;
+  const quader_editor_core::PreparedViewportProjection orthographic(camera);
+  const auto orthographic_ray = orthographic.ray_from_screen_point({700.0f, 100.0f});
+  EXPECT_FLOAT_EQ(orthographic_ray.origin.x, 0.0f);
+  EXPECT_FLOAT_EQ(orthographic_ray.origin.y, 0.0f);
+  EXPECT_FLOAT_EQ(orthographic_ray.origin.z, 5.0f);
+  EXPECT_FLOAT_EQ(orthographic_ray.direction.x, 0.0f);
+  EXPECT_FLOAT_EQ(orthographic_ray.direction.y, 0.0f);
+  EXPECT_FLOAT_EQ(orthographic_ray.direction.z, 0.0f);
 }

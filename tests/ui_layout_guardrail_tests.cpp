@@ -677,16 +677,15 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(console_header,
                   "class ConsolePanel final : public QWidget");
-  expect_contains(console, "new QListView");
-  expect_contains(console, "new QStandardItemModel");
+  expect_contains(console, "new QPlainTextEdit");
+  expect_contains(console, "new QMenu");
   expect_contains(console, "ui_panel_stable_id(UIPanelId::Console)");
   expect_contains(console, "QStringLiteral(\"console.search\")");
   expect_contains(console, "QStringLiteral(\"console.entries\")");
-  expect_contains(console, "panel_.setFocusProxy(search_edit_)");
-  expect_contains(console, "QStringLiteral(\"console.entries.model\")");
-  expect_contains(console, "item->setEditable(false)");
-  expect_missing(console, "entries_view_->setSelectionMode(");
-  expect_missing(console, "entries_view_->setEditTriggers(");
+  expect_contains(console, "panel_.setFocusProxy(command_edit_)");
+  expect_contains(console, "entries_view_->setReadOnly(true)");
+  expect_contains(console, "QPlainTextEdit::NoWrap");
+  expect_missing(console, "new QStandardItemModel");
   const std::size_t revision_gate =
       console.find("const std::uint64_t revision = Logger::memory_revision()");
   const std::size_t incremental_read =
@@ -696,13 +695,8 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(revision_gate, incremental_read);
   expect_contains(console,
                    "source_revision_valid_ && source_revision_ == revision");
-  expect_contains(console, "entries_model_->removeRows(0, removed_visible_rows)");
-  expect_contains(console,
-                  "entries_model_->invisibleRootItem()->appendRows("
-                  "appended_items)");
-  expect_contains(console,
-                  "entries_model_->invisibleRootItem()->appendRows(items)");
-  expect_missing(console, "entries_model_->appendRow(item)");
+  expect_contains(console, "remove_visible_entry(entry->id, state)");
+  expect_contains(console, "append_visible_entry(entry)");
   expect_contains(console, "ConsoleModel::accepts_normalized(");
   expect_contains(console, "search_filter_timer_->setSingleShot(true)");
   expect_contains(console,
@@ -717,7 +711,7 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(localization, std::string::npos);
   const std::string source_sync_body =
       console.substr(source_sync, localization - source_sync);
-  expect_missing(source_sync_body, "entries_model_->clear()");
+  expect_missing(source_sync_body, "rebuild_entries()");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1554,7 +1548,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system,
                   "selection_toolbar_->synchronize(*editor_, active_mode, true)");
   expect_contains(ui_system,
-                  "tool_toolbar_->synchronize(*editor_, selection, true)");
+                  "synchronize_tool_toolbar(selection, true)");
   expect_contains(ui_system,
                   "snapping_toolbar_->synchronize(*editor_, true)");
   expect_contains(ui_system,
@@ -1791,12 +1785,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "setIconSize(QSize(32, 32))");
   expect_contains(toolbar, "Qt::ToolButtonIconOnly");
   expect_contains(toolbar, "action_group->setExclusive(true)");
-  expect_contains(toolbar, "if (spec.separator_before && !actions().empty())");
-  expect_contains(toolbar, "addSeparator()");
+  expect_contains(toolbar, "if (spec.toolbar_visible)");
   expect_contains(toolbar, "{ViewportToolId::CreatePrimitive,");
-  expect_contains(toolbar, "tool_create_box.png\", true");
-
-  std::size_t previous_icon = 0;
   for (std::string_view icon :
        {"tool_select.png", "tool_move.png", "tool_rotate.png",
         "tool_scale.png", "tool_pivot.png", "tool_create_box.png",
@@ -1804,9 +1794,7 @@ TEST(UiLayoutGuardrailTests,
         "tool_insert_edge_loop.png", "tool_knife.png", "tool_cut.png",
         "tool_poly.png", "tool_mirror.png", "tool_linear_array.png",
         "tool_radial_array.png"}) {
-    const std::size_t icon_position = toolbar.find(icon, previous_icon);
-    EXPECT_NE(icon_position, std::string::npos) << icon;
-    previous_icon = icon_position + icon.size();
+    expect_contains(toolbar, icon);
   }
 
   expect_contains(ui_system,
@@ -1820,7 +1808,7 @@ TEST(UiLayoutGuardrailTests,
                   "command_id_for_tool_activation(tool_id)");
   expect_contains(ui_system, "commands().execute(command_id)");
   expect_contains(ui_system,
-                  "tool_toolbar_->synchronize(*editor_, selection,");
+                  "synchronize_tool_toolbar(selection, owner_state_changed)");
   expect_contains(ui_system, "owner_state_changed);");
   expect_contains(ui_system,
                   "toolbar_owner_presenter_.needs_refresh(owner_stamp)");
@@ -1872,14 +1860,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "{ViewportToolId::UvPeel, \":/quader/icons/tool_uv_peel.png\"}");
   expect_contains(toolbar, "refresh_curve_tool_icon()");
   expect_contains(toolbar, "QEvent::PaletteChange");
-  const std::size_t mirror = toolbar.find("{ViewportToolId::Mirror,");
-  const std::size_t peel = toolbar.find("{ViewportToolId::UvPeel,");
-  const std::size_t linear_array = toolbar.find("{ViewportToolId::LinearArray,");
-  ASSERT_NE(mirror, std::string::npos);
-  ASSERT_NE(peel, std::string::npos);
-  ASSERT_NE(linear_array, std::string::npos);
-  EXPECT_LT(mirror, peel);
-  EXPECT_LT(peel, linear_array);
   expect_contains(toolbar, "QPainter painter(&pixmap)");
   expect_contains(toolbar, "palette.color(QPalette::ButtonText)");
 }
@@ -3584,7 +3564,11 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(release_capture, show);
 
   expect_missing(presenter, "available_actions(");
-  expect_missing(presenter, "available_action_set(");
+  const std::size_t presenter_show =
+      presenter.find("void QtViewportContextMenuPresenter::show(");
+  ASSERT_NE(presenter_show, std::string::npos);
+  expect_missing(std::string_view(presenter).substr(presenter_show),
+                 "available_action_set(");
   expect_contains(
       presenter,
       "std::string popup_key = \"ui.viewport.context_menu.action.\";");

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/mesh_asset.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 
 #include <editor/modeling/runtime/session.hpp>
 #include <quader/modeling/mesh/polygon_document.hpp>
@@ -21,6 +22,8 @@ namespace quader {
 
 /** Immutable affected-face connectivity and compiled ranges for one gesture. */
 struct MeshProjectionPositionUpdatePlan;
+/** Retains canonical topology and direct authored-to-compiled vertex mappings. */
+struct MeshRetainedPositionProjectionPlan;
 
 /** Cumulative projection work and immutable gesture-plan preparation. */
 struct MeshProjectionPositionUpdateStats {
@@ -35,6 +38,8 @@ struct MeshProjectionPositionUpdateStats {
   std::uint64_t partial_plan_face_visit_count = 0;
   std::uint64_t partial_plan_reuse_count = 0;
   std::uint64_t partial_plan_fallback_count = 0;
+  std::uint64_t retained_stream_projection_count = 0;
+  std::uint64_t retained_stream_fallback_count = 0;
 };
 
 /**
@@ -99,6 +104,45 @@ public:
   prepare_position_update_plan(
       const MeshAsset &current,
       std::span<const std::uint32_t> movable_vertex_ids);
+  /** Prepares immutable compilation input once for an SDK coordinate gesture. */
+  [[nodiscard]] static std::shared_ptr<const MeshRetainedPositionProjectionPlan>
+  prepare_retained_position_projection(
+      const quader::modeling::PolygonDocument &document, const MeshAsset &current,
+      const MeshProjectionPositionUpdatePlan *partial_plan = nullptr);
+  /** Derives canonical streams without materializing an authored native document. */
+  [[nodiscard]] static std::shared_ptr<const MeshGeometryProjection>
+  project_retained_mesh_positions(
+      const quader::modeling::PolygonDocument &document,
+      const quader::modeling::PolygonDocument &previous_document,
+      const MeshRetainedPositionProjectionPlan &plan,
+      const std::shared_ptr<const MeshGeometryProjection> &previous = {},
+      std::shared_ptr<std::vector<QVec3>> positions = {});
+  /**
+   * Applies the complete fixed vertex-update set of a prepared SDK transform
+   * directly to gesture scratch and retained compiled ranges. Publications never
+   * borrow the mutable scratch. A different update set/layout returns no result.
+   * UV-preserving n-gons retain this path only while their triangle identities
+   * match the source; loop rebasing remains with the canonical fallback.
+   */
+  [[nodiscard]] static std::shared_ptr<const MeshGeometryProjection>
+  project_retained_mesh_position_updates(
+      std::span<const modeling::VertexPositionUpdate> updates,
+      const MeshRetainedPositionProjectionPlan &plan,
+      const std::shared_ptr<const MeshGeometryProjection> &previous = {},
+      std::shared_ptr<std::vector<QVec3>> positions = {},
+      bool preserve_preview_uv_layout = false);
+  /**
+   * Adopts accepted streams, reusing a family's authored pin only when its full
+   * content exactly matches this object's accepted SDK document.
+   */
+  [[nodiscard]] static MeshAsset materialize_retained_mesh_projection(
+      const quader::modeling::PolygonDocument &document, const MeshAsset &source,
+      const MeshGeometryProjection &projection,
+      const std::shared_ptr<const quader_poly::Document> &shared_authored = {});
+  /** Pins accepted coordinates and authored topology without assembling copies. */
+  [[nodiscard]] static MeshAsset materialize_retained_mesh_projection(
+      const quader::modeling::PolygonDocument &document, const MeshAsset &source,
+      std::shared_ptr<const MeshGeometryProjection> projection);
   /** Projects an exported authored document once, with canonical fallback. */
   [[nodiscard]] static MeshAsset update_polygon_document_mesh_positions(
       quader_poly::Document document, const MeshAsset &current,

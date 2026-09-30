@@ -395,25 +395,15 @@ std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds(
     const ViewportOverlayFrame *selection,
     const RenderOverlaySelectionSnapshot *scene,
     ViewportOverlaySubmissionWorkCounters &work) {
-  const bool component = request.scene_selection_mode == RenderOverlaySelectionMode::Component;
+  QDR_PROFILE_SCOPE("Selection dimensions update object bounds");
   std::optional<ViewportSelectionDimensionBounds> bounds;
-  std::unordered_map<int, std::unordered_map<int, QVec3>> preview_positions;
   std::unordered_map<const RenderToolPreviewMeshRecord *, ViewportSelectionDimensionBounds>
       preview_bounds;
   for (const RenderToolPreviewMeshRecord &preview : request.selection_dimension_preview_meshes) {
     const auto &vertices = preview.mesh.geometry().vertices;
     const bool dynamic = preview.dynamic_positions && preview.dynamic_position_payload &&
                          preview.dynamic_position_payload->size() == vertices.size();
-    if (component) {
-      if (!dynamic || preview.source_object_id < 0) continue;
-      auto &positions = preview_positions[preview.source_object_id];
-      positions.reserve(vertices.size());
-      for (std::size_t index = 0u; index < vertices.size(); ++index) {
-        positions.try_emplace(static_cast<int>(vertices[index].source_vertex_id),
-            transform_point(preview.transform, (*preview.dynamic_position_payload)[index]));
-      }
-      work.selection_dimension_source_record_count += vertices.size();
-    } else if (preview.suppress_source) {
+    if (preview.suppress_source) {
       std::optional<ViewportSelectionDimensionBounds> candidate;
       const auto append_at = [&](const QMat4 &world) {
         for (std::size_t index = 0u; index < vertices.size(); ++index) {
@@ -485,7 +475,7 @@ std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds(
     }
     return nullptr;
   };
-  if (!component && scene != nullptr) {
+  if (scene != nullptr) {
     for (const RenderOverlayBoundsSnapshot &selected : scene->selected_mesh_bounds) {
       bool member_preview = false;
       const auto *selected_objects = request.selected_mesh_outline_snapshot;
@@ -576,41 +566,33 @@ std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds(
   }
   if (selection != nullptr) {
     std::unordered_set<int> replaced_objects;
-    const auto append_point = [&](int object, int vertex, QVec3 point) {
-      if (component) {
-        const auto object_positions = preview_positions.find(object);
-        if (object_positions != preview_positions.end()) {
-          const auto position = object_positions->second.find(vertex);
-          if (position != object_positions->second.end()) point = position->second;
-        }
-      } else {
-        if (replaced_objects.contains(object)) return;
-        bool replaced = false;
-        for (const auto &preview : request.selection_dimension_preview_meshes) {
-          if (preview.source_object_id == object && append_preview(preview)) replaced = true;
-        }
-        if (replaced) {
-          replaced_objects.insert(object);
-          return;
-        }
+    const auto append_point = [&](int object, QVec3 point) {
+      if (replaced_objects.contains(object)) return;
+      bool replaced = false;
+      for (const auto &preview : request.selection_dimension_preview_meshes) {
+        if (preview.source_object_id == object && append_preview(preview)) replaced = true;
+      }
+      if (replaced) {
+        replaced_objects.insert(object);
+        return;
       }
       include_dimension_point(bounds, point);
     };
     for (const auto &line : selection->lines) {
       if (!dimension_selection_source(line.source) ||
           (line.layer != ViewportOverlayLayer::SelectedFaceEdge &&
-           (component || line.layer != ViewportOverlayLayer::SelectedEdge))) continue;
-      append_point(line.element.object_id, line.element.edge_a, line.start);
-      append_point(line.element.object_id, line.element.edge_b, line.end);
+           line.layer != ViewportOverlayLayer::SelectedEdge)) continue;
+      append_point(line.element.object_id, line.start);
+      append_point(line.element.object_id, line.end);
     }
     for (const auto &triangle : selection->triangles) {
       if (!dimension_selection_source(triangle.source) ||
           (triangle.layer != ViewportOverlayLayer::SelectedVisibleFace &&
            triangle.layer != ViewportOverlayLayer::SelectedXrayFace &&
            triangle.layer != ViewportOverlayLayer::SelectedFaceMask)) continue;
-      append_point(triangle.element.object_id, triangle.element.vertex_id, triangle.a);
-      append_point(triangle.element.object_id, triangle.element.edge_a, triangle.b);
-      append_point(triangle.element.object_id, triangle.element.edge_b, triangle.c);
+      append_point(triangle.element.object_id, triangle.a);
+      append_point(triangle.element.object_id, triangle.b);
+      append_point(triangle.element.object_id, triangle.c);
     }
     work.selection_dimension_source_record_count +=
         selection->lines.size() + selection->triangles.size();
@@ -704,6 +686,136 @@ ViewportOverlayFrame build_persistent_frame(
 
 } // namespace
 
+std::optional<ViewportSelectionDimensionBounds>
+ViewportOverlaySubmissionCoordinator::component_selection_dimension_bounds(
+    const ViewportOverlaySubmissionRequest &request,
+    const ViewportOverlayFrame *selection, std::uint64_t selection_revision) {
+  QDR_PROFILE_SCOPE("Selection dimensions update component bounds");
+  const auto previews = request.selection_dimension_preview_meshes;
+  const auto eligible = [](const RenderToolPreviewMeshRecord &preview) {
+    return preview.source_object_id >= 0 && preview.dynamic_positions &&
+           preview.dynamic_position_payload &&
+           preview.dynamic_position_payload->size() ==
+               preview.mesh.geometry().vertices.size();
+  };
+  bool mapping_matches = component_dimensions_.valid &&
+      component_dimensions_.selection_revision == selection_revision &&
+      component_dimensions_.previews.size() == previews.size();
+  if (mapping_matches) {
+    QDR_PROFILE_SCOPE("Selection dimensions validate preview mapping");
+    for (std::size_t index = 0u; index < previews.size(); ++index) {
+      const auto &preview = previews[index];
+      auto &retained = component_dimensions_.previews[index];
+      const bool dynamic = eligible(preview);
+      if (retained.object_id != preview.source_object_id ||
+          static_cast<bool>(retained.geometry) != dynamic) {
+        mapping_matches = false;
+        break;
+      }
+      if (!dynamic || retained.geometry.get() == &preview.mesh.geometry()) continue;
+      const auto &vertices = preview.mesh.geometry().vertices;
+      if (retained.geometry->vertices.size() != vertices.size() ||
+          !std::equal(vertices.begin(), vertices.end(),
+                      retained.geometry->vertices.begin(),
+                      [](const MeshVertex &left, const MeshVertex &right) {
+                        return left.source_vertex_id == right.source_vertex_id;
+                      })) {
+        mapping_matches = false;
+        break;
+      }
+      retained.geometry = preview.mesh.geometry_payload();
+    }
+  }
+  if (!mapping_matches) {
+    QDR_PROFILE_SCOPE("Selection dimensions build preview mapping");
+    ++work_counters_.selection_dimension_mapping_build_count;
+    component_dimensions_ = {};
+    component_dimensions_.selection_revision = selection_revision;
+    component_dimensions_.previews.reserve(previews.size());
+    struct SelectedPoint final {
+      std::optional<ViewportSelectionDimensionBounds> fallback;
+      std::optional<ComponentDimensionPositionBinding> binding;
+    };
+    std::unordered_map<std::uint64_t, SelectedPoint> selected_points;
+    const auto point_key = [](int object, int vertex) {
+      return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(object)) << 32u) |
+             static_cast<std::uint32_t>(vertex);
+    };
+    const auto append_point = [&](int object, int vertex, QVec3 point) {
+      if (previews.empty()) {
+        include_dimension_point(component_dimensions_.fallback_bounds, point);
+        return;
+      }
+      include_dimension_point(selected_points[point_key(object, vertex)].fallback,
+                              point);
+    };
+    if (selection != nullptr) {
+      for (const auto &line : selection->lines) {
+        if (!dimension_selection_source(line.source) ||
+            line.layer != ViewportOverlayLayer::SelectedFaceEdge) continue;
+        append_point(line.element.object_id, line.element.edge_a, line.start);
+        append_point(line.element.object_id, line.element.edge_b, line.end);
+      }
+      for (const auto &triangle : selection->triangles) {
+        if (!dimension_selection_source(triangle.source) ||
+            (triangle.layer != ViewportOverlayLayer::SelectedVisibleFace &&
+             triangle.layer != ViewportOverlayLayer::SelectedXrayFace &&
+             triangle.layer != ViewportOverlayLayer::SelectedFaceMask)) continue;
+        append_point(triangle.element.object_id, triangle.element.vertex_id, triangle.a);
+        append_point(triangle.element.object_id, triangle.element.edge_a, triangle.b);
+        append_point(triangle.element.object_id, triangle.element.edge_b, triangle.c);
+      }
+      work_counters_.selection_dimension_source_record_count +=
+          selection->lines.size() + selection->triangles.size();
+    }
+    for (std::size_t preview_index = 0u; preview_index < previews.size(); ++preview_index) {
+      const auto &preview = previews[preview_index];
+      const bool dynamic = eligible(preview);
+      component_dimensions_.previews.push_back({
+          .object_id = preview.source_object_id,
+          .geometry = dynamic ? preview.mesh.geometry_payload() : nullptr});
+      if (!dynamic) continue;
+      const auto &vertices = preview.mesh.geometry().vertices;
+      for (std::size_t vertex_index = 0u; vertex_index < vertices.size(); ++vertex_index) {
+        const auto found = selected_points.find(point_key(preview.source_object_id,
+            static_cast<int>(vertices[vertex_index].source_vertex_id)));
+        if (found != selected_points.end() && !found->second.binding) {
+          // Compiled corners and repeated preview records use the first match,
+          // exactly as the previous object/vertex try_emplace position map did.
+          found->second.binding = ComponentDimensionPositionBinding{
+              .preview_index = preview_index, .vertex_index = vertex_index};
+        }
+      }
+      work_counters_.selection_dimension_mapping_source_record_count += vertices.size();
+    }
+    component_dimensions_.positions.reserve(selected_points.size());
+    for (const auto &[key, point] : selected_points) {
+      (void)key;
+      if (point.binding) {
+        component_dimensions_.positions.push_back(*point.binding);
+      } else if (point.fallback) {
+        include_dimension_point(component_dimensions_.fallback_bounds, point.fallback->min);
+        include_dimension_point(component_dimensions_.fallback_bounds, point.fallback->max);
+      }
+    }
+    component_dimensions_.valid = true;
+  }
+  auto bounds = component_dimensions_.fallback_bounds;
+  {
+    QDR_PROFILE_SCOPE("Selection dimensions evaluate mapped positions");
+    for (const auto &binding : component_dimensions_.positions) {
+      const auto &preview = previews[binding.preview_index];
+      include_dimension_point(bounds, transform_point(preview.transform,
+          (*preview.dynamic_position_payload)[binding.vertex_index]));
+    }
+  }
+  work_counters_.selection_dimension_position_read_count +=
+      component_dimensions_.positions.size();
+  work_counters_.selection_dimension_source_record_count +=
+      component_dimensions_.positions.size();
+  return bounds;
+}
+
 ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     ViewportOverlaySubmissionRequest request,
     const ViewportSettings &settings,
@@ -775,9 +887,13 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
         selection_dimensions_.tool_preview_revision != request.tool_preview_overlay_revision ||
         selection_dimensions_.mode != request.scene_selection_mode ||
         selection_dimensions_.context != request.style_selection_context) {
-      auto bounds = selection_dimension_bounds(request,
-          selection_overlay_visible ? &selection_source_.frame : nullptr,
-          dimension_scene, work_counters_);
+      const auto *dimension_selection =
+          selection_overlay_visible ? &selection_source_.frame : nullptr;
+      auto bounds = request.scene_selection_mode == RenderOverlaySelectionMode::Component
+          ? component_selection_dimension_bounds(request, dimension_selection,
+                                                  selection_revision)
+          : selection_dimension_bounds(request, dimension_selection,
+                                       dimension_scene, work_counters_);
       ++work_counters_.selection_dimension_bounds_build_count;
       if (!selection_dimensions_.valid ||
           !same_dimension_bounds(selection_dimensions_.bounds, bounds)) {
@@ -1080,6 +1196,7 @@ void ViewportOverlaySubmissionCoordinator::invalidate_all() {
   panes_ = {};
   selection_source_ = {};
   selection_dimensions_ = {};
+  component_dimensions_ = {};
   array_dimensions_ = {};
   curve_overlay_source_.reset();
   mesh_outline_source_.reset();

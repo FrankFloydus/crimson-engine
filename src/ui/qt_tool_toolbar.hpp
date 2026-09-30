@@ -30,7 +30,7 @@ class QuaderEditorApi;
 class QtUiScaleMetrics;
 
 /**
- * Presents the primary modeling tools as one movable native Qt toolbar.
+ * Presents mode-independent modeling tools as one movable native Qt toolbar.
  * Tool availability, activation, and active state remain public API concerns.
  */
 class QtToolToolbar final : public QToolBar {
@@ -84,6 +84,7 @@ private:
       QuaderSelectionMode::Object;
   std::uint64_t synchronized_selection_revision_ = 0;
   std::uint64_t synchronized_keybindings_revision_ = 0;
+  std::array<std::uint64_t, 8> synchronized_availability_revisions_{};
   QuaderPrimitiveCreationShape synchronized_primitive_shape_ =
       QuaderPrimitiveCreationShape::Box;
   std::function<void(std::string_view)> tool_requested_;

@@ -172,10 +172,13 @@ QtSnappingToolbar::QtSnappingToolbar(QWidget *parent) : QToolBar(parent) {
   angle_label_->setBuddy(angle_combo_);
   addWidget(angle_combo_);
 
+  QIcon transform_space_icon(
+      QStringLiteral(":/quader/icons/tool_transform_world.png"));
+  transform_space_icon.addFile(
+      QStringLiteral(":/quader/icons/tool_transform_local.png"), QSize(),
+      QIcon::Normal, QIcon::On);
   transform_space_action_ = new QAction(
-      qt_multiresolution_icon(
-          QStringLiteral(":/quader/icons/tool_transform_local.png")),
-      QStringLiteral("Local Transforms"), this);
+      transform_space_icon, QStringLiteral("Local Transforms"), this);
   transform_space_action_->setObjectName(
       QStringLiteral("toggle_transform_space"));
   transform_space_action_->setCheckable(true);

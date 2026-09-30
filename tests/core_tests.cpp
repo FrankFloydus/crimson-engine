@@ -46,6 +46,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
@@ -1109,13 +1110,13 @@ TEST(ConsoleModelTests, FiltersByLevelAndSearch) {
   };
 
   const auto filtered = ConsoleModel::filter(
-      entries, {.minimum_level = spdlog::level::warn, .search_text = "vulkan"});
+      entries, {.level_mask = kConsoleErrorLevel, .search_text = "VULKAN"});
 
   ASSERT_EQ(filtered.size(), 1u);
   EXPECT_EQ(filtered[0].message, "vulkan failed");
 }
 
-TEST(ConsoleModelTests, RespectsMinimumSeverityLevels) {
+TEST(ConsoleModelTests, SelectsExactCategoriesAndGroupsCriticalWithError) {
   std::vector<LogEntry> entries = {
       {.level = spdlog::level::trace, .message = "trace"},
       {.level = spdlog::level::debug, .message = "debug"},
@@ -1123,26 +1124,45 @@ TEST(ConsoleModelTests, RespectsMinimumSeverityLevels) {
       {.level = spdlog::level::warn, .message = "warn"},
       {.level = spdlog::level::err, .message = "error"},
       {.level = spdlog::level::critical, .message = "critical"},
+      {.level = spdlog::level::off, .message = "off"},
   };
 
   EXPECT_EQ(
-      ConsoleModel::filter(entries, {.minimum_level = spdlog::level::trace})
+      ConsoleModel::filter(entries, {})
           .size(),
       6u);
   EXPECT_EQ(
-      ConsoleModel::filter(entries, {.minimum_level = spdlog::level::info})
+      ConsoleModel::filter(entries, {.level_mask = kConsoleInfoLevel})
           .size(),
-      4u);
+      1u);
   EXPECT_EQ(
-      ConsoleModel::filter(entries, {.minimum_level = spdlog::level::warn})
+      ConsoleModel::filter(entries, {.level_mask = kConsoleWarningLevel})
           .size(),
-      3u);
-  EXPECT_EQ(ConsoleModel::filter(entries, {.minimum_level = spdlog::level::err})
+      1u);
+  EXPECT_EQ(ConsoleModel::filter(entries, {.level_mask = kConsoleErrorLevel})
                 .size(),
             2u);
   EXPECT_TRUE(
-      ConsoleModel::filter(entries, {.minimum_level = spdlog::level::off})
+      ConsoleModel::filter(entries, {.level_mask = 0u})
           .empty());
+  const auto mixed = ConsoleModel::filter(
+      entries, {.level_mask = kConsoleTraceLevel | kConsoleWarningLevel});
+  ASSERT_EQ(mixed.size(), 2u);
+  EXPECT_EQ(mixed[0].message, "trace");
+  EXPECT_EQ(mixed[1].message, "warn");
+}
+
+TEST(ConsoleModelTests, KeepsStructuredPayloadSeparateFromFormattedCompatibilityText) {
+  Logger::initialize({.name = "console-structured-test", .file_path = ""});
+  LOG_WARN("first line\nsecond line");
+  const auto entries = Logger::entries_snapshot();
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].payload, "first line\nsecond line");
+  EXPECT_NE(entries[0].timestamp, spdlog::log_clock::time_point{});
+  ASSERT_GT(entries[0].message.size(), 13u);
+  EXPECT_EQ(entries[0].message[9], '.');
+  EXPECT_NE(entries[0].message.find("[warning]"), std::string::npos);
+  EXPECT_NE(entries[0].message.find(entries[0].payload), std::string::npos);
 }
 
 TEST(AppWindowSettingsTests, RoundTripsNormalBoundsAndMaximizedState) {
@@ -11799,6 +11819,7 @@ TEST(ViewportInputRouterTests,
            ViewportShortcutKind::DeletePopup,
            ViewportShortcutKind::AddPopup,
            ViewportShortcutKind::ShadingPopup,
+           ViewportShortcutKind::MarkingMenu,
        }) {
     SCOPED_TRACE(static_cast<int>(popup_kind));
     ViewportInputRouter router;
@@ -11931,6 +11952,8 @@ TEST(ViewportHostContractAdapterTests,
            std::pair{"viewport.add_popup", ViewportShortcutKind::AddPopup},
            std::pair{"viewport.shading_popup",
                      ViewportShortcutKind::ShadingPopup},
+           std::pair{"viewport.marking_menu",
+                     ViewportShortcutKind::MarkingMenu},
        }) {
     SCOPED_TRACE(target_id);
     ViewportShortcut shortcut;
@@ -23478,9 +23501,22 @@ void expect_mesh_geometry_near(const MeshGeometryPayload &actual,
     expect_vec3_near(left.normal, right.normal);
     EXPECT_NEAR(left.uv.x, right.uv.x, 0.0001f);
     EXPECT_NEAR(left.uv.y, right.uv.y, 0.0001f);
+    for (std::size_t component = 0u; component < left.uv_carrier.size();
+         ++component) {
+      EXPECT_NEAR(left.uv_carrier[component], right.uv_carrier[component],
+                  0.0001f);
+    }
+    expect_vec3_near(left.uv_geometric_normal, right.uv_geometric_normal);
     EXPECT_EQ(left.rgba, right.rgba);
     EXPECT_EQ(left.source_vertex_id, right.source_vertex_id);
   }
+}
+
+std::shared_ptr<const MeshGeometryPayload>
+effective_preview_geometry(const ModelingToolPreviewMesh &preview) {
+  return preview.geometry_projection
+             ? preview.geometry_projection->materialized_geometry()
+             : preview.mesh.geometry_payload();
 }
 
 TEST(ModelingSessionServiceTests,
@@ -23529,17 +23565,20 @@ TEST(ModelingSessionServiceTests,
         service.tool_preview_meshes();
     ASSERT_EQ(previews.size(), 1u);
     const ModelingToolPreviewMesh &preview = previews.front();
+    const std::shared_ptr<const MeshGeometryPayload> preview_geometry =
+        effective_preview_geometry(preview);
+    ASSERT_NE(preview_geometry, nullptr);
     ASSERT_TRUE(preview.dynamic_positions);
     EXPECT_EQ(preview.double_sided, binding->double_sided);
     ASSERT_NE(preview.dynamic_position_payload, nullptr);
     ASSERT_EQ(preview.dynamic_position_payload->size(),
-              preview.mesh.geometry().vertices.size());
+              preview_geometry->vertices.size());
     bool derived_attribute_changed = false;
-    ASSERT_EQ(preview.mesh.geometry().vertices.size(),
+    ASSERT_EQ(preview_geometry->vertices.size(),
               source_geometry.vertices.size());
     for (std::size_t index = 0u;
-         index < preview.mesh.geometry().vertices.size(); ++index) {
-      const MeshVertex &derived = preview.mesh.geometry().vertices[index];
+         index < preview_geometry->vertices.size(); ++index) {
+      const MeshVertex &derived = preview_geometry->vertices[index];
       const MeshVertex &base = source_geometry.vertices[index];
       expect_vec3_near((*preview.dynamic_position_payload)[index],
                        derived.position);
@@ -23571,7 +23610,12 @@ TEST(ModelingSessionServiceTests,
     ASSERT_TRUE(commit.changed);
     const MeshAsset *committed = assets.mesh(mesh_id);
     ASSERT_NE(committed, nullptr);
-    expect_mesh_geometry_near(preview.mesh.geometry(), committed->geometry());
+    ASSERT_NE(committed->authored_polygon_document, nullptr);
+    const MeshAsset canonical =
+        MeshProjectionService::compile_polygon_document_mesh(
+            *committed->authored_polygon_document);
+    expect_mesh_geometry_near(*preview_geometry, canonical.geometry());
+    expect_mesh_geometry_near(committed->geometry(), canonical.geometry());
   }
 }
 
@@ -23652,8 +23696,9 @@ TEST(ModelingSessionServiceTests,
       EXPECT_TRUE(previews.front().dynamic_positions);
       EXPECT_TRUE(previews.front().suppress_source);
       EXPECT_EQ(previews.front().double_sided, double_sided);
-      const MeshGeometryPayload preview_geometry =
-          previews.front().mesh.geometry();
+      const std::shared_ptr<const MeshGeometryPayload> preview_geometry =
+          effective_preview_geometry(previews.front());
+      ASSERT_NE(preview_geometry, nullptr);
       const MeshAsset *durable_during_preview = assets.mesh(mesh_id);
       ASSERT_NE(durable_during_preview, nullptr);
       expect_mesh_geometry_near(durable_during_preview->geometry(),
@@ -23665,8 +23710,12 @@ TEST(ModelingSessionServiceTests,
       ASSERT_TRUE(committed.changed);
       const MeshAsset *committed_mesh = assets.mesh(mesh_id);
       ASSERT_NE(committed_mesh, nullptr);
-      expect_mesh_geometry_near(preview_geometry,
-                                committed_mesh->geometry());
+      ASSERT_NE(committed_mesh->authored_polygon_document, nullptr);
+      const MeshAsset canonical =
+          MeshProjectionService::compile_polygon_document_mesh(
+              *committed_mesh->authored_polygon_document);
+      expect_mesh_geometry_near(*preview_geometry, canonical.geometry());
+      expect_mesh_geometry_near(committed_mesh->geometry(), canonical.geometry());
     }
   }
 }
@@ -24373,6 +24422,8 @@ TEST(ModelingSessionServiceTests,
   const AssetId mesh_id = binding->mesh;
   const MeshAsset *source_mesh = assets.mesh(mesh_id);
   ASSERT_NE(source_mesh, nullptr);
+  const std::shared_ptr<const MeshGeometryPayload> source_geometry =
+      source_mesh->geometry_payload();
   const std::uint64_t source_mesh_revision =
       assets.mesh_revision(mesh_id).value;
 
@@ -24405,9 +24456,14 @@ TEST(ModelingSessionServiceTests,
   ASSERT_EQ(first_mesh.dynamic_position_payload->size(),
             first_mesh.mesh.geometry().vertices.size());
   const std::shared_ptr<const MeshGeometryPayload> retained_geometry =
-      first_mesh.mesh.geometry_payload();
+      effective_preview_geometry(first_mesh);
+  ASSERT_NE(retained_geometry, nullptr);
+  ASSERT_NE(first_mesh.geometry_projection, nullptr);
+  EXPECT_EQ(first_mesh.mesh.geometry_payload(), source_geometry);
   const std::shared_ptr<const std::vector<QVec3>> retained_first_positions =
       first_mesh.dynamic_position_payload;
+  const MeshGeometryPayload first_geometry_snapshot = *retained_geometry;
+  const std::vector<QVec3> first_positions_snapshot = *retained_first_positions;
 
   const ModelingTransformDragPreview second =
       service.update_transform_drag(test_x_move_drag_update_request(3.0f));
@@ -24419,14 +24475,21 @@ TEST(ModelingSessionServiceTests,
   const ModelingToolPreviewMesh &second_mesh = second_meshes.front();
   EXPECT_EQ(second_mesh.layout_key, first_mesh.layout_key);
   EXPECT_GT(second_mesh.position_revision, first_mesh.position_revision);
-  EXPECT_NE(second_mesh.mesh.geometry_payload().get(), retained_geometry.get());
-  ASSERT_EQ(second_mesh.mesh.geometry().vertices.size(),
+  const std::shared_ptr<const MeshGeometryPayload> second_geometry =
+      effective_preview_geometry(second_mesh);
+  ASSERT_NE(second_geometry, nullptr);
+  const MeshGeometryPayload second_geometry_snapshot = *second_geometry;
+  ASSERT_NE(second_mesh.geometry_projection, nullptr);
+  EXPECT_NE(second_mesh.geometry_projection, first_mesh.geometry_projection);
+  EXPECT_EQ(second_mesh.mesh.geometry_payload(), source_geometry);
+  EXPECT_NE(second_geometry, retained_geometry);
+  ASSERT_EQ(second_geometry->vertices.size(),
             retained_geometry->vertices.size());
-  ASSERT_EQ(second_mesh.mesh.geometry().indices.size(),
-            retained_geometry->indices.size());
+  EXPECT_EQ(second_geometry->indices, retained_geometry->indices);
+  EXPECT_EQ(second_geometry->primitives, retained_geometry->primitives);
   for (std::size_t index = 0u;
-       index < second_mesh.mesh.geometry().vertices.size(); ++index) {
-    EXPECT_EQ(second_mesh.mesh.geometry().vertices[index].source_vertex_id,
+       index < second_geometry->vertices.size(); ++index) {
+    EXPECT_EQ(second_geometry->vertices[index].source_vertex_id,
               retained_geometry->vertices[index].source_vertex_id);
   }
   ASSERT_NE(second_mesh.dynamic_position_payload, nullptr);
@@ -24440,7 +24503,15 @@ TEST(ModelingSessionServiceTests,
   for (std::size_t index = 0u;
        index < second_mesh.dynamic_position_payload->size(); ++index) {
     expect_vec3_near((*second_mesh.dynamic_position_payload)[index],
-                     second_mesh.mesh.geometry().vertices[index].position);
+                     second_geometry->vertices[index].position);
+    expect_vec3_near((*retained_first_positions)[index],
+                     first_positions_snapshot[index]);
+    expect_vec3_near(retained_geometry->vertices[index].position,
+                     source_geometry->vertices[index].position +
+                         QVec3{1.0f, 0.0f, 0.0f});
+    expect_vec3_near(second_geometry->vertices[index].position,
+                     source_geometry->vertices[index].position +
+                         QVec3{3.0f, 0.0f, 0.0f});
   }
 
   const ModelingSdkProjectionStats after_samples =
@@ -24461,6 +24532,17 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(cancel.ok) << cancel.message;
   EXPECT_FALSE(service.transient_transform_preview_active());
   EXPECT_TRUE(service.tool_preview_meshes().empty());
+  const MeshAsset *restored_mesh = assets.mesh(mesh_id);
+  ASSERT_NE(restored_mesh, nullptr);
+  EXPECT_EQ(restored_mesh->geometry_payload(), source_geometry);
+  expect_mesh_geometry_near(*effective_preview_geometry(first_mesh),
+                            first_geometry_snapshot);
+  expect_mesh_geometry_near(*effective_preview_geometry(second_mesh),
+                            second_geometry_snapshot);
+  for (std::size_t index = 0u; index < first_positions_snapshot.size(); ++index) {
+    expect_vec3_near((*retained_first_positions)[index],
+                     first_positions_snapshot[index]);
+  }
 }
 
 TEST(ModelingSessionServiceTests,

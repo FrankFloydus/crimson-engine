@@ -193,7 +193,6 @@ void ViewportRenderer::initialize(filament::Engine &engine,
     render_target_.initialize(engine, texture_registry);
     overlay_render_target_.initialize(engine, texture_registry);
   }
-  LOG_INFO("Creating viewport Filament view");
   view_ = engine_->createView();
   view_->setName("Main Viewport");
   view_->setScene(scene_);
@@ -222,7 +221,6 @@ void ViewportRenderer::initialize(filament::Engine &engine,
   overlay_view_->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
   update_visible_layers();
 
-  LOG_INFO("Creating viewport camera");
   camera_entity_ = utils::EntityManager::get().create();
   camera_ = engine_->createCamera(camera_entity_);
   overlay_camera_entity_ = utils::EntityManager::get().create();
@@ -232,7 +230,6 @@ void ViewportRenderer::initialize(filament::Engine &engine,
   overlay_view_->setCamera(overlay_camera_);
   grid_renderer_.initialize(engine, scene, ground_grid_material,
                             resolved_grid_layer_mask);
-  LOG_INFO("Creating initial viewport render target");
   resize(640, 480);
 }
 
@@ -275,6 +272,7 @@ bool ViewportRenderer::update_selected_mesh_outlines(
 }
 
 void ViewportRenderer::shutdown() {
+    component_selection_renderer_.shutdown();
     reset_presentation_cache();
     if (!engine_) {
         return;
@@ -647,6 +645,7 @@ void ViewportRenderer::set_material_debug_mode(
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
     QDR_PROFILE_FUNCTION();
+    component_selection_renderer_.render(renderer);
     selected_mesh_outline_renderer_.render_masks(renderer);
     // Diagnostics need the lit mesh layer but use the editor backdrop. Hide
     // only the skybox during this view's submission, then restore it before
@@ -656,6 +655,11 @@ void ViewportRenderer::render(filament::Renderer& renderer) {
             ? scene_->getSkybox() : nullptr);
     render_pass_coordinator_.render(renderer, view_, overlay_view_,
                                     surface_ == ViewportRenderSurface::Texture);
+}
+
+bool ViewportRenderer::configure_component_selection(filament::Material &material,
+                                                      filament::Texture &fallback) {
+  return engine_ != nullptr && component_selection_renderer_.initialize(*engine_, material, fallback);
 }
 
 void ViewportRenderer::update_visible_layers() {

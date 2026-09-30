@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <diagnostics/profile.hpp>
 #include <iterator>
 #include <limits>
@@ -866,6 +867,56 @@ void append_native_delta(ElementDelta &target,
               transform.x_axis.z * transform.y_axis.y);
 }
 
+[[nodiscard]] bool finite_merge_position(quader::QVec3 position) {
+  return std::isfinite(position.x) && std::isfinite(position.y) &&
+         std::isfinite(position.z);
+}
+
+[[nodiscard]] bool finite_merge_transform(Transform3 transform) {
+  const auto finite = [](Vec3 value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) &&
+           std::isfinite(value.z);
+  };
+  return finite(transform.x_axis) && finite(transform.y_axis) &&
+         finite(transform.z_axis) && finite(transform.origin);
+}
+
+/** Inverts the distance metric without its irrelevant world translation. */
+[[nodiscard]] std::optional<Transform3>
+inverse_merge_metric(Transform3 transform) {
+  if (!finite_merge_transform(transform)) {
+    return std::nullopt;
+  }
+  const double a = transform.x_axis.x;
+  const double b = transform.y_axis.x;
+  const double c = transform.z_axis.x;
+  const double d = transform.x_axis.y;
+  const double e = transform.y_axis.y;
+  const double f = transform.z_axis.y;
+  const double g = transform.x_axis.z;
+  const double h = transform.y_axis.z;
+  const double i = transform.z_axis.z;
+  const double determinant_value =
+      a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (!std::isfinite(determinant_value) || determinant_value == 0.0) {
+    return std::nullopt;
+  }
+  const double inverse_determinant = 1.0 / determinant_value;
+  Transform3 inverse{
+      .x_axis = {static_cast<float>((e * i - f * h) * inverse_determinant),
+                 static_cast<float>((f * g - d * i) * inverse_determinant),
+                 static_cast<float>((d * h - e * g) * inverse_determinant)},
+      .y_axis = {static_cast<float>((c * h - b * i) * inverse_determinant),
+                 static_cast<float>((a * i - c * g) * inverse_determinant),
+                 static_cast<float>((b * g - a * h) * inverse_determinant)},
+      .z_axis = {static_cast<float>((b * f - c * e) * inverse_determinant),
+                 static_cast<float>((c * d - a * f) * inverse_determinant),
+                 static_cast<float>((a * e - b * d) * inverse_determinant)},
+  };
+  return finite_merge_transform(inverse) ? std::optional{inverse}
+                                         : std::nullopt;
+}
+
 [[nodiscard]] Result<SessionBridgePreviewCandidate> prepare_bridge_candidate(
     PolygonDocument survivor, const PolygonDocument &source,
     Transform3 survivor_from_source, SelectionKind selection_kind, int steps) {
@@ -1449,8 +1500,8 @@ struct ModelingSessionImpl {
 
   void record_topology_identity(ObjectId object_id,
                                 const PolygonDocument &document) {
-    const quader_poly::Document &native =
-        PolygonDocumentNativeAccess::document(document);
+    const auto native =
+        PolygonDocumentNativeAccess::identity_high_water(document);
     TopologyIdentityHighWater &high_water =
         topology_identity_high_water[object_id.index];
     high_water.next_vertex_id =
@@ -1483,13 +1534,14 @@ struct ModelingSessionImpl {
     if (high_water == topology_identity_high_water.end()) {
       return;
     }
-    const quader_poly::Document &current =
-        PolygonDocumentNativeAccess::document(document);
+    const auto current =
+        PolygonDocumentNativeAccess::identity_high_water(document);
     if (current.next_vertex_id >= high_water->second.next_vertex_id &&
         current.next_face_id >= high_water->second.next_face_id) {
       return;
     }
-    quader_poly::Document reconciled = current;
+    quader_poly::Document reconciled =
+        PolygonDocumentNativeAccess::document(document);
     reconciled.next_vertex_id =
         std::max(reconciled.next_vertex_id,
                  high_water->second.next_vertex_id);
@@ -1528,8 +1580,8 @@ struct ModelingSessionImpl {
     if (high_water == topology_identity_high_water.end()) {
       return Result<OperationResult>::success(OperationResult{});
     }
-    const quader_poly::Document &native =
-        PolygonDocumentNativeAccess::document(document);
+    const auto native =
+        PolygonDocumentNativeAccess::identity_high_water(document);
     if (native.next_vertex_id < high_water->second.next_vertex_id ||
         native.next_face_id < high_water->second.next_face_id) {
       return Result<OperationResult>::failure(make_error(
@@ -3415,6 +3467,295 @@ ModelingSession::prepare_bridge_documents(
   return prepare_bridge_candidate(
       std::move(survivor_working), source->polygon_document(),
       survivor_from_source, selection_kind, steps);
+}
+
+Result<SessionMergePreviewCandidate> ModelingSession::prepare_merge_documents(
+    ObjectId survivor_id, std::span<const SessionMergeSource> sources,
+    SelectionKind selection_kind, float tolerance,
+    Transform3 world_from_survivor, SessionMergeIntent intent) const {
+  const bool vertex_merge = selection_kind == SelectionKind::Vertex;
+  const bool valid_intent = intent == SessionMergeIntent::ByDistance ||
+                            intent == SessionMergeIntent::ToActive ||
+                            intent == SessionMergeIntent::ToCenter;
+  if (sources.empty() ||
+      (!vertex_merge && selection_kind != SelectionKind::Edge) ||
+      !valid_intent ||
+      (!vertex_merge && intent != SessionMergeIntent::ByDistance) ||
+      !std::isfinite(tolerance) || tolerance < 0.0F) {
+    return Result<SessionMergePreviewCandidate>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Merge needs distinct objects, vertex or edge selections, and a finite "
+        "non-negative tolerance."));
+  }
+  const std::optional<Transform3> survivor_from_world =
+      inverse_merge_metric(world_from_survivor);
+  if (!survivor_from_world.has_value()) {
+    return Result<SessionMergePreviewCandidate>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Merge needs a finite invertible survivor transform."));
+  }
+  // Translation cancels from distances and centroids. Omitting it also avoids
+  // losing coincident local coordinates far from the world origin.
+  world_from_survivor.origin = {};
+
+  const SessionObject *survivor = impl_->live_object(survivor_id);
+  if (survivor == nullptr) {
+    return Result<SessionMergePreviewCandidate>::failure(
+        make_error(ErrorCode::InvalidId, "Merge survivor object is not live."));
+  }
+  if (survivor->kind() != SessionObjectKind::Mesh) {
+    return Result<SessionMergePreviewCandidate>::failure(
+        wrong_document_kind_error());
+  }
+  PolygonDocument candidate = survivor->polygon_document();
+  impl_->reconcile_topology_identity(survivor_id, candidate);
+  quader_poly::Document combined =
+      PolygonDocumentNativeAccess::document(candidate);
+  const quader_poly::Selection survivor_selection =
+      PolygonDocumentNativeAccess::selection(candidate);
+  const auto selection_matches = [vertex_merge](
+                                     const quader_poly::Selection &selection) {
+    return vertex_merge
+               ? selection.mode == quader_poly::SelectionMode::Vertex &&
+                     !selection.vertices.empty()
+               : selection.mode == quader_poly::SelectionMode::Edge &&
+                     !selection.edges.empty();
+  };
+  if (!selection_matches(survivor_selection)) {
+    return Result<SessionMergePreviewCandidate>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Merge needs selected elements on the survivor object."));
+  }
+  if (intent == SessionMergeIntent::ToActive &&
+      (!survivor_selection.has_active ||
+       survivor_selection.active_kind != quader_poly::ElementKind::Vertex ||
+       std::ranges::find(survivor_selection.vertices,
+                         survivor_selection.active_vertex) ==
+           survivor_selection.vertices.end() ||
+       quader_poly::find_vertex(combined, survivor_selection.active_vertex) ==
+           nullptr)) {
+    return Result<SessionMergePreviewCandidate>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Merge to active needs the survivor's active selected vertex."));
+  }
+  quader_poly::Selection merged_selection = survivor_selection;
+  std::unordered_set<std::uint64_t> source_ids{object_id_key(survivor_id)};
+  ElementDelta appended_elements;
+  for (const SessionMergeSource &source : sources) {
+    if (!source_ids.insert(object_id_key(source.object)).second ||
+        !finite_merge_transform(source.survivor_from_source)) {
+      return Result<SessionMergePreviewCandidate>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Merge needs distinct source objects and finite transforms."));
+    }
+    const SessionObject *source_object = impl_->live_object(source.object);
+    if (source_object == nullptr) {
+      return Result<SessionMergePreviewCandidate>::failure(
+          make_error(ErrorCode::InvalidId, "Merge source object is not live."));
+    }
+    if (source_object->kind() != SessionObjectKind::Mesh) {
+      return Result<SessionMergePreviewCandidate>::failure(
+          wrong_document_kind_error());
+    }
+    const PolygonDocument &source_polygon =
+        source.prepared_document.has_value() ? *source.prepared_document
+                                             : source_object->polygon_document();
+    const quader_poly::Selection &source_selection =
+        PolygonDocumentNativeAccess::selection(source_polygon);
+    if (!selection_matches(source_selection)) {
+      return Result<SessionMergePreviewCandidate>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Merge needs selected elements on every source object."));
+    }
+    quader_poly::Document source_document =
+        PolygonDocumentNativeAccess::document(source_polygon);
+    for (quader_poly::Vertex &vertex : source_document.vertices) {
+      vertex.position =
+          transform_point(source.survivor_from_source, vertex.position);
+      if (!finite_merge_position(vertex.position)) {
+        return Result<SessionMergePreviewCandidate>::failure(make_error(
+            ErrorCode::InvalidArgument,
+            "Merge source transform produced nonfinite coordinates."));
+      }
+    }
+    if (determinant(source.survivor_from_source) < 0.0F) {
+      for (quader_poly::Face &face : source_document.faces) {
+        std::ranges::reverse(face.vertices);
+        if (face.uvs.size() == face.vertices.size()) {
+          std::ranges::reverse(face.uvs);
+        } else {
+          face.uvs.clear();
+        }
+      }
+    }
+    Result<AppendedDocument> appended =
+        append_document_with_remapped_ids(combined, source_document);
+    if (!appended.ok()) {
+      return Result<SessionMergePreviewCandidate>::failure(appended.error());
+    }
+    const auto &remap = appended.value();
+    if (vertex_merge) {
+      for (quader_poly::ElementId vertex_id : source_selection.vertices) {
+        const auto mapped = remap.vertex_ids.find(vertex_id);
+        if (mapped == remap.vertex_ids.end()) {
+          return Result<SessionMergePreviewCandidate>::failure(make_error(
+              ErrorCode::InvalidId, "Merge could not remap a source vertex."));
+        }
+        merged_selection.vertices.push_back(mapped->second);
+      }
+    } else {
+      for (quader_poly::Edge edge : source_selection.edges) {
+        const auto a = remap.vertex_ids.find(edge.a);
+        const auto b = remap.vertex_ids.find(edge.b);
+        if (a == remap.vertex_ids.end() || b == remap.vertex_ids.end()) {
+          return Result<SessionMergePreviewCandidate>::failure(make_error(
+              ErrorCode::InvalidId, "Merge could not remap a source edge."));
+        }
+        merged_selection.edges.push_back(
+            quader_poly::make_edge(a->second, b->second));
+      }
+    }
+    appended_elements.vertices.insert(appended_elements.vertices.end(),
+                                      remap.created.vertices.begin(),
+                                      remap.created.vertices.end());
+    appended_elements.edges.insert(appended_elements.edges.end(),
+                                   remap.created.edges.begin(),
+                                   remap.created.edges.end());
+    appended_elements.faces.insert(appended_elements.faces.end(),
+                                   remap.created.faces.begin(),
+                                   remap.created.faces.end());
+  }
+
+  const quader_poly::Document combined_local = combined;
+  std::unordered_set<quader_poly::ElementId> merge_vertex_ids;
+  if (vertex_merge) {
+    merge_vertex_ids.insert(merged_selection.vertices.begin(),
+                            merged_selection.vertices.end());
+  } else {
+    for (quader_poly::Edge edge : merged_selection.edges) {
+      merge_vertex_ids.insert(edge.a);
+      merge_vertex_ids.insert(edge.b);
+    }
+  }
+  for (quader_poly::Vertex &vertex : combined.vertices) {
+    vertex.position = transform_point(world_from_survivor, vertex.position);
+    if (!finite_merge_position(vertex.position)) {
+      return Result<SessionMergePreviewCandidate>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Merge world transform produced nonfinite coordinates."));
+    }
+  }
+  const quader_poly::OperationResult merged = [&] {
+    if (!vertex_merge) {
+      return quader_poly::merge_selected_edges(combined, merged_selection);
+    }
+    switch (intent) {
+    case SessionMergeIntent::ToActive:
+      return quader_poly::merge_selected_vertices_to_active(
+          combined, merged_selection);
+    case SessionMergeIntent::ToCenter:
+      return quader_poly::merge_selected_vertices_to_center(
+          combined, merged_selection);
+    case SessionMergeIntent::ByDistance:
+      return quader_poly::merge_selected_vertices_by_distance(
+          combined, merged_selection, tolerance);
+    }
+    return quader_poly::OperationResult::failure("Invalid merge intent.");
+  }();
+  if (!merged.success) {
+    return Result<SessionMergePreviewCandidate>::failure(
+        make_error(ErrorCode::ValidationFailed, merged.message));
+  }
+  if (!merged.changed) {
+    OperationResult unchanged;
+    unchanged.message = merged.message;
+    return Result<SessionMergePreviewCandidate>::success({
+        .survivor_document = survivor->polygon_document(),
+        .receipt = std::move(unchanged),
+    });
+  }
+
+  const char *message = "Edges merged.";
+  if (vertex_merge) {
+    switch (intent) {
+    case SessionMergeIntent::ToActive:
+      message = "Vertices merged to active.";
+      break;
+    case SessionMergeIntent::ToCenter:
+      message = "Vertices merged to center.";
+      break;
+    case SessionMergeIntent::ByDistance:
+      message = "Vertices merged by distance.";
+      break;
+    }
+  }
+  OperationResult receipt = session_result(true, message);
+  receipt.dirty.topology = true;
+  receipt.dirty.materials = true;
+  receipt.dirty.overlays = true;
+  receipt.created = std::move(appended_elements);
+  std::unordered_map<quader_poly::ElementId, quader_poly::Vertex *> live_vertices;
+  live_vertices.reserve(combined.vertices.size());
+  for (quader_poly::Vertex &vertex : combined.vertices) {
+    live_vertices.emplace(vertex.id, &vertex);
+  }
+  for (const quader_poly::Vertex &before : combined_local.vertices) {
+    const auto found = live_vertices.find(before.id);
+    if (found == live_vertices.end()) {
+      if (merge_vertex_ids.contains(before.id)) {
+        receipt.deleted.vertices.push_back(make_id<VertexTag>(before.id));
+      }
+      continue;
+    }
+    quader_poly::Vertex *after = found->second;
+    const quader::QVec3 world_before =
+        transform_point(world_from_survivor, before.position);
+    const bool moved = after->position.x != world_before.x ||
+                       after->position.y != world_before.y ||
+                       after->position.z != world_before.z;
+    after->position = moved
+                          ? transform_point(*survivor_from_world, after->position)
+                          : before.position;
+    if (!finite_merge_position(after->position)) {
+      return Result<SessionMergePreviewCandidate>::failure(make_error(
+          ErrorCode::ValidationFailed,
+          "Merge produced nonfinite survivor coordinates."));
+    }
+    if (moved) {
+      receipt.modified.vertices.push_back(make_id<VertexTag>(after->id));
+    }
+  }
+  std::unordered_set<quader_poly::ElementId> live_faces;
+  live_faces.reserve(combined.faces.size());
+  for (const quader_poly::Face &face : combined.faces) {
+    live_faces.insert(face.id);
+  }
+  for (const quader_poly::Face &face : combined_local.faces) {
+    if (!live_faces.contains(face.id)) {
+      receipt.deleted.faces.push_back(make_id<FaceTag>(face.id));
+    }
+  }
+  if (vertex_merge && survivor_selection.has_active &&
+      survivor_selection.active_kind == quader_poly::ElementKind::Vertex &&
+      std::ranges::find(merged_selection.vertices,
+                        survivor_selection.active_vertex) !=
+          merged_selection.vertices.end()) {
+    merged_selection.has_active = true;
+    merged_selection.active_kind = quader_poly::ElementKind::Vertex;
+    merged_selection.active_vertex = survivor_selection.active_vertex;
+  }
+  receipt.affected = receipt.modified;
+  PolygonDocumentNativeAccess::replace_document(candidate, std::move(combined));
+  PolygonDocumentNativeAccess::replace_selection(candidate,
+                                                std::move(merged_selection));
+  PolygonDocumentImpl &candidate_impl =
+      PolygonDocumentNativeAccess::impl(candidate);
+  ++candidate_impl.content_revision;
+  ++candidate_impl.selection_revision;
+  return Result<SessionMergePreviewCandidate>::success({
+      .survivor_document = std::move(candidate),
+      .receipt = std::move(receipt),
+  });
 }
 
 Result<OperationResult>

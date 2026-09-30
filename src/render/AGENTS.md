@@ -36,9 +36,66 @@ file except through prior written authorization from Francesco Di Blasi.
   queries pin immutable geometry and private scratch; Filament calls stay on the render owner.
   Packed preview begin must resolve viewport-skipped points before positions move. Refresh clip
   uniforms on camera changes even when unrelated frame layers also change.
+- Compatible component vertex layers share one ordered marker geometry across selected/unselected
+  outline/fill passes. Selection colors, sizes and class occupy a separate appearance stream;
+  geometry, visibility and preview position streams retain independent lifetimes. Preserve exact
+  within-class order and use the generic path for incompatible size/depth partitions or membership.
+  Reconcile source-face visibility BVHs per object with exact geometry comparisons, evict absent
+  sources, and keep query keys independent of color while retaining marker extent and eligibility.
+  Factory upload counters include generic rebuilds; use them with actual pixel parity tests rather
+  than relying only on preview-specific upload counters.
+- Compatible component SourceWire layers retain edge slots and GPU buffers across membership
+  changes. Keep active indices in incoming draw order and update only dirty endpoint/color ranges;
+  retain object and canonical endpoint identity without merging ambiguous occurrences. Bound capacity
+  to four times the active population and release empty layers. Restore, rebind and reapply live
+  preview positions when base membership changes. Bound fragmented upload command counts as well
+  as buffer capacity: consolidate large dirty-range sets and preserve retained positions in unchanged
+  gaps. Per-edge uploads can overflow Filament's command stream during a dense commit.
+  The generic builder remains the fallback for
+  incompatible widths, sources or occurrence identities. Slot and pixel/preview contracts live in
+  `tests/overlay_edit_wire_retention_tests.cpp` and `tests/selection_overlay_runtime_tests.cpp`.
 - Dynamic preview preparation validates every group before uploads. Parallel work owns candidate
   CPU streams and upload descriptors; publish serially only after the whole batch succeeds. Reuse
   unchanged groups and preserve canonical normals, UVs, indices and bounds.
+  Consume immutable effective geometry/position streams through their snapshot pins; the baseline
+  mesh alone may not contain preview attributes or triangulation. Unchanged position proofs include
+  payload ownership as well as source, layout and revision.
+  Equivalent inputs may share immutable packed CPU bytes after exact geometry and effective-position
+  equality. Each destination retains its own validated single-use update and asynchronous descriptor
+  lifetime; changed normals, UVs, carriers, indices, partitions or positions invalidate reuse.
+- `EditableMeshSurfaceCache` retains coarse batches of different ordinary meshes across preview,
+  commit and cancel. Each enrolled source has one effective presentation: its accepted override or
+  the current committed snapshot. Exclude only successfully covered sources from ordinary caches;
+  unsupported records keep the legacy preview path alongside retained peers. Prepare every lane
+  before changing coverage, and preserve the accepted display on candidate failure. Scene sync and
+  later instance suppression must use the same filtered records so covered sources cannot reappear.
+  Keep source geometry, positions and material pins immutable; commit/cancel changes effective
+  inputs without promoting render state into document truth. Keep occurrence transforms relative
+  to a retained chunk anchor with bounded placement extent; Filament applies the anchor through its
+  camera-relative entity transform. Reanchoring must not recreate compatible geometry buffers.
+  Share canonical CPU packing across chunks only after exact effective-stream comparison; bounded
+  workers must join before any Filament resource creation or publication. Pixel, malformed-candidate and handoff
+  coverage lives in `tests/render_normal_mapping_runtime_tests.cpp`; exclusion restoration,
+  occurrence filtering and light-only changes live in `tests/render_texture_lifetime_tests.cpp`.
+- Exact equivalent dynamic previews share one buffer-only GPU geometry owner with instanced
+  rendered/shaded/depth chunks. Keep logical records for object identity, suppression and overlays.
+  Stage geometry and exact-count instance updates before live publication; incompatible populations
+  grow hidden candidates. Retire borrowers before their owner, bound inactive material-bearing
+  resources, and drain ended generations under count/time budgets. Reflected or singular placements
+  retain per-object rendering because Filament determines winding from the entity transform.
+  Both batching paths inspect only materials used by drawn primitives. Alpha-textured or
+  not-yet-classified materials retain ordinary per-object depth sorting; unsupported placements
+  retain their established rendering path. Read opacity from the existing texture upload cache;
+  eligibility checks must never decode images.
+  Pixel, rejection, split/merge and retirement contracts live in
+  `tests/render_normal_mapping_runtime_tests.cpp`.
+- Visible component marquee queries may use retained GPU triangle-ID/depth snapshots only when
+  geometry and camera identity match. Conservative pixel coverage supplies candidates for the
+  existing exact CPU intersection rule; uncertain coverage, near-plane loss, overflow and stale
+  readbacks must fall back. X-ray and exact edge rules retain their CPU path. Completed callbacks
+  alone do not prove valid pixel contents. Keep asynchronous storage alive through shutdown and
+  avoid warming during active navigation or editing. CPU-oracle and actual readback coverage live
+  in `tests/component_selection_depth_tests.cpp` and `tests/component_selection_runtime_tests.cpp`.
 - Vulkan object/group silhouettes use retained ordinary/active geometry batches in a separate
   selection scene and per-pane occupancy/depth targets. Camera movement updates projection, never
   CPU triangle unions or geometry uploads. Keep the two class boundaries independent, with active
@@ -69,7 +126,9 @@ file except through prior written authorization from Francesco Di Blasi.
   bounded command batches before `beginFrame`; large scenes can exhaust Filament's command arena
   even during shutdown.
   Detach the complete retiring set of renderables before releasing their materials, avoiding
-  repeated material-lifetime validation scans. Keep unchanged synchronization free of submissions.
+  repeated material-lifetime validation scans. Ordinary proxy retirement removes renderable
+  components immediately, then drains material/geometry owners under count and elapsed-time budgets,
+  including unchanged syncs while a backlog exists. Otherwise unchanged synchronization submits nothing.
   See `SelectedObjectOverlayCache` and the
   6,400-mesh regression in `tests/selection_overlay_runtime_tests.cpp`.
   Vulkan selected face fills share indexed buffers across their four composition passes and

@@ -1205,6 +1205,39 @@ bool selection_hover_target_is_selected(std::span<const PolygonObject> objects,
 bool selection_hover_target_is_selected(
     const std::vector<PolygonObject> &objects, SelectionMode mode,
     const SelectionHoverState &hover);
+/// Immutable geometry-derived overlay facts pinned to an authored document.
+class SelectionOverlayGeometry;
+
+/// Counts retained geometry construction independently of selection classification.
+struct SelectionOverlayGeometryWorkCounters {
+  std::uint64_t geometry_build_count = 0;
+  std::uint64_t face_triangulation_count = 0;
+  std::uint64_t geometry_position_refresh_count = 0;
+  std::uint64_t frame_position_refresh_count = 0;
+  std::uint64_t semantic_aggregate_build_count = 0;
+  std::uint64_t world_projection_build_count = 0;
+  std::uint64_t accepted_coordinate_handoff_count = 0;
+};
+
+[[nodiscard]] std::shared_ptr<const SelectionOverlayGeometry>
+build_selection_overlay_geometry(
+    const CowPolygonDocument &document,
+    SelectionOverlayGeometryWorkCounters &work,
+    const SelectionOverlayGeometry *previous = nullptr);
+
+/**
+ * Rebinds source-ID coordinates when semantic membership stays exact.
+ * The caller must rebuild the candidate frame when this returns false.
+ */
+[[nodiscard]] bool refresh_selection_overlay_frame_positions(
+    SelectionOverlayFrame &frame, const SelectionOverlayGeometry &previous,
+    const SelectionOverlayGeometry &current,
+    SelectionOverlayGeometryWorkCounters &work);
+
+SelectionOverlayFrame build_selection_overlay_frame(
+    const PolygonObject &object, SelectionMode mode, int active_object_id,
+    const SelectionHoverState &hover, const SelectionOverlayStyle &style,
+    const SelectionOverlayGeometry &geometry);
 SelectionOverlayFrame build_selection_overlay_frame(
     std::span<const PolygonObject> objects, SelectionMode mode,
     const SelectionHoverState &hover, const SelectionOverlayStyle &style = {});
@@ -1220,9 +1253,11 @@ SelectionOverlayFrame build_selection_overlay_frame(
     int active_object_id, const SelectionHoverState &hover,
     const SelectionOverlayStyle &style = {});
 SelectionOverlayFrame build_object_selection_wire_overlay_frame(
-    const PolygonObject &object, const SelectionOverlayStyle &style = {});
+    const PolygonObject &object, const SelectionOverlayStyle &style = {},
+    const SelectionOverlayGeometry *geometry = nullptr);
 SelectionOverlayFrame build_source_wire_overlay_frame(
-    const PolygonObject &object, const SelectionOverlayStyle &style = {});
+    const PolygonObject &object, const SelectionOverlayStyle &style = {},
+    const SelectionOverlayGeometry *geometry = nullptr);
 SelectionOverlayFrame build_selection_hover_overlay_frame(
     std::span<const PolygonObject> objects, SelectionMode mode,
     const SelectionHoverState &hover, const SelectionOverlayStyle &style = {});

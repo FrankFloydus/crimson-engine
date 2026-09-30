@@ -730,6 +730,13 @@ std::vector<Triangle> triangulate_face_local_indices(
     const VertexLookupIndex& vertex_lookup,
     const quader::QVec3& normal)
 {
+    return triangulate_face_local_indices(face, vertex_lookup, normal);
+}
+
+std::vector<Triangle> triangulate_face_local_indices(
+    const Face &face, const VertexLookupIndex &vertex_lookup,
+    const quader::QVec3 &normal)
+{
     QDR_PROFILE_SCOPE("qdr_document.triangulate_face_local_indices");
     std::vector<Triangle> triangles;
     if (face.vertices.size() < 3) {
@@ -805,6 +812,13 @@ FaceUvBasis generated_face_uv_basis(
     const Face& face,
     const quader::QVec3& normal,
     const VertexLookupIndex& vertex_lookup)
+{
+    return generated_face_uv_basis(face, normal, vertex_lookup);
+}
+
+FaceUvBasis generated_face_uv_basis(
+    const Face &face, const quader::QVec3 &normal,
+    const VertexLookupIndex &vertex_lookup)
 {
     if (face.vertices.empty()) {
         return {};

@@ -56,3 +56,20 @@ retained overlays, when reporting viewport performance.
 
 Regression examples: [submitted extrusion wires](../../../../tests/selected_mesh_outline_presentation_tests.cpp)
 and [Vulkan outline pixels](../../../../tests/selection_overlay_runtime_tests.cpp).
+
+Ordinary component transforms retain SDK topology and publish immutable coordinate snapshots.
+The native projection prepares authored-to-compiled mappings once, then publishes
+`MeshGeometryProjection` position, attribute and index streams. When that pin is present,
+`preview.mesh` supplies source metadata; its stored vertices are not the current candidate.
+Consumers must use the effective stream spans and authoritative positions, including tangent,
+UV, wire and depth preparation. Unchanged stream owners remain pinned across updates.
+
+Keep full geometry materialization out of frame preparation. Explicit API export and commit may
+materialize the accepted streams lazily; commit adopts that cached geometry only after the
+accepted SDK content identity matches. Equivalent accepted families also retain a shared immutable
+authored document after exact SDK content comparison, keeping local picking reuse without merging
+independent SDK objects or their identity cursors. UV-preservation or topology/layout changes retain canonical
+fallback. Rejection must preserve every accepted stream and revision, and no reusable position
+buffer may be written while an accepted or older snapshot pins it. These contracts are covered by
+[coordinate projection parity](../../../../tests/uv_native_sampling_tests.cpp) and
+[component transform lifecycle tests](../../../../tests/component_transform_persistence_tests.cpp).

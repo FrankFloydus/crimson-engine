@@ -46,9 +46,47 @@ UsageStamp usage_stamp(const SceneSession &session) {
 /// Pins the exact source checked, without retaining a mutable document owner.
 struct GeometrySlots final {
   std::uint64_t inspection_pass = 0u;
+  std::optional<MeshAsset> resident_source;
   MeshAssetWriteSource source;
   QdrMeshMaterialSlotsReadResult read;
 };
+
+bool same_material_slot_source(const MeshAsset &left, const MeshAsset &right) {
+  const bool left_authored = left.has_authored_polygon_document &&
+                            left.authored_polygon_document;
+  const bool right_authored = right.has_authored_polygon_document &&
+                             right.authored_polygon_document;
+  if (left_authored != right_authored) return false;
+  if (left_authored) {
+    const auto left_faces = left.authored_polygon_document.read_view().faces;
+    const auto right_faces = right.authored_polygon_document.read_view().faces;
+    return left_faces.data() == right_faces.data() &&
+           left_faces.size() == right_faces.size();
+  }
+  const auto left_primitives = left.geometry_primitives();
+  const auto right_primitives = right.geometry_primitives();
+  return left_primitives.data() == right_primitives.data() &&
+         left_primitives.size() == right_primitives.size() &&
+         left.geometry_indices().size() == right.geometry_indices().size();
+}
+
+QdrMeshMaterialSlotsReadResult inspect_material_slots(const MeshAsset &source) {
+  QdrMeshMaterialSlotsReadResult result{.ok = true};
+  if (source.has_authored_polygon_document && source.authored_polygon_document) {
+    for (const auto &face : source.authored_polygon_document.read_view().faces) {
+      result.material_slots.push_back(face.material_slot);
+    }
+  } else {
+    for (const auto &primitive : normalized_mesh_primitive_spans(source)) {
+      result.material_slots.push_back(primitive.material_slot);
+    }
+  }
+  std::ranges::sort(result.material_slots);
+  result.material_slots.erase(
+      std::unique(result.material_slots.begin(), result.material_slots.end()),
+      result.material_slots.end());
+  return result;
+}
 
 QdrMeshMaterialSlotsReadResult inspect_material_slots(
     const MeshAssetWriteSource &source) {
@@ -183,6 +221,25 @@ struct ProjectMaterialUsageService::State final {
     auto &mesh = cached.meshes[mesh_id];
     if (mesh.inspection_pass == work.live_scene_scan_count) return mesh.read;
     mesh.inspection_pass = work.live_scene_scan_count;
+    if (assets.mesh_materialized(mesh_id)) {
+      const auto *resident = assets.mesh(mesh_id);
+      if (resident == nullptr) {
+        mesh.read = {.message = "Mesh geometry is unavailable."};
+        return mesh.read;
+      }
+      if (mesh.read.ok && mesh.resident_source &&
+          (mesh.resident_source->revision == resident->revision ||
+           same_material_slot_source(*mesh.resident_source, *resident))) {
+        mesh.resident_source = *resident;
+        return mesh.read;
+      }
+      mesh.resident_source = *resident;
+      mesh.source = {};
+      ++work.geometry_slot_scan_count;
+      mesh.read = inspect_material_slots(*resident);
+      return mesh.read;
+    }
+    mesh.resident_source.reset();
     const auto source = assets.mesh_write_source(mesh_id);
     if (!source.ok) {
       mesh.read = {.message = source.message};

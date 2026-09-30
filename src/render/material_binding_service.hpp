@@ -14,6 +14,8 @@
 
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
+#include <math/mat3.h>
+#include <math/mat4.h>
 
 #include <cstdint>
 #include <span>
@@ -23,6 +25,7 @@ namespace quader {
 class TextureBindingService;
 class ViewportSettings;
 struct InstanceEditStyle;
+enum class MaterialOpacity;
 
 // Matches the shipping Filament instance limit; mappings never split geometry.
 inline constexpr std::size_t kMeshTextureMappingCapacity = 64u;
@@ -32,6 +35,15 @@ inline constexpr std::size_t kMeshTextureMappingCapacity = 64u;
 void bind_mesh_texture_mappings(
     filament::MaterialInstance &material_instance,
     std::span<const QMat4> sampling_from_local = {});
+
+/// Publishes prevalidated, equally sized occurrence palettes for a rigid coarse
+/// mesh chunk. Each span contains 1..kMeshTextureMappingCapacity entries; CPU
+/// preparation is complete before this allocation-free publication step.
+void bind_coarse_mesh_parameters(
+    filament::MaterialInstance &material_instance,
+    std::span<const filament::math::mat4f> sampling_from_local,
+    std::span<const filament::math::mat3f> sampling_cofactors,
+    std::span<const filament::math::mat3f> world_normal_from_local);
 
 /** Binds the shared Standard Material UV transform to a Filament instance. */
 void bind_standard_material_texture_transform(
@@ -93,6 +105,13 @@ public:
     filament::MaterialInstance *create_mesh_material_instance(
         const RenderMaterialAssetSnapshot *material, bool double_sided,
         bool editor_unlit = false) const;
+    /// Resolves the same default override as material creation without loading
+    /// images; only a decoded opaque base color or solid fallback returns true.
+    [[nodiscard]] bool material_is_known_opaque(
+        const RenderMaterialAssetSnapshot *material) const;
+    /// Distinguishes an unloaded image from known alpha without loading pixels.
+    [[nodiscard]] MaterialOpacity material_opacity(
+        const RenderMaterialAssetSnapshot *material) const;
     filament::MaterialInstance *duplicate_mesh_material_instance(
         const filament::MaterialInstance *source) const;
     void destroy_mesh_material_instance(
@@ -108,6 +127,8 @@ public:
         filament::MaterialInstance &material_instance, bool dimmed) const;
 
   private:
+    [[nodiscard]] const RenderMaterialAssetSnapshot *effective_material(
+        const RenderMaterialAssetSnapshot *material) const;
     filament::Material *shaded_mesh_material_ = nullptr;
     filament::Material *rendered_mesh_material_ = nullptr;
     TextureBindingService *texture_binding_ = nullptr;

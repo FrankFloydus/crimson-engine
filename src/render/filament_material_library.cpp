@@ -26,50 +26,39 @@ bool FilamentMaterialLibrary::initialize(
   try {
     const std::filesystem::path material_dir =
         executable_dir / std::string(kFilamentMaterialDirectory);
-    LOG_INFO("Loading Quader mesh material");
     quader_mesh_material_ =
         load(material_dir / std::string(kQuaderMeshMaterialFile));
-    LOG_INFO("Loading Quader lit mesh material");
     quader_mesh_lit_material_ =
         load(material_dir / std::string(kQuaderMeshLitMaterialFile));
-    LOG_INFO("Loading vertex color overlay material");
     vertex_color_overlay_material_ =
         load(material_dir / std::string(kVertexColorOverlayMaterialFile));
-    LOG_INFO("Loading instance selection fill material");
     instance_selection_fill_material_ =
         load(material_dir / std::string(kInstanceSelectionFillMaterialFile));
-    LOG_INFO("Loading overlay line material");
     overlay_line_material_ =
         load(material_dir / std::string(kOverlayLineMaterialFile));
-    LOG_INFO("Loading selected object line material");
     selected_object_line_material_ =
         load(material_dir / std::string(kSelectedObjectLineMaterialFile));
-    LOG_INFO("Loading selected mesh outline mask material");
     selected_mesh_outline_mask_material_ =
         load(material_dir / std::string(kSelectedMeshOutlineMaskMaterialFile));
-    LOG_INFO("Loading selected mesh outline composite material");
     selected_mesh_outline_composite_material_ =
         load(material_dir / std::string(kSelectedMeshOutlineCompositeMaterialFile));
-    LOG_INFO("Loading edit wire line material");
     edit_wire_line_material_ =
         load(material_dir / std::string(kEditWireLineMaterialFile));
-    LOG_INFO("Loading overlay point material");
     overlay_point_material_ =
         load(material_dir / std::string(kOverlayPointMaterialFile));
-    LOG_INFO("Loading overlay icon material");
     overlay_icon_material_ =
         load(material_dir / std::string(kOverlayIconMaterialFile));
-    LOG_INFO("Loading ground grid material");
     ground_grid_material_ =
         load(material_dir / std::string(kGroundGridMaterialFile));
     overlay_stencil_reset_material_ =
         load(material_dir / std::string(kOverlayStencilResetMaterialFile));
+    component_selection_material_ =
+        load(material_dir / std::string(kComponentSelectionMaterialFile));
   } catch (const std::exception &error) {
     LOG_ERROR("Material load failed: {}", error.what());
     shutdown();
     return false;
   }
-  LOG_INFO("Filament materials loaded");
   return true;
 }
 
@@ -91,6 +80,7 @@ void FilamentMaterialLibrary::shutdown() {
     destroy(overlay_icon_material_);
     destroy(ground_grid_material_);
     destroy(overlay_stencil_reset_material_);
+    destroy(component_selection_material_);
     engine_ = nullptr;
 }
 

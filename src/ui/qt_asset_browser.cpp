@@ -394,7 +394,19 @@ public:
     // proxy owns display order, so moving an asset never resets unrelated tiles.
     std::map<QString, QtAssetBrowserItem *> incoming;
     for (auto &item : value.items) {
-      incoming.emplace(item.id, &item);
+      if (!incoming.emplace(item.id, &item).second) {
+        // A malformed projection must not dereference an exhausted identity
+        // lookup or publish a mismatched beginInsertRows range.
+        replace(std::move(value));
+        return true;
+      }
+    }
+    std::set<QString> previous_ids;
+    for (const auto &item : snapshot.items) {
+      if (!previous_ids.insert(item.id).second) {
+        replace(std::move(value));
+        return true;
+      }
     }
     bool folders_changed = false;
     for (int last = rowCount() - 1; last >= 0;) {

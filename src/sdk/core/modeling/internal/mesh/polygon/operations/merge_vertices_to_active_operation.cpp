@@ -48,6 +48,11 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
   if (selection.mode != SelectionMode::Vertex) {
     return OperationResult::failure("Merge needs vertex selection mode.");
   }
+    const OperationResult source_validation =
+        validate_authored_operation_candidate(document, document);
+    if (!source_validation.success) {
+        return source_validation;
+    }
     if (selection.vertices.size() < 2) {
         return OperationResult::failure("Select at least two vertices to merge.");
     }
@@ -74,15 +79,14 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
         return OperationResult::failure("Select at least one other vertex to merge.");
     }
 
-#if defined(QUADER_POLY_USE_OPENMESH)
-    return merge_selected_vertices_to_active_with_topology_backend(document, selection, merge_vertex_ids, active_vertex_id);
-#else
     Document candidate;
     const Vertex* active_vertex = find_vertex(document, active_vertex_id);
     if (active_vertex == nullptr) {
         return OperationResult::failure("Active vertex was not found.");
     }
-    const OperationResult candidate_result = build_vertex_merge_candidate(document, candidate, merge_vertex_ids, active_vertex_id, active_vertex->position);
+    const OperationResult candidate_result = build_topology_vertex_merge_candidate(
+        document, candidate, merge_vertex_ids, active_vertex_id,
+        active_vertex->position, true);
     if (!candidate_result.changed) {
         return candidate_result;
     }
@@ -90,8 +94,12 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
     if (find_vertex(candidate, active_vertex_id) == nullptr) {
         return OperationResult::failure("Merge would remove the active vertex.");
     }
+    const OperationResult validation =
+        validate_authored_operation_candidate(document, candidate);
+    if (!validation.success) {
+        return validation;
+    }
     document = std::move(candidate);
-    prune_unused_vertices(document);
 
     selection.clear();
     selection.mode = SelectionMode::Vertex;
@@ -99,7 +107,6 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
     activate_vertex_selection(selection, active_vertex_id);
 
     return { true, {} };
-#endif
 }
 
 } // namespace

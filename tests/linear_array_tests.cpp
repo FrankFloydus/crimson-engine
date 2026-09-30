@@ -2309,6 +2309,61 @@ TEST(RadialArrayToolServiceTests,
 }
 
 TEST(LinearArrayToolServiceTests,
+     ArrayCommandAvailabilityTracksVisibilityLocksAndAssetRemoval) {
+  for (const auto &[tool, command_id] : std::array{
+           std::pair{ViewportToolId::LinearArray,
+                     quader_command::kToolsActivateLinearArray},
+           std::pair{ViewportToolId::RadialArray,
+                     quader_command::kToolsActivateRadialArray}}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto source = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Array Availability Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    const auto expect_available = [&](bool expected) {
+      const auto descriptor = editor.commands().descriptor(command_id);
+      ASSERT_TRUE(descriptor.has_value());
+      EXPECT_EQ(descriptor->enabled, expected);
+      EXPECT_EQ(editor.tools().can_activate(tool), expected);
+    };
+    expect_available(true);
+    ASSERT_TRUE(session.scene().set_locked(source.value().entity, true));
+    expect_available(false);
+    ASSERT_TRUE(session.scene().set_locked(source.value().entity, false));
+    expect_available(true);
+    ASSERT_TRUE(session.scene().set_visible(source.value().entity, false));
+    expect_available(false);
+    ASSERT_TRUE(session.scene().set_visible(source.value().entity, true));
+    expect_available(true);
+
+    const auto layer = session.scene().create_layer("Array Availability Layer");
+    ASSERT_TRUE(session.scene().set_entity_layer(source.value().entity, layer));
+    expect_available(true);
+    ASSERT_TRUE(session.scene().set_layer_locked(layer, true));
+    expect_available(false);
+    ASSERT_TRUE(session.scene().set_layer_locked(layer, false));
+    expect_available(true);
+    ASSERT_TRUE(session.scene().set_layer_visible(layer, false));
+    expect_available(false);
+    ASSERT_TRUE(session.scene().set_layer_visible(layer, true));
+    expect_available(true);
+
+    const auto mesh = session.scene().mesh(source.value().entity)->mesh;
+    const auto scene_revision = session.scene().revision();
+    ASSERT_TRUE(session.assets().remove_mesh(mesh));
+    EXPECT_EQ(session.scene().revision(), scene_revision);
+    expect_available(false);
+    const auto rejected = editor.tools().activate(tool);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+  }
+}
+
+TEST(LinearArrayToolServiceTests,
      MixedOrdinaryMeshesAndOccurrencesAreRejectedExplicitly) {
   SceneSession session;
   QuaderEditorApi editor(

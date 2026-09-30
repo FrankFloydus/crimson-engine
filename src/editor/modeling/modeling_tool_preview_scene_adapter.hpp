@@ -49,6 +49,7 @@ namespace quader {
         .position_revision = mesh.position_revision,
         .dynamic_position_payload =
             std::move(mesh.dynamic_position_payload),
+        .geometry_projection = std::move(mesh.geometry_projection),
     });
   }
   projected.curves.reserve(preview.curves.size());

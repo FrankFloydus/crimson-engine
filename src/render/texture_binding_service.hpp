@@ -26,6 +26,9 @@
 
 namespace quader {
 
+/// Cached base-color classification; unknown inputs never authorize batching.
+enum class MaterialOpacity { Unknown, Opaque, Transparent };
+
 /**
  * Coordinates Texture Binding Service responsibilities for the render extraction and Filament resource layer.
  */
@@ -81,6 +84,12 @@ public:
                                        const RenderMaterialAssetSnapshot *material,
                                        const char *slot_name,
                                        filament::Texture *fallback);
+    /// Consults decoded cache metadata only; unknown image alpha is not opaque.
+    /// Missing slots and failed loads use the opaque solid albedo fallback.
+    [[nodiscard]] bool base_color_is_known_opaque(
+        const RenderMaterialAssetSnapshot *material) const;
+    [[nodiscard]] MaterialOpacity base_color_opacity(
+        const RenderMaterialAssetSnapshot *material) const;
 
     void retain_material_textures(const filament::MaterialInstance &source,
                                   const filament::MaterialInstance &duplicate);
@@ -142,13 +151,15 @@ public:
     struct TextureCacheEntry final {
       filament::Texture *texture = nullptr;
       std::size_t consumer_count = 0u;
+      bool opaque = false;
     };
     void retain_texture(const filament::MaterialInstance &consumer,
                         const TextureCacheKey &key);
 
-    filament::Texture *load_texture_asset(const TextureAsset &texture);
+    filament::Texture *load_texture_asset(const TextureAsset &texture,
+                                         bool &opaque);
     filament::Texture *load_project_texture_asset(
-        const RenderTextureAssetSnapshot &texture);
+        const RenderTextureAssetSnapshot &texture, bool &opaque);
     filament::Texture *create_solid_texture(std::uint8_t r, std::uint8_t g,
                                             std::uint8_t b, std::uint8_t a,
                                             TextureColorSpace color_space);

@@ -8,6 +8,7 @@
 
 #include "render/viewport_overlay_frame.hpp"
 #include "render/overlay/overlay_proxy_factory.hpp"
+#include "render/overlay/overlay_edit_wire_retention.hpp"
 #include "render/overlay/overlay_renderable_proxy.hpp"
 
 #include <array>
@@ -34,7 +35,11 @@ struct OverlayRenderableCacheStats {
   std::uint64_t point_geometry_update_count = 0u;
   std::uint64_t point_visibility_upload_count = 0u;
   std::uint64_t point_position_upload_count = 0u;
+  OverlayProxyUploadStats uploads;
   OverlayDepthStampPointVisibilityStats point_visibility;
+  std::size_t retained_source_wire_edges = 0u;
+  std::size_t retained_source_wire_capacity = 0u;
+  std::size_t shared_position_proxy_count = 0u;
 };
 
 /**
@@ -72,7 +77,8 @@ public:
      * overlays without rebuilding their semantic/projected frame in the UI.
      */
     bool set_transform_position_streams(
-        const std::vector<RenderToolPreviewMeshRecord> &meshes);
+        const std::vector<RenderToolPreviewMeshRecord> &meshes,
+        bool accepted_coordinates = false);
     /// Drops retained transform topology/bindings when the bound document is
     /// replaced. Normal transform end keeps this topology warm for the next
     /// move/rotate/scale gesture.
@@ -89,6 +95,23 @@ public:
     struct OverlayProxyGroup {
         std::uint64_t signature = 0;
         std::vector<OverlayRenderableProxy> proxies;
+        std::uint64_t face_source_signature = 0u;
+        std::vector<std::uint32_t> face_indices;
+        std::vector<std::uint32_t> face_colors;
+    };
+
+    struct FaceTriangleKey {
+      std::array<int, 5u> values{};
+      bool operator==(const FaceTriangleKey &) const = default;
+    };
+    struct FaceTriangleKeyHash {
+      std::size_t operator()(const FaceTriangleKey &key) const;
+    };
+    struct RetainedFaceSource {
+      std::uint64_t signature = 0u;
+      std::vector<ViewportOverlayTriangle> triangles;
+      std::unordered_map<FaceTriangleKey, std::uint32_t, FaceTriangleKeyHash> triangle_slots;
+      bool valid = false;
     };
 
     /// Pins one object's stable vertex mapping and reusable world-position
@@ -134,6 +157,9 @@ public:
         std::uint8_t layer_mask = 0;
         bool has_frame = false;
         OverlayDepthStampPointVisibilityFilter point_visibility;
+        OverlayEditWireRetention source_wire_retention;
+        std::array<OverlayEditWireRetention, 2u> selection_wire_retention;
+        RetainedFaceSource face_source;
         std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxy_groups;
         OverlayFrameSignatures transform_base_signatures;
         std::uint64_t transform_base_frame_signature = 0u;
@@ -144,7 +170,12 @@ public:
         std::vector<TransformSourceBindingSpan> transform_source_binding_spans;
         bool transform_bindings_valid = false;
         bool transform_active = false;
+        ViewportOverlayFrame accepted_visibility_frame;
+        OverlayFrameSignatures accepted_visibility_signatures;
+        bool accepted_visibility_valid = false;
         bool point_viewport_skips_applied = false;
+        bool component_point_family_active = false;
+        bool component_point_geometry_retained = false;
         std::uint64_t point_order_signature = 0u;
         std::uint64_t point_geometry_update_count = 0u;
         std::uint64_t point_visibility_upload_count = 0u;
@@ -153,11 +184,18 @@ public:
 
     void rebuild_slot(OverlaySlot &slot,
                       bool rebuild_camera_independent_layers);
+    bool rebuild_component_points(OverlaySlot &slot);
+    bool rebuild_retained_source_wire(OverlaySlot &slot, OverlayProxyGroup &group,
+                                     ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire);
+    void prepare_retained_face_source(OverlaySlot &slot);
+    bool rebuild_retained_faces(OverlaySlot &slot, OverlayProxyGroup &group,
+                               ViewportOverlayLayer layer);
     void update_retained_camera_state(OverlaySlot &slot);
     void update_point_visibility(OverlaySlot &slot);
     void begin_transform_stream(OverlaySlot &slot,
                                 std::uint64_t layout_signature);
     void resolve_transform_stream_bindings(OverlaySlot &slot);
+    void bind_shared_transform_positions(OverlaySlot &slot);
     void apply_transform_stream(OverlaySlot &slot,
                                 std::uint64_t position_signature,
                                 const std::vector<std::uint8_t>
@@ -172,9 +210,13 @@ public:
     std::uint16_t blend_order_bias_ = 0u;
     std::array<OverlaySlot, kMaxViewportOverlaySlots> slots_;
     std::vector<TransformPositionSource> transform_sources_;
+    std::vector<std::uint32_t> transform_source_offsets_;
+    std::vector<OverlayFloat3> shared_transform_positions_;
+    bool shared_transform_positions_ready_ = false;
     std::uint64_t transform_layout_signature_ = 0u;
     std::uint64_t transform_position_signature_ = 0u;
     bool transform_stream_active_ = false;
+    bool transform_coordinates_accepted_ = false;
 };
 
 } // namespace quader

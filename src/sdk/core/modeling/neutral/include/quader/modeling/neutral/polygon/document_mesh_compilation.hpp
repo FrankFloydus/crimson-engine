@@ -54,9 +54,14 @@ struct CompiledMesh {
  */
 void compile_document_into(const Document &document, CompiledMesh &mesh,
                            SurfaceShading shading = SurfaceShading::Authored);
+void compile_document_into(const DocumentReadView &document, CompiledMesh &mesh,
+                           SurfaceShading shading = SurfaceShading::Authored);
 
 [[nodiscard]] CompiledMesh
 compile_document(const Document &document,
+                 SurfaceShading shading = SurfaceShading::Authored);
+[[nodiscard]] CompiledMesh
+compile_document(const DocumentReadView &document,
                  SurfaceShading shading = SurfaceShading::Authored);
 
 } // namespace quader_poly

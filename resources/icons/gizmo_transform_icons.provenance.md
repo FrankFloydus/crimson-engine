@@ -1,5 +1,9 @@
 # Gizmo visibility and Local Transforms icon provenance
 
+The Local Transforms artwork is superseded by the World/Local pair documented in
+[modeling_tool_icons.provenance.md](modeling_tool_icons.provenance.md). The Toggle
+Gizmos artwork documented below remains unchanged.
+
 Created on 2026-09-25 using the built-in ImageGen tool at the user's request.
 The user approved both initial previews before installation, then requested a
 larger visibility eye after reviewing the native toolbar.

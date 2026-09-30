@@ -51,7 +51,7 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogCoversEditorCoreT
 }
 
 TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogExposesHostGlueHintsWithoutExecutableSurface) {
-	EXPECT_TRUE(same_text(require_tool("select").primary_shortcut, "Q"));
+	EXPECT_TRUE(require_tool("select").primary_shortcut.empty());
 	EXPECT_TRUE(same_text(require_tool("lasso_select").primary_shortcut, "Shift+Q"));
 	EXPECT_TRUE(same_text(require_tool("move").primary_shortcut, "W"));
 	EXPECT_TRUE(same_text(require_tool("rotate").primary_shortcut, "R"));

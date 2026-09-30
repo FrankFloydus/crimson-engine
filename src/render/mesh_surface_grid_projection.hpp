@@ -9,6 +9,7 @@
 #include "assets/mesh_asset.hpp"
 
 #include <cstdint>
+#include <array>
 #include <span>
 #include <vector>
 
@@ -22,6 +23,28 @@ struct MeshSurfaceGridVertexProjection final {
   bool face_projected = false;
 };
 
+/// Immutable authored-face membership, independent from deforming coordinates.
+struct MeshSurfaceGridProjectionPlan final {
+  /// Preserves canonical triangle accumulation and first-seen corner order.
+  struct Face final {
+    std::vector<std::array<std::uint32_t, 3u>> triangles;
+    std::vector<std::uint32_t> vertices;
+    bool exclusive = false;
+  };
+  std::size_t vertex_count = 0u;
+  std::vector<Face> faces;
+};
+
+[[nodiscard]] MeshSurfaceGridProjectionPlan prepare_mesh_surface_grid_projection(
+    std::size_t vertex_count, std::span<const std::uint32_t> indices,
+    std::span<const MeshPrimitiveSpan> primitives);
+
+[[nodiscard]] std::vector<MeshSurfaceGridVertexProjection>
+build_mesh_surface_grid_vertex_projections(
+    std::span<const MeshVertex> vertices,
+    const MeshSurfaceGridProjectionPlan &plan,
+    std::span<const QVec3> positions = {});
+
 /**
  * Builds renderer-owned projection hints from original, uncoalesced face spans.
  *
@@ -33,6 +56,7 @@ struct MeshSurfaceGridVertexProjection final {
 build_mesh_surface_grid_vertex_projections(
     std::span<const MeshVertex> vertices,
     std::span<const std::uint32_t> indices,
-    std::span<const MeshPrimitiveSpan> primitives);
+    std::span<const MeshPrimitiveSpan> primitives,
+    std::span<const QVec3> positions = {});
 
 } // namespace quader

@@ -15,8 +15,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <set>
 #include <span>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -59,6 +62,141 @@ struct DistanceMergeCluster {
     quader::QVec3 centroid;
 };
 
+float distance_axis_coordinate(quader::QVec3 position, std::uint8_t axis)
+{
+    return axis == 0U ? position.x : (axis == 1U ? position.y : position.z);
+}
+
+struct DistanceRadiusNode {
+    std::size_t vertex_index = 0;
+    std::uint8_t axis = 0;
+};
+
+/// Indexes the immutable source positions. Query order is deliberately separate
+/// from merge order: callers restore input order before checking assignment.
+class DistanceRadiusIndex {
+public:
+    explicit DistanceRadiusIndex(std::span<const DistanceMergeVertex> vertices)
+        : vertices_(vertices)
+    {
+        nodes_.reserve(vertices.size());
+        for (std::size_t index = 0; index < vertices.size(); ++index) {
+            nodes_.push_back({index, 0});
+        }
+        build_range(0, nodes_.size());
+    }
+
+    void find_within_radius(quader::QVec3 position, float distance_limit_squared,
+                            std::vector<std::size_t>& candidates) const
+    {
+        candidates.clear();
+        query_range(0, nodes_.size(), position, distance_limit_squared, candidates);
+    }
+
+private:
+    void build_range(std::size_t begin, std::size_t end)
+    {
+        if (begin == end) {
+            return;
+        }
+
+        quader::QVec3 minimum = vertices_[nodes_[begin].vertex_index].position;
+        quader::QVec3 maximum = minimum;
+        for (std::size_t index = begin + 1U; index < end; ++index) {
+            const quader::QVec3 position = vertices_[nodes_[index].vertex_index].position;
+            minimum.x = std::min(minimum.x, position.x);
+            minimum.y = std::min(minimum.y, position.y);
+            minimum.z = std::min(minimum.z, position.z);
+            maximum.x = std::max(maximum.x, position.x);
+            maximum.y = std::max(maximum.y, position.y);
+            maximum.z = std::max(maximum.z, position.z);
+        }
+
+        std::uint8_t axis = 0;
+        double widest_extent = static_cast<double>(maximum.x) - minimum.x;
+        for (std::uint8_t candidate_axis = 1; candidate_axis < 3; ++candidate_axis) {
+            const double extent =
+                static_cast<double>(distance_axis_coordinate(maximum, candidate_axis)) -
+                distance_axis_coordinate(minimum, candidate_axis);
+            if (extent > widest_extent) {
+                axis = candidate_axis;
+                widest_extent = extent;
+            }
+        }
+
+        const std::size_t middle = begin + (end - begin) / 2U;
+        std::nth_element(
+            nodes_.begin() + static_cast<std::ptrdiff_t>(begin),
+            nodes_.begin() + static_cast<std::ptrdiff_t>(middle),
+            nodes_.begin() + static_cast<std::ptrdiff_t>(end),
+            [&](const DistanceRadiusNode& left, const DistanceRadiusNode& right) {
+                const float left_coordinate =
+                    distance_axis_coordinate(vertices_[left.vertex_index].position, axis);
+                const float right_coordinate =
+                    distance_axis_coordinate(vertices_[right.vertex_index].position, axis);
+                return left_coordinate < right_coordinate ||
+                    (left_coordinate == right_coordinate && left.vertex_index < right.vertex_index);
+            });
+        nodes_[middle].axis = axis;
+        build_range(begin, middle);
+        build_range(middle + 1U, end);
+    }
+
+    void query_range(std::size_t begin, std::size_t end,
+                     quader::QVec3 position, float distance_limit_squared,
+                     std::vector<std::size_t>& candidates) const
+    {
+        if (begin == end) {
+            return;
+        }
+        const std::size_t middle = begin + (end - begin) / 2U;
+        const DistanceRadiusNode& node = nodes_[middle];
+        const quader::QVec3 candidate_position = vertices_[node.vertex_index].position;
+        if (length_squared(candidate_position - position) <= distance_limit_squared) {
+            candidates.push_back(node.vertex_index);
+        }
+
+        const float axis_delta = distance_axis_coordinate(position, node.axis) -
+            distance_axis_coordinate(candidate_position, node.axis);
+        if (axis_delta <= 0.0F) {
+            query_range(begin, middle, position, distance_limit_squared, candidates);
+            if (axis_delta * axis_delta <= distance_limit_squared) {
+                query_range(middle + 1U, end, position, distance_limit_squared, candidates);
+            }
+        } else {
+            query_range(middle + 1U, end, position, distance_limit_squared, candidates);
+            if (axis_delta * axis_delta <= distance_limit_squared) {
+                query_range(begin, middle, position, distance_limit_squared, candidates);
+            }
+        }
+    }
+
+    std::span<const DistanceMergeVertex> vertices_;
+    std::vector<DistanceRadiusNode> nodes_;
+};
+
+std::vector<DistanceMergeVertex> selected_distance_vertices(
+    const Document& document, const Selection& selection)
+{
+    std::unordered_map<ElementId, const Vertex*> available_vertices;
+    available_vertices.reserve(document.vertices.size());
+    for (const Vertex& vertex : document.vertices) {
+        available_vertices.emplace(vertex.id, &vertex);
+    }
+
+    std::vector<DistanceMergeVertex> vertices;
+    vertices.reserve(std::min(selection.vertices.size(), document.vertices.size()));
+    for (const ElementId vertex_id : selection.vertices) {
+        const auto found = available_vertices.find(vertex_id);
+        if (vertex_id == kInvalidElementId || found == available_vertices.end()) {
+            continue;
+        }
+        vertices.push_back({vertex_id, found->second->position, vertices.size()});
+        available_vertices.erase(found);
+    }
+    return vertices;
+}
+
 quader::QVec3 centroid_for_distance_cluster(std::span<const DistanceMergeVertex> vertices)
 {
     quader::QVec3 centroid;
@@ -92,40 +230,34 @@ ElementId survivor_for_distance_cluster(std::span<const DistanceMergeVertex> ver
 }
 
 std::vector<DistanceMergeCluster> distance_merge_clusters(
-    const Document& document,
-    const std::vector<ElementId>& selected_vertices,
+    std::span<const DistanceMergeVertex> vertices,
     float tolerance)
 {
-    std::vector<DistanceMergeVertex> vertices;
-    vertices.reserve(selected_vertices.size());
-    for (std::size_t index = 0; index < selected_vertices.size(); ++index) {
-        const Vertex* vertex = find_vertex(document, selected_vertices[index]);
-        if (vertex == nullptr) {
-            continue;
-        }
-        vertices.push_back({ vertex->id, vertex->position, index });
-    }
-
+    const DistanceRadiusIndex radius_index(vertices);
     std::vector<bool> assigned(vertices.size(), false);
     std::vector<DistanceMergeCluster> clusters;
+    std::vector<std::size_t> candidates;
+    candidates.reserve(vertices.size());
+    std::vector<DistanceMergeVertex> cluster;
     const float tolerance_squared = tolerance * tolerance;
     const float boundary_epsilon =
         std::max(kEpsilon, tolerance_squared * 0.00001F);
+    const float distance_limit_squared = tolerance_squared + boundary_epsilon;
     for (std::size_t seed_index = 0; seed_index < vertices.size(); ++seed_index) {
         if (assigned[seed_index]) {
             continue;
         }
 
-        std::vector<DistanceMergeVertex> cluster;
+        radius_index.find_within_radius(vertices[seed_index].position,
+                                       distance_limit_squared, candidates);
+        std::sort(candidates.begin(), candidates.end());
+        cluster.clear();
         cluster.push_back(vertices[seed_index]);
-        for (std::size_t candidate_index = seed_index + 1U; candidate_index < vertices.size(); ++candidate_index) {
-            if (assigned[candidate_index]) {
+        for (const std::size_t candidate_index : candidates) {
+            if (candidate_index <= seed_index || assigned[candidate_index]) {
                 continue;
             }
-            const float distance_squared = length_squared(vertices[candidate_index].position - vertices[seed_index].position);
-            if (distance_squared <= tolerance_squared + boundary_epsilon) {
-                cluster.push_back(vertices[candidate_index]);
-            }
+            cluster.push_back(vertices[candidate_index]);
         }
 
         assigned[seed_index] = true;
@@ -162,19 +294,24 @@ OperationResult MergeVerticesByDistanceOperation::apply(Document& document, Sele
     if (!std::isfinite(tolerance_) || tolerance_ < 0.0F) {
         return OperationResult::failure("Merge by Distance needs a finite non-negative tolerance.");
     }
+    const OperationResult source_validation =
+        validate_authored_operation_candidate(document, document, true, true);
+    if (!source_validation.success) {
+        return source_validation;
+    }
 
-    const std::vector<ElementId> selected_vertices = selected_valid_vertices(document, selection);
+    const std::vector<DistanceMergeVertex> selected_vertices =
+        selected_distance_vertices(document, selection);
     if (selected_vertices.size() < 2U) {
         return OperationResult::failure("Select at least two vertices to merge by distance.");
     }
 
-    const std::vector<DistanceMergeCluster> clusters = distance_merge_clusters(document, selected_vertices, tolerance_);
+    const std::vector<DistanceMergeCluster> clusters = distance_merge_clusters(selected_vertices, tolerance_);
     if (clusters.empty()) {
         return { false, "No selected vertices are within the merge distance." };
     }
 
     Document candidate = document;
-    std::vector<ElementId> selected_after_merge = selected_vertices;
     std::vector<ElementId> survivor_ids;
     survivor_ids.reserve(clusters.size());
     for (const DistanceMergeCluster& cluster : clusters) {
@@ -190,7 +327,9 @@ OperationResult MergeVerticesByDistanceOperation::apply(Document& document, Sele
 
         Document next_candidate;
         const OperationResult merge_result =
-            build_vertex_merge_candidate(candidate, next_candidate, merge_vertex_ids, cluster.survivor_id, cluster.centroid);
+            build_topology_vertex_merge_candidate(
+                candidate, next_candidate, merge_vertex_ids,
+                cluster.survivor_id, cluster.centroid, true);
         if (!merge_result.changed) {
             return merge_result;
         }
@@ -199,23 +338,26 @@ OperationResult MergeVerticesByDistanceOperation::apply(Document& document, Sele
         }
 
         candidate = std::move(next_candidate);
-        for (const ElementId removed_vertex_id : merge_vertex_ids) {
-            std::erase(selected_after_merge, removed_vertex_id);
-        }
-        add_unique_id(survivor_ids, cluster.survivor_id);
+        survivor_ids.push_back(cluster.survivor_id);
     }
 
-    prune_unused_vertices(candidate);
-    if (!every_face_triangulates(candidate)) {
-        return OperationResult::failure("Merge by Distance would create invalid face geometry.");
+    const OperationResult validation =
+        validate_authored_operation_candidate(document, candidate, true, true);
+    if (!validation.success) {
+        return validation;
     }
 
     document = std::move(candidate);
+    std::unordered_set<ElementId> live_vertex_ids;
+    live_vertex_ids.reserve(document.vertices.size());
+    for (const Vertex& vertex : document.vertices) {
+        live_vertex_ids.insert(vertex.id);
+    }
     selection.clear();
     selection.mode = SelectionMode::Vertex;
-    for (const ElementId vertex_id : selected_after_merge) {
-        if (find_vertex(document, vertex_id) != nullptr) {
-            add_unique_id(selection.vertices, vertex_id);
+    for (const DistanceMergeVertex& vertex : selected_vertices) {
+        if (live_vertex_ids.contains(vertex.id)) {
+            selection.vertices.push_back(vertex.id);
         }
     }
     const ElementId active_id =

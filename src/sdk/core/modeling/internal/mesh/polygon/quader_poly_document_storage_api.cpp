@@ -102,6 +102,11 @@ Face* find_face(Document& document, ElementId id)
 
 std::vector<Edge> document_edges(const Document& document)
 {
+    return document_edges(document_read_view(document));
+}
+
+std::vector<Edge> document_edges(const DocumentReadView& document)
+{
     std::set<std::pair<ElementId, ElementId>> unique_edges;
     for (const Face& face : document.faces) {
         if (face.vertices.size() < 2) {

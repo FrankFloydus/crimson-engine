@@ -131,8 +131,9 @@ bool ModelingMeshSyncService::destroy_projected_entity(
 }
 
 bool ModelingMeshSyncService::parent_projected_entity(
-    SceneDocument &scene, EntityId entity, EntityId parent) const {
-  return scene.set_parent(entity, parent, false);
+    SceneDocument &scene, EntityId entity, EntityId parent,
+    bool preserve_world) const {
+  return scene.set_parent(entity, parent, preserve_world);
 }
 
 bool ModelingMeshSyncService::set_projected_transform(

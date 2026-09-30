@@ -880,6 +880,9 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Domain::Internal, Group::Internal, 20u,
                  Surface::None, Palette::Internal,
                  Activation::InteractiveTool),
+    presentation(quader_command::kDiagnosticsDumpSelection,
+                 Domain::Internal, Group::Internal, 30u,
+                 Surface::None, Palette::Internal),
 };
 
 } // namespace

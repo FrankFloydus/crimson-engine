@@ -19,6 +19,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -467,6 +468,503 @@ TEST(ModelingSdkConsumerTests,
       EXPECT_EQ(face.texture_transform, authored.value().faces.front().texture_transform);
     }
   }
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedSelectionTransformsMatchCanonicalOperationsAndAuthoredUvs) {
+  const auto box = PolygonDocument::make_box({});
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  auto topology = box.value().authored_topology();
+  ASSERT_TRUE(topology.ok()) << topology.error_message();
+  std::ranges::reverse(topology.value().vertices);
+  for (auto &face : topology.value().faces) {
+    face.texture_transform = {
+        .scale = {2.0F, 0.5F}, .shift_uv = {0.25F, -0.5F},
+        .rotation_degrees = 35.0F,
+    };
+    face.uvs.resize(face.vertices.size());
+    for (std::size_t index = 0U; index < face.uvs.size(); ++index) {
+      face.uvs[index] = {static_cast<float>(index),
+                         static_cast<float>(face.id.index)};
+    }
+  }
+  constexpr std::array kTransforms{
+      Transform3{.origin = {0.5F, 0.25F, -3.0F}},
+      Transform3{.x_axis = {0.0F, 1.25F, 0.0F},
+                 .y_axis = {-0.75F, 0.0F, 0.25F},
+                 .z_axis = {0.125F, 0.0F, 2.0F},
+                 .origin = {4.0F, -5.0F, 6.0F}},
+      Transform3{.x_axis = {-1.0F, 0.0F, 0.0F},
+                 .z_axis = {0.0F, 0.0F, 0.0F}},
+  };
+  for (const auto mode : {SelectionMode::Vertex, SelectionMode::Edge,
+                          SelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    auto imported = PolygonDocument::from_authored_topology(topology.value());
+    ASSERT_TRUE(imported.ok()) << imported.error_message();
+    auto source = std::move(imported).value();
+    if (mode == SelectionMode::Vertex) {
+      const auto ids = source.vertex_ids();
+      const std::array selected{ids[0], ids[2], ids[5]};
+      ASSERT_TRUE(source.select_vertices(selected).ok());
+    } else if (mode == SelectionMode::Edge) {
+      const auto ids = source.edge_ids();
+      const std::array selected{ids[0], ids[1], ids[3]};
+      ASSERT_TRUE(source.select_edges(selected).ok());
+    } else {
+      const auto ids = source.face_ids();
+      const std::array selected{ids[0], ids[1]};
+      ASSERT_TRUE(source.select_faces(selected).ok());
+    }
+    const auto prepared = source.prepare_selection_transform();
+    ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+    for (std::size_t index = 0U; index < kTransforms.size(); ++index) {
+      SCOPED_TRACE(index);
+      auto canonical = source;
+      const bool translation = index == 0U;
+      const auto receipt = translation
+          ? canonical.translate_selection(kTransforms[index].origin)
+          : canonical.transform_selection(kTransforms[index]);
+      ASSERT_TRUE(receipt.ok()) << receipt.error_message();
+      const auto evaluated = translation
+          ? prepared.value().evaluate_translation(kTransforms[index].origin)
+          : prepared.value().evaluate_transform(kTransforms[index]);
+      ASSERT_TRUE(evaluated.ok()) << evaluated.error_message();
+      const auto &result = evaluated.value();
+      EXPECT_EQ(serialize_qdr_authored_topology(result.document).or_throw(),
+                serialize_qdr_authored_topology(canonical).or_throw());
+      EXPECT_EQ(result.receipt.changed, receipt.value().changed);
+      EXPECT_EQ(result.receipt.success, receipt.value().success);
+      EXPECT_EQ(result.receipt.message, receipt.value().message);
+      EXPECT_EQ(result.receipt.dirty.geometry, receipt.value().dirty.geometry);
+      EXPECT_FALSE(result.receipt.dirty.topology);
+      EXPECT_FALSE(result.receipt.dirty.selection);
+      EXPECT_TRUE(result.receipt.affected.empty());
+      EXPECT_TRUE(result.receipt.modified.empty());
+      EXPECT_TRUE(result.document.shares_selection_with(source));
+      EXPECT_EQ(result.document.content_revision(), canonical.content_revision());
+      EXPECT_EQ(result.document.selection_revision(), source.selection_revision());
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedSelectionTransformPinsSourceAndKeepsEarlierEvaluationsImmutable) {
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  auto source = std::move(created).value();
+  ASSERT_TRUE(source.select_vertex(source.vertex_ids().front()).ok());
+  const auto baseline = source;
+  const auto prepared = source.prepare_selection_transform();
+  ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+  auto first = prepared.value().evaluate_translation({1.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  const auto first_bytes = serialize_qdr_authored_topology(first.value().document);
+  ASSERT_TRUE(first_bytes.ok()) << first_bytes.error_message();
+
+  ASSERT_TRUE(source.select_all_faces().ok());
+  ASSERT_TRUE(source.translate_selection({20.0F, 0.0F, 0.0F}).ok());
+  const auto second = prepared.value().evaluate_translation({2.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  auto expected = baseline;
+  ASSERT_TRUE(expected.translate_selection({2.0F, 0.0F, 0.0F}).ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(second.value().document).or_throw(),
+            serialize_qdr_authored_topology(expected).or_throw());
+  EXPECT_EQ(serialize_qdr_authored_topology(first.value().document).or_throw(),
+            first_bytes.value());
+  EXPECT_TRUE(second.value().document.shares_selection_with(baseline));
+  EXPECT_EQ(second.value().document.content_revision(),
+            baseline.content_revision() + 1U);
+
+  ASSERT_TRUE(first.value().document.select_all_vertices().ok());
+  ASSERT_TRUE(first.value().document.translate_selection({9.0F, 0.0F, 0.0F}).ok());
+  const auto repeated = prepared.value().evaluate_translation({2.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_EQ(serialize_qdr_authored_topology(repeated.value().document).or_throw(),
+            serialize_qdr_authored_topology(second.value().document).or_throw());
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedSelectionTransformNoOpsReuseSourceIdentityAndRevisions) {
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  auto source = std::move(created).value();
+  for (const bool select : {false, true}) {
+    SCOPED_TRACE(select);
+    if (select) {
+      ASSERT_TRUE(source.select_all_vertices().ok());
+    }
+    const auto prepared = source.prepare_selection_transform();
+    ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+    const auto translated = prepared.value().evaluate_translation(
+        select ? Vec3{} : Vec3{5.0F, -7.0F, 9.0F});
+    const auto transformed = prepared.value().evaluate_transform({});
+    for (const auto *result : {&translated, &transformed}) {
+      ASSERT_TRUE(result->ok()) << result->error_message();
+      EXPECT_TRUE(result->value().receipt.success);
+      EXPECT_FALSE(result->value().receipt.changed);
+      EXPECT_FALSE(result->value().receipt.dirty.geometry);
+      EXPECT_FALSE(result->value().receipt.dirty.selection);
+      EXPECT_EQ(result->value().document.content_identity(), source.content_identity());
+      EXPECT_EQ(result->value().document.content_revision(), source.content_revision());
+      EXPECT_EQ(result->value().document.selection_revision(), source.selection_revision());
+      EXPECT_TRUE(result->value().document.shares_selection_with(source));
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedSelectionTransformRejectsNonfiniteInputAndOverflowAtomically) {
+  const PreparedSelectionTransform unavailable;
+  EXPECT_FALSE(unavailable.evaluate_translation({}).ok());
+  EXPECT_FALSE(unavailable.evaluate_transform({}).ok());
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  auto source = std::move(created).value();
+  const auto vertex = source.vertex_ids().back();
+  constexpr float kMaximum = std::numeric_limits<float>::max();
+  const std::array updates{VertexPositionUpdate{
+      .vertex = vertex, .position = {kMaximum * 0.75F, 1.0F, 1.0F}}};
+  ASSERT_TRUE(source.set_vertex_positions(updates).ok());
+  ASSERT_TRUE(source.select_all_vertices().ok());
+  const auto baseline = serialize_qdr_authored_topology(source).or_throw();
+  const auto prepared = source.prepare_selection_transform();
+  ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+  const auto accepted = prepared.value().evaluate_translation({0.0F, 1.0F, 0.0F});
+  ASSERT_TRUE(accepted.ok()) << accepted.error_message();
+  const auto accepted_bytes =
+      serialize_qdr_authored_topology(accepted.value().document).or_throw();
+  for (const float invalid : {std::numeric_limits<float>::infinity(),
+                              std::numeric_limits<float>::quiet_NaN()}) {
+    EXPECT_FALSE(prepared.value().evaluate_translation({invalid, 0.0F, 0.0F}).ok());
+    EXPECT_FALSE(prepared.value().evaluate_transform(
+        {.y_axis = {0.0F, invalid, 0.0F}}).ok());
+  }
+  EXPECT_FALSE(prepared.value().evaluate_translation({kMaximum, 0.0F, 0.0F}).ok());
+  EXPECT_FALSE(prepared.value().evaluate_transform(
+      {.x_axis = {2.0F, 0.0F, 0.0F}}).ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(source).or_throw(), baseline);
+  EXPECT_EQ(serialize_qdr_authored_topology(accepted.value().document).or_throw(),
+            accepted_bytes);
+  const auto recovered = prepared.value().evaluate_translation({0.0F, 1.0F, 0.0F});
+  ASSERT_TRUE(recovered.ok()) << recovered.error_message();
+  EXPECT_EQ(serialize_qdr_authored_topology(recovered.value().document).or_throw(),
+            accepted_bytes);
+}
+
+/** Compares the complete public render payload produced by two document states. */
+void expect_compiled_mesh_equal(const MeshPayload &actual,
+                                const MeshPayload &expected) {
+  EXPECT_EQ(actual.content_revision, expected.content_revision);
+  EXPECT_EQ(actual.indices, expected.indices);
+  ASSERT_EQ(actual.primitives.size(), expected.primitives.size());
+  for (std::size_t index = 0U; index < actual.primitives.size(); ++index) {
+    EXPECT_EQ(actual.primitives[index].index_offset,
+              expected.primitives[index].index_offset);
+    EXPECT_EQ(actual.primitives[index].index_count,
+              expected.primitives[index].index_count);
+    EXPECT_EQ(actual.primitives[index].material, expected.primitives[index].material);
+  }
+  ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+  for (std::size_t index = 0U; index < actual.vertices.size(); ++index) {
+    const auto &a = actual.vertices[index];
+    const auto &b = expected.vertices[index];
+    EXPECT_EQ(a.position.x, b.position.x);
+    EXPECT_EQ(a.position.y, b.position.y);
+    EXPECT_EQ(a.position.z, b.position.z);
+    EXPECT_EQ(a.normal.x, b.normal.x);
+    EXPECT_EQ(a.normal.y, b.normal.y);
+    EXPECT_EQ(a.normal.z, b.normal.z);
+    EXPECT_EQ(a.uv0.x, b.uv0.x);
+    EXPECT_EQ(a.uv0.y, b.uv0.y);
+    EXPECT_EQ(a.uv_carrier, b.uv_carrier);
+    EXPECT_EQ(a.uv_geometric_normal.x, b.uv_geometric_normal.x);
+    EXPECT_EQ(a.uv_geometric_normal.y, b.uv_geometric_normal.y);
+    EXPECT_EQ(a.uv_geometric_normal.z, b.uv_geometric_normal.z);
+    EXPECT_EQ(a.color, b.color);
+    EXPECT_EQ(a.source_vertex, b.source_vertex);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedCoordinateCompilationRetainsSparseTopologyAndAllVertexAttributes) {
+  auto topology = PolygonDocument::make_box({}).or_throw().authored_topology().or_throw();
+  const auto sparse_vertex = [](VertexId id) {
+    return make_id<VertexTag>(100U + id.index * 3U);
+  };
+  for (auto &vertex : topology.vertices) {
+    vertex.id = sparse_vertex(vertex.id);
+  }
+  for (auto &face : topology.faces) {
+    for (auto &vertex : face.vertices) {
+      vertex = sparse_vertex(vertex);
+    }
+    face.material_slot = face.id.index;
+    face.texture_transform = {.scale = {-2.0F, 0.5F},
+                              .shift_uv = {0.25F, -0.125F},
+                              .rotation_degrees = 30.0F};
+    face.shading = face.id.index % 2U == 0U
+        ? AuthoredSurfaceShading::Flat : AuthoredSurfaceShading::Authored;
+    face.uvs.clear();
+    if (face.id.index % 2U == 0U) {
+      for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+        face.uvs.push_back({static_cast<float>(corner) * 0.25F,
+                            static_cast<float>(face.id.index) * 0.125F});
+      }
+    }
+  }
+  topology.hard_normal_edges = {make_edge_key(
+      topology.faces.front().vertices[0], topology.faces.front().vertices[1])};
+  topology.soft_normal_edges = {make_edge_key(
+      topology.faces.front().vertices[1], topology.faces.front().vertices[2])};
+  topology.next_vertex_id = 1000U;
+  auto source = PolygonDocument::from_authored_topology(topology).or_throw();
+  const std::array selected{topology.vertices[0].id, topology.vertices[3].id,
+                            topology.vertices[6].id};
+  ASSERT_TRUE(source.select_vertices(selected).ok());
+  const auto original_mesh = source.compile_mesh().or_throw();
+  const auto prepared = source.prepare_selection_transform().or_throw();
+  constexpr std::array kTransforms{
+      Transform3{.origin = {0.25F, -0.5F, 2.0F}},
+      Transform3{.x_axis = {-1.0F, 0.25F, 0.0F},
+                 .y_axis = {0.5F, 2.0F, 0.0F},
+                 .z_axis = {0.0F, 0.5F, 0.75F}},
+  };
+  std::vector<PolygonDocument> pinned;
+  std::vector<MeshPayload> expected_meshes;
+  for (const auto &transform : kTransforms) {
+    auto expected = source;
+    ASSERT_TRUE(expected.transform_selection(transform).ok());
+    expected_meshes.push_back(expected.compile_mesh().or_throw());
+    auto evaluated = prepared.evaluate_transform(transform).or_throw();
+    ASSERT_TRUE(evaluated.receipt.changed);
+    const auto identity = evaluated.document.content_identity();
+    expect_compiled_mesh_equal(evaluated.document.compile_mesh().or_throw(),
+                               expected_meshes.back());
+    expect_compiled_mesh_equal(evaluated.document.compile_mesh().or_throw(),
+                               expected_meshes.back());
+    EXPECT_EQ(evaluated.document.content_identity(), identity);
+    pinned.push_back(std::move(evaluated.document));
+    EXPECT_EQ(prepared.work_stats().coordinate_snapshot_count, pinned.size());
+    EXPECT_EQ(prepared.work_stats().topology_materialization_count, 0U);
+  }
+  EXPECT_FALSE(prepared.evaluate_translation(
+      {std::numeric_limits<float>::infinity(), 0.0F, 0.0F}).ok());
+  const auto zero = prepared.evaluate_translation({}).or_throw();
+  EXPECT_EQ(zero.document.content_identity(), source.content_identity());
+  expect_compiled_mesh_equal(zero.document.compile_mesh().or_throw(), original_mesh);
+  for (std::size_t index = 0U; index < pinned.size(); ++index) {
+    expect_compiled_mesh_equal(pinned[index].compile_mesh().or_throw(),
+                               expected_meshes[index]);
+  }
+  EXPECT_EQ(prepared.work_stats().coordinate_snapshot_count, pinned.size());
+  EXPECT_EQ(prepared.work_stats().topology_materialization_count, 0U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedCoordinateCompilationPublishesOneSnapshotAcrossConcurrentReaders) {
+  auto source = PolygonDocument::make_box({}).or_throw();
+  ASSERT_TRUE(source.select_all_vertices().ok());
+  const auto prepared = source.prepare_selection_transform().or_throw();
+  const auto evaluated = prepared.evaluate_translation({3.0F, 2.0F, -1.0F}).or_throw();
+  auto expected = source;
+  ASSERT_TRUE(expected.translate_selection({3.0F, 2.0F, -1.0F}).ok());
+  const auto expected_mesh = expected.compile_mesh().or_throw();
+  std::array<Result<MeshPayload>, 8> meshes;
+  std::vector<std::jthread> readers;
+  for (std::size_t index = 0U; index < meshes.size(); ++index) {
+    readers.emplace_back([&, index] {
+      meshes[index] = evaluated.document.compile_mesh();
+    });
+  }
+  readers.clear();
+  for (const auto &mesh : meshes) {
+    ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+    expect_compiled_mesh_equal(mesh.value(), expected_mesh);
+  }
+  EXPECT_EQ(prepared.work_stats().coordinate_snapshot_count, 1U);
+  EXPECT_EQ(prepared.work_stats().topology_materialization_count, 0U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedCoordinatePublicationsStayLazyAcrossPreviewHistory) {
+  ModelingSession session;
+  std::vector<ObjectId> objects;
+  std::vector<PolygonDocument> sources;
+  std::vector<PreparedSelectionTransform> preparations;
+  for (int index = 0; index < 2; ++index) {
+    auto source = PolygonDocument::make_box({}).or_throw();
+    ASSERT_TRUE(source.select_all_vertices().ok());
+    objects.push_back(session.add_document(source, "Coordinate Preview").or_throw());
+    sources.push_back(source);
+    preparations.push_back(source.prepare_selection_transform().or_throw());
+  }
+  session.clear_history();
+  const auto updates_for = [&](float distance) {
+    std::vector<SessionPreviewDocumentUpdate> updates;
+    for (std::size_t index = 0U; index < objects.size(); ++index) {
+      auto evaluated = preparations[index].evaluate_translation(
+          {distance, 0.0F, 0.0F}).or_throw();
+      EXPECT_EQ(evaluated.document.vertex_count(), sources[index].vertex_count());
+      EXPECT_EQ(evaluated.document.face_count(), sources[index].face_count());
+      EXPECT_TRUE(evaluated.document.shares_selection_with(sources[index]));
+      EXPECT_NE(evaluated.positions, nullptr);
+      if (evaluated.positions) {
+        EXPECT_EQ(evaluated.positions->size(), sources[index].vertex_count());
+      }
+      updates.push_back({.object = objects[index],
+                         .document = std::move(evaluated.document),
+                         .receipt = std::move(evaluated.receipt)});
+    }
+    return updates;
+  };
+  const auto preview = session.begin_preview_transaction(
+      "coordinate_preview", updates_for(0.0F)).or_throw();
+  ASSERT_TRUE(session.update_preview_transaction(preview, updates_for(1.0F)).ok());
+  const auto checkpoint = session.capture_preview_checkpoint(preview).or_throw();
+  std::vector<PolygonDocument> pinned;
+  for (const auto object : objects) {
+    pinned.push_back(session.preview_document_copy(preview, object).or_throw());
+  }
+  for (int sample = 2; sample <= 16; ++sample) {
+    ASSERT_TRUE(session.update_preview_transaction(
+        preview, updates_for(static_cast<float>(sample))).ok());
+  }
+  const auto accepted_identity = session.preview_document_copy(
+      preview, objects.front()).or_throw().content_identity();
+  auto rejected = updates_for(17.0F);
+  rejected.back().receipt.success = false;
+  rejected.back().receipt.error_code = ErrorCode::ValidationFailed;
+  EXPECT_FALSE(session.update_preview_transaction(preview, std::move(rejected)).ok());
+  EXPECT_EQ(session.preview_document_copy(preview, objects.front()).or_throw()
+                .content_identity(), accepted_identity);
+  ASSERT_TRUE(session.restore_preview_checkpoint(checkpoint).ok());
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    EXPECT_EQ(session.preview_document_copy(preview, objects[index]).or_throw()
+                  .content_identity(), pinned[index].content_identity());
+    EXPECT_EQ(preparations[index].work_stats().topology_materialization_count, 0U);
+    EXPECT_EQ(preparations[index].work_stats().coordinate_publication_count, 17U);
+  }
+  ASSERT_TRUE(session.commit_preview(preview).ok());
+  for (const auto &preparation : preparations) {
+    EXPECT_EQ(preparation.work_stats().topology_materialization_count, 0U);
+  }
+  ASSERT_TRUE(session.undo().ok());
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    EXPECT_EQ(session.document_snapshot(objects[index]).or_throw()->content_identity(),
+              sources[index].content_identity());
+  }
+  ASSERT_TRUE(session.redo().ok());
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    const auto snapshot = session.document_snapshot(objects[index]).or_throw();
+    EXPECT_EQ(snapshot->content_identity(), pinned[index].content_identity());
+    EXPECT_EQ(preparations[index].work_stats().topology_materialization_count, 0U);
+    auto expected = sources[index];
+    ASSERT_TRUE(expected.translate_selection({1.0F, 0.0F, 0.0F}).ok());
+    expect_compiled_mesh_equal(snapshot->compile_mesh().or_throw(),
+                               expected.compile_mesh().or_throw());
+    expect_compiled_mesh_equal(pinned[index].compile_mesh().or_throw(),
+                               expected.compile_mesh().or_throw());
+    EXPECT_EQ(preparations[index].work_stats().coordinate_snapshot_count, 1U);
+    EXPECT_EQ(preparations[index].work_stats().topology_materialization_count, 0U);
+    EXPECT_EQ(serialize_qdr_authored_topology(*snapshot).or_throw(),
+              serialize_qdr_authored_topology(expected).or_throw());
+    EXPECT_EQ(preparations[index].work_stats().topology_materialization_count, 1U);
+    EXPECT_EQ(snapshot->content_identity(), pinned[index].content_identity());
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedCoordinatePublicationsRestoreZeroAndCancelWithoutMaterialization) {
+  auto source = PolygonDocument::make_box({}).or_throw();
+  ASSERT_TRUE(source.select_all_vertices().ok());
+  const auto prepared = source.prepare_selection_transform().or_throw();
+  ModelingSession session;
+  const auto object = session.add_document(source, "Coordinate Cancel").or_throw();
+  session.clear_history();
+  auto changed = prepared.evaluate_translation({5.0F, 0.0F, 0.0F}).or_throw();
+  const auto preview = session.begin_document_preview(
+      object, "coordinate_preview", changed.document, changed.receipt).or_throw();
+  auto zero = prepared.evaluate_translation({}).or_throw();
+  ASSERT_NE(zero.positions, nullptr);
+  ASSERT_NE(changed.positions, nullptr);
+  ASSERT_EQ(zero.positions->size(), changed.positions->size());
+  for (std::size_t index = 0U; index < zero.positions->size(); ++index) {
+    EXPECT_EQ((*zero.positions)[index].vertex, (*changed.positions)[index].vertex);
+    EXPECT_FLOAT_EQ((*zero.positions)[index].position.x + 5.0F,
+                    (*changed.positions)[index].position.x);
+  }
+  EXPECT_EQ(zero.document.content_identity(), source.content_identity());
+  ASSERT_TRUE(session.update_document_preview(
+      preview, zero.document, zero.receipt).ok());
+  const auto committed = session.commit_preview(preview);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_FALSE(committed.value().changed);
+  EXPECT_FALSE(session.can_undo());
+  const auto cancelled_preview = session.begin_document_preview(
+      object, "coordinate_preview", changed.document, changed.receipt).or_throw();
+  ASSERT_TRUE(session.cancel_preview(cancelled_preview).ok());
+  EXPECT_EQ(session.document_copy(object).or_throw().content_identity(),
+            source.content_identity());
+  EXPECT_EQ(prepared.work_stats().topology_materialization_count, 0U);
+  EXPECT_EQ(prepared.work_stats().coordinate_publication_count, 1U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedCoordinatePublicationMaterializesOnceAcrossConcurrentReaders) {
+  auto source = PolygonDocument::make_box({}).or_throw();
+  ASSERT_TRUE(source.select_all_vertices().ok());
+  const auto prepared = source.prepare_selection_transform().or_throw();
+  const auto evaluated = prepared.evaluate_translation({1.0F, 2.0F, 3.0F}).or_throw();
+  const auto identity = evaluated.document.content_identity();
+  auto expected = source;
+  ASSERT_TRUE(expected.translate_selection({1.0F, 2.0F, 3.0F}).ok());
+  const auto expected_bytes = serialize_qdr_authored_topology(expected).or_throw();
+  std::array<Result<std::vector<std::byte>>, 8> serialized;
+  std::vector<std::jthread> readers;
+  for (std::size_t index = 0U; index < serialized.size(); ++index) {
+    readers.emplace_back([&, index] {
+      serialized[index] = serialize_qdr_authored_topology(evaluated.document);
+    });
+  }
+  readers.clear();
+  for (const auto &bytes : serialized) {
+    ASSERT_TRUE(bytes.ok()) << bytes.error_message();
+    EXPECT_EQ(bytes.value(), expected_bytes);
+  }
+  EXPECT_EQ(prepared.work_stats().topology_materialization_count, 1U);
+  EXPECT_EQ(evaluated.document.content_identity(), identity);
+  const auto second_plan = evaluated.document.prepare_selection_transform().or_throw();
+  const auto second = second_plan.evaluate_translation({0.0F, 4.0F, 0.0F}).or_throw();
+  EXPECT_EQ(second_plan.work_stats().topology_materialization_count, 0U);
+  EXPECT_EQ(prepared.work_stats().topology_materialization_count, 1U);
+  ASSERT_TRUE(expected.translate_selection({0.0F, 4.0F, 0.0F}).ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(second.document).or_throw(),
+            serialize_qdr_authored_topology(expected).or_throw());
+  EXPECT_EQ(second_plan.work_stats().topology_materialization_count, 1U);
+  EXPECT_NE(second.document.content_identity(), identity);
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreparedCoordinatePublicationPreservesCanonicalUnchangedVertexBits) {
+  auto source = PolygonDocument::make_box({}).or_throw();
+  const std::array positions{VertexPositionUpdate{
+      .vertex = source.vertex_ids().front(), .position = {-0.0F, -0.0F, -0.0F}}};
+  ASSERT_TRUE(source.set_vertex_positions(positions).ok());
+  ASSERT_TRUE(source.select_all_vertices().ok());
+  const auto prepared = source.prepare_selection_transform().or_throw();
+  constexpr Transform3 kCollapseX{.x_axis = {0.0F, 0.0F, 0.0F}};
+  const auto evaluated = prepared.evaluate_transform(kCollapseX).or_throw();
+  auto expected = source;
+  ASSERT_TRUE(expected.transform_selection(kCollapseX).ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(evaluated.document).or_throw(),
+            serialize_qdr_authored_topology(expected).or_throw());
+  auto edited = evaluated.document;
+  ASSERT_TRUE(edited.translate_selection({3.0F, 0.0F, 0.0F}).ok());
+  ASSERT_TRUE(expected.translate_selection({3.0F, 0.0F, 0.0F}).ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(edited).or_throw(),
+            serialize_qdr_authored_topology(expected).or_throw());
+  EXPECT_NE(edited.content_identity(), evaluated.document.content_identity());
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -1777,6 +2275,420 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(session.undo().ok());
   EXPECT_EQ(session.objects().size(), 2U);
   EXPECT_TRUE(session.document_copy(second.value()).ok());
+}
+
+[[nodiscard]] PolygonDocument make_session_merge_quad(
+    float left, SelectionKind selection_kind, bool select_right_boundary,
+    std::uint32_t material_slot = 7U) {
+  const std::array vertices{make_id<VertexTag>(1U), make_id<VertexTag>(2U),
+                            make_id<VertexTag>(3U), make_id<VertexTag>(4U)};
+  AuthoredTopology topology;
+  topology.vertices = {{vertices[0], {left, 0.0F, 0.0F}},
+                       {vertices[1], {left + 1.0F, 0.0F, 0.0F}},
+                       {vertices[2], {left + 1.0F, 1.0F, 0.0F}},
+                       {vertices[3], {left, 1.0F, 0.0F}}};
+  topology.faces = {{
+      .id = make_id<FaceTag>(1U),
+      .vertices = {vertices.begin(), vertices.end()},
+      .uvs = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}},
+      .material_slot = material_slot,
+      .shading = AuthoredSurfaceShading::Flat,
+      .texture_transform = {.scale = {2.0F, 0.5F},
+                            .shift_uv = {0.125F, -0.25F},
+                            .rotation_degrees = 17.0F},
+  }};
+  topology.next_vertex_id = 5U;
+  topology.next_face_id = 2U;
+  PolygonDocument document =
+      PolygonDocument::from_authored_topology(topology).or_throw();
+  const std::array boundary = select_right_boundary
+                                  ? std::array{vertices[1], vertices[2]}
+                                  : std::array{vertices[0], vertices[3]};
+  if (selection_kind == SelectionKind::Vertex) {
+    (void)document.select_vertices(boundary).or_throw();
+  } else {
+    (void)document.select_edge(make_edge_key(boundary[0], boundary[1])).or_throw();
+  }
+  return document;
+}
+
+void expect_session_merge_document_restored(const PolygonDocument &actual,
+                                            const PolygonDocument &expected) {
+  const AuthoredTopology actual_topology = actual.authored_topology().or_throw();
+  AuthoredTopology expected_topology = expected.authored_topology().or_throw();
+  EXPECT_GE(actual_topology.next_vertex_id, expected_topology.next_vertex_id);
+  EXPECT_GE(actual_topology.next_face_id, expected_topology.next_face_id);
+  expected_topology.next_vertex_id = actual_topology.next_vertex_id;
+  expected_topology.next_face_id = actual_topology.next_face_id;
+  const PolygonDocument normalized_expected =
+      PolygonDocument::from_authored_topology(expected_topology).or_throw();
+  EXPECT_EQ(serialize_qdr_authored_topology(actual).or_throw(),
+            serialize_qdr_authored_topology(normalized_expected).or_throw());
+  const PolygonSelectionSnapshot actual_selection = actual.selection();
+  const PolygonSelectionSnapshot expected_selection = expected.selection();
+  EXPECT_EQ(actual_selection.kind, expected_selection.kind);
+  EXPECT_EQ(actual_selection.vertices, expected_selection.vertices);
+  EXPECT_EQ(actual_selection.edges, expected_selection.edges);
+  EXPECT_EQ(actual_selection.faces, expected_selection.faces);
+  EXPECT_EQ(actual_selection.has_active, expected_selection.has_active);
+  EXPECT_EQ(actual_selection.active_vertex, expected_selection.active_vertex);
+  EXPECT_EQ(actual_selection.active_edge, expected_selection.active_edge);
+  EXPECT_EQ(actual_selection.active_face, expected_selection.active_face);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionMergePreparesVerticesAcrossThreeDocumentsWithoutMutation) {
+  ModelingSession session;
+  const ObjectId survivor = session.add_document(
+      make_session_merge_quad(0.0F, SelectionKind::Vertex, true), "First")
+                                .or_throw();
+  PolygonDocument middle_document =
+      make_session_merge_quad(1.0F, SelectionKind::Vertex, false);
+  ASSERT_TRUE(middle_document.select_all_vertices().ok());
+  const ObjectId middle =
+      session.add_document(std::move(middle_document), "Middle").or_throw();
+  const ObjectId last = session.add_document(
+      make_session_merge_quad(2.0F, SelectionKind::Vertex, false), "Last")
+                            .or_throw();
+  const std::array sources{SessionMergeSource{.object = middle},
+                           SessionMergeSource{.object = last}};
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  const std::size_t undo_depth = session.undo_depth();
+
+  const auto prepared =
+      session.prepare_merge_documents(survivor, sources, SelectionKind::Vertex);
+  ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+  ASSERT_TRUE(prepared.value().receipt.success);
+  ASSERT_TRUE(prepared.value().receipt.changed);
+  EXPECT_TRUE(prepared.value().receipt.dirty.topology);
+  const PolygonDocument &candidate = prepared.value().survivor_document;
+  ASSERT_TRUE(candidate.validate().ok());
+  const AuthoredPolygonPayload payload = candidate.authored_payload().or_throw();
+  EXPECT_EQ(payload.vertices.size(), 8U);
+  EXPECT_EQ(payload.faces.size(), 3U);
+  EXPECT_EQ(authored_open_edge_count(payload), 8U);
+  EXPECT_EQ(candidate.selection().kind, SelectionKind::Vertex);
+  EXPECT_EQ(candidate.selection().vertices.size(), 4U);
+  const auto bounds = mesh_bounds(candidate.compile_mesh().or_throw());
+  ASSERT_TRUE(bounds.has_value());
+  expect_vec3_near(bounds->min, {0.0F, 0.0F, 0.0F});
+  expect_vec3_near(bounds->max, {3.0F, 1.0F, 0.0F});
+
+  EXPECT_EQ(session.objects().size(), 3U);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+  for (const ObjectId object : std::array{survivor, middle, last}) {
+    EXPECT_EQ(session.document_copy(object).or_throw().vertex_count(), 4U);
+    EXPECT_EQ(session.document_copy(object).or_throw().face_count(), 1U);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionMergeNoOpDoesNotAliasCoincidentLocalIdsOrConsumeRedo) {
+  ModelingSession session;
+  const PolygonDocument survivor_document =
+      make_session_merge_quad(0.0F, SelectionKind::Vertex, true);
+  const PolygonDocument source_document =
+      make_session_merge_quad(4.0F, SelectionKind::Vertex, false);
+  const ObjectId survivor = session.add_document(survivor_document, "First").or_throw();
+  const ObjectId source = session.add_document(source_document, "Second").or_throw();
+  ASSERT_TRUE(session.rename_object(survivor, "Renamed").ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  const std::size_t undo_depth = session.undo_depth();
+  const std::array sources{SessionMergeSource{.object = source}};
+
+  const auto prepared = session.prepare_merge_documents(
+      survivor, sources, SelectionKind::Vertex, 0.01F);
+  ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+  EXPECT_TRUE(prepared.value().receipt.success);
+  EXPECT_FALSE(prepared.value().receipt.changed);
+  EXPECT_EQ(serialize_qdr_authored_topology(prepared.value().survivor_document)
+                .or_throw(),
+            serialize_qdr_authored_topology(survivor_document).or_throw());
+  expect_session_merge_document_restored(prepared.value().survivor_document,
+                                         survivor_document);
+  expect_session_merge_document_restored(session.document_copy(survivor).or_throw(),
+                                         survivor_document);
+  expect_session_merge_document_restored(session.document_copy(source).or_throw(),
+                                         source_document);
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionMergeEdgesPreservesReflectedSourceUvsAndPreparedMaterialSlots) {
+  ModelingSession session;
+  const PolygonDocument survivor_document =
+      make_session_merge_quad(0.0F, SelectionKind::Edge, true);
+  const PolygonDocument source_document =
+      make_session_merge_quad(0.0F, SelectionKind::Edge, true, 9U);
+  const ObjectId survivor = session.add_document(survivor_document, "First").or_throw();
+  const ObjectId source = session.add_document(source_document, "Second").or_throw();
+  PolygonDocument prepared_source = source_document;
+  ASSERT_TRUE(prepared_source.assign_all_face_material_slot(19U).ok());
+  const std::array sources{SessionMergeSource{
+      .object = source,
+      .survivor_from_source = {.x_axis = {-2.0F, 0.0F, 0.0F},
+                               .origin = {3.0F, 0.0F, 0.0F}},
+      .prepared_document = prepared_source,
+  }};
+
+  const auto prepared =
+      session.prepare_merge_documents(survivor, sources, SelectionKind::Edge);
+  ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+  ASSERT_TRUE(prepared.value().receipt.success);
+  ASSERT_TRUE(prepared.value().receipt.changed);
+  const PolygonDocument &candidate = prepared.value().survivor_document;
+  ASSERT_TRUE(candidate.validate().ok());
+  const AuthoredTopology topology = candidate.authored_topology().or_throw();
+  ASSERT_EQ(topology.vertices.size(), 6U);
+  ASSERT_EQ(topology.faces.size(), 2U);
+  EXPECT_EQ(authored_open_edge_count(candidate.authored_payload().or_throw()), 6U);
+  EXPECT_EQ(candidate.selection().kind, SelectionKind::Edge);
+  ASSERT_EQ(candidate.selection().edges.size(), 1U);
+  EXPECT_EQ(candidate.selection().edges.front(),
+            make_edge_key(make_id<VertexTag>(2U), make_id<VertexTag>(3U)));
+  const auto source_face = std::ranges::find(topology.faces, 19U,
+                                            &AuthoredTopologyFace::material_slot);
+  ASSERT_NE(source_face, topology.faces.end());
+  EXPECT_EQ(source_face->shading, AuthoredSurfaceShading::Flat);
+  EXPECT_EQ(source_face->texture_transform,
+            source_document.authored_topology().or_throw().faces.front().texture_transform);
+  ASSERT_EQ(source_face->uvs.size(), source_face->vertices.size());
+  float signed_area = 0.0F;
+  for (std::size_t corner = 0; corner < source_face->vertices.size(); ++corner) {
+    const auto vertex = std::ranges::find(topology.vertices, source_face->vertices[corner],
+                                          &AuthoredTopologyVertex::id);
+    const auto next_vertex = std::ranges::find(
+        topology.vertices,
+        source_face->vertices[(corner + 1U) % source_face->vertices.size()],
+        &AuthoredTopologyVertex::id);
+    ASSERT_NE(vertex, topology.vertices.end());
+    ASSERT_NE(next_vertex, topology.vertices.end());
+    EXPECT_NEAR(source_face->uvs[corner].x, (3.0F - vertex->position.x) * 0.5F,
+                0.0001F);
+    EXPECT_NEAR(source_face->uvs[corner].y, vertex->position.y, 0.0001F);
+    signed_area += vertex->position.x * next_vertex->position.y -
+                   next_vertex->position.x * vertex->position.y;
+  }
+  EXPECT_GT(signed_area, 0.0F);
+  EXPECT_EQ(candidate.face_ids_by_material_slot(7U).size(), 1U);
+  expect_session_merge_document_restored(session.document_copy(source).or_throw(),
+                                         source_document);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionMergeVertexToleranceUsesWorldMetricAndReturnsSurvivorCoordinates) {
+  ModelingSession session;
+  const PolygonDocument survivor_document =
+      make_session_merge_quad(0.0F, SelectionKind::Vertex, true);
+  const ObjectId survivor = session.add_document(survivor_document, "First").or_throw();
+  const ObjectId source = session.add_document(
+      make_session_merge_quad(1.2F, SelectionKind::Vertex, false), "Second")
+                              .or_throw();
+  const std::array sources{SessionMergeSource{.object = source}};
+  struct MetricCase {
+    float scale_x;
+    float tolerance;
+    bool changed;
+  };
+  for (const MetricCase metric : std::array{
+           MetricCase{10.0F, 0.5F, false}, MetricCase{10.0F, 2.1F, true},
+           MetricCase{0.1F, 0.05F, true}}) {
+    SCOPED_TRACE(metric.scale_x);
+    SCOPED_TRACE(metric.tolerance);
+    const Transform3 world_from_survivor{
+        .x_axis = {metric.scale_x, 0.0F, 0.0F},
+        .y_axis = {0.0F, 3.0F, 0.0F},
+        .z_axis = {0.0F, 0.0F, 2.0F},
+        .origin = {7.0F, -4.0F, 2.0F},
+    };
+    const auto prepared = session.prepare_merge_documents(
+        survivor, sources, SelectionKind::Vertex, metric.tolerance,
+        world_from_survivor);
+    ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+    EXPECT_TRUE(prepared.value().receipt.success);
+    ASSERT_EQ(prepared.value().receipt.changed, metric.changed);
+    const PolygonDocument &candidate = prepared.value().survivor_document;
+    if (!metric.changed) {
+      expect_session_merge_document_restored(candidate, survivor_document);
+      continue;
+    }
+    ASSERT_TRUE(candidate.validate().ok());
+    const AuthoredPolygonPayload payload = candidate.authored_payload().or_throw();
+    ASSERT_EQ(payload.vertices.size(), 6U);
+    EXPECT_EQ(payload.faces.size(), 2U);
+    const auto bottom = authored_position(payload, make_id<VertexTag>(2U));
+    const auto top = authored_position(payload, make_id<VertexTag>(3U));
+    ASSERT_TRUE(bottom.has_value());
+    ASSERT_TRUE(top.has_value());
+    expect_vec3_near(*bottom, {1.1F, 0.0F, 0.0F});
+    expect_vec3_near(*top, {1.1F, 1.0F, 0.0F});
+    const auto bounds = mesh_bounds(candidate.compile_mesh().or_throw());
+    ASSERT_TRUE(bounds.has_value());
+    expect_vec3_near(bounds->min, {0.0F, 0.0F, 0.0F});
+    expect_vec3_near(bounds->max, {2.2F, 1.0F, 0.0F});
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionMergeRejectsInvalidOperandsWithoutMutationOrHistoryChanges) {
+  ModelingSession session;
+  const PolygonDocument survivor_document =
+      make_session_merge_quad(0.0F, SelectionKind::Vertex, true);
+  const PolygonDocument source_document =
+      make_session_merge_quad(1.0F, SelectionKind::Vertex, false);
+  const ObjectId survivor = session.add_document(survivor_document, "First").or_throw();
+  const ObjectId source = session.add_document(source_document, "Second").or_throw();
+  ASSERT_TRUE(session.rename_object(survivor, "Renamed").ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  const std::size_t undo_depth = session.undo_depth();
+  const std::array sources{SessionMergeSource{.object = source}};
+  const std::array duplicate_sources{sources.front(), sources.front()};
+  const std::array self_source{SessionMergeSource{.object = survivor}};
+  const std::array absent_source{
+      SessionMergeSource{.object = make_id<ObjectTag>(999999U)}};
+  EXPECT_FALSE(session.prepare_merge_documents(survivor, {}, SelectionKind::Vertex).ok());
+  EXPECT_FALSE(session.prepare_merge_documents(survivor, duplicate_sources,
+                                                SelectionKind::Vertex).ok());
+  EXPECT_FALSE(session.prepare_merge_documents(survivor, self_source,
+                                                SelectionKind::Vertex).ok());
+  EXPECT_FALSE(session.prepare_merge_documents(survivor, absent_source,
+                                                SelectionKind::Vertex).ok());
+  EXPECT_FALSE(session.prepare_merge_documents(survivor, sources, SelectionKind::Face).ok());
+  EXPECT_FALSE(session.prepare_merge_documents(survivor, sources, SelectionKind::Vertex,
+                                                -1.0F).ok());
+  EXPECT_FALSE(session.prepare_merge_documents(
+      survivor, sources, SelectionKind::Vertex,
+      std::numeric_limits<float>::infinity()).ok());
+  const Transform3 singular_world{.x_axis = {0.0F, 0.0F, 0.0F}};
+  EXPECT_FALSE(session.prepare_merge_documents(survivor, sources, SelectionKind::Vertex,
+                                                0.0F, singular_world).ok());
+  PolygonDocument unselected_source = source_document;
+  ASSERT_TRUE(unselected_source.clear_selection().ok());
+  const std::array unselected_sources{SessionMergeSource{
+      .object = source,
+      .prepared_document = unselected_source,
+  }};
+  EXPECT_FALSE(session.prepare_merge_documents(survivor, unselected_sources,
+                                                SelectionKind::Vertex).ok());
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+  expect_session_merge_document_restored(session.document_copy(survivor).or_throw(),
+                                         survivor_document);
+  expect_session_merge_document_restored(session.document_copy(source).or_throw(),
+                                         source_document);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionMergePreviewCancelCommitUndoRedoRetainsIdentityHighWater) {
+  ModelingSession session;
+  const PolygonDocument survivor_document =
+      make_session_merge_quad(0.0F, SelectionKind::Edge, true);
+  const PolygonDocument source_document =
+      make_session_merge_quad(1.0F, SelectionKind::Edge, false);
+  const ObjectId survivor = session.add_document(survivor_document, "First").or_throw();
+  const ObjectId source = session.add_document(source_document, "Second").or_throw();
+  const std::array sources{SessionMergeSource{.object = source}};
+  const std::size_t undo_depth = session.undo_depth();
+  const auto begin_merge_preview = [&](const SessionMergePreviewCandidate &candidate) {
+    SessionPreviewTransactionRequest request;
+    request.replace_object_selection = true;
+    request.active_participant_index = 0U;
+    request.participants.push_back({
+        .action = SessionPreviewAction::ReplaceExisting,
+        .object = survivor,
+        .document = candidate.survivor_document,
+        .receipt = candidate.receipt,
+        .selected = true,
+    });
+    request.participants.push_back({
+        .action = SessionPreviewAction::RemoveExisting,
+        .object = source,
+    });
+    return session.begin_preview_transaction("modeling.merge.preview",
+                                              std::move(request)).or_throw();
+  };
+  const auto first =
+      session.prepare_merge_documents(survivor, sources, SelectionKind::Edge);
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(first.value().receipt.changed);
+  const AuthoredTopology first_topology =
+      first.value().survivor_document.authored_topology().or_throw();
+  const SessionPreviewBeginResult canceled = begin_merge_preview(first.value());
+  EXPECT_EQ(session.preview_document_copy(canceled.preview_id, survivor)
+                .or_throw().vertex_count(), 6U);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  ASSERT_TRUE(session.cancel_preview(canceled.preview_id).ok());
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  const PolygonDocument after_cancel = session.document_copy(survivor).or_throw();
+  expect_session_merge_document_restored(after_cancel, survivor_document);
+  expect_session_merge_document_restored(session.document_copy(source).or_throw(),
+                                         source_document);
+  const AuthoredTopology canceled_topology = after_cancel.authored_topology().or_throw();
+  EXPECT_GE(canceled_topology.next_vertex_id, first_topology.next_vertex_id);
+  EXPECT_GE(canceled_topology.next_face_id, first_topology.next_face_id);
+
+  const auto second =
+      session.prepare_merge_documents(survivor, sources, SelectionKind::Edge);
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(second.value().receipt.changed);
+  const AuthoredTopology second_topology =
+      second.value().survivor_document.authored_topology().or_throw();
+  for (const AuthoredTopologyVertex &vertex : second_topology.vertices) {
+    if (vertex.id.index > 4U) {
+      EXPECT_GE(vertex.id.index, first_topology.next_vertex_id);
+    }
+  }
+  for (const AuthoredTopologyFace &face : second_topology.faces) {
+    if (face.id.index != 1U) {
+      EXPECT_GE(face.id.index, first_topology.next_face_id);
+    }
+  }
+  const SessionPreviewBeginResult begun = begin_merge_preview(second.value());
+  const auto committed = session.commit_preview_transaction(begun.preview_id);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_EQ(committed.value().active_object, survivor);
+  EXPECT_EQ(committed.value().selected_objects, std::vector<ObjectId>{survivor});
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_EQ(session.objects().front().id, survivor);
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1U);
+  const PolygonDocument merged = session.document_copy(survivor).or_throw();
+  expect_session_merge_document_restored(merged, second.value().survivor_document);
+  ASSERT_TRUE(session.undo().ok());
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  const PolygonDocument undone = session.document_copy(survivor).or_throw();
+  expect_session_merge_document_restored(undone, survivor_document);
+  expect_session_merge_document_restored(session.document_copy(source).or_throw(),
+                                         source_document);
+  EXPECT_GE(undone.authored_topology().or_throw().next_vertex_id,
+            second_topology.next_vertex_id);
+  EXPECT_GE(undone.authored_topology().or_throw().next_face_id,
+            second_topology.next_face_id);
+  ASSERT_TRUE(session.redo().ok());
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_EQ(session.objects().front().id, survivor);
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1U);
+  expect_session_merge_document_restored(session.document_copy(survivor).or_throw(), merged);
 }
 
 TEST(ModelingSdkConsumerTests,

@@ -33,7 +33,10 @@ public:
       ModelingSessionService &modeling, EditorSelectionService &selection,
       const ModelingCommandDispatcher &dispatcher, std::string tool_id,
       std::string label)
-      : ModelingMementoCommand(modeling, std::move(label)),
+      : ModelingMementoCommand(modeling, std::move(label), false, false,
+                               tool_id == "merge_edges" || tool_id == "merge_by_distance" ||
+                               tool_id == "merge_vertices_to_active" ||
+                               tool_id == "merge_vertices_to_center"),
         selection_(selection), dispatcher_(dispatcher),
         tool_id_(std::move(tool_id)) {}
 
@@ -54,7 +57,10 @@ class ModelingActionHistoryCommand final : public ModelingMementoCommand {
 public:
   ModelingActionHistoryCommand(ModelingSessionService &modeling,
                                std::string action_id, std::string label)
-      : ModelingMementoCommand(modeling, std::move(label)),
+      : ModelingMementoCommand(modeling, std::move(label), false, false,
+                               action_id == "merge_edges" || action_id == "merge_by_distance" ||
+                               action_id == "merge_vertices" ||
+                               action_id == "merge_vertices_at_center"),
         action_id_(std::move(action_id)) {}
 
 private:

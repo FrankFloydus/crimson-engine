@@ -860,8 +860,24 @@ quader::QVec3 curved_bridge_position(
       return linear;
     }
 
-    const quader::QVec3 start_tangent = start_tangent_direction * rail_length;
-    const quader::QVec3 end_tangent = end_tangent_direction * -rail_length;
+    const quader::QVec3 end_forward_direction = end_tangent_direction * -1.0F;
+    const quader::QVec3 rail_direction = (end - start) / rail_length;
+    const quader::QVec3 tangent_bisector = start_tangent_direction + end_forward_direction;
+    float tangent_scale = 1.0F;
+    if (length_squared(tangent_bisector) > kEpsilon &&
+        dot(start_tangent_direction, rail_direction) > kEpsilon &&
+        dot(end_forward_direction, rail_direction) > kEpsilon &&
+        length_squared(cross(normalize_or_zero(tangent_bisector), rail_direction)) <= kEpsilon) {
+        // Equal-radius circular joins have their tangent bisector along the chord.
+        // Converting the cubic arc's 4/3*r*tan(turn/4) controls to Hermite tangents
+        // gives sec^2(turn/4): one for straight rails and 4-2*sqrt(2) at 90 degrees.
+        const float cos_turn = std::clamp(
+            dot(start_tangent_direction, end_forward_direction), -1.0F, 1.0F);
+        const float cos_half_turn = std::sqrt((1.0F + cos_turn) * 0.5F);
+        tangent_scale = 2.0F / (1.0F + cos_half_turn);
+    }
+    const quader::QVec3 start_tangent = start_tangent_direction * (rail_length * tangent_scale);
+    const quader::QVec3 end_tangent = end_forward_direction * (rail_length * tangent_scale);
     const float t2 = t * t;
     const float t3 = t2 * t;
     const float h00 = (2.0F * t3) - (3.0F * t2) + 1.0F;

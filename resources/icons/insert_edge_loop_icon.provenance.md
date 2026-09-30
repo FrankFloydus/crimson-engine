@@ -1,5 +1,8 @@
 # Insert Edge Loop toolbar icon provenance
 
+This earlier revision is superseded by the SVG-based artwork documented in
+[modeling_tool_icons.provenance.md](modeling_tool_icons.provenance.md).
+
 Created on 2026-09-25 with the built-in ImageGen tool at the user's request.
 
 Asset: `tool_insert_edge_loop.png`.

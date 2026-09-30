@@ -10,6 +10,13 @@
 
 namespace quader {
 
+enum class QtLogMessageSeverity { Subdued, Information, Warning, Error };
+
+/** Resolves readable log text through the live palette and contrast policy. */
+[[nodiscard]] QColor qt_log_message_color(QtLogMessageSeverity severity,
+                                         const QPalette &palette,
+                                         bool themed);
+
 /** Shared orange outline for the current material and active viewport pane. */
 [[nodiscard]] QColor qt_current_item_outline_color();
 

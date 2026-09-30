@@ -46,129 +46,111 @@ public:
 
 OperationResult ConnectVerticesOperation::apply(Document& document, Selection& selection) const
 {
-  if (selection.mode != SelectionMode::Vertex) {
-    return OperationResult::failure("Connect needs vertex selection mode.");
-  }
-
+    if (selection.mode != SelectionMode::Vertex) {
+        return OperationResult::failure("Connect needs vertex selection mode.");
+    }
+    const OperationResult source_validation = validate_authored_operation_candidate(document, document);
+    if (!source_validation.success) {
+        return source_validation;
+    }
     const std::vector<ElementId> selected_vertices = selected_valid_vertices(document, selection);
-    if (selected_vertices.size() < 2) {
+    if (selected_vertices.size() < 2U) {
         return OperationResult::failure("Select at least two vertices to connect.");
     }
 
-    const Document source = document;
-    for (std::size_t face_index = 0; face_index < source.faces.size(); ++face_index) {
-        const Face& face = source.faces[face_index];
+    Document candidate = document;
+    std::vector<Face> rebuilt_faces;
+    rebuilt_faces.reserve(document.faces.size() + selected_vertices.size());
+    std::vector<Edge> connected_edges;
+    bool common_face_found = false;
+    for (const Face& face : document.faces) {
         std::vector<std::size_t> selected_indices;
-        selected_indices.reserve(selected_vertices.size());
         for (std::size_t index = 0; index < face.vertices.size(); ++index) {
             if (contains_id(selected_vertices, face.vertices[index])) {
                 selected_indices.push_back(index);
             }
         }
-        if (selected_indices.size() != selected_vertices.size()) {
+        if (selected_indices.size() < 2U) {
+            rebuilt_faces.push_back(face);
             continue;
         }
-
-        std::vector<Face> replacement_faces;
-        replacement_faces.reserve(selected_indices.size() + 1U);
-        std::vector<Edge> connected_edges;
-        connected_edges.reserve(selected_indices.size());
-        ElementId next_face_id = source.next_face_id;
-        if (selected_indices.size() == 2) {
-            const std::size_t first = selected_indices[0];
-            const std::size_t second = selected_indices[1];
-            std::vector<ElementId> first_loop = unique_valid_face_loop(face_vertices_between(face, first, second));
-            std::vector<ElementId> second_loop = unique_valid_face_loop(face_vertices_between(face, second, first));
-            if (first_loop.size() < 3 || second_loop.size() < 3) {
-                continue;
+        common_face_found = true;
+        std::vector<Edge> face_connectors;
+        const std::size_t connector_count = selected_indices.size() == 2U ? 1U : selected_indices.size();
+        bool has_new_chord = false;
+        for (std::size_t index = 0; index < connector_count; ++index) {
+            const std::size_t first = selected_indices[index];
+            const std::size_t second = selected_indices[(index + 1U) % selected_indices.size()];
+            const Edge connector = make_edge(face.vertices[first], face.vertices[second]);
+            const bool adjacent = (first + 1U) % face.vertices.size() == second ||
+                (second + 1U) % face.vertices.size() == first;
+            if (!adjacent) {
+                if (!authored_face_chord_is_valid(document, face, connector.a, connector.b)) {
+                    return OperationResult::failure("Connect Vertices needs chords inside the authored face boundary.");
+                }
+                has_new_chord = true;
             }
-
-            Face first_face;
-            first_face.id = face.id;
-            first_face.vertices = std::move(first_loop);
-            first_face.material_slot = face.material_slot;
-            first_face.normal_shading = face.normal_shading;
-            first_face.texture_transform = face.texture_transform;
-            replacement_faces.push_back(std::move(first_face));
-
-            Face second_face;
-            second_face.id = next_face_id++;
-            second_face.vertices = std::move(second_loop);
-            second_face.material_slot = face.material_slot;
-            second_face.normal_shading = face.normal_shading;
-            second_face.texture_transform = face.texture_transform;
-            replacement_faces.push_back(std::move(second_face));
-            connected_edges.push_back(make_edge(face.vertices[first], face.vertices[second]));
+            add_unique_edge(face_connectors, connector);
+        }
+        if (!has_new_chord) {
+            rebuilt_faces.push_back(face);
+            continue;
+        }
+        const auto append_replacement = [&](std::vector<ElementId> loop, ElementId face_id) -> bool {
+            Face replacement = face;
+            replacement.id = face_id;
+            replacement.vertices = std::move(loop);
+            if (replacement.vertices.size() < 3U ||
+                !preserve_face_uvs(document, face, candidate, replacement)) {
+                return false;
+            }
+            rebuilt_faces.push_back(std::move(replacement));
+            return true;
+        };
+        if (selected_indices.size() == 2U) {
+            if (!append_replacement(face_vertices_between(face, selected_indices[0], selected_indices[1]), face.id) ||
+                !append_replacement(face_vertices_between(face, selected_indices[1], selected_indices[0]), candidate.next_face_id++)) {
+                return OperationResult::failure("Connect Vertices encountered invalid face data.");
+            }
         } else {
             std::vector<ElementId> center_loop;
-            center_loop.reserve(selected_indices.size());
-            for (const std::size_t selected_index : selected_indices) {
-                center_loop.push_back(face.vertices[selected_index]);
+            for (const std::size_t index : selected_indices) {
+                center_loop.push_back(face.vertices[index]);
             }
-            center_loop = unique_valid_face_loop(std::move(center_loop));
-            if (center_loop.size() < 3) {
-                continue;
+            if (!append_replacement(std::move(center_loop), face.id)) {
+                return OperationResult::failure("Connect Vertices encountered invalid face data.");
             }
-
-            Face center_face;
-            center_face.id = face.id;
-            center_face.vertices = std::move(center_loop);
-            center_face.material_slot = face.material_slot;
-            center_face.normal_shading = face.normal_shading;
-            center_face.texture_transform = face.texture_transform;
-            replacement_faces.push_back(std::move(center_face));
-
             for (std::size_t index = 0; index < selected_indices.size(); ++index) {
-                const std::size_t start = selected_indices[index];
-                const std::size_t end = selected_indices[(index + 1U) % selected_indices.size()];
-                add_unique_edge(connected_edges, make_edge(face.vertices[start], face.vertices[end]));
-                std::vector<ElementId> side_loop = unique_valid_face_loop(face_vertices_between(face, start, end));
-                if (side_loop.size() < 3) {
-                    continue;
+                const std::size_t first = selected_indices[index];
+                const std::size_t second = selected_indices[(index + 1U) % selected_indices.size()];
+                std::vector<ElementId> side_loop = face_vertices_between(face, first, second);
+                if (side_loop.size() >= 3U && !append_replacement(std::move(side_loop), candidate.next_face_id++)) {
+                    return OperationResult::failure("Connect Vertices encountered invalid face data.");
                 }
-
-                Face side_face;
-                side_face.id = next_face_id++;
-                side_face.vertices = std::move(side_loop);
-                side_face.material_slot = face.material_slot;
-                side_face.normal_shading = face.normal_shading;
-                side_face.texture_transform = face.texture_transform;
-                replacement_faces.push_back(std::move(side_face));
             }
         }
-
-        if (replacement_faces.size() < 2 || connected_edges.empty()) {
-            continue;
+        for (const Edge edge : face_connectors) {
+            add_unique_edge(connected_edges, edge);
         }
-
-        for (Face& replacement : replacement_faces) {
-            if (!preserve_face_uvs(source, face, source, replacement)) {
-                return OperationResult::failure("Connect Vertices encountered invalid mesh data.");
-            }
-        }
-
-        Document candidate = source;
-        candidate.next_face_id = next_face_id;
-        candidate.faces.erase(candidate.faces.begin() + static_cast<std::ptrdiff_t>(face_index));
-        candidate.faces.insert(candidate.faces.end(), replacement_faces.begin(), replacement_faces.end());
-        prune_invalid_faces(candidate);
-        prune_normal_edge_states(candidate);
-        if (!every_face_triangulates(candidate)) {
-            continue;
-        }
-
-        document = std::move(candidate);
-
-        selection.clear();
-        selection.mode = SelectionMode::Edge;
-        selection.edges = std::move(connected_edges);
-        activate_last_selection(selection);
-        return { true, {} };
     }
-
-    return OperationResult::failure("Connect needs selected vertices on the same face.");
+    if (connected_edges.empty()) {
+        return OperationResult::failure(common_face_found
+            ? "Connect Vertices found only existing face edges."
+            : "Connect needs selected vertices on the same authored face.");
+    }
+    candidate.faces = std::move(rebuilt_faces);
+    prune_normal_edge_states(candidate);
+    const OperationResult validation = validate_authored_operation_candidate(document, candidate);
+    if (!validation.success) {
+        return validation;
+    }
+    document = std::move(candidate);
+    selection.clear();
+    selection.mode = SelectionMode::Edge;
+    selection.edges = std::move(connected_edges);
+    activate_last_selection(selection);
+    return {true, {}};
 }
-
 } // namespace
 
 OperationResult connect_selected_vertices(Document& document, Selection& selection)

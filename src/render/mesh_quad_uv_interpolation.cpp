@@ -103,66 +103,60 @@ build_quad(std::span<const MeshVertex> vertices,
 
 } // namespace
 
+MeshQuadUvInterpolationPlan prepare_mesh_quad_uv_interpolation(
+    std::size_t vertex_count, std::span<const std::uint32_t> indices,
+    std::span<const MeshPrimitiveSpan> primitives) {
+  MeshQuadUvInterpolationPlan plan{.vertex_count = vertex_count};
+  std::vector<std::uint32_t> references(vertex_count, 0u);
+  std::vector<std::size_t> last_primitive(vertex_count, std::numeric_limits<std::size_t>::max());
+  for (std::size_t primitive_index = 0u; primitive_index < primitives.size(); ++primitive_index) {
+    const auto primitive = primitives[primitive_index];
+    const std::uint64_t end = static_cast<std::uint64_t>(primitive.index_offset) + primitive.index_count;
+    if (end > indices.size()) return plan;
+    for (std::uint64_t index = primitive.index_offset; index < end; ++index) {
+      const auto vertex = indices[static_cast<std::size_t>(index)];
+      if (vertex >= vertex_count) return plan;
+      if (last_primitive[vertex] != primitive_index) {
+        last_primitive[vertex] = primitive_index;
+        ++references[vertex];
+      }
+    }
+  }
+  for (const auto primitive : primitives) {
+    if (primitive.index_count != 6u) continue;
+    std::array<std::uint32_t, 4u> corners{};
+    if (quad_boundary(indices.subspan(primitive.index_offset, 6u), corners) &&
+        std::ranges::all_of(corners, [&](auto vertex) { return references[vertex] == 1u; })) {
+      plan.corners.push_back(corners);
+    }
+  }
+  return plan;
+}
+
 std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
-    std::span<const MeshVertex> vertices,
-    std::span<const std::uint32_t> indices,
-    std::span<const MeshPrimitiveSpan> primitives,
+    std::span<const MeshVertex> vertices, const MeshQuadUvInterpolationPlan &plan,
     std::span<const QVec3> positions) {
   std::vector<MeshQuadUvInterpolation> result(vertices.size());
-  if (vertices.empty() || indices.empty() || primitives.empty() ||
-      (!positions.empty() && positions.size() != vertices.size())) {
-    return result;
-  }
-  // A compiled corner belongs to exactly one authored face. Never infer quad
-  // constants on shared importer vertices or after material-span coalescing.
-  std::vector<std::uint32_t> references(vertices.size(), 0u);
-  std::vector<std::size_t> last_primitive(vertices.size(),
-                                       std::numeric_limits<std::size_t>::max());
-  for (std::size_t primitive_index = 0u; primitive_index < primitives.size();
-       ++primitive_index) {
-    const MeshPrimitiveSpan primitive = primitives[primitive_index];
-    const std::uint64_t end =
-        static_cast<std::uint64_t>(primitive.index_offset) + primitive.index_count;
-    if (end > indices.size()) {
-      return result;
-    }
-    for (std::uint64_t index = primitive.index_offset; index < end; ++index) {
-      const std::uint32_t vertex_index = indices[static_cast<std::size_t>(index)];
-      if (vertex_index >= vertices.size()) {
-        return result;
-      }
-      if (last_primitive[vertex_index] != primitive_index) {
-        last_primitive[vertex_index] = primitive_index;
-        ++references[vertex_index];
-      }
-    }
-  }
-  for (const MeshPrimitiveSpan primitive : primitives) {
-    if (primitive.index_count != 6u) {
-      continue;
-    }
-    std::array<std::uint32_t, 4> corners{};
-    if (!quad_boundary(indices.subspan(primitive.index_offset, 6u), corners) ||
-        !std::ranges::all_of(corners, [&](std::uint32_t index) {
-          return references[index] == 1u;
-        })) {
-      continue;
-    }
+  if (plan.vertex_count != vertices.size() ||
+      (!positions.empty() && positions.size() != vertices.size())) return result;
+  for (const auto &corners : plan.corners) {
     const auto quad = build_quad(vertices, positions, corners);
-    if (!quad.has_value()) {
-      continue;
-    }
+    if (!quad) continue;
     for (std::size_t index = 0u; index < 4u; ++index) {
       result[corners[index]] = {
-          .coordinates = {quad->coordinates[index].x,
-                          quad->coordinates[index].y,
-                          quad->coordinates[index].z},
+          .coordinates = {quad->coordinates[index].x, quad->coordinates[index].y, quad->coordinates[index].z},
           .geometry_warp = {quad->geometry_warp.x, quad->geometry_warp.y},
-          .uv_correction = {quad->uv_correction.x, quad->uv_correction.y},
-          .enabled = true};
+          .uv_correction = {quad->uv_correction.x, quad->uv_correction.y}, .enabled = true};
     }
   }
   return result;
+}
+
+std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
+    std::span<const MeshVertex> vertices, std::span<const std::uint32_t> indices,
+    std::span<const MeshPrimitiveSpan> primitives, std::span<const QVec3> positions) {
+  return build_mesh_quad_uv_interpolations(vertices,
+      prepare_mesh_quad_uv_interpolation(vertices.size(), indices, primitives), positions);
 }
 
 QVec2 evaluate_mesh_quad_uv_interpolation(

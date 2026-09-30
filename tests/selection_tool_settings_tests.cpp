@@ -73,7 +73,8 @@ TEST(SelectionToolSettingsTests, LassoIdentityShortcutAndUserOverrideRemainCoher
 
   ASSERT_TRUE(editor.commands().set_shortcut(kCommand, "Ctrl+Alt+F22").ok());
   EXPECT_EQ(editor.commands().shortcut_for(kCommand), "Ctrl+Alt+F22");
-  EXPECT_EQ(editor.commands().shortcut_for(quader_command::kToolsActivateSelect), "Q");
+  EXPECT_TRUE(editor.commands().shortcut_for(
+      quader_command::kToolsActivateSelect).empty());
   ASSERT_TRUE(editor.commands().remove_shortcut(kCommand).ok());
   EXPECT_TRUE(editor.commands().shortcut_for(kCommand).empty());
   ASSERT_TRUE(editor.commands().reset_shortcut(kCommand).ok());

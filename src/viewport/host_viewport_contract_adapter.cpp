@@ -135,7 +135,7 @@ std::string viewport_grid_preset_target_id(int preset) {
 
 std::span<const ViewportShortcutTargetDescriptor>
 viewport_shortcut_target_catalog() {
-  static const std::array<ViewportShortcutTargetDescriptor, 33> kDescriptors{{
+  static const std::array<ViewportShortcutTargetDescriptor, 34> kDescriptors{{
       {"new_scene", quader_command::kSceneDocumentNew.string(),
        viewport_target_shortcut(ViewportShortcutKind::None,
                                 ViewportShortcutContext::Global)},
@@ -231,6 +231,8 @@ viewport_shortcut_target_catalog() {
        viewport_target_shortcut(ViewportShortcutKind::AddPopup)},
       {"", "viewport.shading_popup",
        viewport_target_shortcut(ViewportShortcutKind::ShadingPopup)},
+      {"", "viewport.marking_menu",
+       viewport_target_shortcut(ViewportShortcutKind::MarkingMenu)},
   }};
   return kDescriptors;
 }
@@ -1034,6 +1036,7 @@ bool viewport_target_requires_router_dispatch(std::string_view target_id) {
          target_id == "viewport.delete_popup" ||
          target_id == "viewport.add_popup" ||
          target_id == "viewport.shading_popup" ||
+         target_id == "viewport.marking_menu" ||
          known_viewport_tool_target ||
          quader_selection_mode_id_from_command_target(target_id).has_value() ||
          quader_grid_preset_id_from_command_target(target_id).has_value();
@@ -1064,6 +1067,7 @@ bool viewport_shortcuts_match(const ViewportShortcut &lhs,
   case ViewportShortcutKind::DeletePopup:
   case ViewportShortcutKind::AddPopup:
   case ViewportShortcutKind::ShadingPopup:
+  case ViewportShortcutKind::MarkingMenu:
   case ViewportShortcutKind::DeleteSelection:
   case ViewportShortcutKind::SelectAll:
   case ViewportShortcutKind::InvertSelection:

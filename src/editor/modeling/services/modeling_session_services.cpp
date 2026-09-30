@@ -81,12 +81,11 @@ bool same_matrix(const QMat4 &left, const QMat4 &right) {
 }
 
 quader_poly::Ray rectangle_local_pick_ray(
-    const quader_editor_core::ViewportCameraState &camera,
+    const quader_editor_core::PreparedViewportProjection &projection,
     QVec2 screen_position,
     const quader_editor_core::PickObjectTransform *transform) {
   const quader_poly::Ray world_ray =
-      quader_editor_core::ray_from_viewport_screen_point(camera,
-                                                         screen_position);
+      projection.ray_from_screen_point(screen_position);
   if (transform == nullptr) {
     return world_ray;
   }
@@ -2318,9 +2317,10 @@ ModelingSelectionService::rectangle_projected_hits_request(
   QDR_PROFILE_SCOPE("Box selection project candidates");
   const quader_editor_core::ViewportCameraState camera =
       modeling_runtime_camera(request.camera);
+  const quader_editor_core::PreparedViewportProjection projection(camera);
+  const QVec3 depth_forward = normalize(camera.transform.z_axis * -1.0f);
   const auto depth_visible = [&](QVec3 world) {
-    const double depth = dot(world - camera.transform.origin,
-                             normalize(camera.transform.z_axis * -1.0f));
+    const double depth = dot(world - camera.transform.origin, depth_forward);
     return !clip_depth || (depth >= near_plane && depth <= far_plane);
   };
   quader_editor_core::RectangleProjectedHitsRequest hits_request;
@@ -2428,8 +2428,7 @@ ModelingSelectionService::rectangle_projected_hits_request(
       world_vertex_valid[vertex_index] = 1U;
       QVec2 screen;
       if (!depth_visible(world_position) ||
-          !quader_editor_core::project_viewport_point(camera, world_position,
-                                                      screen)) {
+          !projection.project_point(world_position, screen)) {
         projected_object.complete_geometry = false;
         continue;
       }
@@ -2567,12 +2566,11 @@ ModelingSelectionService::rectangle_projected_hits_request(
                          static_cast<float>(world_center_count);
           if ((clip_depth && !projected_face.screen_vertices.empty()
                    ? (facing_screen = projected_face.screen_vertices.front(), true)
-                   : quader_editor_core::project_viewport_point(
-                         camera, world_center, facing_screen))) {
+                   : projection.project_point(world_center, facing_screen))) {
             projected_face.front_facing =
                 pick_facts->face_is_front_facing_pickable(
                     face.id,
-                    rectangle_local_pick_ray(camera, facing_screen,
+                    rectangle_local_pick_ray(projection, facing_screen,
                                              object_transform));
           } else {
             projected_face.front_facing = false;
@@ -2619,13 +2617,13 @@ ModelingSelectionService::rectangle_projected_hits_request(
           QVec2 facing_screen;
           if ((clip_depth && projected_edge.has_screen_position
                    ? (facing_screen = projected_edge.screen_position, true)
-                   : quader_editor_core::project_viewport_point(
-                         camera, (*world_a + *world_b) * 0.5F, facing_screen))) {
+                   : projection.project_point((*world_a + *world_b) * 0.5F,
+                                              facing_screen))) {
             projected_edge.front_facing =
                 !pick_facts->edge_has_incident_face(edge) ||
                 pick_facts->edge_has_front_facing_pickable_face(
                     edge,
-                    rectangle_local_pick_ray(camera, facing_screen,
+                    rectangle_local_pick_ray(projection, facing_screen,
                                              object_transform));
           } else {
             projected_edge.front_facing = false;
@@ -2650,7 +2648,7 @@ ModelingSelectionService::rectangle_projected_hits_request(
             !pick_facts->vertex_has_incident_face(vertex.id) ||
             pick_facts->vertex_has_front_facing_pickable_face(
                 vertex.id,
-                rectangle_local_pick_ray(camera, *found, object_transform));
+                rectangle_local_pick_ray(projection, *found, object_transform));
       } else {
         projected_vertex.front_facing = false;
       }
@@ -3272,6 +3270,33 @@ void ModelingOverlayService::invalidate_composed_frame() const {
   selection_overlay_cache_.invalidate();
 }
 
+const ViewportOverlayFrame *ModelingOverlayService::accepted_coordinate_base_frame(
+    const ModelingAcceptedOverlayCoordinates &coordinates,
+    std::uint64_t local_visibility_revision,
+    ModelingSelectionOverlayOptions options) const {
+  const auto &base = projected_overlay_base_cache_;
+  if (!base.populated ||
+      base.content_revision != coordinates.source_content_revision ||
+      base.selection_revision != coordinates.source_selection_revision ||
+      base.scene_revision != coordinates.source_scene_revision ||
+      base.object_map_revision != coordinates.source_object_map_revision ||
+      base.local_visibility_revision != local_visibility_revision ||
+      base.suppress_persistent_object_selection !=
+          options.suppress_persistent_object_selection ||
+      base.suppress_persistent_selection != options.suppress_persistent_selection ||
+      base.persistent_source_wire_object_id != options.persistent_source_wire_object_id) {
+    QDR_PROFILE_SCOPE("Accepted overlay semantic base unavailable");
+    return nullptr;
+  }
+  // Keep the original source revisions: these positions remain the semantic
+  // baseline, explicitly paired with owned accepted coordinates by render.
+  QDR_PROFILE_SCOPE("Accepted overlay retain semantic and world projection");
+  ++geometry_work_.accepted_coordinate_handoff_count;
+  QDR_PROFILE_PLOT("Accepted overlay handoff count",
+                   static_cast<std::int64_t>(geometry_work_.accepted_coordinate_handoff_count));
+  return &base.frame;
+}
+
 std::uint64_t ModelingOverlayService::selection_overlay_signature(
     const quader_editor_core::EditorRuntime &runtime,
     ModelingSelectionOverlayOptions options) const {
@@ -3644,9 +3669,24 @@ ModelingOverlayService::selection_overlay_base_frame(
   {
     QDR_PROFILE_SCOPE("Selection overlay assemble semantic object entries");
     for (const quader_editor_core::PolygonObject &object : session.objects()) {
-      const std::uint64_t signature =
-          PickingCacheProjection::local_face_geometry_signature(object);
       const auto reusable = previous_entry_by_object_id.find(object.id);
+      const auto geometry_document = object.document.topology_payload();
+      const bool same_document =
+          reusable != previous_entry_by_object_id.end() &&
+          previous_entries[reusable->second].geometry_document ==
+              geometry_document;
+      const std::uint64_t signature =
+          same_document
+              ? previous_entries[reusable->second].geometry_signature
+              : PickingCacheProjection::local_face_geometry_signature(object);
+      const bool same_previous_geometry =
+          reusable != previous_entry_by_object_id.end() &&
+          previous_entries[reusable->second].geometry_signature == signature &&
+          (same_document ||
+           (previous_entries[reusable->second].geometry_document != nullptr &&
+            same_overlay_document_layout(
+                *previous_entries[reusable->second].geometry_document,
+                *geometry_document)));
       const bool active_source_wire_object =
           selection_mode != quader_editor_core::SelectionMode::Object &&
           object.id > 0 && object.selected &&
@@ -3660,9 +3700,8 @@ ModelingOverlayService::selection_overlay_base_frame(
       const bool active_component_object =
           object.id > 0 && object.id == active_object_id;
 
-      OverlayBaseObjectCacheEntry entry;
-      if (reusable != previous_entry_by_object_id.end() &&
-          previous_entries[reusable->second].geometry_signature == signature &&
+      const bool same_previous_presentation =
+          reusable != previous_entry_by_object_id.end() &&
           previous_entries[reusable->second].selection_mode == selection_mode &&
           previous_entries[reusable->second].selected == object.selected &&
           previous_entries[reusable->second].component_edit_target ==
@@ -3678,10 +3717,15 @@ ModelingOverlayService::selection_overlay_base_frame(
           previous_suppressed_persistent_selection ==
               options.suppress_persistent_selection &&
           ModelingSelectionService::selection_matches(
-              previous_entries[reusable->second].selection, object.selection)) {
+              previous_entries[reusable->second].selection, object.selection);
+      OverlayBaseObjectCacheEntry entry;
+      if (same_previous_geometry && same_previous_presentation) {
         entry = std::move(previous_entries[reusable->second]);
       } else {
         const OverlayBaseObjectCacheEntry *template_entry = nullptr;
+        if (same_previous_geometry) {
+          entry.geometry = previous_entries[reusable->second].geometry;
+        }
         const auto [template_first, template_last] =
             current_entry_by_geometry_signature.equal_range(signature);
         for (auto candidate = template_first; candidate != template_last;
@@ -3691,7 +3735,8 @@ ModelingOverlayService::selection_overlay_base_frame(
               next.object_entries[candidate_index];
           const quader_editor_core::PolygonObject &candidate_object =
               *current_entry_source_objects[candidate_index];
-          if (candidate_entry.selection_mode == selection_mode &&
+          const bool same_presentation =
+              candidate_entry.selection_mode == selection_mode &&
               candidate_entry.selected == object.selected &&
               candidate_entry.component_edit_target ==
                   object.component_edit_target &&
@@ -3702,9 +3747,20 @@ ModelingOverlayService::selection_overlay_base_frame(
               candidate_entry.tool_source_wire_object ==
                   tool_source_wire_object &&
               ModelingSelectionService::selection_matches(
-                  candidate_entry.selection, object.selection) &&
+                  candidate_entry.selection, object.selection);
+          const bool needs_template_geometry =
+              entry.geometry == nullptr && candidate_entry.geometry != nullptr;
+          if (!same_presentation && !needs_template_geometry) {
+            continue;
+          }
+          const bool same_geometry =
+              candidate_entry.geometry_document == geometry_document ||
               same_overlay_document_layout(candidate_object.document,
-                                           object.document)) {
+                                           object.document);
+          if (needs_template_geometry && same_geometry) {
+            entry.geometry = candidate_entry.geometry;
+          }
+          if (same_presentation && same_geometry) {
             template_entry = &candidate_entry;
             break;
           }
@@ -3713,7 +3769,11 @@ ModelingOverlayService::selection_overlay_base_frame(
         if (template_entry != nullptr) {
           QDR_PROFILE_SCOPE(
               "Selection overlay clone identical object template");
+          auto retained_geometry = std::move(entry.geometry);
           entry = *template_entry;
+          if (entry.geometry == nullptr) {
+            entry.geometry = std::move(retained_geometry);
+          }
           entry.object_id = object.id;
           entry.selection = object.selection;
           set_overlay_frame_object_id(entry.frame, object.id);
@@ -3727,7 +3787,31 @@ ModelingOverlayService::selection_overlay_base_frame(
           entry.active_component_object = active_component_object;
           entry.tool_source_wire_object = tool_source_wire_object;
           entry.selection = object.selection;
-          if (options.suppress_persistent_selection) {
+          const bool needs_geometry =
+              tool_source_wire_object ||
+              (!options.suppress_persistent_selection && object.selected &&
+               !(options.suppress_persistent_object_selection &&
+                 selection_mode == quader_editor_core::SelectionMode::Object));
+          if (needs_geometry && entry.geometry == nullptr) {
+            entry.geometry = quader_editor_core::build_selection_overlay_geometry(
+                object.document, geometry_work_,
+                reusable != previous_entry_by_object_id.end()
+                    ? previous_entries[reusable->second].geometry.get()
+                    : nullptr);
+          }
+          bool refreshed_positions = false;
+          if (!same_previous_geometry && same_previous_presentation &&
+              entry.geometry != nullptr &&
+              previous_entries[reusable->second].geometry != nullptr) {
+            entry.frame = std::move(previous_entries[reusable->second].frame);
+            refreshed_positions =
+                quader_editor_core::refresh_selection_overlay_frame_positions(
+                    entry.frame, *previous_entries[reusable->second].geometry,
+                    *entry.geometry, geometry_work_);
+          }
+          if (refreshed_positions) {
+            // The existing frame's source bindings retain membership and order.
+          } else if (options.suppress_persistent_selection) {
             entry.frame = {};
           } else if (options.suppress_persistent_object_selection &&
                      selection_mode ==
@@ -3735,7 +3819,12 @@ ModelingOverlayService::selection_overlay_base_frame(
                      object.selected) {
             entry.frame =
                 quader_editor_core::build_object_selection_wire_overlay_frame(
-                    object, {});
+                    object, {}, entry.geometry.get());
+          } else if (entry.geometry != nullptr) {
+            entry.frame = quader_editor_core::build_selection_overlay_frame(
+                object, selection_mode,
+                active_component_object ? object.id : -1, empty_hover, {},
+                *entry.geometry);
           } else {
             entry.frame = quader_editor_core::build_selection_overlay_frame(
                 std::span<const quader_editor_core::PolygonObject>(&object, 1U),
@@ -3752,9 +3841,11 @@ ModelingOverlayService::selection_overlay_base_frame(
           remove_source_wire_for_object(entry.frame, object.id);
           append_overlay_frame(
               entry.frame,
-              quader_editor_core::build_source_wire_overlay_frame(object, {}));
+              quader_editor_core::build_source_wire_overlay_frame(
+                  object, {}, entry.geometry.get()));
         }
       }
+      entry.geometry_document = geometry_document;
       if (options.suppress_persistent_object_selection &&
           selection_mode == quader_editor_core::SelectionMode::Object &&
           object.selected) {
@@ -3773,6 +3864,7 @@ ModelingOverlayService::selection_overlay_base_frame(
 
   {
     QDR_PROFILE_SCOPE("Selection overlay assemble semantic aggregate");
+    ++geometry_work_.semantic_aggregate_build_count;
     // Reserve the complete aggregate once. Reserving current-size + source-size
     // for every object makes a many-object component overlay quadratic because
     // each append can reallocate and copy the entire accumulated frame.
@@ -3911,6 +4003,7 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
       projected_overlay_base_cache_.persistent_source_wire_object_id !=
           options.persistent_source_wire_object_id) {
     QDR_PROFILE_SCOPE("Selection overlay project persistent base");
+    ++geometry_work_.world_projection_build_count;
     projected_overlay_base_cache_.frame =
         SelectionOverlayProjection::project_selection_overlay_frame(
             base_frame, object_registry, scene, selection_mode,
@@ -3949,6 +4042,7 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
     projected_overlay_base_cache_.persistent_source_wire_object_id =
         options.persistent_source_wire_object_id;
     projected_overlay_base_cache_.valid = true;
+    projected_overlay_base_cache_.populated = true;
   }
 
   {
@@ -3969,9 +4063,20 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
     const ModelingSelectionService &selection_service,
     const ModelingSdkProjectionAdapter &sdk_projection,
     int persistent_source_wire_object_id) const {
+  return volatile_overlay_frame(&session, session.selection_mode(), runtime,
+      scene, object_registry, selection_service, sdk_projection,
+      persistent_source_wire_object_id);
+}
+
+ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
+    const ModelingSelectionProjectionSnapshot *session,
+    quader_editor_core::SelectionMode selection_mode,
+    const quader_editor_core::EditorRuntime &runtime,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
+    const ModelingSelectionService &selection_service,
+    const ModelingSdkProjectionAdapter &sdk_projection,
+    int persistent_source_wire_object_id) const {
   QDR_PROFILE_FUNCTION();
-  const quader_editor_core::SelectionMode selection_mode =
-      session.selection_mode();
   const ModelingInstanceEditScope instance_edit_scope =
       selection_service.overlay_instance_edit_scope();
   const std::function<bool(EntityId)> entity_visible =
@@ -3988,13 +4093,14 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
     // Do not rebuild them on every movement of the cut preview.
     component_hover.candidate_object_id = -1;
   }
-  if (hover.kind != quader_editor_core::SelectionHoverKind::None ||
-      hover.candidate_object_id > 0) {
+  if (session != nullptr &&
+      (hover.kind != quader_editor_core::SelectionHoverKind::None ||
+       hover.candidate_object_id > 0)) {
     QDR_PROFILE_SCOPE("Volatile overlay project hover frame");
     quader_editor_core::SelectionOverlayFrame hover_frame;
     const auto append_hover_object = [&](int object_id) {
       const quader_editor_core::PolygonObject *object =
-          find_polygon_object_by_id(session.objects(), object_id);
+          find_polygon_object_by_id(session->objects(), object_id);
       if (object == nullptr) {
         return;
       }

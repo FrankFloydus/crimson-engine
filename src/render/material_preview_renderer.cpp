@@ -76,6 +76,7 @@ struct PreviewGpuVertex final {
   filament::math::float3 uv_geometric_normal;
   filament::math::float4 quad_uv_coordinates{};
   filament::math::float4 quad_uv_correction{};
+  float occurrence_index = 0.0f;
 };
 
 /// Retains the fill and wire resources for one generated preview mesh.
@@ -438,6 +439,12 @@ struct MaterialPreviewRenderer::Impl final {
             .attribute(filament::VertexAttribute::CUSTOM4, 0u,
                        AttributeType::FLOAT4,
                        offsetof(PreviewGpuVertex, quad_uv_correction),
+                       sizeof(PreviewGpuVertex))
+            .attribute(filament::VertexAttribute::CUSTOM5, 0u,
+                       AttributeType::FLOAT3, offsetof(PreviewGpuVertex, position),
+                       sizeof(PreviewGpuVertex))
+            .attribute(filament::VertexAttribute::CUSTOM6, 0u,
+                       AttributeType::FLOAT, offsetof(PreviewGpuVertex, occurrence_index),
                        sizeof(PreviewGpuVertex))
             .build(*engine);
     mesh.triangles =

@@ -192,6 +192,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kProjectExportSelectionObj,
                Fixture::ExternalRuntime, Domain::ExternalRuntime,
                Outcome::MayReject, UndoRepeat::None, kExternal),
+      contract(quader_command::kDiagnosticsDumpSelection,
+               Fixture::ObjectSelection, Domain::ExternalRuntime,
+               Outcome::SuccessRequired, UndoRepeat::None),
       contract(quader_command::kSceneDocumentNew,
                Fixture::ProjectWithScene, kSceneDocumentDomains,
                Outcome::ChangeRequired),
@@ -809,9 +812,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 223U);
+  static_assert(std::size(kContracts) == 224U);
 #else
-  static_assert(std::size(kContracts) == 222U);
+  static_assert(std::size(kContracts) == 223U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

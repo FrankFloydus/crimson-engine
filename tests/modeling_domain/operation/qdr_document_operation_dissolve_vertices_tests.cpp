@@ -4,9 +4,34 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_validation_test_helpers.hpp"
+#include "operation_atomicity_test_helpers.hpp"
 
 using namespace quader_poly;
+
+namespace {
+
+/// Retains the selected straight corner and its containing face identities.
+struct DissolvableCornerFixture {
+    Document document;
+    ElementId middle = kInvalidElementId;
+    ElementId face = kInvalidElementId;
+};
+
+DissolvableCornerFixture make_dissolvable_corner_fixture()
+{
+    DissolvableCornerFixture fixture;
+    const ElementId left = add_vertex(fixture.document, {-1.0F, 0.0F, 0.0F});
+    fixture.middle = add_vertex(fixture.document, {0.0F, 0.0F, 0.0F});
+    const ElementId right = add_vertex(fixture.document, {1.0F, 0.0F, 0.0F});
+    const ElementId top = add_vertex(fixture.document, {0.0F, 1.0F, 0.0F});
+    fixture.face = add_face(fixture.document, std::array{left, fixture.middle, right, top}, 5);
+    Face& face = *find_face(fixture.document, fixture.face);
+    face.uvs = {{2.0F, 3.0F}, {4.0F, 4.0F}, {6.0F, 5.0F}, {-1.0F, 8.0F}};
+    face.normal_shading = SurfaceShading::Smooth;
+    return fixture;
+}
+
+} // namespace
 
 TEST(QdrDocumentOperationDissolveVerticesTests, DissolveRetainsAuthoredUvsAtEverySurvivingCorner) {
     Document document;
@@ -154,4 +179,57 @@ TEST(QdrDocumentOperationDissolveVerticesTests,
                                          replacement));
     EXPECT_FALSE(qdr_test::contains_edge(document.soft_normal_edges,
                                          replacement));
+}
+
+TEST(QdrDocumentOperationDissolveVerticesTests, DissolvePreservesUnrelatedCollapsedFacesAndLooseVertices) {
+    DissolvableCornerFixture fixture = make_dissolvable_corner_fixture();
+    const Face source = *find_face(fixture.document, fixture.face);
+    const Document island = qdr_test::append_unrelated_authored_geometry(fixture.document);
+    Selection selection = qdr_test::vertex_selection({fixture.middle});
+
+    const OperationResult result = dissolve_selected_vertices(fixture.document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_EQ(find_vertex(fixture.document, fixture.middle), nullptr);
+    ASSERT_EQ(fixture.document.faces.size(), 2U);
+    const Face* face = find_face(fixture.document, fixture.face);
+    ASSERT_NE(face, nullptr);
+    ASSERT_EQ(face->vertices.size(), 3U);
+    ASSERT_EQ(face->uvs.size(), 3U);
+    EXPECT_EQ(face->material_slot, source.material_slot);
+    EXPECT_EQ(face->normal_shading, source.normal_shading);
+    EXPECT_EQ(face->texture_transform, source.texture_transform);
+    for (std::size_t corner = 0; corner < face->vertices.size(); ++corner) {
+        const auto source_corner = std::ranges::find(source.vertices, face->vertices[corner]);
+        ASSERT_NE(source_corner, source.vertices.end());
+        const auto index = static_cast<std::size_t>(source_corner - source.vertices.begin());
+        EXPECT_FLOAT_EQ(face->uvs[corner].x, source.uvs[index].x);
+        EXPECT_FLOAT_EQ(face->uvs[corner].y, source.uvs[index].y);
+    }
+    EXPECT_TRUE(qdr_test::face_compiles_to_triangles(fixture.document, *face));
+    EXPECT_EQ(selection.mode, SelectionMode::Vertex);
+    EXPECT_EQ(selection.vertices, (std::vector<ElementId>{source.vertices[0], source.vertices[2]}));
+    EXPECT_TRUE(validate_polygon_selection_liveness(fixture.document, selection).ok());
+    qdr_test::expect_unrelated_authored_geometry_preserved(fixture.document, island);
+}
+
+TEST(QdrDocumentOperationDissolveVerticesTests, DissolveRejectsNonfiniteOrMalformedInputAtomically) {
+    for (const auto fault : qdr_test::kAuthoredInputFaults) {
+        SCOPED_TRACE(static_cast<int>(fault));
+        DissolvableCornerFixture fixture = make_dissolvable_corner_fixture();
+        static_cast<void>(qdr_test::append_unrelated_authored_geometry(fixture.document));
+        qdr_test::corrupt_unrelated_authored_geometry(fixture.document, fault);
+        Selection selection = qdr_test::vertex_selection({fixture.middle});
+        const std::string original_document = qdr_test::document_fingerprint(fixture.document);
+        const std::string original_selection = qdr_test::selection_fingerprint(selection);
+
+        const OperationResult result = dissolve_selected_vertices(fixture.document, selection);
+
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(result.changed);
+        EXPECT_FALSE(result.message.empty());
+        EXPECT_EQ(qdr_test::document_fingerprint(fixture.document), original_document);
+        EXPECT_EQ(qdr_test::selection_fingerprint(selection), original_selection);
+    }
 }

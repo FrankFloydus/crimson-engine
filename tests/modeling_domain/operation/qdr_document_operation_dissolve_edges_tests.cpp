@@ -4,13 +4,49 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_validation_test_helpers.hpp"
+#include "operation_atomicity_test_helpers.hpp"
 
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <algorithm>
 
 using namespace quader_poly;
+
+namespace {
+
+/// Retains a removable quad seam and both support-corner identities.
+struct DissolvableSeamFixture {
+    Document document;
+    Edge seam;
+    ElementId first_face = kInvalidElementId;
+};
+
+DissolvableSeamFixture make_dissolvable_seam_fixture()
+{
+    DissolvableSeamFixture fixture;
+    const ElementId left_bottom = add_vertex(fixture.document, {0.0F, 0.0F, 0.0F});
+    const ElementId middle_bottom = add_vertex(fixture.document, {1.0F, 0.0F, 0.0F});
+    const ElementId right_bottom = add_vertex(fixture.document, {2.0F, 0.0F, 0.0F});
+    const ElementId left_top = add_vertex(fixture.document, {0.0F, 2.0F, 0.0F});
+    const ElementId middle_top = add_vertex(fixture.document, {1.0F, 2.0F, 0.0F});
+    const ElementId right_top = add_vertex(fixture.document, {2.0F, 2.0F, 0.0F});
+    fixture.first_face = add_face(fixture.document,
+        std::array{left_bottom, middle_bottom, middle_top, left_top}, 7);
+    const ElementId second_face = add_face(fixture.document,
+        std::array{middle_bottom, right_bottom, right_top, middle_top}, 7);
+    find_face(fixture.document, fixture.first_face)->normal_shading = SurfaceShading::Smooth;
+    find_face(fixture.document, second_face)->normal_shading = SurfaceShading::Smooth;
+    for (Face& face : fixture.document.faces) {
+        for (const ElementId vertex_id : face.vertices) {
+            const auto position = find_vertex(fixture.document, vertex_id)->position;
+            face.uvs.push_back({position.x + 3.0F, position.y - 4.0F});
+        }
+    }
+    fixture.seam = make_edge(middle_bottom, middle_top);
+    return fixture;
+}
+
+} // namespace
 
 TEST(QdrDocumentOperationDissolveEdgesTests, DissolveRetainsIdentityTransformAuthoredChartsAndNeighborCorners) {
     Document document = make_cube({});
@@ -68,6 +104,83 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveEdgesRemovesARedundantSuppo
 	EXPECT_EQ(fixture.document.faces.front().texture_transform, texture);
 	EXPECT_TRUE(fixture.document.faces.front().uvs.empty());
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests,
+     DissolveKeepsBentBoundaryCornerAndRemovesStraightOppositeCorner) {
+    DissolvableSeamFixture fixture = make_dissolvable_seam_fixture();
+    Vertex* bent = find_vertex(fixture.document, fixture.seam.a);
+    ASSERT_NE(bent, nullptr);
+    bent->position.y = -0.5F;
+    const quader::QVec3 original_position = bent->position;
+    const Face original_face = *find_face(fixture.document, fixture.first_face);
+    const auto original_corner = std::ranges::find(original_face.vertices, bent->id);
+    ASSERT_NE(original_corner, original_face.vertices.end());
+    const quader::QVec2 original_uv = original_face.uvs[
+        static_cast<std::size_t>(original_corner - original_face.vertices.begin())];
+    const auto original_edges = document_edges(fixture.document);
+    std::vector<Edge> retained_edges;
+    for (const Edge edge : original_edges) {
+        if ((edge.a == bent->id || edge.b == bent->id) && edge != fixture.seam) {
+            retained_edges.push_back(edge);
+        }
+    }
+    ASSERT_EQ(retained_edges.size(), 2U);
+    fixture.document.hard_normal_edges = {retained_edges[0]};
+    fixture.document.soft_normal_edges = {retained_edges[1]};
+    Selection selection = qdr_test::edge_selection({fixture.seam}, fixture.seam);
+
+    const OperationResult result = dissolve_selected_edges(fixture.document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    ASSERT_EQ(fixture.document.faces.size(), 1U);
+    ASSERT_EQ(fixture.document.vertices.size(), 5U);
+    const Vertex* retained = find_vertex(fixture.document, fixture.seam.a);
+    ASSERT_NE(retained, nullptr);
+    EXPECT_FLOAT_EQ(retained->position.x, original_position.x);
+    EXPECT_FLOAT_EQ(retained->position.y, original_position.y);
+    EXPECT_FLOAT_EQ(retained->position.z, original_position.z);
+    EXPECT_EQ(find_vertex(fixture.document, fixture.seam.b), nullptr);
+    const Face& merged = fixture.document.faces.front();
+    EXPECT_EQ(merged.id, fixture.first_face);
+    EXPECT_EQ(merged.material_slot, original_face.material_slot);
+    EXPECT_EQ(merged.normal_shading, original_face.normal_shading);
+    ASSERT_EQ(merged.vertices.size(), 5U);
+    ASSERT_EQ(merged.uvs.size(), merged.vertices.size());
+    const auto retained_corner = std::ranges::find(merged.vertices, retained->id);
+    ASSERT_NE(retained_corner, merged.vertices.end());
+    const std::size_t corner =
+        static_cast<std::size_t>(retained_corner - merged.vertices.begin());
+    EXPECT_FLOAT_EQ(merged.uvs[corner].x, original_uv.x);
+    EXPECT_FLOAT_EQ(merged.uvs[corner].y, original_uv.y);
+    EXPECT_TRUE(qdr_test::contains_edge(fixture.document.hard_normal_edges, retained_edges[0]));
+    EXPECT_TRUE(qdr_test::contains_edge(fixture.document.soft_normal_edges, retained_edges[1]));
+    EXPECT_FALSE(qdr_test::document_has_edge(fixture.document, fixture.seam));
+    EXPECT_EQ(selection.faces, std::vector<ElementId>{fixture.first_face});
+    EXPECT_TRUE(validate_polygon_selection_liveness(fixture.document, selection).ok());
+    qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests,
+     DissolveUsesFiveDegreeBoundaryStraightnessThreshold) {
+    for (const auto [offset, keep_corner] :
+         std::array{std::pair{0.03F, false}, std::pair{0.08F, true}}) {
+        SCOPED_TRACE(offset);
+        DissolvableSeamFixture fixture = make_dissolvable_seam_fixture();
+        find_vertex(fixture.document, fixture.seam.a)->position.y = -offset;
+        Selection selection = qdr_test::edge_selection({fixture.seam});
+
+        const OperationResult result = dissolve_selected_edges(fixture.document, selection);
+
+        ASSERT_TRUE(result.success) << result.message;
+        ASSERT_TRUE(result.changed);
+        EXPECT_EQ(find_vertex(fixture.document, fixture.seam.a) != nullptr, keep_corner);
+        EXPECT_EQ(find_vertex(fixture.document, fixture.seam.b), nullptr);
+        ASSERT_EQ(fixture.document.faces.size(), 1U);
+        EXPECT_EQ(fixture.document.faces.front().vertices.size(), keep_corner ? 5U : 4U);
+        qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+    }
 }
 
 TEST(QdrDocumentOperationDissolveEdgesTests, DissolveEdgesRestoresASharedCubeCutWithoutOpeningTheHull) {
@@ -182,8 +295,8 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveRemovesAnAuthoredSeamAndKee
         second_face.uvs.push_back(unapply_face_texture_transform(second_uvs[corner], second_face.texture_transform));
     }
     const std::map<ElementId, quader::QVec2> expected_uvs{
-        {a, first_uvs[0]}, {b, second_uvs[1]},
-        {c, second_uvs[2]}, {d, first_uvs[3]}};
+        {a, first_uvs[0]}, {e, second_uvs[0]}, {b, second_uvs[1]},
+        {c, second_uvs[2]}, {f, first_uvs[2]}, {d, first_uvs[3]}};
     const Edge seam = make_edge(e, f);
     Selection selection = qdr_test::edge_selection({seam}, seam);
 
@@ -192,7 +305,7 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveRemovesAnAuthoredSeamAndKee
     ASSERT_TRUE(result.success) << result.message;
     ASSERT_TRUE(result.changed);
     ASSERT_EQ(document.faces.size(), 1U);
-    ASSERT_EQ(document.vertices.size(), 4U);
+    ASSERT_EQ(document.vertices.size(), 6U);
     const Face& merged = document.faces.front();
     EXPECT_EQ(merged.id, first);
     EXPECT_EQ(merged.material_slot, 7U);
@@ -201,8 +314,8 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveRemovesAnAuthoredSeamAndKee
     ASSERT_EQ(merged.vertices.size(), expected_uvs.size());
     ASSERT_EQ(merged.uvs.size(), merged.vertices.size());
     EXPECT_FALSE(qdr_test::document_has_edge(document, seam));
-    EXPECT_EQ(find_vertex(document, e), nullptr);
-    EXPECT_EQ(find_vertex(document, f), nullptr);
+    EXPECT_NE(find_vertex(document, e), nullptr);
+    EXPECT_NE(find_vertex(document, f), nullptr);
     EXPECT_EQ(find_face(document, second), nullptr);
     for (std::size_t corner = 0; corner < merged.vertices.size(); ++corner) {
         const auto expected = expected_uvs.at(merged.vertices[corner]);
@@ -300,8 +413,8 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveKeepsBoundaryUvsAcrossANonc
     find_face(document, first)->uvs = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}};
     find_face(document, second)->uvs = {{1.0F, 0.0F}, {2.5F, 0.0F}, {2.5F, 1.0F}, {1.0F, 1.0F}};
     const std::map<ElementId, quader::QVec2> expected_uvs{
-        {a, {0.0F, 0.0F}}, {b, {2.5F, 0.0F}},
-        {c, {2.5F, 1.0F}}, {d, {0.0F, 1.0F}}};
+        {a, {0.0F, 0.0F}}, {e, {1.0F, 0.0F}}, {b, {2.5F, 0.0F}},
+        {c, {2.5F, 1.0F}}, {f, {1.0F, 1.0F}}, {d, {0.0F, 1.0F}}};
     const auto original_vertices = document.vertices;
     const Edge join = make_edge(e, f);
     Selection selection = qdr_test::edge_selection({join});
@@ -311,23 +424,20 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveKeepsBoundaryUvsAcrossANonc
     ASSERT_TRUE(result.success) << result.message;
     ASSERT_TRUE(result.changed);
     ASSERT_EQ(document.faces.size(), 1U);
-    ASSERT_EQ(document.vertices.size(), 4U);
+    ASSERT_EQ(document.vertices.size(), 6U);
     const Face& merged = document.faces.front();
     EXPECT_EQ(merged.id, first);
     ASSERT_EQ(merged.vertices.size(), expected_uvs.size());
     ASSERT_EQ(merged.uvs.size(), merged.vertices.size());
     EXPECT_FALSE(qdr_test::document_has_edge(document, join));
-    EXPECT_EQ(find_vertex(document, e), nullptr);
-    EXPECT_EQ(find_vertex(document, f), nullptr);
+    EXPECT_NE(find_vertex(document, e), nullptr);
+    EXPECT_NE(find_vertex(document, f), nullptr);
     for (std::size_t corner = 0; corner < merged.vertices.size(); ++corner) {
         const auto expected = expected_uvs.at(merged.vertices[corner]);
         EXPECT_FLOAT_EQ(merged.uvs[corner].x, expected.x);
         EXPECT_FLOAT_EQ(merged.uvs[corner].y, expected.y);
     }
     for (const Vertex& original : original_vertices) {
-        if (original.id == e || original.id == f) {
-            continue;
-        }
         const Vertex* retained = find_vertex(document, original.id);
         ASSERT_NE(retained, nullptr);
         EXPECT_FLOAT_EQ(retained->position.x, original.position.x);
@@ -478,4 +588,55 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveProtectsBothCornersOfAnOrig
     }
     EXPECT_FALSE(qdr_test::document_has_edge(document, make_edge(a, c)));
     qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests, DissolvePreservesUnrelatedCollapsedFacesAndLooseVertices) {
+    DissolvableSeamFixture fixture = make_dissolvable_seam_fixture();
+    const Document island = qdr_test::append_unrelated_authored_geometry(fixture.document);
+    Selection selection = qdr_test::edge_selection({fixture.seam}, fixture.seam);
+
+    const OperationResult result = dissolve_selected_edges(fixture.document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_FALSE(qdr_test::document_has_edge(fixture.document, fixture.seam));
+    EXPECT_EQ(find_vertex(fixture.document, fixture.seam.a), nullptr);
+    EXPECT_EQ(find_vertex(fixture.document, fixture.seam.b), nullptr);
+    ASSERT_EQ(fixture.document.faces.size(), 2U);
+    const Face* merged = find_face(fixture.document, fixture.first_face);
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(merged->vertices.size(), 4U);
+    ASSERT_EQ(merged->uvs.size(), merged->vertices.size());
+    EXPECT_EQ(merged->material_slot, 7U);
+    EXPECT_EQ(merged->normal_shading, SurfaceShading::Smooth);
+    for (std::size_t corner = 0; corner < merged->vertices.size(); ++corner) {
+        const auto position = find_vertex(fixture.document, merged->vertices[corner])->position;
+        EXPECT_FLOAT_EQ(merged->uvs[corner].x, position.x + 3.0F);
+        EXPECT_FLOAT_EQ(merged->uvs[corner].y, position.y - 4.0F);
+    }
+    EXPECT_TRUE(qdr_test::face_compiles_to_triangles(fixture.document, *merged));
+    EXPECT_EQ(selection.mode, SelectionMode::Face);
+    EXPECT_EQ(selection.faces, std::vector<ElementId>{fixture.first_face});
+    EXPECT_TRUE(validate_polygon_selection_liveness(fixture.document, selection).ok());
+    qdr_test::expect_unrelated_authored_geometry_preserved(fixture.document, island);
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests, DissolveRejectsNonfiniteOrMalformedInputAtomically) {
+    for (const auto fault : qdr_test::kAuthoredInputFaults) {
+        SCOPED_TRACE(static_cast<int>(fault));
+        DissolvableSeamFixture fixture = make_dissolvable_seam_fixture();
+        static_cast<void>(qdr_test::append_unrelated_authored_geometry(fixture.document));
+        qdr_test::corrupt_unrelated_authored_geometry(fixture.document, fault);
+        Selection selection = qdr_test::edge_selection({fixture.seam}, fixture.seam);
+        const std::string original_document = qdr_test::document_fingerprint(fixture.document);
+        const std::string original_selection = qdr_test::selection_fingerprint(selection);
+
+        const OperationResult result = dissolve_selected_edges(fixture.document, selection);
+
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(result.changed);
+        EXPECT_FALSE(result.message.empty());
+        EXPECT_EQ(qdr_test::document_fingerprint(fixture.document), original_document);
+        EXPECT_EQ(qdr_test::selection_fingerprint(selection), original_selection);
+    }
 }

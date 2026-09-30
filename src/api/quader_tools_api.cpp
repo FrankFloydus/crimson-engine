@@ -1478,6 +1478,7 @@ void QuaderToolsApi::set_runtime_hooks(QuaderToolsRuntimeHooks hooks) {
 }
 
 void QuaderToolsApi::rebind_session(QuaderApiSession session) {
+  availability_source_.reset();
   session_ = session;
   active_settings_source_valid_ = false;
   active_tool_valid_ = false;
@@ -2041,6 +2042,29 @@ std::uint64_t QuaderToolsApi::active_tool_revision() const {
     ++active_tool_revision_;
   }
   return active_tool_revision_;
+}
+
+std::uint64_t QuaderToolsApi::availability_revision() const {
+  const SceneSession &session = scene_session(session_);
+  const std::array<std::uint64_t, 13> source{
+      session.document_binding_generation(),
+      session.modeling().tool_settings_revision(),
+      session.modeling().tool_preview_source_revision(),
+      session.primitive_creation().tool_settings_revision(),
+      session.extrude().tool_settings_revision(),
+      session.uv_peel().tool_settings_revision(),
+      session.curve().tool_settings_revision(),
+      session.curve().control_selection_revision(),
+      session.linear_array().tool_settings_revision(),
+      session.radial_array().tool_settings_revision(),
+      session.path_array().tool_settings_revision(),
+      session.pivot().tool_settings_revision(),
+      session.pivot().selection_pivot_revision()};
+  if (!availability_source_.has_value() || *availability_source_ != source) {
+    availability_source_ = source;
+    ++availability_revision_;
+  }
+  return availability_revision_;
 }
 
 std::uint64_t QuaderToolsApi::active_input_hints_revision(

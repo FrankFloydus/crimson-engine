@@ -9,6 +9,7 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "scene/scene_bounds.hpp"
+#include "viewport/viewport_selection_depth.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -145,6 +146,7 @@ struct SceneSurfaceQueryStats final {
   /// Counts materialized landmarks in the current snapshot; queries stay lazy.
   std::size_t landmark_count = 0u;
   std::size_t unique_geometry_count = 0u;
+  ViewportSelectionDepthQueryStats selection_depth;
 };
 
 /**
@@ -194,12 +196,22 @@ public:
               SceneSurfaceQueryScratch &scratch) const;
   [[nodiscard]] std::optional<SceneSurfaceHit>
   nearest_hit(const SceneSurfaceRaycastRequest &request) const;
+  /// Derives a retained render-neutral projection of this exact occluder set.
+  [[nodiscard]] std::shared_ptr<const ViewportSelectionDepthGeometry>
+  selection_depth_geometry() const;
+  /// Verifies a proposed raster ID with the same local-ray kernel as the BVH.
+  [[nodiscard]] std::optional<float> selection_depth_triangle_distance(
+      std::uint32_t triangle_id, QVec3 origin, QVec3 direction) const;
+  [[nodiscard]] std::shared_ptr<const ViewportSelectionDepthSnapshot>
+  selection_depth_snapshot(const ViewportSelectionDepthCamera &camera) const;
+  void record_selection_depth_work(const ViewportSelectionDepthQueryStats &work) const;
 
 private:
   friend class SceneSurfaceQuery;
 
   explicit SceneSurfaceQuerySnapshot(std::shared_ptr<const Data> data);
   std::shared_ptr<const Data> data_;
+  std::shared_ptr<const ViewportSelectionDepthSource> selection_depth_source_;
 };
 
 /**
@@ -232,6 +244,8 @@ public:
   [[nodiscard]] SceneSurfaceQuerySnapshot snapshot() const;
   [[nodiscard]] SceneSurfaceQueryStats stats() const noexcept;
   void invalidate() noexcept;
+  /// Attaches a derived renderer capability; the query remains valid without it.
+  void set_selection_depth_source(std::weak_ptr<const ViewportSelectionDepthSource> source);
 
 private:
   [[nodiscard]] static SceneSurfaceQuerySnapshot snapshot_from_data(
@@ -239,6 +253,7 @@ private:
 
   class Impl;
   std::unique_ptr<Impl> impl_;
+  std::weak_ptr<const ViewportSelectionDepthSource> selection_depth_source_;
 };
 
 } // namespace quader

@@ -7,6 +7,7 @@
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/poly_operation.hpp>
 #include <quader/modeling/neutral/polygon/poly_operation_descriptor.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
@@ -189,6 +190,11 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
         return OperationResult::failure("Bridge needs one or more selected edge pairs.");
     }
 
+    const OperationResult source_validation = validate_authored_operation_candidate(document, document);
+    if (!source_validation.success) {
+        return source_validation;
+    }
+
     const std::map<std::pair<ElementId, ElementId>, int> incidence_counts = edge_incidence_counts(document);
     std::vector<BridgePairInfo> pair_infos;
     pair_infos.reserve(edge_pairs.size());
@@ -208,6 +214,12 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
         if (!used_edges.insert({ first.a, first.b }).second || !used_edges.insert({ second.a, second.b }).second) {
             return OperationResult::failure("Bridge cannot reuse the same edge in multiple pairs.");
         }
+        const auto first_incidence = incidence_counts.find({first.a, first.b});
+        const auto second_incidence = incidence_counts.find({second.a, second.b});
+        if (first_incidence == incidence_counts.end() || first_incidence->second != 1 ||
+            second_incidence == incidence_counts.end() || second_incidence->second != 1) {
+            return OperationResult::failure("Bridge needs open boundary edges with exactly one adjacent face.");
+        }
 
         const std::optional<BridgePairInfo> pair_info = bridge_edge_info_pair(document, first, second, incidence_counts);
         if (!pair_info.has_value()) {
@@ -222,7 +234,8 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
     bridged_face_ids.reserve(edge_pairs.size() * static_cast<std::size_t>(step_count));
     std::map<BridgeRailStepKey, ElementId> rail_step_vertices;
 
-    auto append_bridge_face = [&](std::vector<ElementId> vertices, const OpenBridgeEdgeInfo& source) -> bool {
+    auto append_bridge_face = [&](std::vector<ElementId> vertices, const OpenBridgeEdgeInfo& source, const OpenBridgeEdgeInfo& other,
+                                  const std::map<ElementId, quader::QVec2>* rail_uvs = nullptr) -> bool {
         vertices = unique_valid_face_loop(std::move(vertices));
         if (vertices.size() < 3 || vertices.size() > 4) {
             return false;
@@ -232,6 +245,47 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
         bridge_face.vertices = std::move(vertices);
         bridge_face.material_slot = source.material_slot;
         bridge_face.texture_transform = source.texture_transform;
+        const auto source_face = std::ranges::find_if(document.faces, [&](const Face& face) {
+            return oriented_edge_in_face(face, source.edge).has_value();
+        });
+        const auto other_face = std::ranges::find_if(document.faces, [&](const Face& face) {
+            return oriented_edge_in_face(face, other.edge).has_value();
+        });
+        if (source_face == document.faces.end() || other_face == document.faces.end()) {
+            return false;
+        }
+        bridge_face.normal_shading = source_face->normal_shading;
+        if (rail_uvs != nullptr) {
+            bridge_face.uvs.reserve(bridge_face.vertices.size());
+            for (const ElementId vertex_id : bridge_face.vertices) {
+                const auto uv = rail_uvs->find(vertex_id);
+                if (uv == rail_uvs->end()) {
+                    return false;
+                }
+                bridge_face.uvs.push_back(uv->second);
+            }
+        } else {
+            if (!preserve_face_uvs(document, *source_face, candidate, bridge_face)) {
+                return false;
+            }
+            if (bridge_face.uvs.empty() && face_has_loop_uvs(*other_face)) {
+                if (!assign_face_local_uvs(candidate, bridge_face)) {
+                    return false;
+                }
+            }
+            if (face_has_loop_uvs(bridge_face)) {
+                for (std::size_t index = 0; index < bridge_face.vertices.size(); ++index) {
+                    if (!face_uv_for_vertex_id(*source_face, bridge_face.vertices[index]).has_value()) {
+                        const auto uv = face_uv_for_vertex_id(*other_face, bridge_face.vertices[index]);
+                        if (uv.has_value()) {
+                            bridge_face.uvs[index] = unapply_face_texture_transform(
+                                apply_face_texture_transform(*uv, other_face->texture_transform),
+                                bridge_face.texture_transform);
+                        }
+                    }
+                }
+            }
+        }
         if (triangulate_face_local_indices(candidate, bridge_face).empty()) {
             return false;
         }
@@ -274,32 +328,33 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
     for (const BridgePairInfo& pair_info : pair_infos) {
         if (step_count == 1) {
             const std::optional<std::vector<ElementId>> bridge_loop = bridge_face_loop_from_open_edges(document, pair_info.first, pair_info.second);
-            if (!bridge_loop.has_value() || !append_bridge_face(*bridge_loop, pair_info.first)) {
+            if (!bridge_loop.has_value() || !append_bridge_face(*bridge_loop, pair_info.first, pair_info.second)) {
                 return OperationResult::failure("Bridge could not create a valid triangle or quad from the selected edges.");
             }
         } else {
             const ElementId first_a = pair_info.first.oriented_face_edge.second;
             const ElementId first_b = pair_info.first.oriented_face_edge.first;
-            const ElementId second_a = pair_info.second.oriented_face_edge.second;
-            const ElementId second_b = pair_info.second.oriented_face_edge.first;
             const std::vector<ElementId> unique_vertices = unique_bridge_vertices(pair_info.first.edge, pair_info.second.edge);
-            ElementId second_for_a = second_b;
-            ElementId second_for_b = second_a;
-            if (unique_vertices.size() == 4) {
-                const float crossed_score =
-                    length_squared(vertex_position_or_zero(document, first_a) - vertex_position_or_zero(document, second_b)) +
-                    length_squared(vertex_position_or_zero(document, first_b) - vertex_position_or_zero(document, second_a));
-                const float aligned_score =
-                    length_squared(vertex_position_or_zero(document, first_a) - vertex_position_or_zero(document, second_a)) +
-                    length_squared(vertex_position_or_zero(document, first_b) - vertex_position_or_zero(document, second_b));
-                if (aligned_score < crossed_score) {
-                    second_for_a = second_a;
-                    second_for_b = second_b;
-                }
-            } else if (unique_vertices.size() == 3 && first_a != second_b && first_b != second_a) {
-                if (first_a == second_a || first_b == second_b) {
-                    second_for_a = second_a;
-                    second_for_b = second_b;
+            const auto bridge_loop = bridge_face_loop_from_open_edges(document, pair_info.first, pair_info.second);
+            if (!bridge_loop.has_value()) {
+                return OperationResult::failure("Bridge could not find consistently oriented boundary rails.");
+            }
+            const auto first_corner = std::ranges::find(*bridge_loop, first_a);
+            const std::size_t first_index = static_cast<std::size_t>(std::distance(bridge_loop->begin(), first_corner));
+            if ((*bridge_loop)[(first_index + 1U) % bridge_loop->size()] != first_b) {
+                return OperationResult::failure("Bridge could not orient its first boundary edge.");
+            }
+            ElementId second_for_a = first_a;
+            ElementId second_for_b = first_b;
+            if (unique_vertices.size() == 4U) {
+                second_for_b = (*bridge_loop)[(first_index + 2U) % bridge_loop->size()];
+                second_for_a = (*bridge_loop)[(first_index + 3U) % bridge_loop->size()];
+            } else if (unique_vertices.size() == 3U) {
+                const ElementId third = (*bridge_loop)[(first_index + 2U) % bridge_loop->size()];
+                if (pair_info.second.edge.a == first_a || pair_info.second.edge.b == first_a) {
+                    second_for_b = third;
+                } else {
+                    second_for_a = third;
                 }
             }
             const bool rail_a_shared = first_a == second_for_a;
@@ -313,6 +368,50 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
 
             const quader::QVec3 first_outward = bridge_edge_outward_direction(document, pair_info.first);
             const quader::QVec3 second_outward = bridge_edge_outward_direction(document, pair_info.second);
+            const auto first_source = std::ranges::find_if(document.faces, [&](const Face& face) {
+                return oriented_edge_in_face(face, pair_info.first.edge).has_value();
+            });
+            const auto second_source = std::ranges::find_if(document.faces, [&](const Face& face) {
+                return oriented_edge_in_face(face, pair_info.second.edge).has_value();
+            });
+            if (first_source == document.faces.end() || second_source == document.faces.end()) {
+                return OperationResult::failure("Bridge could not find its boundary texture charts.");
+            }
+            Face first_chart = *first_source;
+            Face second_chart = *second_source;
+            if (!ensure_face_loop_uvs(candidate, first_chart) ||
+                !ensure_face_loop_uvs(candidate, second_chart)) {
+                return OperationResult::failure("Bridge could not resolve its boundary texture charts.");
+            }
+            // Geometry can share cached rails; each pair retains its own chart seam.
+            std::map<ElementId, quader::QVec2> rail_uvs;
+            const auto assign_rail_uv = [&](ElementId vertex_id, ElementId start_id,
+                                            ElementId end_id, int step_index) -> bool {
+                const auto start_uv = face_uv_for_vertex_id(first_chart, start_id);
+                const auto end_uv = face_uv_for_vertex_id(second_chart, end_id);
+                if (!start_uv.has_value() || !end_uv.has_value()) {
+                    return false;
+                }
+                if (step_index == 0 || start_id == end_id) {
+                    rail_uvs.insert_or_assign(vertex_id, *start_uv);
+                    return true;
+                }
+                const quader::QVec2 resolved_start = apply_face_texture_transform(
+                    *start_uv, first_chart.texture_transform);
+                const quader::QVec2 resolved_end = apply_face_texture_transform(
+                    *end_uv, second_chart.texture_transform);
+                const float factor = static_cast<float>(step_index) / static_cast<float>(step_count);
+                const quader::QVec2 resolved_uv = step_index == step_count ? resolved_end :
+                    quader::QVec2{resolved_start.x + (resolved_end.x - resolved_start.x) * factor,
+                                 resolved_start.y + (resolved_end.y - resolved_start.y) * factor};
+                rail_uvs.insert_or_assign(vertex_id, unapply_face_texture_transform(
+                    resolved_uv, first_chart.texture_transform));
+                return true;
+            };
+            if (!assign_rail_uv(first_a, first_a, second_for_a, 0) ||
+                !assign_rail_uv(first_b, first_b, second_for_b, 0)) {
+                return OperationResult::failure("Bridge could not resolve its boundary texture corners.");
+            }
             ElementId previous_a = first_a;
             ElementId previous_b = first_b;
             for (int step_index = 1; step_index <= step_count; ++step_index) {
@@ -322,17 +421,21 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
                     current_b == kInvalidElementId) {
                   return OperationResult::failure("Bridge could not create intermediate step vertices.");
                 }
+                if (!assign_rail_uv(current_a, first_a, second_for_a, step_index) ||
+                    !assign_rail_uv(current_b, first_b, second_for_b, step_index)) {
+                    return OperationResult::failure("Bridge could not interpolate its rail texture corners.");
+                }
 
                 if (rail_a_shared) {
-                    if (!append_bridge_face({ first_a, previous_b, current_b }, pair_info.first)) {
+                    if (!append_bridge_face({ first_a, previous_b, current_b }, pair_info.first, pair_info.second, &rail_uvs)) {
                         return OperationResult::failure("Bridge could not create a valid stepped triangle.");
                     }
                 } else if (rail_b_shared) {
-                    if (!append_bridge_face({ previous_a, first_b, current_a }, pair_info.first)) {
+                    if (!append_bridge_face({ previous_a, first_b, current_a }, pair_info.first, pair_info.second, &rail_uvs)) {
                         return OperationResult::failure("Bridge could not create a valid stepped triangle.");
                     }
                 } else {
-                    if (!append_bridge_face({ previous_a, previous_b, current_b, current_a }, pair_info.first)) {
+                    if (!append_bridge_face({ previous_a, previous_b, current_b, current_a }, pair_info.first, pair_info.second, &rail_uvs)) {
                         return OperationResult::failure("Bridge could not create a valid stepped quad.");
                     }
                 }
@@ -344,8 +447,13 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
     }
 
     prune_normal_edge_states(candidate);
-    if (bridged_face_ids.empty() || !every_face_triangulates(candidate)) {
+    if (bridged_face_ids.empty()) {
         return OperationResult::failure("Bridge would create invalid face geometry.");
+    }
+
+    const OperationResult validation = validate_authored_operation_candidate(document, candidate);
+    if (!validation.success) {
+        return validation;
     }
 
     document = std::move(candidate);

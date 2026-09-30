@@ -249,11 +249,22 @@ QtAssetBrowserSnapshot UISystem::asset_browser_snapshot(bool refresh_files) {
       continue;
     }
     const QString path = QString::fromStdString(entry.project_relative_path);
-    const std::string identity = entry.kind == QuaderProjectAssetKind::Scene
-        ? std::string(entry.scene_id.str()) : std::string(entry.asset_id.str());
+    QString identity;
+    if (entry.kind == QuaderProjectAssetKind::Scene) {
+      // Physical copies of a registered scene deliberately have no scene UUID.
+      // Their paths must distinguish the browser rows until opening registers
+      // them; the nil UUID is not a shared presentation identity.
+      identity = entry.scene_id.valid()
+          ? QString::fromStdString(std::string(entry.scene_id.str()))
+          : QStringLiteral("scene:") + path;
+    } else {
+      identity = entry.asset_id.valid()
+          ? QString::fromStdString(std::string(entry.asset_id.str()))
+          : QStringLiteral("asset:") + path;
+    }
     snapshot.items.push_back({
         .id = entry.kind == QuaderProjectAssetKind::Folder
-            ? path : QString::fromStdString(identity),
+            ? path : identity,
         .relative_path = path,
         .name = QString::fromStdString(entry.name),
         .kind = browser_kind(entry.kind),

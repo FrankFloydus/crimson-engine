@@ -58,6 +58,7 @@ public:
     filament::Material &overlay_stencil_reset() {
       return *overlay_stencil_reset_material_;
     }
+    filament::Material &component_selection() { return *component_selection_material_; }
 
   private:
     filament::Material* load(const std::filesystem::path& path) const;
@@ -77,6 +78,7 @@ public:
     filament::Material *overlay_icon_material_ = nullptr;
     filament::Material *ground_grid_material_ = nullptr;
     filament::Material *overlay_stencil_reset_material_ = nullptr;
+    filament::Material *component_selection_material_ = nullptr;
 };
 
 } // namespace quader

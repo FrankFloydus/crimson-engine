@@ -164,9 +164,18 @@ bool RadialArrayToolService::can_activate() const {
   }
   QDR_PROFILE_SCOPE("Radial array can activate");
   const std::uint64_t scene_revision = scene_.revision();
+  const std::uint64_t layer_revision = scene_.layer_revision();
+  const std::uint64_t asset_revision = assets_.revision();
+  const std::uint64_t object_map_revision =
+      modeling_.modeling_object_map_revision();
+  const std::uint64_t instance_edit_revision = instances_.instance_edit_revision();
   const int selection_mode = static_cast<int>(selection_.mode());
   if (can_activate_cache_valid_ &&
       can_activate_scene_revision_ == scene_revision &&
+      can_activate_layer_revision_ == layer_revision &&
+      can_activate_asset_revision_ == asset_revision &&
+      can_activate_object_map_revision_ == object_map_revision &&
+      can_activate_instance_edit_revision_ == instance_edit_revision &&
       can_activate_selection_mode_ == selection_mode) {
     return can_activate_cached_value_;
   }
@@ -176,6 +185,10 @@ bool RadialArrayToolService::can_activate() const {
     can_activate_cached_value_ = can_activate_preflight();
   }
   can_activate_scene_revision_ = scene_revision;
+  can_activate_layer_revision_ = layer_revision;
+  can_activate_asset_revision_ = asset_revision;
+  can_activate_object_map_revision_ = object_map_revision;
+  can_activate_instance_edit_revision_ = instance_edit_revision;
   can_activate_selection_mode_ = selection_mode;
   can_activate_cache_valid_ = true;
   return can_activate_cached_value_;
@@ -205,9 +218,22 @@ bool RadialArrayToolService::can_activate_preflight() const {
     if (source_is_occurrence != instance_occurrences) {
       return false;
     }
-    return source_is_occurrence ||
-           (scene_.modeling_object(source) != nullptr &&
-            scene_.mesh(source) != nullptr);
+    const bool active_definition_member =
+        instances_.is_in_active_definition_scope(source);
+    if (!scene_.exists(source) || scene_.transform(source) == nullptr ||
+        (!active_definition_member && !scene_.is_effectively_visible(source)) ||
+        scene_.is_effectively_locked(source)) {
+      return false;
+    }
+    if (source_is_occurrence) {
+      return true;
+    }
+    const ModelingObjectComponent *modeling = scene_.modeling_object(source);
+    const MeshComponent *mesh = scene_.mesh(source);
+    return modeling != nullptr && mesh != nullptr &&
+           modeling->object_id != kInvalidModelingObjectId &&
+           modeling_.modeling_object_for_entity(source) == modeling->object_id &&
+           assets_.mesh(mesh->mesh) != nullptr;
   });
 }
 

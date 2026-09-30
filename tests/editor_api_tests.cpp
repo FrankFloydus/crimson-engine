@@ -5364,6 +5364,90 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
+     MarkingMenuBindingsPreserveInitiatingChordScopesAndSelectOverrides) {
+  constexpr std::string_view kMarkingMenu = "viewport.marking_menu";
+  const std::filesystem::path path =
+      keybinding_test_path("viewport-marking-menu");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  auto &commands = editor.commands();
+  ASSERT_TRUE(commands.set_keybinding_storage_path(path).ok());
+  using Kind = quader::QuaderViewportKeybindingDispatch::Kind;
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::Move};
+
+  EXPECT_EQ(commands.shortcut_for(kMarkingMenu), "Q");
+  EXPECT_TRUE(commands.shortcut_for(
+      quader::quader_command::kToolsActivateSelect).empty());
+  const auto expect_marking_menu = [&](std::string_view binding) {
+    const auto chord = single_input_chord(binding);
+    const auto dispatch = commands.dispatch_viewport_input_binding(
+        chord, state, true, false);
+    ASSERT_EQ(dispatch.kind, Kind::ViewportShortcut);
+    EXPECT_EQ(dispatch.shortcut.kind,
+              quader::ViewportShortcutKind::MarkingMenu);
+    ASSERT_TRUE(dispatch.shortcut.initiating_chord.has_value());
+    EXPECT_EQ(*dispatch.shortcut.initiating_chord, chord);
+  };
+  expect_marking_menu("Q");
+
+  const auto lasso = commands.dispatch_viewport_input_binding(
+      single_input_chord("Shift+Q"), state, true, false);
+  ASSERT_EQ(lasso.kind, Kind::ViewportShortcut);
+  EXPECT_EQ(lasso.shortcut.kind, quader::ViewportShortcutKind::ActivateTool);
+  EXPECT_EQ(lasso.shortcut.tool, quader::ViewportToolId::LassoSelect);
+
+  for (const std::string_view binding : {"Q", "Ctrl+Alt+F20"}) {
+    SCOPED_TRACE(binding);
+    ASSERT_TRUE(editor.preferences()
+                    .set_shortcut(kMarkingMenu, std::string(binding)).ok());
+    expect_marking_menu(binding);
+    const auto chord = single_input_chord(binding);
+    EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                  chord, state, false, false, {.editor_focused = true}).kind,
+              Kind::NoMatch);
+    EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                  chord, state, true, true).kind,
+              Kind::NoMatch);
+    EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                  chord, state, true, false, {.navigation_active = true}).kind,
+              Kind::NoMatch);
+  }
+  EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                single_input_chord("Q"), state, true, false).kind,
+            Kind::NoMatch);
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(kMarkingMenu, "Ctrl+K Alt+F21").ok());
+  EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                single_input_chord("Ctrl+K"), state, true, false).kind,
+            Kind::PendingChord);
+  expect_marking_menu("Alt+F21");
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kToolsActivateSelect,
+                                "Q").ok());
+  const auto conflicting_reset =
+      editor.preferences().reset_shortcut(kMarkingMenu);
+  EXPECT_FALSE(conflicting_reset.ok());
+  EXPECT_FALSE(conflicting_reset.changed());
+  EXPECT_EQ(commands.shortcut_for(kMarkingMenu), "Ctrl+K Alt+F21");
+  CommandTestHarness reloaded_harness;
+  auto &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.commands().shortcut_for(
+                quader::quader_command::kToolsActivateSelect), "Q");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kMarkingMenu), "Ctrl+K Alt+F21");
+  const auto select = reloaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("Q"), state, true, false);
+  ASSERT_EQ(select.kind, Kind::ViewportShortcut);
+  EXPECT_EQ(select.shortcut.kind, quader::ViewportShortcutKind::ActivateTool);
+  EXPECT_EQ(select.shortcut.tool, quader::ViewportToolId::Select);
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
      AssetBrowserDefaultPreservesStoredMappingsSequencesAndUnassignments) {
   /// Owns the uniquely named project and override file used by this test.
   struct TemporaryProject {
@@ -23270,9 +23354,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 223u);
+  EXPECT_EQ(commands.size(), 224u);
 #else
-  EXPECT_EQ(commands.size(), 222u);
+  EXPECT_EQ(commands.size(), 223u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -23338,7 +23422,8 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 59u);
+  EXPECT_EQ(non_command_target_count, 60u);
+  EXPECT_TRUE(has_keybinding_catalog_entry(catalog, "viewport.marking_menu", "Q"));
 
   for (const std::string &typed_id : typed_command_ids()) {
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;

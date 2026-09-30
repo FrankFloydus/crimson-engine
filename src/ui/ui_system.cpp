@@ -575,7 +575,7 @@ bool UISystem::initialize(RenderSystem &render_system,
         }
         // The original actions dispatch through the existing command owners.
         // Synchronize their toggle direction to the clicked pane first.
-        tool_toolbar_->synchronize(*editor_, editor_->selection().summary(), true);
+        synchronize_tool_toolbar(editor_->selection().summary(), true);
         snapping_toolbar_->synchronize(*editor_, true);
         viewport_display_toolbar_->synchronize(*editor_, true);
         const auto generation = runtime_binding_generation_;
@@ -1139,7 +1139,7 @@ void UISystem::install_runtime_hooks(
         const QuaderSelectionMode active_mode =
             to_api_selection_mode(modeling_->selection_mode());
         selection_toolbar_->synchronize(*editor_, active_mode, true);
-        tool_toolbar_->synchronize(*editor_, selection, true);
+        synchronize_tool_toolbar(selection, true);
       });
   tool_toolbar_->set_tool_requested_callback(
       [this](std::string_view tool_id) {
@@ -1148,19 +1148,21 @@ void UISystem::install_runtime_hooks(
         }
         const std::string command_id =
             editor_->commands().command_id_for_tool_activation(tool_id);
+        const auto generation = runtime_binding_generation_;
         present_lifecycle_result(editor_->commands().execute(command_id));
-        tool_toolbar_->synchronize(*editor_, editor_->selection().summary(),
-                                   true);
+        if (editor_ != nullptr && generation == runtime_binding_generation_) {
+          synchronize_tool_toolbar(editor_->selection().summary(), true);
+        }
       });
   tool_toolbar_->set_command_requested_callback(
       [this](QuaderCommandId command_id) {
         if (editor_ == nullptr) {
           return;
         }
+        const auto generation = runtime_binding_generation_;
         present_lifecycle_result(editor_->commands().execute(command_id));
-        if (editor_ != nullptr && tool_toolbar_ != nullptr) {
-          tool_toolbar_->synchronize(*editor_, editor_->selection().summary(),
-                                     true);
+        if (editor_ != nullptr && generation == runtime_binding_generation_) {
+          synchronize_tool_toolbar(editor_->selection().summary(), true);
         }
       });
   snapping_toolbar_->set_transform_space_toggle_requested_callback([this]() {
@@ -1393,6 +1395,11 @@ void UISystem::install_runtime_hooks(
     main_menu_->rebind_runtime(editor, modeling);
   }
 
+  editor.selection_diagnostics().set_runtime_hooks(
+      QuaderSelectionDiagnosticsRuntimeHooks{
+          .dump_directory = [directory = settings_paths_.directory]() {
+            return directory / "selection-dumps";
+          }});
   editor.viewports().set_runtime_hooks(QuaderViewportRuntimeHooks{
       .frame_all =
           [this](ViewportPaneId pane) {
@@ -2864,6 +2871,16 @@ void UISystem::show_home() {
   }
 }
 
+void UISystem::synchronize_tool_toolbar(
+    const QuaderSelectionSummary &selection, bool force) {
+  if (editor_ == nullptr) {
+    return;
+  }
+  if (tool_toolbar_ != nullptr) {
+    tool_toolbar_->synchronize(*editor_, selection, force);
+  }
+}
+
 void UISystem::show_workspace() {
   const bool presentation_changed = home_visible_;
   if (!viewport_initialized_ && viewport_panel_ != nullptr &&
@@ -2928,7 +2945,7 @@ void UISystem::show_workspace() {
       texture_toolbar_->synchronize(*editor_, true);
     }
     if (tool_toolbar_ != nullptr) {
-      tool_toolbar_->synchronize(*editor_, selection, true);
+      synchronize_tool_toolbar(selection, true);
     }
   }
   panels_.apply_settings(settings_);
@@ -3277,6 +3294,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         return ToolbarOwnerPresentationStamp{
             .owner_available = owner_available,
             .scene_revision = owner_available ? document_->revision() : 0u,
+            .asset_revision = assets_ != nullptr ? assets_->revision() : 0u,
+            .scene_layer_revision =
+                owner_available ? document_->layer_revision() : 0u,
             .scene_selection_revision =
                 owner_available ? document_->selection_revision() : 0u,
             .modeling_content_revision =
@@ -3289,6 +3309,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
           .pane = frame_focused_pane,
           .pane_control_revision = frame_pane_control_revision,
           .active_tool_revision = frame_active_tool_revision,
+          .availability_revision = editor_->tools().availability_revision(),
           .keybindings_revision = editor_->commands().keybindings_revision(),
           .preferred_primitive_shape =
               editor_->tools().preferred_primitive_shape(),
@@ -3318,8 +3339,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         }
         if (tool_toolbar_ != nullptr) {
           QDR_PROFILE_SCOPE("UI synchronize tool toolbar");
-          tool_toolbar_->synchronize(*editor_, selection,
-                                     owner_state_changed);
+          synchronize_tool_toolbar(selection, owner_state_changed);
         }
         toolbar_owner_presenter_.mark_presented(owner_stamp);
         toolbar_tool_presenter_.mark_presented(tool_stamp);
@@ -3662,6 +3682,44 @@ void UISystem::create_docks() {
   outliner_panel_ = new OutlinerPanel(main_window_.get());
   inspector_panel_ = new InspectorPanel(main_window_.get());
   console_panel_ = new ConsolePanel(main_window_.get());
+  console_panel_->set_command_handler([this](std::string_view command) {
+    if (editor_ == nullptr || console_panel_ == nullptr) {
+      return;
+    }
+    if (command != "/dump") {
+      const auto localized = localization_.text(
+          "ui.console.unknown_command", "Unknown command: %1");
+      const QString message =
+          QString::fromUtf8(localized.data(),
+                            static_cast<qsizetype>(localized.size()))
+              .arg(QString::fromUtf8(command.data(),
+                                    static_cast<qsizetype>(command.size())));
+      console_panel_->append_command_reply(spdlog::level::err,
+                                           message.toUtf8().toStdString());
+      return;
+    }
+    const auto result = editor_->commands().execute(
+        quader_command::kDiagnosticsDumpSelection);
+    if (!result.ok()) {
+      console_panel_->append_command_reply(spdlog::level::err,
+                                           result.error_message());
+    }
+  });
+  auto *dump_timer = new QTimer(console_panel_);
+  dump_timer->setInterval(200);
+  QObject::connect(dump_timer, &QTimer::timeout, console_panel_, [this] {
+    if (editor_ == nullptr || console_panel_ == nullptr ||
+        !editor_->selection_diagnostics().pending()) {
+      return;
+    }
+    if (auto reply = editor_->selection_diagnostics().take_completed();
+        reply.has_value()) {
+      console_panel_->append_command_reply(
+          reply->ok() ? spdlog::level::info : spdlog::level::err,
+          reply->ok() ? reply->value().summary : reply->error_message());
+    }
+  });
+  dump_timer->start();
   asset_browser_ = new QtAssetBrowser(main_window_.get());
   asset_browser_->set_material_authoring_available(
       release_has_feature(ReleaseFeature::Materials));
@@ -5367,7 +5425,7 @@ void UISystem::handle_settings_dialog_change(const QtSettingsChange &change) {
         selection_toolbar_->synchronize(*editor_, active_mode, true);
       }
       if (tool_toolbar_ != nullptr) {
-        tool_toolbar_->synchronize(*editor_, selection, true);
+        synchronize_tool_toolbar(selection, true);
       }
       if (snapping_toolbar_ != nullptr) {
         snapping_toolbar_->synchronize(*editor_, true);

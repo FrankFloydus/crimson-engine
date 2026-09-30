@@ -215,6 +215,10 @@ private:
   mutable int validated_selection_mode_ = -1;
   mutable bool cached_session_sources_valid_ = false;
   mutable std::uint64_t can_activate_scene_revision_ = 0;
+  mutable std::uint64_t can_activate_layer_revision_ = 0;
+  mutable std::uint64_t can_activate_asset_revision_ = 0;
+  mutable std::uint64_t can_activate_object_map_revision_ = 0;
+  mutable std::uint64_t can_activate_instance_edit_revision_ = 0;
   mutable int can_activate_selection_mode_ = -1;
   mutable bool can_activate_cached_value_ = false;
   mutable bool can_activate_cache_valid_ = false;

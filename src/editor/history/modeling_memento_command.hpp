@@ -48,11 +48,21 @@ public:
         if (preserve_texture_edit_state_) {
           before_texture_state_ = modeling_.capture_face_texture_edit_state();
         }
-        before_ = capture_before_memento();
+        before_ = preserve_merge_children_
+            ? modeling_.capture_component_merge_history_memento()
+            : ModelingSessionMemento{};
+        if (!before_.valid()) {
+          before_ = capture_before_memento();
+        }
         CommandResult result =
             modeling_memento_command_result(execute_initial());
         if (result.ok && result.changed) {
-          after_ = capture_after_memento();
+          after_ = preserve_merge_children_
+              ? modeling_.capture_component_merge_history_memento(before_)
+              : ModelingSessionMemento{};
+          if (!after_.valid()) {
+            after_ = capture_after_memento();
+          }
           if (preserve_texture_edit_state_) {
             after_texture_state_ = modeling_.capture_face_texture_edit_state();
           }
@@ -64,11 +74,13 @@ public:
 protected:
     ModelingMementoCommand(ModelingSessionService& modeling, std::string label,
                            bool executed = false,
-                           bool preserve_texture_edit_state = false)
+                           bool preserve_texture_edit_state = false,
+                           bool preserve_merge_children = false)
         : modeling_(modeling)
         , label_(std::move(label))
         , executed_(executed)
-        , preserve_texture_edit_state_(preserve_texture_edit_state) {}
+        , preserve_texture_edit_state_(preserve_texture_edit_state)
+        , preserve_merge_children_(preserve_merge_children) {}
 
     [[nodiscard]] ModelingSessionService& modeling() { return modeling_; }
     [[nodiscard]] const ModelingSessionService& modeling() const { return modeling_; }
@@ -101,6 +113,7 @@ private:
   ModelingSessionMemento after_;
   bool executed_ = false;
   bool preserve_texture_edit_state_ = false;
+  bool preserve_merge_children_ = false;
   std::optional<ModelingFaceTextureEditState> before_texture_state_;
   std::optional<ModelingFaceTextureEditState> after_texture_state_;
 };
@@ -399,7 +412,10 @@ public:
             ModelingSessionService& modeling,
             ModelingInstantOperationId operation,
             std::string label)
-        : ModelingMementoCommand(modeling, std::move(label))
+        : ModelingMementoCommand(modeling, std::move(label), false, false,
+                                 operation == ModelingInstantOperationId::MergeEdges ||
+                                 operation == ModelingInstantOperationId::MergeVerticesToActive ||
+                                 operation == ModelingInstantOperationId::MergeVerticesToCenter)
         , operation_(operation) {}
 
 private:
@@ -595,7 +611,7 @@ private:
 class CommitActiveOperationPreviewHistoryCommand final : public ModelingMementoCommand {
 public:
     explicit CommitActiveOperationPreviewHistoryCommand(ModelingSessionService& modeling)
-        : ModelingMementoCommand(modeling, "Commit Operation Preview") {}
+        : ModelingMementoCommand(modeling, "Commit Operation Preview", false, false, true) {}
 
 private:
   ModelingCommandResult execute_initial() override {

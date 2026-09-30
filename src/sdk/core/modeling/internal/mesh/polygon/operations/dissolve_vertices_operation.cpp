@@ -131,6 +131,11 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
     return OperationResult::failure("Select one or more vertices to dissolve.");
   }
 
+    const OperationResult source_validation = validate_authored_operation_candidate(document, document);
+    if (!source_validation.success) {
+        return source_validation;
+    }
+
     const std::vector<ElementId> selected_vertices = selected_valid_vertices(document, selection);
     if (selected_vertices.empty()) {
         return OperationResult::failure("Select one or more valid vertices to dissolve.");
@@ -192,15 +197,20 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
         return OperationResult::failure("No dissolvable selected vertices were found.");
     }
 
-    prune_invalid_faces(candidate);
-    prune_unused_vertices(candidate);
+    std::erase_if(candidate.vertices, [&](const Vertex& vertex) {
+        return contains_id(dissolved_vertices, vertex.id) &&
+            std::ranges::none_of(candidate.faces, [&](const Face& face) {
+                return contains_id(face.vertices, vertex.id);
+            });
+    });
     remap_edge_normal_modes_after_vertex_dissolve(
         document, candidate,
         std::set<ElementId>(dissolved_vertices.begin(),
                             dissolved_vertices.end()));
     restore_source_face_orientation(document, candidate);
-    if (!every_face_triangulates(candidate)) {
-        return OperationResult::failure("Dissolve Vertex would create invalid face geometry.");
+    const OperationResult validation = validate_authored_operation_candidate(document, candidate);
+    if (!validation.success) {
+        return validation;
     }
 
     document = std::move(candidate);

@@ -6,6 +6,18 @@ The selected generated PNGs are copied without modification, preserving genuine 
 
 ## Box
 
+Updated on 2026-09-29 from the user-provided
+`codex-clipboard-5b34aa5b-3977-4a45-9927-6772a9bb0f5e.png`, using the approved
+precise vector workflow. [tool_create_box.svg](tool_create_box.svg) is now the
+editable base cube artwork: top `#BCC5DF`, left `#6C759C`, right `#383D56`, sampled
+from the reference. Its three flat faces have equal projected proportions and
+no outlines, gradients or background. The transparent 384px
+[tool_create_box.png](tool_create_box.png) is rendered from that SVG with Sharp
+at density 288. Existing Create Box toolbar/menu resource paths are unchanged.
+
+The earlier generated revision below is superseded for Box; the other primitive
+icons retain their existing artwork.
+
 Asset: `tool_create_box.png`.
 
 Generation source: `exec-2d6913cc-f7db-4f6b-a423-0ef5c7bb0046.png`.

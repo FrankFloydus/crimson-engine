@@ -19,6 +19,8 @@
 namespace quader {
 
 class SceneRenderBridge;
+class ViewportRenderer;
+class ViewportCameraController;
 enum class ToolPreviewSubmissionResult : std::uint8_t;
 
 /**
@@ -53,6 +55,9 @@ public:
 
   static QuaderApiVoidResult sync_scene(QuaderRenderApi &api,
                                         SceneRenderBridge &bridge);
+  /// Warms a derived GPU selection certificate only after this camera settles.
+  static void prepare_selection_depth(QuaderRenderApi &api, ViewportRenderer &renderer,
+                                      const ViewportCameraController &camera, bool eligible);
   static QuaderApiVoidResult sync_tool_previews(
       QuaderRenderApi &api, SceneRenderBridge &bridge,
       const ToolPreviewPublisher &publish = {},

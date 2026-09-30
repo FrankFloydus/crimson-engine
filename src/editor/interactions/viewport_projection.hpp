@@ -34,6 +34,43 @@ struct ViewportCameraState {
 };
 
 /**
+ * Immutable camera-only arithmetic shared by every point and ray in one query.
+ * Retains the scalar projection's float dot products and division order.
+ */
+class PreparedViewportProjection final {
+public:
+  explicit PreparedViewportProjection(const ViewportCameraState &camera);
+
+  [[nodiscard]] bool project_point(quader::QVec3 point,
+                                   quader::QVec2 &out_screen) const;
+  [[nodiscard]] bool point_is_behind_camera(quader::QVec3 point) const;
+  [[nodiscard]] quader_poly::Ray
+  ray_from_screen_point(quader::QVec2 screen) const;
+
+private:
+  [[nodiscard]] quader::QVec3
+  vector_from_camera_components(quader::QVec3 components) const;
+
+  CameraProjection projection_;
+  bool affine_model_space_;
+  quader::QVec3 origin_;
+  quader::QVec3 right_;
+  quader::QVec3 up_;
+  quader::QVec3 forward_;
+  double width_;
+  double height_;
+  double aspect_;
+  double half_height_ = 0.0;
+  double tangent_ = 0.0;
+  quader::QVec3 up_cross_forward_;
+  quader::QVec3 forward_cross_right_;
+  quader::QVec3 right_cross_up_;
+  float determinant_ = 0.0F;
+  bool affine_basis_valid_ = false;
+  quader::QVec3 orthographic_affine_direction_;
+};
+
+/**
  * Stores the Cut Grid Point Result data contract used by the modal modeling interaction layer.
  */
 struct CutGridPointResult {

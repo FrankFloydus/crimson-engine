@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/asset_document.hpp"
+#include "assets/mesh_authored_polygon_document.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
 
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -28,6 +30,7 @@ namespace quader {
 
 struct MeshWireGeometryPayload;
 struct MeshCollisionGeometryPayload;
+struct MeshGeometryProjection;
 
 /**
  * Represents a Mesh Vertex value used by the asset document and registry layer.
@@ -126,13 +129,13 @@ struct MeshGeometryPayload final {
            primitives.size() * sizeof(MeshPrimitiveSpan);
   }
 
-  /** Computes the deterministic ID once, then serves it in O(1). */
-  [[nodiscard]] MeshGeometryContentId content_id() const noexcept {
-    std::uint64_t cached = content_id_.load(std::memory_order_acquire);
-    if (cached != 0) {
-      return MeshGeometryContentId{cached};
-    }
-
+  /** Hashes effective immutable streams without assembling another payload. */
+  [[nodiscard]] static MeshGeometryContentId content_id_for(
+      std::span<const MeshVertex> vertices,
+      std::span<const std::uint32_t> indices,
+      std::span<const MeshPrimitiveSpan> primitives,
+      std::span<const QVec3> positions = {}) noexcept {
+    if (!positions.empty() && positions.size() != vertices.size()) return {};
     constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
     constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
     std::uint64_t hash = kFnvOffset;
@@ -156,10 +159,12 @@ struct MeshGeometryPayload final {
     };
 
     hash_size(vertices.size());
-    for (const MeshVertex &vertex : vertices) {
-      hash_float(vertex.position.x);
-      hash_float(vertex.position.y);
-      hash_float(vertex.position.z);
+    for (std::size_t index = 0u; index < vertices.size(); ++index) {
+      const MeshVertex &vertex = vertices[index];
+      const QVec3 position = positions.empty() ? vertex.position : positions[index];
+      hash_float(position.x);
+      hash_float(position.y);
+      hash_float(position.z);
       hash_float(vertex.normal.x);
       hash_float(vertex.normal.y);
       hash_float(vertex.normal.z);
@@ -188,6 +193,14 @@ struct MeshGeometryPayload final {
       hash = 1;
     }
 
+    return MeshGeometryContentId{hash};
+  }
+
+  /** Computes the deterministic ID once, then serves it in O(1). */
+  [[nodiscard]] MeshGeometryContentId content_id() const noexcept {
+    std::uint64_t hash = content_id_.load(std::memory_order_acquire);
+    if (hash != 0) return MeshGeometryContentId{hash};
+    hash = content_id_for(vertices, indices, primitives).value;
     std::uint64_t expected = 0;
     if (!content_id_.compare_exchange_strong(
             expected, hash, std::memory_order_release,
@@ -229,31 +242,22 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
     editable_geometry_ = geometry;
   }
 
-  [[nodiscard]] const MeshGeometryPayload &geometry() const noexcept {
-    return *geometry_;
-  }
+  [[nodiscard]] const MeshGeometryPayload &geometry() const;
 
-  /** Returns a lifetime-pinned immutable payload for snapshots and caches. */
-  [[nodiscard]] std::shared_ptr<const MeshGeometryPayload>
-  geometry_payload() const noexcept {
-    (void)geometry_->content_id();
-    editable_geometry_.reset();
-    return geometry_;
-  }
+  /** Legacy contiguous payload access; retained streams materialize once. */
+  [[nodiscard]] std::shared_ptr<const MeshGeometryPayload> geometry_payload() const;
 
-  /** Runtime-stable identity shared by every logical asset using this payload. */
-  [[nodiscard]] std::uintptr_t geometry_token() const noexcept {
-    return reinterpret_cast<std::uintptr_t>(geometry_.get());
-  }
-
-  [[nodiscard]] std::size_t geometry_byte_size() const noexcept {
-    return geometry_->byte_size();
-  }
-
-  [[nodiscard]] MeshGeometryContentId geometry_content_id() const noexcept {
-    (void)geometry_payload();
-    return geometry_->content_id();
-  }
+  /** Effective streams remain pinned independently of legacy materialization. */
+  [[nodiscard]] const std::shared_ptr<const MeshGeometryProjection> &
+  geometry_projection() const noexcept { return geometry_projection_; }
+  void share_geometry_projection(std::shared_ptr<const MeshGeometryProjection> projection);
+  [[nodiscard]] std::span<const MeshVertex> geometry_vertices() const noexcept;
+  [[nodiscard]] std::span<const QVec3> geometry_positions() const noexcept;
+  [[nodiscard]] std::span<const std::uint32_t> geometry_indices() const noexcept;
+  [[nodiscard]] std::span<const MeshPrimitiveSpan> geometry_primitives() const noexcept;
+  [[nodiscard]] std::uintptr_t geometry_token() const noexcept;
+  [[nodiscard]] std::size_t geometry_byte_size() const noexcept;
+  [[nodiscard]] MeshGeometryContentId geometry_content_id() const noexcept;
 
   /** Returns cached renderer-neutral authored/compiled boundary segments. */
   [[nodiscard]] std::shared_ptr<const MeshWireGeometryPayload>
@@ -261,6 +265,10 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
 
   /** Detaches shared geometry before a caller mutates the returned payload. */
   MeshGeometryPayload &edit_geometry() {
+    if (geometry_projection_) {
+      geometry_ = geometry_payload();
+      geometry_projection_.reset();
+    }
     if (geometry_.use_count() == 1) {
       if (std::shared_ptr<MeshGeometryPayload> editable =
               editable_geometry_.lock()) {
@@ -278,6 +286,7 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
   }
 
   void replace_geometry(MeshGeometryPayload geometry) {
+    geometry_projection_.reset();
     auto replacement =
         std::make_shared<MeshGeometryPayload>(std::move(geometry));
     replacement->invalidate_content_id();
@@ -287,6 +296,7 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
   }
 
   void share_geometry(std::shared_ptr<const MeshGeometryPayload> geometry) {
+    geometry_projection_.reset();
     if (geometry) {
       geometry_ = std::move(geometry);
       editable_geometry_.reset();
@@ -301,7 +311,7 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
 
   bool has_stable_cpu_topology = true;
   bool has_authored_polygon_document = false;
-  std::shared_ptr<const quader_poly::Document> authored_polygon_document;
+  MeshAuthoredPolygonDocument authored_polygon_document;
 
   quader_poly::Document &edit_authored_polygon_document();
   void replace_authored_polygon_document(quader_poly::Document document);
@@ -312,21 +322,27 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
         static_cast<bool>(authored_polygon_document);
     invalidate_wire_geometry_payload();
   }
+  void share_authored_polygon_snapshot(modeling::PolygonDocumentReadSnapshot snapshot) {
+    authored_polygon_document.share_snapshot(std::move(snapshot));
+    has_authored_polygon_document = true;
+    invalidate_wire_geometry_payload();
+  }
 
 private:
   void invalidate_wire_geometry_payload() const noexcept {
     wire_geometry_payload_.reset();
-    wire_geometry_source_ = nullptr;
-    wire_geometry_authored_source_ = nullptr;
+    wire_geometry_source_ = 0u;
+    wire_geometry_authored_source_ = 0u;
     wire_geometry_authored_enabled_ = false;
   }
 
-  std::shared_ptr<const MeshGeometryPayload> geometry_;
+  mutable std::shared_ptr<const MeshGeometryPayload> geometry_;
+  std::shared_ptr<const MeshGeometryProjection> geometry_projection_;
   mutable std::weak_ptr<MeshGeometryPayload> editable_geometry_;
   mutable std::shared_ptr<const MeshWireGeometryPayload>
       wire_geometry_payload_;
-  mutable const MeshGeometryPayload *wire_geometry_source_ = nullptr;
-  mutable const quader_poly::Document *wire_geometry_authored_source_ = nullptr;
+  mutable std::uintptr_t wire_geometry_source_ = 0u;
+  mutable std::uintptr_t wire_geometry_authored_source_ = 0u;
   mutable bool wire_geometry_authored_enabled_ = false;
 };
 
@@ -356,7 +372,18 @@ normalized_mesh_primitive_spans(const MeshGeometryPayload &geometry) {
 
 inline std::vector<MeshPrimitiveSpan>
 normalized_mesh_primitive_spans(const MeshAsset &mesh) {
-  return normalized_mesh_primitive_spans(mesh.geometry());
+  const auto primitives = mesh.geometry_primitives();
+  const auto index_count = mesh.geometry_indices().size();
+  std::vector<MeshPrimitiveSpan> spans;
+  spans.reserve(primitives.empty() ? 1u : primitives.size());
+  for (const auto &primitive : primitives) {
+    const std::uint64_t end = static_cast<std::uint64_t>(primitive.index_offset) + primitive.index_count;
+    if (primitive.index_count != 0u && end <= index_count) spans.push_back(primitive);
+  }
+  if (spans.empty() && index_count != 0u) {
+    spans.push_back({.index_count = static_cast<std::uint32_t>(index_count)});
+  }
+  return spans;
 }
 
 inline std::vector<MeshPrimitiveSpan>

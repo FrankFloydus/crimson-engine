@@ -460,6 +460,32 @@ bool DocumentCommandService::can_unparent_selection() const {
   return changes_parent;
 }
 
+bool DocumentCommandService::can_group_selection() const {
+  const auto roots = document_command_selected_root_entities(scene_);
+  return !roots.empty() && !selected_mutation_blocked() &&
+         std::ranges::all_of(roots, [this](EntityId entity) {
+           return !scene_.is_effectively_locked(entity);
+         });
+}
+
+bool DocumentCommandService::can_ungroup_selection() const {
+  if (selected_mutation_blocked()) {
+    return false;
+  }
+  bool has_group = false;
+  for (const EntityId entity : document_command_selected_root_entities(scene_)) {
+    if (scene_.kind(entity) != EntityKind::Empty ||
+        !scene_.has_children(entity)) {
+      continue;
+    }
+    if (scene_.is_effectively_locked(entity)) {
+      return false;
+    }
+    has_group = true;
+  }
+  return has_group;
+}
+
 DocumentCommandResult DocumentCommandService::unparent_selection() {
   std::vector<EntityId> children;
   for (const EntityId entity : scene_.selected_entities()) {

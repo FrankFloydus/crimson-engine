@@ -344,7 +344,7 @@ add_library(quader_assets STATIC
 
 quader_configure_core_module(quader_assets)
 target_include_directories(quader_assets
-    PRIVATE "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
+    PUBLIC "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
 target_link_libraries(quader_assets
     PUBLIC quader_core_utilities quader_modeling_sdk_curves
     PRIVATE stduuid)
@@ -385,6 +385,7 @@ add_library(quader_editor_services STATIC
     src/editor/commands/editor_command_registry.cpp
     src/editor/commands/modeling_command_execution_service.cpp
     src/editor/commands/scene_structural_lifecycle_service.cpp
+    src/editor/diagnostics/selection_diagnostic_service.cpp
     src/editor/history/editor_history_service.cpp
     src/editor/commands/modeling_selection_memento_command.cpp
     src/editor/input/quader_keybinding_target_catalog.cpp
@@ -410,6 +411,10 @@ add_library(quader_editor_services STATIC
 )
 
 quader_configure_core_module(quader_editor_services)
+target_include_directories(quader_editor_services
+    PRIVATE
+        "${QUADER_GENERATED_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
 target_link_libraries(quader_editor_services
     PUBLIC
         quader_document
@@ -575,6 +580,7 @@ add_library(quader_viewport_services STATIC
     src/viewport/viewport_host_defaults.cpp
     src/viewport/viewport_input_router.cpp
     src/viewport/viewport_layout.cpp
+    src/viewport/viewport_selection_depth.cpp
     src/viewport/viewport_settings.cpp
     src/viewport/viewport_workspace_service.cpp
 )
@@ -630,6 +636,7 @@ add_library(quader_api STATIC
     src/api/quader_scene_api.cpp
     src/api/quader_scene_documents_api.cpp
     src/api/quader_selection_api.cpp
+    src/api/quader_selection_diagnostics_api.cpp
     src/api/quader_script.cpp
     src/api/quader_tools_api.cpp
     src/api/quader_ui_api.cpp
@@ -776,6 +783,7 @@ quader_register_filament_material(quader_instance_selection_fill_material resour
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line resources/materials/overlay_line_coverage.glsl)
 quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line resources/materials/instance_edit.glsl resources/materials/overlay_line_coverage.glsl)
 quader_register_filament_material(quader_selection_mask_material resources/materials/quader_selection_mask.mat quader_selection_mask)
+quader_register_filament_material(quader_component_selection_material resources/materials/quader_component_selection.mat quader_component_selection)
 quader_register_filament_material(quader_selection_outline_material resources/materials/quader_selection_outline.mat quader_selection_outline)
 quader_register_filament_material(quader_edit_wire_line_material resources/materials/quader_edit_wire_line.mat quader_edit_wire_line resources/materials/overlay_line_coverage.glsl)
 quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
@@ -825,6 +833,7 @@ if(WIN32)
 endif()
 
 add_library(quader_render STATIC
+    src/render/component_selection_renderer.cpp
     src/render/curve_solid_geometry_cache.cpp
     src/render/filament_utils.cpp
     src/render/filament_buffer_descriptor_factory.cpp
@@ -841,6 +850,7 @@ add_library(quader_render STATIC
     src/render/scene_tone_mapper.cpp
     src/render/material_compiler_service.cpp
     src/render/mesh_renderable_cache.cpp
+    src/render/editable_mesh_surface_cache.cpp
     src/render/mesh_renderable_factory.cpp
     src/render/mesh_quad_uv_interpolation.cpp
     src/render/mesh_surface_grid_projection.cpp
@@ -850,6 +860,7 @@ add_library(quader_render STATIC
     src/render/overlay/collision_shape_overlay_cache.cpp
     src/render/overlay/overlay_face_fill_builder.cpp
     src/render/overlay/overlay_line_mesh_builder.cpp
+    src/render/overlay/overlay_edit_wire_retention.cpp
     src/render/overlay/overlay_point_mesh_builder.cpp
     src/render/overlay/overlay_proxy_factory.cpp
     src/render/overlay/render_overlay_snapshot.cpp
@@ -1014,6 +1025,8 @@ add_library(quader_ui STATIC
     src/ui/qt_selection_toolbar.cpp
     src/ui/qt_snapping_toolbar.cpp
     src/ui/qt_tool_toolbar.cpp
+    src/ui/qt_modeling_operation_catalog.cpp
+    src/ui/qt_marking_menu.cpp
     src/ui/qt_viewport_display_toolbar.cpp
     src/ui/qt_viewport_control_strip.cpp
     src/ui/qt_texture_toolbar.cpp
@@ -1035,6 +1048,7 @@ add_library(quader_ui STATIC
     src/ui/qt_viewport_delete_popup.cpp
     src/ui/qt_viewport_quick_menu.hpp
     src/ui/qt_viewport_quick_menu.cpp
+    src/ui/qt_viewport_marking_menu.cpp
     src/ui/qt_viewport_fly_navigation_hud.cpp
     src/ui/qt_viewport_edge_length_hud.cpp
     src/ui/qt_viewport_render_submission_policy.hpp
@@ -1211,6 +1225,7 @@ set(QUADER_TOOL_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_scale.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_pivot.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_transform_local.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_transform_world.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_primitive.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_cylinder.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_sphere.png"
@@ -1647,6 +1662,9 @@ if(QUADER_BUILD_TESTS)
         tests/collision_shape_overlay_tests.cpp
         tests/command_behavior_contract_tests.cpp
         tests/component_transform_persistence_tests.cpp
+        tests/modeling_component_merge_tests.cpp
+        tests/selection_diagnostics_tests.cpp
+        tests/qt_console_panel_tests.cpp
         tests/core_tests.cpp
         tests/editor_history_limit_tests.cpp
         tests/editor_modeling_history_retention_tests.cpp
@@ -1718,6 +1736,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_texture_info_window_tests.cpp
         tests/qt_viewport_header_tests.cpp
         tests/qt_project_workspace_tests.cpp
+        tests/qt_tool_toolbar_tests.cpp
         tests/qt_relative_pointer_input_tests.cpp
         tests/qt_horizontal_pointer_capture_tests.cpp
         tests/qt_retained_message_box_tests.cpp
@@ -1737,6 +1756,8 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_delete_popup_tests.cpp
         tests/qt_viewport_context_menu_tests.cpp
         tests/qt_viewport_quick_menu_tests.cpp
+        tests/qt_marking_menu_tests.cpp
+        tests/qt_viewport_marking_menu_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
         tests/modeling_selection_performance_tests.cpp
@@ -1792,6 +1813,7 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
         tests/overlay_depth_point_visibility_tests.cpp
+        tests/overlay_edit_wire_retention_tests.cpp
         tests/light_renderable_cache_tests.cpp
         tests/light_properties_tests.cpp
         tests/lasso_overlay_tests.cpp
@@ -1806,6 +1828,8 @@ if(QUADER_BUILD_TESTS)
         tests/selection_mode_adapter_tests.cpp
         tests/selection_overlay_runtime_tests.cpp
         tests/dense_component_frame_runtime_tests.cpp
+        tests/component_selection_depth_tests.cpp
+        tests/component_selection_runtime_tests.cpp
         tests/selection_tool_settings_tests.cpp
         tests/viewport_interaction_controller_tests.cpp
         tests/viewport_transform_trackball_overlay_tests.cpp

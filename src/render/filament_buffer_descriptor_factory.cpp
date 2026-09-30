@@ -17,6 +17,10 @@ void release_bytes(void *buffer, std::size_t, void *) {
   delete[] static_cast<std::byte *>(buffer);
 }
 
+void release_retained_bytes(void *, std::size_t, void *owner) {
+  delete static_cast<std::shared_ptr<const void> *>(owner);
+}
+
 std::byte *copy_bytes(const void *data, std::size_t byte_count) {
   if (byte_count == 0u) {
     return nullptr;
@@ -35,6 +39,14 @@ filament::backend::BufferDescriptor
 FilamentBufferDescriptorFactory::bytes(const void *data,
                                        std::size_t byte_count) {
   return {copy_bytes(data, byte_count), byte_count, release_bytes};
+}
+
+filament::backend::BufferDescriptor
+FilamentBufferDescriptorFactory::retained_bytes(
+    const void *data, std::size_t byte_count,
+    std::shared_ptr<const void> owner) {
+  return {data, byte_count, release_retained_bytes,
+          new std::shared_ptr<const void>(std::move(owner))};
 }
 
 filament::backend::PixelBufferDescriptor

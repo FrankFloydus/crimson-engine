@@ -263,16 +263,28 @@ public:
   [[nodiscard]] ModelingSelectionExport export_selection() const;
   [[nodiscard]] ModelingSelectedVerticesSnapshot
   selected_vertices_snapshot() const;
+  /// Pins authored topology and accepted coordinates for explicit diagnostics.
+  [[nodiscard]] modeling::Result<ModelingPolygonDocumentReadSnapshot>
+  polygon_document_read_snapshot(int modeling_object_id,
+                                 bool include_preview = true) const;
   [[nodiscard]] std::uint64_t selection_overlay_signature(
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] ViewportOverlayFrame
   selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const;
+  /// Renderer-only frozen semantic base; accepted coordinates are supplied by
+  /// accepted_overlay_coordinates() in the same render publication.
+  [[nodiscard]] ViewportOverlayFrame selection_overlay_render_frame(
+      ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] std::shared_ptr<const ModelingAcceptedOverlayCoordinates>
+  accepted_overlay_coordinates() const;
   [[nodiscard]] ModelingVolatileOverlaySnapshot
   volatile_overlay_snapshot() const;
   /// Compatibility copy for non-frame-loop consumers and focused tests.
   [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame() const;
   [[nodiscard]] ModelingVolatileOverlayCacheStats
   volatile_overlay_cache_stats() const;
+  [[nodiscard]] const quader_editor_core::SelectionOverlayGeometryWorkCounters &
+  selection_overlay_geometry_work_counters() const;
   /**
    * O(1) source revision for generated preview state. Changed runtime commands
    * and overlay invalidations advance it before the next render sync.
@@ -312,6 +324,8 @@ public:
   /// Other modeling history continues to capture only the SDK projection.
   [[nodiscard]] ModelingSessionMemento capture_history_memento(
       bool preserve_group_selection = false) const;
+  [[nodiscard]] ModelingSessionMemento capture_component_merge_history_memento(
+      const ModelingSessionMemento &before = {}) const;
   [[nodiscard]] ModelingSessionMemento capture_history_memento_without_objects(
       const ModelingSessionMemento &selection_baseline,
       std::span<const int> excluded_object_ids) const;

@@ -120,7 +120,7 @@ quader::QVec3 face_normal_from_lookup(
 }
 
 std::map<ElementId, quader::QVec3> build_smooth_normals(
-    const Document& document,
+    const DocumentReadView& document,
     const VertexLookupIndex& vertex_lookup)
 {
     QDR_PROFILE_SCOPE("qdr_document.build_smooth_normals");
@@ -217,7 +217,7 @@ private:
 };
 
 std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(
-    const Document& document,
+    const DocumentReadView& document,
     const VertexLookupIndex& vertex_lookup)
 {
     QDR_PROFILE_SCOPE("qdr_document.build_authored_smooth_corner_normals");
@@ -324,7 +324,25 @@ quader::QVec3 face_normal(const Document& document, const Face& face)
     return face_normal_from_lookup(face, vertex_lookup);
 }
 
+quader::QVec3 face_normal(const DocumentReadView &document, const Face &face)
+{
+    const VertexLookupIndex vertex_lookup(document);
+    return face_normal_from_lookup(face, vertex_lookup);
+}
+
+quader::QVec3 document_internal::face_normal_from_vertex_lookup(
+    const Face &face, const VertexLookupIndex &vertex_lookup)
+{
+    return face_normal_from_lookup(face, vertex_lookup);
+}
+
 void compile_document_into(const Document &document, CompiledMesh &mesh,
+                           SurfaceShading shading)
+{
+    compile_document_into(document_read_view(document), mesh, shading);
+}
+
+void compile_document_into(const DocumentReadView &document, CompiledMesh &mesh,
                            SurfaceShading shading)
 {
     QDR_PROFILE_SCOPE("qdr_document.compile_document");
@@ -373,7 +391,6 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
             face_normal_from_lookup(face, vertex_lookup);
         const std::vector<Triangle> triangles =
             triangulate_face_local_indices(
-                document,
                 face,
                 vertex_lookup,
                 normal);
@@ -388,7 +405,6 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
             use_loop_uvs
                 ? FaceUvBasis {}
                 : generated_face_uv_basis(
-                      document,
                       face,
                       normal,
                       vertex_lookup);
@@ -490,6 +506,12 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
 }
 
 CompiledMesh compile_document(const Document& document, SurfaceShading shading)
+{
+    return compile_document(document_read_view(document), shading);
+}
+
+CompiledMesh compile_document(const DocumentReadView &document,
+                              SurfaceShading shading)
 {
     CompiledMesh mesh;
     compile_document_into(document, mesh, shading);

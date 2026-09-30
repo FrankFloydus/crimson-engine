@@ -783,6 +783,7 @@ bool ViewportInputRouter::handle_shortcut(const ViewportShortcut &shortcut,
   case ViewportShortcutKind::DeletePopup:
   case ViewportShortcutKind::AddPopup:
   case ViewportShortcutKind::ShadingPopup:
+  case ViewportShortcutKind::MarkingMenu:
     return !active_tool_blocks_focus_shortcuts;
   case ViewportShortcutKind::FlipMeshNormals:
     return !active_tool_blocks_focus_shortcuts &&

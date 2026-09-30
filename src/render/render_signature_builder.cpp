@@ -265,6 +265,7 @@ OverlayFrameSignatures RenderSignatureBuilder::overlay_frame_signatures(
     const ViewportOverlayFrame &frame) {
   OverlayFrameSignatures result;
   RenderSignatureBuilder frame_signature;
+  RenderSignatureBuilder component_point_geometry_signature;
   std::array<RenderSignatureBuilder, kViewportOverlayLayerCount>
       layer_signatures;
   for (std::size_t layer_index = 0; layer_index < layer_signatures.size();
@@ -297,6 +298,14 @@ OverlayFrameSignatures RenderSignatureBuilder::overlay_frame_signatures(
     ++result.point_counts[overlay_layer_index(point.layer)];
     add_point_signature(layer_signatures[overlay_layer_index(point.layer)],
                         point);
+    if (point.layer == ViewportOverlayLayer::UnselectedVertex ||
+        point.layer == ViewportOverlayLayer::SelectedVertex) {
+      component_point_geometry_signature
+          .add_vec3(point.position)
+          .add_value(static_cast<std::uint32_t>(point.source));
+      add_overlay_element_signature(component_point_geometry_signature,
+                                    point.element);
+    }
   }
 
   frame_signature.add_size(frame.icons.size());
@@ -310,6 +319,8 @@ OverlayFrameSignatures RenderSignatureBuilder::overlay_frame_signatures(
   frame_signature.add_bool(frame.hover_target_selected);
 
   result.frame_signature = frame_signature.value();
+  result.component_point_geometry_signature =
+      component_point_geometry_signature.value();
   for (std::size_t layer_index = 0; layer_index < layer_signatures.size();
        ++layer_index) {
     result.layer_signatures[layer_index] =

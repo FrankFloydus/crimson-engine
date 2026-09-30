@@ -120,6 +120,26 @@ struct Document {
     ElementId next_face_id = 1;
 };
 
+/** Non-owning immutable geometry with independently retained topology and vertices. */
+struct DocumentReadView {
+  std::span<const Vertex> vertices;
+  std::span<const Face> faces;
+  std::span<const Edge> hard_normal_edges;
+  std::span<const Edge> soft_normal_edges;
+  ElementId next_vertex_id = 1;
+  ElementId next_face_id = 1;
+};
+
+/** Borrows a complete document without copying its authored arrays. */
+[[nodiscard]] inline DocumentReadView document_read_view(const Document &document) {
+  return {.vertices = document.vertices,
+          .faces = document.faces,
+          .hard_normal_edges = document.hard_normal_edges,
+          .soft_normal_edges = document.soft_normal_edges,
+          .next_vertex_id = document.next_vertex_id,
+          .next_face_id = document.next_face_id};
+}
+
 /**
  * Represents a Cube Primitive Spec value used by the polygon document and mesh editing core.
  */

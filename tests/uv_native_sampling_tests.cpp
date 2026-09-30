@@ -29,6 +29,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -1138,6 +1139,95 @@ TEST(MeshProjectionPositionTests,
 }
 
 TEST(MeshProjectionPositionTests,
+     RetainedCoordinateStreamsMatchCanonicalAcrossEditsAndPinnedRestore) {
+  for (const auto shading : {quader_poly::SurfaceShading::Authored,
+                            quader_poly::SurfaceShading::Flat}) {
+    for (const bool authored_uvs : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(shading));
+      SCOPED_TRACE(authored_uvs);
+      const auto source = translated_projection_fixture(shading, authored_uvs);
+      auto document = MeshProjectionService::sdk_document_from_polygon_document(source).or_throw();
+      ASSERT_TRUE(document.select_vertex(modeling::make_id<modeling::VertexTag>(
+          source.vertices[2].id)).ok());
+      const auto prepared = document.prepare_selection_transform().or_throw();
+      const auto baseline = MeshProjectionService::compile_sdk_document_mesh(document);
+      ASSERT_TRUE(baseline);
+      const std::array movable{source.vertices[2].id};
+      const auto neighborhood = MeshProjectionService::prepare_position_update_plan(*baseline, movable);
+      const auto plan = MeshProjectionService::prepare_retained_position_projection(
+          document, *baseline, neighborhood.get());
+      ASSERT_TRUE(plan);
+      const auto baseline_geometry = baseline->geometry_payload();
+      auto previous_document = document;
+      std::shared_ptr<const MeshGeometryProjection> previous;
+      std::shared_ptr<const MeshGeometryProjection> pinned;
+      std::optional<MeshAsset> pinned_canonical;
+      const auto stats_before = MeshProjectionService::position_update_stats();
+      for (const auto delta : {modeling::Vec3{0.25F, 0.125F, 0.75F},
+                               modeling::Vec3{-2.5F, -1.5F, 0.0F}, modeling::Vec3{},
+                               modeling::Vec3{0.5F, -0.25F, 1.0F}}) {
+        auto evaluated = prepared.evaluate_translation(delta).or_throw();
+        const auto work_before = prepared.work_stats();
+        const auto projection = MeshProjectionService::project_retained_mesh_positions(
+            evaluated.document, previous_document, *plan, previous);
+        ASSERT_TRUE(projection);
+        EXPECT_EQ(prepared.work_stats().topology_materialization_count,
+                  work_before.topology_materialization_count);
+        EXPECT_EQ(projection->source_geometry, baseline_geometry);
+        ASSERT_TRUE(projection->positions);
+        EXPECT_EQ(projection->positions->size(), baseline_geometry->vertices.size());
+        const auto canonical = MeshProjectionService::compile_sdk_document_mesh(evaluated.document);
+        ASSERT_TRUE(canonical);
+        expect_canonical_projection(*projection->materialized_geometry(), canonical->geometry());
+        EXPECT_EQ(projection->materialized_geometry(), projection->materialized_geometry());
+        const auto adopted = MeshProjectionService::materialize_retained_mesh_projection(
+            evaluated.document, *baseline, *projection);
+        EXPECT_EQ(adopted.geometry_payload(), projection->materialized_geometry());
+        ASSERT_TRUE(adopted.authored_polygon_document);
+        ASSERT_TRUE(canonical->authored_polygon_document);
+        EXPECT_TRUE(mesh_asset_payload_detail::same_polygon_document(
+            *adopted.authored_polygon_document, *canonical->authored_polygon_document));
+        MeshAsset sibling_source = *baseline;
+        sibling_source.name = "Independent retained participant";
+        const auto sibling = MeshProjectionService::materialize_retained_mesh_projection(
+            evaluated.document, sibling_source, *projection, adopted.authored_polygon_document);
+        EXPECT_EQ(sibling.authored_polygon_document, adopted.authored_polygon_document);
+        EXPECT_EQ(sibling.name, sibling_source.name);
+        EXPECT_EQ(sibling.geometry_payload(), adopted.geometry_payload());
+        // Equal render geometry does not prove equal authored identity cursors.
+        auto different_identity = std::make_shared<quader_poly::Document>(
+            *adopted.authored_polygon_document);
+        ++different_identity->next_vertex_id;
+        ++different_identity->next_face_id;
+        const auto independent = MeshProjectionService::materialize_retained_mesh_projection(
+            evaluated.document, sibling_source, *projection, different_identity);
+        EXPECT_NE(independent.authored_polygon_document, different_identity);
+        ASSERT_TRUE(independent.authored_polygon_document);
+        EXPECT_TRUE(mesh_asset_payload_detail::same_polygon_document(
+            *independent.authored_polygon_document, *canonical->authored_polygon_document));
+        EXPECT_EQ(independent.name, sibling_source.name);
+        EXPECT_EQ(MeshProjectionService::project_retained_mesh_positions(
+            evaluated.document, evaluated.document, *plan, projection), projection);
+        if (!pinned) {
+          pinned = projection;
+          pinned_canonical = canonical;
+        }
+        expect_canonical_projection(*pinned->materialized_geometry(), pinned_canonical->geometry());
+        EXPECT_EQ(baseline->geometry_payload(), baseline_geometry);
+        previous_document = std::move(evaluated.document);
+        previous = projection;
+      }
+      EXPECT_EQ(MeshProjectionService::position_update_stats().retained_stream_projection_count -
+                    stats_before.retained_stream_projection_count, 4U);
+      const auto rejected = prepared.evaluate_translation(
+          {std::numeric_limits<float>::infinity(), 0, 0});
+      EXPECT_FALSE(rejected.ok());
+      expect_canonical_projection(*pinned->materialized_geometry(), pinned_canonical->geometry());
+    }
+  }
+}
+
+TEST(MeshProjectionPositionTests,
      PartialComponentAndReflectedUpdatesKeepCanonicalDerivedGeometry) {
   for (const bool authored_uvs : {false, true}) {
     const auto source = translated_projection_fixture(
@@ -1217,6 +1307,51 @@ void append_remote_projection_faces(quader_poly::Document &document) {
         quader_poly::add_vertex(document, {x, 2.0f, 0.0f})};
     (void)quader_poly::add_face(document, vertices);
   }
+}
+
+TEST(MeshProjectionPositionTests,
+     RetainedCoordinateNeighborhoodPreservesCreasesAndRejectsAnotherTopology) {
+  auto source = translated_projection_fixture(quader_poly::SurfaceShading::Authored, true);
+  append_remote_projection_faces(source);
+  auto document = MeshProjectionService::sdk_document_from_polygon_document(source).or_throw();
+  const std::array selected{modeling::make_id<modeling::VertexTag>(source.vertices[4].id),
+                            modeling::make_id<modeling::VertexTag>(source.vertices[5].id)};
+  ASSERT_TRUE(document.select_vertices(selected).ok());
+  const auto prepared = document.prepare_selection_transform().or_throw();
+  const auto baseline = MeshProjectionService::compile_sdk_document_mesh(document);
+  ASSERT_TRUE(baseline);
+  const std::array movable{source.vertices[4].id, source.vertices[5].id};
+  const auto neighborhood = MeshProjectionService::prepare_position_update_plan(*baseline, movable);
+  const auto plan = MeshProjectionService::prepare_retained_position_projection(
+      document, *baseline, neighborhood.get());
+  ASSERT_TRUE(plan);
+  auto previous_document = document;
+  std::shared_ptr<const MeshGeometryProjection> previous;
+  const auto stats_before = MeshProjectionService::position_update_stats();
+  for (const float angle : {30.0F, 50.0F, 39.99F, 40.0F, 140.0F, 0.0F}) {
+    SCOPED_TRACE(angle);
+    const float radians = angle * 3.14159265358979323846F / 180.0F;
+    const float cosine = std::cos(radians);
+    const float sine = std::sin(radians);
+    auto evaluated = prepared.evaluate_transform({
+        .x_axis = {cosine, 0, sine}, .y_axis = {0, 1, 0},
+        .z_axis = {-sine, 0, cosine}, .origin = {2 - 2 * cosine, 0, -2 * sine}}).or_throw();
+    const auto projection = MeshProjectionService::project_retained_mesh_positions(
+        evaluated.document, previous_document, *plan, previous);
+    ASSERT_TRUE(projection);
+    const auto canonical = MeshProjectionService::compile_sdk_document_mesh(evaluated.document);
+    ASSERT_TRUE(canonical);
+    expect_canonical_projection(*projection->materialized_geometry(), canonical->geometry());
+    previous_document = std::move(evaluated.document);
+    previous = projection;
+  }
+  const auto stats_after = MeshProjectionService::position_update_stats();
+  EXPECT_EQ(stats_after.retained_partial_count - stats_before.retained_partial_count, 6U);
+  EXPECT_EQ(stats_after.full_compile_count, stats_before.full_compile_count);
+  auto unrelated = MeshProjectionService::sdk_document_from_polygon_document(source).or_throw();
+  EXPECT_FALSE(MeshProjectionService::project_retained_mesh_positions(
+      unrelated, previous_document, *plan, previous));
+  expect_canonical_projection(*previous->materialized_geometry(), baseline->geometry());
 }
 
 TEST(MeshProjectionPositionTests,

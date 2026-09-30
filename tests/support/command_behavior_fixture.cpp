@@ -434,6 +434,11 @@ private:
   }
 
   void install_runtime_hooks() {
+    if (command_id_ == quader_command::kDiagnosticsDumpSelection.string()) {
+      const auto dump_directory = temporary_.make_empty_child("SelectionDumps");
+      editor().selection_diagnostics().set_runtime_hooks(
+          {.dump_directory = [dump_directory] { return dump_directory; }});
+    }
     install_preferences_hooks();
     install_viewport_hooks();
     install_ui_hooks();
@@ -1040,8 +1045,11 @@ private:
     const bool radial_edges =
         pair && command_id_ ==
                     quader_command::kModelingRadialAlignEdges.string();
-    PolygonFixture polygon = radial_edges ? make_irregular_radial_quad()
-                                          : make_two_quad_plane();
+    const bool merge_edges =
+        pair && command_id_ == quader_command::kModelingMergeEdges.string();
+    PolygonFixture polygon = merge_edges ? make_parallel_quad_pair()
+                             : radial_edges ? make_irregular_radial_quad()
+                                            : make_two_quad_plane();
     const std::vector<quader_poly::ElementId> vertices = polygon.vertices;
     const QuaderModelingObjectRef object =
         create_polygon_object(std::move(polygon), "Edge Selection Plane");
@@ -1065,6 +1073,18 @@ private:
                                    : QuaderSelectionEdit::Add),
                    "Select canonical irregular radial edge ring");
       }
+      return;
+    }
+    if (merge_edges) {
+      // Two consistently wound boundary islands can weld without folding the
+      // already connected two-quad plane onto its own interior adjacency.
+      require_ok(editor().selection().select_edge(
+                     object, api_element(vertices[0]), api_element(vertices[1])),
+                 "Select first canonical merge edge");
+      require_ok(editor().selection().select_edge(
+                     object, api_element(vertices[4]), api_element(vertices[5]),
+                     QuaderSelectionEdit::Add),
+                 "Select active canonical merge edge");
       return;
     }
     require_ok(editor().selection().select_edge(

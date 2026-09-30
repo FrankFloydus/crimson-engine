@@ -107,6 +107,363 @@ quader_poly::Document service_uv_peel_strip_document() {
   return document;
 }
 
+void expect_selection_overlay_frame_eq(
+    const quader_editor_core::SelectionOverlayFrame &actual,
+    const quader_editor_core::SelectionOverlayFrame &expected) {
+  ASSERT_EQ(actual.triangles.size(), expected.triangles.size());
+  for (std::size_t index = 0; index < expected.triangles.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto &a = actual.triangles[index];
+    const auto &b = expected.triangles[index];
+    EXPECT_EQ(a.layer, b.layer);
+    expect_vec3_eq(a.a, b.a);
+    expect_vec3_eq(a.b, b.b);
+    expect_vec3_eq(a.c, b.c);
+    EXPECT_EQ(a.color_abgr, b.color_abgr);
+    EXPECT_EQ(a.object_id, b.object_id);
+    EXPECT_EQ(a.face_id, b.face_id);
+    EXPECT_EQ(a.vertex_a, b.vertex_a);
+    EXPECT_EQ(a.vertex_b, b.vertex_b);
+    EXPECT_EQ(a.vertex_c, b.vertex_c);
+  }
+  ASSERT_EQ(actual.lines.size(), expected.lines.size());
+  for (std::size_t index = 0; index < expected.lines.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto &a = actual.lines[index];
+    const auto &b = expected.lines[index];
+    EXPECT_EQ(a.layer, b.layer);
+    expect_vec3_eq(a.start, b.start);
+    expect_vec3_eq(a.end, b.end);
+    EXPECT_EQ(a.color_abgr, b.color_abgr);
+    EXPECT_FLOAT_EQ(a.width_pixels, b.width_pixels);
+    EXPECT_EQ(a.object_id, b.object_id);
+    EXPECT_EQ(a.face_id, b.face_id);
+    EXPECT_EQ(a.edge, b.edge);
+  }
+  ASSERT_EQ(actual.points.size(), expected.points.size());
+  for (std::size_t index = 0; index < expected.points.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto &a = actual.points[index];
+    const auto &b = expected.points[index];
+    EXPECT_EQ(a.layer, b.layer);
+    expect_vec3_eq(a.position, b.position);
+    EXPECT_EQ(a.color_abgr, b.color_abgr);
+    EXPECT_FLOAT_EQ(a.size_pixels, b.size_pixels);
+    EXPECT_EQ(a.object_id, b.object_id);
+    EXPECT_EQ(a.vertex_id, b.vertex_id);
+  }
+  EXPECT_EQ(actual.hover_target_selected, expected.hover_target_selected);
+  ASSERT_EQ(actual.hover_edge_dimension_context.has_value(),
+            expected.hover_edge_dimension_context.has_value());
+  if (expected.hover_edge_dimension_context.has_value()) {
+    const auto &a = *actual.hover_edge_dimension_context;
+    const auto &b = *expected.hover_edge_dimension_context;
+    expect_vec3_eq(a.inside_reference, b.inside_reference);
+    EXPECT_EQ(a.object_id, b.object_id);
+    EXPECT_EQ(a.face_id, b.face_id);
+    EXPECT_EQ(a.edge, b.edge);
+  }
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SemanticOverlayGeometrySurvivesSelectionModeAndActiveChanges) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 1;
+  object.selected = true;
+  object.component_edit_target = true;
+  object.document = service_uv_peel_strip_document();
+  const auto first_face = object.document.faces[0].id;
+  const auto second_face = object.document.faces[1].id;
+  const auto boundary_edge = quader_poly::make_edge(1, 2);
+  const auto interior_edge = quader_poly::make_edge(2, 5);
+  ModelingOverlayService overlay;
+  std::uint64_t selection_revision = 1;
+  const auto verify_frame = [&](SelectionMode mode, int active_id) {
+    const ModelingSelectionProjectionSnapshot snapshot(
+        {object}, mode, active_id, 7, selection_revision++);
+    const auto &actual = overlay.selection_overlay_base_frame(snapshot);
+    const auto expected = build_selection_overlay_frame(
+        snapshot.objects(), mode, active_id, {});
+    expect_selection_overlay_frame_eq(actual, expected);
+    return actual;
+  };
+  object.selection.mode = quader_poly::SelectionMode::Face;
+  object.selection.faces = {first_face, second_face};
+  const auto warm_frame = verify_frame(SelectionMode::Face, object.id);
+  const auto warm_work = overlay.selection_overlay_geometry_work_counters();
+  EXPECT_EQ(warm_work.geometry_build_count, 1U);
+  EXPECT_GE(warm_work.face_triangulation_count, object.document.faces.size());
+  SelectionOverlayFrame warm_source;
+  for (const auto &line : warm_frame.lines) {
+    if (line.layer == SelectionOverlayLayer::SourceWire) {
+      warm_source.lines.push_back(line);
+    }
+  }
+  ASSERT_FALSE(warm_source.lines.empty());
+  object.selected = false;
+  object.component_edit_target = false;
+  object.selection = {};
+  const auto cleared = verify_frame(SelectionMode::Face, -1);
+  EXPECT_TRUE(cleared.triangles.empty());
+  EXPECT_TRUE(cleared.lines.empty());
+  EXPECT_TRUE(cleared.points.empty());
+  object.selected = true;
+  object.component_edit_target = true;
+  object.selection.mode = quader_poly::SelectionMode::Face;
+  object.selection.faces = {second_face};
+  const auto reselected = verify_frame(SelectionMode::Face, object.id);
+  EXPECT_TRUE(std::ranges::any_of(reselected.triangles, [&](const auto &triangle) {
+    return triangle.layer == SelectionOverlayLayer::SelectedVisibleFace &&
+           triangle.face_id == second_face;
+  }));
+  EXPECT_FALSE(std::ranges::any_of(reselected.triangles, [&](const auto &triangle) {
+    return triangle.layer == SelectionOverlayLayer::SelectedVisibleFace &&
+           triangle.face_id == first_face;
+  }));
+  const auto reselected_work = overlay.selection_overlay_geometry_work_counters();
+  EXPECT_EQ(reselected_work.geometry_build_count, warm_work.geometry_build_count);
+  EXPECT_EQ(reselected_work.face_triangulation_count, warm_work.face_triangulation_count);
+  const SelectionOverlayStyle style;
+  for (const auto mode : std::array{SelectionMode::Object, SelectionMode::Vertex,
+                                   SelectionMode::Edge, SelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    object.selection = {};
+    object.selection.has_active = true;
+    if (mode == SelectionMode::Vertex) {
+      object.selection.mode = quader_poly::SelectionMode::Vertex;
+      object.selection.vertices = {1, 2};
+      object.selection.active_kind = quader_poly::ElementKind::Vertex;
+      object.selection.active_vertex = 2;
+    } else if (mode == SelectionMode::Edge) {
+      object.selection.mode = quader_poly::SelectionMode::Edge;
+      object.selection.edges = {boundary_edge, interior_edge};
+      object.selection.active_kind = quader_poly::ElementKind::Edge;
+      object.selection.active_edge = interior_edge;
+    } else if (mode == SelectionMode::Face) {
+      object.selection.mode = quader_poly::SelectionMode::Face;
+      object.selection.faces = {second_face, first_face};
+      object.selection.active_kind = quader_poly::ElementKind::Face;
+      object.selection.active_face = first_face;
+    }
+    const auto frame = verify_frame(mode, object.id);
+    if (mode == SelectionMode::Object) {
+      EXPECT_TRUE(frame.points.empty());
+      EXPECT_TRUE(std::ranges::any_of(frame.triangles, [](const auto &triangle) {
+        return triangle.layer == SelectionOverlayLayer::SelectedXrayFace;
+      }));
+      object.selected = false;
+      const auto deselected = verify_frame(mode, -1);
+      EXPECT_TRUE(deselected.triangles.empty());
+      EXPECT_TRUE(deselected.lines.empty());
+      object.selected = true;
+      (void)verify_frame(mode, object.id);
+    } else {
+      SelectionOverlayFrame source;
+      for (const auto &line : frame.lines) {
+        if (line.layer == SelectionOverlayLayer::SourceWire) {
+          source.lines.push_back(line);
+        }
+      }
+      expect_selection_overlay_frame_eq(source, warm_source);
+      if (mode == SelectionMode::Vertex) {
+        EXPECT_EQ(std::ranges::count_if(frame.points, [](const auto &point) {
+          return point.layer == SelectionOverlayLayer::SelectedVertex;
+        }), 2);
+        EXPECT_TRUE(std::ranges::any_of(frame.points, [&](const auto &point) {
+          return point.vertex_id == 2 &&
+                 point.color_abgr == style.active_selected_handle_color_abgr;
+        }));
+        object.selection.active_vertex = 1;
+      } else if (mode == SelectionMode::Edge) {
+        EXPECT_TRUE(std::ranges::any_of(frame.lines, [&](const auto &line) {
+          return line.layer == SelectionOverlayLayer::OpenEdge &&
+                 line.edge == boundary_edge;
+        }));
+        EXPECT_FALSE(std::ranges::any_of(frame.lines, [&](const auto &line) {
+          return line.layer == SelectionOverlayLayer::OpenEdge &&
+                 line.edge == interior_edge;
+        }));
+        object.selection.active_edge = boundary_edge;
+      } else {
+        EXPECT_TRUE(std::ranges::any_of(frame.triangles, [&](const auto &triangle) {
+          return triangle.layer == SelectionOverlayLayer::SelectedVisibleFace &&
+                 triangle.face_id == first_face &&
+                 triangle.color_abgr == style.active_selection_face_color_abgr;
+        }));
+        object.selection.active_face = second_face;
+      }
+      (void)verify_frame(mode, object.id);
+      (void)verify_frame(mode, -1);
+      object.selection.has_active = false;
+      if (mode == SelectionMode::Vertex) {
+        object.selection.vertices = {2};
+      } else if (mode == SelectionMode::Edge) {
+        object.selection.edges = {interior_edge};
+      } else {
+        object.selection.faces = {second_face};
+      }
+      (void)verify_frame(mode, object.id);
+    }
+    const auto &work = overlay.selection_overlay_geometry_work_counters();
+    EXPECT_EQ(work.geometry_build_count, warm_work.geometry_build_count);
+    EXPECT_EQ(work.face_triangulation_count, warm_work.face_triangulation_count);
+  }
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SemanticOverlayGeometryRetainsTopologyAcrossPositionChanges) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 1;
+  object.selected = true;
+  object.component_edit_target = true;
+  object.document = service_uv_peel_strip_document();
+  object.selection.mode = quader_poly::SelectionMode::Edge;
+  object.selection.edges = {quader_poly::make_edge(1, 2)};
+  ModelingOverlayService overlay;
+  std::uint64_t content_revision = 1;
+  const auto verify_frame = [&] {
+    const ModelingSelectionProjectionSnapshot snapshot(
+        {object}, SelectionMode::Edge, object.id, content_revision, 1);
+    const auto &actual = overlay.selection_overlay_base_frame(snapshot);
+    const auto expected = build_selection_overlay_frame(
+        snapshot.objects(), SelectionMode::Edge, object.id, {});
+    expect_selection_overlay_frame_eq(actual, expected);
+    return actual;
+  };
+  const auto initial_frame = verify_frame();
+  const auto initial_work = overlay.selection_overlay_geometry_work_counters();
+  EXPECT_EQ(initial_work.geometry_build_count, 1U);
+  EXPECT_GE(initial_work.face_triangulation_count, object.document.faces.size());
+  ASSERT_FALSE(initial_frame.triangles.empty());
+  object.document.edit().vertices[0].position.x -= 0.5F;
+  ++content_revision;
+  const auto moved_frame = verify_frame();
+  const auto moved_work = overlay.selection_overlay_geometry_work_counters();
+  EXPECT_EQ(moved_work.geometry_build_count, initial_work.geometry_build_count);
+  EXPECT_EQ(moved_work.geometry_position_refresh_count,
+            initial_work.geometry_position_refresh_count + 1U);
+  EXPECT_EQ(moved_work.frame_position_refresh_count,
+            initial_work.frame_position_refresh_count);
+  EXPECT_GT(moved_work.face_triangulation_count, initial_work.face_triangulation_count);
+  EXPECT_TRUE(std::ranges::any_of(moved_frame.lines, [](const auto &line) {
+    return line.start.x == -2.5F || line.end.x == -2.5F;
+  }));
+  EXPECT_FALSE(std::ranges::any_of(initial_frame.lines, [](const auto &line) {
+    return line.start.x == -2.5F || line.end.x == -2.5F;
+  }));
+  // A new neighboring face closes the selected boundary edge. This must
+  // replace its old open-edge ticks as well as extend the source wire.
+  const auto a = quader_poly::add_vertex(object.document.edit(), {-2.5F, -2.0F, 0.0F});
+  const auto b = quader_poly::add_vertex(object.document.edit(), {0.0F, -2.0F, 0.0F});
+  ASSERT_NE(quader_poly::add_face(object.document.edit(), std::array{1U, a, b, 2U}),
+            quader_poly::kInvalidElementId);
+  ++content_revision;
+  const auto extended_frame = verify_frame();
+  const auto extended_work = overlay.selection_overlay_geometry_work_counters();
+  EXPECT_EQ(extended_work.geometry_build_count, moved_work.geometry_build_count + 1U);
+  EXPECT_GT(extended_work.face_triangulation_count, moved_work.face_triangulation_count);
+  EXPECT_GT(extended_frame.triangles.size(), moved_frame.triangles.size());
+  EXPECT_TRUE(std::ranges::any_of(moved_frame.lines, [](const auto &line) {
+    return line.layer == SelectionOverlayLayer::OpenEdge;
+  }));
+  EXPECT_FALSE(std::ranges::any_of(extended_frame.lines, [](const auto &line) {
+    return line.layer == SelectionOverlayLayer::OpenEdge;
+  }));
+  (void)verify_frame();
+  const auto &unchanged_work = overlay.selection_overlay_geometry_work_counters();
+  EXPECT_EQ(unchanged_work.geometry_build_count, extended_work.geometry_build_count);
+  EXPECT_EQ(unchanged_work.face_triangulation_count, extended_work.face_triangulation_count);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SemanticOverlayPositionRefreshPreservesFrozenFramesAndUndoCoordinates) {
+  using namespace quader_editor_core;
+  for (const auto mode : {SelectionMode::Vertex, SelectionMode::Edge,
+                          SelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    PolygonObject object;
+    object.id = 1;
+    object.selected = true;
+    object.component_edit_target = true;
+    object.document = quader_poly::make_cube({});
+    object.selection.mode = mode == SelectionMode::Vertex
+        ? quader_poly::SelectionMode::Vertex
+        : mode == SelectionMode::Edge ? quader_poly::SelectionMode::Edge
+                                      : quader_poly::SelectionMode::Face;
+    object.selection.vertices = {object.document.vertices.front().id};
+    object.selection.edges = {quader_poly::make_edge(
+        object.document.faces.front().vertices[0],
+        object.document.faces.front().vertices[1])};
+    object.selection.faces = {object.document.faces.front().id};
+    const auto original_document = object.document;
+    ModelingOverlayService overlay;
+    std::uint64_t content_revision = 1U;
+    const auto frame_for_current_document = [&] {
+      const ModelingSelectionProjectionSnapshot snapshot(
+          {object}, mode, object.id, content_revision++, 1U);
+      const auto actual = overlay.selection_overlay_base_frame(snapshot);
+      const auto expected = build_selection_overlay_frame(
+          snapshot.objects(), mode, object.id, {});
+      expect_selection_overlay_frame_eq(actual, expected);
+      return actual;
+    };
+    const auto frozen_frame = frame_for_current_document();
+    const auto initial_work = overlay.selection_overlay_geometry_work_counters();
+    for (auto &vertex : object.document.edit().vertices) {
+      vertex.position += QVec3{4.0F, -2.0F, 8.0F};
+    }
+    (void)frame_for_current_document();
+    const auto moved_work = overlay.selection_overlay_geometry_work_counters();
+    EXPECT_EQ(moved_work.geometry_build_count, initial_work.geometry_build_count);
+    EXPECT_EQ(moved_work.geometry_position_refresh_count,
+              initial_work.geometry_position_refresh_count + 1U);
+    EXPECT_EQ(moved_work.frame_position_refresh_count,
+              initial_work.frame_position_refresh_count + 1U);
+    object.document = original_document;
+    const auto undo_frame = frame_for_current_document();
+    expect_selection_overlay_frame_eq(undo_frame, frozen_frame);
+    const auto restored_work = overlay.selection_overlay_geometry_work_counters();
+    EXPECT_EQ(restored_work.geometry_build_count, initial_work.geometry_build_count);
+    EXPECT_EQ(restored_work.frame_position_refresh_count,
+              moved_work.frame_position_refresh_count + 1U);
+  }
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SemanticOverlayPositionRefreshRejectsChangedTriangulationAndCollapsedEdges) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 1;
+  object.selected = true;
+  object.component_edit_target = true;
+  object.document = service_uv_peel_strip_document();
+  object.selection.mode = quader_poly::SelectionMode::Vertex;
+  object.selection.vertices = {object.document.vertices.front().id};
+  ModelingOverlayService overlay;
+  std::uint64_t content_revision = 1U;
+  const auto verify = [&] {
+    const ModelingSelectionProjectionSnapshot snapshot(
+        {object}, SelectionMode::Vertex, object.id, content_revision++, 1U);
+    const auto &actual = overlay.selection_overlay_base_frame(snapshot);
+    const auto expected = build_selection_overlay_frame(
+        snapshot.objects(), SelectionMode::Vertex, object.id, {});
+    expect_selection_overlay_frame_eq(actual, expected);
+  };
+  verify();
+  const auto initial_work = overlay.selection_overlay_geometry_work_counters();
+  object.document.edit().vertices[0].position =
+      object.document.vertices[1].position;
+  verify();
+  object.document.edit().vertices[0].position = {-3.0F, 1.0F, 0.25F};
+  verify();
+  const auto work = overlay.selection_overlay_geometry_work_counters();
+  EXPECT_EQ(work.geometry_build_count, initial_work.geometry_build_count);
+  EXPECT_EQ(work.geometry_position_refresh_count,
+            initial_work.geometry_position_refresh_count + 2U);
+}
+
 TEST(ModelingSessionServiceSplitTests,
      ActiveComponentChangesInvalidateOnlyRelevantSemanticObjectFrames) {
   using namespace quader_editor_core;
@@ -4696,7 +5053,7 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     InstantOperationEnablementUsesHostSingleObjectConstraint) {
+     InstantOperationEnablementAllowsConnectAcrossApplicableObjects) {
   const ModelingInstantOperationCatalogEntry *connect =
       find_modeling_instant_operation_catalog_entry(
           ModelingInstantOperationId::ConnectVertices);
@@ -4718,7 +5075,7 @@ TEST(ModelingSessionServiceSplitTests,
   summary.selected_vertex_count = 2;
   summary.selected_object_count = 2;
 
-  EXPECT_FALSE(modeling_instant_operation_enabled(*connect, summary));
+  EXPECT_TRUE(modeling_instant_operation_enabled(*connect, summary));
 
   summary.selected_object_count = 1;
   EXPECT_TRUE(modeling_instant_operation_enabled(*connect, summary));
@@ -4734,6 +5091,8 @@ TEST(ModelingSessionServiceSplitTests,
 
   face_summary.selected_face_count = 2;
   EXPECT_TRUE(modeling_instant_operation_enabled(*combine_faces, face_summary));
+  face_summary.selected_object_count = 2;
+  EXPECT_FALSE(modeling_instant_operation_enabled(*combine_faces, face_summary));
 }
 
 TEST(ModelingSessionServiceSplitTests,

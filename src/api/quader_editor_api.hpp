@@ -20,6 +20,7 @@
 #include "api/quader_render_api.hpp"
 #include "api/quader_release_types.hpp"
 #include "api/quader_scene_documents_api.hpp"
+#include "api/quader_selection_diagnostics_api.hpp"
 #include "api/quader_standard_material_documents_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "api/quader_ui_api.hpp"
@@ -82,6 +83,8 @@ public:
     [[nodiscard]] const QuaderModelingApi& modeling() const;
     [[nodiscard]] QuaderSelectionApi& selection();
     [[nodiscard]] const QuaderSelectionApi& selection() const;
+    [[nodiscard]] QuaderSelectionDiagnosticsApi &selection_diagnostics();
+    [[nodiscard]] const QuaderSelectionDiagnosticsApi &selection_diagnostics() const;
     [[nodiscard]] QuaderAssetApi& assets();
     [[nodiscard]] const QuaderAssetApi& assets() const;
     [[nodiscard]] QuaderHistoryApi& history();

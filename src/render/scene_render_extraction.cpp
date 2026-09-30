@@ -12,6 +12,7 @@
 #include "assets/asset_registry.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "assets/mesh_wire_geometry.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/curve_solid_geometry_cache.hpp"
@@ -425,6 +426,9 @@ RenderMaterialBindingSnapshot::material_for_slot(std::uint32_t slot) const {
 
 RenderMeshAssetSnapshot render_mesh_asset_snapshot(AssetId mesh_id,
                                                    const MeshAsset &asset) {
+  if (const auto projection = asset.geometry_projection()) {
+    return render_mesh_asset_snapshot(mesh_id, asset, projection);
+  }
   const std::shared_ptr<const MeshGeometryPayload> geometry =
       asset.geometry_payload();
   RenderMeshAssetSnapshot snapshot{
@@ -439,6 +443,33 @@ RenderMeshAssetSnapshot render_mesh_asset_snapshot(AssetId mesh_id,
   snapshot.primitives = geometry->primitives;
   snapshot.present = true;
   snapshot.has_stable_cpu_topology = asset.has_stable_cpu_topology;
+  return snapshot;
+}
+
+RenderMeshAssetSnapshot render_mesh_asset_snapshot(
+    AssetId mesh_id, const MeshAsset &asset,
+    std::shared_ptr<const MeshGeometryProjection> projection) {
+  if (!projection) {
+    return render_mesh_asset_snapshot(mesh_id, asset);
+  }
+  RenderMeshAssetSnapshot snapshot{
+      .mesh_id = mesh_id,
+      .mesh_revision = asset.revision.value,
+      .geometry_payload = projection->source_geometry,
+      .geometry_projection = projection,
+      .geometry_token = reinterpret_cast<std::uintptr_t>(projection.get()),
+      .vertices = projection->vertices(),
+      .indices = projection->indices(),
+      .primitives = projection->primitives(),
+      .positions = projection->positions
+                       ? std::span<const QVec3>(*projection->positions)
+                       : std::span<const QVec3>{},
+      .present = projection->source_geometry != nullptr &&
+                 projection->positions != nullptr,
+      .has_stable_cpu_topology = asset.has_stable_cpu_topology,
+  };
+  snapshot.present = snapshot.present &&
+                     snapshot.positions.size() == snapshot.vertices.size();
   return snapshot;
 }
 
@@ -846,6 +877,12 @@ preview_material_component_signature(const MaterialComponent &material) {
 }
 
 } // namespace
+
+bool render_material_payloads_equal(
+    const RenderMaterialAssetSnapshot *left,
+    const RenderMaterialAssetSnapshot *right) {
+  return same_render_material_payload(left, right);
+}
 
 std::uint64_t instance_occurrence_token(EntityId definition,
                                         EntityId member,
@@ -1891,6 +1928,7 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .position_revision = mesh.position_revision,
         .dynamic_position_payload =
             std::move(mesh.dynamic_position_payload),
+        .geometry_projection = std::move(mesh.geometry_projection),
     });
     records.back().material_revision = records.back().material.revision;
   }

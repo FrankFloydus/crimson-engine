@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "math/glm_bridge.hpp"
@@ -141,20 +142,73 @@ struct SurfaceEdgeAccumulator final {
   std::uint64_t key = 0u;
 };
 
+/// Pins effective immutable streams without creating a legacy contiguous payload.
+struct SurfaceGeometryView final {
+  std::shared_ptr<const MeshGeometryPayload> payload;
+  std::shared_ptr<const MeshGeometryProjection> projection;
+  std::span<const MeshVertex> vertices;
+  std::span<const QVec3> positions;
+  std::span<const std::uint32_t> indices;
+  std::span<const MeshPrimitiveSpan> primitives;
+  MeshGeometryContentId content_id;
+
+  [[nodiscard]] QVec3 position(std::size_t index) const noexcept {
+    return positions.empty() ? vertices[index].position : positions[index];
+  }
+};
+
+[[nodiscard]] SurfaceGeometryView surface_geometry_view(const MeshAsset &mesh) {
+  SurfaceGeometryView view;
+  view.projection = mesh.geometry_projection();
+  if (view.projection) {
+    view.vertices = view.projection->vertices();
+    view.indices = view.projection->indices();
+    view.primitives = view.projection->primitives();
+    if (view.projection->positions) view.positions = *view.projection->positions;
+  } else {
+    view.payload = mesh.geometry_payload();
+    view.vertices = view.payload->vertices;
+    view.indices = view.payload->indices;
+    view.primitives = view.payload->primitives;
+  }
+  view.content_id = mesh.geometry_content_id();
+  return view;
+}
+
+[[nodiscard]] bool surface_geometry_equal(const SurfaceGeometryView &left,
+                                          const SurfaceGeometryView &right) {
+  if ((left.projection && left.projection == right.projection) ||
+      (!left.projection && !right.projection && left.payload == right.payload)) return true;
+  if (left.vertices.size() != right.vertices.size() || left.indices.size() != right.indices.size() ||
+      left.primitives.size() != right.primitives.size() ||
+      !std::equal(left.indices.begin(), left.indices.end(), right.indices.begin()) ||
+      !std::equal(left.primitives.begin(), left.primitives.end(), right.primitives.begin())) return false;
+  for (std::size_t index = 0u; index < left.vertices.size(); ++index) {
+    MeshVertex first = left.vertices[index];
+    MeshVertex second = right.vertices[index];
+    first.position = left.position(index);
+    second.position = right.position(index);
+    if (!mesh_asset_payload_detail::same_vertex(first, second)) return false;
+  }
+  return true;
+}
+
 [[nodiscard]] std::optional<SceneBounds> transformed_payload_bounds(
-    const MeshGeometryPayload &geometry, const QMat4 &world_from_local) {
-  if (geometry.vertices.empty() || !scene_matrix_is_finite(world_from_local)) {
+    const SurfaceGeometryView &geometry, const QMat4 &world_from_local) {
+  if (geometry.vertices.empty() || (!geometry.positions.empty() &&
+      geometry.positions.size() != geometry.vertices.size()) ||
+      (geometry.projection && !geometry.projection->positions) || !scene_matrix_is_finite(world_from_local)) {
     return std::nullopt;
   }
   const QVec3 first =
-      transform_point(world_from_local, geometry.vertices.front().position);
+      transform_point(world_from_local, geometry.position(0u));
   if (!finite_vector(first)) {
     return std::nullopt;
   }
   SceneBounds bounds{.min = first, .max = first};
   for (std::size_t index = 1u; index < geometry.vertices.size(); ++index) {
     const QVec3 point =
-        transform_point(world_from_local, geometry.vertices[index].position);
+        transform_point(world_from_local, geometry.position(index));
     if (!finite_vector(point)) {
       return std::nullopt;
     }
@@ -165,7 +219,7 @@ struct SurfaceEdgeAccumulator final {
 
 /// Pins one immutable mesh payload together with its local triangle BLAS.
 struct CachedSurfaceGeometry final {
-  std::shared_ptr<const MeshGeometryPayload> payload;
+  SurfaceGeometryView source;
   std::vector<NeutralTriangle> triangles;
   TriangleBvh bvh;
 };
@@ -175,7 +229,6 @@ struct FrozenSurfaceParticipant final {
   SceneSurfaceParticipant public_record;
   QMat4 world_from_local;
   QMat4 local_from_world;
-  std::shared_ptr<const MeshGeometryPayload> pinned_payload;
   std::shared_ptr<const CachedSurfaceGeometry> geometry;
 };
 
@@ -206,14 +259,23 @@ struct SurfaceLandmarkWorkCounters final {
   std::atomic<std::uint64_t> build_count = 0u;
 };
 
+/// Accumulates worker-local certificates without extending renderer lifetimes.
+struct SurfaceSelectionDepthWork final {
+  std::atomic<std::uint64_t> accepted = 0u;
+  std::atomic<std::uint64_t> rejected = 0u;
+  std::atomic<std::uint64_t> overflow = 0u;
+  std::atomic<std::uint64_t> fallback = 0u;
+  std::atomic<std::uint64_t> stale = 0u;
+};
+
 void append_landmarks(std::vector<SceneSurfaceLandmark> &landmarks,
                        const SceneSurfaceParticipant &participant,
-                       const MeshGeometryPayload &geometry,
+                       const SurfaceGeometryView &geometry,
                        const QMat4 &world_from_local) {
   std::vector<QVec3> world_vertices;
   world_vertices.reserve(geometry.vertices.size());
-  for (const MeshVertex &vertex : geometry.vertices) {
-    const QVec3 world = transform_point(world_from_local, vertex.position);
+  for (std::size_t index = 0u; index < geometry.vertices.size(); ++index) {
+    const QVec3 world = transform_point(world_from_local, geometry.position(index));
     if (!finite_vector(world)) {
       return;
     }
@@ -318,6 +380,10 @@ struct SceneSurfaceQuerySnapshot::Data final {
   std::shared_ptr<SurfaceLandmarkWorkCounters> landmark_work_counters;
   std::vector<FrozenSurfaceParticipant> participants;
   BoundsBvh tlas;
+  mutable std::once_flag selection_depth_once;
+  mutable std::shared_ptr<const ViewportSelectionDepthGeometry> selection_depth_geometry;
+  mutable std::vector<std::pair<std::size_t, std::size_t>> selection_depth_primitives;
+  std::shared_ptr<SurfaceSelectionDepthWork> selection_depth_work;
 };
 
 /// Adapts scene, asset, instance, and local-visibility state into BVHs.
@@ -366,6 +432,7 @@ public:
         std::make_shared<SceneSurfaceQuerySnapshot::Data>();
     next->revision = ++snapshot_revision_;
     next->landmark_work_counters = landmark_work_counters_;
+    next->selection_depth_work = selection_depth_work_;
     const auto local_allows = [&](EntityId entity) {
       if (local_snapshot.has_value()) {
         return local_snapshot->allows(entity);
@@ -401,6 +468,13 @@ public:
                                 ? snapshot_->landmark_count.load(
                                       std::memory_order_acquire)
                                 : 0u;
+    result.selection_depth = {
+        .gpu_accepted_witnesses = selection_depth_work_->accepted.load(std::memory_order_relaxed),
+        .gpu_rejected_witnesses = selection_depth_work_->rejected.load(std::memory_order_relaxed),
+        .gpu_overflow_witnesses = selection_depth_work_->overflow.load(std::memory_order_relaxed),
+        .cpu_fallback_witnesses = selection_depth_work_->fallback.load(std::memory_order_relaxed),
+        .stale_snapshot_queries = selection_depth_work_->stale.load(std::memory_order_relaxed),
+    };
     return result;
   }
 
@@ -414,18 +488,16 @@ public:
 
 private:
   [[nodiscard]] std::shared_ptr<const CachedSurfaceGeometry>
-  geometry_for(std::shared_ptr<const MeshGeometryPayload> payload,
+  geometry_for(SurfaceGeometryView source,
                SceneSurfaceParticipantId id) const {
-    const MeshGeometryContentId content_id = payload->content_id();
+    const MeshGeometryContentId content_id = source.content_id;
     for (GeometryCacheEntry &entry : geometry_cache_) {
       if (!(entry.content_id == content_id)) {
         continue;
       }
       const std::shared_ptr<const CachedSurfaceGeometry> &candidate =
           entry.geometry;
-      if (candidate &&
-          (candidate->payload.get() == payload.get() ||
-           mesh_geometry_payload_equal(*candidate->payload, *payload))) {
+      if (candidate && surface_geometry_equal(candidate->source, source)) {
         entry.last_use_sequence = ++geometry_use_sequence_;
         return candidate;
       }
@@ -442,33 +514,32 @@ private:
       if (previous != snapshot_->participants.end() &&
           previous->public_record.id == id) {
         const auto &candidate = previous->geometry;
-        if (candidate->payload->content_id() == content_id &&
-            (candidate->payload.get() == payload.get() ||
-             mesh_geometry_payload_equal(*candidate->payload, *payload))) {
+        if (candidate->source.content_id == content_id &&
+            surface_geometry_equal(candidate->source, source)) {
           return candidate;
         }
       }
     }
 
     auto geometry = std::make_shared<CachedSurfaceGeometry>();
-    geometry->payload = std::move(payload);
-    const MeshGeometryPayload &source = *geometry->payload;
-    geometry->triangles.reserve(source.indices.size() / 3u);
+    geometry->source = std::move(source);
+    const auto &effective = geometry->source;
+    geometry->triangles.reserve(effective.indices.size() / 3u);
     std::vector<std::size_t> primitive_indices;
-    primitive_indices.reserve(source.indices.size() / 3u);
-    for (std::size_t offset = 0u; offset + 2u < source.indices.size();
+    primitive_indices.reserve(effective.indices.size() / 3u);
+    for (std::size_t offset = 0u; offset + 2u < effective.indices.size();
          offset += 3u) {
-      const std::uint32_t first = source.indices[offset];
-      const std::uint32_t second = source.indices[offset + 1u];
-      const std::uint32_t third = source.indices[offset + 2u];
-      if (first >= source.vertices.size() ||
-          second >= source.vertices.size() || third >= source.vertices.size()) {
+      const std::uint32_t first = effective.indices[offset];
+      const std::uint32_t second = effective.indices[offset + 1u];
+      const std::uint32_t third = effective.indices[offset + 2u];
+      if (first >= effective.vertices.size() ||
+          second >= effective.vertices.size() || third >= effective.vertices.size()) {
         continue;
       }
       geometry->triangles.push_back({
-          neutral_vector(source.vertices[first].position),
-          neutral_vector(source.vertices[second].position),
-          neutral_vector(source.vertices[third].position),
+          neutral_vector(effective.position(first)),
+          neutral_vector(effective.position(second)),
+          neutral_vector(effective.position(third)),
       });
       primitive_indices.push_back(offset / 3u);
     }
@@ -492,18 +563,17 @@ private:
       bool effectively_locked) const {
     const std::optional<QMat4> local_from_world =
         try_scene_matrix_inverse(world_from_local);
-    std::shared_ptr<const MeshGeometryPayload> payload =
-        mesh.geometry_payload();
+    SurfaceGeometryView source = surface_geometry_view(mesh);
     const std::optional<SceneBounds> bounds =
         local_from_world.has_value()
-            ? transformed_payload_bounds(*payload, world_from_local)
+            ? transformed_payload_bounds(source, world_from_local)
             : std::nullopt;
     if (!local_from_world.has_value() || !bounds.has_value() ||
         !valid_bounds(*bounds)) {
       return;
     }
     std::shared_ptr<const CachedSurfaceGeometry> geometry =
-        geometry_for(payload, id);
+        geometry_for(std::move(source), id);
     const SceneSurfaceParticipant public_record{
         .id = id,
         .world_bounds = *bounds,
@@ -515,7 +585,6 @@ private:
         .public_record = public_record,
         .world_from_local = world_from_local,
         .local_from_world = *local_from_world,
-        .pinned_payload = std::move(payload),
         .geometry = std::move(geometry),
     });
   }
@@ -599,6 +668,8 @@ private:
   mutable std::uint64_t snapshot_revision_ = 0u;
   std::shared_ptr<SurfaceLandmarkWorkCounters> landmark_work_counters_ =
       std::make_shared<SurfaceLandmarkWorkCounters>();
+  std::shared_ptr<SurfaceSelectionDepthWork> selection_depth_work_ =
+      std::make_shared<SurfaceSelectionDepthWork>();
   mutable std::shared_ptr<const SceneSurfaceQuerySnapshot::Data> snapshot_;
   mutable SurfaceSnapshotFingerprint fingerprint_;
   mutable bool fingerprint_valid_ = false;
@@ -639,7 +710,7 @@ SceneSurfaceQuerySnapshot::landmarks() const {
     std::vector<SceneSurfaceLandmark> landmarks;
     for (const FrozenSurfaceParticipant &participant : data_->participants) {
       append_landmarks(landmarks, participant.public_record,
-                       *participant.pinned_payload, participant.world_from_local);
+                       participant.geometry->source, participant.world_from_local);
     }
     std::ranges::sort(
         landmarks,
@@ -826,7 +897,140 @@ SceneSurfaceQuerySnapshot SceneSurfaceQuery::snapshot_from_data(
 }
 
 SceneSurfaceQuerySnapshot SceneSurfaceQuery::snapshot() const {
-  return impl_->snapshot();
+  auto result = impl_->snapshot();
+  result.selection_depth_source_ = selection_depth_source_.lock();
+  return result;
+}
+
+namespace {
+
+// The GPU projects rounded world vertices while the exact oracle transforms
+// rays into local space. Certify only well-conditioned rigid/uniform mappings;
+// other occurrences still supply exact rejection candidates and CPU fallback.
+[[nodiscard]] bool conservative_selection_transform(const QMat4 &world, const QMat4 &local) {
+  const auto &matrix = world.values;
+  const auto &inverse = local.values;
+  std::array<double, 3u> squared_lengths{};
+  for (std::size_t column = 0u; column < 3u; ++column) {
+    for (std::size_t row = 0u; row < 3u; ++row) {
+      const double value = matrix[column * 4u + row];
+      squared_lengths[column] += value * value;
+    }
+  }
+  const double scale = *std::max_element(squared_lengths.begin(), squared_lengths.end());
+  if (!(scale > 0.0) || !std::isfinite(scale)) return false;
+  constexpr double kRelativeTolerance = 16.0 * std::numeric_limits<float>::epsilon();
+  for (std::size_t left = 0u; left < 3u; ++left) {
+    if (std::abs(squared_lengths[left] - scale) > scale * kRelativeTolerance) return false;
+    for (std::size_t right = left + 1u; right < 3u; ++right) {
+      double product = 0.0;
+      for (std::size_t row = 0u; row < 3u; ++row) product +=
+          static_cast<double>(matrix[left * 4u + row]) * matrix[right * 4u + row];
+      if (std::abs(product) > scale * kRelativeTolerance) return false;
+    }
+  }
+  for (std::size_t row = 0u; row < 3u; ++row) {
+    for (std::size_t column = 0u; column < 4u; ++column) {
+      double product = column == 3u ? matrix[12u + row] : 0.0;
+      double magnitude = std::abs(product);
+      for (std::size_t inner = 0u; inner < 3u; ++inner) {
+        const double term = static_cast<double>(matrix[inner * 4u + row]) * inverse[column * 4u + inner];
+        product += term;
+        magnitude += std::abs(term);
+      }
+      const double expected = row == column ? 1.0 : 0.0;
+      if (!std::isfinite(product) || std::abs(product - expected) >
+          kRelativeTolerance * (column == 3u ? std::max(1.0, magnitude) : 1.0)) return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] double selection_transform_magnitude(const QMat4 &world, NeutralVector point) {
+  const std::array<double, 3u> coordinates{point.x, point.y, point.z};
+  double magnitude = 0.0;
+  for (std::size_t row = 0u; row < 3u; ++row) {
+    double sum = std::abs(static_cast<double>(world.values[12u + row]));
+    for (std::size_t column = 0u; column < 3u; ++column) sum +=
+        std::abs(static_cast<double>(world.values[column * 4u + row]) * coordinates[column]);
+    magnitude = std::max(magnitude, sum);
+  }
+  return magnitude;
+}
+
+} // namespace
+
+void SceneSurfaceQuery::set_selection_depth_source(
+    std::weak_ptr<const ViewportSelectionDepthSource> source) {
+  selection_depth_source_ = std::move(source);
+}
+
+std::shared_ptr<const ViewportSelectionDepthGeometry>
+SceneSurfaceQuerySnapshot::selection_depth_geometry() const {
+  if (!data_) return {};
+  std::call_once(data_->selection_depth_once, [this] {
+    QDR_PROFILE_SCOPE("Selection GPU derive frozen triangles");
+    auto geometry = std::make_shared<ViewportSelectionDepthGeometry>();
+    std::size_t count = 0u;
+    for (const auto &participant : data_->participants) count += participant.geometry->triangles.size();
+    geometry->triangles.reserve(count);
+    data_->selection_depth_primitives.reserve(count);
+    for (std::size_t participant_index = 0u; participant_index < data_->participants.size(); ++participant_index) {
+      const auto &participant = data_->participants[participant_index];
+      geometry->conservative_transforms = geometry->conservative_transforms &&
+          conservative_selection_transform(participant.world_from_local, participant.local_from_world);
+      for (std::size_t triangle_index = 0u; triangle_index < participant.geometry->triangles.size(); ++triangle_index) {
+        const auto &triangle = participant.geometry->triangles[triangle_index];
+        geometry->transform_arithmetic_magnitude = std::max({geometry->transform_arithmetic_magnitude,
+            selection_transform_magnitude(participant.world_from_local, triangle.a),
+            selection_transform_magnitude(participant.world_from_local, triangle.b),
+            selection_transform_magnitude(participant.world_from_local, triangle.c)});
+        geometry->triangles.push_back({
+            transform_point(participant.world_from_local, {triangle.a.x, triangle.a.y, triangle.a.z}),
+            transform_point(participant.world_from_local, {triangle.b.x, triangle.b.y, triangle.b.z}),
+            transform_point(participant.world_from_local, {triangle.c.x, triangle.c.y, triangle.c.z}),
+        });
+        data_->selection_depth_primitives.emplace_back(participant_index, triangle_index);
+      }
+    }
+    data_->selection_depth_geometry = std::move(geometry);
+  });
+  return data_->selection_depth_geometry;
+}
+
+std::optional<float> SceneSurfaceQuerySnapshot::selection_depth_triangle_distance(
+    std::uint32_t triangle_id, QVec3 origin, QVec3 direction) const {
+  if (!data_ || triangle_id == 0u || triangle_id > data_->selection_depth_primitives.size()) return {};
+  const auto [participant_index, triangle_index] = data_->selection_depth_primitives[triangle_id - 1u];
+  const auto &participant = data_->participants[participant_index];
+  const QVec3 local_origin = transform_point(participant.local_from_world, origin);
+  const QVec3 local_direction = transform_vector(participant.local_from_world, normalize_or_zero(direction));
+  if (!finite_vector(local_origin) || !finite_vector(local_direction) ||
+      length_squared(local_direction) <= kRayEpsilon * kRayEpsilon) return {};
+  const auto hit = quader_geometry::intersect_ray_triangle<float>(
+      NeutralRay{neutral_vector(local_origin), neutral_vector(local_direction)},
+      participant.geometry->triangles[triangle_index], kRayEpsilon);
+  return hit.hit && hit.distance >= 0.0f ? std::optional<float>(hit.distance) : std::nullopt;
+}
+
+std::shared_ptr<const ViewportSelectionDepthSnapshot>
+SceneSurfaceQuerySnapshot::selection_depth_snapshot(const ViewportSelectionDepthCamera &camera) const {
+  if (!selection_depth_source_ || !data_) return {};
+  const auto result = selection_depth_source_->latest();
+  // No GPU export is built by a query merely to find that its view is stale.
+  return result && data_->selection_depth_geometry &&
+          result->matches(data_->selection_depth_geometry.get(), camera) ? result : nullptr;
+}
+
+void SceneSurfaceQuerySnapshot::record_selection_depth_work(
+    const ViewportSelectionDepthQueryStats &work) const {
+  if (!data_ || !data_->selection_depth_work) return;
+  auto &counters = *data_->selection_depth_work;
+  counters.accepted.fetch_add(work.gpu_accepted_witnesses, std::memory_order_relaxed);
+  counters.rejected.fetch_add(work.gpu_rejected_witnesses, std::memory_order_relaxed);
+  counters.overflow.fetch_add(work.gpu_overflow_witnesses, std::memory_order_relaxed);
+  counters.fallback.fetch_add(work.cpu_fallback_witnesses, std::memory_order_relaxed);
+  counters.stale.fetch_add(work.stale_snapshot_queries, std::memory_order_relaxed);
 }
 
 SceneSurfaceQueryStats SceneSurfaceQuery::stats() const noexcept {

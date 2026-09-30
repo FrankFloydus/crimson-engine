@@ -688,7 +688,7 @@ public:
 
   [[nodiscard]] ViewportOverlayFrame
   build_selection_overlay_frame() const override {
-    return modeling_.selection_overlay_frame(options_);
+    return modeling_.selection_overlay_render_frame(options_);
   }
 
 private:
@@ -1793,6 +1793,13 @@ void QtViewportPanel::prepare_viewports(
     renderer.apply_scene_settings(
         scene_settings, viewport_shading_uses_scene_lighting(shading), pane_settings);
     renderer.update_camera(pane_workspace.camera);
+    if (pane_state.id == focused_pane) {
+      const bool selection_depth_eligible = !viewport_interaction_active &&
+          (cached_overlay_mode == ModelingSelectionMode::Vertex || cached_overlay_mode == ModelingSelectionMode::Face) &&
+          !pane_settings.bool_value(ViewportBoolSettingId::BackfaceSelection);
+      QuaderRenderApiRuntimeAccess::prepare_selection_depth(editor.render(), renderer,
+          pane_workspace.camera, selection_depth_eligible);
+    }
     renderer.update_ground_grid(pane_workspace.camera, grid_world_size,
                                 pane_settings, grid_visible);
     renderer.set_scene_layer_mask(
@@ -4056,8 +4063,15 @@ void QtViewportPanel::process_viewport_input(
       result.shortcut.kind == ViewportShortcutKind::ShadingPopup &&
       localization_ != nullptr;
   const bool show_quick_menu = show_add_popup || show_shading_popup;
+  const bool show_marking_menu =
+      result.shortcut_handled &&
+      result.shortcut.kind == ViewportShortcutKind::MarkingMenu &&
+      result.shortcut.initiating_chord.has_value() && localization_ != nullptr &&
+      input.viewport_hovered && !input.text_input_active && !interaction_locked &&
+      !input.pointer_interaction_canceled && !result.navigation_active &&
+      !input.active_tool_owns_viewport && !input.modal_tool_active;
   QPoint shortcut_popup_global_point;
-  if (show_delete_popup || show_quick_menu) {
+  if (show_delete_popup || show_quick_menu || show_marking_menu) {
     const qreal scale =
         std::max<qreal>(pane_state.surface->devicePixelRatio(), 1.0);
     const QPoint local_point(
@@ -4066,6 +4080,41 @@ void QtViewportPanel::process_viewport_input(
         static_cast<int>(std::lround(input.mouse_local.y /
                                      static_cast<float>(scale))));
     shortcut_popup_global_point = pane_state.surface->mapToGlobal(local_point);
+  }
+
+  if (show_marking_menu) {
+    const QuaderInputChord initiating_chord = *result.shortcut.initiating_chord;
+    // A complete tap can arrive in one sampled frame. Its release already
+    // canceled the gesture at the origin; do not enter an unclosable hold loop.
+    const bool already_released = std::any_of(
+        input.released_input_chords.begin(), input.released_input_chords.end(),
+        [&initiating_chord](const QuaderInputChord &released) {
+          return released.device == initiating_chord.device &&
+                 released.key == initiating_chord.key &&
+                 released.mouse_button == initiating_chord.mouse_button;
+        });
+    if (!already_released) {
+      (void)workspace_->focus_pane(*input_pane);
+      update_focused_pane_indicator();
+      const bool changed = marking_menu_presenter_.show(
+          *pane_state.surface_container, shortcut_popup_global_point, *input_pane,
+          initiating_chord, editor, input_router_, *localization_, ui_scale_metrics_,
+          {.current_generation = &runtime_binding_generation_,
+           .expected_generation = input_binding_generation});
+      if (runtime_binding_generation_ != input_binding_generation) {
+        return;
+      }
+      // The popup consumed the release. Discard its held-key/pointer samples
+      // before the surface regains ownership of the next editing gesture.
+      pane_state.surface->abandon_input();
+      suppressed_keybinding_chords_.clear();
+      editor.commands().reset_pending_viewport_keybinding_chord();
+      if (changed) {
+        hover_controller_.invalidate();
+        sync_pane_control_selection(pane_state);
+      }
+    }
+    return;
   }
 
   const bool suppress_hover_work =

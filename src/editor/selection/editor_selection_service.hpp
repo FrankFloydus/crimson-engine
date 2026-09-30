@@ -96,6 +96,8 @@ struct ResolvedSelectionHit {
   double pick_distance_pixels = 0.0;
   std::optional<QVec3> world_position;
   std::vector<ModelingSelectionVisibilityWitness> visibility_witnesses;
+  /// Exact component rectangle match whose publication needs no depth metrics.
+  bool rectangle_target_only = false;
   std::array<std::uint64_t, 4> stable_key{};
 };
 

@@ -266,6 +266,7 @@ ResolvedSelectionHit resolved_modeling_hit(ModelingSelectionHit hit) {
       .pick_distance_pixels = hit.pick_distance,
       .world_position = hit.world_position,
       .visibility_witnesses = std::move(hit.visibility_witnesses),
+      .rectangle_target_only = hit.rectangle_target_only,
       .stable_key = {
           static_cast<std::uint64_t>(domain), hit.entity,
           static_cast<std::uint64_t>(

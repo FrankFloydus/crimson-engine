@@ -2288,6 +2288,129 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
+     FaceDimensionPreviewMappingRetainsOnlySelectedAuthoredVertices) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedFaceEdge,
+      .start = {-8, 0, 0}, .end = {8, 4, 0},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 10, .edge_a = 1, .edge_b = 2, .face_id = 1}});
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::SelectedVisibleFace,
+      .a = {-8, 0, 0}, .b = {8, 4, 0}, .c = {8, 0, 20},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 10, .vertex_id = 1, .edge_a = 2, .edge_b = 3,
+                  .face_id = 1}});
+  auto second_line = frame.lines.front();
+  second_line.element.object_id = 20;
+  frame.lines.push_back(second_line);
+  StaticSelectionFrameProvider provider(frame);
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.style_selection_context = ViewportOverlaySelectionContext::Face;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Face;
+  request.camera = dimension_test_camera();
+  std::vector previews{dimension_preview(10, 100), dimension_preview(20, 200),
+                       dimension_preview(10, 100)};
+  previews.front().mesh.edit_geometry().vertices.push_back(
+      {.position = {1000, 1000, 1000}, .source_vertex_id = 1});
+  previews.front().mesh.edit_geometry().vertices.push_back(
+      {.position = {2000, 2000, 2000}, .source_vertex_id = 4});
+  previews.front().dynamic_position_payload = std::make_shared<const std::vector<QVec3>>(
+      std::vector<QVec3>{{2, 1, 0}, {4, 3, 0}, {3, 2, 1},
+                         {1000, 1000, 1000}, {2000, 2000, 2000}});
+  previews[1].transform.values[12] = 10;
+  previews[2].transform.values[12] = 3000;
+  request.selection_dimension_preview_meshes = previews;
+  request.tool_preview_overlay_revision = 1u;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 1, 0}, {14, 3, 1});
+  const auto initial_work = coordinator.work_counters();
+  EXPECT_EQ(initial_work.selection_dimension_mapping_build_count, 1u);
+  EXPECT_EQ(initial_work.selection_dimension_mapping_source_record_count, 11u);
+  EXPECT_EQ(initial_work.selection_dimension_position_read_count, 5u);
+  for (int step = 1; step <= 3; ++step) {
+    const float offset = static_cast<float>(step);
+    previews.front().dynamic_position_payload = std::make_shared<const std::vector<QVec3>>(
+        std::vector<QVec3>{{2 + offset, 1, 0}, {4 + offset, 3, 0},
+                           {3 + offset, 2, 1}, {1000, 1000, 1000}, {2000, 2000, 2000}});
+    previews[1].transform.values[12] = 10 + 2 * offset;
+    ++request.tool_preview_overlay_revision;
+    const auto result = coordinator.submit(request, settings, target);
+    expect_dimension_bounds(result, {2 + offset, 1, 0}, {14 + 2 * offset, 3, 1});
+    ASSERT_TRUE(result.selection_dimension_bounds);
+    EXPECT_GT(expect_dimension_box_edges(target.dynamic_frame,
+        *result.selection_dimension_bounds, request.camera), 0u);
+    const auto work = coordinator.work_counters();
+    EXPECT_EQ(work.selection_dimension_mapping_build_count, 1u);
+    EXPECT_EQ(work.selection_dimension_mapping_source_record_count, 11u);
+    EXPECT_EQ(work.selection_dimension_position_read_count,
+              static_cast<std::uint64_t>(5 * (step + 1)));
+    EXPECT_EQ(provider.build_count, 1);
+  }
+  // A new immutable render payload with identical authored-ID order is compatible.
+  previews.front().mesh.edit_geometry().vertices.front().normal = {1, 0, 0};
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {5, 1, 0}, {20, 3, 1});
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_mapping_build_count, 1u);
+  const auto retained_work = coordinator.work_counters();
+  (void)coordinator.submit(request, settings, target);
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_position_read_count,
+            retained_work.selection_dimension_position_read_count);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     FaceDimensionPreviewMappingInvalidatesLayoutEligibilityAndSelection) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedFaceEdge,
+      .start = {-8, 0, 0}, .end = {8, 4, 0},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 10, .edge_a = 1, .edge_b = 9, .face_id = 1}});
+  StaticSelectionFrameProvider provider(frame);
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.style_selection_context = ViewportOverlaySelectionContext::Face;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Face;
+  std::vector previews{dimension_preview(10, 100)};
+  request.selection_dimension_preview_meshes = previews;
+  request.tool_preview_overlay_revision = 1u;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 1, 0}, {8, 4, 0});
+  // The external layout key is deliberately unchanged; exact source IDs decide reuse.
+  auto &vertices = previews.front().mesh.edit_geometry().vertices;
+  std::swap(vertices[0].source_vertex_id, vertices[1].source_vertex_id);
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {4, 3, 0}, {8, 4, 0});
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_mapping_build_count, 2u);
+  const auto accepted_positions = previews.front().dynamic_position_payload;
+  previews.front().dynamic_position_payload = std::make_shared<const std::vector<QVec3>>(
+      std::vector<QVec3>{{99, 99, 99}});
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {-8, 0, 0}, {8, 4, 0});
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_mapping_build_count, 3u);
+  previews.front().dynamic_position_payload = accepted_positions;
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {4, 3, 0}, {8, 4, 0});
+  frame.lines.front().element.edge_a = 2;
+  provider.set_frame(frame);
+  ++request.selection_source.selection_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {2, 1, 0}, {8, 4, 0});
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_mapping_build_count, 5u);
+  request.selection_dimension_preview_meshes = {};
+  ++request.tool_preview_overlay_revision;
+  expect_dimension_bounds(coordinator.submit(request, settings, target), {-8, 0, 0}, {8, 4, 0});
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_mapping_build_count, 6u);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
      PartialGroupAndInstancePreviewsRetainUntouchedLeavesWithoutOldExtrema) {
   StaticSelectionFrameProvider provider({});
   RenderOverlaySelectionSnapshot scene;

@@ -1348,10 +1348,15 @@ to_material_document(const QuaderMaterialAsset &material) {
 
 inline QuaderToolPreviewMesh
 to_api_tool_preview_mesh(const ModelingToolPreviewMesh &preview) {
+  MeshAsset effective_mesh = preview.mesh;
+  if (preview.geometry_projection) {
+    effective_mesh.share_geometry(
+        preview.geometry_projection->materialized_geometry());
+  }
   return {
       .source_entity = preview.source_entity,
       .material = preview.material.material,
-      .mesh = to_api_mesh_asset(preview.mesh),
+      .mesh = to_api_mesh_asset(effective_mesh),
       .transform = preview.transform,
       .instance_transforms = preview.instance_transforms,
   };

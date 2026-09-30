@@ -48,6 +48,11 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
   if (selection.mode != SelectionMode::Vertex) {
     return OperationResult::failure("Merge needs vertex selection mode.");
   }
+    const OperationResult source_validation =
+        validate_authored_operation_candidate(document, document);
+    if (!source_validation.success) {
+        return source_validation;
+    }
 
     std::vector<ElementId> selected_vertices;
     selected_vertices.reserve(selection.vertices.size());
@@ -93,7 +98,8 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
     }
 
     Document candidate;
-    const OperationResult candidate_result = build_vertex_merge_candidate(document, candidate, merge_vertex_ids, survivor_vertex_id, center);
+    const OperationResult candidate_result = build_topology_vertex_merge_candidate(
+        document, candidate, merge_vertex_ids, survivor_vertex_id, center, true);
     if (!candidate_result.changed) {
         return candidate_result;
     }
@@ -101,9 +107,13 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
     if (find_vertex(candidate, survivor_vertex_id) == nullptr) {
         return OperationResult::failure("Merge would remove the center vertex.");
     }
+    const OperationResult validation =
+        validate_authored_operation_candidate(document, candidate);
+    if (!validation.success) {
+        return validation;
+    }
 
     document = std::move(candidate);
-    prune_unused_vertices(document);
 
     selection.clear();
     selection.mode = SelectionMode::Vertex;

@@ -19,6 +19,7 @@
 #include <quader/modeling/payloads.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
 #include <quader/modeling/mesh/polygon_document.hpp>
+#include <quader/modeling/neutral/polygon/document_read_snapshot.hpp>
 
 #include <array>
 #include <cstddef>
@@ -118,6 +119,14 @@ struct ModelingSelectedVerticesSnapshot final {
   bool ok = false;
   std::string message;
   std::vector<ModelingSelectedVertexObjectSnapshot> objects;
+};
+
+/// Pins one authored polygon publication and its generation-bearing SDK owner.
+struct ModelingPolygonDocumentReadSnapshot final {
+  modeling::ObjectId object{};
+  modeling::PolygonDocumentReadSnapshot document;
+  modeling::PolygonSelectionSnapshot selection;
+  bool preview = false;
 };
 
 /// Carries host-resolved local vertex targets back to the SDK owner.
@@ -308,6 +317,10 @@ public:
   [[nodiscard]] const void *session_identity() const noexcept;
   [[nodiscard]] std::optional<MeshAsset>
   compile_object_mesh(int modeling_object_id) const;
+  /// Returns accepted preview coordinates, rejecting suppressed participants.
+  [[nodiscard]] modeling::Result<ModelingPolygonDocumentReadSnapshot>
+  polygon_document_read_snapshot(int modeling_object_id,
+                                 bool include_preview = true) const;
   [[nodiscard]] ModelingSdkPlaneCutPreviewResult preview_plane_cut(
       std::span<const int> modeling_object_ids,
       const std::array<QVec3, 3> &world_plane_points,
@@ -511,6 +524,8 @@ public:
       float closed_edge_ledge_size = 0.0F);
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   workspace_transform_preview_meshes() const;
+  [[nodiscard]] std::shared_ptr<const ModelingAcceptedOverlayCoordinates>
+  accepted_overlay_coordinates() const;
   [[nodiscard]] std::uint64_t workspace_transform_preview_revision() const;
   [[nodiscard]] bool workspace_transform_preview_active() const;
   void apply_workspace_transform_preview_to_overlay(
@@ -601,6 +616,9 @@ public:
   /// captured the completed edit. Active publication and previews defer it.
   void release_redundant_sdk_history();
   [[nodiscard]] ModelingSdkProjectionSnapshot capture_snapshot() const;
+  /** Captures only promoted non-modeling children for an explicit merge history item. */
+  [[nodiscard]] ModelingSdkProjectionSnapshot capture_component_merge_snapshot(
+      const ModelingSdkProjectionSnapshot &before = {}) const;
   [[nodiscard]] ModelingSdkProjectionSnapshot rebase_snapshot_host_projection(
       const ModelingSdkProjectionSnapshot &snapshot) const;
   [[nodiscard]] ModelingSdkProjectionSnapshot

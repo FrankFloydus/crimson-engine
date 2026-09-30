@@ -103,6 +103,8 @@ public:
     engine_->pumpMessageQueues();
     view_.shutdown();
     mesh_outline_masks_.shutdown();
+    point_audit_cache_.shutdown();
+    point_audit_factory_.shutdown();
     bridge_.shutdown();
     registry_.clear();
     materials_.shutdown();
@@ -338,6 +340,42 @@ public:
   void set_overlay_audit_frame(ViewportOverlayFrame frame) {
     overlay_audit_frame_.frame = std::move(frame);
     ++revision_;
+  }
+
+  void present_retained_point_frame(const ViewportOverlayFrame &frame) {
+    initialize_point_audit();
+    (void)point_audit_cache_.set_overlay_frame(
+        0u, viewport_grid_layer_mask(0u), frame,
+        ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}));
+  }
+
+  OverlayRenderableCacheStats retained_point_stats() const {
+    return point_audit_cache_.stats(0u);
+  }
+
+  bool update_retained_point_positions(
+      const std::vector<RenderToolPreviewMeshRecord> &previews) {
+    return point_audit_cache_.set_transform_position_streams(previews);
+  }
+
+  QImage capture_legacy_point_frame(const ViewportOverlayFrame &frame) {
+    initialize_point_audit();
+    point_audit_cache_.clear_slot(0u);
+    const auto camera =
+        ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight});
+    const auto signatures = OverlayRenderableBuilder::frame_signatures(frame);
+    OverlayDepthStampPointVisibilityFilter visibility;
+    std::vector<OverlayRenderableProxy> proxies;
+    for (const auto layer : kViewportOverlayDrawOrder) {
+      auto layer_proxies = point_audit_factory_.create_layer_proxies(
+          OverlayRenderableBuilder::build_layer(
+              frame, camera, layer, &signatures, 0u, &visibility),
+          viewport_grid_layer_mask(0u));
+      for (auto &proxy : layer_proxies) proxies.push_back(std::move(proxy));
+    }
+    auto image = capture();
+    for (auto &proxy : proxies) point_audit_factory_.destroy(proxy);
+    return image;
   }
 
   static void append_overlay_audit_occluder(ViewportOverlayFrame &frame, float z) {
@@ -715,6 +753,10 @@ public:
   bool present_component_transform_sample(ViewportOverlaySelectionContext context,
                                           const ViewportSettings &settings) {
     return present_component_sample(context, 1.0f, settings, true);
+  }
+
+  OverlayRenderableCacheStats component_overlay_stats() const {
+    return bridge_.overlay_stats();
   }
 
   bool present_component_sample(ViewportOverlaySelectionContext context,
@@ -1154,7 +1196,7 @@ public:
 
   ViewportOverlayFrame build_selection_overlay_frame() const override {
     ++selection_frame_builds_;
-    return session_.modeling().selection_overlay_frame();
+    return session_.modeling().selection_overlay_render_frame();
   }
 
   std::uint64_t selection_frame_builds() const { return selection_frame_builds_; }
@@ -1235,6 +1277,16 @@ public:
   }
 
 private:
+  void initialize_point_audit() {
+    if (point_audit_factory_.initialized()) return;
+    point_audit_factory_.initialize(
+        *engine_, *scene_, materials_.vertex_color_overlay(),
+        materials_.overlay_line(), materials_.edit_wire_line(),
+        materials_.overlay_point(), materials_.overlay_icon(),
+        std::filesystem::path(QCoreApplication::applicationDirPath().toStdWString()));
+    point_audit_cache_.initialize(point_audit_factory_);
+  }
+
   QuaderEditorApi &array_editor() {
     // Match the viewport's retained facade: recreating it every frame discards
     // QuaderRenderApi's source stamps and republishes an unchanged preview.
@@ -1313,6 +1365,8 @@ private:
   FilamentMaterialLibrary materials_;
   TextureRegistry registry_;
   SceneRenderBridge bridge_;
+  OverlayProxyFactory point_audit_factory_;
+  OverlayRenderableCache point_audit_cache_;
   SelectedMeshOutlineMaskCache mesh_outline_masks_;
   ViewportRenderer view_;
   ViewportCameraController camera_;
@@ -2014,6 +2068,385 @@ TEST(SelectionOverlayRuntimeTests,
   }
 }
 
+TEST(SelectionOverlayRuntimeTests,
+     VulkanComponentPointClassesRetainGeometryAndMatchLegacyPasses) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-component-point-retention-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  for (const auto projection : {ViewportProjection::Perspective,
+                                ViewportProjection::Orthographic}) {
+    SCOPED_TRACE(projection == ViewportProjection::Perspective ? "perspective" : "orthographic");
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.0f, projection, 0.1f));
+    ViewportOverlayFrame frame;
+    harness.append_overlay_audit_occluder(frame, -0.2f);
+    const auto point = [&](ViewportOverlayLayer layer, QVec2 pixel,
+                           std::uint32_t color, int vertex, float z = 0.5f) {
+      const bool selected = layer == ViewportOverlayLayer::SelectedVertex;
+      return ViewportOverlayPoint{
+          .layer = layer,
+          .position = harness.overlay_audit_world_point(pixel, z),
+          .color = color, .size_pixels = selected ? 13.0f : 9.0f,
+          .style_role = ViewportOverlayStyleRole::ExplicitColor,
+          .source = ViewportOverlaySource::ComponentSelection,
+          .element = {.object_id = 1, .vertex_id = vertex},
+          .outline_growth_pixels = selected ? 2.0f : 0.0f};
+    };
+    frame.points = {
+        point(ViewportOverlayLayer::UnselectedVertex, {319.0f, 240.0f}, rgba8(40, 220, 255, 192), 0),
+        point(ViewportOverlayLayer::SelectedVertex, {323.0f, 240.0f}, rgba8(250, 80, 40, 160), 1),
+        point(ViewportOverlayLayer::SelectedVertex, {325.0f, 240.0f}, rgba8(255, 225, 80, 160), 2),
+        point(ViewportOverlayLayer::UnselectedVertex, {440.0f, 240.0f}, rgba8(40, 220, 255), 3, -0.5f)};
+    harness.present_retained_point_frame(frame);
+    const auto initial = harness.capture();
+    ASSERT_FALSE(initial.isNull());
+    EXPECT_EQ(initial, harness.capture_legacy_point_frame(frame))
+        << "Overlapping ordinary/active colors and outline ordering match existing passes.";
+    harness.present_retained_point_frame(frame);
+    const auto before_class_change = harness.retained_point_stats();
+    frame.points[0].layer = ViewportOverlayLayer::SelectedVertex;
+    frame.points[0].size_pixels = 13.0f;
+    frame.points[0].outline_growth_pixels = 2.0f;
+    frame.points[1].layer = ViewportOverlayLayer::UnselectedVertex;
+    frame.points[1].size_pixels = 9.0f;
+    frame.points[1].outline_growth_pixels = 0.0f;
+    harness.present_retained_point_frame(frame);
+    const auto reclassified = harness.retained_point_stats();
+    EXPECT_EQ(reclassified.uploads.position_upload_count, before_class_change.uploads.position_upload_count);
+    EXPECT_EQ(reclassified.uploads.index_upload_count, before_class_change.uploads.index_upload_count);
+    EXPECT_EQ(reclassified.uploads.static_upload_count, before_class_change.uploads.static_upload_count);
+    EXPECT_EQ(reclassified.point_geometry_update_count, before_class_change.point_geometry_update_count);
+    EXPECT_GT(reclassified.uploads.appearance_upload_count, before_class_change.uploads.appearance_upload_count);
+    const auto class_image = harness.capture();
+    ASSERT_FALSE(class_image.isNull());
+    EXPECT_NE(class_image, initial);
+    EXPECT_EQ(class_image, harness.capture_legacy_point_frame(frame));
+
+    harness.present_retained_point_frame(frame);
+    const auto before_style = harness.retained_point_stats();
+    for (auto &marker : frame.points) {
+      marker.color = viewport_active_selection_color(marker.color);
+      marker.size_pixels *= 2.0f;
+      marker.outline_growth_pixels = *marker.outline_growth_pixels * 2.0f;
+    }
+    harness.present_retained_point_frame(frame);
+    const auto restyled = harness.retained_point_stats();
+    EXPECT_EQ(restyled.uploads.position_upload_count, before_style.uploads.position_upload_count);
+    EXPECT_EQ(restyled.uploads.index_upload_count, before_style.uploads.index_upload_count);
+    EXPECT_EQ(restyled.uploads.static_upload_count, before_style.uploads.static_upload_count);
+    EXPECT_GT(restyled.uploads.appearance_upload_count, before_style.uploads.appearance_upload_count);
+    const auto style_image = harness.capture();
+    ASSERT_FALSE(style_image.isNull());
+    EXPECT_NE(style_image, class_image);
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.4f, projection, 0.1f));
+    harness.present_retained_point_frame(frame);
+    const auto camera_only = harness.retained_point_stats();
+    EXPECT_EQ(camera_only.uploads.position_upload_count, restyled.uploads.position_upload_count);
+    EXPECT_EQ(camera_only.uploads.index_upload_count, restyled.uploads.index_upload_count);
+    EXPECT_EQ(camera_only.uploads.static_upload_count, restyled.uploads.static_upload_count);
+    EXPECT_EQ(camera_only.uploads.appearance_upload_count, restyled.uploads.appearance_upload_count);
+    const auto camera_image = harness.capture();
+    ASSERT_FALSE(camera_image.isNull());
+    EXPECT_EQ(camera_image, harness.capture_legacy_point_frame(frame));
+
+    harness.present_retained_point_frame(frame);
+    const auto before_membership = harness.retained_point_stats();
+    frame.points.erase(frame.points.begin() + 1);
+    harness.present_retained_point_frame(frame);
+    const auto changed_membership = harness.retained_point_stats();
+    EXPECT_GT(changed_membership.uploads.position_upload_count, before_membership.uploads.position_upload_count);
+    EXPECT_GT(changed_membership.uploads.index_upload_count, before_membership.uploads.index_upload_count);
+    const auto membership_image = harness.capture();
+    ASSERT_FALSE(membership_image.isNull());
+    EXPECT_EQ(membership_image, harness.capture_legacy_point_frame(frame));
+
+    harness.present_retained_point_frame(frame);
+    std::vector<RenderToolPreviewMeshRecord> previews(1u);
+    auto &preview = previews.front();
+    preview.source_object_id = 1;
+    preview.dynamic_positions = true;
+    preview.layout_key = 1u;
+    preview.position_revision = 1u;
+    auto positions = std::make_shared<std::vector<QVec3>>();
+    for (const auto &marker : frame.points) {
+      preview.mesh.edit_geometry().vertices.push_back({
+          .position = marker.position,
+          .source_vertex_id = static_cast<std::uint32_t>(marker.element.vertex_id)});
+      positions->push_back(marker.position + QVec3{0.03f, 0.0f, 0.0f});
+    }
+    preview.dynamic_position_payload = positions;
+    ASSERT_TRUE(harness.update_retained_point_positions(previews));
+    const auto preview_stats = harness.retained_point_stats();
+    const auto moved = harness.capture();
+    ASSERT_FALSE(moved.isNull());
+    EXPECT_NE(moved, membership_image);
+    frame.points.front().color = rgba8(80, 255, 40);
+    harness.present_retained_point_frame(frame);
+    const auto preview_restyled = harness.retained_point_stats();
+    EXPECT_EQ(preview_restyled.uploads.position_upload_count, preview_stats.uploads.position_upload_count)
+        << "A classification/style publication must not restore and re-upload active preview positions.";
+    EXPECT_EQ(preview_restyled.uploads.index_upload_count, preview_stats.uploads.index_upload_count);
+    EXPECT_GT(preview_restyled.uploads.appearance_upload_count, preview_stats.uploads.appearance_upload_count);
+    const auto preview_image = harness.capture();
+    ASSERT_FALSE(preview_image.isNull());
+    EXPECT_NE(preview_image, moved);
+    ASSERT_TRUE(harness.update_retained_point_positions({}));
+    for (std::size_t index = 0u; index < frame.points.size(); ++index) {
+      frame.points[index].position = (*positions)[index];
+    }
+    EXPECT_EQ(preview_image, harness.capture_legacy_point_frame(frame))
+        << "Retained point streams match freshly projected authored positions after style changes.";
+
+    // Heterogeneous sizes preserve the original batch-order fallback.
+    frame.points.back().size_pixels += 1.0f;
+    frame.points.back().layer = frame.points.front().layer;
+    harness.present_retained_point_frame(frame);
+    const auto heterogeneous = harness.capture();
+    ASSERT_FALSE(heterogeneous.isNull());
+    EXPECT_EQ(heterogeneous, harness.capture_legacy_point_frame(frame));
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanSourceWireSlotsRetainGeometryAndMatchLegacyPreviewPixels) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-source-wire-retention-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    SCOPED_TRACE(projection == ViewportProjection::Perspective ? "perspective" : "orthographic");
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.0f, projection, 0.1f));
+    const auto edge = [&](QVec2 first, QVec2 second, int index, std::uint32_t color) {
+      return ViewportOverlayLine{
+          .layer = ViewportOverlayLayer::SourceWire,
+          .start = harness.overlay_audit_world_point(first, 0.5f),
+          .end = harness.overlay_audit_world_point(second, 0.5f),
+          .color = color, .width_pixels = 4.0f,
+          .style_role = ViewportOverlayStyleRole::ExplicitColor,
+          .source = ViewportOverlaySource::ComponentSelection,
+          .element = {.object_id = 1, .edge_a = index * 2, .edge_b = index * 2 + 1}};
+    };
+    ViewportOverlayFrame frame;
+    frame.lines = {
+        edge({260.0f, 240.0f}, {380.0f, 240.0f}, 0, rgba8(255, 50, 40, 160)),
+        edge({320.0f, 185.0f}, {320.0f, 295.0f}, 1, rgba8(40, 220, 255, 192)),
+        edge({260.0f, 210.0f}, {380.0f, 270.0f}, 2, rgba8(240, 220, 60, 160)),
+        edge({270.0f, 290.0f}, {390.0f, 290.0f}, 3, rgba8(120, 240, 80, 192))};
+    // The last segment crosses the near plane; retained endpoints use exactly
+    // the existing edit-wire shader clipping and constant-pixel expansion.
+    frame.lines.back().end.z = 0.95f;
+    const auto initial_reference = harness.capture_legacy_point_frame(frame);
+    ASSERT_FALSE(initial_reference.isNull());
+    EXPECT_NE(initial_reference, harness.capture_legacy_point_frame({}));
+    auto subset = frame;
+    subset.lines.erase(subset.lines.begin() + 1);
+    const auto subset_reference = harness.capture_legacy_point_frame(subset);
+    std::reverse(subset.lines.begin(), subset.lines.end());
+    const auto reordered_reference = harness.capture_legacy_point_frame(subset);
+    auto colored = frame;
+    colored.lines.front().color = rgba8(100, 255, 50, 192);
+    auto colored_subset = colored;
+    colored_subset.lines.erase(colored_subset.lines.begin() + 1);
+    const auto restored_reference = harness.capture_legacy_point_frame(colored_subset);
+    auto translated = colored_subset;
+    for (auto &line : translated.lines) {
+      line.start.x += 0.08f;
+      line.end.x += 0.08f;
+    }
+    const auto preview_reference = harness.capture_legacy_point_frame(translated);
+    auto committed = colored_subset;
+    committed.lines.front().end.y += 0.04f;
+    const auto committed_reference = harness.capture_legacy_point_frame(committed);
+
+    // Generate references first so this entire mutation sequence retains one
+    // live arena, including removal, order changes, preview edits and cancel.
+    harness.present_retained_point_frame(frame);
+    EXPECT_EQ(harness.capture(), initial_reference);
+    auto before = harness.retained_point_stats();
+    EXPECT_EQ(before.retained_source_wire_capacity, 4u);
+    EXPECT_EQ(before.retained_source_wire_edges, 4u);
+    auto ordered_subset = frame;
+    ordered_subset.lines.erase(ordered_subset.lines.begin() + 1);
+    harness.present_retained_point_frame(ordered_subset);
+    auto after = harness.retained_point_stats();
+    EXPECT_EQ(after.uploads.geometry_creation_count, before.uploads.geometry_creation_count);
+    EXPECT_EQ(after.uploads.position_upload_count, before.uploads.position_upload_count);
+    EXPECT_EQ(after.uploads.static_upload_count, before.uploads.static_upload_count);
+    EXPECT_EQ(after.uploads.index_upload_count, before.uploads.index_upload_count + 1u);
+    EXPECT_EQ(harness.capture(), subset_reference);
+    before = after;
+    harness.present_retained_point_frame(subset);
+    after = harness.retained_point_stats();
+    EXPECT_EQ(after.uploads.geometry_creation_count, before.uploads.geometry_creation_count);
+    EXPECT_EQ(after.uploads.position_upload_count, before.uploads.position_upload_count);
+    EXPECT_EQ(after.uploads.static_upload_count, before.uploads.static_upload_count);
+    EXPECT_EQ(after.uploads.index_upload_count, before.uploads.index_upload_count + 1u);
+    EXPECT_EQ(harness.capture(), reordered_reference);
+    harness.present_retained_point_frame(frame);
+    EXPECT_EQ(harness.capture(), initial_reference);
+    EXPECT_EQ(harness.retained_point_stats().uploads.geometry_creation_count,
+              before.uploads.geometry_creation_count);
+
+    std::vector<RenderToolPreviewMeshRecord> previews(1u);
+    auto &preview = previews.front();
+    preview.source_object_id = 1;
+    preview.dynamic_positions = true;
+    preview.layout_key = 1u;
+    preview.position_revision = 1u;
+    auto base_positions = std::make_shared<std::vector<QVec3>>();
+    auto moved_positions = std::make_shared<std::vector<QVec3>>();
+    for (const auto &line : frame.lines) {
+      for (const auto endpoint : {line.start, line.end}) {
+        preview.mesh.edit_geometry().vertices.push_back({
+            .position = endpoint,
+            .source_vertex_id = static_cast<std::uint32_t>(base_positions->size())});
+        base_positions->push_back(endpoint);
+        moved_positions->push_back(endpoint + QVec3{0.08f, 0.0f, 0.0f});
+      }
+    }
+    preview.dynamic_position_payload = moved_positions;
+    ASSERT_TRUE(harness.update_retained_point_positions(previews));
+    harness.present_retained_point_frame(colored);
+    harness.present_retained_point_frame(colored_subset);
+    EXPECT_EQ(harness.capture(), preview_reference)
+        << "Membership and color changes preserve active preview endpoints.";
+    ++preview.position_revision;
+    preview.dynamic_position_payload = base_positions;
+    ASSERT_TRUE(harness.update_retained_point_positions(previews));
+    EXPECT_EQ(harness.capture(), restored_reference) << "A zero displacement restores authored endpoints.";
+    ++preview.position_revision;
+    preview.dynamic_position_payload = moved_positions;
+    ASSERT_TRUE(harness.update_retained_point_positions(previews));
+    EXPECT_EQ(harness.capture(), preview_reference);
+    ASSERT_TRUE(harness.update_retained_point_positions({}));
+    EXPECT_EQ(harness.capture(), restored_reference) << "Cancel restores the currently active edge subset.";
+    before = harness.retained_point_stats();
+    harness.present_retained_point_frame(committed);
+    after = harness.retained_point_stats();
+    EXPECT_EQ(after.uploads.geometry_creation_count, before.uploads.geometry_creation_count);
+    EXPECT_EQ(after.uploads.index_upload_count, before.uploads.index_upload_count);
+    EXPECT_GT(after.uploads.position_upload_count, before.uploads.position_upload_count);
+    EXPECT_EQ(harness.capture(), committed_reference);
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.2f, projection, 0.1f));
+    harness.present_retained_point_frame(committed);
+    const auto camera_stats = harness.retained_point_stats();
+    EXPECT_EQ(camera_stats.uploads.position_upload_count, after.uploads.position_upload_count);
+    EXPECT_EQ(camera_stats.uploads.index_upload_count, after.uploads.index_upload_count);
+    EXPECT_EQ(camera_stats.uploads.static_upload_count, after.uploads.static_upload_count);
+    const auto camera_image = harness.capture();
+    EXPECT_EQ(camera_image, harness.capture_legacy_point_frame(committed));
+    harness.present_retained_point_frame(frame);
+    harness.present_retained_point_frame({});
+    EXPECT_EQ(harness.retained_point_stats().retained_source_wire_capacity, 0u);
+    EXPECT_EQ(harness.retained_point_stats().retained_source_wire_edges, 0u);
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanFragmentedSourceWireCommitBoundsUploadsAndPreservesPixels) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-fragmented-wire-commit-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.prepare_overlay_audit_camera(1.0f, ViewportProjection::Orthographic));
+
+  // Alternate dirty and unchanged edges across a large retained buffer. One
+  // upload per dirty edge used to exhaust Filament's backend command arena.
+  constexpr int kEdgeCount = 65536;
+  constexpr int kColumns = 256;
+  ViewportOverlayFrame frame;
+  frame.lines.reserve(kEdgeCount);
+  std::vector<RenderToolPreviewMeshRecord> previews(1u);
+  auto &preview = previews.front();
+  preview.source_object_id = 1;
+  preview.dynamic_positions = true;
+  preview.layout_key = 1u;
+  preview.position_revision = 1u;
+  auto moved_positions = std::make_shared<std::vector<QVec3>>();
+  moved_positions->reserve(kEdgeCount * 2u);
+  auto &vertices = preview.mesh.edit_geometry().vertices;
+  vertices.reserve(kEdgeCount * 2u);
+  const auto origin = harness.overlay_audit_world_point({40.0f, 40.0f}, 0.5f);
+  const auto pixel_x = harness.overlay_audit_world_point({41.0f, 40.0f}, 0.5f) - origin;
+  const auto pixel_y = harness.overlay_audit_world_point({40.0f, 41.0f}, 0.5f) - origin;
+  for (int index = 0; index < kEdgeCount; ++index) {
+    const auto start = origin + pixel_x * (2.1f * static_cast<float>(index % kColumns)) +
+        pixel_y * (1.5f * static_cast<float>(index / kColumns));
+    const auto end = start + pixel_x * 1.25f;
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::SourceWire, .start = start, .end = end,
+        .color = index % 2 == 0 ? rgba8(250, 90, 40, 192) : rgba8(40, 220, 255, 192),
+        .width_pixels = 1.0f, .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::ComponentSelection,
+        .element = {.object_id = 1, .edge_a = index * 2, .edge_b = index * 2 + 1}});
+    for (const auto endpoint : {start, end}) {
+      vertices.push_back({.position = endpoint,
+          .source_vertex_id = static_cast<std::uint32_t>(moved_positions->size())});
+      moved_positions->push_back(index % 2 == 0 ? endpoint + pixel_y * 0.6f : endpoint);
+    }
+  }
+  preview.dynamic_position_payload = moved_positions;
+  auto committed = frame;
+  for (std::size_t index = 0u; index < committed.lines.size(); ++index) {
+    committed.lines[index].start = (*moved_positions)[index * 2u];
+    committed.lines[index].end = (*moved_positions)[index * 2u + 1u];
+  }
+  const auto original_reference = harness.capture_legacy_point_frame(frame);
+  const auto committed_reference = harness.capture_legacy_point_frame(committed);
+  ASSERT_FALSE(original_reference.isNull());
+  ASSERT_FALSE(committed_reference.isNull());
+  ASSERT_NE(original_reference, committed_reference);
+
+  harness.present_retained_point_frame(frame);
+  EXPECT_EQ(harness.capture(), original_reference);
+  ASSERT_TRUE(harness.update_retained_point_positions(previews));
+  EXPECT_EQ(harness.capture(), committed_reference);
+  ASSERT_TRUE(harness.update_retained_point_positions({}));
+  const auto before_commit = harness.retained_point_stats();
+  harness.present_retained_point_frame(committed);
+  const auto after_commit = harness.retained_point_stats();
+  EXPECT_EQ(after_commit.retained_source_wire_edges, static_cast<std::size_t>(kEdgeCount));
+  EXPECT_EQ(after_commit.uploads.geometry_creation_count, before_commit.uploads.geometry_creation_count);
+  EXPECT_EQ(after_commit.uploads.index_upload_count, before_commit.uploads.index_upload_count);
+  EXPECT_GT(after_commit.uploads.position_upload_count, before_commit.uploads.position_upload_count);
+  EXPECT_LE(after_commit.uploads.position_upload_count - before_commit.uploads.position_upload_count, 8u)
+      << "Fragmented edits must not enqueue commands in proportion to dirty edge count.";
+  EXPECT_LE(after_commit.uploads.static_upload_count - before_commit.uploads.static_upload_count, 4u);
+  EXPECT_EQ(harness.capture(), committed_reference)
+      << "Consolidation preserves both changed edges and intervening unchanged edges.";
+
+  // Reverting the same topology exercises a second fragmented upload without
+  // recreating buffers, then an unchanged publication must upload nothing.
+  harness.present_retained_point_frame(frame);
+  const auto restored = harness.retained_point_stats();
+  EXPECT_EQ(restored.uploads.geometry_creation_count, after_commit.uploads.geometry_creation_count);
+  EXPECT_EQ(restored.uploads.index_upload_count, after_commit.uploads.index_upload_count);
+  EXPECT_LE(restored.uploads.position_upload_count - after_commit.uploads.position_upload_count, 8u);
+  EXPECT_LE(restored.uploads.static_upload_count - after_commit.uploads.static_upload_count, 4u);
+  EXPECT_EQ(harness.capture(), original_reference);
+  harness.present_retained_point_frame(frame);
+  const auto unchanged = harness.retained_point_stats();
+  EXPECT_EQ(unchanged.uploads.position_upload_count, restored.uploads.position_upload_count);
+  EXPECT_EQ(unchanged.uploads.static_upload_count, restored.uploads.static_upload_count);
+  EXPECT_EQ(unchanged.uploads.index_upload_count, restored.uploads.index_upload_count);
+}
+
 TEST(SelectionOverlayRuntimeTests, VulkanOverlayLineEndsAndPointRingsHaveAnalyticCoverage) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
     GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
@@ -2511,11 +2944,14 @@ TEST(SelectionOverlayRuntimeTests,
     ASSERT_TRUE(modeling.begin_transform_preview(false).ok);
     std::uint64_t retained_builds = 0u;
     std::uint64_t retained_signature = 0u;
+    OverlayProxyUploadStats previous_uploads;
     float previous_delta = 0.0f;
     for (const float delta : {0.9f, 1.8f}) {
       SCOPED_TRACE(delta);
       ASSERT_TRUE(modeling.update_transform_translate_preview({delta, 0.0f, 0.0f}).ok);
       ASSERT_TRUE(present());
+      const auto overlay_stats = harness.component_overlay_stats();
+      EXPECT_GT(overlay_stats.shared_position_proxy_count, 0u);
       if (retained_builds == 0u) {
         retained_builds = harness.selection_frame_builds();
         retained_signature = modeling.selection_overlay_signature();
@@ -2524,7 +2960,16 @@ TEST(SelectionOverlayRuntimeTests,
         EXPECT_EQ(modeling.selection_overlay_signature(), retained_signature);
         EXPECT_FALSE(harness.last_submission().persistent_submitted)
             << "Changing only packed positions must keep the semantic frame retained.";
+        EXPECT_EQ(overlay_stats.uploads.position_upload_count, previous_uploads.position_upload_count)
+            << "Steady movement must not upload expanded positions for each overlay proxy.";
+        EXPECT_EQ(overlay_stats.uploads.shared_position_upload_count,
+                  previous_uploads.shared_position_upload_count + 1u);
+        EXPECT_EQ(overlay_stats.uploads.shared_position_binding_upload_count,
+                  previous_uploads.shared_position_binding_upload_count);
+        EXPECT_EQ(overlay_stats.uploads.index_upload_count, previous_uploads.index_upload_count);
+        EXPECT_EQ(overlay_stats.uploads.static_upload_count, previous_uploads.static_upload_count);
       }
+      previous_uploads = overlay_stats.uploads;
       const QImage image = capture(delta < 1.0f ? "first" : "second");
       ASSERT_NO_FATAL_FAILURE(expect_current(image, delta));
       EXPECT_EQ(yellow_pixels(image, selected_pixel(previous_delta)), 0);
@@ -2538,6 +2983,8 @@ TEST(SelectionOverlayRuntimeTests,
       ASSERT_TRUE(present());
       EXPECT_EQ(harness.selection_frame_builds(), retained_builds);
       EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+                previous_uploads.shared_position_upload_count);
       previous_delta = delta;
     }
     // A camera rebuild must reapply the same packed positions to all layers.
@@ -2545,6 +2992,8 @@ TEST(SelectionOverlayRuntimeTests,
     ASSERT_TRUE(present());
     EXPECT_EQ(harness.selection_frame_builds(), retained_builds);
     EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+              previous_uploads.shared_position_upload_count);
     ASSERT_NO_FATAL_FAILURE(expect_current(capture("camera"), previous_delta));
     ASSERT_TRUE(modeling.cancel_transform_preview().ok);
     ASSERT_TRUE(present());
@@ -2552,6 +3001,56 @@ TEST(SelectionOverlayRuntimeTests,
     const QImage restored = capture("cancel");
     ASSERT_NO_FATAL_FAILURE(expect_current(restored, 0.0f));
     EXPECT_EQ(yellow_pixels(restored, selected_pixel(previous_delta)), 0);
+    EXPECT_EQ(harness.component_overlay_stats().shared_position_proxy_count, 0u);
+    // A second gesture must rebind retained indices after cancel restored CPU positions.
+    ASSERT_TRUE(modeling.begin_transform_preview(false).ok);
+    ASSERT_TRUE(modeling.update_transform_translate_preview({0.9f, 0.0f, 0.0f}).ok);
+    ASSERT_TRUE(present());
+    EXPECT_GT(harness.component_overlay_stats().shared_position_proxy_count, 0u);
+    ASSERT_NO_FATAL_FAILURE(expect_current(capture("repeat"), 0.9f));
+    const auto before_commit_uploads = harness.component_overlay_stats().uploads;
+    const auto before_commit_work = modeling.selection_overlay_geometry_work_counters();
+    ASSERT_TRUE(modeling.commit_transform_preview().ok);
+    ASSERT_TRUE(present());
+    EXPECT_TRUE(modeling.tool_preview_meshes().empty());
+    EXPECT_FALSE(modeling.transient_transform_preview_active());
+    EXPECT_GT(harness.component_overlay_stats().shared_position_proxy_count, 0u);
+    const auto committed_uploads = harness.component_overlay_stats().uploads;
+    EXPECT_EQ(committed_uploads.position_upload_count, before_commit_uploads.position_upload_count);
+    EXPECT_EQ(committed_uploads.shared_position_upload_count, before_commit_uploads.shared_position_upload_count);
+    EXPECT_EQ(committed_uploads.shared_position_binding_upload_count, before_commit_uploads.shared_position_binding_upload_count);
+    EXPECT_EQ(committed_uploads.static_upload_count, before_commit_uploads.static_upload_count);
+    EXPECT_EQ(committed_uploads.index_upload_count, before_commit_uploads.index_upload_count);
+    EXPECT_EQ(modeling.selection_overlay_geometry_work_counters().semantic_aggregate_build_count,
+              before_commit_work.semantic_aggregate_build_count);
+    EXPECT_EQ(modeling.selection_overlay_geometry_work_counters().world_projection_build_count,
+              before_commit_work.world_projection_build_count);
+    ASSERT_NO_FATAL_FAILURE(expect_current(capture("commit"), 0.9f));
+    ASSERT_TRUE(present());
+    EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+              committed_uploads.shared_position_upload_count);
+    ASSERT_TRUE(harness.pan_face_fill_camera(-0.15f));
+    ASSERT_TRUE(present());
+    ASSERT_NO_FATAL_FAILURE(expect_current(capture("navigation_after_commit"), 0.9f));
+    EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+              committed_uploads.shared_position_upload_count);
+
+    // Accept a candidate whose final sample has never reached the GPU. The
+    // handoff must upload that sample, rather than promoting the previous one.
+    ASSERT_TRUE(modeling.begin_transform_preview(false).ok);
+    ASSERT_TRUE(modeling.update_transform_translate_preview({0.3f, 0.0f, 0.0f}).ok);
+    ASSERT_TRUE(present());
+    ASSERT_TRUE(modeling.update_transform_translate_preview({0.9f, 0.0f, 0.0f}).ok);
+    ASSERT_TRUE(modeling.commit_transform_preview().ok);
+    ASSERT_TRUE(present());
+    ASSERT_NO_FATAL_FAILURE(expect_current(capture("unsubmitted_commit"), 1.8f));
+    EXPECT_EQ(yellow_pixels(harness.capture(), selected_pixel(1.2f)), 0);
+    ASSERT_TRUE(modeling.begin_transform_preview(false).ok);
+    ASSERT_TRUE(modeling.update_transform_translate_preview({0.3f, 0.0f, 0.0f}).ok);
+    ASSERT_TRUE(present());
+    ASSERT_TRUE(modeling.cancel_transform_preview().ok);
+    ASSERT_TRUE(present());
+    ASSERT_NO_FATAL_FAILURE(expect_current(capture("cancel_after_commit"), 1.8f));
   }
 }
 

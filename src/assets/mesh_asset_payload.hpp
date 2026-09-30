@@ -206,6 +206,9 @@ inline MeshAsset clone_mesh_asset_payload(const MeshAsset &source) {
  * vertex and index buffers.
  */
 inline MeshAsset isolate_mesh_asset_payload(MeshAsset source) {
+  if (source.geometry_projection() && source.authored_polygon_document.read_snapshot()) {
+    return source;
+  }
   (void)source.geometry_payload();
   // A caller can assign a shared_ptr<Document> to the public const pointer and
   // retain a mutable alias. Publish an immutable snapshot at registry mutation

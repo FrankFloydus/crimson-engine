@@ -46,6 +46,7 @@ void SceneRenderBridge::initialize(
   instance_cache_.initialize(mesh_factory_, engine.getMaxAutomaticInstances());
   tool_preview_cache_.initialize(mesh_factory_, material_binding_,
                                  engine.getMaxAutomaticInstances());
+  editable_surface_cache_.initialize(mesh_factory_, material_binding_);
   tool_preview_light_cache_.initialize(engine, scene);
   overlay_proxy_factory_.initialize(engine, scene, overlay_material,
                                     overlay_line_material,
@@ -81,6 +82,7 @@ void SceneRenderBridge::shutdown() {
   if (engine_) {
     tool_preview_light_cache_.shutdown();
     tool_preview_cache_.shutdown();
+    editable_surface_cache_.shutdown();
     sync_service_.shutdown();
     selected_object_overlay_cache_.shutdown();
     scene_wireframe_overlay_cache_.shutdown();
@@ -99,6 +101,7 @@ void SceneRenderBridge::shutdown() {
 
   previous_scene_snapshot_ = {};
   has_previous_scene_snapshot_ = false;
+  surface_sync_pending_ = false;
   curve_solid_geometry_cache_.clear();
   scene_binding_ = {};
   project_material_resolver_ = nullptr;
@@ -112,6 +115,7 @@ void SceneRenderBridge::shutdown() {
   tool_preview_wireframe_snapshot_ = {};
   tool_preview_wireframe_dirty_ = false;
   selection_dimension_preview_meshes_.clear();
+  accepted_overlay_coordinates_.clear();
   selection_dimension_preview_groups_.clear();
   selection_dimension_preview_curves_.clear();
   array_dimension_preview_lights_.clear();
@@ -135,8 +139,11 @@ void SceneRenderBridge::set_project_material_resolver(
   }
   project_material_resolver_ = resolver;
   material_binding_.set_project_material_resolver(resolver);
+  editable_surface_cache_.clear();
+  sync_service_.set_retained_mesh_exclusion({});
   previous_scene_snapshot_ = {};
   has_previous_scene_snapshot_ = false;
+  surface_sync_pending_ = false;
 }
 
 void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
@@ -148,6 +155,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   has_scene_binding_ = true;
   previous_scene_snapshot_ = {};
   has_previous_scene_snapshot_ = false;
+  surface_sync_pending_ = false;
   curve_solid_geometry_cache_.clear();
   ++tool_preview_submission_revision_;
   tool_preview_suppression_signature_ = 0u;
@@ -159,6 +167,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   tool_preview_wireframe_snapshot_ = {};
   tool_preview_wireframe_dirty_ = false;
   selection_dimension_preview_meshes_.clear();
+  accepted_overlay_coordinates_.clear();
   selection_dimension_preview_groups_.clear();
   selection_dimension_preview_curves_.clear();
   array_dimension_preview_lights_.clear();
@@ -173,6 +182,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   // Retire outgoing preview and viewport-overlay material consumers before
   // switching the scene. Their texture pins drain alongside the scene proxies.
   tool_preview_cache_.clear();
+  editable_surface_cache_.clear();
   tool_preview_wireframe_cache_.clear();
   tool_preview_light_cache_.clear();
   mesh_cache_.set_preview_suppressed_entities({});
@@ -215,7 +225,11 @@ void SceneRenderBridge::sync(const SceneDocument &document,
                                           local_visibility)) {
     // Keep draining retired GPU proxies while making unchanged camera-only
     // frames O(1) at the scene-extraction boundary.
-    (void)sync_service_.sync(previous_scene_snapshot_);
+    if (surface_sync_pending_) {
+      (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
+    } else {
+      (void)sync_service_.sync(previous_scene_snapshot_);
+    }
     return;
   }
   if (has_previous_scene_snapshot_ &&
@@ -223,7 +237,11 @@ void SceneRenderBridge::sync(const SceneDocument &document,
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision, instance_edit_scope,
           local_visibility)) {
-    (void)sync_service_.sync(previous_scene_snapshot_);
+    if (surface_sync_pending_) {
+      (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
+    } else {
+      (void)sync_service_.sync(previous_scene_snapshot_);
+    }
     return;
   }
   if (has_previous_scene_snapshot_ &&
@@ -231,7 +249,11 @@ void SceneRenderBridge::sync(const SceneDocument &document,
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision, instance_edit_scope,
           local_visibility)) {
-    (void)sync_service_.sync(previous_scene_snapshot_);
+    if (surface_sync_pending_) {
+      (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
+    } else {
+      (void)sync_service_.sync(previous_scene_snapshot_);
+    }
     return;
   }
   if (has_previous_scene_snapshot_ &&
@@ -239,7 +261,11 @@ void SceneRenderBridge::sync(const SceneDocument &document,
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision,
           instance_edit_scope, local_visibility)) {
-    (void)sync_service_.sync(previous_scene_snapshot_);
+    if (surface_sync_pending_) {
+      (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
+    } else {
+      (void)sync_service_.sync(previous_scene_snapshot_);
+    }
     return;
   }
   if (has_previous_scene_snapshot_ &&
@@ -247,7 +273,7 @@ void SceneRenderBridge::sync(const SceneDocument &document,
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision,
           instance_edit_scope, local_visibility)) {
-    (void)sync_service_.sync(previous_scene_snapshot_);
+    (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
     return;
   }
   RenderSceneSnapshot snapshot = build_render_scene_snapshot(
@@ -270,7 +296,7 @@ void SceneRenderBridge::sync(RenderSceneSnapshot snapshot) {
     return;
   }
   bind_scene(snapshot.scene_binding);
-  (void)sync_service_.sync(snapshot);
+  (void)synchronize_mesh_surfaces(snapshot);
   previous_scene_snapshot_ = std::move(snapshot);
   has_previous_scene_snapshot_ = true;
   QDR_PROFILE_PLOT("Quader ordinary mesh records",
@@ -281,6 +307,28 @@ void SceneRenderBridge::sync(RenderSceneSnapshot snapshot) {
                    static_cast<std::int64_t>(mesh_factory_.geometry_cache_stats().resource_count));
 }
 
+bool SceneRenderBridge::synchronize_mesh_surfaces(const RenderSceneSnapshot &snapshot) {
+  QDR_PROFILE_SCOPE("Scene synchronize retained editable surfaces");
+  const auto prepared = editable_surface_cache_.prepare(
+      snapshot, selection_dimension_preview_meshes_, tool_preview_suppression_);
+  if (prepared == ToolPreviewSubmissionResult::Failed) {
+    surface_sync_pending_ = true;
+    return false;
+  }
+  const auto fallback = tool_preview_cache_.set_meshes(
+      editable_surface_cache_.prepared_fallback_meshes());
+  if (fallback == ToolPreviewSubmissionResult::Failed) {
+    editable_surface_cache_.discard_prepared();
+    surface_sync_pending_ = true;
+    return false;
+  }
+  editable_surface_cache_.publish_prepared();
+  sync_service_.set_retained_mesh_exclusion(editable_surface_cache_.scene_exclusion());
+  (void)sync_service_.sync(snapshot);
+  surface_sync_pending_ = false;
+  return true;
+}
+
 void SceneRenderBridge::update_mesh_surface_grid(
     float grid_world_spacing, const ViewportSettings &settings) {
   QDR_PROFILE_FUNCTION();
@@ -288,6 +336,7 @@ void SceneRenderBridge::update_mesh_surface_grid(
     return;
   }
   mesh_cache_.update_surface_grid(grid_world_spacing, settings);
+  editable_surface_cache_.update_surface_grid(grid_world_spacing, settings);
   instance_cache_.update_surface_grid(grid_world_spacing, settings);
   tool_preview_cache_.update_surface_grid(grid_world_spacing, settings);
 }
@@ -297,6 +346,9 @@ SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
   result.device_instance_limit = instance_cache_.max_instances_per_chunk();
 
   std::unordered_set<const MeshGeometryPayload *> payloads;
+  const auto &coverage = editable_surface_cache_.scene_exclusion();
+  const std::unordered_set<EntityId> covered_entities(coverage.entities.begin(),
+                                                    coverage.entities.end());
   const auto add_payload = [&](const RenderMeshAssetSnapshot &mesh) {
     if (mesh.geometry_payload != nullptr &&
         payloads.insert(mesh.geometry_payload.get()).second) {
@@ -307,7 +359,7 @@ SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
   if (has_previous_scene_snapshot_) {
     for (const RenderSceneMeshRecord &mesh : previous_scene_snapshot_.meshes) {
       add_payload(mesh.mesh);
-      if (mesh.renderable()) {
+      if (mesh.renderable() && !covered_entities.contains(mesh.entity_id)) {
         result.standalone_primitive_submissions +=
             coalesced_render_mesh_primitive_spans(mesh.mesh).size() * 3u;
       }
@@ -329,11 +381,14 @@ SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
   const InstanceSelectionOverlayCacheStats selection =
       instance_selection_overlay_cache_.stats();
   result.gpu_geometry_resource_count =
-      geometry.resource_count + wire.unique_geometry_resource_count +
+      geometry.resource_count + geometry.editable_surface_live_geometry_count +
+      wire.unique_geometry_resource_count +
       preview_wire.unique_geometry_resource_count +
       selection.unique_wire_geometry_resource_count;
   result.gpu_geometry_upload_count =
-      geometry.upload_count + wire.geometry_upload_count +
+      geometry.upload_count + geometry.editable_surface_position_upload_count +
+      geometry.editable_surface_attribute_upload_count +
+      geometry.editable_surface_index_upload_count + wire.geometry_upload_count +
       preview_wire.geometry_upload_count +
       selection.wire_geometry_upload_count;
   result.gpu_geometry_reuse_count =
@@ -341,11 +396,13 @@ SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
       preview_wire.geometry_reuse_count +
       selection.wire_geometry_reuse_count;
   result.gpu_uploaded_vertex_bytes =
-      geometry.uploaded_vertex_bytes + wire.derived_vertex_bytes +
+      geometry.uploaded_vertex_bytes + geometry.editable_surface_uploaded_vertex_bytes +
+      wire.derived_vertex_bytes +
       preview_wire.derived_vertex_bytes +
       selection.wire_derived_vertex_bytes;
   result.gpu_uploaded_index_bytes =
-      geometry.uploaded_index_bytes + wire.derived_index_bytes +
+      geometry.uploaded_index_bytes + geometry.editable_surface_uploaded_index_bytes +
+      wire.derived_index_bytes +
       preview_wire.derived_index_bytes +
       selection.wire_derived_index_bytes;
   result.base_instance_participant_count = instances.participant_count;
@@ -356,6 +413,7 @@ SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
   result.selection_wire_batch_chunk_count = selection.wire_chunk_count;
   result.planned_primitive_submissions =
       result.standalone_primitive_submissions +
+      editable_surface_cache_.proxy_count() +
       result.base_instance_batch_chunk_count + result.wire_batch_chunk_count +
       result.selection_fill_batch_chunk_count +
       result.selection_wire_batch_chunk_count;
@@ -367,7 +425,8 @@ void SceneRenderBridge::perform_idle_resource_maintenance() {
   if (!tool_preview_cache_.initialized()) {
     return;
   }
-  tool_preview_cache_.drain_retired_destroy_queue(1u);
+  tool_preview_cache_.drain_retired_destroy_queue(256u);
+  editable_surface_cache_.drain_retired_destroy_queue(256u);
 }
 
 void SceneRenderBridge::set_active_overlay_viewports(
@@ -604,24 +663,44 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
       build_render_tool_preview_overlay_frame(preview);
   RenderOverlaySceneWireframeSnapshot wireframe_candidate =
       build_render_tool_preview_wireframe_snapshot(preview.meshes);
+  const auto surface_result = editable_surface_cache_.prepare(
+      previous_scene_snapshot_, preview.meshes, preview.suppression);
+  if (surface_result == ToolPreviewSubmissionResult::Failed) {
+    return surface_result;
+  }
   const ToolPreviewSubmissionResult light_result =
       tool_preview_light_cache_.prepare(preview.lights);
   if (light_result == ToolPreviewSubmissionResult::Failed) {
+    editable_surface_cache_.discard_prepared();
     return light_result;
   }
   const ToolPreviewSubmissionResult mesh_result =
-      tool_preview_cache_.set_meshes(preview.meshes);
+      tool_preview_cache_.set_meshes(editable_surface_cache_.prepared_fallback_meshes());
   if (mesh_result == ToolPreviewSubmissionResult::Failed) {
     QDR_PROFILE_SCOPE("Tool preview preserve previous source coverage");
     tool_preview_light_cache_.discard_prepared();
+    editable_surface_cache_.discard_prepared();
     return mesh_result;
   }
+  editable_surface_cache_.publish_prepared();
   tool_preview_light_cache_.publish_prepared();
+  const bool coverage_changed = sync_service_.set_retained_mesh_exclusion(
+      editable_surface_cache_.scene_exclusion());
+  if (coverage_changed && has_previous_scene_snapshot_) {
+    (void)sync_service_.sync(previous_scene_snapshot_);
+  }
   ++tool_preview_submission_revision_;
   wireframe_candidate.scene_revision = tool_preview_submission_revision_;
   tool_preview_wireframe_snapshot_ = std::move(wireframe_candidate);
   tool_preview_wireframe_dirty_ = true;
-  (void)overlay_cache_.set_transform_position_streams(preview.meshes);
+  // An empty preview after successful acceptance is not cancellation. Consume
+  // the latest owned accepted stream even if its last drag sample never reached
+  // this viewport; exact payload identity then makes an already-current handoff
+  // a no-op for GPU uploads and base restoration.
+  (void)overlay_cache_.set_transform_position_streams(
+      preview.meshes.empty() ? preview.accepted_overlay_coordinates : preview.meshes,
+      preview.meshes.empty() && !preview.accepted_overlay_coordinates.empty());
+  accepted_overlay_coordinates_ = std::move(preview.accepted_overlay_coordinates);
   tool_preview_overlay_frame_ = std::move(overlay_candidate);
   selection_dimension_preview_meshes_ = std::move(preview.meshes);
   selection_dimension_preview_groups_ = std::move(preview.group_markers);
@@ -646,8 +725,7 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
     instance_cache_.set_preview_suppressed_entities(
         std::move(suppressed_entities), std::move(occurrence_suppressions),
         has_previous_scene_snapshot_
-            ? std::span<const RenderSceneInstancePrimitiveRecord>(
-                  previous_scene_snapshot_.instance_primitives)
+            ? sync_service_.ordinary_instance_primitives(previous_scene_snapshot_)
             : std::span<const RenderSceneInstancePrimitiveRecord>{});
     sync_service_.set_preview_suppressed_lights(
         tool_preview_suppressed_entities_,
@@ -662,6 +740,7 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
     filtered_scene_overlay_valid_ = false;
   }
   return mesh_result == ToolPreviewSubmissionResult::Published ||
+                 surface_result == ToolPreviewSubmissionResult::Published ||
                  light_result == ToolPreviewSubmissionResult::Published
              ? ToolPreviewSubmissionResult::Published
              : ToolPreviewSubmissionResult::Unchanged;
@@ -671,7 +750,8 @@ ViewportOverlaySubmissionResult SceneRenderBridge::submit_viewport_overlay(
     ViewportOverlaySubmissionRequest request,
     const ViewportSettings &settings) {
   request.selection_dimension_scene_snapshot = request.scene_overlay_snapshot;
-  request.selection_dimension_preview_meshes = selection_dimension_preview_meshes_;
+  request.selection_dimension_preview_meshes = selection_dimension_preview_meshes_.empty()
+      ? accepted_overlay_coordinates_ : selection_dimension_preview_meshes_;
   request.selection_dimension_preview_groups = selection_dimension_preview_groups_;
   request.selection_dimension_preview_curves = selection_dimension_preview_curves_;
   request.array_dimension_preview_lights = array_dimension_preview_lights_;

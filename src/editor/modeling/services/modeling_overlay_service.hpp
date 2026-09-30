@@ -14,6 +14,7 @@
 #include "render/viewport_overlay_frame.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <editor/interactions/selection_edit.hpp>
@@ -74,6 +75,14 @@ public:
   [[nodiscard]] static bool has_modal_overlay(const ModelingToolStatus &status);
   void invalidate() const;
   void invalidate_composed_frame() const;
+  [[nodiscard]] const ViewportOverlayFrame *accepted_coordinate_base_frame(
+      const ModelingAcceptedOverlayCoordinates &coordinates,
+      std::uint64_t local_visibility_revision,
+      ModelingSelectionOverlayOptions options) const;
+  [[nodiscard]] const quader_editor_core::SelectionOverlayGeometryWorkCounters &
+  selection_overlay_geometry_work_counters() const {
+    return geometry_work_;
+  }
   [[nodiscard]] std::uint64_t selection_overlay_signature(
       const quader_editor_core::EditorRuntime &runtime,
       ModelingSelectionOverlayOptions options = {}) const;
@@ -124,6 +133,15 @@ public:
       const ModelingSelectionService &selection_service,
       const ModelingSdkProjectionAdapter &sdk_projection,
       int persistent_source_wire_object_id) const;
+  [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame(
+      const ModelingSelectionProjectionSnapshot *selection,
+      quader_editor_core::SelectionMode selection_mode,
+      const quader_editor_core::EditorRuntime &runtime,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_registry,
+      const ModelingSelectionService &selection_service,
+      const ModelingSdkProjectionAdapter &sdk_projection,
+      int persistent_source_wire_object_id) const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes(
       const quader_editor_core::EditorRuntime &runtime,
@@ -136,6 +154,9 @@ private:
     struct OverlayBaseObjectCacheEntry {
       int object_id = -1;
       std::uint64_t geometry_signature = 0;
+      std::shared_ptr<const quader_poly::Document> geometry_document;
+      std::shared_ptr<const quader_editor_core::SelectionOverlayGeometry>
+          geometry;
       quader_editor_core::SelectionMode selection_mode =
           quader_editor_core::SelectionMode::Object;
       bool selected = false;
@@ -167,6 +188,7 @@ private:
     /// Retains the expensive world projection of the semantic selection base.
     struct ProjectedOverlayBaseCache {
       bool valid = false;
+      bool populated = false;
       int active_object_id = -1;
       std::uint64_t content_revision = 0;
       std::uint64_t selection_revision = 0;
@@ -183,6 +205,7 @@ private:
     };
 
     mutable SelectionOverlayCache selection_overlay_cache_;
+    mutable quader_editor_core::SelectionOverlayGeometryWorkCounters geometry_work_;
     mutable OverlayBaseCache overlay_base_cache_;
     mutable ProjectedOverlayBaseCache projected_overlay_base_cache_;
 };

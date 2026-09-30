@@ -28,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -833,26 +834,40 @@ void stitch_merge_split_uv_density(Document& document, std::span<const MergeFace
         return;
     }
 
+    std::unordered_map<ElementId, const MergeFaceUvAssignment*> assignments_by_face;
+    assignments_by_face.reserve(assignments.size());
+    for (const MergeFaceUvAssignment& assignment : assignments) {
+        assignments_by_face.try_emplace(assignment.face_id, &assignment);
+    }
+    struct AssignedSlopeFace {
+        Face* face = nullptr;
+        const MergeFaceUvAssignment* assignment = nullptr;
+    };
+    std::vector<AssignedSlopeFace> assigned_faces;
+    assigned_faces.reserve(std::min(document.faces.size(), assignments.size()));
+    // Unassigned faces cannot participate. Keep document order so seam repair
+    // still chooses the same reference and stitches each target at the same turn.
+    for (Face& face : document.faces) {
+        const auto assignment = assignments_by_face.find(face.id);
+        if (assignment != assignments_by_face.end() &&
+            face_is_merge_split_slope(document, face)) {
+            assigned_faces.push_back({&face, assignment->second});
+        }
+    }
+
     std::set<ElementId> stitched_faces;
-    for (std::size_t left_index = 0; left_index < document.faces.size(); ++left_index) {
-        for (std::size_t right_index = left_index + 1U; right_index < document.faces.size(); ++right_index) {
-            Face& left_face = document.faces[left_index];
-            Face& right_face = document.faces[right_index];
-            if (!face_is_merge_split_slope(document, left_face) ||
-                !face_is_merge_split_slope(document, right_face)) {
-                continue;
-            }
+    for (std::size_t left_index = 0; left_index < assigned_faces.size(); ++left_index) {
+        for (std::size_t right_index = left_index + 1U; right_index < assigned_faces.size(); ++right_index) {
+            Face& left_face = *assigned_faces[left_index].face;
+            Face& right_face = *assigned_faces[right_index].face;
 
             const std::optional<Edge> shared_edge = shared_edge_between_faces(left_face, right_face);
             if (!shared_edge.has_value()) {
                 continue;
             }
 
-            const MergeFaceUvAssignment* left_assignment = uv_assignment_for_face(assignments, left_face.id);
-            const MergeFaceUvAssignment* right_assignment = uv_assignment_for_face(assignments, right_face.id);
-            if (left_assignment == nullptr || right_assignment == nullptr) {
-                continue;
-            }
+            const MergeFaceUvAssignment* left_assignment = assigned_faces[left_index].assignment;
+            const MergeFaceUvAssignment* right_assignment = assigned_faces[right_index].assignment;
 
             const quader::QVec2 left_delta = face_uv_delta_for_edge(left_face, *shared_edge);
             const quader::QVec2 right_delta = face_uv_delta_for_edge(right_face, *shared_edge);

@@ -31,7 +31,7 @@ void append_authored_segments(const MeshAsset &mesh,
     return;
   }
 
-  const quader_poly::Document &document = *mesh.authored_polygon_document;
+  const auto document = mesh.authored_polygon_document.read_view();
   std::unordered_map<quader_poly::ElementId, QVec3> positions;
   positions.reserve(document.vertices.size());
   for (const quader_poly::Vertex &vertex : document.vertices) {
@@ -62,22 +62,25 @@ void append_authored_segments(const MeshAsset &mesh,
 
 void append_compiled_segments(const MeshAsset &mesh,
                               MeshWireGeometryPayload &payload) {
-  const MeshGeometryPayload &geometry = mesh.geometry();
+  const auto vertices = mesh.geometry_vertices();
+  const auto positions = mesh.geometry_positions();
+  const auto indices = mesh.geometry_indices();
   std::unordered_set<std::uint64_t> emitted;
-  emitted.reserve(geometry.indices.size());
+  emitted.reserve(indices.size());
   const auto append_edge = [&](std::uint32_t a, std::uint32_t b) {
-    if (a >= geometry.vertices.size() || b >= geometry.vertices.size() ||
+    if (a >= vertices.size() || b >= vertices.size() ||
         a == b || !emitted.insert(edge_key(a, b)).second) {
       return;
     }
     payload.segments.push_back(
-        {geometry.vertices[a].position, geometry.vertices[b].position});
+        {positions.empty() ? vertices[a].position : positions[a],
+         positions.empty() ? vertices[b].position : positions[b]});
   };
-  for (std::size_t index = 0u; index + 2u < geometry.indices.size();
+  for (std::size_t index = 0u; index + 2u < indices.size();
        index += 3u) {
-    append_edge(geometry.indices[index], geometry.indices[index + 1u]);
-    append_edge(geometry.indices[index + 1u], geometry.indices[index + 2u]);
-    append_edge(geometry.indices[index + 2u], geometry.indices[index]);
+    append_edge(indices[index], indices[index + 1u]);
+    append_edge(indices[index + 1u], indices[index + 2u]);
+    append_edge(indices[index + 2u], indices[index]);
   }
 }
 
@@ -127,15 +130,14 @@ compute_mesh_wire_geometry_payload(const MeshAsset &mesh) {
 
 std::shared_ptr<const MeshWireGeometryPayload>
 MeshAsset::wire_geometry_payload() const {
-  const MeshGeometryPayload *geometry_source = &geometry();
-  const quader_poly::Document *authored_source =
-      authored_polygon_document.get();
-  if (authored_source == nullptr) {
-    if (geometry_source->wire_geometry_payload_ == nullptr) {
-      geometry_source->wire_geometry_payload_ =
+  const std::uintptr_t geometry_source = geometry_token();
+  const std::uintptr_t authored_source = authored_polygon_document.identity_token();
+  if (authored_source == 0u && !geometry_projection_) {
+    if (geometry_->wire_geometry_payload_ == nullptr) {
+      geometry_->wire_geometry_payload_ =
           compute_mesh_wire_geometry_payload(*this);
     }
-    return geometry_source->wire_geometry_payload_;
+    return geometry_->wire_geometry_payload_;
   }
   if (wire_geometry_payload_ != nullptr &&
       wire_geometry_source_ == geometry_source &&
@@ -159,8 +161,7 @@ MeshTopologyCounts mesh_topology_counts(const MeshAsset &mesh) {
   MeshTopologyCounts counts;
   if (mesh.has_authored_polygon_document &&
       mesh.authored_polygon_document != nullptr) {
-    const quader_poly::Document &document =
-        *mesh.authored_polygon_document;
+    const auto document = mesh.authored_polygon_document.read_view();
     counts.vertices = document.vertices.size();
     counts.faces = document.faces.size();
     for (const quader_poly::Face &face : document.faces) {
@@ -169,8 +170,8 @@ MeshTopologyCounts mesh_topology_counts(const MeshAsset &mesh) {
       }
     }
   } else {
-    counts.vertices = mesh.geometry().vertices.size();
-    counts.triangles = mesh.geometry().indices.size() / 3u;
+    counts.vertices = mesh.geometry_vertices().size();
+    counts.triangles = mesh.geometry_indices().size() / 3u;
     counts.faces = counts.triangles;
   }
   if (const std::shared_ptr<const MeshWireGeometryPayload> wire =

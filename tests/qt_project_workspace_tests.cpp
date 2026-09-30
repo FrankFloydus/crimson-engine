@@ -6473,6 +6473,92 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   ui.shutdown();
 }
 
+TEST(QtProjectWorkspaceTests, SavingWithUnregisteredSceneCopiesRetainsDistinctBrowserRows) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-asset-copy-save-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-asset-copy-save-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+  quader::apply_qt_obsidian_application_theme(QApplication::palette());
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto root = scoped_profile.profile() / "Copy Project";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  quader::RenderSystem renderer;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resource_root));
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto bind = [&](quader::SceneSession &scene) {
+    ui.install_runtime_hooks(editor, scene.scene(), scene.assets(),
+        scene.modeling(), scene.selection(), scene.native_tools(),
+        scene.point_placement(), quader::kInvalidAssetId);
+  };
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(editor, bind);
+  bind(project.fallback_scene());
+  ASSERT_TRUE(editor.project().create(root).ok());
+  ASSERT_TRUE(editor.project_assets().create_folder("", "Backups").ok());
+  for (const std::string name : {"First", "Second"}) {
+    const auto created = editor.project_assets().create_scene_asset("", name);
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    ASSERT_TRUE(std::filesystem::copy_file(
+        root / created.value().project_relative_path,
+        root / "Backups" / (name + ".qdr")));
+    ASSERT_TRUE(editor.project_assets().assets(true).ok());
+  }
+  const auto catalog = editor.project_assets().assets(true);
+  ASSERT_TRUE(catalog.ok()) << catalog.error_message();
+  std::size_t unregistered = 0;
+  for (const auto &asset : catalog.value().assets) {
+    if (asset.kind == quader::QuaderProjectAssetKind::Scene &&
+        asset.project_relative_path.starts_with("Backups/")) {
+      EXPECT_FALSE(asset.scene_id.valid());
+      ++unregistered;
+    }
+  }
+  ASSERT_EQ(unregistered, 2U);
+  auto *dock = ui.main_window()->findChild<QDockWidget *>(
+      QStringLiteral("dock_asset_browser"));
+  ASSERT_NE(dock, nullptr);
+  auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+  ASSERT_NE(browser, nullptr);
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  ui.refresh({}, {});
+  const auto scene = editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(scene.has_value());
+  const auto path = quader::ProjectRelativePath::parse_portable("Working.qdr");
+  ASSERT_TRUE(path.ok());
+  const auto saved = editor.scene_documents().save_as(*scene, path.value());
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  ui.refresh({}, {});
+  const auto box = editor.modeling().create_box({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Saved Box"});
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.scene_documents().save(*scene).ok());
+  ui.refresh({}, {});
+  QStringList identities;
+  for (const auto &item : browser->snapshot().items) {
+    EXPECT_FALSE(identities.contains(item.id)) << item.relative_path.toStdString();
+    identities.push_back(item.id);
+  }
+  browser->set_selected_folder(QStringLiteral("Backups"));
+  auto *grid = browser->findChild<QListView *>(QStringLiteral("assetBrowser.grid"));
+  ASSERT_NE(grid, nullptr);
+  EXPECT_EQ(grid->model()->rowCount(), 2);
+  EXPECT_TRUE(std::filesystem::exists(root / "Working.qdr"));
+  ui.shutdown();
+}
+
 TEST(QtProjectWorkspaceTests, AssetBrowserCreatesDetachedScenesInFullWidthBottomDock) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const auto profile = std::filesystem::temp_directory_path() /

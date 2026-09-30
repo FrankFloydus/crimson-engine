@@ -105,8 +105,9 @@ filament::Texture *TextureBindingService::resolve_texture(
     retain_texture(consumer, cache_key);
     return cached->second.texture ? cached->second.texture : fallback;
   }
-  filament::Texture *loaded = load_texture_asset(*texture);
-  texture_cache_[cache_key] = {.texture = loaded};
+  bool opaque = false;
+  filament::Texture *loaded = load_texture_asset(*texture, opaque);
+  texture_cache_[cache_key] = {.texture = loaded, .opaque = opaque};
   upload_count_ += loaded != nullptr ? 1u : 0u;
   retain_texture(consumer, cache_key);
   return loaded ? loaded : fallback;
@@ -137,13 +138,42 @@ filament::Texture *TextureBindingService::resolve_texture(
     retain_texture(consumer, cache_key);
     return cached->second.texture ? cached->second.texture : fallback;
   }
+  bool opaque = false;
   filament::Texture *loaded = texture->project_owned()
-                                  ? load_project_texture_asset(*texture)
-                                  : load_texture_asset(texture->texture);
-  texture_cache_[cache_key] = {.texture = loaded};
+                                  ? load_project_texture_asset(*texture, opaque)
+                                  : load_texture_asset(texture->texture, opaque);
+  texture_cache_[cache_key] = {.texture = loaded, .opaque = opaque};
   upload_count_ += loaded != nullptr ? 1u : 0u;
   retain_texture(consumer, cache_key);
   return loaded ? loaded : fallback;
+}
+
+bool TextureBindingService::base_color_is_known_opaque(
+    const RenderMaterialAssetSnapshot *material) const {
+  return base_color_opacity(material) == MaterialOpacity::Opaque;
+}
+
+MaterialOpacity TextureBindingService::base_color_opacity(
+    const RenderMaterialAssetSnapshot *material) const {
+  if (!material || !material->present) {
+    return MaterialOpacity::Opaque;
+  }
+  const auto *texture = material->texture_for_slot(material_texture_slot::kBaseColor);
+  if (!texture || !texture->present) {
+    return MaterialOpacity::Opaque;
+  }
+  const TextureCacheKey cache_key{
+      .scene_binding = scene_binding_,
+      .id = texture->texture_id,
+      .project_id = texture->project_texture_id,
+      .revision = texture->project_owned() ? texture->content_revision
+                                           : texture->texture.revision.value,
+      .color_space = texture->texture.color_space,
+  };
+  const auto cached = texture_cache_.find(cache_key);
+  if (cached == texture_cache_.end()) return MaterialOpacity::Unknown;
+  return cached->second.texture == nullptr || cached->second.opaque
+      ? MaterialOpacity::Opaque : MaterialOpacity::Transparent;
 }
 
 void TextureBindingService::retain_texture(
@@ -203,7 +233,8 @@ TextureBindingService::CacheStats TextureBindingService::cache_stats() const {
 }
 
 filament::Texture *
-TextureBindingService::load_texture_asset(const TextureAsset &texture) {
+TextureBindingService::load_texture_asset(const TextureAsset &texture,
+                                          bool &opaque) {
   if (!engine_ || texture.source_path.empty()) {
     return nullptr;
   }
@@ -221,11 +252,12 @@ TextureBindingService::load_texture_asset(const TextureAsset &texture) {
                              : PngTextureColorSpace::Linear,
           .generate_mipmaps = true,
           .label = "material texture",
+          .opaque_output = &opaque,
       });
 }
 
 filament::Texture *TextureBindingService::load_project_texture_asset(
-    const RenderTextureAssetSnapshot &texture) {
+    const RenderTextureAssetSnapshot &texture, bool &opaque) {
   if (!engine_) {
     return nullptr;
   }
@@ -235,6 +267,7 @@ filament::Texture *TextureBindingService::load_project_texture_asset(
                          : PngTextureColorSpace::Linear,
       .generate_mipmaps = true,
       .label = "project material texture",
+      .opaque_output = &opaque,
   };
   if (texture.decoded_rgba8 != nullptr &&
       !texture.decoded_rgba8->empty()) {

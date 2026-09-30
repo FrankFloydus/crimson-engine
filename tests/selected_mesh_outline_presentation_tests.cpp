@@ -222,7 +222,7 @@ public:
   explicit ExtrudeOutlineProvider(SceneSession &session) : session_(session) {}
   ViewportOverlayFrame build_selection_overlay_frame() const override {
     ++builds;
-    return session_.modeling().selection_overlay_frame();
+    return session_.modeling().selection_overlay_render_frame();
   }
   mutable std::uint64_t builds = 0u;
 
@@ -745,17 +745,22 @@ TEST(SelectedMeshOutlinePresentationTests,
     SceneRenderBridge bridge;
     OverlayRenderableCache overlay_cache;
     std::vector<RenderToolPreviewMeshRecord> published;
+    std::vector<RenderToolPreviewMeshRecord> accepted_coordinates;
     std::size_t publications = 0u;
-    const QuaderRenderApiRuntimeAccess::ToolPreviewPublisher publisher =
-        [&](std::vector<RenderToolPreviewMeshRecord> records) {
+    bool position_stream_changed = false;
+    const QuaderRenderApiRuntimeAccess::ToolPreviewScenePublisher publisher =
+        [&](RenderToolPreviewSceneSnapshot records) {
           ++publications;
-          published = std::move(records);
-          (void)overlay_cache.set_transform_position_streams(published);
+          published = std::move(records.meshes);
+          accepted_coordinates = std::move(records.accepted_overlay_coordinates);
+          position_stream_changed = overlay_cache.set_transform_position_streams(
+              published.empty() ? accepted_coordinates : published,
+              published.empty() && !accepted_coordinates.empty());
           return ToolPreviewSubmissionResult::Published;
         };
     const auto sync_preview = [&] {
       return QuaderRenderApiRuntimeAccess::sync_tool_previews(
-          harness.editor.render(), bridge, publisher);
+          harness.editor.render(), bridge, {}, publisher);
     };
     const auto submit = [&] {
       EXPECT_TRUE(sync_preview().ok());
@@ -785,7 +790,7 @@ TEST(SelectedMeshOutlinePresentationTests,
                       batch.mesh.vertices.size());
             QVec3 position{binding.base_position.x, binding.base_position.y,
                            binding.base_position.z};
-            for (const auto &preview : published) {
+            for (const auto &preview : published.empty() ? accepted_coordinates : published) {
               if (preview.source_object_id != binding.object_id) continue;
               EXPECT_TRUE(preview.dynamic_positions);
               EXPECT_NE(preview.layout_key, 0u);
@@ -830,7 +835,9 @@ TEST(SelectedMeshOutlinePresentationTests,
       const auto count = publications;
       for (int frame = 0; frame < 5; ++frame) {
         ASSERT_TRUE(sync_preview().ok());
-        EXPECT_FALSE(overlay_cache.set_transform_position_streams(published));
+        EXPECT_FALSE(overlay_cache.set_transform_position_streams(
+            published.empty() ? accepted_coordinates : published,
+            published.empty() && !accepted_coordinates.empty()));
       }
       EXPECT_EQ(publications, count);
       ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
@@ -891,6 +898,7 @@ TEST(SelectedMeshOutlinePresentationTests,
       ASSERT_TRUE(modeling.cancel_transform_drag().ok);
       ASSERT_TRUE(submit().persistent_submitted);
       EXPECT_TRUE(published.empty());
+      EXPECT_TRUE(accepted_coordinates.empty());
       expect_face_position(1.0F);
     } else {
       ASSERT_TRUE(drag_to(-0.5F).ok);
@@ -898,10 +906,36 @@ TEST(SelectedMeshOutlinePresentationTests,
       expect_face_position(-0.5F);
       EXPECT_NE(wires(), accepted_wires);
       ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+      const auto before_commit_work =
+          modeling.selection_overlay_geometry_work_counters();
       ASSERT_TRUE(modeling.commit_transform_drag(harness.session.history()).ok);
       (void)submit();
       EXPECT_TRUE(published.empty());
+      ASSERT_EQ(accepted_coordinates.size(), 1u);
+      EXPECT_FALSE(position_stream_changed);
+      EXPECT_FALSE(modeling.transient_transform_preview_active());
+      EXPECT_TRUE(modeling.tool_preview_meshes().empty());
       expect_face_position(-0.5F);
+      const auto committed_work = modeling.selection_overlay_geometry_work_counters();
+      EXPECT_EQ(committed_work.geometry_build_count,
+                before_commit_work.geometry_build_count);
+      EXPECT_EQ(committed_work.geometry_position_refresh_count,
+                before_commit_work.geometry_position_refresh_count);
+      EXPECT_EQ(committed_work.semantic_aggregate_build_count,
+                before_commit_work.semantic_aggregate_build_count);
+      EXPECT_EQ(committed_work.world_projection_build_count,
+                before_commit_work.world_projection_build_count);
+      EXPECT_GT(committed_work.accepted_coordinate_handoff_count,
+                before_commit_work.accepted_coordinate_handoff_count);
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      ASSERT_TRUE(submit().persistent_submitted);
+      EXPECT_TRUE(accepted_coordinates.empty());
+      expect_face_position(1.0F);
+      ASSERT_TRUE(harness.editor.history().redo().ok());
+      ASSERT_TRUE(submit().persistent_submitted);
+      expect_face_position(-0.5F);
+      EXPECT_EQ(modeling.selection_overlay_geometry_work_counters().geometry_build_count,
+                before_commit_work.geometry_build_count);
     }
     ASSERT_FALSE(modeling.transform_drag_active());
     ASSERT_NO_FATAL_FAILURE(expect_unchanged());

@@ -31,7 +31,7 @@ modeling_command_result_from_command_result(CommandResult result) {
 class ModelingPreviewCommitCommand final : public ModelingMementoCommand {
 public:
     ModelingPreviewCommitCommand(ModelingSessionService& modeling, std::string label)
-        : ModelingMementoCommand(modeling, std::move(label)) {}
+        : ModelingMementoCommand(modeling, std::move(label), false, false, true) {}
 
 private:
   ModelingSessionMemento capture_before_memento() override {

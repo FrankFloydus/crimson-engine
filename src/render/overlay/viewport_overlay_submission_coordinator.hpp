@@ -18,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -278,6 +279,9 @@ struct ViewportOverlaySubmissionWorkCounters final {
   std::uint64_t selection_dimension_bounds_build_count = 0u;
   std::uint64_t selection_dimension_source_record_count = 0u;
   std::uint64_t selection_dimension_frame_build_count = 0u;
+  std::uint64_t selection_dimension_mapping_build_count = 0u;
+  std::uint64_t selection_dimension_mapping_source_record_count = 0u;
+  std::uint64_t selection_dimension_position_read_count = 0u;
   std::uint64_t array_dimension_bounds_build_count = 0u;
   std::uint64_t array_dimension_originals_build_count = 0u;
 };
@@ -304,6 +308,33 @@ public:
   [[nodiscard]] ViewportOverlaySubmissionWorkCounters work_counters() const;
 
 private:
+  [[nodiscard]] std::optional<ViewportSelectionDimensionBounds>
+  component_selection_dimension_bounds(
+      const ViewportOverlaySubmissionRequest &request,
+      const ViewportOverlayFrame *selection,
+      std::uint64_t selection_revision);
+
+  /// Pins only source-ID layout; changing preview positions remain owner inputs.
+  struct ComponentDimensionPreviewLayout final {
+    int object_id = -1;
+    std::shared_ptr<const MeshGeometryPayload> geometry;
+  };
+
+  /// Addresses one selected authored vertex in an accepted preview position stream.
+  struct ComponentDimensionPositionBinding final {
+    std::size_t preview_index = 0u;
+    std::size_t vertex_index = 0u;
+  };
+
+  /// Retains selected-to-preview bindings and bounds for vertices without a preview.
+  struct ComponentDimensionMapping final {
+    std::uint64_t selection_revision = 0u;
+    std::vector<ComponentDimensionPreviewLayout> previews;
+    std::vector<ComponentDimensionPositionBinding> positions;
+    std::optional<ViewportSelectionDimensionBounds> fallback_bounds;
+    bool valid = false;
+  };
+
   /** Retains shared semantic selection geometry and its publication revision. */
   struct SelectionSourceState final {
     ViewportOverlaySelectionSourceStamp stamp;
@@ -357,6 +388,7 @@ private:
   std::array<PaneState, kMaxViewportSlots> panes_;
   SelectionSourceState selection_source_;
   SelectionDimensionSourceState selection_dimensions_;
+  ComponentDimensionMapping component_dimensions_;
   ArrayDimensionSourceState array_dimensions_;
   CurveToolOverlayCache curve_overlay_source_;
   SelectedMeshOutlineCache mesh_outline_source_;

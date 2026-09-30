@@ -10,12 +10,21 @@ material {
         uv0,
         color,
         custom0,
-        custom1
+        custom1,
+        custom2,
+        custom3
     ],
     variables : [
-        pointUv
+        pointUv,
+        pointColor
     ],
     parameters : [
+        { type : bool, name : sharedPositionsEnabled },
+        { type : sampler2d, name : sharedPositions, precision : high },
+        {
+            type : float,
+            name : componentPass
+        },
         {
             type : float,
             name : innerRadius
@@ -36,8 +45,18 @@ material {
 }
 
 vertex {
+    highp vec3 overlayPosition(highp vec3 position) {
+        if (materialParams.sharedPositionsEnabled) {
+            int index = int(position.x);
+            int width = textureSize(materialParams_sharedPositions, 0).x;
+            return texelFetch(materialParams_sharedPositions,
+                    ivec2(index % width, index / width), 0).xyz;
+        }
+        return position;
+    }
+
     void materialVertex(inout MaterialVertexInputs material) {
-        highp vec4 centerWorld = getWorldFromModelMatrix() * vec4(getCustom0().xyz, 1.0);
+        highp vec4 centerWorld = getWorldFromModelMatrix() * vec4(overlayPosition(getCustom0().xyz), 1.0);
         highp vec4 centerView = getViewFromWorldMatrix() * centerWorld;
         float nearPlane = max(materialParams.nearPlane, 0.0001);
         highp vec4 centerClip;
@@ -48,7 +67,13 @@ vertex {
         }
 
         vec2 corner = material.uv0 - vec2(0.5);
-        float pointSize = max(materialParams.pointSize, 1.0);
+        bool componentPoints = materialParams.componentPass >= 0.0;
+        bool componentOutline = componentPoints && mod(materialParams.componentPass, 2.0) < 0.5;
+        vec4 appearance = getCustom2();
+        float pointSize = max(componentPoints
+            ? appearance.x + (componentOutline ? appearance.y : 0.0)
+            : materialParams.pointSize, 1.0);
+        material.pointColor = componentOutline ? getCustom3() : material.color;
         // Reserve half a physical pixel outside circular markers for coverage.
         // Square vertex markers retain their original quad and hard boundary.
         float quadSize = pointSize + (materialParams.innerRadius > 0.0 ? 1.0 : 0.0);
@@ -79,7 +104,10 @@ vertex {
             max(unbiasedDeviceDepth - legacyMaximumPull, biasedDeviceDepth));
         highp vec4 finalDevice = vec4(centerDevice.xy + offsetDevice,
                                      deviceDepth, 1.0);
-        if (getCustom1().x < 0.5) {
+        bool wrongClass = componentPoints &&
+            abs(appearance.z - floor(materialParams.componentPass * 0.5)) > 0.5;
+        if (getCustom1().x < 0.5 || wrongClass ||
+            (componentOutline && appearance.y <= 0.0)) {
             finalDevice = vec4(1000000.0, 1000000.0, 0.0, 1.0);
         }
 
@@ -93,7 +121,7 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        vec4 color = getColor();
+        vec4 color = variable_pointColor;
         if (materialParams.innerRadius > 0.0) {
             float pointSize = max(materialParams.pointSize, 1.0);
             float distancePixels = length(variable_pointUv.xy - vec2(0.5)) * pointSize;

@@ -68,8 +68,9 @@ std::optional<SceneBounds> transformed_local_bounds(
 std::optional<SceneBounds> transformed_mesh_geometry_bounds(
     const MeshAsset &mesh, const QMat4 &world_from_local,
     SceneBounds *local_bounds) {
-  const MeshGeometryPayload &geometry = mesh.geometry();
-  if (geometry.vertices.empty()) {
+  const auto vertices = mesh.geometry_vertices();
+  const auto positions = mesh.geometry_positions();
+  if (vertices.empty()) {
     return std::nullopt;
   }
 
@@ -79,18 +80,18 @@ std::optional<SceneBounds> transformed_mesh_geometry_bounds(
         world_matrix * glm::vec4{to_glm(local_point), 1.0f};
     return from_glm(glm::vec3{transformed} / transformed.w);
   };
-  const QVec3 first_local = geometry.vertices.front().position;
+  const QVec3 first_local = positions.empty() ? vertices.front().position : positions.front();
   const QVec3 first_world = world_point(first_local);
   if (local_bounds != nullptr) {
     *local_bounds = SceneBounds{.min = first_local, .max = first_local};
   }
   SceneBounds world_bounds{.min = first_world, .max = first_world};
-  for (std::size_t index = 1u; index < geometry.vertices.size(); ++index) {
-    const MeshVertex &vertex = geometry.vertices[index];
+  for (std::size_t index = 1u; index < vertices.size(); ++index) {
+    const QVec3 position = positions.empty() ? vertices[index].position : positions[index];
     if (local_bounds != nullptr) {
-      include_point(*local_bounds, vertex.position);
+      include_point(*local_bounds, position);
     }
-    include_point(world_bounds, world_point(vertex.position));
+    include_point(world_bounds, world_point(position));
   }
   return world_bounds;
 }
@@ -201,17 +202,16 @@ std::optional<SceneBounds> entity_hierarchy_world_bounds_with_projection(
 } // namespace
 
 std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh) {
-  const MeshGeometryPayload &geometry = mesh.geometry();
-  if (geometry.vertices.empty()) {
+  const auto vertices = mesh.geometry_vertices();
+  const auto positions = mesh.geometry_positions();
+  if (vertices.empty()) {
     return std::nullopt;
   }
 
-  SceneBounds bounds{
-      .min = geometry.vertices.front().position,
-      .max = geometry.vertices.front().position,
-  };
-  for (const MeshVertex &vertex : geometry.vertices) {
-    include_point(bounds, vertex.position);
+  const QVec3 first = positions.empty() ? vertices.front().position : positions.front();
+  SceneBounds bounds{.min = first, .max = first};
+  for (std::size_t index = 1u; index < vertices.size(); ++index) {
+    include_point(bounds, positions.empty() ? vertices[index].position : positions[index]);
   }
   return bounds;
 }

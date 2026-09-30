@@ -82,8 +82,6 @@ public:
                  native_window);
       }
     }
-    LOG_INFO("Vulkan presentation for native window {}: {}", native_window,
-             unsynchronized ? "Immediate (VSync off)" : "FIFO (VSync on)");
   }
 
 private:
@@ -203,8 +201,6 @@ bool RenderSystem::initialize(void *native_window,
                               const std::filesystem::path &executable_dir,
                               RenderConfig config) {
   shutdown();
-  LOG_INFO("Initializing Filament renderer with {} backend",
-           to_string(config.backend));
   const auto fail = [&](std::string_view message) {
     LOG_ERROR("{}", message);
     shutdown();
@@ -219,7 +215,6 @@ bool RenderSystem::initialize(void *native_window,
   if (!engine_) {
     return fail("Unable to create Filament engine");
   }
-  LOG_INFO("Filament engine created");
   // The display-latency heuristic assumes a refresh-cadenced application loop.
   // GPU frame fences remain enabled independently when VSync is disabled.
   engine_->setFeatureFlag("engine.skip_frame_when_cpu_ahead_of_display",
@@ -237,15 +232,11 @@ bool RenderSystem::initialize(void *native_window,
     if (!primary_surface_->swap_chain) {
       return fail("Unable to create Filament swapchain");
     }
-    LOG_INFO("Filament swapchain created for native window {}", native_window);
-  } else {
-    LOG_INFO("Filament initialized without a primary swapchain");
   }
   renderer_ = engine_->createRenderer();
   if (!renderer_) {
     return fail("Unable to create Filament renderer");
   }
-  LOG_INFO("Filament renderer created");
   if (primary_surface_ != nullptr) {
     primary_surface_->renderer = renderer_;
   }
@@ -254,7 +245,6 @@ bool RenderSystem::initialize(void *native_window,
   if (!scene_) {
     return fail("Unable to create Filament scene");
   }
-  LOG_INFO("Filament scene created");
   const EnvironmentDocument &environment = config.settings.environment;
   renderer_clear_color_ = {environment.clear_color.x, environment.clear_color.y,
                            environment.clear_color.z,
@@ -577,8 +567,9 @@ void RenderSystem::update_gpu_frame_performance_stats() {
   const std::size_t history_size =
       std::min<std::size_t>(renderer->getMaxFrameHistorySize(), 8u);
   const auto history = renderer->getFrameInfoHistory(history_size);
-  for (std::size_t index = history.size(); index > 0u; --index) {
-    const filament::Renderer::FrameInfo &info = history[index - 1u];
+  // Filament publishes history newest first. Skip pending entries rather than
+  // adding another history-window delay to the asynchronous GPU measurement.
+  for (const filament::Renderer::FrameInfo &info : history) {
     if (is_frame_info_duration_available(info.denoisedGpuFrameDuration)) {
       frame_performance_stats_.gpu_frame_ms =
           frame_info_duration_ms(info.denoisedGpuFrameDuration);
@@ -639,9 +630,6 @@ void RenderSystem::create_surface_swap_chain(RenderSurfaceState &surface) {
   if (surface.swap_chain == nullptr) {
     LOG_ERROR("Unable to create Filament swapchain for native window {}",
               surface.native_window);
-  } else {
-    LOG_INFO("Filament swapchain created for native window {} with flags {}",
-             surface.native_window, flags);
   }
   surface.submitted_this_frame = false;
   surface.submitted_last_frame = false;
@@ -763,6 +751,9 @@ void RenderSystem::initialize_viewport_renderer(
                                material_library_.ground_grid(),
                                material_library_.overlay_stencil_reset(),
                                grid_layer_mask, surface);
+  if (solid_color_texture_ != nullptr) {
+    (void)viewport_renderer.configure_component_selection(material_library_.component_selection(), *solid_color_texture_);
+  }
   if (selected_mesh_outline_mask_cache_ != nullptr) {
     (void)viewport_renderer.configure_selected_mesh_outlines(
         *selected_mesh_outline_mask_cache_,

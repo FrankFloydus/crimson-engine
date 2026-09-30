@@ -25,10 +25,13 @@ namespace quader {
 struct LogEntry {
     spdlog::level::level_enum level = spdlog::level::info;
     std::string logger_name;
-    std::string message;
+    std::string message; // Compatibility projection including the log formatter.
     std::string file;
     int line = 0;
     std::uint64_t sequence = 0;
+    // Structured source values let retained consumers choose their presentation.
+    spdlog::log_clock::time_point timestamp{};
+    std::string payload;
 };
 
 /**

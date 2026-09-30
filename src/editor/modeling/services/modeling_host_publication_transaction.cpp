@@ -308,17 +308,14 @@ bool ModelingHostProjectionCheckpoint::can_restore(
     return false;
   }
   if (captures_scene_) {
-    const bool scene_preserving =
-        preserves_concurrent_owner_changes_ &&
-        scene_mutation_fence_.has_value() &&
-        scene_->can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
-            *scene_checkpoint_, *scene_mutation_fence_, created_entities);
     const bool scene_ready =
-        require_preserving_restore
-            ? scene_preserving
-            : scene_->can_restore_modeling_projection_checkpoint(
-                  *scene_checkpoint_, created_entities) ||
-                  scene_preserving;
+        (!require_preserving_restore &&
+         scene_->can_restore_modeling_projection_checkpoint(
+             *scene_checkpoint_, created_entities)) ||
+        (preserves_concurrent_owner_changes_ &&
+         scene_mutation_fence_.has_value() &&
+         scene_->can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+             *scene_checkpoint_, *scene_mutation_fence_, created_entities));
     if (!scene_ready) {
       return false;
     }
@@ -328,17 +325,14 @@ bool ModelingHostProjectionCheckpoint::can_restore(
     return false;
   }
   if (captures_assets_) {
-    const bool assets_preserving =
-        preserves_concurrent_owner_changes_ &&
-        asset_mutation_fence_.has_value() &&
-        assets_->can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
-            *asset_checkpoint_, *asset_mutation_fence_, created_assets);
     const bool assets_ready =
-        require_preserving_restore
-            ? assets_preserving
-            : assets_->can_restore_modeling_projection_checkpoint(
-                  *asset_checkpoint_, created_assets) ||
-                  assets_preserving;
+        (!require_preserving_restore &&
+         assets_->can_restore_modeling_projection_checkpoint(
+             *asset_checkpoint_, created_assets)) ||
+        (preserves_concurrent_owner_changes_ &&
+         asset_mutation_fence_.has_value() &&
+         assets_->can_restore_modeling_projection_checkpoint_preserving_concurrent_changes(
+             *asset_checkpoint_, *asset_mutation_fence_, created_assets));
     if (!assets_ready) {
       return false;
     }
@@ -349,16 +343,12 @@ bool ModelingHostProjectionCheckpoint::can_restore(
   if (bindings_ == nullptr || !binding_checkpoint_.has_value()) {
     return false;
   }
-  const bool bindings_preserving =
-      preserves_concurrent_owner_changes_ &&
-      binding_mutation_fence_.has_value() &&
-      bindings_->can_restore_projection_checkpoint_preserving_concurrent_changes(
-          *binding_checkpoint_, *binding_mutation_fence_);
-  return require_preserving_restore
-             ? bindings_preserving
-             : bindings_->can_restore_projection_checkpoint(
-                   *binding_checkpoint_) ||
-                   bindings_preserving;
+  return (!require_preserving_restore &&
+          bindings_->can_restore_projection_checkpoint(*binding_checkpoint_)) ||
+         (preserves_concurrent_owner_changes_ &&
+          binding_mutation_fence_.has_value() &&
+          bindings_->can_restore_projection_checkpoint_preserving_concurrent_changes(
+              *binding_checkpoint_, *binding_mutation_fence_));
 }
 
 bool ModelingHostProjectionCheckpoint::restore(

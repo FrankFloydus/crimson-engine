@@ -24,5 +24,6 @@ inline constexpr std::string_view kOverlayPointMaterialFile = "quader_overlay_po
 inline constexpr std::string_view kOverlayIconMaterialFile = "quader_overlay_icon.filamat";
 inline constexpr std::string_view kGroundGridMaterialFile = "ground_grid.filamat";
 inline constexpr std::string_view kOverlayStencilResetMaterialFile = "overlay_stencil_reset.filamat";
+inline constexpr std::string_view kComponentSelectionMaterialFile = "quader_component_selection.filamat";
 
 } // namespace quader

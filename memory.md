@@ -838,6 +838,11 @@ Tests: [presentation](tests/render_presentation_tests.cpp),
   [canvas regressions and opt-in scene benchmark](tests/face_texture_canvas_api_tests.cpp).
 - Camera motion reuses persistent world-space overlays and selection projections; hover/tool deltas
   have separate invalidation. Scene selection-only changes patch selected flags, not mesh geometry.
+- Semantic component overlays retain immutable geometry facts separately from selection/active
+  classification. Pinned document identity gates hashing; replaced storage requires exact geometry
+  compatibility before sharing cached face triangulation and edge incidence. Selection membership
+  still changes output layers and source participation. See
+  [semantic retention tests](tests/modeling_session_service_split_tests.cpp).
 - Surface ray snapshots never derive snap landmarks eagerly. Frozen snapshots pin the geometry and
   transforms needed for their one-time, thread-safe landmark derivation, including after owner
   destruction. Reuse pinned local geometry when a transform-only rebuild exceeds the strong LRU;
@@ -870,23 +875,54 @@ Tests: [presentation](tests/render_presentation_tests.cpp),
   unchanged, feedback-only and rejected updates retain the cached payload. Commit/cancel need no
   derived build. See [preview owner](src/sdk/core/modeling/src/session.cpp) and
   [lazy payload regressions](tests/sdk/modeling_curve_session_tests.cpp).
-- Affine component preview preparation mutates each canonical SDK candidate once, then derives
+- Affine component preview preparation evaluates each canonical SDK candidate once, then derives
   native geometry and packed positions from that same accepted arithmetic. Worker jobs own separate
   candidates; reject the complete batch before publishing any participant or reusing its currently
-  visible position buffer. Freeze each worker's final geometry before publication so its first content
-  hash does not serialize on the render thread. Retained topology compiles the changed-face normal neighborhood through
+  visible position buffer. Finish each worker's immutable position/attribute/index streams before
+  publication; materialize full native geometry only for explicit export or accepted commit.
+  Retained topology compiles the changed-face normal neighborhood through
   the canonical compiler, including every incident face in the affected smoothing fans; uncertain
   topology takes the full fallback. See [projection parity](tests/uv_native_sampling_tests.cpp) and
   [atomic preview rejection](tests/component_transform_persistence_tests.cpp).
+- Transform gestures pin SDK-selected storage indices once; each evaluation preserves canonical
+  translation/affine arithmetic, immutable prior candidates and atomic finite-coordinate rejection.
+  Candidates publish immutable selected coordinates over retained topology. Native derived
+  projection consumes those same coordinates rather than forcing every logical candidate through
+  authored topology export. Legacy readers materialize once; the next gesture pins a flat baseline
+  so publications never form growing chains. Publication identity is monotonic and remains stable
+  across lazy materialization. Session allocation-cursor checks use metadata without materializing.
+  Equivalent participants may share derived geometry only after exact authored/layout/movable-set
+  comparison at gesture start and exact transform/current-source comparison at each update.
+  Their SDK documents, selection, object identity and history remain independent. Never use
+  geometry-isomorphism or hash equality alone to share authored IDs or projected attributes.
+  See [prepared SDK parity](tests/sdk/modeling_sdk_consumer_tests.cpp) and
+  [derived sharing and pinned previews](tests/component_transform_persistence_tests.cpp).
+- Pure component Move converts world displacement through the inverse linear basis, preserving
+  exact identity axes. Conjugating a translation through full world matrices introduces origin-dependent
+  rounding and artificial deformation, breaking equivalent-geometry reuse at distant origins.
+  Repeat must resolve the displacement separately for each object's rotated/scaled basis. Preserve
+  ordinary affine evaluation for rotation and scale. The world-origin and repeat regressions live in
+  [component persistence](tests/component_transform_persistence_tests.cpp).
 - A drag's fixed movable vertex set can retain its normal-neighborhood plan, including a cached
   full-compile fallback. Validate authored attributes, untouched positions and compiled layout
   against the pinned source before reuse; canonical compilation remains authoritative. A rejected
   candidate must not mutate either the plan or the currently published geometry.
-- Measure dense interaction through real viewport preparation and Vulkan submission as well as
-  modeling work. The opt-in [native viewport fixture](tests/dense_component_frame_runtime_tests.cpp)
-  clones the project and reports frame, publication, overlay and rendering stages for unchanged,
-  navigation, selection, deformation and commit workloads. Preserve scene, camera, raster and selected
-  element counts in before/after comparisons; a model-only timing cannot establish viewport FPS.
+- Dense-edit acceptance uses `ClonedProjectFullEditorMixedComponentWorkflow` in the opt-in
+  [native viewport fixture](tests/dense_component_frame_runtime_tests.cpp), enabled with
+  `QUADER_TEST_DENSE_COMPONENT_WORKFLOW=1`. It clones the project and repeats all-object vertex,
+  edge and face edits through native pointer events, visible panels, final release updates,
+  commit, undo/redo and subsequent navigation. It also covers all authored vertices, a measured
+  distinct-geometry population and native visible marquee selection. Temporarily disable grid
+  snapping during measured continuous drags and restore it afterward; require every sampled
+  update to advance both modeling and render-preview publication. Unchanged snapped samples
+  must not dilute deformation timings. Keep the native raster fixed and reject physical-input
+  interference; compare pointer inputs, selection and geometry fingerprints across builds.
+  Record fallback reasons,
+  actual GPU-selection decisions, resource counts and per-stream uploads; unused fast paths are
+  not evidence of improvement. The older bounded fixture remains a micro/workflow measurement.
+  Preserve scene, camera, settings, raster, stage order and selected element counts in before/after
+  comparisons. Verify geometry/history outside timed stages, and assert camera-only frames do not
+  create or upload geometry. Model-only or favorable-subset timing cannot establish viewport FPS.
 
 Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
 [render guardrails](tests/render_source_policy_guardrail_tests.cpp),

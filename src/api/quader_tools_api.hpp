@@ -86,6 +86,8 @@ public:
     /// Records the input pane after a successful semantic settings-operation start.
     void record_active_settings_origin(ViewportPaneId pane);
     [[nodiscard]] std::uint64_t active_tool_revision() const;
+    /// Scalar tool/preview gate for command availability; no settings or overlay projection.
+    [[nodiscard]] std::uint64_t availability_revision() const;
     /// Cheap gate for owner-selected operation hints, including lifecycle/rebind.
     [[nodiscard]] std::uint64_t active_input_hints_revision(const QuaderOperationInputContext &context = {}) const;
     /// Resolve only after the hint revision changes; key mappings remain command-owned.
@@ -188,6 +190,8 @@ public:
     mutable std::string active_tool_id_;
     mutable std::uint64_t active_tool_revision_ = 0;
     mutable bool active_tool_valid_ = false;
+    mutable std::optional<std::array<std::uint64_t, 13>> availability_source_;
+    mutable std::uint64_t availability_revision_ = 0;
     mutable std::array<std::uint64_t, 20> input_hints_source_ = {};
     mutable QuaderOperationInputContext input_hints_context_;
     mutable std::string input_hints_native_tool_id_;

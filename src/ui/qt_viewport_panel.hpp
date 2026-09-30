@@ -20,6 +20,7 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
 #include "ui/qt_viewport_delete_popup.hpp"
+#include "ui/qt_viewport_marking_menu.hpp"
 #include "ui/qt_viewport_quick_menu.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
@@ -317,6 +318,7 @@ private:
   QtViewportContextMenuPresenter context_menu_presenter_;
   QtViewportDeletePopupPresenter delete_popup_presenter_;
   QtViewportQuickMenuPresenter quick_menu_presenter_;
+  QtViewportMarkingMenuPresenter marking_menu_presenter_;
   const SceneDocument *point_light_pick_cached_document_ = nullptr;
   std::uint64_t point_light_pick_cached_scene_revision_ = 0u;
   std::uint64_t point_light_pick_cached_selection_revision_ = 0u;

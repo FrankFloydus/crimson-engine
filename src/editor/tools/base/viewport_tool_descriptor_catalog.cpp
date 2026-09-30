@@ -18,7 +18,8 @@ constexpr std::array<ToolDescriptor, 18> kViewportToolDescriptors{{
         .modeling_tool = ModelingViewportTool::Select,
         .id = "select",
         .label = "Select",
-        .shortcut = "Q",
+        // Select remains remappable; Q opens the viewport marking menu.
+        .shortcut = "",
         .kind = ToolKind::Selection,
         .menu_group = ToolMenuGroup::Navigation,
         .allows_selection_fallback = true,

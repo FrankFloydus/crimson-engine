@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "render/curve_solid_geometry_cache.hpp"
+#include "render/editable_mesh_surface_cache.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/instance_renderable_cache.hpp"
@@ -87,6 +88,10 @@ public:
                     filament::Texture &solid_color_texture,
                     std::filesystem::path resource_root);
     void shutdown();
+    [[nodiscard]] OverlayRenderableCacheStats
+    overlay_stats(std::size_t viewport_index = 0u) const {
+      return overlay_cache_.stats(viewport_index);
+    }
     void set_project_material_resolver(
         const RenderProjectMaterialResolver *resolver);
     [[nodiscard]] const RenderProjectMaterialResolver *
@@ -130,7 +135,17 @@ public:
       return tool_preview_overlay_suppression_dirty_ || tool_preview_wireframe_dirty_;
     }
     [[nodiscard]] SceneRenderResourceDiagnostics diagnostics() const;
-    /** Drains one retired preview proxy during an explicitly idle UI slice. */
+    [[nodiscard]] MeshRenderableFactory::GeometryCacheStats
+    mesh_geometry_work_counters() const {
+      return mesh_factory_.geometry_cache_stats();
+    }
+    [[nodiscard]] ToolPreviewCacheWorkCounters tool_preview_work_counters() const noexcept {
+      return tool_preview_cache_.work_counters();
+    }
+    [[nodiscard]] EditableMeshSurfaceWorkCounters editable_surface_work_counters() const noexcept {
+      return editable_surface_cache_.work_counters();
+    }
+    /** Drains retired preview resources under the cache's idle time budget. */
     void perform_idle_resource_maintenance();
     /// Restricts transient overlay work to currently visible workspace panes;
     /// slots leaving the layout are released and lazily resubmitted if shown.
@@ -140,6 +155,8 @@ public:
         const ViewportSettings &settings);
 
   private:
+    /// Accepts persistent geometry before excluding its occurrences from ordinary draws.
+    [[nodiscard]] bool synchronize_mesh_surfaces(const RenderSceneSnapshot &snapshot);
     [[nodiscard]] ViewportOverlayCameraUpdate
     update_overlay_cameras(
         std::size_t viewport_index, std::uint8_t layer_mask,
@@ -159,6 +176,7 @@ public:
     MeshRenderableCache mesh_cache_;
     InstanceRenderableCache instance_cache_;
     ToolPreviewRenderableCache tool_preview_cache_;
+    EditableMeshSurfaceCache editable_surface_cache_;
     ToolPreviewLightCache tool_preview_light_cache_;
     OverlayProxyFactory overlay_proxy_factory_;
     OverlayRenderableCache overlay_cache_;
@@ -173,6 +191,7 @@ public:
     CurveSolidGeometryCache curve_solid_geometry_cache_;
     RenderSceneSnapshot previous_scene_snapshot_;
     bool has_previous_scene_snapshot_ = false;
+    bool surface_sync_pending_ = false;
     RenderSceneBindingKey scene_binding_;
     const RenderProjectMaterialResolver *project_material_resolver_ = nullptr;
     bool has_scene_binding_ = false;
@@ -188,6 +207,7 @@ public:
     bool tool_preview_wireframe_dirty_ = false;
     /// Pins the accepted candidate for CPU selection measurements as well as GPU streams.
     std::vector<RenderToolPreviewMeshRecord> selection_dimension_preview_meshes_;
+    std::vector<RenderToolPreviewMeshRecord> accepted_overlay_coordinates_;
     std::vector<RenderToolPreviewGroupMarkerRecord> selection_dimension_preview_groups_;
     std::vector<RenderToolPreviewCurveRecord> selection_dimension_preview_curves_;
     std::vector<RenderToolPreviewLightRecord> array_dimension_preview_lights_;

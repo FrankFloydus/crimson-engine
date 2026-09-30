@@ -189,17 +189,13 @@ TEST(SavedArchDissolveSdkTests,
   const auto result = dissolved.authored_topology();
   ASSERT_TRUE(result.ok()) << result.error_message();
   ASSERT_EQ(result.value().faces.size(), 2U);
-  EXPECT_EQ(result.value().vertices.size(), 6U);
+  EXPECT_EQ(result.value().vertices.size(), 8U);
   EXPECT_EQ(result.value().next_vertex_id, topology.next_vertex_id);
   EXPECT_EQ(result.value().next_face_id, topology.next_face_id);
   EXPECT_EQ(result.value().hard_normal_edges, topology.hard_normal_edges);
   for (const auto& vertex : topology.vertices) {
     const auto found = std::ranges::find(result.value().vertices, vertex.id,
                                        &AuthoredTopologyVertex::id);
-    if (vertex.id.index == 16U || vertex.id.index == 1297U) {
-      EXPECT_EQ(found, result.value().vertices.end());
-      continue;
-    }
     ASSERT_NE(found, result.value().vertices.end());
     EXPECT_EQ(found->position.x, vertex.position.x);
     EXPECT_EQ(found->position.y, vertex.position.y);
@@ -212,13 +208,15 @@ TEST(SavedArchDissolveSdkTests,
   EXPECT_EQ(merged->material_slot, topology.faces[0].material_slot);
   EXPECT_EQ(merged->shading, topology.faces[0].shading);
   EXPECT_EQ(merged->texture_transform, topology.faces[0].texture_transform);
-  ASSERT_EQ(merged->vertices.size(), 4U);
-  ASSERT_EQ(merged->uvs.size(), 4U);
+  ASSERT_EQ(merged->vertices.size(), 6U);
+  ASSERT_EQ(merged->uvs.size(), 6U);
 
-  // Cleanup removes the dissolved edge's degree-two endpoints, including their
-  // conflicting UV corners. All other authored corner values survive.
-  const std::array<std::pair<std::uint32_t, Vec2>, 4> expected_uvs{{
+  // Both boundary endpoints turn about 11.25 degrees, so normal dissolve keeps
+  // them. Each retained UV corner follows its surviving outgoing boundary edge.
+  const std::array<std::pair<std::uint32_t, Vec2>, 6> expected_uvs{{
       {17U, topology.faces[0].uvs[0]},
+      {16U, topology.faces[1].uvs[0]},
+      {1297U, topology.faces[0].uvs[2]},
       {1296U, topology.faces[0].uvs[3]},
       {15U, topology.faces[1].uvs[1]},
       {1298U, topology.faces[1].uvs[2]},

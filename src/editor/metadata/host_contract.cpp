@@ -208,7 +208,7 @@ std::span<const HostActionDescriptor> action_descriptors()
       operation_action("merge_vertices_at_center", "Merge Vertices at Center",
                        "merge_vertices_to_center",
                        action_availability(HostSelectionMode::Vertex, 2, 0,
-                                           HostActiveSelectionKind::Vertex,
+                                           HostActiveSelectionKind::None,
                                            false)),
       operation_action(
           "merge_by_distance", "Merge Vertices by Distance", "merge_by_distance",
@@ -222,7 +222,7 @@ std::span<const HostActionDescriptor> action_descriptors()
       operation_action("connect_vertices", "Connect Vertices", "connect_vertices",
                        action_availability(HostSelectionMode::Vertex, 2, 0,
                                            HostActiveSelectionKind::None,
-                                           true)),
+                                           false)),
       operation_action(
           "dissolve_vertices", "Dissolve Vertices", "dissolve_vertices",
           action_availability(HostSelectionMode::Vertex, 1, 0,
@@ -294,7 +294,7 @@ std::span<const HostActionDescriptor> action_descriptors()
       operation_action("merge_edges", "Merge Edges", "merge_edges",
                        action_availability(HostSelectionMode::Edge, 0, 2,
                                            HostActiveSelectionKind::None,
-                                           true)),
+                                           false)),
       operation_action("collapse_edges", "Collapse Edges", "collapse_edges",
                        action_availability(HostSelectionMode::Edge, 0, 1,
                                            HostActiveSelectionKind::None,
@@ -734,7 +734,7 @@ shortcut(std::string_view id, HostShortcutContext context, std::string_view key,
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-  static const std::array<HostShortcutDescriptor, 40> kDescriptors{{
+  static const std::array<HostShortcutDescriptor, 39> kDescriptors{{
       shortcut("undo", HostShortcutContext::Global, "Z", true, false, false,
                HostShortcutTargetKind::EditorAction, "undo"),
       shortcut("redo_shift_z", HostShortcutContext::Global, "Z", true, false,
@@ -807,8 +807,6 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
       shortcut("flip_vertical", HostShortcutContext::Viewport, "V", false,
                false, true, HostShortcutTargetKind::ViewportAction,
                "flip_vertical"),
-      shortcut("select_tool", HostShortcutContext::Viewport, "Q", false, false,
-               false, HostShortcutTargetKind::Tool, "select"),
       shortcut("lasso_select_tool", HostShortcutContext::Viewport, "Q", false,
                false, true, HostShortcutTargetKind::Tool, "lasso_select"),
       shortcut("knife_tool", HostShortcutContext::Viewport, "C", false, false,

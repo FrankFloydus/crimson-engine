@@ -63,7 +63,8 @@ public:
                                               EntityId entity) const;
   [[nodiscard]] bool parent_projected_entity(SceneDocument &scene,
                                              EntityId entity,
-                                             EntityId parent) const;
+                                            EntityId parent,
+                                            bool preserve_world = false) const;
   [[nodiscard]] bool set_projected_transform(
       SceneDocument &scene, EntityId entity,
       const TransformComponent &transform) const;

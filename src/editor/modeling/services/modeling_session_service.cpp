@@ -633,6 +633,7 @@ private:
 
 void collect_face_visibility_witnesses(
     const quader_editor_core::ViewportCameraState &camera,
+    const quader_editor_core::PreparedViewportProjection &projection,
     const quader_poly::Document &document, const quader_poly::Face &face,
     RectangleVisibilityWitnessAccumulator &witnesses) {
   std::vector<QVec2> screen_vertices;
@@ -646,8 +647,7 @@ void collect_face_visibility_witnesses(
       continue;
     }
     QVec2 screen{};
-    if (!quader_editor_core::project_viewport_point(camera, vertex->position,
-                                                    screen)) {
+    if (!projection.project_point(vertex->position, screen)) {
       all_projected = false;
       screen_vertices.push_back({});
       continue;
@@ -667,10 +667,8 @@ void collect_face_visibility_witnesses(
     }
     QVec2 screen_a{};
     QVec2 screen_b{};
-    if (!quader_editor_core::project_viewport_point(camera, a->position,
-                                                    screen_a) ||
-        !quader_editor_core::project_viewport_point(camera, b->position,
-                                                    screen_b)) {
+    if (!projection.project_point(a->position, screen_a) ||
+        !projection.project_point(b->position, screen_b)) {
       continue;
     }
     const auto clipped = clipped_screen_segment_factors(
@@ -703,8 +701,7 @@ void collect_face_visibility_witnesses(
       triangles = quader_poly::build_face_pick_geometry(document, face.id,
                                                        options);
     }
-    const quader_poly::Ray ray =
-        quader_editor_core::ray_from_viewport_screen_point(camera, anchor);
+    const quader_poly::Ray ray = projection.ray_from_screen_point(anchor);
     const quader_poly::PickResult hit =
         quader_poly::pick_face_geometry(*triangles, ray, options);
     if (hit.hit) {
@@ -719,13 +716,13 @@ resolved_selection_visibility_witnesses(
     ModelingActiveSelectionKind kind, int vertex_id,
     int edge_a, int edge_b, int face_id,
     const quader_editor_core::ViewportCameraState &camera,
+    const quader_editor_core::PreparedViewportProjection &projection,
     const quader_editor_core::ScreenRect &rect) {
   if (kind == ModelingActiveSelectionKind::Vertex) {
     const quader_poly::Vertex *vertex =
         quader_poly::find_vertex(document, vertex_id);
     QVec2 screen{};
-    if (vertex != nullptr && quader_editor_core::project_viewport_point(
-                                 camera, vertex->position, screen) &&
+    if (vertex != nullptr && projection.project_point(vertex->position, screen) &&
         quader_editor_core::screen_rect_contains(rect, screen)) {
       return {{.screen_position = screen, .world_position = vertex->position}};
     }
@@ -738,10 +735,8 @@ resolved_selection_visibility_witnesses(
     QVec2 screen_a{};
     QVec2 screen_b{};
     if (a != nullptr && b != nullptr &&
-        quader_editor_core::project_viewport_point(camera, a->position,
-                                                   screen_a) &&
-        quader_editor_core::project_viewport_point(camera, b->position,
-                                                   screen_b)) {
+        projection.project_point(a->position, screen_a) &&
+        projection.project_point(b->position, screen_b)) {
       witnesses.consider(screen_a, a->position);
       witnesses.consider(screen_b, b->position);
       const auto clipped = clipped_screen_segment_factors(
@@ -762,19 +757,20 @@ resolved_selection_visibility_witnesses(
   if (kind == ModelingActiveSelectionKind::Face) {
     const quader_poly::Face *face = quader_poly::find_face(document, face_id);
     if (face != nullptr) {
-      collect_face_visibility_witnesses(camera, document, *face, witnesses);
+      collect_face_visibility_witnesses(camera, projection, document, *face,
+                                       witnesses);
     }
     return witnesses.finish();
   }
   if (kind == ModelingActiveSelectionKind::Object) {
     for (const quader_poly::Face &face : document.faces) {
-      collect_face_visibility_witnesses(camera, document, face, witnesses);
+      collect_face_visibility_witnesses(camera, projection, document, face,
+                                       witnesses);
     }
     if (document.faces.empty()) {
       for (const quader_poly::Vertex &vertex : document.vertices) {
         QVec2 screen{};
-        if (quader_editor_core::project_viewport_point(
-                camera, vertex.position, screen)) {
+        if (projection.project_point(vertex.position, screen)) {
           witnesses.consider(screen, vertex.position);
         }
       }
@@ -2018,14 +2014,57 @@ public:
         hits.vertices.empty()) {
       return {};
     }
+    // Component rectangle application consumes a set in canonical universe
+    // order. Through-selection needs neither occlusion witnesses nor depth
+    // ordering; retain both for scene targets and visible-only selection.
+    std::unordered_set<int> through_objects;
+    const bool component_through_selection = request.select_backfaces &&
+        !request.camera.affine_model_space &&
+        projected.selection_mode() != quader_editor_core::SelectionMode::Object;
+    if (component_through_selection) {
+      const QVec3 forward = normalize(request.camera.z_axis * -1.0f);
+      const auto &bounds = selection_service_.cached_pick_object_bounds(
+          projected, scene_, object_registry_);
+      through_objects.reserve(bounds.size());
+      for (const auto &bound : bounds) {
+        if (bound.empty || !std::isfinite(bound.min.x) || !std::isfinite(bound.min.y) ||
+            !std::isfinite(bound.min.z) || !std::isfinite(bound.max.x) ||
+            !std::isfinite(bound.max.y) || !std::isfinite(bound.max.z) ||
+            bound.min.x > bound.max.x || bound.min.y > bound.max.y ||
+            bound.min.z > bound.max.z) {
+          continue;
+        }
+        const QVec3 nearest{
+            forward.x >= 0 ? bound.min.x : bound.max.x,
+            forward.y >= 0 ? bound.min.y : bound.max.y,
+            forward.z >= 0 ? bound.min.z : bound.max.z};
+        const float depth = dot(nearest - request.camera.origin, forward);
+        // Orthographic projection includes the camera's rear half-space. Keep
+        // the old witness rejection for bounds touching/crossing that plane.
+        if (std::isfinite(depth) && depth > 0.0001f) {
+          through_objects.insert(bound.object_id);
+        }
+      }
+    }
+    const auto needs_witness = [&](const auto &hit) {
+      return !through_objects.contains(hit.object_id);
+    };
+    const bool needs_visibility_witnesses = !hits.object_ids.empty() ||
+        std::ranges::any_of(hits.faces, needs_witness) ||
+        std::ranges::any_of(hits.edges, needs_witness) ||
+        std::ranges::any_of(hits.vertices, needs_witness);
+    const std::vector<quader_editor_core::PolygonObject> empty_picking_objects;
     const std::vector<quader_editor_core::PolygonObject> &picking_objects = [&]()
         -> const std::vector<quader_editor_core::PolygonObject> & {
+      if (!needs_visibility_witnesses) {
+        return empty_picking_objects;
+      }
       QDR_PROFILE_SCOPE("Marquee acquire world picking geometry");
       return selection_service_.cached_scene_transformed_objects_for_picking(
           projected, scene_, object_registry_);
     }();
     return [&]() {
-      QDR_PROFILE_SCOPE("Marquee build visibility witnesses");
+      QDR_PROFILE_SCOPE("Marquee resolve modeling targets");
       std::unordered_map<int, const quader_editor_core::PolygonObject *>
           picking_objects_by_id;
       picking_objects_by_id.reserve(picking_objects.size());
@@ -2036,6 +2075,7 @@ public:
       result.reserve(hits.object_ids.size() + hits.faces.size() +
                      hits.edges.size() + hits.vertices.size());
       const auto camera = modeling_runtime_camera(request.camera);
+      const quader_editor_core::PreparedViewportProjection projection(camera);
       const auto rect = quader_editor_core::normalized_screen_rect(request.start, request.end);
       const auto append = [&](int object_id, ModelingActiveSelectionKind kind,
                               int vertex, int edge_a, int edge_b, int face) {
@@ -2052,12 +2092,13 @@ public:
             kind == ModelingActiveSelectionKind::Object
                 ? kInvalidModelingObjectId
                 : object_id);
+        const bool rectangle_target_only = through_objects.contains(object_id);
         std::vector<ModelingSelectionVisibilityWitness> witnesses;
         if (const auto object = picking_objects_by_id.find(object_id);
-            object != picking_objects_by_id.end()) {
+            !rectangle_target_only && object != picking_objects_by_id.end()) {
           witnesses = resolved_selection_visibility_witnesses(
               object->second->document.read(), kind, vertex, edge_a, edge_b,
-              face, camera, rect);
+              face, camera, projection, rect);
         }
         std::optional<QVec3> world_position =
             witnesses.empty()
@@ -2073,6 +2114,7 @@ public:
             .face_id = face,
             .world_position = std::move(world_position),
             .visibility_witnesses = std::move(witnesses),
+            .rectangle_target_only = rectangle_target_only,
         });
       };
       for (const int object_id : hits.object_ids) {
@@ -3461,6 +3503,13 @@ public:
     return sdk_projection_adapter_.selected_vertices_snapshot();
   }
 
+  [[nodiscard]] modeling::Result<ModelingPolygonDocumentReadSnapshot>
+  polygon_document_read_snapshot(int modeling_object_id,
+                                 bool include_preview) const {
+    return sdk_projection_adapter_.polygon_document_read_snapshot(
+        modeling_object_id, include_preview);
+  }
+
   ModelingCommandResult apply_resolved_vertex_positions(
       std::span<const ModelingResolvedVertexPositionBatch> batches) {
     return sdk_projection_adapter_.apply_resolved_vertex_positions(batches);
@@ -3488,7 +3537,7 @@ public:
         options.suppress_persistent_selection ||
         active_scene_selection_is_owned_outside_modeling();
     options.persistent_source_wire_object_id =
-        persistent_tool_source_wire_object_id(selection_projection_snapshot());
+        persistent_tool_source_wire_object_id();
     return overlay_service_.selection_overlay_signature(runtime_, options) ^
            sdk_projection_adapter_.selection_overlay_preview_signature();
   }
@@ -3582,10 +3631,32 @@ public:
     const ModelingSelectionProjectionSnapshot &projected =
         selection_projection_snapshot();
     options.persistent_source_wire_object_id =
-        persistent_tool_source_wire_object_id(projected);
+        persistent_tool_source_wire_object_id();
     return overlay_service_.selection_overlay_frame(
         projected, runtime_, scene_, object_registry_, selection_service_,
         sdk_projection_adapter_, options);
+  }
+
+  [[nodiscard]] std::shared_ptr<const ModelingAcceptedOverlayCoordinates>
+  accepted_overlay_coordinates() const {
+    return sdk_projection_adapter_.accepted_overlay_coordinates();
+  }
+
+  [[nodiscard]] ViewportOverlayFrame selection_overlay_render_frame(
+      ModelingSelectionOverlayOptions options = {}) const {
+    const auto coordinates = accepted_overlay_coordinates();
+    if (coordinates) {
+      options.suppress_persistent_selection =
+          options.suppress_persistent_selection ||
+          active_scene_selection_is_owned_outside_modeling();
+      options.persistent_source_wire_object_id =
+          persistent_tool_source_wire_object_id();
+      if (const auto *base = overlay_service_.accepted_coordinate_base_frame(
+              *coordinates, selection_service_.viewport_visibility_revision(), options)) {
+        return *base;
+      }
+    }
+    return selection_overlay_frame(options);
   }
 
   [[nodiscard]] ModelingVolatileOverlaySnapshot
@@ -3618,12 +3689,16 @@ public:
           },
       };
     }
-    const ModelingSelectionProjectionSnapshot &projected =
-        selection_projection_snapshot();
+    const auto &hover = runtime_.hover();
+    const bool needs_geometry =
+        hover.kind != quader_editor_core::SelectionHoverKind::None ||
+        hover.candidate_object_id > 0;
+    const auto *projected = needs_geometry ? &selection_projection_snapshot() : nullptr;
     ViewportOverlayFrame frame = overlay_service_.volatile_overlay_frame(
-        projected, runtime_, scene_, object_registry_, selection_service_,
+        projected, app_selection_mode_to_runtime(selection_mode()),
+        runtime_, scene_, object_registry_, selection_service_,
         sdk_projection_adapter_,
-        persistent_tool_source_wire_object_id(projected));
+        persistent_tool_source_wire_object_id());
     volatile_overlay_cache_.key = source_key;
     volatile_overlay_cache_.frame =
         std::make_shared<const ViewportOverlayFrame>(std::move(frame));
@@ -3651,6 +3726,11 @@ public:
         .build_count = volatile_overlay_cache_.build_count,
         .reuse_count = volatile_overlay_cache_.reuse_count,
     };
+  }
+
+  [[nodiscard]] const quader_editor_core::SelectionOverlayGeometryWorkCounters &
+  selection_overlay_geometry_work_counters() const {
+    return overlay_service_.selection_overlay_geometry_work_counters();
   }
 
   [[nodiscard]] std::uint64_t tool_preview_source_revision() const {
@@ -3780,6 +3860,14 @@ public:
                      std::make_shared<ModelingSessionMemento::Impl>(
                          rebased_sdk_baseline))
                : ModelingSessionMemento{};
+  }
+
+  [[nodiscard]] ModelingSessionMemento capture_component_merge_history_memento(
+      const ModelingSdkProjectionSnapshot &before) const {
+    const auto snapshot = sdk_projection_adapter_.capture_component_merge_snapshot(before);
+    return snapshot.valid()
+        ? ModelingSessionMemento(std::make_shared<ModelingSessionMemento::Impl>(snapshot))
+        : ModelingSessionMemento{};
   }
 
   [[nodiscard]] ModelingSessionMemento
@@ -5813,6 +5901,12 @@ public:
 
   [[nodiscard]] ModelingSelectionSummary action_selection_summary() const {
     ModelingSelectionSummary summary = selection_summary();
+    if (summary.mode == ModelingSelectionMode::Vertex ||
+        summary.mode == ModelingSelectionMode::Edge ||
+        summary.mode == ModelingSelectionMode::Face) {
+      summary.selected_object_count = static_cast<std::uint32_t>(
+          sdk_projection_adapter_.selected_component_entities().size());
+    }
     if (summary.has_selection) {
       const auto topology =
           sdk_projection_adapter_.selection_topology_eligibility();
@@ -6038,6 +6132,30 @@ public:
     return from_glm(glm::translate(glm::mat4{1.0f}, to_glm(delta)));
   }
 
+  quader_poly::Transform3 object_local_transform(
+      const QMat4 &world_affine, const QMat4 &object_from_world,
+      const QMat4 &world_from_object) const {
+    const QMat4 identity;
+    bool translation_only = true;
+    for (std::size_t index = 0u; index < world_affine.values.size(); ++index) {
+      if (index >= 12u && index <= 14u) {
+        continue;
+      }
+      translation_only &= world_affine.values[index] == identity.values[index];
+    }
+    if (translation_only) {
+      // A displacement has no world origin. Conjugating translation matrices
+      // subtracts large object origins and adds them back, losing small moves
+      // and producing different geometry for otherwise equivalent objects.
+      const QVec3 world_delta{world_affine.values[12], world_affine.values[13],
+                             world_affine.values[14]};
+      return {.origin = to_runtime(transform_vector(object_from_world, world_delta))};
+    }
+    return runtime_transform_from_matrix(from_glm(
+        to_glm(object_from_world) * to_glm(world_affine) *
+        to_glm(world_from_object)));
+  }
+
   void refresh_transform_drag_projection_cache() {
     ModelingSelectionProjectionSnapshot projection =
         selection_projection_snapshot();
@@ -6111,16 +6229,13 @@ public:
         !initialize_transform_drag_local_inputs(message)) {
       return false;
     }
-    const glm::mat4 world_delta = to_glm(world_affine);
     for (std::size_t index = 0;
          index < transform_drag_local_inputs_.size(); ++index) {
       const TransformDragLocalInput &input =
           transform_drag_local_inputs_[index];
-      const glm::mat4 local_delta =
-          to_glm(input.object_from_world) * world_delta *
-          to_glm(input.world_from_object);
       transform_drag_preview_transforms_[index].transform = from_runtime(
-          runtime_transform_from_matrix(from_glm(local_delta)));
+          object_local_transform(world_affine, input.object_from_world,
+                                 input.world_from_object));
     }
     return true;
   }
@@ -6129,7 +6244,6 @@ public:
   local_transforms_for_selected_objects(const QMat4 &world_affine,
                                         std::string &message) const {
     std::vector<quader_editor_core::ObjectLocalTransform> transforms;
-    const glm::mat4 world_delta = to_glm(world_affine);
     const ModelingSelectionProjectionSnapshot &projection =
         selection_projection_snapshot();
     for (const quader_editor_core::PolygonObject &object :
@@ -6144,11 +6258,11 @@ public:
         return {};
       }
       const glm::mat4 object_world = to_glm(*world_from_object);
-      const glm::mat4 local_delta =
-          glm::inverse(object_world) * world_delta * object_world;
       transforms.push_back({
           .object_id = object.id,
-          .transform = runtime_transform_from_matrix(from_glm(local_delta)),
+          .transform = object_local_transform(
+              world_affine, from_glm(glm::inverse(object_world)),
+              *world_from_object),
       });
     }
     if (transforms.empty()) {
@@ -6273,7 +6387,8 @@ public:
       return {true, duplicated || transformed.changed, {}};
     }
 
-    if (action.tool == quader_editor_core::ViewportInteractionTool::Move) {
+    if (action.tool == quader_editor_core::ViewportInteractionTool::Move &&
+        action.operation == quader_editor_core::TransformDragOperation::Extrude) {
       const ModelingCommandResult begun =
           begin_transform_preview(action.duplicate_selected);
       if (!begun.ok) {
@@ -6287,13 +6402,8 @@ public:
         (void)cancel_transform_preview();
         return {false, false, message};
       }
-      ModelingCommandResult update;
-      if (action.operation ==
-          quader_editor_core::TransformDragOperation::Extrude) {
-        update = update_transform_extrude_preview(offsets.front().offset, 0.0F);
-      } else {
-        update = update_transform_translate_preview(offsets.front().offset);
-      }
+      const ModelingCommandResult update =
+          update_transform_extrude_preview(offsets.front().offset, 0.0F);
       if (!update.ok) {
         (void)cancel_transform_preview();
         return {false, update.changed, update.message};
@@ -6303,15 +6413,15 @@ public:
       return {committed.ok, committed.changed, committed.message};
     }
 
-    if (action.tool != quader_editor_core::ViewportInteractionTool::Rotate &&
+    if (action.tool != quader_editor_core::ViewportInteractionTool::Move &&
+        action.tool != quader_editor_core::ViewportInteractionTool::Rotate &&
         action.tool != quader_editor_core::ViewportInteractionTool::Scale) {
       return {false, false, "Unsupported repeat transform tool."};
     }
 
     // Re-enter the same per-object preview path used by the original drag.
-    // This preserves the recorded world pivot, converts the complete affine
-    // into each selected object's local basis, and retains TransformExtrude
-    // for Shift+Rotate rather than reducing the rotation to an offset.
+    // This preserves each object's displacement basis and the recorded world
+    // pivot, including TransformExtrude for Shift+Rotate.
     const ModelingCommandResult begun = begin_portable_transform_preview(
         action.duplicate_selected,
         action.operation ==
@@ -6330,6 +6440,7 @@ public:
     replay_drag.space = action.space;
     replay_drag.orientation = action.orientation;
     replay_drag.pivot = action.pivot;
+    replay_drag.move.preview_delta = to_runtime(replay_move_delta);
     replay_drag.rotate.active =
         action.tool == quader_editor_core::ViewportInteractionTool::Rotate;
     replay_drag.rotate.axis = action.axis;
@@ -6349,7 +6460,9 @@ public:
       clear_transform_drag_caches();
       return {false, update.changed, update.message};
     }
-    const ModelingCommandResult committed = commit_transform_preview();
+    const ModelingCommandResult committed = commit_transform_preview(
+        action.tool == quader_editor_core::ViewportInteractionTool::Move &&
+        action.move_auto_merge_vertices);
     clear_transform_drag_caches();
     return {committed.ok, committed.changed, committed.message};
   }
@@ -10605,8 +10718,7 @@ private:
     return true;
   }
 
-  [[nodiscard]] int persistent_tool_source_wire_object_id(
-      const ModelingSelectionProjectionSnapshot &projected) const {
+  [[nodiscard]] int persistent_tool_source_wire_object_id() const {
     if (runtime_.active_tool() ==
         quader_editor_core::ViewportInteractionTool::InsertEdgeLoop) {
       const auto &loop = runtime_.insert_edge_loop_state();
@@ -10623,7 +10735,7 @@ private:
     if (runtime_.hover().candidate_object_id > 0) {
       return runtime_.hover().candidate_object_id;
     }
-    return knife.active ? projected.active_object_id() : -1;
+    return knife.active ? selection_projection_snapshot().active_object_id() : -1;
   }
 
   /** Borrows the cached native projection for read-only selection queries. */
@@ -11493,6 +11605,13 @@ ModelingSessionService::selected_vertices_snapshot() const {
   return impl_->selected_vertices_snapshot();
 }
 
+modeling::Result<ModelingPolygonDocumentReadSnapshot>
+ModelingSessionService::polygon_document_read_snapshot(
+    int modeling_object_id, bool include_preview) const {
+  return impl_->polygon_document_read_snapshot(modeling_object_id,
+                                                include_preview);
+}
+
 ModelingSelectionBoxBaseline
 ModelingSessionService::capture_box_selection_baseline() const {
   QDR_PROFILE_SCOPE("Modeling session box baseline entry");
@@ -11509,6 +11628,16 @@ ViewportOverlayFrame ModelingSessionService::selection_overlay_frame(
   return impl_->selection_overlay_frame(options);
 }
 
+ViewportOverlayFrame ModelingSessionService::selection_overlay_render_frame(
+    ModelingSelectionOverlayOptions options) const {
+  return impl_->selection_overlay_render_frame(options);
+}
+
+std::shared_ptr<const ModelingAcceptedOverlayCoordinates>
+ModelingSessionService::accepted_overlay_coordinates() const {
+  return impl_->accepted_overlay_coordinates();
+}
+
 ModelingVolatileOverlaySnapshot
 ModelingSessionService::volatile_overlay_snapshot() const {
   return impl_->volatile_overlay_snapshot();
@@ -11521,6 +11650,11 @@ ViewportOverlayFrame ModelingSessionService::volatile_overlay_frame() const {
 ModelingVolatileOverlayCacheStats
 ModelingSessionService::volatile_overlay_cache_stats() const {
   return impl_->volatile_overlay_cache_stats();
+}
+
+const quader_editor_core::SelectionOverlayGeometryWorkCounters &
+ModelingSessionService::selection_overlay_geometry_work_counters() const {
+  return impl_->selection_overlay_geometry_work_counters();
 }
 
 std::uint64_t ModelingSessionService::tool_preview_source_revision() const {
@@ -11620,6 +11754,12 @@ void ModelingSessionService::release_redundant_sdk_history() {
 ModelingSessionMemento ModelingSessionService::capture_history_memento(
     bool preserve_group_selection) const {
   return impl_->capture_history_memento(preserve_group_selection);
+}
+
+ModelingSessionMemento ModelingSessionService::capture_component_merge_history_memento(
+    const ModelingSessionMemento &before) const {
+  return impl_->capture_component_merge_history_memento(
+      before.valid() ? before.impl_->sdk_projection : ModelingSdkProjectionSnapshot{});
 }
 
 ModelingSessionMemento

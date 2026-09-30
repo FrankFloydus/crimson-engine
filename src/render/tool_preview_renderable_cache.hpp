@@ -39,7 +39,18 @@ struct ToolPreviewCacheWorkCounters final {
   std::uint64_t explicit_instance_chunk_creations = 0u;
   std::uint64_t explicit_instance_prefix_updates = 0u;
   std::uint64_t dynamic_geometry_preparations = 0u;
+  std::uint64_t canonical_dynamic_geometry_preparations = 0u;
+  std::uint64_t reused_dynamic_geometry_preparations = 0u;
   std::uint64_t parallel_dynamic_geometry_batches = 0u;
+  std::uint64_t dynamic_family_group_creations = 0u;
+  std::size_t active_dynamic_geometry_families = 0u;
+  std::size_t active_dynamic_geometry_participants = 0u;
+  std::size_t ordinary_static_records = 0u;
+  std::size_t ordinary_unknown_opacity_records = 0u;
+  std::size_t ordinary_transparent_records = 0u;
+  std::size_t ordinary_reflected_records = 0u;
+  std::size_t inactive_dynamic_geometry_families = 0u;
+  std::size_t retired_proxy_count = 0u;
 };
 
 /** One active-prefix slice backed by a retained fixed-capacity InstanceBuffer. */
@@ -122,7 +133,18 @@ public:
     [[nodiscard]] ToolPreviewCacheWorkCounters work_counters() const noexcept {
       return work_counters_;
     }
-    void reset_work_counters() noexcept { work_counters_ = {}; }
+    void reset_work_counters() noexcept {
+      const auto current = work_counters_;
+      work_counters_ = {};
+      work_counters_.active_dynamic_geometry_families = current.active_dynamic_geometry_families;
+      work_counters_.active_dynamic_geometry_participants = current.active_dynamic_geometry_participants;
+      work_counters_.ordinary_static_records = current.ordinary_static_records;
+      work_counters_.ordinary_unknown_opacity_records = current.ordinary_unknown_opacity_records;
+      work_counters_.ordinary_transparent_records = current.ordinary_transparent_records;
+      work_counters_.ordinary_reflected_records = current.ordinary_reflected_records;
+      work_counters_.inactive_dynamic_geometry_families = current.inactive_dynamic_geometry_families;
+      work_counters_.retired_proxy_count = current.retired_proxy_count;
+    }
 
   private:
     /// Owns the render proxies and identity facts for one preview participant.
@@ -146,16 +168,20 @@ public:
       std::uint64_t material_signature = 0u;
       std::uint64_t material_uniform_signature = 0u;
       std::uint64_t layout_key = 0u;
-      // Participant-local payload identity. Dynamic position payload ownership
-      // deliberately remains with the producer so its workspace pool can reuse
-      // buffers immediately after submission.
+      // Participant-local revision and immutable owner identity must both
+      // match before a retained position upload can be skipped.
       std::uint64_t position_revision = 0u;
+      std::shared_ptr<const std::vector<QVec3>> position_payload;
       std::shared_ptr<const MeshGeometryPayload> topology_payload;
+      std::shared_ptr<const MeshGeometryProjection> geometry_projection;
+      RenderMaterialBindingSnapshot material_payload;
       std::vector<QMat4> transforms;
       std::vector<QMat4> sampling_from_local;
       bool dynamic_positions = false;
+      bool gpu_family = false;
       bool explicit_instances = false;
       bool visible = false;
+      bool candidate_visible = false;
       bool material_uniforms_initialized = false;
       // Updated only when a proxy is created or retired. Idle retirement must
       // not rediscover this value by scanning all remaining instance vectors.
@@ -178,6 +204,7 @@ public:
       // generation from Filament with one bulk Scene interaction.
       std::vector<utils::Entity> scene_entities;
       bool detached = false;
+      bool dynamic_families = false;
     };
 
     /// Captures normalized producer state used to match retained preview groups.
@@ -191,7 +218,9 @@ public:
       std::uint64_t mesh_revision = 0u;
       std::uint64_t layout_key = 0u;
       std::uint64_t position_revision = 0u;
+      std::shared_ptr<const std::vector<QVec3>> position_payload;
       std::shared_ptr<const MeshGeometryPayload> geometry_payload;
+      std::shared_ptr<const MeshGeometryProjection> geometry_projection;
       QMat4 transform;
       std::vector<QMat4> instance_transforms;
       QMat4 sampling_from_local;
@@ -259,12 +288,22 @@ public:
     [[nodiscard]] std::unique_ptr<PreviewGeneration>
     build_generation(
         const std::vector<RenderToolPreviewMeshRecord> &meshes,
-        bool &complete);
+        bool &complete, std::size_t dynamic_family_count = 0u);
     bool prepare_generation(
         PreviewGeneration &generation,
         const std::vector<RenderToolPreviewMeshRecord> &meshes,
         std::vector<std::size_t> &candidate_indices,
         bool allow_explicit_count_change, bool &preparation_failed);
+    /// Reconciles renderer-owned equivalence families without changing logical
+    /// preview identity or rebuilding compatible material/instance allocations.
+    bool prepare_dynamic_family_generation(
+        PreviewGeneration &generation,
+        const std::vector<RenderToolPreviewMeshRecord> &families,
+        std::vector<std::size_t> &candidate_indices,
+        std::size_t dynamic_family_count);
+    [[nodiscard]] std::vector<RenderToolPreviewMeshRecord>
+    build_dynamic_families(
+        const std::vector<RenderToolPreviewMeshRecord> &meshes) const;
     GenerationMatchResult match_generation_groups(
         const PreviewGeneration &generation,
         std::span<const RenderToolPreviewMeshRecord *const> renderable_meshes,
@@ -277,6 +316,7 @@ public:
     void publish_generation_subset(
         PreviewGeneration &generation,
         std::vector<std::size_t> candidate_indices);
+    void trim_inactive_dynamic_families(PreviewGeneration &generation);
     void set_group_visible(PreviewGroup &group, bool visible);
     void hide_generation(PreviewGeneration &generation);
     void detach_generation(PreviewGeneration &generation);

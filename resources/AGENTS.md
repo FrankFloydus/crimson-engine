@@ -14,6 +14,10 @@ presentation and rendering integration.
 
 ## Resource Rules
 
+- `icons/tool_create_box.svg` is the user-selected base cube artwork for future
+  cube-derived icons. Reuse its geometry and neutral face palette; apply explicit
+  selection/tool accents as needed without restyling unrelated existing icons.
+
 - User-facing UI text belongs in `resources/locales/*.lang`.
 - Qt starts from Fusion; explicitly requested styling can change fonts, palettes, stylesheets, and
   icons. Keep assets scoped and verify their readable, focused, selected, and disabled states.

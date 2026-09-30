@@ -40,31 +40,50 @@ ViewportSceneProjectionCamera::ViewportSceneProjectionCamera(
     const ViewportCameraController &camera)
     : runtime_camera_(ViewportCameraAdapter::runtime_camera(
           camera, camera.viewport_size())),
+      prepared_projection_(runtime_camera_),
+      depth_forward_(normalize(runtime_camera_.transform.z_axis * -1.0f)),
       near_plane_(camera.state().near_plane),
-      far_plane_(camera.state().far_plane) {}
+      far_plane_(camera.state().far_plane) {
+  if (length(depth_forward_) <= 1.0e-6f) {
+    depth_forward_ = {0.0f, 0.0f, -1.0f};
+  }
+}
 
 ViewportSceneProjectionCamera::ViewportSceneProjectionCamera(
     const ModelingViewportCamera &camera)
-    : runtime_camera_(modeling_runtime_camera(camera)) {}
+    : runtime_camera_(modeling_runtime_camera(camera)),
+      prepared_projection_(runtime_camera_),
+      depth_forward_(normalize(runtime_camera_.transform.z_axis * -1.0f)) {
+  if (length(depth_forward_) <= 1.0e-6f) {
+    depth_forward_ = {0.0f, 0.0f, -1.0f};
+  }
+}
 
 ViewportRay ViewportSceneProjectionCamera::ray_from_viewport_point(
     QVec2 local_mouse) const {
   const quader_poly::Ray ray =
-      quader_editor_core::ray_from_viewport_screen_point(runtime_camera_,
-                                                         local_mouse);
+      prepared_projection_.ray_from_screen_point(local_mouse);
   return {.origin = ray.origin, .direction = normalize(ray.direction)};
+}
+
+ViewportSelectionDepthCamera ViewportSceneProjectionCamera::selection_depth_camera() const noexcept {
+  return {.origin = runtime_camera_.transform.origin,
+          .right = normalize(runtime_camera_.transform.x_axis),
+          .up = normalize(runtime_camera_.transform.y_axis),
+          .forward = normalize(runtime_camera_.transform.z_axis * -1.0f),
+          .viewport_size = runtime_camera_.viewport_size,
+          .vertical_fov_degrees = static_cast<float>(runtime_camera_.fov_degrees),
+          .orthographic_size = static_cast<float>(runtime_camera_.orthographic_size),
+          .orthographic = orthographic(),
+          .supported = !runtime_camera_.affine_model_space};
 }
 
 ViewportScreenPoint ViewportSceneProjectionCamera::project_world_point(
     QVec3 world) const {
   QVec2 screen{};
-  const bool projected =
-      quader_editor_core::project_viewport_point(runtime_camera_, world, screen);
-  QVec3 forward = normalize(runtime_camera_.transform.z_axis * -1.0f);
-  if (length(forward) <= 1.0e-6f) {
-    forward = {0.0f, 0.0f, -1.0f};
-  }
-  const float depth = dot(world - runtime_camera_.transform.origin, forward);
+  const bool projected = prepared_projection_.project_point(world, screen);
+  const float depth =
+      dot(world - runtime_camera_.transform.origin, depth_forward_);
   return {
       .position = screen,
       .depth = depth,
@@ -397,10 +416,45 @@ struct SceneHitRayInterval final {
 /** Reuses identical surface rays only while one frozen marquee is collected. */
 class MarqueeSurfaceDepthCache final {
 public:
-  explicit MarqueeSurfaceDepthCache(std::size_t expected_rays) {
+  MarqueeSurfaceDepthCache(std::size_t expected_rays,
+      const SceneSurfaceQuerySnapshot *surfaces,
+      std::shared_ptr<const ViewportSelectionDepthSnapshot> selection_depth)
+      : surfaces_(surfaces), selection_depth_(std::move(selection_depth)) {
     if (expected_rays != 0u) {
       depths_.reserve(expected_rays);
     }
+  }
+
+  ~MarqueeSurfaceDepthCache() {
+    if (surfaces_) surfaces_->record_selection_depth_work(stats_);
+  }
+
+  [[nodiscard]] ViewportSelectionDepthDecision visibility(
+      ModelingActiveSelectionKind kind, QVec2 screen_position,
+      const ViewportRay &ray, double depth) {
+    if (!selection_depth_ || (kind != ModelingActiveSelectionKind::Vertex &&
+                             kind != ModelingActiveSelectionKind::Face)) {
+      ++stats_.cpu_fallback_witnesses;
+      return ViewportSelectionDepthDecision::Unavailable;
+    }
+    const auto decision = classify_viewport_selection_depth(*selection_depth_,
+        screen_position, ray.origin, ray.direction, depth,
+        kViewportSurfaceOcclusionTolerance,
+        {.owner = surfaces_, .intersect = [](const void *owner, std::uint32_t triangle_id,
+                                             QVec3 origin, QVec3 direction) {
+          return static_cast<const SceneSurfaceQuerySnapshot *>(owner)
+              ->selection_depth_triangle_distance(triangle_id, origin, direction);
+        }});
+    switch (decision) {
+    case ViewportSelectionDepthDecision::Accepted: ++stats_.gpu_accepted_witnesses; break;
+    case ViewportSelectionDepthDecision::Rejected: ++stats_.gpu_rejected_witnesses; break;
+    case ViewportSelectionDepthDecision::Overflow:
+      ++stats_.gpu_overflow_witnesses;
+      ++stats_.cpu_fallback_witnesses;
+      break;
+    case ViewportSelectionDepthDecision::Unavailable: ++stats_.cpu_fallback_witnesses; break;
+    }
+    return decision;
   }
 
   [[nodiscard]] std::optional<float> nearest_depth(
@@ -424,6 +478,9 @@ public:
 
 private:
   std::unordered_map<std::uint64_t, std::optional<float>> depths_;
+  const SceneSurfaceQuerySnapshot *surfaces_ = nullptr;
+  std::shared_ptr<const ViewportSelectionDepthSnapshot> selection_depth_;
+  ViewportSelectionDepthQueryStats stats_;
 };
 
 /** Keeps one valid witness's exact ray and its original equal-depth priority. */
@@ -521,6 +578,14 @@ visible_resolved_marquee_candidate(
   // The old strict-less-than minimum chose the first original witness on an
   // equal depth. Sorting that index second preserves its exact world position.
   for (const PreparedMarqueeWitness &witness : prepared) {
+    const auto visibility = surface_depths.visibility(hit.target.component_kind,
+        witness.witness->screen_position, witness.ray, witness.depth);
+    if (visibility == ViewportSelectionDepthDecision::Rejected) continue;
+    if (visibility == ViewportSelectionDepthDecision::Accepted) {
+      candidate.world_position = witness.witness->world_position;
+      candidate.ray_distance = witness.depth;
+      return candidate;
+    }
     const auto surface_depth = surface_depths.nearest_depth(
         *query.scene_surfaces, witness.witness->screen_position, witness.ray, *scratch);
     if (!surface_depth.has_value() ||
@@ -540,6 +605,12 @@ void append_visible_marquee_modeling_hits(
   constexpr std::size_t kMinimumParallelHits = 8192u;
   constexpr std::size_t kHitsPerWorker = 4096u;
   const std::size_t count = query.resolved_selection_hits.size();
+  std::shared_ptr<const ViewportSelectionDepthSnapshot> selection_depth;
+  if (query.scene_surfaces && !query.include_occluded_resolved_modeling_hits &&
+      resolve_box_selection_rule(query.rule, query.start, query.end) == ModelingBoxSelectionRule::Crossing) {
+    selection_depth = query.scene_surfaces->selection_depth_snapshot(query.camera.selection_depth_camera());
+    if (!selection_depth) query.scene_surfaces->record_selection_depth_work({.stale_snapshot_queries = 1u});
+  }
   std::size_t worker_count = 1u;
   // Orthographic depth layers often share identical screen rays. Retain that
   // cross-mesh reuse in one cache instead of duplicating it between workers.
@@ -550,7 +621,8 @@ void append_visible_marquee_modeling_hits(
   }
   if (worker_count == 1u) {
     MarqueeSurfaceDepthCache surface_depths(
-        query.scene_surfaces != nullptr && !query.include_occluded_resolved_modeling_hits ? count : 0u);
+        query.scene_surfaces != nullptr && !query.include_occluded_resolved_modeling_hits ? count : 0u,
+        query.scene_surfaces, selection_depth);
     for (const ResolvedSelectionHit &hit : query.resolved_selection_hits) {
       if (auto visible = visible_resolved_marquee_candidate(query, hit, scratch, surface_depths)) {
         hits.push_back(std::move(*visible));
@@ -569,7 +641,7 @@ void append_visible_marquee_modeling_hits(
       const std::size_t end = begin + count / worker_count +
                               (worker < count % worker_count ? 1u : 0u);
       SceneSurfaceQueryScratch worker_scratch;
-      MarqueeSurfaceDepthCache surface_depths(end - begin);
+      MarqueeSurfaceDepthCache surface_depths(end - begin, query.scene_surfaces, selection_depth);
       for (std::size_t index = begin; index < end; ++index) {
         visible_hits[index] = visible_resolved_marquee_candidate(
             query, query.resolved_selection_hits[index], &worker_scratch, surface_depths);
@@ -1079,17 +1151,48 @@ resolve_viewport_scene_ray_hit(const ViewportSceneRayHitQuery &query) {
 std::vector<ViewportSceneHitCandidate> collect_viewport_scene_marquee_hits(
     const ViewportSceneMarqueeHitQuery &query) {
   QDR_PROFILE_FUNCTION();
-  struct ProjectedCandidate final {
-    ViewportSceneHitCandidate hit;
-    quader_editor_core::RectangleProjectedObject projected;
-  };
-
   std::optional<SceneSurfaceQueryScratch> local_scratch;
   SceneSurfaceQueryScratch *surface_scratch = query.surface_scratch;
   if (surface_scratch == nullptr && query.scene_surfaces != nullptr) {
     local_scratch.emplace();
     surface_scratch = &*local_scratch;
   }
+  // The modeling rectangle query emits identity-only component targets for
+  // through-selection. Its exact projected geometry has already matched the
+  // rectangle, and component publication orders the set by its universe. No
+  // surface witness, depth ordering or duplicate membership pass is needed.
+  if (query.include_occluded_resolved_modeling_hits &&
+      query.billboards.empty() && query.curves.empty() &&
+      !query.include_curve_controls &&
+      std::ranges::all_of(query.resolved_selection_hits, [](const auto &hit) {
+        return hit.target.domain == ResolvedSelectionDomain::ModelingComponent;
+      }) &&
+      std::ranges::any_of(query.resolved_selection_hits, [](const auto &hit) {
+        return hit.rectangle_target_only;
+      })) {
+    QDR_PROFILE_SCOPE("Marquee collect through component targets");
+    std::vector<ViewportSceneHitCandidate> hits;
+    hits.reserve(query.resolved_selection_hits.size());
+    MarqueeSurfaceDepthCache surface_depths(0u, query.scene_surfaces, {});
+    for (const ResolvedSelectionHit &hit : query.resolved_selection_hits) {
+      if (!hit.rectangle_target_only) {
+        if (auto visible = visible_resolved_marquee_candidate(
+                query, hit, surface_scratch, surface_depths)) {
+          hits.push_back(std::move(*visible));
+        }
+        continue;
+      }
+      ViewportSceneHitCandidate candidate = viewport_scene_hit_candidate(hit);
+      if (viewport_scene_hit_candidate_valid(candidate)) {
+        hits.push_back(std::move(candidate));
+      }
+    }
+    return hits;
+  }
+  struct ProjectedCandidate final {
+    ViewportSceneHitCandidate hit;
+    quader_editor_core::RectangleProjectedObject projected;
+  };
 
   std::vector<ProjectedCandidate> projected_candidates;
   projected_candidates.reserve(

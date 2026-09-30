@@ -51,6 +51,12 @@ public:
 
     void bind_scene(RenderSceneBindingKey scene_binding);
     bool sync(const RenderSceneSnapshot &snapshot);
+    /// Excludes occurrences already drawn by the persistent editable surface owner.
+    bool set_retained_mesh_exclusion(
+        const RenderToolPreviewSuppressionSnapshot &exclusion);
+    /// Keeps suppression replans from reintroducing externally covered occurrences.
+    [[nodiscard]] std::span<const RenderSceneInstancePrimitiveRecord>
+    ordinary_instance_primitives(const RenderSceneSnapshot &snapshot);
     bool render_asset_revisions_changed(
         const RenderSceneSnapshot &snapshot) const;
     void set_preview_suppressed_lights(
@@ -58,6 +64,8 @@ public:
         std::span<const RenderSceneLightRecord> retained_lights = {});
 
   private:
+    [[nodiscard]] const RenderSceneSnapshot &ordinary_snapshot(
+        const RenderSceneSnapshot &snapshot);
     [[nodiscard]] bool
     can_sync_transforms_only(const RenderSceneSnapshot &snapshot) const;
     void sync_dirty_transforms(const RenderSceneSnapshot &snapshot);
@@ -72,6 +80,10 @@ public:
     bool has_scene_binding_ = false;
     bool has_synced_ = false;
     LightRenderableCache light_cache_;
+    RenderToolPreviewSuppressionSnapshot retained_mesh_exclusion_;
+    std::unordered_set<EntityId> retained_mesh_entities_;
+    RenderSceneSnapshot ordinary_snapshot_;
+    bool ordinary_snapshot_valid_ = false;
 };
 
 } // namespace quader

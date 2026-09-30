@@ -1522,7 +1522,7 @@ TEST(BuildGuardrailTests,
       "src/sdk/core/modeling/neutral/include/quader/modeling/neutral");
   const std::filesystem::path implementation_mesh =
       source_path("src/sdk/core/modeling/internal/mesh");
-  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 33U);
+  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 34U);
   EXPECT_TRUE(files_with_extension(implementation_mesh, ".hpp").empty());
 
   const std::string retired_include = joined("#include <me", "sh/");
@@ -5463,9 +5463,9 @@ TEST(BuildGuardrailTests,
       source, "MeshRenderableFactory::prepare_dynamic_geometry_update(",
       "bool MeshRenderableFactory::update_dynamic_geometry(");
 
-  expect_contains(prepare, "build_render_vertices(mesh, dynamic_positions)");
-  expect_contains(prepare, "pack_dynamic_static_vertices(render_vertices)");
-  expect_contains(prepare, "std::vector<std::uint32_t> indices(mesh.indices.begin(), mesh.indices.end())");
+  expect_contains(prepare, "build_render_vertices<DynamicRenderVertexStatic>(mesh, dynamic_positions)");
+  expect_contains(prepare, "packed->indices.assign(mesh.indices.begin(), mesh.indices.end())");
+  expect_contains(prepare, "FilamentBufferDescriptorFactory::retained_bytes");
   expect_contains(update, "prepare_dynamic_geometry_update(mesh, dynamic_positions)");
   expect_contains(update, "setBufferAt(");
   expect_contains(update, "*engine_, 0");

@@ -7,6 +7,7 @@
 #include "render/mesh_renderable_factory.hpp"
 
 #include "assets/mesh_collision_geometry_payload.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
@@ -21,18 +22,25 @@
 
 #include <backend/DriverEnums.h>
 #include <filament/RenderableManager.h>
+#include <filament/SkinningBuffer.h>
 #include <filament/TransformManager.h>
 #include <math/mat3.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <future>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -56,6 +64,7 @@ struct RenderVertex {
     filament::math::float4 quad_uv_coordinates;
     filament::math::float4 quad_uv_correction;
     std::uint32_t color;
+    float occurrence_index = 0.0f;
 };
 
 /// Stores static vertex attributes retained while a modal tool streams only
@@ -69,7 +78,13 @@ struct DynamicRenderVertexStatic {
     filament::math::float4 quad_uv_coordinates;
     filament::math::float4 quad_uv_correction;
     std::uint32_t color;
+    float occurrence_index = 0.0f;
 };
+
+std::span<const QVec3> effective_mesh_positions(
+    const RenderMeshAssetSnapshot &mesh, std::span<const QVec3> positions = {}) {
+  return positions.empty() ? mesh.positions : positions;
+}
 
 /**
  * Cleans up partially constructed Filament mesh resources until ownership is handed to the proxy.
@@ -157,7 +172,8 @@ filament::math::float4 tangent_frame_from_basis(
 }
 
 std::vector<filament::math::float4>
-mesh_tangent_frames(const RenderMeshAssetSnapshot &mesh) {
+mesh_tangent_frames(const RenderMeshAssetSnapshot &mesh,
+                    std::span<const QVec3> positions) {
   std::vector<QVec3> tangents(mesh.vertices.size());
   std::vector<QVec3> bitangents(mesh.vertices.size());
   for (std::size_t index = 0u; index + 2u < mesh.indices.size(); index += 3u) {
@@ -171,8 +187,10 @@ mesh_tangent_frames(const RenderMeshAssetSnapshot &mesh) {
     const MeshVertex &v0 = mesh.vertices[i0];
     const MeshVertex &v1 = mesh.vertices[i1];
     const MeshVertex &v2 = mesh.vertices[i2];
-    const QVec3 edge1 = v1.position - v0.position;
-    const QVec3 edge2 = v2.position - v0.position;
+    const QVec3 edge1 = positions.empty() ? v1.position - v0.position
+                                        : positions[i1] - positions[i0];
+    const QVec3 edge2 = positions.empty() ? v2.position - v0.position
+                                        : positions[i2] - positions[i0];
     const QVec2 delta1 = v1.uv - v0.uv;
     const QVec2 delta2 = v2.uv - v0.uv;
     const float determinant = delta1.x * delta2.y - delta1.y * delta2.x;
@@ -206,61 +224,49 @@ mesh_tangent_frames(const RenderMeshAssetSnapshot &mesh) {
   return frames;
 }
 
-std::vector<RenderVertex>
+template <typename Vertex = RenderVertex>
+std::vector<Vertex>
 build_render_vertices(const RenderMeshAssetSnapshot &mesh,
-                      std::span<const QVec3> positions = {}) {
+                      std::span<const QVec3> positions = {},
+                      const MeshSurfaceGridProjectionPlan *grid_plan = nullptr,
+                      const MeshQuadUvInterpolationPlan *quad_plan = nullptr) {
+  positions = effective_mesh_positions(mesh, positions);
   const std::vector<filament::math::float4> tangent_frames =
-      mesh_tangent_frames(mesh);
+      mesh_tangent_frames(mesh, positions);
   const std::vector<MeshSurfaceGridVertexProjection> grid_projections =
-      build_mesh_surface_grid_vertex_projections(
-          mesh.vertices, mesh.indices, mesh.primitives);
+      grid_plan ? build_mesh_surface_grid_vertex_projections(mesh.vertices, *grid_plan, positions)
+                : build_mesh_surface_grid_vertex_projections(mesh.vertices, mesh.indices, mesh.primitives, positions);
   const std::vector<MeshQuadUvInterpolation> quad_interpolations =
-      build_mesh_quad_uv_interpolations(mesh.vertices, mesh.indices,
-                                       mesh.primitives, positions);
-  std::vector<RenderVertex> vertices;
+      quad_plan ? build_mesh_quad_uv_interpolations(mesh.vertices, *quad_plan, positions)
+                : build_mesh_quad_uv_interpolations(mesh.vertices, mesh.indices, mesh.primitives, positions);
+  std::vector<Vertex> vertices;
   vertices.reserve(mesh.vertices.size());
   for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
     const MeshVertex &vertex = mesh.vertices[index];
     const MeshSurfaceGridVertexProjection &grid_projection =
         grid_projections[index];
     const MeshQuadUvInterpolation &quad = quad_interpolations[index];
-    vertices.push_back({
-        to_filament(vertex.position),
-        tangent_frames[index],
-        {vertex.uv.x, vertex.uv.y},
-        {grid_projection.local_normal.x, grid_projection.local_normal.y,
+    Vertex packed{
+        .tangent_frame = tangent_frames[index],
+        .uv = {vertex.uv.x, vertex.uv.y},
+        .surface_grid_projection = {grid_projection.local_normal.x, grid_projection.local_normal.y,
          grid_projection.local_normal.z,
          grid_projection.face_projected ? 1.0f : 0.0f},
-        {vertex.uv_carrier[0], vertex.uv_carrier[1], vertex.uv_carrier[2],
+        .uv_carrier = {vertex.uv_carrier[0], vertex.uv_carrier[1], vertex.uv_carrier[2],
          vertex.uv_carrier[3]},
-        to_filament(vertex.uv_geometric_normal),
-        {quad.coordinates.x, quad.coordinates.y, quad.coordinates.z,
+        .uv_geometric_normal = to_filament(vertex.uv_geometric_normal),
+        .quad_uv_coordinates = {quad.coordinates.x, quad.coordinates.y, quad.coordinates.z,
          quad.enabled ? 1.0f : 0.0f},
-        {quad.geometry_warp.x, quad.geometry_warp.y, quad.uv_correction.x,
+        .quad_uv_correction = {quad.geometry_warp.x, quad.geometry_warp.y, quad.uv_correction.x,
          quad.uv_correction.y},
-        vertex.rgba,
-    });
+        .color = vertex.rgba,
+    };
+    if constexpr (std::is_same_v<Vertex, RenderVertex>) {
+      packed.position = to_filament(positions.empty() ? vertex.position : positions[index]);
+    }
+    vertices.push_back(packed);
   }
   return vertices;
-}
-
-std::vector<DynamicRenderVertexStatic>
-pack_dynamic_static_vertices(std::span<const RenderVertex> vertices) {
-  std::vector<DynamicRenderVertexStatic> packed;
-  packed.reserve(vertices.size());
-  for (const RenderVertex &vertex : vertices) {
-    packed.push_back({
-        .tangent_frame = vertex.tangent_frame,
-        .uv = vertex.uv,
-        .surface_grid_projection = vertex.surface_grid_projection,
-        .uv_carrier = vertex.uv_carrier,
-        .uv_geometric_normal = vertex.uv_geometric_normal,
-        .quad_uv_coordinates = vertex.quad_uv_coordinates,
-        .quad_uv_correction = vertex.quad_uv_correction,
-        .color = vertex.color,
-    });
-  }
-  return packed;
 }
 
 RenderInstanceBounds
@@ -280,13 +286,15 @@ compute_local_bounds_impl(const RenderMeshAssetSnapshot &mesh) {
       std::numeric_limits<float>::lowest(),
   };
 
-  for (const MeshVertex &vertex : mesh.vertices) {
-    min_value.x = std::min(min_value.x, vertex.position.x);
-    min_value.y = std::min(min_value.y, vertex.position.y);
-    min_value.z = std::min(min_value.z, vertex.position.z);
-    max_value.x = std::max(max_value.x, vertex.position.x);
-    max_value.y = std::max(max_value.y, vertex.position.y);
-    max_value.z = std::max(max_value.z, vertex.position.z);
+  if (!mesh.positions.empty() && mesh.positions.size() != mesh.vertices.size()) return {};
+  for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
+    const QVec3 position = mesh.positions.empty() ? mesh.vertices[index].position : mesh.positions[index];
+    min_value.x = std::min(min_value.x, position.x);
+    min_value.y = std::min(min_value.y, position.y);
+    min_value.z = std::min(min_value.z, position.z);
+    max_value.x = std::max(max_value.x, position.x);
+    max_value.y = std::max(max_value.y, position.y);
+    max_value.z = std::max(max_value.z, position.z);
   }
 
   return {.min = min_value, .max = max_value, .present = true};
@@ -375,6 +383,46 @@ void submit_resource_retirement(filament::Engine &engine,
   }
 }
 
+bool same_dynamic_float(float left, float right) {
+  return std::bit_cast<std::uint32_t>(left) ==
+         std::bit_cast<std::uint32_t>(right);
+}
+
+bool same_dynamic_vec3(QVec3 left, QVec3 right) {
+  return same_dynamic_float(left.x, right.x) &&
+         same_dynamic_float(left.y, right.y) &&
+         same_dynamic_float(left.z, right.z);
+}
+
+bool same_dynamic_vertex(const MeshVertex &left, const MeshVertex &right) {
+  return same_dynamic_vec3(left.position, right.position) &&
+         same_dynamic_vec3(left.normal, right.normal) &&
+         same_dynamic_float(left.uv.x, right.uv.x) &&
+         same_dynamic_float(left.uv.y, right.uv.y) &&
+         left.rgba == right.rgba &&
+         left.source_vertex_id == right.source_vertex_id &&
+         std::equal(left.uv_carrier.begin(), left.uv_carrier.end(),
+                    right.uv_carrier.begin(), same_dynamic_float) &&
+         same_dynamic_vec3(left.uv_geometric_normal,
+                           right.uv_geometric_normal);
+}
+
+bool same_dynamic_geometry(const RenderMeshAssetSnapshot &left,
+                           const RenderMeshAssetSnapshot &right) {
+  if (left.vertices.size() != right.vertices.size() ||
+      left.indices.size() != right.indices.size() ||
+      left.primitives.size() != right.primitives.size()) return false;
+  if (left.geometry_payload && left.geometry_payload == right.geometry_payload &&
+      left.vertices.data() == right.vertices.data() &&
+      left.indices.data() == right.indices.data() &&
+      left.primitives.data() == right.primitives.data()) return true;
+  return std::equal(left.vertices.begin(), left.vertices.end(),
+                    right.vertices.begin(), same_dynamic_vertex) &&
+         std::equal(left.indices.begin(), left.indices.end(), right.indices.begin()) &&
+         std::equal(left.primitives.begin(), left.primitives.end(),
+                    right.primitives.begin());
+}
+
 void destroy_renderable_component_resources(filament::Engine &engine,
                                             filament::Scene *scene,
                                             MaterialBindingService &materials,
@@ -416,17 +464,257 @@ void destroy_renderable_component_resources(filament::Engine &engine,
 
 } // namespace
 
+/// CPU-only transforms shared by sibling renderable instance updates.
+struct MeshRenderableFactory::ExplicitInstanceUpdate final {
+  std::vector<filament::math::mat4f> transforms;
+};
+
 /// CPU-only upload storage. Source identity prevents accidental cross-mesh or
 /// repeated consumption; the snapshot pins immutable attribute inputs.
 struct MeshRenderableFactory::DynamicGeometryUpdate final {
+  /// Shared immutable CPU bytes; each destination owns independent descriptors.
+  struct PackedStreams final {
+    std::vector<filament::math::float3> positions;
+    std::vector<DynamicRenderVertexStatic> static_vertices;
+    std::vector<std::uint32_t> indices;
+  };
   RenderMeshAssetSnapshot source;
   const QVec3 *source_positions = nullptr;
   std::size_t source_position_count = 0u;
   filament::backend::BufferDescriptor positions;
   filament::backend::BufferDescriptor static_vertices;
   filament::backend::BufferDescriptor indices;
+  std::shared_ptr<const PackedStreams> packed;
   bool consumed = false;
 };
+
+/// Immutable canonical streams retained by one coarse geometry owner. Records
+/// share unchanged CPU packs; only the current accepted population stays pinned.
+struct EditableMeshGeometryState final {
+  /// Full canonical streams shared independently of material index partitions.
+  struct CanonicalStreams final {
+    std::vector<filament::math::float3> positions;
+    std::vector<DynamicRenderVertexStatic> attributes;
+  };
+  /// Validated immutable triangle, material-range and authored-face bindings.
+  struct Topology final {
+    RenderMeshAssetSnapshot source;
+    std::vector<MeshPrimitiveSpan> selected_primitives;
+    std::vector<std::uint32_t> indices;
+    MeshSurfaceGridProjectionPlan grid_plan;
+    MeshQuadUvInterpolationPlan quad_plan;
+  };
+  /// Pins source attributes and owns renderer-derived streams for one occurrence.
+  struct Record final {
+    RenderMeshAssetSnapshot source;
+    std::shared_ptr<const MeshGeometryPayload> copied_source;
+    std::shared_ptr<const std::vector<QVec3>> position_payload;
+    std::shared_ptr<const Topology> topology;
+    std::shared_ptr<const CanonicalStreams> streams;
+    RenderInstanceBounds local_bounds;
+    bool uses_source_positions = false;
+  };
+  std::vector<std::shared_ptr<const Record>> records;
+  std::vector<std::uint32_t> vertex_offsets;
+  std::shared_ptr<const std::vector<std::uint32_t>> indices;
+  std::vector<QMat4> source_transforms;
+  std::vector<QMat4> source_mappings;
+  std::vector<filament::math::mat4f> transforms;
+  std::vector<filament::math::mat4f> mappings;
+  std::vector<filament::math::mat3f> mapping_cofactors;
+  std::vector<filament::math::mat3f> world_normals;
+  QVec3 world_anchor;
+  RenderInstanceBounds local_bounds;
+  RenderInstanceBounds world_bounds;
+  std::uint32_t vertex_count = 0u;
+};
+
+/// One rigid bone per vertex preserves canonical positions and tangent frames.
+struct EditableSurfaceVertexBinding final {
+  std::array<std::uint16_t, 4u> bone_indices{};
+  filament::math::float4 bone_weights{1.0f, 0.0f, 0.0f, 0.0f};
+  float occurrence_index = 0.0f;
+};
+
+/// A complete CPU candidate with a bounded number of owned upload descriptors.
+struct MeshRenderableFactory::EditableSurfaceUpdate final {
+  /// A contiguous range of one GPU vertex attribute stream.
+  struct Range final {
+    std::uint32_t first_vertex = 0u;
+    std::size_t byte_count = 0u;
+    filament::backend::BufferDescriptor upload;
+  };
+  std::shared_ptr<const EditableMeshGeometryState> previous;
+  std::shared_ptr<const EditableMeshGeometryState> state;
+  filament::VertexBuffer *expected_vertices = nullptr;
+  filament::IndexBuffer *expected_indices = nullptr;
+  filament::SkinningBuffer *expected_palette = nullptr;
+  std::vector<Range> position_ranges;
+  std::vector<Range> attribute_ranges;
+  filament::backend::BufferDescriptor binding_upload;
+  filament::backend::BufferDescriptor index_upload;
+  std::size_t attribute_pack_count = 0u;
+  std::size_t canonical_reuse_count = 0u;
+  bool reuses_geometry = false;
+  bool indices_changed = false;
+  bool palette_changed = false;
+  bool mappings_changed = false;
+  bool bounds_changed = false;
+  bool anchor_changed = false;
+  bool consumed = false;
+};
+
+/// Owns exact canonical keys and per-key completion, never retained globally.
+struct MeshRenderableFactory::EditableSurfacePreparationContext final {
+  /// Pins comparison inputs while one worker derives the shared attribute pack.
+  struct Entry final {
+    std::shared_ptr<const EditableMeshGeometryState::Record> key;
+    std::shared_future<std::shared_ptr<const EditableMeshGeometryState::CanonicalStreams>> result;
+  };
+  std::mutex mutex;
+  std::unordered_map<std::uint64_t, std::vector<Entry>> entries;
+  std::unordered_map<std::uint64_t, std::size_t> source_counts;
+};
+
+namespace {
+
+bool finite_surface_position(QVec3 position) {
+  return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z);
+}
+
+bool same_surface_attributes(const MeshVertex &left, const MeshVertex &right) {
+  return same_dynamic_vec3(left.normal, right.normal) &&
+      same_dynamic_float(left.uv.x, right.uv.x) && same_dynamic_float(left.uv.y, right.uv.y) &&
+      left.rgba == right.rgba && left.source_vertex_id == right.source_vertex_id &&
+      left.uv_carrier == right.uv_carrier &&
+      same_dynamic_vec3(left.uv_geometric_normal, right.uv_geometric_normal);
+}
+
+template <typename Value>
+bool same_surface_bytes(std::span<const Value> left, std::span<const Value> right) {
+  static_assert(std::is_trivially_copyable_v<Value>);
+  return left.size() == right.size() && (left.empty() ||
+      std::memcmp(left.data(), right.data(), left.size_bytes()) == 0);
+}
+
+bool same_surface_bounds(const RenderInstanceBounds &left, const RenderInstanceBounds &right) {
+  return left.present == right.present && same_dynamic_vec3(left.min, right.min) &&
+      same_dynamic_vec3(left.max, right.max);
+}
+
+filament::math::mat3f surface_cofactor(const QMat4 &matrix, bool rescale) {
+  QVec3 first{matrix.values[0], matrix.values[1], matrix.values[2]};
+  QVec3 second{matrix.values[4], matrix.values[5], matrix.values[6]};
+  QVec3 third{matrix.values[8], matrix.values[9], matrix.values[10]};
+  if (rescale) {
+    const float magnitude = std::max({std::fabs(first.x), std::fabs(first.y), std::fabs(first.z),
+        std::fabs(second.x), std::fabs(second.y), std::fabs(second.z),
+        std::fabs(third.x), std::fabs(third.y), std::fabs(third.z)});
+    first = first / magnitude;
+    second = second / magnitude;
+    third = third / magnitude;
+  }
+  return {to_filament(cross(second, third)), to_filament(cross(third, first)),
+          to_filament(cross(first, second))};
+}
+
+bool pinned_surface_streams(const RenderMeshAssetSnapshot &mesh) {
+  if (mesh.geometry_projection) {
+    return mesh.vertices.data() == mesh.geometry_projection->vertices().data() &&
+        mesh.vertices.size() == mesh.geometry_projection->vertices().size() &&
+        mesh.indices.data() == mesh.geometry_projection->indices().data() &&
+        mesh.indices.size() == mesh.geometry_projection->indices().size() &&
+        mesh.primitives.data() == mesh.geometry_projection->primitives().data() &&
+        mesh.primitives.size() == mesh.geometry_projection->primitives().size();
+  }
+  return mesh.geometry_payload && mesh.vertices.data() == mesh.geometry_payload->vertices.data() &&
+      mesh.vertices.size() == mesh.geometry_payload->vertices.size() &&
+      mesh.indices.data() == mesh.geometry_payload->indices.data() &&
+      mesh.indices.size() == mesh.geometry_payload->indices.size() &&
+      mesh.primitives.data() == mesh.geometry_payload->primitives.data() &&
+      mesh.primitives.size() == mesh.geometry_payload->primitives.size();
+}
+
+bool same_surface_topology(const EditableMeshGeometryState::Topology &previous,
+                           const MeshRenderableFactory::EditableSurfaceSource &source) {
+  const auto &left = previous.source;
+  const auto &right = source.mesh;
+  return left.vertices.size() == right.vertices.size() &&
+      left.indices.size() == right.indices.size() && left.primitives.size() == right.primitives.size() &&
+      previous.selected_primitives.size() == source.primitives.size() &&
+      std::equal(previous.selected_primitives.begin(), previous.selected_primitives.end(), source.primitives.begin()) &&
+      ((pinned_surface_streams(right) && left.indices.data() == right.indices.data() &&
+        left.primitives.data() == right.primitives.data()) ||
+       (std::equal(left.indices.begin(), left.indices.end(), right.indices.begin()) &&
+        std::equal(left.primitives.begin(), left.primitives.end(), right.primitives.begin())));
+}
+
+bool same_surface_source(const EditableMeshGeometryState::Record &previous,
+                         const MeshRenderableFactory::EditableSurfaceSource &source,
+                         std::span<const QVec3> positions) {
+  const auto &left = previous.source;
+  const auto &right = source.mesh;
+  if (left.vertices.size() != right.vertices.size() || left.indices.size() != right.indices.size() ||
+      left.primitives.size() != right.primitives.size()) return false;
+  const bool same_owners = pinned_surface_streams(right) && pinned_surface_streams(left);
+  if (!(same_owners && left.vertices.data() == right.vertices.data()) &&
+      !std::equal(left.vertices.begin(), left.vertices.end(), right.vertices.begin(),
+                  same_surface_attributes)) return false;
+  if (!(same_owners && left.indices.data() == right.indices.data()) &&
+      !std::equal(left.indices.begin(), left.indices.end(), right.indices.begin())) return false;
+  if (!(same_owners && left.primitives.data() == right.primitives.data()) &&
+      !std::equal(left.primitives.begin(), left.primitives.end(), right.primitives.begin())) return false;
+  if (source.position_payload && source.position_payload == previous.position_payload &&
+      positions.data() == source.position_payload->data() &&
+      positions.size() == source.position_payload->size()) return true;
+  if (positions.empty() && same_owners && left.vertices.data() == right.vertices.data() &&
+      previous.uses_source_positions) return true;
+  if (right.geometry_projection &&
+      right.geometry_projection->positions == previous.position_payload &&
+      right.geometry_projection->positions &&
+      positions.data() == right.geometry_projection->positions->data() &&
+      positions.size() == right.geometry_projection->positions->size()) return true;
+  for (std::size_t index = 0u; index < previous.streams->positions.size(); ++index) {
+    const QVec3 position = positions.empty() ? right.vertices[index].position : positions[index];
+    const auto packed = previous.streams->positions[index];
+    if (!same_dynamic_vec3(position, {packed.x, packed.y, packed.z})) return false;
+  }
+  return true;
+}
+
+std::uint64_t surface_canonical_signature(const RenderMeshAssetSnapshot &mesh,
+                                        const void *positions) {
+  // Immutable stream identity is the common-case key. Distinct unique geometry
+  // never pays a whole-mesh hash merely to discover it has no sharing partner.
+  return RenderSignatureBuilder{}
+      .add_value(reinterpret_cast<std::uintptr_t>(mesh.vertices.data()))
+      .add_value(reinterpret_cast<std::uintptr_t>(mesh.indices.data()))
+      .add_value(reinterpret_cast<std::uintptr_t>(mesh.primitives.data()))
+      .add_value(reinterpret_cast<std::uintptr_t>(positions))
+      .add_size(mesh.vertices.size()).add_size(mesh.indices.size()).value();
+}
+
+bool append_surface_world_bounds(RenderInstanceBounds &bounds,
+                                 const RenderInstanceBounds &local, const QMat4 &transform) {
+  for (std::uint32_t corner = 0u; corner < 8u; ++corner) {
+    const QVec3 point = transform_point(transform,
+        {(corner & 1u) != 0u ? local.max.x : local.min.x,
+         (corner & 2u) != 0u ? local.max.y : local.min.y,
+         (corner & 4u) != 0u ? local.max.z : local.min.z});
+    if (!finite_surface_position(point)) return false;
+    if (!bounds.present) {
+      bounds = {.min = point, .max = point, .present = true};
+    } else {
+      bounds.min = {std::min(bounds.min.x, point.x), std::min(bounds.min.y, point.y),
+                    std::min(bounds.min.z, point.z)};
+      bounds.max = {std::max(bounds.max.x, point.x), std::max(bounds.max.y, point.y),
+                    std::max(bounds.max.z, point.z)};
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 /// Owns shared Filament vertex/index buffers keyed by immutable geometry.
 struct MeshRenderableFactory::GeometryCacheState final {
@@ -451,6 +739,334 @@ struct MeshRenderableFactory::GeometryCacheState final {
 };
 
 MeshRenderableFactory::MeshRenderableFactory() = default;
+
+bool MeshRenderableFactory::supports_editable_surface_transform(const QMat4 &transform) {
+  if (!std::ranges::all_of(transform.values, [](float value) { return std::isfinite(value); }) ||
+      transform.values[3] != 0.0f || transform.values[7] != 0.0f ||
+      transform.values[11] != 0.0f || transform.values[15] != 1.0f) return false;
+  QVec3 first{transform.values[0], transform.values[1], transform.values[2]};
+  QVec3 second{transform.values[4], transform.values[5], transform.values[6]};
+  QVec3 third{transform.values[8], transform.values[9], transform.values[10]};
+  const float magnitude = std::max({std::fabs(first.x), std::fabs(first.y), std::fabs(first.z),
+      std::fabs(second.x), std::fabs(second.y), std::fabs(second.z),
+      std::fabs(third.x), std::fabs(third.y), std::fabs(third.z)});
+  // Skinning normalizes raw cofactors. Keep their squared magnitudes within
+  // normal float range; ordinary renderables retain the extreme-scale path.
+  if (magnitude < 1.0e-8f || magnitude > 1.0e8f) return false;
+  first = first / magnitude;
+  second = second / magnitude;
+  third = third / magnitude;
+  const float maximum = std::max({dot(first, first), dot(second, second), dot(third, third)});
+  const float minimum = std::min({dot(first, first), dot(second, second), dot(third, third)});
+  const float tolerance = maximum * 0.00001f;
+  return dot(cross(first, second), third) > 0.0f && maximum - minimum <= tolerance &&
+      std::fabs(dot(first, second)) <= tolerance && std::fabs(dot(first, third)) <= tolerance &&
+      std::fabs(dot(second, third)) <= tolerance;
+}
+
+std::shared_ptr<MeshRenderableFactory::EditableSurfacePreparationContext>
+MeshRenderableFactory::create_editable_surface_preparation_context() {
+  return std::make_shared<EditableSurfacePreparationContext>();
+}
+
+void MeshRenderableFactory::register_editable_surface_sources(
+    EditableSurfacePreparationContext &context, std::span<const EditableSurfaceSource> sources) {
+  for (const auto &source : sources) {
+    const auto positions = effective_mesh_positions(source.mesh, source.positions);
+    const void *position_data = positions.empty() && source.position_payload
+        ? source.position_payload->data() : positions.data();
+    ++context.source_counts[surface_canonical_signature(source.mesh, position_data)];
+  }
+}
+
+std::shared_ptr<MeshRenderableFactory::EditableSurfaceUpdate>
+MeshRenderableFactory::prepare_editable_surface_update(
+    std::span<const EditableSurfaceSource> sources, const MeshRenderableProxy *existing,
+    std::shared_ptr<EditableSurfacePreparationContext> context) {
+  QDR_PROFILE_SCOPE("Editable surface prepare chunk streams");
+  if (sources.empty() || sources.size() > kEditableSurfaceMaximumOccurrences) return {};
+  try {
+    auto prepared = std::make_shared<EditableSurfaceUpdate>();
+    if (existing != nullptr && existing->owns_mesh_buffers && existing->skinning_buffer != nullptr) {
+      prepared->previous = existing->editable_geometry_state;
+      prepared->expected_vertices = existing->vertex_buffer;
+      prepared->expected_indices = existing->index_buffer;
+      prepared->expected_palette = existing->skinning_buffer;
+    }
+    auto state = std::make_shared<EditableMeshGeometryState>();
+    const auto &first_transform = sources.front().world_from_local;
+    state->world_anchor = {first_transform.values[12], first_transform.values[13], first_transform.values[14]};
+    const auto within_anchor = [&](QVec3 anchor) {
+      return std::ranges::all_of(sources, [&](const EditableSurfaceSource &source) {
+        return std::fabs(static_cast<double>(source.world_from_local.values[12]) - anchor.x) <= kEditableSurfaceMaximumPlacementOffset &&
+            std::fabs(static_cast<double>(source.world_from_local.values[13]) - anchor.y) <= kEditableSurfaceMaximumPlacementOffset &&
+            std::fabs(static_cast<double>(source.world_from_local.values[14]) - anchor.z) <= kEditableSurfaceMaximumPlacementOffset;
+      });
+    };
+    if (prepared->previous && within_anchor(prepared->previous->world_anchor)) {
+      state->world_anchor = prepared->previous->world_anchor;
+    }
+    if (!within_anchor(state->world_anchor)) return {};
+    state->records.reserve(sources.size());
+    state->vertex_offsets.reserve(sources.size());
+    state->source_transforms.reserve(sources.size());
+    state->source_mappings.reserve(sources.size());
+    state->transforms.reserve(sources.size());
+    state->mappings.reserve(sources.size());
+    state->mapping_cofactors.reserve(sources.size());
+    state->world_normals.reserve(sources.size());
+    bool layout_matches = prepared->previous && prepared->previous->records.size() == sources.size();
+    bool indices_match = layout_matches;
+    std::size_t index_count = 0u;
+    for (std::size_t occurrence = 0u; occurrence < sources.size(); ++occurrence) {
+      const auto &input = sources[occurrence];
+      const auto &mesh = input.mesh;
+      auto positions = effective_mesh_positions(mesh, input.positions);
+      if (positions.empty() && input.position_payload) positions = *input.position_payload;
+      if (!mesh.renderable() || mesh.indices.size() % 3u != 0u ||
+          (!positions.empty() && positions.size() != mesh.vertices.size()) ||
+          mesh.vertices.size() > kEditableSurfaceMaximumVertices - state->vertex_count ||
+          !supports_editable_surface_transform(input.world_from_local) ||
+          !std::ranges::all_of(input.sampling_from_local.values,
+                              [](float value) { return std::isfinite(value); })) return {};
+      const auto previous = prepared->previous && occurrence < prepared->previous->records.size()
+          ? prepared->previous->records[occurrence] : nullptr;
+      std::shared_ptr<const EditableMeshGeometryState::Record> record;
+      const bool retained_topology = previous && same_surface_topology(*previous->topology, input);
+      const bool retained_attributes = previous && pinned_surface_streams(mesh) &&
+          previous->source.vertices.data() == mesh.vertices.data() &&
+          previous->source.vertices.size() == mesh.vertices.size();
+      if (retained_topology && same_surface_source(*previous, input, positions)) {
+        record = previous;
+      } else {
+        auto next = std::make_shared<EditableMeshGeometryState::Record>();
+        auto streams = std::make_shared<EditableMeshGeometryState::CanonicalStreams>();
+        next->streams = streams;
+        next->source = mesh;
+        const bool pinned = pinned_surface_streams(mesh);
+        if (!pinned) {
+          auto copy = std::make_shared<MeshGeometryPayload>();
+          copy->vertices.assign(mesh.vertices.begin(), mesh.vertices.end());
+          copy->indices.assign(mesh.indices.begin(), mesh.indices.end());
+          copy->primitives.assign(mesh.primitives.begin(), mesh.primitives.end());
+          next->copied_source = copy;
+          next->source.geometry_payload = copy;
+          next->source.geometry_projection.reset();
+          next->source.vertices = copy->vertices;
+          next->source.indices = copy->indices;
+          next->source.primitives = copy->primitives;
+        }
+        next->source.positions = {};
+        next->uses_source_positions = positions.empty();
+        if (input.position_payload && positions.data() == input.position_payload->data() &&
+            positions.size() == input.position_payload->size()) next->position_payload = input.position_payload;
+        if (!next->position_payload && mesh.geometry_projection && mesh.geometry_projection->positions &&
+            positions.data() == mesh.geometry_projection->positions->data() &&
+            positions.size() == mesh.geometry_projection->positions->size()) {
+          next->position_payload = mesh.geometry_projection->positions;
+        }
+        streams->positions.reserve(mesh.vertices.size());
+        for (std::size_t vertex = 0u; vertex < mesh.vertices.size(); ++vertex) {
+          const auto &attribute = mesh.vertices[vertex];
+          const auto point = positions.empty() ? attribute.position : positions[vertex];
+          if (!finite_surface_position(point) || (!retained_attributes &&
+              (!finite_surface_position(attribute.normal) || !finite_surface_position(attribute.uv_geometric_normal) ||
+               !std::isfinite(attribute.uv.x) || !std::isfinite(attribute.uv.y) ||
+               !std::ranges::all_of(attribute.uv_carrier,
+                                   [](float value) { return std::isfinite(value); })))) return {};
+          streams->positions.push_back(to_filament(point));
+        }
+        if (retained_topology) {
+          next->topology = previous->topology;
+        } else {
+          auto topology = std::make_shared<EditableMeshGeometryState::Topology>();
+          topology->source = next->source;
+          topology->selected_primitives.assign(input.primitives.begin(), input.primitives.end());
+          for (const auto index : mesh.indices) if (index >= mesh.vertices.size()) return {};
+          for (const auto &primitive : mesh.primitives) {
+            if (primitive.index_count % 3u != 0u || static_cast<std::uint64_t>(primitive.index_offset) +
+                primitive.index_count > mesh.indices.size()) return {};
+          }
+          if (input.primitives.empty()) {
+            topology->indices.assign(mesh.indices.begin(), mesh.indices.end());
+          } else {
+            for (const auto &primitive : input.primitives) {
+              if (primitive.index_count % 3u != 0u || static_cast<std::uint64_t>(primitive.index_offset) +
+                  primitive.index_count > mesh.indices.size()) return {};
+              const auto selected = mesh.indices.subspan(primitive.index_offset, primitive.index_count);
+              topology->indices.insert(topology->indices.end(), selected.begin(), selected.end());
+            }
+          }
+          if (topology->indices.empty()) return {};
+          topology->grid_plan = prepare_mesh_surface_grid_projection(mesh.vertices.size(), mesh.indices, mesh.primitives);
+          topology->quad_plan = prepare_mesh_quad_uv_interpolation(mesh.vertices.size(), mesh.indices, mesh.primitives);
+          next->topology = std::move(topology);
+        }
+        // Derive from every canonical face before selecting this material's
+        // indices, preserving smoothing, authored quad charts and grid hints.
+        next->local_bounds = positions.empty() ? compute_local_bounds_impl(mesh)
+                                               : compute_local_bounds_impl(positions);
+        using CanonicalStreams = EditableMeshGeometryState::CanonicalStreams;
+        std::shared_future<std::shared_ptr<const CanonicalStreams>> pending;
+        std::shared_ptr<std::promise<std::shared_ptr<const CanonicalStreams>>> producer;
+        const auto signature = context ? surface_canonical_signature(mesh, positions.data()) : 0u;
+        const auto count = context ? context->source_counts.find(signature)
+            : std::unordered_map<std::uint64_t, std::size_t>::const_iterator{};
+        if (context && (context->source_counts.empty() ||
+                        (count != context->source_counts.end() && count->second > 1u))) {
+          std::lock_guard lock(context->mutex);
+          auto &entries = context->entries[signature];
+          for (const auto &entry : entries) {
+            if (same_surface_source(*entry.key, input, positions)) {
+              pending = entry.result;
+              break;
+            }
+          }
+          if (!pending.valid()) {
+            producer = std::make_shared<std::promise<std::shared_ptr<const CanonicalStreams>>>();
+            pending = producer->get_future().share();
+            entries.push_back({next, pending});
+          }
+        }
+        if (pending.valid() && !producer) {
+          next->streams = pending.get();
+          ++prepared->canonical_reuse_count;
+        } else {
+          try {
+            streams->attributes = build_render_vertices<DynamicRenderVertexStatic>(mesh, positions,
+                &next->topology->grid_plan, &next->topology->quad_plan);
+            ++prepared->attribute_pack_count;
+            if (producer) producer->set_value(streams);
+          } catch (...) {
+            if (producer) producer->set_exception(std::current_exception());
+            throw;
+          }
+        }
+        record = std::move(next);
+      }
+      if (record->topology->indices.size() > kEditableSurfaceMaximumIndices - index_count) return {};
+      index_count += record->topology->indices.size();
+      state->vertex_offsets.push_back(state->vertex_count);
+      state->vertex_count += static_cast<std::uint32_t>(record->streams->positions.size());
+      layout_matches = layout_matches && previous &&
+          previous->streams->positions.size() == record->streams->positions.size() &&
+          previous->topology->indices.size() == record->topology->indices.size();
+      indices_match = indices_match && layout_matches &&
+          (previous->topology == record->topology || previous->topology->indices == record->topology->indices);
+      // Keep small canonical details away from absolute float translations.
+      // Filament combines the entity anchor with its camera-relative transform
+      // in double precision before the shader applies these local bone matrices.
+      QMat4 local_from_source = input.world_from_local;
+      local_from_source.values[12] = static_cast<float>(static_cast<double>(input.world_from_local.values[12]) - state->world_anchor.x);
+      local_from_source.values[13] = static_cast<float>(static_cast<double>(input.world_from_local.values[13]) - state->world_anchor.y);
+      local_from_source.values[14] = static_cast<float>(static_cast<double>(input.world_from_local.values[14]) - state->world_anchor.z);
+      if (!append_surface_world_bounds(state->local_bounds, record->local_bounds, local_from_source)) return {};
+      if (!append_surface_world_bounds(state->world_bounds, record->local_bounds, input.world_from_local)) return {};
+      state->records.push_back(std::move(record));
+      const bool same_transform = previous && prepared->previous->source_transforms[occurrence].values == input.world_from_local.values;
+      const bool same_mapping = previous && prepared->previous->source_mappings[occurrence].values == input.sampling_from_local.values;
+      const bool same_anchor = prepared->previous && same_dynamic_vec3(state->world_anchor, prepared->previous->world_anchor);
+      state->source_transforms.push_back(input.world_from_local);
+      state->source_mappings.push_back(input.sampling_from_local);
+      state->transforms.push_back(same_transform && same_anchor ? prepared->previous->transforms[occurrence] : make_transform(local_from_source));
+      state->mappings.push_back(same_mapping ? prepared->previous->mappings[occurrence] : make_transform(input.sampling_from_local));
+      state->mapping_cofactors.push_back(same_mapping ? prepared->previous->mapping_cofactors[occurrence] : surface_cofactor(input.sampling_from_local, false));
+      state->world_normals.push_back(same_transform ? prepared->previous->world_normals[occurrence] : surface_cofactor(input.world_from_local, true));
+    }
+    if (indices_match) {
+      state->indices = prepared->previous->indices;
+    } else {
+      auto indices = std::make_shared<std::vector<std::uint32_t>>();
+      indices->reserve(index_count);
+      for (std::size_t occurrence = 0u; occurrence < state->records.size(); ++occurrence) {
+        for (const auto index : state->records[occurrence]->topology->indices) {
+          indices->push_back(index + state->vertex_offsets[occurrence]);
+        }
+      }
+      state->indices = std::move(indices);
+    }
+    prepared->reuses_geometry = layout_matches && prepared->expected_vertices != nullptr &&
+        prepared->expected_indices != nullptr && existing->vertex_count == state->vertex_count &&
+        existing->index_count == state->indices->size();
+    const auto old = prepared->previous;
+    prepared->indices_changed = !prepared->reuses_geometry || state->indices != old->indices;
+    prepared->palette_changed = !prepared->reuses_geometry ||
+        !same_surface_bytes<filament::math::mat4f>(state->transforms, old->transforms);
+    prepared->mappings_changed = !prepared->reuses_geometry ||
+        !same_surface_bytes<filament::math::mat4f>(state->mappings, old->mappings);
+    prepared->bounds_changed = !prepared->reuses_geometry || !same_surface_bounds(state->local_bounds, old->local_bounds);
+    prepared->anchor_changed = !prepared->reuses_geometry || !same_dynamic_vec3(state->world_anchor, old->world_anchor);
+    const auto prepare_ranges = [&]<typename Vertex>(bool attributes,
+        std::vector<EditableSurfaceUpdate::Range> &ranges) {
+      std::vector<std::pair<std::size_t, std::size_t>> spans;
+      for (std::size_t index = 0u; index < state->records.size(); ++index) {
+        const auto &record = *state->records[index];
+        const auto &values = [&]() -> const std::vector<Vertex> & {
+          if constexpr (std::is_same_v<Vertex, DynamicRenderVertexStatic>) return record.streams->attributes;
+          else return record.streams->positions;
+        }();
+        bool changed = !prepared->reuses_geometry;
+        if (!changed && state->records[index] != old->records[index]) {
+          const auto &previous_values = [&]() -> const std::vector<Vertex> & {
+            if constexpr (std::is_same_v<Vertex, DynamicRenderVertexStatic>) return old->records[index]->streams->attributes;
+            else return old->records[index]->streams->positions;
+          }();
+          changed = !same_surface_bytes<Vertex>(values, previous_values);
+        }
+        if (!changed) continue;
+        if (!spans.empty() && spans.back().second == index) spans.back().second = index + 1u;
+        else spans.emplace_back(index, index + 1u);
+      }
+      // Command count is bounded independently from fragmented object edits.
+      constexpr std::size_t kMaximumUploadRanges = 8u;
+      if (spans.size() > kMaximumUploadRanges) spans = {{spans.front().first, spans.back().second}};
+      ranges.reserve(spans.size());
+      for (const auto [begin, end] : spans) {
+        std::vector<Vertex> packed;
+        const auto first_vertex = state->vertex_offsets[begin];
+        const auto last_vertex = end == state->records.size() ? state->vertex_count : state->vertex_offsets[end];
+        packed.reserve(last_vertex - first_vertex);
+        for (std::size_t index = begin; index < end; ++index) {
+          const auto &values = [&]() -> const std::vector<Vertex> & {
+            if constexpr (std::is_same_v<Vertex, DynamicRenderVertexStatic>) return state->records[index]->streams->attributes;
+            else return state->records[index]->streams->positions;
+          }();
+          packed.insert(packed.end(), values.begin(), values.end());
+        }
+        const auto bytes = packed.size() * sizeof(Vertex);
+        ranges.push_back({first_vertex, bytes, FilamentBufferDescriptorFactory::vector(std::move(packed))});
+      }
+      (void)attributes;
+    };
+    prepare_ranges.template operator()<filament::math::float3>(false, prepared->position_ranges);
+    prepare_ranges.template operator()<DynamicRenderVertexStatic>(true, prepared->attribute_ranges);
+    if (prepared->indices_changed) prepared->index_upload = FilamentBufferDescriptorFactory::retained_bytes(
+        state->indices->data(), state->indices->size() * sizeof(std::uint32_t), state->indices);
+    if (!prepared->reuses_geometry) {
+      std::vector<EditableSurfaceVertexBinding> bindings;
+      bindings.reserve(state->vertex_count);
+      for (std::size_t index = 0u; index < state->records.size(); ++index) {
+        EditableSurfaceVertexBinding binding;
+        binding.bone_indices[0] = static_cast<std::uint16_t>(index);
+        binding.occurrence_index = static_cast<float>(index);
+        bindings.insert(bindings.end(), state->records[index]->streams->positions.size(), binding);
+      }
+      prepared->binding_upload = FilamentBufferDescriptorFactory::vector(std::move(bindings));
+    }
+    prepared->state = std::move(state);
+    return prepared;
+  } catch (...) {
+    return {};
+  }
+}
+
+bool MeshRenderableFactory::editable_surface_update_reuses_geometry(const EditableSurfaceUpdate &prepared) {
+  return prepared.reuses_geometry;
+}
+
+RenderInstanceBounds MeshRenderableFactory::editable_surface_world_bounds(const EditableSurfaceUpdate &prepared) {
+  return prepared.state ? prepared.state->world_bounds : RenderInstanceBounds{};
+}
 
 MeshRenderableFactory::~MeshRenderableFactory() { shutdown(); }
 
@@ -502,6 +1118,7 @@ void MeshRenderableFactory::shutdown() {
 
 bool MeshRenderableFactory::acquire_geometry(
     const RenderMeshAssetSnapshot &mesh, MeshRenderableProxy &proxy) {
+  if (!mesh.positions.empty()) return acquire_dynamic_geometry(mesh, proxy, mesh.positions);
   if (engine_ == nullptr || geometry_cache_ == nullptr ||
       !mesh.renderable()) {
     return false;
@@ -606,6 +1223,10 @@ bool MeshRenderableFactory::acquire_geometry(
                      AttributeType::FLOAT4,
                      offsetof(RenderVertex, quad_uv_correction),
                      sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::CUSTOM5, 0,
+                     AttributeType::FLOAT3, offsetof(RenderVertex, position), sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::CUSTOM6, 0,
+                     AttributeType::FLOAT, offsetof(RenderVertex, occurrence_index), sizeof(RenderVertex))
           .normalized(filament::VertexAttribute::COLOR)
           .build(*engine_);
   resource->vertex_buffer->setBufferAt(
@@ -732,22 +1353,21 @@ bool MeshRenderableFactory::acquire_collision_geometry(
 bool MeshRenderableFactory::acquire_dynamic_geometry(
     const RenderMeshAssetSnapshot &mesh, MeshRenderableProxy &proxy,
     std::span<const QVec3> dynamic_positions) {
+  dynamic_positions = effective_mesh_positions(mesh, dynamic_positions);
   if (engine_ == nullptr || !mesh.renderable() ||
       (!dynamic_positions.empty() &&
        dynamic_positions.size() != mesh.vertices.size())) {
     return false;
   }
-  const std::vector<RenderVertex> vertices =
-      build_render_vertices(mesh, dynamic_positions);
+  std::vector<DynamicRenderVertexStatic> static_vertices =
+      build_render_vertices<DynamicRenderVertexStatic>(mesh, dynamic_positions);
   std::vector<filament::math::float3> positions;
-  positions.reserve(vertices.size());
-  for (std::size_t index = 0u; index < vertices.size(); ++index) {
+  positions.reserve(mesh.vertices.size());
+  for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
     positions.push_back(dynamic_positions.empty()
-                            ? vertices[index].position
+                            ? to_filament(mesh.vertices[index].position)
                             : to_filament(dynamic_positions[index]));
   }
-  std::vector<DynamicRenderVertexStatic> static_vertices =
-      pack_dynamic_static_vertices(vertices);
   proxy.vertex_buffer =
       filament::VertexBuffer::Builder()
           .vertexCount(static_cast<std::uint32_t>(positions.size()))
@@ -787,6 +1407,11 @@ bool MeshRenderableFactory::acquire_dynamic_geometry(
                      AttributeType::FLOAT4,
                      offsetof(DynamicRenderVertexStatic, quad_uv_correction),
                      sizeof(DynamicRenderVertexStatic))
+          .attribute(filament::VertexAttribute::CUSTOM5, 0,
+                     AttributeType::FLOAT3, 0, sizeof(filament::math::float3))
+          .attribute(filament::VertexAttribute::CUSTOM6, 1,
+                     AttributeType::FLOAT, offsetof(DynamicRenderVertexStatic, occurrence_index),
+                     sizeof(DynamicRenderVertexStatic))
           .normalized(filament::VertexAttribute::COLOR)
           .build(*engine_);
   proxy.vertex_buffer->setBufferAt(
@@ -807,10 +1432,30 @@ bool MeshRenderableFactory::acquire_dynamic_geometry(
   proxy.dynamic_geometry = true;
   proxy.vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
   proxy.index_count = static_cast<std::uint32_t>(mesh.indices.size());
+  if (geometry_cache_ != nullptr) {
+    ++geometry_cache_->stats.dynamic_geometry_create_count;
+    ++geometry_cache_->stats.dynamic_geometry_upload_count;
+    geometry_cache_->stats.dynamic_uploaded_vertex_bytes +=
+        mesh.vertices.size() *
+        (sizeof(filament::math::float3) + sizeof(DynamicRenderVertexStatic));
+    geometry_cache_->stats.dynamic_uploaded_index_bytes +=
+        mesh.indices.size() * sizeof(std::uint32_t);
+  }
   return true;
 }
 
 void MeshRenderableFactory::release_geometry(MeshRenderableProxy &proxy) {
+  if (proxy.skinning_buffer != nullptr) {
+    if (engine_ != nullptr && proxy.owns_mesh_buffers) {
+      engine_->destroy(proxy.skinning_buffer);
+      submit_resource_retirement(*engine_, pending_resource_retirements_);
+      if (proxy.editable_geometry_state && geometry_cache_ != nullptr) {
+        --geometry_cache_->stats.editable_surface_live_geometry_count;
+      }
+    }
+    proxy.skinning_buffer = nullptr;
+  }
+  proxy.editable_geometry_state.reset();
   if (proxy.geometry_resource == 0u || geometry_cache_ == nullptr) {
     if (engine_ != nullptr && proxy.owns_mesh_buffers) {
       if (proxy.vertex_buffer != nullptr) {
@@ -938,7 +1583,9 @@ MeshRenderableProxy MeshRenderableFactory::create(
 std::shared_ptr<MeshRenderableFactory::DynamicGeometryUpdate>
 MeshRenderableFactory::prepare_dynamic_geometry_update(
     const RenderMeshAssetSnapshot &mesh,
-    std::span<const QVec3> dynamic_positions) {
+    std::span<const QVec3> dynamic_positions,
+    const std::shared_ptr<DynamicGeometryUpdate> &equivalent_update) {
+  dynamic_positions = effective_mesh_positions(mesh, dynamic_positions);
   if (!dynamic_positions.empty() &&
       dynamic_positions.size() != mesh.vertices.size()) {
     return {};
@@ -948,32 +1595,54 @@ MeshRenderableFactory::prepare_dynamic_geometry_update(
     prepared->source = mesh;
     prepared->source_positions = dynamic_positions.data();
     prepared->source_position_count = dynamic_positions.size();
-    std::vector<filament::math::float3> positions;
-    {
-      QDR_PROFILE_SCOPE("Mesh dynamic position upload pack");
-      positions.reserve(mesh.vertices.size());
-      if (dynamic_positions.empty()) {
-        for (const MeshVertex &vertex : mesh.vertices) {
-          positions.push_back(to_filament(vertex.position));
-        }
-      } else {
-        for (const QVec3 position : dynamic_positions) {
-          positions.push_back(to_filament(position));
+    if (equivalent_update) {
+      if (equivalent_update->consumed || !equivalent_update->packed ||
+          !same_dynamic_geometry(equivalent_update->source, mesh)) return {};
+      const auto &positions = equivalent_update->packed->positions;
+      if (positions.size() != mesh.vertices.size()) return {};
+      for (std::size_t index = 0u; index < positions.size(); ++index) {
+        const QVec3 expected = dynamic_positions.empty()
+            ? mesh.vertices[index].position : dynamic_positions[index];
+        if (!same_dynamic_vec3(expected,
+                               {positions[index].x, positions[index].y,
+                                positions[index].z})) return {};
+      }
+      prepared->packed = equivalent_update->packed;
+    } else {
+      auto packed = std::make_shared<DynamicGeometryUpdate::PackedStreams>();
+      auto &positions = packed->positions;
+      {
+        QDR_PROFILE_SCOPE("Mesh dynamic position upload pack");
+        positions.reserve(mesh.vertices.size());
+        if (dynamic_positions.empty()) {
+          for (const MeshVertex &vertex : mesh.vertices) {
+            positions.push_back(to_filament(vertex.position));
+          }
+        } else {
+          for (const QVec3 position : dynamic_positions) {
+            positions.push_back(to_filament(position));
+          }
         }
       }
+      {
+        QDR_PROFILE_SCOPE("Mesh dynamic derived attributes pack");
+        packed->static_vertices =
+            build_render_vertices<DynamicRenderVertexStatic>(mesh, dynamic_positions);
+        packed->indices.assign(mesh.indices.begin(), mesh.indices.end());
+      }
+      prepared->packed = std::move(packed);
     }
-    {
-      QDR_PROFILE_SCOPE("Mesh dynamic derived attributes pack");
-      const std::vector<RenderVertex> render_vertices =
-          build_render_vertices(mesh, dynamic_positions);
-      auto static_vertices = pack_dynamic_static_vertices(render_vertices);
-      std::vector<std::uint32_t> indices(mesh.indices.begin(), mesh.indices.end());
-      // Descriptor wrappers own CPU bytes and may allocate. Prepare them here
-      // as well so submission cannot fail after uploading only some streams.
-      prepared->positions = FilamentBufferDescriptorFactory::vector(std::move(positions));
-      prepared->static_vertices = FilamentBufferDescriptorFactory::vector(std::move(static_vertices));
-      prepared->indices = FilamentBufferDescriptorFactory::vector(std::move(indices));
-    }
+    // Each destination retains the shared bytes independently until Filament
+    // releases its upload. Allocate every descriptor before the mutation pass.
+    const auto &packed = *prepared->packed;
+    prepared->positions = FilamentBufferDescriptorFactory::retained_bytes(
+        packed.positions.data(), packed.positions.size() * sizeof(filament::math::float3),
+        prepared->packed);
+    prepared->static_vertices = FilamentBufferDescriptorFactory::retained_bytes(
+        packed.static_vertices.data(),
+        packed.static_vertices.size() * sizeof(DynamicRenderVertexStatic), prepared->packed);
+    prepared->indices = FilamentBufferDescriptorFactory::retained_bytes(
+        packed.indices.data(), packed.indices.size() * sizeof(std::uint32_t), prepared->packed);
     return prepared;
   } catch (...) {
     // Preparation is isolated from renderer state; keep the accepted preview
@@ -988,7 +1657,10 @@ bool MeshRenderableFactory::update_dynamic_geometry(
     std::span<const QVec3> dynamic_positions,
     const RenderInstanceBounds *local_bounds_override,
     std::shared_ptr<DynamicGeometryUpdate> prepared) {
+  dynamic_positions = effective_mesh_positions(mesh, dynamic_positions);
   if (engine_ == nullptr || !proxy.dynamic_geometry ||
+      proxy.skinning_buffer != nullptr ||
+      !proxy.owns_mesh_buffers ||
       proxy.vertex_buffer == nullptr || proxy.index_buffer == nullptr ||
       proxy.vertex_count != mesh.vertices.size() ||
       proxy.index_count != mesh.indices.size() ||
@@ -1003,6 +1675,7 @@ bool MeshRenderableFactory::update_dynamic_geometry(
       prepared->source.mesh_id != mesh.mesh_id ||
       prepared->source.mesh_revision != mesh.mesh_revision ||
       prepared->source.geometry_payload != mesh.geometry_payload ||
+      prepared->source.geometry_projection != mesh.geometry_projection ||
       prepared->source.geometry_token != mesh.geometry_token ||
       prepared->source.geometry_content_id != mesh.geometry_content_id ||
       prepared->source.vertices.data() != mesh.vertices.data() ||
@@ -1031,7 +1704,15 @@ bool MeshRenderableFactory::update_dynamic_geometry(
     proxy.index_buffer->setBuffer(
         *engine_, std::move(prepared->indices));
   }
-  {
+  if (geometry_cache_ != nullptr) {
+    ++geometry_cache_->stats.dynamic_geometry_upload_count;
+    geometry_cache_->stats.dynamic_uploaded_vertex_bytes +=
+        mesh.vertices.size() *
+        (sizeof(filament::math::float3) + sizeof(DynamicRenderVertexStatic));
+    geometry_cache_->stats.dynamic_uploaded_index_bytes +=
+        mesh.indices.size() * sizeof(std::uint32_t);
+  }
+  if (proxy.entity) {
     QDR_PROFILE_SCOPE("Mesh dynamic position update bounds");
     filament::RenderableManager &renderable_manager =
         engine_->getRenderableManager();
@@ -1080,7 +1761,7 @@ bool MeshRenderableFactory::try_rebind_static_geometry(
     const RenderMeshAssetSnapshot &mesh) {
   QDR_PROFILE_FUNCTION();
   if (!initialized() || proxies.empty() || !mesh.renderable() ||
-      geometry_cache_ == nullptr) {
+      geometry_cache_ == nullptr || !mesh.positions.empty()) {
     return false;
   }
 
@@ -1218,7 +1899,7 @@ bool MeshRenderableFactory::try_rebind_instance_geometry(
   for (const InstanceGeometryRebind &request : requests) {
     const MeshRenderableProxy *proxy = request.proxy;
     const RenderMeshAssetSnapshot *mesh = request.mesh;
-    if (proxy == nullptr || mesh == nullptr || !mesh->renderable() ||
+    if (proxy == nullptr || mesh == nullptr || !mesh->renderable() || !mesh->positions.empty() ||
         !proxy->entity || proxy->dynamic_geometry ||
         proxy->instance_buffer == nullptr || proxy->mesh != mesh->mesh_id ||
         proxy->geometry_resource == 0u || !proxy->owns_mesh_buffers ||
@@ -1316,6 +1997,7 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   proxy.owns_mesh_buffers = false;
+  if (prototype.skinning_buffer != nullptr) return proxy;
   MeshRenderableCreationGuard creation_guard(*this, proxy);
   proxy.entity = utils::EntityManager::get().create();
   proxy.source_entity = entity_id;
@@ -1382,7 +2064,7 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_geometry(
   proxy.owns_mesh_buffers = false;
   MeshRenderableCreationGuard creation_guard(*this, proxy);
   if (!initialized() || geometry_source.vertex_buffer == nullptr ||
-      geometry_source.index_buffer == nullptr) {
+      geometry_source.index_buffer == nullptr || geometry_source.skinning_buffer != nullptr) {
     return proxy;
   }
 
@@ -1445,6 +2127,237 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_geometry(
   return proxy;
 }
 
+MeshRenderableProxy MeshRenderableFactory::create_dynamic_geometry(
+    const RenderMeshAssetSnapshot &mesh,
+    std::span<const QVec3> dynamic_positions) {
+  QDR_PROFILE_FUNCTION();
+  MeshRenderableProxy proxy;
+  if (!initialized()) {
+    return proxy;
+  }
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
+  proxy.mesh = mesh.mesh_id;
+  proxy.mesh_revision = mesh.mesh_revision;
+  if (!acquire_dynamic_geometry(mesh, proxy, dynamic_positions)) {
+    return {};
+  }
+  creation_guard.release();
+  return proxy;
+}
+
+MeshRenderableProxy MeshRenderableFactory::create_editable_surface_geometry(
+    std::shared_ptr<EditableSurfaceUpdate> prepared) {
+  QDR_PROFILE_FUNCTION();
+  MeshRenderableProxy proxy;
+  if (!initialized() || !prepared || !prepared->state || prepared->consumed ||
+      prepared->reuses_geometry || prepared->position_ranges.size() != 1u ||
+      prepared->attribute_ranges.size() != 1u) return proxy;
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
+  prepared->consumed = true;
+  const auto &state = *prepared->state;
+  proxy.vertex_count = state.vertex_count;
+  proxy.index_count = static_cast<std::uint32_t>(state.indices->size());
+  proxy.dynamic_geometry = true;
+  proxy.vertex_buffer = filament::VertexBuffer::Builder()
+      .vertexCount(proxy.vertex_count).bufferCount(3u)
+      .attribute(filament::VertexAttribute::POSITION, 0u, AttributeType::FLOAT3,
+                 0u, sizeof(filament::math::float3))
+      .attribute(filament::VertexAttribute::CUSTOM5, 0u, AttributeType::FLOAT3,
+                 0u, sizeof(filament::math::float3))
+      .attribute(filament::VertexAttribute::TANGENTS, 1u, AttributeType::FLOAT4,
+                 offsetof(DynamicRenderVertexStatic, tangent_frame), sizeof(DynamicRenderVertexStatic))
+      .attribute(filament::VertexAttribute::UV0, 1u, AttributeType::FLOAT2,
+                 offsetof(DynamicRenderVertexStatic, uv), sizeof(DynamicRenderVertexStatic))
+      .attribute(filament::VertexAttribute::COLOR, 1u, AttributeType::UBYTE4,
+                 offsetof(DynamicRenderVertexStatic, color), sizeof(DynamicRenderVertexStatic))
+      .attribute(filament::VertexAttribute::CUSTOM0, 1u, AttributeType::FLOAT4,
+                 offsetof(DynamicRenderVertexStatic, surface_grid_projection), sizeof(DynamicRenderVertexStatic))
+      .attribute(filament::VertexAttribute::CUSTOM1, 1u, AttributeType::FLOAT4,
+                 offsetof(DynamicRenderVertexStatic, uv_carrier), sizeof(DynamicRenderVertexStatic))
+      .attribute(filament::VertexAttribute::CUSTOM2, 1u, AttributeType::FLOAT3,
+                 offsetof(DynamicRenderVertexStatic, uv_geometric_normal), sizeof(DynamicRenderVertexStatic))
+      .attribute(filament::VertexAttribute::CUSTOM3, 1u, AttributeType::FLOAT4,
+                 offsetof(DynamicRenderVertexStatic, quad_uv_coordinates), sizeof(DynamicRenderVertexStatic))
+      .attribute(filament::VertexAttribute::CUSTOM4, 1u, AttributeType::FLOAT4,
+                 offsetof(DynamicRenderVertexStatic, quad_uv_correction), sizeof(DynamicRenderVertexStatic))
+      .attribute(filament::VertexAttribute::BONE_INDICES, 2u, AttributeType::USHORT4,
+                 offsetof(EditableSurfaceVertexBinding, bone_indices), sizeof(EditableSurfaceVertexBinding))
+      .attribute(filament::VertexAttribute::BONE_WEIGHTS, 2u, AttributeType::FLOAT4,
+                 offsetof(EditableSurfaceVertexBinding, bone_weights), sizeof(EditableSurfaceVertexBinding))
+      .attribute(filament::VertexAttribute::CUSTOM6, 2u, AttributeType::FLOAT,
+                 offsetof(EditableSurfaceVertexBinding, occurrence_index), sizeof(EditableSurfaceVertexBinding))
+      .normalized(filament::VertexAttribute::COLOR).build(*engine_);
+  proxy.index_buffer = filament::IndexBuffer::Builder().indexCount(proxy.index_count)
+      .bufferType(filament::IndexBuffer::IndexType::UINT).build(*engine_);
+  proxy.skinning_buffer = filament::SkinningBuffer::Builder()
+      .boneCount(static_cast<std::uint32_t>(state.records.size())).initialize(false).build(*engine_);
+  if (proxy.vertex_buffer == nullptr || proxy.index_buffer == nullptr || proxy.skinning_buffer == nullptr) return {};
+  proxy.vertex_buffer->setBufferAt(*engine_, 0u, std::move(prepared->position_ranges.front().upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 1u, std::move(prepared->attribute_ranges.front().upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(prepared->binding_upload));
+  proxy.index_buffer->setBuffer(*engine_, std::move(prepared->index_upload));
+  proxy.skinning_buffer->setBones(*engine_, state.transforms.data(), state.transforms.size());
+  proxy.editable_geometry_state = prepared->state;
+  prepared->expected_vertices = proxy.vertex_buffer;
+  prepared->expected_indices = proxy.index_buffer;
+  prepared->expected_palette = proxy.skinning_buffer;
+  auto &stats = geometry_cache_->stats;
+  ++stats.editable_surface_live_geometry_count;
+  ++stats.editable_surface_geometry_create_count;
+  stats.editable_surface_attribute_pack_count += prepared->attribute_pack_count;
+  stats.editable_surface_canonical_reuse_count += prepared->canonical_reuse_count;
+  ++stats.editable_surface_position_upload_count;
+  ++stats.editable_surface_attribute_upload_count;
+  ++stats.editable_surface_index_upload_count;
+  ++stats.editable_surface_palette_upload_count;
+  stats.editable_surface_uploaded_vertex_bytes += static_cast<std::uint64_t>(state.vertex_count) *
+      (sizeof(filament::math::float3) + sizeof(DynamicRenderVertexStatic) + sizeof(EditableSurfaceVertexBinding));
+  stats.editable_surface_uploaded_index_bytes += state.indices->size() * sizeof(std::uint32_t);
+  creation_guard.release();
+  return proxy;
+}
+
+MeshRenderableProxy MeshRenderableFactory::create_editable_surface_proxy(
+    const MeshRenderableProxy &geometry_owner, const RenderMaterialAssetSnapshot *material,
+    const RenderInstanceBounds &world_bounds, bool cast_shadows, bool receive_shadows,
+    bool double_sided, std::uint8_t layer_mask, bool editor_unlit, bool depth_only,
+    std::uint8_t channel, std::uint8_t presentation_flags) {
+  QDR_PROFILE_FUNCTION();
+  MeshRenderableProxy proxy;
+  proxy.owns_mesh_buffers = false;
+  if (!initialized() || !geometry_owner.owns_mesh_buffers || !geometry_owner.editable_geometry_state ||
+      geometry_owner.vertex_buffer == nullptr || geometry_owner.index_buffer == nullptr ||
+      geometry_owner.skinning_buffer == nullptr || !world_bounds.present) return proxy;
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
+  const auto &state = *geometry_owner.editable_geometry_state;
+  proxy.vertex_buffer = geometry_owner.vertex_buffer;
+  proxy.index_buffer = geometry_owner.index_buffer;
+  proxy.skinning_buffer = geometry_owner.skinning_buffer;
+  proxy.vertex_count = geometry_owner.vertex_count;
+  proxy.index_count = geometry_owner.index_count;
+  proxy.dynamic_geometry = true;
+  proxy.cast_shadows = cast_shadows;
+  proxy.double_sided = double_sided;
+  proxy.material_instances.reserve(1u);
+  proxy.material_slots.reserve(1u);
+  auto *material_instance = material_binding_->create_mesh_material_instance(material, double_sided, editor_unlit);
+  if (material_instance == nullptr) return {};
+  proxy.material_instances.push_back(material_instance);
+  proxy.material_slots.push_back(0u);
+  material_binding_->apply_instance_edit_dim(*material_instance,
+      (presentation_flags & static_cast<std::uint8_t>(RenderInstancePresentationFlag::Dimmed)) != 0u);
+  bind_coarse_mesh_parameters(*material_instance, state.mappings, state.mapping_cofactors, state.world_normals);
+  if (depth_only) {
+    material_instance->setColorWrite(false);
+    material_instance->setDepthWrite(true);
+    material_instance->setDepthCulling(true);
+  }
+  proxy.entity = utils::EntityManager::get().create();
+  const auto result = filament::RenderableManager::Builder(1u)
+      .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                proxy.vertex_buffer, proxy.index_buffer, 0u, proxy.index_count)
+      .material(0u, material_instance).enableSkinningBuffers(true)
+      .skinning(proxy.skinning_buffer, state.records.size(), 0u)
+      .boundingBox(filament_bounds(state.local_bounds)).layerMask(kViewportAllLayerMask, layer_mask)
+      .channel(channel).castShadows(cast_shadows).receiveShadows(receive_shadows)
+      .build(*engine_, proxy.entity);
+  if (result != filament::RenderableManager::Builder::Success) return {};
+  engine_->getTransformManager().create(proxy.entity);
+  QMat4 world_from_anchor;
+  world_from_anchor.values[12] = state.world_anchor.x;
+  world_from_anchor.values[13] = state.world_anchor.y;
+  world_from_anchor.values[14] = state.world_anchor.z;
+  update_transform(proxy, world_from_anchor);
+  scene_->addEntity(proxy.entity);
+  creation_guard.mark_scene_added();
+  creation_guard.release();
+  return proxy;
+}
+
+bool MeshRenderableFactory::validate_editable_surface_update(
+    const MeshRenderableProxy &owner, const EditableSurfaceUpdate &prepared) const {
+  return initialized() && prepared.state && !prepared.consumed && prepared.reuses_geometry &&
+      owner.owns_mesh_buffers && owner.editable_geometry_state == prepared.previous &&
+      owner.vertex_buffer == prepared.expected_vertices && owner.index_buffer == prepared.expected_indices &&
+      owner.skinning_buffer == prepared.expected_palette && owner.skinning_buffer != nullptr &&
+      owner.vertex_count == prepared.state->vertex_count && owner.index_count == prepared.state->indices->size();
+}
+
+bool MeshRenderableFactory::validate_editable_surface_presentation(
+    const MeshRenderableProxy &proxy, const MeshRenderableProxy &owner,
+    const EditableSurfaceUpdate &prepared) const {
+  if (!initialized() || !prepared.state || !proxy.entity || proxy.owns_mesh_buffers ||
+      proxy.vertex_buffer != owner.vertex_buffer || proxy.index_buffer != owner.index_buffer ||
+      proxy.skinning_buffer != owner.skinning_buffer || proxy.skinning_buffer == nullptr ||
+      proxy.material_instances.size() != 1u || proxy.material_instances.front() == nullptr ||
+      (owner.editable_geometry_state != prepared.previous && owner.editable_geometry_state != prepared.state)) return false;
+  const auto &renderables = engine_->getRenderableManager();
+  const auto instance = renderables.getInstance(proxy.entity);
+  return instance && renderables.getPrimitiveCount(instance) == 1u;
+}
+
+bool MeshRenderableFactory::update_editable_surface_geometry(
+    MeshRenderableProxy &owner, std::shared_ptr<EditableSurfaceUpdate> prepared) {
+  QDR_PROFILE_FUNCTION();
+  if (!prepared || !validate_editable_surface_update(owner, *prepared)) return false;
+  prepared->consumed = true;
+  auto &stats = geometry_cache_->stats;
+  for (auto &range : prepared->position_ranges) {
+    owner.vertex_buffer->setBufferAt(*engine_, 0u, std::move(range.upload),
+        range.first_vertex * sizeof(filament::math::float3));
+    ++stats.editable_surface_position_upload_count;
+    stats.editable_surface_uploaded_vertex_bytes += range.byte_count;
+  }
+  for (auto &range : prepared->attribute_ranges) {
+    owner.vertex_buffer->setBufferAt(*engine_, 1u, std::move(range.upload),
+        range.first_vertex * sizeof(DynamicRenderVertexStatic));
+    ++stats.editable_surface_attribute_upload_count;
+    stats.editable_surface_uploaded_vertex_bytes += range.byte_count;
+  }
+  if (prepared->indices_changed) {
+    owner.index_buffer->setBuffer(*engine_, std::move(prepared->index_upload));
+    ++stats.editable_surface_index_upload_count;
+    stats.editable_surface_uploaded_index_bytes += prepared->state->indices->size() * sizeof(std::uint32_t);
+  }
+  if (prepared->palette_changed) {
+    owner.skinning_buffer->setBones(*engine_, prepared->state->transforms.data(), prepared->state->transforms.size());
+    ++stats.editable_surface_palette_upload_count;
+  }
+  stats.editable_surface_attribute_pack_count += prepared->attribute_pack_count;
+  stats.editable_surface_canonical_reuse_count += prepared->canonical_reuse_count;
+  owner.editable_geometry_state = prepared->state;
+  return true;
+}
+
+bool MeshRenderableFactory::update_editable_surface_presentation(
+    MeshRenderableProxy &proxy, const EditableSurfaceUpdate &prepared,
+    const RenderInstanceBounds &world_bounds, bool cast_shadows) {
+  if (!initialized() || !prepared.state || !proxy.entity || proxy.owns_mesh_buffers ||
+      proxy.vertex_buffer != prepared.expected_vertices || proxy.index_buffer != prepared.expected_indices ||
+      proxy.skinning_buffer != prepared.expected_palette || proxy.material_instances.size() != 1u ||
+      proxy.material_instances.front() == nullptr || !world_bounds.present) return false;
+  auto &renderables = engine_->getRenderableManager();
+  const auto instance = renderables.getInstance(proxy.entity);
+  if (!instance) return false;
+  if (prepared.palette_changed || prepared.mappings_changed) {
+    bind_coarse_mesh_parameters(*proxy.material_instances.front(), prepared.state->mappings,
+        prepared.state->mapping_cofactors, prepared.state->world_normals);
+  }
+  if (prepared.bounds_changed) renderables.setAxisAlignedBoundingBox(instance, filament_bounds(prepared.state->local_bounds));
+  if (prepared.anchor_changed) {
+    QMat4 world_from_anchor;
+    world_from_anchor.values[12] = prepared.state->world_anchor.x;
+    world_from_anchor.values[13] = prepared.state->world_anchor.y;
+    world_from_anchor.values[14] = prepared.state->world_anchor.z;
+    update_transform(proxy, world_from_anchor);
+  }
+  if (proxy.cast_shadows != cast_shadows) {
+    renderables.setCastShadows(instance, cast_shadows);
+    proxy.cast_shadows = cast_shadows;
+  }
+  return true;
+}
+
 MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
     const RenderMeshAssetSnapshot &mesh,
     const RenderMaterialBindingSnapshot *material,
@@ -1452,7 +2365,8 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
     const RenderInstanceBounds &world_bounds, bool cast_shadows,
     bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
     bool editor_unlit, bool depth_only, std::uint8_t channel,
-    std::uint8_t presentation_flags, std::size_t instance_capacity) {
+    std::uint8_t presentation_flags, std::size_t instance_capacity,
+    const MeshRenderableProxy *geometry_source) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   instance_capacity = instance_capacity == 0u
@@ -1468,6 +2382,16 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
           mesh.indices.size()) {
     return proxy;
   }
+  if (geometry_source != nullptr &&
+      (!geometry_source->dynamic_geometry ||
+       geometry_source->skinning_buffer != nullptr ||
+       !geometry_source->owns_mesh_buffers ||
+       geometry_source->vertex_buffer == nullptr ||
+       geometry_source->index_buffer == nullptr ||
+       geometry_source->vertex_count != mesh.vertices.size() ||
+       geometry_source->index_count != mesh.indices.size())) {
+    return proxy;
+  }
 
   MeshRenderableCreationGuard creation_guard(*this, proxy);
   proxy.entity = utils::EntityManager::get().create();
@@ -1478,19 +2402,32 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
   proxy.material_revision = material != nullptr ? material->revision : 0u;
   proxy.cast_shadows = cast_shadows;
   proxy.double_sided = double_sided;
-  if (!acquire_geometry(mesh, proxy)) {
+  if (geometry_source != nullptr) {
+    proxy.owns_mesh_buffers = false;
+    proxy.dynamic_geometry = true;
+    proxy.vertex_buffer = geometry_source->vertex_buffer;
+    proxy.index_buffer = geometry_source->index_buffer;
+    proxy.vertex_count = geometry_source->vertex_count;
+    proxy.index_count = geometry_source->index_count;
+  } else if (!acquire_geometry(mesh, proxy)) {
     return proxy;
   }
 
   const RenderMaterialAssetSnapshot *primitive_material =
       material != nullptr ? material->material_for_slot(primitive.material_slot)
                           : nullptr;
+  // Reserve ownership storage before creating a material so allocation failure
+  // cannot leave an untracked instance outside the construction guard.
+  proxy.material_slots.reserve(1u);
+  proxy.material_instances.reserve(1u);
   filament::MaterialInstance *material_instance =
       material_binding_->create_mesh_material_instance(
           primitive_material, double_sided, editor_unlit);
   if (material_instance == nullptr) {
     return proxy;
   }
+  proxy.material_slots.push_back(primitive.material_slot);
+  proxy.material_instances.push_back(material_instance);
   material_binding_->apply_instance_edit_dim(
       *material_instance,
       (presentation_flags & static_cast<std::uint8_t>(
@@ -1501,9 +2438,6 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
     material_instance->setDepthWrite(true);
     material_instance->setDepthCulling(true);
   }
-  proxy.material_slots.push_back(primitive.material_slot);
-  proxy.material_instances.push_back(material_instance);
-
   std::vector<filament::math::mat4f> transforms;
   transforms.reserve(instance_capacity);
   for (const QMat4 &transform : world_transforms) {
@@ -1743,13 +2677,51 @@ bool MeshRenderableFactory::update_explicit_instances(
       renderables.getInstanceCount(renderable) != world_transforms.size()) {
     return false;
   }
-  std::vector<filament::math::mat4f> transforms;
-  transforms.reserve(world_transforms.size());
-  for (const QMat4 &transform : world_transforms) {
-    transforms.push_back(make_transform(transform));
+  const auto prepared = prepare_explicit_instance_update(world_transforms);
+  return prepared != nullptr &&
+         update_explicit_instances_prepared(proxy, *prepared, world_bounds);
+}
+
+std::shared_ptr<MeshRenderableFactory::ExplicitInstanceUpdate>
+MeshRenderableFactory::prepare_explicit_instance_update(
+    std::span<const QMat4> world_transforms) {
+  if (world_transforms.empty()) {
+    return {};
   }
-  proxy.instance_buffer->setLocalTransforms(transforms.data(),
-                                             transforms.size());
+  auto prepared = std::make_shared<ExplicitInstanceUpdate>();
+  prepared->transforms.reserve(world_transforms.size());
+  for (const QMat4 &transform : world_transforms) {
+    prepared->transforms.push_back(make_transform(transform));
+  }
+  return prepared;
+}
+
+bool MeshRenderableFactory::validate_explicit_instances(
+    const MeshRenderableProxy &proxy,
+    const ExplicitInstanceUpdate &prepared) const {
+  if (!initialized() || proxy.instance_buffer == nullptr || !proxy.entity ||
+      prepared.transforms.empty() ||
+      prepared.transforms.size() > proxy.instance_buffer->getInstanceCount()) {
+    return false;
+  }
+  const auto &renderables = engine_->getRenderableManager();
+  const auto renderable = renderables.getInstance(proxy.entity);
+  return renderable && renderables.getInstanceCount(renderable) ==
+                           prepared.transforms.size();
+}
+
+bool MeshRenderableFactory::update_explicit_instances_prepared(
+    const MeshRenderableProxy &proxy,
+    const ExplicitInstanceUpdate &prepared,
+    const RenderInstanceBounds &world_bounds) {
+  QDR_PROFILE_FUNCTION();
+  if (!validate_explicit_instances(proxy, prepared)) {
+    return false;
+  }
+  auto &renderables = engine_->getRenderableManager();
+  const auto renderable = renderables.getInstance(proxy.entity);
+  proxy.instance_buffer->setLocalTransforms(prepared.transforms.data(),
+                                            prepared.transforms.size());
   renderables.setAxisAlignedBoundingBox(renderable,
                                         filament_bounds(world_bounds));
   return true;

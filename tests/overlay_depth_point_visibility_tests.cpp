@@ -235,6 +235,150 @@ TEST(OverlayDepthPointVisibilityTests,
 }
 
 TEST(OverlayDepthPointVisibilityTests,
+     SelectionParticipationRetainsRemainingObjectAcceleration) {
+  ViewportOverlayFrame frame;
+  for (int object_id = 7; object_id < 10; ++object_id) {
+    append_visibility_box(frame, object_id);
+  }
+  OverlayDepthStampPointVisibilityFilter visibility;
+  const auto camera = point_visibility_camera();
+  const auto evaluate = [&] {
+    return visibility.evaluate(frame, OverlayRenderableBuilder::frame_signatures(frame),
+                               camera, false);
+  };
+  ASSERT_EQ(evaluate().size(), 18u);
+  EXPECT_EQ(visibility.stats().object_build_count, 3u);
+
+  // A replacement frame owns different storage and drops one participant.
+  auto replacement = frame;
+  std::erase_if(replacement.triangles, [](const auto &triangle) {
+    return triangle.element.object_id == 8;
+  });
+  std::erase_if(replacement.points, [](const auto &point) {
+    return point.element.object_id == 8;
+  });
+  frame = std::move(replacement);
+  const auto subset = evaluate();
+  ASSERT_EQ(subset.size(), 12u);
+  EXPECT_EQ(visibility.stats().object_count, 2u);
+  EXPECT_EQ(visibility.stats().triangle_count, 24u);
+  EXPECT_EQ(visibility.stats().object_build_count, 3u);
+  EXPECT_EQ(visibility.stats().object_reuse_count, 2u);
+  for (std::size_t index = 0u; index < subset.size(); ++index) {
+    EXPECT_EQ(subset[index], index % 2u == 0u ? 1u : 0u);
+  }
+
+  // A removed object has no owner lifetime in the frame. Returning under the
+  // same ID builds its current geometry instead of reviving a historical BVH.
+  append_visibility_box(frame, 8, {}, true);
+  const auto returned = evaluate();
+  ASSERT_EQ(returned.size(), 18u);
+  EXPECT_EQ(visibility.stats().object_count, 3u);
+  EXPECT_EQ(visibility.stats().object_build_count, 4u);
+  EXPECT_EQ(visibility.stats().object_reuse_count, 4u);
+  EXPECT_TRUE(std::ranges::all_of(returned.subspan(12u), [](std::uint8_t flag) {
+    return flag != 0u;
+  }));
+
+  frame.triangles.clear();
+  const auto removed = evaluate();
+  EXPECT_EQ(visibility.stats().object_count, 0u);
+  EXPECT_EQ(visibility.stats().triangle_count, 0u);
+  EXPECT_EQ(visibility.stats().object_build_count, 4u);
+  EXPECT_TRUE(std::ranges::all_of(removed, [](std::uint8_t flag) {
+    return flag != 0u;
+  }));
+}
+
+TEST(OverlayDepthPointVisibilityTests,
+     AppearanceChangesReusePointQueriesWithEquivalentExtents) {
+  ViewportOverlayFrame frame;
+  append_visibility_box(frame, 7);
+  OverlayDepthStampPointVisibilityFilter visibility;
+  const auto camera = point_visibility_camera();
+  const auto evaluate = [&] {
+    return visibility.evaluate(frame, OverlayRenderableBuilder::frame_signatures(frame),
+                               camera);
+  };
+  const auto original = evaluate();
+  const std::vector<std::uint8_t> expected(original.begin(), original.end());
+  const auto initial = visibility.stats();
+  for (auto &point : frame.points) {
+    point.color = rgba8(32u, 80u, 255u);
+    point.style_role = ViewportOverlayStyleRole::ActiveSelectedVertex;
+    point.source = ViewportOverlaySource::ComponentSelection;
+    point.layer = point.layer == ViewportOverlayLayer::SelectedVertex
+        ? ViewportOverlayLayer::UnselectedVertex : ViewportOverlayLayer::SelectedVertex;
+  }
+  for (auto &triangle : frame.triangles) {
+    triangle.color = rgba8(80u, 90u, 100u);
+    triangle.style_role = ViewportOverlayStyleRole::SelectedSourceWire;
+  }
+  const auto recolored = evaluate();
+  EXPECT_TRUE(std::ranges::equal(recolored, expected));
+  EXPECT_EQ(visibility.stats().query_batch_count, initial.query_batch_count);
+  EXPECT_EQ(visibility.stats().ray_query_count, initial.ray_query_count);
+  EXPECT_EQ(visibility.stats().object_build_count, initial.object_build_count);
+
+  frame.points[1u].size_pixels += 4.0f;
+  (void)evaluate();
+  EXPECT_EQ(visibility.stats().query_batch_count, initial.query_batch_count + 1u);
+  frame.points[1u].outline_growth_pixels = 8.0f;
+  (void)evaluate();
+  EXPECT_EQ(visibility.stats().query_batch_count, initial.query_batch_count + 2u);
+  frame.points[1u].position.z = -0.5f;
+  EXPECT_EQ(evaluate()[1u], 1u);
+  EXPECT_EQ(visibility.stats().query_batch_count, initial.query_batch_count + 3u);
+  frame.points[1u].position.z = -3.0f;
+  EXPECT_EQ(evaluate()[1u], 0u);
+  frame.points[1u].layer = ViewportOverlayLayer::ToolHandle;
+  EXPECT_EQ(evaluate()[1u], 1u);
+  EXPECT_EQ(visibility.stats().object_build_count, initial.object_build_count);
+}
+
+TEST(OverlayDepthPointVisibilityTests,
+     GeometryPreviewRebuildsOnlyChangedObjectsAndRefreshesBindings) {
+  ViewportOverlayFrame frame;
+  append_visibility_box(frame, 7);
+  append_visibility_box(frame, 8);
+  OverlayDepthStampPointVisibilityFilter visibility;
+  const auto camera = point_visibility_camera();
+  const auto evaluate = [&] {
+    return visibility.evaluate(frame, OverlayRenderableBuilder::frame_signatures(frame),
+                               camera, false);
+  };
+  EXPECT_EQ(evaluate()[1u], 0u);
+  EXPECT_EQ(visibility.stats().object_build_count, 2u);
+  for (auto &triangle : frame.triangles) {
+    if (triangle.element.object_id != 7) continue;
+    triangle.a.x += 10.0f;
+    triangle.b.x += 10.0f;
+    triangle.c.x += 10.0f;
+  }
+  const auto moved = evaluate();
+  EXPECT_EQ(moved[1u], 1u);
+  EXPECT_EQ(moved[7u], 0u);
+  EXPECT_EQ(visibility.stats().object_build_count, 3u);
+  EXPECT_EQ(visibility.stats().object_reuse_count, 1u);
+  frame.points[1u].element.object_id = 8;
+  EXPECT_EQ(evaluate()[1u], 0u);
+  EXPECT_EQ(visibility.stats().object_build_count, 3u);
+  for (auto &triangle : frame.triangles) {
+    if (triangle.element.object_id == 8) std::swap(triangle.b, triangle.c);
+  }
+  const auto inverted = evaluate();
+  EXPECT_EQ(inverted[1u], 1u);
+  EXPECT_EQ(inverted[7u], 1u);
+  EXPECT_EQ(visibility.stats().object_build_count, 4u);
+  EXPECT_EQ(visibility.stats().object_reuse_count, 2u);
+
+  OverlayDepthStampPointVisibilityFilter fresh;
+  EXPECT_TRUE(std::ranges::equal(inverted,
+      fresh.evaluate(frame, OverlayRenderableBuilder::frame_signatures(frame),
+                     camera, false)));
+}
+
+TEST(OverlayDepthPointVisibilityTests,
      RetainedProxySubmissionBuildsAccelerationOnceAcrossPointLayers) {
   PointVisibilityCacheHarness harness;
   ASSERT_TRUE(harness.initialize());
@@ -243,13 +387,14 @@ TEST(OverlayDepthPointVisibilityTests,
   auto camera = point_visibility_camera();
   auto &cache = harness.cache();
   ASSERT_TRUE(cache.set_overlay_frame(frame, camera));
-  EXPECT_EQ(cache.stats(0u).proxy_count, 6u);
+  // Selected/unselected passes share one proxy; hover keeps two pass proxies.
+  EXPECT_EQ(cache.stats(0u).proxy_count, 3u);
   EXPECT_EQ(cache.stats(0u).point_visibility.build_count, 1u);
   const auto retained_geometry = cache.stats(0u).point_geometry_update_count;
   for (int step = 0; step < 8; ++step) {
     camera.eye.x += 0.1f;
     EXPECT_TRUE(cache.update_overlay_camera(0u, kViewportOverlayLayerMask, camera));
-    EXPECT_EQ(cache.stats(0u).proxy_count, 6u);
+    EXPECT_EQ(cache.stats(0u).proxy_count, 3u);
     EXPECT_EQ(cache.stats(0u).point_visibility.build_count, 1u);
     EXPECT_EQ(cache.stats(0u).point_geometry_update_count, retained_geometry);
     EXPECT_EQ(cache.stats(0u).point_position_upload_count, 0u);
@@ -300,7 +445,7 @@ TEST(OverlayDepthPointVisibilityTests,
   frame.triangles.clear();
   EXPECT_TRUE(cache.set_overlay_frame(frame, camera));
   EXPECT_EQ(cache.stats(0u).point_visibility.triangle_count, 0u);
-  EXPECT_EQ(cache.stats(0u).proxy_count, 6u);
+  EXPECT_EQ(cache.stats(0u).proxy_count, 3u);
   cache.clear_slot(0u);
   EXPECT_EQ(cache.stats(0u).proxy_count, 0u);
 }
@@ -359,8 +504,8 @@ TEST(OverlayDepthPointVisibilityTests, CameraAndOccluderChangesRetainPointGeomet
   auto &cache = harness.cache();
   ASSERT_TRUE(cache.set_overlay_frame(frame, camera));
   const auto original = cache.stats(0u);
-  EXPECT_EQ(original.point_vertex_count, 48u);
-  EXPECT_EQ(original.visible_point_vertex_count, 24u);
+  EXPECT_EQ(original.point_vertex_count, 32u);
+  EXPECT_EQ(original.visible_point_vertex_count, 16u);
   camera.eye = {0.0f, 0.0f, -4.0f};
   camera.forward = {0.0f, 0.0f, 1.0f};
   ASSERT_TRUE(cache.update_overlay_camera(0u, kViewportOverlayLayerMask, camera));
@@ -368,14 +513,14 @@ TEST(OverlayDepthPointVisibilityTests, CameraAndOccluderChangesRetainPointGeomet
   EXPECT_EQ(reversed.point_geometry_update_count, original.point_geometry_update_count);
   EXPECT_EQ(reversed.point_position_upload_count, 0u);
   EXPECT_EQ(reversed.point_vertex_count, original.point_vertex_count);
-  EXPECT_EQ(reversed.visible_point_vertex_count, 24u);
+  EXPECT_EQ(reversed.visible_point_vertex_count, 16u);
   EXPECT_GT(reversed.point_visibility_upload_count, original.point_visibility_upload_count);
   EXPECT_EQ(reversed.point_visibility.build_count, 1u);
 
   frame.triangles.clear();
   ASSERT_TRUE(cache.set_overlay_frame(frame, camera));
   const auto no_occluder = cache.stats(0u);
-  EXPECT_EQ(no_occluder.visible_point_vertex_count, 48u);
+  EXPECT_EQ(no_occluder.visible_point_vertex_count, 32u);
   EXPECT_EQ(no_occluder.point_geometry_update_count, original.point_geometry_update_count);
   EXPECT_EQ(no_occluder.point_position_upload_count, 0u);
   EXPECT_GT(no_occluder.point_visibility_upload_count, reversed.point_visibility_upload_count);
@@ -625,8 +770,8 @@ TEST(OverlayDepthPointVisibilityTests,
   auto camera = point_visibility_camera();
   auto &cache = harness.cache();
   ASSERT_TRUE(cache.set_overlay_frame(frame, camera));
-  constexpr std::size_t kAllPointVertices = 48u;
-  constexpr std::size_t kStrictPointVertices = 24u;
+  constexpr std::size_t kAllPointVertices = 32u;
+  constexpr std::size_t kStrictPointVertices = 16u;
   ASSERT_EQ(cache.stats(0u).point_vertex_count, kAllPointVertices);
   ASSERT_EQ(cache.stats(0u).point_visibility.viewport_skip_count, 6u);
   ASSERT_EQ(cache.stats(0u).point_visibility.ray_query_count, 0u);

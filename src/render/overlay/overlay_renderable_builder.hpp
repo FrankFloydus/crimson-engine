@@ -23,7 +23,11 @@ namespace quader {
 
 /// Reports retained source-face acceleration work independently of camera queries.
 struct OverlayDepthStampPointVisibilityStats {
+  /// Source-frame reconciliations, including appearance-only source changes.
   std::uint64_t build_count = 0u;
+  /// Actual per-object acceleration builds and exact unchanged geometry reuse.
+  std::uint64_t object_build_count = 0u;
+  std::uint64_t object_reuse_count = 0u;
   std::uint64_t viewport_skip_count = 0u;
   std::uint64_t ray_query_count = 0u;
   std::uint64_t query_batch_count = 0u;
@@ -209,6 +213,10 @@ public:
   static OverlayRenderState make_state(ViewportOverlayLayer layer,
                                        ViewportOverlayGeometryKind kind,
                                        std::uint16_t blend_order);
+  /// Shared presentation for expanded and retained component wire geometry.
+  static OverlayEditWireBatch edit_wire_presentation(
+      ViewportOverlayLayer layer, float width_pixels,
+      const ViewportOverlayCamera &camera, std::uint16_t blend_order);
 
   static OverlayLayerBuildPlan
   build_layer(const ViewportOverlayFrame &frame,

@@ -166,35 +166,84 @@ struct OverlayDepthStampPointVisibilityFilter::Impl final {
     const StampSet *stamps = nullptr;
   };
 
-  void rebuild(const ViewportOverlayFrame &frame) {
+  /// Stages only changed objects; accepted BVHs own their triangles across frames.
+  struct SourceCandidate final {
+    const StampSet *previous = nullptr;
+    std::size_t triangle_count = 0u;
+    bool matches_previous = true;
+    std::unique_ptr<StampSet> replacement;
+  };
+
+  [[nodiscard]] static bool same_point(quader_geometry::QVec3f left,
+                                       QVec3 right) {
+    return left.x == right.x && left.y == right.y && left.z == right.z;
+  }
+
+  void reconcile_sources(const ViewportOverlayFrame &frame) {
     QDR_PROFILE_FUNCTION();
-    stamps_by_object.clear();
-    query_points.clear();
-    query_frame_valid = false;
-    visibility_valid = false;
-    work.object_count = 0u;
-    work.triangle_count = 0u;
-    ++work.build_count;
+    std::unordered_map<int, SourceCandidate> candidates;
+    candidates.reserve(stamps_by_object.size());
     for (const ViewportOverlayTriangle &triangle : frame.triangles) {
       if (triangle.layer != ViewportOverlayLayer::SourceWireDepthStamp ||
           triangle.element.object_id < 0) {
         continue;
       }
-      StampSet &set = stamps_by_object[triangle.element.object_id];
-      set.triangles.push_back({neutral_point(triangle.a),
-                               neutral_point(triangle.b),
-                               neutral_point(triangle.c)});
-      set.centroid += triangle.a + triangle.b + triangle.c;
-      set.vertex_count += 3u;
-      ++work.triangle_count;
+      auto [found, inserted] = candidates.try_emplace(triangle.element.object_id);
+      SourceCandidate &candidate = found->second;
+      if (inserted) {
+        const auto previous = stamps_by_object.find(triangle.element.object_id);
+        if (previous != stamps_by_object.end()) {
+          candidate.previous = previous->second.get();
+        }
+      }
+      if (candidate.matches_previous) {
+        if (candidate.previous == nullptr ||
+            candidate.triangle_count >= candidate.previous->triangles.size()) {
+          candidate.matches_previous = false;
+        } else {
+          const auto &previous =
+              candidate.previous->triangles[candidate.triangle_count];
+          candidate.matches_previous = same_point(previous.a, triangle.a) &&
+              same_point(previous.b, triangle.b) && same_point(previous.c, triangle.c);
+        }
+      }
+      ++candidate.triangle_count;
     }
 
-    work.object_count = stamps_by_object.size();
-    for (auto &[object_id, set] : stamps_by_object) {
+    std::size_t object_build_count = 0u;
+    std::size_t triangle_count = 0u;
+    for (auto &[object_id, candidate] : candidates) {
       (void)object_id;
-      if (set.vertex_count == 0u) {
-        continue;
+      triangle_count += candidate.triangle_count;
+      candidate.matches_previous = candidate.matches_previous &&
+          candidate.previous != nullptr &&
+          candidate.triangle_count == candidate.previous->triangles.size();
+      if (!candidate.matches_previous) {
+        candidate.replacement = std::make_unique<StampSet>();
+        candidate.replacement->triangles.reserve(candidate.triangle_count);
+        ++object_build_count;
       }
+    }
+    if (object_build_count != 0u) {
+      for (const ViewportOverlayTriangle &triangle : frame.triangles) {
+        if (triangle.layer != ViewportOverlayLayer::SourceWireDepthStamp ||
+            triangle.element.object_id < 0) {
+          continue;
+        }
+        SourceCandidate &candidate = candidates.at(triangle.element.object_id);
+        if (!candidate.replacement) continue;
+        StampSet &set = *candidate.replacement;
+        set.triangles.push_back({neutral_point(triangle.a),
+                                 neutral_point(triangle.b),
+                                 neutral_point(triangle.c)});
+        set.centroid += triangle.a + triangle.b + triangle.c;
+        set.vertex_count += 3u;
+      }
+    }
+    for (auto &[object_id, candidate] : candidates) {
+      (void)object_id;
+      if (!candidate.replacement) continue;
+      StampSet &set = *candidate.replacement;
       set.centroid =
           set.centroid / static_cast<float>(set.vertex_count);
       set.inside_out = inside_out_score(set) < -kOverlayVisibilityEpsilon;
@@ -203,6 +252,30 @@ struct OverlayDepthStampPointVisibilityFilter::Impl final {
       }
       set.traversal_scratch.reserve(set.bvh.required_traversal_capacity());
     }
+
+    const bool sources_changed = object_build_count != 0u ||
+        candidates.size() != stamps_by_object.size();
+    if (sources_changed) {
+      // Query bindings never outlive a replaced or removed source. Objects
+      // absent from this frame are evicted, without retaining historical BVHs.
+      query_points.clear();
+      query_frame_valid = false;
+      visibility_valid = false;
+      std::erase_if(stamps_by_object, [&](const auto &entry) {
+        return !candidates.contains(entry.first);
+      });
+      for (auto &[object_id, candidate] : candidates) {
+        if (candidate.replacement) {
+          stamps_by_object.insert_or_assign(object_id,
+                                            std::move(candidate.replacement));
+        }
+      }
+    }
+    ++work.build_count;
+    work.object_build_count += object_build_count;
+    work.object_reuse_count += candidates.size() - object_build_count;
+    work.object_count = stamps_by_object.size();
+    work.triangle_count = triangle_count;
   }
 
   void resolve_query_points(const ViewportOverlayFrame &frame,
@@ -211,12 +284,14 @@ struct OverlayDepthStampPointVisibilityFilter::Impl final {
     RenderSignatureBuilder point_signature;
     point_signature.add_size(frame.points.size());
     for (const auto &point : frame.points) {
-      point_signature.add_value(static_cast<std::uint64_t>(point.layer));
-    }
-    for (std::size_t index = 0u; index < signatures.point_counts.size(); ++index) {
-      if (signatures.point_counts[index] != 0u) {
-        point_signature.add_value(signatures.layer_signatures[index]);
-      }
+      const bool eligible = overlay_layer_uses_depth_stamp_point_visibility(point.layer);
+      point_signature.add_bool(eligible);
+      if (!eligible) continue;
+      // Color, style and equivalent selection layers do not change a center
+      // ray. Effective extent still controls conservative viewport skipping.
+      point_signature.add_value(static_cast<std::uint64_t>(point.element.object_id))
+          .add_vec3(point.position)
+          .add_float(point_radius(point));
     }
     query_frame_signature = signatures.frame_signature;
     if (query_frame_valid && query_point_signature == point_signature.value()) return;
@@ -227,8 +302,8 @@ struct OverlayDepthStampPointVisibilityFilter::Impl final {
       const auto &point = frame.points[index];
       if (!overlay_layer_uses_depth_stamp_point_visibility(point.layer)) continue;
       const auto found = stamps_by_object.find(point.element.object_id);
-      if (found == stamps_by_object.end() || found->second.inside_out) continue;
-      query_points.push_back({.frame_index = index, .stamps = &found->second});
+      if (found == stamps_by_object.end() || found->second->inside_out) continue;
+      query_points.push_back({.frame_index = index, .stamps = found->second.get()});
     }
     query_point_signature = point_signature.value();
     query_frame_valid = true;
@@ -301,6 +376,16 @@ struct OverlayDepthStampPointVisibilityFilter::Impl final {
         traversal_scratch);
   }
 
+  [[nodiscard]] static float point_radius(const ViewportOverlayPoint &point) {
+    const float size = viewport_overlay_point_size_pixels(
+        point.layer, point.size_pixels);
+    const float outline_growth = point.outline_growth_pixels.value_or(
+        viewport_overlay_point_outline_growth_pixels(point.layer));
+    // Include the larger outline quad and the shader's half-pixel circular
+    // coverage, plus one physical pixel for conservative raster rounding.
+    return std::max(1.0f, size + std::max(0.0f, outline_growth)) * 0.5f + 1.5f;
+  }
+
   [[nodiscard]] bool outside_viewport(const ViewportOverlayPoint &point) const {
     if (!projector.has_value()) {
       return false;
@@ -314,20 +399,13 @@ struct OverlayDepthStampPointVisibilityFilter::Impl final {
     if (!projected.valid) {
       return false;
     }
-    const float size = viewport_overlay_point_size_pixels(
-        point.layer, point.size_pixels);
-    const float outline_growth = point.outline_growth_pixels.value_or(
-        viewport_overlay_point_outline_growth_pixels(point.layer));
-    // Include the larger outline quad and the shader's half-pixel circular
-    // coverage, plus one physical pixel for conservative raster rounding.
-    const float radius =
-        std::max(1.0f, size + std::max(0.0f, outline_growth)) * 0.5f + 1.5f;
+    const float radius = point_radius(point);
     return projected.pixel.x < -radius || projected.pixel.y < -radius ||
            projected.pixel.x > camera.viewport_size.x + radius ||
            projected.pixel.y > camera.viewport_size.y + radius;
   }
 
-  std::unordered_map<int, StampSet> stamps_by_object;
+  std::unordered_map<int, std::unique_ptr<StampSet>> stamps_by_object;
   ViewportOverlayCamera camera;
   std::optional<OverlayCameraProjector> projector;
   OverlayDepthStampPointVisibilityStats work;
@@ -360,7 +438,7 @@ void OverlayDepthStampPointVisibilityFilter::prepare(
   const auto source_signature = signatures.layer_signatures[
       overlay_layer_index(ViewportOverlayLayer::SourceWireDepthStamp)];
   if (!impl_->source_valid || impl_->source_signature != source_signature) {
-    impl_->rebuild(frame);
+    impl_->reconcile_sources(frame);
     impl_->source_signature = source_signature;
     impl_->source_valid = true;
   }
@@ -396,9 +474,9 @@ bool OverlayDepthStampPointVisibilityFilter::point_visible(
     return true;
   }
   const auto found = impl_->stamps_by_object.find(point.element.object_id);
-  return found == impl_->stamps_by_object.end() || found->second.inside_out ||
-         Impl::point_visible(point.position, impl_->camera, found->second,
-                             impl_->work, found->second.traversal_scratch);
+  return found == impl_->stamps_by_object.end() || found->second->inside_out ||
+         Impl::point_visible(point.position, impl_->camera, *found->second,
+                             impl_->work, found->second->traversal_scratch);
 }
 
 std::span<const std::uint8_t> OverlayDepthStampPointVisibilityFilter::evaluate(
@@ -576,6 +654,18 @@ OverlayRenderState OverlayRenderableBuilder::make_state(
       layer, kind, blend_order, viewport_overlay_depth_mode(layer, kind));
 }
 
+OverlayEditWireBatch OverlayRenderableBuilder::edit_wire_presentation(
+    ViewportOverlayLayer layer, float width_pixels,
+    const ViewportOverlayCamera &camera, std::uint16_t blend_order) {
+  const auto sanitized = OverlayCameraProjector::sanitized_camera(camera);
+  return {.state = make_state_with_depth_mode(layer, ViewportOverlayGeometryKind::Lines,
+              blend_order, ViewportOverlayDepthMode::DepthTested),
+          .width_pixels = width_pixels,
+          .near_plane = sanitized.near_plane,
+          .far_plane = sanitized.far_plane,
+          .orthographic_projection = sanitized.projection == ViewportOverlayProjection::Orthographic};
+}
+
 OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     const ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
     ViewportOverlayLayer layer, const OverlayFrameSignatures *signatures,
@@ -696,18 +786,9 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
         OverlayEditWireMesh mesh = OverlayLineMeshBuilder::build(
             batch_lines, camera, width_pixels, 0.0f);
         if (!mesh.empty()) {
-          plan.edit_wire_batches.push_back({
-              .mesh = std::move(mesh),
-              .state = make_state_with_depth_mode(
-                  layer, ViewportOverlayGeometryKind::Lines, blend_order++,
-                  ViewportOverlayDepthMode::DepthTested),
-              .width_pixels = width_pixels,
-              .near_plane = sanitized_camera.near_plane,
-              .far_plane = sanitized_camera.far_plane,
-              .orthographic_projection =
-                  sanitized_camera.projection ==
-                  ViewportOverlayProjection::Orthographic,
-          });
+          auto batch = edit_wire_presentation(layer, width_pixels, sanitized_camera, blend_order++);
+          batch.mesh = std::move(mesh);
+          plan.edit_wire_batches.push_back(std::move(batch));
         }
       }
     }

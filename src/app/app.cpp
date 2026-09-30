@@ -283,16 +283,13 @@ bool App::initialize(QApplication &application,
     return false;
   }
 
-  LOG_INFO("Initializing scene render bridge");
   render_system_.initialize_scene_render_bridge(render_bridge_,
                                                 executable_dir);
   project_material_resolver_ =
       std::make_unique<ProjectSessionRenderMaterialResolver>(project_session_);
   render_bridge_.set_project_material_resolver(
       project_material_resolver_.get());
-  LOG_INFO("Scene render bridge initialized");
 
-  LOG_INFO("Initializing Qt Widgets UI system");
   if (!ui_.initialize(render_system_, executable_dir)) {
     LOG_ERROR("Qt Widgets UI initialization failed");
     shutdown();
@@ -441,7 +438,6 @@ int App::run() {
   if (application_ == nullptr || !running_) {
     return 1;
   }
-  LOG_INFO("Entering Qt application event loop");
   frame_clock_.reset();
   frame_timer_->start(0);
   autosave_timer_->start();

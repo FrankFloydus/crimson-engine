@@ -8,6 +8,7 @@
 
 #include "diagnostics/profile.hpp"
 #include "render/material_binding_service.hpp"
+#include "render/texture_binding_service.hpp"
 #include "render/light_render_policy.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <bit>
 #include <cassert>
+#include <chrono>
 #include <numeric>
 #include <span>
 #include <thread>
@@ -27,6 +29,7 @@
 
 namespace quader {
 namespace {
+
 
 std::size_t
 preview_transform_count(const RenderToolPreviewMeshRecord &preview_mesh) {
@@ -71,26 +74,106 @@ std::span<const QVec3>
 preview_dynamic_positions(const RenderToolPreviewMeshRecord &preview_mesh) {
   return preview_mesh.dynamic_position_payload
              ? std::span<const QVec3>(*preview_mesh.dynamic_position_payload)
+             : preview_mesh.geometry_projection && preview_mesh.geometry_projection->positions
+             ? std::span<const QVec3>(*preview_mesh.geometry_projection->positions)
              : std::span<const QVec3>{};
+}
+
+std::shared_ptr<const MeshGeometryPayload> preview_geometry_owner(
+    const RenderToolPreviewMeshRecord &preview_mesh) {
+  return preview_mesh.geometry_projection ? preview_mesh.geometry_projection->source_geometry
+                                           : preview_mesh.mesh.geometry_payload();
+}
+
+std::shared_ptr<const std::vector<QVec3>> preview_position_owner(
+    const RenderToolPreviewMeshRecord &preview_mesh) {
+  return preview_mesh.dynamic_position_payload ? preview_mesh.dynamic_position_payload
+      : preview_mesh.geometry_projection ? preview_mesh.geometry_projection->positions : nullptr;
+}
+
+RenderMeshAssetSnapshot preview_mesh_snapshot(const RenderToolPreviewMeshRecord &preview_mesh) {
+  return render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh, preview_mesh.geometry_projection);
 }
 
 /// Pins each CPU job's immutable geometry and producer-owned position stream
 /// until every worker has joined and the render thread consumes its result.
 struct PreparedPreviewGeometry final {
   std::size_t submission_index = 0u;
+  std::size_t canonical_index = 0u;
   RenderMeshAssetSnapshot mesh;
   std::shared_ptr<const std::vector<QVec3>> position_owner;
   RenderInstanceBounds bounds;
   std::shared_ptr<MeshRenderableFactory::DynamicGeometryUpdate> upload;
 };
 
+bool same_vec3(QVec3 left, QVec3 right);
+bool same_geometry_payload(
+    const std::shared_ptr<const MeshGeometryPayload> &left,
+    const std::shared_ptr<const MeshGeometryPayload> &right,
+    bool include_positions);
+bool same_geometry_streams(
+    const std::shared_ptr<const MeshGeometryPayload> &left,
+    const std::shared_ptr<const MeshGeometryProjection> &left_projection,
+    const std::shared_ptr<const MeshGeometryPayload> &right,
+    const std::shared_ptr<const MeshGeometryProjection> &right_projection,
+    bool layout_only, bool include_positions);
+
 bool prepare_preview_geometry(std::vector<PreparedPreviewGeometry> &jobs,
-                              bool &parallel) {
+                              bool &parallel, std::size_t &canonical_count) {
   QDR_PROFILE_SCOPE("Tool preview prepare dynamic geometry uploads");
+  std::vector<std::size_t> canonical_indices;
+  {
+    QDR_PROFILE_SCOPE("Tool preview group identical dynamic inputs");
+    std::unordered_map<std::uint64_t, std::vector<std::size_t>> candidates;
+    std::unordered_map<const std::vector<QVec3> *, std::uint64_t> position_signatures;
+    canonical_indices.reserve(jobs.size());
+    candidates.reserve(jobs.size());
+    position_signatures.reserve(jobs.size());
+    for (std::size_t index = 0u; index < jobs.size(); ++index) {
+      auto &job = jobs[index];
+      RenderSignatureBuilder signature;
+      signature.add_value(job.mesh.geometry_content_id.value)
+          .add_value(reinterpret_cast<std::uintptr_t>(job.mesh.geometry_projection.get()))
+          .add_bool(job.position_owner != nullptr);
+      if (job.position_owner) {
+        auto [found, inserted] = position_signatures.try_emplace(job.position_owner.get(), 0u);
+        if (inserted) {
+          RenderSignatureBuilder positions;
+          positions.add_size(job.position_owner->size());
+          for (const QVec3 position : *job.position_owner) positions.add_vec3(position);
+          found->second = positions.value();
+        }
+        signature.add_value(found->second);
+      }
+      auto &bucket = candidates[signature.value()];
+      job.canonical_index = index;
+      for (const std::size_t candidate_index : bucket) {
+        const auto &candidate = jobs[candidate_index];
+        if (!job.mesh.geometry_payload ||
+            !same_geometry_streams(job.mesh.geometry_payload, job.mesh.geometry_projection,
+                                   candidate.mesh.geometry_payload, candidate.mesh.geometry_projection,
+                                   false, true)) continue;
+        const bool same_positions = job.position_owner == candidate.position_owner ||
+            (job.position_owner && candidate.position_owner &&
+             job.position_owner->size() == candidate.position_owner->size() &&
+             std::equal(job.position_owner->begin(), job.position_owner->end(),
+                        candidate.position_owner->begin(), same_vec3));
+        if (same_positions) {
+          job.canonical_index = candidate_index;
+          break;
+        }
+      }
+      if (job.canonical_index == index) {
+        canonical_indices.push_back(index);
+        bucket.push_back(index);
+      }
+    }
+  }
+  canonical_count = canonical_indices.size();
   constexpr std::size_t kParallelThreshold = 32u;
   constexpr std::size_t kMaximumWorkers = 8u;
-  const std::size_t worker_count = jobs.size() < kParallelThreshold ? 1u :
-      std::min(jobs.size(), std::clamp<std::size_t>(
+  const std::size_t worker_count = canonical_count < kParallelThreshold ? 1u :
+      std::min(canonical_count, std::clamp<std::size_t>(
           std::thread::hardware_concurrency(), 1u, kMaximumWorkers));
   parallel = worker_count > 1u;
   const auto prepare = [&](std::size_t index) {
@@ -104,7 +187,7 @@ bool prepare_preview_geometry(std::vector<PreparedPreviewGeometry> &jobs,
   };
   try {
     if (!parallel) {
-      for (std::size_t index = 0u; index < jobs.size(); ++index) prepare(index);
+      for (const std::size_t index : canonical_indices) prepare(index);
     } else {
       std::atomic<std::size_t> next_job{0u};
       std::vector<std::jthread> workers;
@@ -112,8 +195,9 @@ bool prepare_preview_geometry(std::vector<PreparedPreviewGeometry> &jobs,
       for (std::size_t worker = 0u; worker < worker_count; ++worker) {
         workers.emplace_back([&] {
           for (;;) {
-            const std::size_t index = next_job.fetch_add(1u, std::memory_order_relaxed);
-            if (index >= jobs.size()) return;
+            const std::size_t next = next_job.fetch_add(1u, std::memory_order_relaxed);
+            if (next >= canonical_indices.size()) return;
+            const std::size_t index = canonical_indices[next];
             try {
               prepare(index);
             } catch (...) {
@@ -123,6 +207,19 @@ bool prepare_preview_geometry(std::vector<PreparedPreviewGeometry> &jobs,
         });
       }
       // jthread destruction joins before the immutable results are inspected.
+    }
+    {
+      QDR_PROFILE_SCOPE("Tool preview reuse prepared dynamic uploads");
+      for (std::size_t index = 0u; index < jobs.size(); ++index) {
+        auto &job = jobs[index];
+        if (job.canonical_index == index) continue;
+        const auto &canonical = jobs[job.canonical_index];
+        if (!canonical.upload) return false;
+        job.upload = MeshRenderableFactory::prepare_dynamic_geometry_update(
+            job.mesh, job.position_owner ? std::span<const QVec3>(*job.position_owner)
+                                         : std::span<const QVec3>{}, canonical.upload);
+        job.bounds = canonical.bounds;
+      }
     }
   } catch (...) {
     return false;
@@ -176,8 +273,22 @@ bool preview_texture_mappings_equal(
 
 bool preview_uses_explicit_instances(
     const RenderToolPreviewMeshRecord &preview_mesh) {
-  return !preview_mesh.dynamic_positions &&
-         preview_transform_count(preview_mesh) > 1u;
+  return !preview_mesh.dynamic_positions && preview_transform_count(preview_mesh) > 1u;
+}
+
+bool same_preview_material_payload(const RenderMaterialBindingSnapshot &left,
+                                   const RenderMaterialBindingSnapshot &right) {
+  if (left.present != right.present || left.component != right.component ||
+      left.material_slots.size() != right.material_slots.size() ||
+      !render_material_payloads_equal(&left.primary_material, &right.primary_material)) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < left.material_slots.size(); ++index) {
+    if (left.material_slots[index].first != right.material_slots[index].first ||
+        !render_material_payloads_equal(&left.material_slots[index].second,
+                                       &right.material_slots[index].second)) return false;
+  }
+  return true;
 }
 
 bool same_geometry_payload(
@@ -200,7 +311,8 @@ bool same_geometry_payload(
         !same_vec3(a.normal, b.normal) ||
         !same_float_bits(a.uv.x, b.uv.x) ||
         !same_float_bits(a.uv.y, b.uv.y) || a.rgba != b.rgba ||
-        a.uv_carrier != b.uv_carrier ||
+        !std::equal(a.uv_carrier.begin(), a.uv_carrier.end(),
+                    b.uv_carrier.begin(), same_float_bits) ||
         !same_vec3(a.uv_geometric_normal, b.uv_geometric_normal)) {
       return false;
     }
@@ -224,6 +336,45 @@ bool same_dynamic_geometry_layout(
         right->vertices[index].source_vertex_id) {
       return false;
     }
+  }
+  return true;
+}
+
+bool same_geometry_streams(
+    const std::shared_ptr<const MeshGeometryPayload> &left,
+    const std::shared_ptr<const MeshGeometryProjection> &left_projection,
+    const std::shared_ptr<const MeshGeometryPayload> &right,
+    const std::shared_ptr<const MeshGeometryProjection> &right_projection,
+    bool layout_only, bool include_positions) {
+  if (!left_projection && !right_projection) {
+    return layout_only ? same_dynamic_geometry_layout(left, right)
+                       : same_geometry_payload(left, right, include_positions);
+  }
+  if (left == right && left_projection == right_projection) return true;
+  if (!left || !right) return false;
+  const auto left_vertices = left_projection ? left_projection->vertices() : std::span<const MeshVertex>(left->vertices);
+  const auto right_vertices = right_projection ? right_projection->vertices() : std::span<const MeshVertex>(right->vertices);
+  const auto left_indices = left_projection ? left_projection->indices() : std::span<const std::uint32_t>(left->indices);
+  const auto right_indices = right_projection ? right_projection->indices() : std::span<const std::uint32_t>(right->indices);
+  if (left_vertices.size() != right_vertices.size() || left_indices.size() != right_indices.size() ||
+      left->primitives != right->primitives ||
+      (!layout_only && !std::equal(left_indices.begin(), left_indices.end(), right_indices.begin()))) return false;
+  for (std::size_t index = 0u; index < left_vertices.size(); ++index) {
+    const auto &a = left_vertices[index];
+    const auto &b = right_vertices[index];
+    if (a.source_vertex_id != b.source_vertex_id) return false;
+    if (layout_only) continue;
+    if (include_positions) {
+      const QVec3 left_position = left_projection && left_projection->positions && index < left_projection->positions->size()
+          ? (*left_projection->positions)[index] : a.position;
+      const QVec3 right_position = right_projection && right_projection->positions && index < right_projection->positions->size()
+          ? (*right_projection->positions)[index] : b.position;
+      if (!same_vec3(left_position, right_position)) return false;
+    }
+    if (!same_vec3(a.normal, b.normal) || !same_float_bits(a.uv.x, b.uv.x) ||
+        !same_float_bits(a.uv.y, b.uv.y) || a.rgba != b.rgba ||
+        !std::equal(a.uv_carrier.begin(), a.uv_carrier.end(), b.uv_carrier.begin(), same_float_bits) ||
+        !same_vec3(a.uv_geometric_normal, b.uv_geometric_normal)) return false;
   }
   return true;
 }
@@ -384,6 +535,56 @@ ToolPreviewRenderableCache::~ToolPreviewRenderableCache() {
   shutdown();
 }
 
+std::vector<RenderToolPreviewMeshRecord>
+ToolPreviewRenderableCache::build_dynamic_families(
+    const std::vector<RenderToolPreviewMeshRecord> &meshes) const {
+  QDR_PROFILE_SCOPE("Tool preview build dynamic GPU families");
+  std::vector<RenderToolPreviewMeshRecord> families;
+  std::unordered_map<std::uint64_t, std::vector<std::size_t>> buckets;
+  families.reserve(meshes.size());
+  buckets.reserve(meshes.size());
+  for (const auto &mesh : meshes) {
+    const auto positions = preview_dynamic_positions(mesh);
+    if (!positions.empty() && positions.size() != preview_mesh_snapshot(mesh).vertices.size()) return {};
+    RenderSignatureBuilder signature;
+    signature.add_value(mesh.geometry_projection
+        ? reinterpret_cast<std::uintptr_t>(mesh.geometry_projection.get()) : mesh.mesh.geometry_content_id().value)
+        .add_value(preview_material_signature(mesh)).add_bool(!positions.empty());
+    for (const QVec3 position : positions) signature.add_vec3(position);
+    auto &bucket = buckets[signature.value()];
+    std::size_t family_index = families.size();
+    for (const std::size_t candidate_index : bucket) {
+      const auto &candidate = families[candidate_index];
+      const auto candidate_positions = preview_dynamic_positions(candidate);
+      if (mesh.double_sided != candidate.double_sided ||
+          mesh.cast_shadows != candidate.cast_shadows ||
+          mesh.material_reference != candidate.material_reference ||
+          !same_geometry_streams(preview_geometry_owner(mesh), mesh.geometry_projection,
+                                preview_geometry_owner(candidate), candidate.geometry_projection, false, true) ||
+          positions.size() != candidate_positions.size() ||
+          !std::equal(positions.begin(), positions.end(), candidate_positions.begin(), same_vec3) ||
+          !same_preview_material_payload(mesh.material, candidate.material)) continue;
+      family_index = candidate_index;
+      break;
+    }
+    if (family_index == families.size()) {
+      families.push_back(mesh);
+      families.back().instance_transforms.clear();
+      families.back().instance_sampling_from_local.clear();
+      // Family slots use exact layout comparison; producer tokens remain local
+      // to logical records and cannot identify shared mutable GPU storage.
+      families.back().layout_key = 0u;
+      bucket.push_back(family_index);
+    }
+    auto &family = families[family_index];
+    for (std::size_t index = 0u; index < preview_transform_count(mesh); ++index) {
+      family.instance_transforms.push_back(preview_transform(mesh, index));
+      family.instance_sampling_from_local.push_back(preview_texture_mapping(mesh, index));
+    }
+  }
+  return families;
+}
+
 void ToolPreviewRenderableCache::initialize(
     MeshRenderableFactory &factory, MaterialBindingService &material_binding,
     std::size_t maximum_instances_per_chunk) {
@@ -406,52 +607,164 @@ void ToolPreviewRenderableCache::shutdown() {
 }
 
 ToolPreviewSubmissionResult ToolPreviewRenderableCache::set_meshes(
-    const std::vector<RenderToolPreviewMeshRecord> &meshes) {
+    const std::vector<RenderToolPreviewMeshRecord> &source_meshes) {
   QDR_PROFILE_FUNCTION();
   if (!factory_ || !factory_->initialized() || !material_binding_) {
     return ToolPreviewSubmissionResult::Failed;
   }
 
-  const std::uint64_t next_signature = preview_meshes_signature(meshes);
+  const std::uint64_t next_signature = preview_meshes_signature(source_meshes);
   // The aggregate hash is only a cheap rejection gate. Exact state, with
   // pointer-first geometry checks, prevents a collision from suppressing a
   // real submission while keeping repeated dense ticks O(group count).
   if (next_signature == mesh_signature_ &&
-      submitted_meshes_equal(submitted_meshes_, meshes)) {
+      submitted_meshes_equal(submitted_meshes_, source_meshes)) {
     return ToolPreviewSubmissionResult::Unchanged;
   }
 
-  if (meshes.empty()) {
+  try {
+    retired_generations_.reserve(retired_generations_.size() + 3u);
+  } catch (...) {
+    return ToolPreviewSubmissionResult::Failed;
+  }
+
+  if (source_meshes.empty()) {
     QDR_PROFILE_SCOPE("Tool preview retain current and warm generations");
     if (current_generation_) {
       hide_generation(*current_generation_);
+      if (current_generation_->dynamic_families) retire_generation(std::move(current_generation_));
     }
+    if (warm_generation_ && warm_generation_->dynamic_families) retire_generation(std::move(warm_generation_));
     mesh_signature_ = next_signature;
-    submitted_meshes_ = capture_submission(meshes);
+    submitted_meshes_ = capture_submission(source_meshes);
+    work_counters_.active_dynamic_geometry_families = 0u;
+    work_counters_.active_dynamic_geometry_participants = 0u;
+    work_counters_.ordinary_static_records = 0u;
+    work_counters_.ordinary_unknown_opacity_records = 0u;
+    work_counters_.ordinary_transparent_records = 0u;
+    work_counters_.ordinary_reflected_records = 0u;
+    work_counters_.inactive_dynamic_geometry_families = 0u;
+    QDR_PROFILE_PLOT("Quader preview dynamic GPU families", std::int64_t{0});
+    QDR_PROFILE_PLOT("Quader preview dynamic logical participants", std::int64_t{0});
+    QDR_PROFILE_PLOT("Quader retired preview proxies", static_cast<std::int64_t>(work_counters_.retired_proxy_count));
     return ToolPreviewSubmissionResult::Published;
   }
 
+  std::vector<RenderToolPreviewMeshRecord> eligible;
+  std::vector<RenderToolPreviewMeshRecord> ordinary;
+  std::vector<RenderToolPreviewMeshRecord> families;
+  std::vector<PreviewSubmissionState> submission;
+  ToolPreviewCacheWorkCounters fallback_counts;
+  std::size_t dynamic_family_count = 0u;
+  try {
+    submission = capture_submission(source_meshes);
+    eligible.reserve(source_meshes.size());
+    ordinary.reserve(source_meshes.size());
+    for (const auto &mesh : source_meshes) {
+      if (!mesh.renderable()) {
+        if (mesh.suppress_source) return ToolPreviewSubmissionResult::Failed;
+        continue;
+      }
+      const auto snapshot = preview_mesh_snapshot(mesh);
+      const auto positions = preview_dynamic_positions(mesh);
+      if ((preview_position_owner(mesh) && positions.size() != snapshot.vertices.size()) ||
+          (mesh.geometry_projection && (!mesh.geometry_projection->positions ||
+           mesh.geometry_projection->positions->size() != snapshot.vertices.size()))) {
+        return ToolPreviewSubmissionResult::Failed;
+      }
+      bool family_eligible = mesh.dynamic_positions;
+      if (!family_eligible) {
+        ++fallback_counts.ordinary_static_records;
+      } else {
+        // Only drawn slots matter. An unused alpha assignment cannot change
+        // the depth sorting requirements of this record's actual primitives.
+        MaterialOpacity opacity = MaterialOpacity::Opaque;
+        for (const auto primitive : coalesced_render_mesh_primitive_spans(snapshot)) {
+          const auto used_opacity = material_binding_->material_opacity(
+              mesh.material.material_for_slot(primitive.material_slot));
+          if (used_opacity == MaterialOpacity::Transparent) {
+            opacity = used_opacity;
+            break;
+          }
+          if (used_opacity == MaterialOpacity::Unknown) opacity = used_opacity;
+        }
+        if (opacity != MaterialOpacity::Opaque) {
+          family_eligible = false;
+          if (opacity == MaterialOpacity::Transparent) ++fallback_counts.ordinary_transparent_records;
+          else ++fallback_counts.ordinary_unknown_opacity_records;
+        } else {
+          // Instance matrices do not control Filament's entity winding.
+          for (std::size_t index = 0u; index < preview_transform_count(mesh); ++index) {
+            const auto &transform = preview_transform(mesh, index);
+            const QVec3 first{transform.values[0], transform.values[1], transform.values[2]};
+            const QVec3 second{transform.values[4], transform.values[5], transform.values[6]};
+            const QVec3 third{transform.values[8], transform.values[9], transform.values[10]};
+            if (!(dot(cross(first, second), third) > 0.0f)) {
+              family_eligible = false;
+              ++fallback_counts.ordinary_reflected_records;
+              break;
+            }
+          }
+        }
+      }
+      (family_eligible ? eligible : ordinary).push_back(mesh);
+    }
+    families = build_dynamic_families(eligible);
+    if (!eligible.empty() && families.empty()) return ToolPreviewSubmissionResult::Failed;
+    dynamic_family_count = families.size();
+    families.insert(families.end(), ordinary.begin(), ordinary.end());
+  } catch (...) {
+    return ToolPreviewSubmissionResult::Failed;
+  }
+  const bool dynamic_families = dynamic_family_count != 0u;
+  const auto &meshes = dynamic_families ? families : source_meshes;
+  const auto publish_submission = [&] {
+    submitted_meshes_ = std::move(submission);
+    work_counters_.active_dynamic_geometry_families = dynamic_family_count;
+    work_counters_.active_dynamic_geometry_participants = eligible.size();
+    work_counters_.ordinary_static_records = fallback_counts.ordinary_static_records;
+    work_counters_.ordinary_unknown_opacity_records = fallback_counts.ordinary_unknown_opacity_records;
+    work_counters_.ordinary_transparent_records = fallback_counts.ordinary_transparent_records;
+    work_counters_.ordinary_reflected_records = fallback_counts.ordinary_reflected_records;
+    QDR_PROFILE_PLOT("Quader preview ordinary unknown opacity", static_cast<std::int64_t>(fallback_counts.ordinary_unknown_opacity_records));
+    QDR_PROFILE_PLOT("Quader preview ordinary alpha", static_cast<std::int64_t>(fallback_counts.ordinary_transparent_records));
+    QDR_PROFILE_PLOT("Quader preview ordinary reflected", static_cast<std::int64_t>(fallback_counts.ordinary_reflected_records));
+    QDR_PROFILE_PLOT("Quader preview ordinary static", static_cast<std::int64_t>(fallback_counts.ordinary_static_records));
+    QDR_PROFILE_PLOT("Quader preview dynamic GPU families", static_cast<std::int64_t>(work_counters_.active_dynamic_geometry_families));
+    QDR_PROFILE_PLOT("Quader preview dynamic logical participants", static_cast<std::int64_t>(work_counters_.active_dynamic_geometry_participants));
+    QDR_PROFILE_PLOT("Quader retired preview proxies", static_cast<std::int64_t>(work_counters_.retired_proxy_count));
+  };
+
   std::vector<std::size_t> candidate_indices;
+  try {
+    candidate_indices.reserve(meshes.size());
+  } catch (...) {
+    return ToolPreviewSubmissionResult::Failed;
+  }
   bool preparation_failed = false;
-  if (current_generation_) {
+  if (current_generation_ && current_generation_->dynamic_families == dynamic_families) {
     QDR_PROFILE_SCOPE("Tool preview match current generation");
-    if (prepare_generation(*current_generation_, meshes, candidate_indices,
-                           false, preparation_failed)) {
+    const bool prepared = dynamic_families
+        ? prepare_dynamic_family_generation(*current_generation_, meshes, candidate_indices, dynamic_family_count)
+        : prepare_generation(*current_generation_, meshes, candidate_indices, false, preparation_failed);
+    if (prepared) {
       publish_generation_subset(*current_generation_,
                                 std::move(candidate_indices));
       mesh_signature_ = next_signature;
-      submitted_meshes_ = capture_submission(meshes);
+      publish_submission();
       material_uniforms_dirty_ =
           !active_material_uniforms_are_current(*current_generation_);
       return ToolPreviewSubmissionResult::Published;
     }
-    if (preparation_failed) return ToolPreviewSubmissionResult::Failed;
+    if (preparation_failed || dynamic_families) return ToolPreviewSubmissionResult::Failed;
   }
 
-  if (warm_generation_) {
+  if (warm_generation_ && warm_generation_->dynamic_families == dynamic_families) {
     QDR_PROFILE_SCOPE("Tool preview match warm generation");
-    if (prepare_generation(*warm_generation_, meshes, candidate_indices,
-                           true, preparation_failed)) {
+    const bool prepared = dynamic_families
+        ? prepare_dynamic_family_generation(*warm_generation_, meshes, candidate_indices, dynamic_family_count)
+        : prepare_generation(*warm_generation_, meshes, candidate_indices, true, preparation_failed);
+    if (prepared) {
       // The candidate is made visible first. No frame can observe a source
       // hidden without either the old or new preview surface present.
       publish_generation_subset(*warm_generation_,
@@ -461,19 +774,24 @@ ToolPreviewSubmissionResult ToolPreviewRenderableCache::set_meshes(
       }
       current_generation_.swap(warm_generation_);
       mesh_signature_ = next_signature;
-      submitted_meshes_ = capture_submission(meshes);
+      publish_submission();
       material_uniforms_dirty_ =
           !active_material_uniforms_are_current(*current_generation_);
       return ToolPreviewSubmissionResult::Published;
     }
-    if (preparation_failed) return ToolPreviewSubmissionResult::Failed;
+    if (preparation_failed || dynamic_families) return ToolPreviewSubmissionResult::Failed;
   }
 
   std::unique_ptr<PreviewGeneration> candidate;
   bool candidate_complete = false;
   {
     QDR_PROFILE_SCOPE("Tool preview build hidden candidate generation");
-    candidate = build_generation(meshes, candidate_complete);
+    try {
+      candidate = build_generation(meshes, candidate_complete, dynamic_family_count);
+    } catch (...) {
+      return ToolPreviewSubmissionResult::Failed;
+    }
+    if (candidate) candidate->dynamic_families = dynamic_families;
   }
   if (!candidate_complete) {
     // Successful pieces of a failed candidate are detached and queued. The
@@ -498,10 +816,14 @@ ToolPreviewSubmissionResult ToolPreviewRenderableCache::set_meshes(
     QDR_PROFILE_SCOPE("Tool preview retire older warm generation");
     retire_generation(std::move(warm_generation_));
   }
+  if (current_generation_ && current_generation_->dynamic_families) {
+    retire_generation(std::move(current_generation_));
+  }
   warm_generation_ = std::move(current_generation_);
   current_generation_ = std::move(candidate);
   mesh_signature_ = next_signature;
-  submitted_meshes_ = capture_submission(meshes);
+  publish_submission();
+  if (dynamic_families) work_counters_.dynamic_family_group_creations += dynamic_family_count;
   material_uniforms_dirty_ =
       !active_material_uniforms_are_current(*current_generation_);
   return ToolPreviewSubmissionResult::Published;
@@ -509,19 +831,25 @@ ToolPreviewSubmissionResult ToolPreviewRenderableCache::set_meshes(
 
 std::unique_ptr<ToolPreviewRenderableCache::PreviewGeneration>
 ToolPreviewRenderableCache::build_generation(
-    const std::vector<RenderToolPreviewMeshRecord> &meshes, bool &complete) {
+    const std::vector<RenderToolPreviewMeshRecord> &meshes, bool &complete,
+    std::size_t dynamic_family_count) {
   complete = false;
   auto generation = std::make_unique<PreviewGeneration>();
   generation->groups.reserve(meshes.size());
   generation->scene_entities.reserve(meshes.size() * 3u);
 
+  const auto release_proxy = [&](MeshRenderableProxy *proxy) { factory_->destroy(*proxy); };
+  const auto release_group = [&](PreviewGroup *group) { destroy_group(*group, false); };
+  try {
   const auto retain_entity = [&](const MeshRenderableProxy &proxy) {
     if (proxy.entity) {
       generation->scene_entities.push_back(proxy.entity);
     }
   };
 
-  for (const RenderToolPreviewMeshRecord &preview_mesh : meshes) {
+  for (std::size_t mesh_index = 0u; mesh_index < meshes.size(); ++mesh_index) {
+    const auto &preview_mesh = meshes[mesh_index];
+    const bool gpu_family = mesh_index < dynamic_family_count;
     if (!preview_mesh.renderable()) {
       if (preview_mesh.suppress_source) {
         return generation;
@@ -541,7 +869,7 @@ ToolPreviewRenderableCache::build_generation(
     }
 
     const RenderMeshAssetSnapshot mesh_snapshot =
-        render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh);
+        preview_mesh_snapshot(preview_mesh);
     const std::span<const QVec3> positions =
         preview_dynamic_positions(preview_mesh);
     const RenderInstanceBounds local_bounds =
@@ -553,8 +881,10 @@ ToolPreviewRenderableCache::build_generation(
     const RenderInstanceBounds *bounds_override =
         preview_mesh.dynamic_positions ? &local_bounds : nullptr;
 
-    const auto make_group = [&](bool explicit_instances) {
-      PreviewGroup group;
+    const auto make_group = [&](bool explicit_instances,
+                                MeshRenderableProxy geometry_owner) {
+      PreviewGroup group{.rendered_prototype = std::move(geometry_owner)};
+      std::unique_ptr<PreviewGroup, decltype(release_group)> guard(&group, release_group);
       group.source_object_id = preview_mesh.source_object_id;
       group.source_entity = preview_mesh.source_entity;
       group.visibility_entity = preview_mesh.visibility_entity;
@@ -563,17 +893,37 @@ ToolPreviewRenderableCache::build_generation(
       group.material_signature = preview_material_signature(preview_mesh);
       group.layout_key = preview_mesh.layout_key;
       group.position_revision = preview_mesh.position_revision;
-      group.topology_payload = preview_mesh.mesh.geometry_payload();
+      group.position_payload = preview_position_owner(preview_mesh);
+      group.topology_payload = preview_geometry_owner(preview_mesh);
+      group.geometry_projection = preview_mesh.geometry_projection;
+      group.material_payload = preview_mesh.material;
       group.dynamic_positions = preview_mesh.dynamic_positions;
+      group.gpu_family = gpu_family;
       group.explicit_instances = explicit_instances;
+      guard.release();
       return group;
     };
 
-    if (preview_uses_explicit_instances(preview_mesh)) {
+    if (gpu_family || preview_uses_explicit_instances(preview_mesh)) {
       QDR_PROFILE_SCOPE("Tool preview build explicit instance chunks");
-      PreviewGroup group = make_group(true);
-      const ToolPreviewInstancePlan plan = plan_tool_preview_instances(
+      auto owner = preview_mesh.dynamic_positions
+          ? factory_->create_dynamic_geometry(mesh_snapshot, positions) : MeshRenderableProxy{};
+      std::unique_ptr<MeshRenderableProxy, decltype(release_proxy)> owner_guard(&owner, release_proxy);
+      if (preview_mesh.dynamic_positions &&
+          (owner.vertex_buffer == nullptr || owner.index_buffer == nullptr)) {
+        return generation;
+      }
+      PreviewGroup group = make_group(true, std::move(owner));
+      std::unique_ptr<PreviewGroup, decltype(release_group)> group_guard(&group, release_group);
+      const auto *geometry_source = preview_mesh.dynamic_positions ? &group.rendered_prototype : nullptr;
+      ToolPreviewInstancePlan plan = plan_tool_preview_instances(
           transforms.size(), maximum_instances_per_chunk_);
+      if (gpu_family) {
+        // Dynamic slots match exact occurrence counts, so unused capacity
+        // cannot serve a later count change and need not own local matrices.
+        for (auto &chunk : plan.chunks) chunk.capacity = chunk.active_count;
+        plan.allocated_capacity = transforms.size();
+      }
       group.explicit_instance_capacities.reserve(plan.chunks.size());
       for (const ToolPreviewInstanceChunkPlan &chunk : plan.chunks) {
         group.explicit_instance_capacities.push_back(chunk.capacity);
@@ -606,7 +956,8 @@ ToolPreviewRenderableCache::build_generation(
               mesh_snapshot, &preview_mesh.material, primitive,
               active_transforms, world_bounds, preview_mesh.cast_shadows, true,
               preview_mesh.double_sided, 0u, false, false,
-              kViewportDefaultRenderableChannel, 0u, planned.capacity);
+              kViewportDefaultRenderableChannel, 0u, planned.capacity, geometry_source);
+          std::unique_ptr<MeshRenderableProxy, decltype(release_proxy)> rendered_guard(&rendered, release_proxy);
           if (!rendered.entity) {
             generation->groups.push_back(std::move(group));
             return generation;
@@ -620,7 +971,8 @@ ToolPreviewRenderableCache::build_generation(
               mesh_snapshot, &preview_mesh.material, primitive,
               active_transforms, world_bounds, false, false,
               preview_mesh.double_sided, 0u, true, false,
-              kViewportDefaultRenderableChannel, 0u, planned.capacity);
+              kViewportDefaultRenderableChannel, 0u, planned.capacity, geometry_source);
+          std::unique_ptr<MeshRenderableProxy, decltype(release_proxy)> shaded_guard(&shaded, release_proxy);
           if (!shaded.entity) {
             group.explicit_instance_chunks.push_back(
                 PreviewGroup::ExplicitInstanceChunk{
@@ -642,7 +994,8 @@ ToolPreviewRenderableCache::build_generation(
               mesh_snapshot, &preview_mesh.material, primitive,
               active_transforms, world_bounds, false, false,
               preview_mesh.double_sided, 0u, true, true,
-              kViewportOverlayDepthChannel, 0u, planned.capacity);
+              kViewportOverlayDepthChannel, 0u, planned.capacity, geometry_source);
+          std::unique_ptr<MeshRenderableProxy, decltype(release_proxy)> overlay_depth_guard(&overlay_depth, release_proxy);
           if (!overlay_depth.entity) {
             group.explicit_instance_chunks.push_back(
                 PreviewGroup::ExplicitInstanceChunk{
@@ -711,7 +1064,10 @@ ToolPreviewRenderableCache::build_generation(
               .material_signature = preview_material_signature(preview_mesh),
               .layout_key = preview_mesh.layout_key,
               .position_revision = preview_mesh.position_revision,
-              .topology_payload = preview_mesh.mesh.geometry_payload(),
+              .position_payload = preview_position_owner(preview_mesh),
+              .topology_payload = preview_geometry_owner(preview_mesh),
+              .geometry_projection = preview_mesh.geometry_projection,
+              .material_payload = preview_mesh.material,
               .transforms = std::move(transforms),
               .sampling_from_local = std::move(mappings),
               .dynamic_positions = preview_mesh.dynamic_positions,
@@ -795,9 +1151,217 @@ ToolPreviewRenderableCache::build_generation(
     }
     generation->groups.push_back(std::move(group));
   }
+  } catch (...) {
+    return generation;
+  }
   complete = true;
   return generation;
 }
+
+bool ToolPreviewRenderableCache::prepare_dynamic_family_generation(
+    PreviewGeneration &generation,
+    const std::vector<RenderToolPreviewMeshRecord> &families,
+    std::vector<std::size_t> &candidate_indices,
+    std::size_t dynamic_family_count) {
+  QDR_PROFILE_SCOPE("Tool preview reconcile dynamic GPU families");
+  /// Prevalidated occurrence matrices and bounds for one retained draw chunk.
+  struct PreparedChunk final {
+    RenderInstanceBounds bounds;
+    std::shared_ptr<MeshRenderableFactory::ExplicitInstanceUpdate> transforms;
+  };
+  /// Owns every fallible host allocation before publishing a family update.
+  struct PreparedFamily final {
+    std::size_t submission_index = 0u;
+    std::size_t geometry_index = 0u;
+    bool positions_changed = false;
+    bool transforms_changed = false;
+    bool mappings_changed = false;
+    RenderInstanceBounds local_bounds;
+    std::vector<QMat4> transforms;
+    std::vector<QMat4> mappings;
+    std::vector<PreparedChunk> chunks;
+  };
+  std::unique_ptr<PreviewGeneration> growth;
+  try {
+    StableCandidateBuckets buckets;
+    buckets.reserve(generation.groups.size());
+    for (std::size_t index = 0u; index < generation.groups.size(); ++index) {
+      const auto &group = generation.groups[index];
+      const auto key = RenderSignatureBuilder{}.add_value(group.topology_signature)
+          .add_value(group.material_signature).add_size(group.transforms.size())
+          .add_bool(group.gpu_family).value();
+      append_candidate(buckets, key, index);
+    }
+    std::vector<bool> claimed(generation.groups.size(), false);
+    std::vector<RenderToolPreviewMeshRecord> missing;
+    std::size_t missing_family_count = 0u;
+    std::vector<PreparedPreviewGeometry> geometry;
+    std::vector<PreparedFamily> updates;
+    candidate_indices.clear();
+    candidate_indices.reserve(families.size());
+    geometry.reserve(families.size());
+    updates.reserve(families.size());
+    for (std::size_t index = 0u; index < families.size(); ++index) {
+      const auto &family = families[index];
+      const bool gpu_family = index < dynamic_family_count;
+      const auto key = RenderSignatureBuilder{}.add_value(preview_topology_signature(family))
+          .add_value(preview_material_signature(family))
+          .add_size(preview_transform_count(family)).add_bool(gpu_family).value();
+      const auto match = find_candidate(buckets, key, claimed,
+          work_counters_.structural_match_candidate_visits, [&](std::size_t group_index) {
+        const auto &group = generation.groups[group_index];
+        return group.gpu_family == gpu_family &&
+               (gpu_family || group_matches_exact(group, family)) &&
+               group.transforms.size() == preview_transform_count(family) &&
+               group_topology_equals(group, family) &&
+               same_preview_material_payload(group.material_payload, family.material) &&
+               (!family.dynamic_positions || group_dynamic_update_is_valid(group, family)) &&
+               (!group.explicit_instances || group_explicit_update_is_valid(group, family));
+      });
+      if (!match) {
+        candidate_indices.push_back(generation.groups.size() + missing.size());
+        missing.push_back(family);
+        missing_family_count += gpu_family ? 1u : 0u;
+        continue;
+      }
+      claim_candidate(match, claimed);
+      candidate_indices.push_back(match.group_index);
+      const auto &group = generation.groups[match.group_index];
+      if (group_submission_unchanged(group, family)) continue;
+      PreparedFamily update{.submission_index = index,
+          .geometry_index = geometry.size(),
+          .positions_changed = group_positions_changed(group, family),
+          .transforms_changed = !preview_transforms_equal(group.transforms, family),
+          .mappings_changed = !preview_texture_mappings_equal(group.sampling_from_local, family)};
+      copy_preview_transforms(update.transforms, family);
+      copy_preview_texture_mappings(update.mappings, family);
+      if (update.positions_changed) {
+        geometry.push_back({.submission_index = index,
+            .mesh = preview_mesh_snapshot(family),
+            .position_owner = preview_position_owner(family)});
+      }
+      update.chunks.reserve(group.explicit_instance_chunks.size());
+      updates.push_back(std::move(update));
+    }
+    bool parallel = false;
+    std::size_t canonical_count = 0u;
+    if (!prepare_preview_geometry(geometry, parallel, canonical_count)) return false;
+    for (auto &update : updates) {
+      const auto &group = generation.groups[candidate_indices[update.submission_index]];
+      const auto &family = families[update.submission_index];
+      const auto positions = preview_dynamic_positions(family);
+      const auto local_bounds = update.positions_changed ? geometry[update.geometry_index].bounds :
+          positions.empty() ? MeshRenderableFactory::compute_local_bounds(
+              preview_mesh_snapshot(family)) :
+              MeshRenderableFactory::compute_local_bounds(positions);
+      update.local_bounds = local_bounds;
+      for (const auto &chunk : group.explicit_instance_chunks) {
+        const std::span<const QMat4> transforms{update.transforms.data() + chunk.transform_offset,
+                                               chunk.active_count};
+        PreparedChunk prepared_chunk{.bounds = render_instance_world_bounds(local_bounds, transforms)};
+        if (update.transforms_changed) {
+          prepared_chunk.transforms = MeshRenderableFactory::prepare_explicit_instance_update(transforms);
+          if (!prepared_chunk.transforms ||
+              !factory_->validate_explicit_instances(chunk.rendered, *prepared_chunk.transforms) ||
+              !factory_->validate_explicit_instances(chunk.shaded, *prepared_chunk.transforms) ||
+              !factory_->validate_explicit_instances(chunk.overlay_depth, *prepared_chunk.transforms)) return false;
+        }
+        update.chunks.push_back(std::move(prepared_chunk));
+      }
+    }
+    if (!missing.empty()) {
+      bool complete = false;
+      growth = build_generation(missing, complete, missing_family_count);
+      if (!complete) {
+        retire_generation(std::move(growth));
+        return false;
+      }
+      generation.groups.reserve(generation.groups.size() + growth->groups.size());
+      generation.scene_entities.reserve(generation.scene_entities.size() + growth->scene_entities.size());
+    }
+    // Every host allocation, exact-count instance validation and geometry pack
+    // completes before accepted buffers change. Counts never rebind a live
+    // renderable: split/merge candidates use hidden exact-count family slots.
+    for (auto &update : updates) {
+      auto &group = generation.groups[candidate_indices[update.submission_index]];
+      const auto &family = families[update.submission_index];
+      if (update.positions_changed) {
+        auto &prepared = geometry[update.geometry_index];
+        const bool uploaded = factory_->update_dynamic_geometry(group.rendered_prototype,
+            prepared.mesh, preview_dynamic_positions(family), &prepared.bounds, std::move(prepared.upload));
+        assert(uploaded);
+        (void)uploaded;
+      }
+      if (!group.explicit_instances) {
+        const auto apply = [&](const MeshRenderableProxy &proxy, std::size_t index) {
+          if (update.positions_changed) factory_->update_bounds(proxy, update.local_bounds);
+          if (update.transforms_changed) factory_->update_transform(proxy, update.transforms[index]);
+          if (update.mappings_changed) factory_->update_texture_mapping(proxy, update.mappings[index]);
+        };
+        apply(group.rendered_prototype, 0u);
+        apply(group.shaded_prototype, 0u);
+        apply(group.overlay_depth_prototype, 0u);
+        for (std::size_t index = 0u; index < group.rendered_instances.size(); ++index) {
+          apply(group.rendered_instances[index], index + 1u);
+          apply(group.shaded_instances[index], index + 1u);
+          apply(group.overlay_depth_instances[index], index + 1u);
+        }
+      }
+      for (std::size_t index = 0u; index < group.explicit_instance_chunks.size(); ++index) {
+        auto &chunk = group.explicit_instance_chunks[index];
+        const auto &prepared = update.chunks[index];
+        const auto apply = [&](const MeshRenderableProxy &proxy) {
+          if (prepared.transforms) {
+            const bool uploaded = factory_->update_explicit_instances_prepared(proxy, *prepared.transforms,
+                                                                                prepared.bounds);
+            assert(uploaded);
+            (void)uploaded;
+          } else if (update.positions_changed) {
+            factory_->update_bounds(proxy, prepared.bounds);
+          }
+          if (update.mappings_changed) {
+            factory_->update_texture_mappings(proxy,
+                std::span<const QMat4>{update.mappings.data() + chunk.transform_offset, chunk.active_count});
+          }
+        };
+        apply(chunk.rendered);
+        apply(chunk.shaded);
+        apply(chunk.overlay_depth);
+        work_counters_.explicit_instance_prefix_updates += update.transforms_changed ? 1u : 0u;
+        chunk.rendered.source_entity = family.source_entity;
+        chunk.shaded.source_entity = family.source_entity;
+        chunk.overlay_depth.source_entity = family.source_entity;
+      }
+      group.source_object_id = family.source_object_id;
+      group.source_entity = family.source_entity;
+      group.visibility_entity = family.visibility_entity;
+      group.geometry_signature = preview_geometry_signature(family);
+      group.topology_signature = preview_topology_signature(family);
+      group.layout_key = family.layout_key;
+      group.position_revision = family.position_revision;
+      group.position_payload = preview_position_owner(family);
+      group.topology_payload = preview_geometry_owner(family);
+      group.geometry_projection = family.geometry_projection;
+      group.transforms = std::move(update.transforms);
+      group.sampling_from_local = std::move(update.mappings);
+    }
+    if (growth) {
+      work_counters_.dynamic_family_group_creations += missing_family_count;
+      for (auto &group : growth->groups) generation.groups.push_back(std::move(group));
+      generation.scene_entities.insert(generation.scene_entities.end(),
+          growth->scene_entities.begin(), growth->scene_entities.end());
+    }
+    work_counters_.dynamic_geometry_preparations += geometry.size();
+    work_counters_.canonical_dynamic_geometry_preparations += canonical_count;
+    work_counters_.reused_dynamic_geometry_preparations += geometry.size() - canonical_count;
+    work_counters_.parallel_dynamic_geometry_batches += parallel ? 1u : 0u;
+    return true;
+  } catch (...) {
+    retire_generation(std::move(growth));
+    return false;
+  }
+}
+
 bool ToolPreviewRenderableCache::prepare_generation(
     PreviewGeneration &generation,
     const std::vector<RenderToolPreviewMeshRecord> &meshes,
@@ -838,17 +1402,18 @@ bool ToolPreviewRenderableCache::prepare_generation(
       candidate_indices = generation.active_group_indices;
       std::vector<PreparedPreviewGeometry> prepared;
       bool parallel = false;
+      std::size_t canonical_count = 0u;
       try {
         prepared.reserve(meshes.size());
         for (std::size_t index = 0u; index < meshes.size(); ++index) {
           const PreviewGroup &group = generation.groups[candidate_indices[index]];
           if (!group.explicit_instances && group_positions_changed(group, meshes[index])) {
             prepared.push_back({.submission_index = index,
-                .mesh = render_mesh_asset_snapshot(kInvalidAssetId, meshes[index].mesh),
-                .position_owner = meshes[index].dynamic_position_payload});
+                .mesh = preview_mesh_snapshot(meshes[index]),
+                .position_owner = preview_position_owner(meshes[index])});
           }
         }
-        if (!prepare_preview_geometry(prepared, parallel)) {
+        if (!prepare_preview_geometry(prepared, parallel, canonical_count)) {
           preparation_failed = true;
           return false;
         }
@@ -857,6 +1422,8 @@ bool ToolPreviewRenderableCache::prepare_generation(
         return false;
       }
       work_counters_.dynamic_geometry_preparations += prepared.size();
+      work_counters_.canonical_dynamic_geometry_preparations += canonical_count;
+      work_counters_.reused_dynamic_geometry_preparations += prepared.size() - canonical_count;
       work_counters_.parallel_dynamic_geometry_batches += parallel ? 1u : 0u;
       std::size_t prepared_index = 0u;
       for (std::size_t index = 0u; index < meshes.size(); ++index) {
@@ -1042,7 +1609,7 @@ bool ToolPreviewRenderableCache::update_group(
   const std::uint64_t geometry_signature =
       preview_geometry_signature(preview_mesh);
   const std::shared_ptr<const MeshGeometryPayload> topology_payload =
-      preview_mesh.mesh.geometry_payload();
+      preview_geometry_owner(preview_mesh);
   const bool positions_changed = group_positions_changed(group, preview_mesh);
 
   if (group.explicit_instances) {
@@ -1066,9 +1633,14 @@ bool ToolPreviewRenderableCache::update_group(
       return false;
     }
     const RenderMeshAssetSnapshot mesh_snapshot =
-        render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh);
-    const RenderInstanceBounds local_bounds =
-        MeshRenderableFactory::compute_local_bounds(mesh_snapshot);
+        preview_mesh_snapshot(preview_mesh);
+    const auto positions = preview_dynamic_positions(preview_mesh);
+    const RenderInstanceBounds local_bounds = prepared_bounds != nullptr ? *prepared_bounds :
+        positions.empty() ? MeshRenderableFactory::compute_local_bounds(mesh_snapshot)
+                          : MeshRenderableFactory::compute_local_bounds(positions);
+    if (positions_changed && !factory_->update_dynamic_geometry(
+            group.rendered_prototype, mesh_snapshot, positions, &local_bounds,
+            std::move(prepared))) return false;
     const std::size_t chunks_per_primitive = plan.chunks.size();
     for (std::size_t chunk_index = 0u;
          chunk_index < group.explicit_instance_chunks.size();
@@ -1135,6 +1707,10 @@ bool ToolPreviewRenderableCache::update_group(
         chunk.transform_offset = planned.transform_offset;
         chunk.active_count = planned.active_count;
         ++work_counters_.explicit_instance_prefix_updates;
+      } else if (positions_changed) {
+        factory_->update_bounds(chunk.rendered, world_bounds);
+        factory_->update_bounds(chunk.shaded, world_bounds);
+        factory_->update_bounds(chunk.overlay_depth, world_bounds);
       }
       if (mappings_changed && !active_mappings.empty()) {
         factory_->update_texture_mappings(chunk.rendered, active_mappings);
@@ -1149,7 +1725,7 @@ bool ToolPreviewRenderableCache::update_group(
     if (positions_changed) {
       QDR_PROFILE_SCOPE("Tool preview changed position payload");
       const RenderMeshAssetSnapshot mesh_snapshot =
-          render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh);
+          preview_mesh_snapshot(preview_mesh);
       const std::span<const QVec3> positions =
           preview_dynamic_positions(preview_mesh);
       const RenderInstanceBounds local_bounds =
@@ -1247,21 +1823,26 @@ bool ToolPreviewRenderableCache::update_group(
   group.material_signature = preview_material_signature(preview_mesh);
   group.layout_key = preview_mesh.layout_key;
   group.position_revision = preview_mesh.position_revision;
+  group.position_payload = preview_position_owner(preview_mesh);
   if (!group.topology_payload ||
-      group.topology_payload.get() != topology_payload.get()) {
+      group.topology_payload.get() != topology_payload.get() ||
+      group.geometry_projection != preview_mesh.geometry_projection) {
     group.topology_signature = preview_topology_signature(preview_mesh);
   }
   group.topology_payload = topology_payload;
+  group.geometry_projection = preview_mesh.geometry_projection;
   group.dynamic_positions = preview_mesh.dynamic_positions;
   return true;
 }
 void ToolPreviewRenderableCache::publish_generation_subset(
     PreviewGeneration &generation,
     std::vector<std::size_t> candidate_indices) {
-  std::vector<bool> desired(generation.groups.size(), false);
+  for (const std::size_t index : generation.active_group_indices) {
+    generation.groups[index].candidate_visible = false;
+  }
   for (const std::size_t index : candidate_indices) {
-    if (index < desired.size()) {
-      desired[index] = true;
+    if (index < generation.groups.size()) {
+      generation.groups[index].candidate_visible = true;
     }
   }
 
@@ -1273,11 +1854,85 @@ void ToolPreviewRenderableCache::publish_generation_subset(
     }
   }
   for (const std::size_t index : generation.active_group_indices) {
-    if (index < generation.groups.size() && !desired[index]) {
+    if (index < generation.groups.size() && !generation.groups[index].candidate_visible) {
       set_group_visible(generation.groups[index], false);
     }
   }
   generation.active_group_indices = std::move(candidate_indices);
+  if (generation.dynamic_families) trim_inactive_dynamic_families(generation);
+}
+
+void ToolPreviewRenderableCache::trim_inactive_dynamic_families(
+    PreviewGeneration &generation) {
+  constexpr std::size_t kRetainedInactiveFamilies = 64u;
+  constexpr std::size_t kRetainedInactiveProxies = 384u;
+  work_counters_.inactive_dynamic_geometry_families =
+      std::ranges::count_if(generation.groups, [](const auto &group) { return !group.visible && group.gpu_family; });
+  std::size_t inactive_proxy_count = 0u;
+  for (const auto &group : generation.groups) {
+    if (!group.visible) inactive_proxy_count += group.live_proxy_count;
+  }
+  if (generation.groups.size() - generation.active_group_indices.size() <= kRetainedInactiveFamilies &&
+      inactive_proxy_count <= kRetainedInactiveProxies) return;
+  QDR_PROFILE_SCOPE("Tool preview trim inactive GPU families");
+  // Allocate before moving ownership. A failed optional trim leaves the valid
+  // generation intact and can be retried on the next accepted submission.
+  std::unique_ptr<PreviewGeneration> retired;
+  std::vector<PreviewGroup> retained;
+  std::vector<utils::Entity> retained_entities;
+  std::vector<std::size_t> remap;
+  std::vector<bool> active;
+  try {
+    retired = std::make_unique<PreviewGeneration>();
+    remap.resize(generation.groups.size());
+    active.resize(generation.groups.size(), false);
+    for (const auto index : generation.active_group_indices) active[index] = true;
+    retired->groups.reserve(generation.groups.size());
+    retired->scene_entities.reserve(generation.scene_entities.size());
+    retained.reserve(generation.active_group_indices.size() + kRetainedInactiveFamilies);
+    retained_entities.reserve(generation.scene_entities.size());
+    retired_generations_.reserve(retired_generations_.size() + 1u);
+  } catch (...) {
+    return;
+  }
+  const auto append_entities = [](const PreviewGroup &group, auto &entities) {
+    for (const auto entity : {group.rendered_prototype.entity, group.shaded_prototype.entity,
+                              group.overlay_depth_prototype.entity}) {
+      if (entity) entities.push_back(entity);
+    }
+    for (const auto *instances : {&group.rendered_instances, &group.shaded_instances,
+                                  &group.overlay_depth_instances}) {
+      for (const auto &proxy : *instances) if (proxy.entity) entities.push_back(proxy.entity);
+    }
+    for (const auto &chunk : group.explicit_instance_chunks) {
+      for (const auto entity : {chunk.rendered.entity, chunk.shaded.entity, chunk.overlay_depth.entity}) {
+        if (entity) entities.push_back(entity);
+      }
+    }
+  };
+  std::size_t inactive = 0u;
+  std::size_t retained_proxy_count = 0u;
+  for (std::size_t index = 0u; index < generation.groups.size(); ++index) {
+    auto &group = generation.groups[index];
+    const bool retain_inactive = inactive < kRetainedInactiveFamilies &&
+        group.live_proxy_count <= kRetainedInactiveProxies - retained_proxy_count;
+    if (active[index] || retain_inactive) {
+      inactive += active[index] ? 0u : 1u;
+      retained_proxy_count += active[index] ? 0u : group.live_proxy_count;
+      remap[index] = retained.size();
+      append_entities(group, retained_entities);
+      retained.push_back(std::move(group));
+    } else {
+      append_entities(group, retired->scene_entities);
+      retired->groups.push_back(std::move(group));
+    }
+  }
+  generation.groups = std::move(retained);
+  generation.scene_entities = std::move(retained_entities);
+  for (auto &index : generation.active_group_indices) index = remap[index];
+  work_counters_.inactive_dynamic_geometry_families =
+      std::ranges::count_if(generation.groups, [](const auto &group) { return !group.visible && group.gpu_family; });
+  retire_generation(std::move(retired));
 }
 
 void ToolPreviewRenderableCache::set_group_visible(PreviewGroup &group,
@@ -1407,6 +2062,10 @@ void ToolPreviewRenderableCache::retire_generation(
   // Keep their prebuilt entity list so retirement needs one Filament call,
   // independent of proxy count; resource destruction remains idle-budgeted.
   detach_generation(*generation);
+  factory_->destroy_renderable_components(generation->scene_entities);
+  for (const auto &group : generation->groups) {
+    work_counters_.retired_proxy_count += group.live_proxy_count;
+  }
   retired_generations_.push_back(std::move(generation));
 }
 
@@ -1419,6 +2078,7 @@ bool ToolPreviewRenderableCache::destroy_one_proxy(
   const auto record_destroyed_proxy = [&] {
     assert(group.live_proxy_count > 0u);
     --group.live_proxy_count;
+    --work_counters_.retired_proxy_count;
   };
   const auto destroy_proxy = [&](MeshRenderableProxy &proxy) {
     if (generation.detached) {
@@ -1486,10 +2146,15 @@ void ToolPreviewRenderableCache::drain_retired_destroy_queue(
     return;
   }
   std::size_t destroyed = 0u;
+  const auto started = std::chrono::steady_clock::now();
+  constexpr auto kMaximumDuration = std::chrono::milliseconds(2);
   while (destroyed < max_proxy_count && !retired_generations_.empty()) {
     PreviewGeneration &generation = *retired_generations_.back();
     while (!generation.groups.empty() &&
            group_proxy_count(generation.groups.back()) == 0u) {
+      // Buffer-only dynamic owners have no entity and therefore do not count
+      // as proxies. Their borrowers have all retired before releasing them.
+      destroy_group(generation.groups.back(), generation.detached);
       generation.groups.pop_back();
     }
     if (generation.groups.empty()) {
@@ -1501,6 +2166,7 @@ void ToolPreviewRenderableCache::drain_retired_destroy_queue(
     if (destroy_one_proxy(generation)) {
       ++destroyed;
     }
+    if (std::chrono::steady_clock::now() - started >= kMaximumDuration) break;
   }
 }
 
@@ -1556,6 +2222,14 @@ void ToolPreviewRenderableCache::clear() {
     destroy_generation(generation);
   }
   retired_generations_.clear();
+  work_counters_.retired_proxy_count = 0u;
+  work_counters_.active_dynamic_geometry_families = 0u;
+  work_counters_.active_dynamic_geometry_participants = 0u;
+  work_counters_.ordinary_static_records = 0u;
+  work_counters_.ordinary_unknown_opacity_records = 0u;
+  work_counters_.ordinary_transparent_records = 0u;
+  work_counters_.ordinary_reflected_records = 0u;
+  work_counters_.inactive_dynamic_geometry_families = 0u;
   submitted_meshes_.clear();
   mesh_signature_ = 0u;
   material_uniform_signature_ = 0u;
@@ -1608,7 +2282,9 @@ std::uint64_t ToolPreviewRenderableCache::preview_material_signature(
 std::uint64_t ToolPreviewRenderableCache::preview_geometry_signature(
     const RenderToolPreviewMeshRecord &preview_mesh) {
   RenderSignatureBuilder signature;
-  signature.add_value(preview_mesh.mesh.geometry_content_id().value)
+  signature.add_value(preview_mesh.geometry_projection
+      ? reinterpret_cast<std::uintptr_t>(preview_mesh.geometry_projection.get())
+      : preview_mesh.mesh.geometry_content_id().value)
       .add_value(preview_mesh.mesh.revision.value);
   if (preview_mesh.dynamic_positions) {
     signature.add_value(preview_mesh.layout_key)
@@ -1619,7 +2295,7 @@ std::uint64_t ToolPreviewRenderableCache::preview_geometry_signature(
 
 std::uint64_t ToolPreviewRenderableCache::preview_topology_signature(
     const RenderToolPreviewMeshRecord &preview_mesh) {
-  const MeshGeometryPayload &geometry = preview_mesh.mesh.geometry();
+  const auto geometry = preview_mesh_snapshot(preview_mesh);
   RenderSignatureBuilder signature;
   signature.add_size(geometry.vertices.size())
       .add_size(geometry.indices.size());
@@ -1731,12 +2407,12 @@ bool ToolPreviewRenderableCache::group_matches_exact(
       return false;
     }
     const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
-        preview_mesh.mesh.geometry_payload();
+        preview_geometry_owner(preview_mesh);
     const std::size_t retained_capacity = std::accumulate(
         group.explicit_instance_capacities.begin(),
         group.explicit_instance_capacities.end(), std::size_t{0u});
-    return same_geometry_payload(group.topology_payload, geometry_payload,
-                                 true) &&
+    return same_geometry_streams(group.topology_payload, group.geometry_projection,
+                                 geometry_payload, preview_mesh.geometry_projection, false, true) &&
            (!group.explicit_instances ||
             retained_capacity >= preview_transform_count(preview_mesh));
   }
@@ -1744,10 +2420,11 @@ bool ToolPreviewRenderableCache::group_matches_exact(
       group.layout_key == preview_mesh.layout_key || group.layout_key == 0u ||
       preview_mesh.layout_key == 0u;
   const std::shared_ptr<const MeshGeometryPayload> topology_payload =
-      preview_mesh.mesh.geometry_payload();
+      preview_geometry_owner(preview_mesh);
   if (group.layout_key != 0u &&
       group.layout_key == preview_mesh.layout_key &&
-      group.topology_payload.get() == topology_payload.get()) {
+      group.topology_payload.get() == topology_payload.get() &&
+      group.geometry_projection == preview_mesh.geometry_projection) {
     return true;
   }
   return layout_compatible &&
@@ -1770,11 +2447,11 @@ bool ToolPreviewRenderableCache::group_topology_equals(
     const PreviewGroup &group,
     const RenderToolPreviewMeshRecord &preview_mesh) {
   if (preview_mesh.dynamic_positions) {
-    return same_dynamic_geometry_layout(
-        group.topology_payload, preview_mesh.mesh.geometry_payload());
+    return same_geometry_streams(group.topology_payload, group.geometry_projection,
+        preview_geometry_owner(preview_mesh), preview_mesh.geometry_projection, true, false);
   }
-  return same_geometry_payload(group.topology_payload,
-                               preview_mesh.mesh.geometry_payload(), false);
+  return same_geometry_streams(group.topology_payload, group.geometry_projection,
+      preview_geometry_owner(preview_mesh), preview_mesh.geometry_projection, false, false);
 }
 
 bool ToolPreviewRenderableCache::group_submission_unchanged(
@@ -1789,8 +2466,10 @@ bool ToolPreviewRenderableCache::group_submission_unchanged(
              preview_geometry_signature(preview_mesh) &&
          group.layout_key == preview_mesh.layout_key &&
          group.position_revision == preview_mesh.position_revision &&
+         group.position_payload == preview_position_owner(preview_mesh) &&
+         group.geometry_projection == preview_mesh.geometry_projection &&
          group.topology_payload.get() ==
-             preview_mesh.mesh.geometry_payload().get() &&
+             preview_geometry_owner(preview_mesh).get() &&
          group.dynamic_positions == preview_mesh.dynamic_positions &&
          preview_transforms_equal(group.transforms, preview_mesh) &&
          preview_texture_mappings_equal(group.sampling_from_local, preview_mesh);
@@ -1805,15 +2484,17 @@ bool ToolPreviewRenderableCache::group_positions_changed(
        group.visibility_entity != preview_mesh.visibility_entity ||
        group.layout_key != preview_mesh.layout_key ||
        group.position_revision != preview_mesh.position_revision ||
+       group.position_payload != preview_position_owner(preview_mesh) ||
+       group.geometry_projection != preview_mesh.geometry_projection ||
        group.geometry_signature != preview_geometry_signature(preview_mesh) ||
        (!preview_mesh.dynamic_position_payload &&
-        group.topology_payload.get() != preview_mesh.mesh.geometry_payload().get()));
+        group.topology_payload.get() != preview_geometry_owner(preview_mesh).get()));
 }
 
 bool ToolPreviewRenderableCache::group_dynamic_update_is_valid(
     const PreviewGroup &group,
     const RenderToolPreviewMeshRecord &preview_mesh) const {
-  const MeshGeometryPayload &geometry = preview_mesh.mesh.geometry();
+  const auto geometry = preview_mesh_snapshot(preview_mesh);
   const std::span<const QVec3> positions =
       preview_dynamic_positions(preview_mesh);
   // This mirrors every guard in MeshRenderableFactory::update_dynamic_geometry.
@@ -1822,6 +2503,7 @@ bool ToolPreviewRenderableCache::group_dynamic_update_is_valid(
   // prepare_generation's following non-failing mutation pass.
   return factory_ != nullptr && factory_->initialized() &&
          group.rendered_prototype.dynamic_geometry &&
+         group.rendered_prototype.owns_mesh_buffers &&
          group.rendered_prototype.vertex_buffer != nullptr &&
          group.rendered_prototype.index_buffer != nullptr &&
          group.rendered_prototype.vertex_count == geometry.vertices.size() &&
@@ -1834,7 +2516,7 @@ bool ToolPreviewRenderableCache::group_explicit_update_is_valid(
     const RenderToolPreviewMeshRecord &preview_mesh) const {
   if (factory_ == nullptr || !factory_->initialized() ||
       !group.explicit_instances ||
-      !preview_uses_explicit_instances(preview_mesh) ||
+      (!preview_mesh.dynamic_positions && !preview_uses_explicit_instances(preview_mesh)) ||
       group.explicit_instance_capacities.empty()) {
     return false;
   }
@@ -1846,7 +2528,7 @@ bool ToolPreviewRenderableCache::group_explicit_update_is_valid(
     return false;
   }
   const RenderMeshAssetSnapshot mesh_snapshot =
-      render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh);
+      preview_mesh_snapshot(preview_mesh);
   const std::vector<MeshPrimitiveSpan> primitives =
       coalesced_render_mesh_primitive_spans(mesh_snapshot);
   if (primitives.empty() ||
@@ -1907,8 +2589,9 @@ bool ToolPreviewRenderableCache::submitted_meshes_equal(
         left.dynamic_positions != right.dynamic_positions ||
         left.cast_shadows != right.cast_shadows ||
         left.suppress_source != right.suppress_source ||
-        !same_geometry_payload(left.geometry_payload,
-                               right.mesh.geometry_payload(), true) ||
+        left.position_payload != preview_position_owner(right) ||
+        !same_geometry_streams(left.geometry_payload, left.geometry_projection,
+                              preview_geometry_owner(right), right.geometry_projection, false, true) ||
         !same_mat4(left.transform, right.transform) ||
         !same_mat4(left.sampling_from_local, right.sampling_from_local) ||
         left.instance_sampling_from_local.size() != right.instance_sampling_from_local.size() ||
@@ -1947,7 +2630,9 @@ ToolPreviewRenderableCache::capture_submission(
         .mesh_revision = mesh.mesh.revision.value,
         .layout_key = mesh.layout_key,
         .position_revision = mesh.position_revision,
-        .geometry_payload = mesh.mesh.geometry_payload(),
+        .position_payload = preview_position_owner(mesh),
+        .geometry_payload = preview_geometry_owner(mesh),
+        .geometry_projection = mesh.geometry_projection,
         .transform = mesh.transform,
         .instance_transforms = mesh.instance_transforms,
         .sampling_from_local = mesh.sampling_from_local,

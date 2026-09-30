@@ -110,8 +110,6 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height,
   stencil_enabled_ = stencil_enabled;
 
   using Texture = filament::Texture;
-  LOG_INFO("Allocating viewport render target {}x{} for viewport {}x{}", width_,
-           height_, viewport_width_, viewport_height_);
   RenderTargetCreationGuard creation_guard{*engine_};
   creation_guard.color_texture =
       Texture::Builder()
@@ -164,9 +162,6 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height,
   render_target_ = creation_guard.render_target;
   view->setRenderTarget(render_target_);
   view->setViewport({0, 0, viewport_width_, viewport_height_});
-  LOG_INFO("Viewport render target ready {}x{} for viewport {}x{} as texture "
-           "handle {}",
-           width_, height_, viewport_width_, viewport_height_, texture_handle_);
   creation_guard.release();
 }
 

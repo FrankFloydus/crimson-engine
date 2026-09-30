@@ -18,6 +18,15 @@
 namespace quader {
 namespace {
 
+std::size_t owned_material_instance_count(const MeshRenderableProxy &proxy) {
+  if (!proxy.owns_material_instances) {
+    return 0u;
+  }
+  return static_cast<std::size_t>(std::count_if(
+      proxy.material_instances.begin(), proxy.material_instances.end(),
+      [](const auto *material) { return material != nullptr; }));
+}
+
 bool mesh_proxy_needs_rebuild(
     const std::unordered_map<EntityId, MeshRenderableProxy> &proxies,
     const RenderSceneMeshRecord &mesh, bool cast_shadows) {
@@ -126,6 +135,8 @@ void MeshRenderableCache::shutdown() {
     topology_stable_geometry_rebind_count_ = 0u;
     full_proxy_rebuild_count_ = 0u;
     retired_proxy_high_watermark_ = 0u;
+    retired_material_instance_count_ = 0u;
+    destroyed_retired_proxy_count_ = 0u;
     surface_grid_dirty_ = true;
     preview_suppressed_entities_.clear();
     factory_ = nullptr;
@@ -374,19 +385,28 @@ void MeshRenderableCache::remove_except(
 }
 
 void MeshRenderableCache::drain_retired_destroy_queue(
-    std::size_t max_proxy_count) {
+    std::size_t max_proxy_count, std::chrono::nanoseconds max_duration) {
   QDR_PROFILE_FUNCTION();
-  if (!factory_ || max_proxy_count == 0u) {
+  if (!factory_ || max_proxy_count == 0u || retired_mesh_proxies_.empty() ||
+      max_duration <= std::chrono::nanoseconds::zero()) {
     return;
   }
 
+  const bool time_limited = max_duration != std::chrono::nanoseconds::max();
+  const auto started = time_limited ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
   for (std::size_t destroyed = 0u;
        destroyed < max_proxy_count && !retired_mesh_proxies_.empty();
        ++destroyed) {
     QDR_PROFILE_SCOPE("Mesh renderable destroy retired proxy");
     MeshRenderableProxy &proxy = retired_mesh_proxies_.back();
+    retired_material_instance_count_ -= owned_material_instance_count(proxy);
     factory_->destroy_detached(proxy);
     retired_mesh_proxies_.pop_back();
+    ++destroyed_retired_proxy_count_;
+    if (time_limited && std::chrono::steady_clock::now() - started >= max_duration) {
+      break;
+    }
   }
 }
 
@@ -401,7 +421,11 @@ void MeshRenderableCache::retire_proxy(MeshRenderableProxy &&proxy) {
   }
 
   QDR_PROFILE_FUNCTION();
-  factory_->remove_from_scene(proxy);
+  // Remove the renderable component before releasing any retired material.
+  // Scene removal alone leaves it in Filament's material-lifetime validation
+  // scans. The factory submits bounded command batches during this detach.
+  factory_->destroy_renderable_components(std::span(&proxy.entity, 1u));
+  retired_material_instance_count_ += owned_material_instance_count(proxy);
   retired_mesh_proxies_.push_back(std::move(proxy));
   retired_proxy_high_watermark_ =
       std::max(retired_proxy_high_watermark_, retired_mesh_proxies_.size());

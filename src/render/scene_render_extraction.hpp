@@ -48,6 +48,7 @@ struct ToolPreviewMesh {
   // Participant-local token preserved from the modeling producer.
   std::uint64_t position_revision = 0u;
   std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
+  std::shared_ptr<const MeshGeometryProjection> geometry_projection;
 };
 
 /** Captures one Curve binding before its immutable sample payload is pinned. */
@@ -100,6 +101,10 @@ using SceneRenderExtractionPlan = RenderSceneSnapshot;
 
 [[nodiscard]] RenderMeshAssetSnapshot
 render_mesh_asset_snapshot(AssetId mesh_id, const MeshAsset &asset);
+/** Pins effective preview streams without materializing a replacement asset. */
+[[nodiscard]] RenderMeshAssetSnapshot render_mesh_asset_snapshot(
+    AssetId mesh_id, const MeshAsset &asset,
+    std::shared_ptr<const MeshGeometryProjection> projection);
 [[nodiscard]] std::vector<MeshPrimitiveSpan>
 normalized_render_mesh_primitive_spans(const RenderMeshAssetSnapshot &mesh);
 [[nodiscard]] std::vector<MeshPrimitiveSpan>
@@ -114,6 +119,13 @@ build_render_material_binding_snapshot(const AssetRegistry &assets,
 packaged_default_render_material();
 [[nodiscard]] std::uint64_t render_material_binding_signature(
     const RenderMaterialBindingSnapshot &material);
+/** Compares immutable material payloads, including their texture bindings. */
+[[nodiscard]] bool render_material_payloads_equal(
+    const RenderMaterialAssetSnapshot *left,
+    const RenderMaterialAssetSnapshot *right);
+/** Hash prefilter for the exact material-payload comparison above. */
+[[nodiscard]] std::uint64_t render_material_payload_signature(
+    const RenderMaterialAssetSnapshot *material);
 [[nodiscard]] RenderSceneSnapshot
 build_render_scene_snapshot(const SceneDocument &document,
                             const AssetRegistry &assets,

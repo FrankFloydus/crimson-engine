@@ -8,9 +8,13 @@
 
 #include "api/quader_api_types.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
+#include "ui/viewport_context_menu_policy.hpp"
 #include "viewport/viewport_runtime_binding_token.hpp"
 
+#include <QString>
 #include <optional>
+#include <string>
+#include <vector>
 
 class QPoint;
 class QWidget;
@@ -20,6 +24,20 @@ namespace quader {
 class LocalizationService;
 class QuaderEditorApi;
 class ViewportInputRouter;
+
+/// One canonical RMB command projected without pointer-target-only transfers.
+struct QtViewportContextCommand final {
+  std::string command_id;
+  QString label;
+  ViewportContextMenuActionSection section =
+      ViewportContextMenuActionSection::Topology;
+};
+
+/// Collects selected-operand RMB commands using the context menu's own policies.
+[[nodiscard]] std::vector<QtViewportContextCommand>
+qt_viewport_context_commands(QuaderEditorApi &editor,
+                             const QuaderSelectionSummary &selection,
+                             const LocalizationService &localization);
 
 /**
  * Presents the modeling operations available at a viewport position through a

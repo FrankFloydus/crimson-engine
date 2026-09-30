@@ -16,6 +16,8 @@ material {
         lineDistancePixels
     ],
     parameters : [
+        { type : bool, name : sharedPositionsEnabled },
+        { type : sampler2d, name : sharedPositions, precision : high },
         {
             type : float,
             name : lineWidth
@@ -40,6 +42,16 @@ material {
 }
 
 vertex {
+    highp vec3 overlayPosition(highp vec3 position) {
+        if (materialParams.sharedPositionsEnabled) {
+            int index = int(position.x);
+            int width = textureSize(materialParams_sharedPositions, 0).x;
+            return texelFetch(materialParams_sharedPositions,
+                    ivec2(index % width, index / width), 0).xyz;
+        }
+        return position;
+    }
+
     bool clipLineToNearPlane(inout highp vec4 startView, inout highp vec4 endView, float nearZ) {
         bool startBehind = startView.z > nearZ;
         bool endBehind = endView.z > nearZ;
@@ -62,8 +74,8 @@ vertex {
     }
 
     void materialVertex(inout MaterialVertexInputs material) {
-        highp vec4 startWorld = getWorldFromModelMatrix() * vec4(getCustom0().xyz, 1.0);
-        highp vec4 endWorld = getWorldFromModelMatrix() * vec4(getCustom1().xyz, 1.0);
+        highp vec4 startWorld = getWorldFromModelMatrix() * vec4(overlayPosition(getCustom0().xyz), 1.0);
+        highp vec4 endWorld = getWorldFromModelMatrix() * vec4(overlayPosition(getCustom1().xyz), 1.0);
         highp vec4 startView = getViewFromWorldMatrix() * startWorld;
         highp vec4 endView = getViewFromWorldMatrix() * endWorld;
 

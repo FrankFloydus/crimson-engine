@@ -4,11 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_validation_test_helpers.hpp"
+#include "operation_atomicity_test_helpers.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -109,13 +110,28 @@ void expect_nonquad_path_commit_splits_quad(std::size_t non_quad_side_count) {
 	const Face* non_quad_face_after =
 		find_face(fixture.document, fixture.non_quad_face);
 	ASSERT_NE(non_quad_face_after, nullptr);
-	EXPECT_EQ(non_quad_face_after->vertices, non_quad_vertices_before);
 	ASSERT_EQ(selection.edges.size(), 1U);
 	EXPECT_TRUE(qdr_test::edge_positions_match_unordered(
 		fixture.document,
 		selection.edges.front(),
 		{ 0.5F, 0.0F, 0.0F },
 		{ 0.5F, 1.0F, 0.0F }));
+	const ElementId shared_midpoint = qdr_test::vertex_at_position(
+		fixture.document, { 0.5F, 1.0F, 0.0F });
+	ASSERT_NE(shared_midpoint, kInvalidElementId);
+	std::vector<ElementId> expected_non_quad_vertices = non_quad_vertices_before;
+	expected_non_quad_vertices.insert(
+		expected_non_quad_vertices.begin() + 1, shared_midpoint);
+	EXPECT_EQ(non_quad_face_after->vertices, expected_non_quad_vertices);
+	EXPECT_FALSE(qdr_test::document_has_edge(
+		fixture.document, fixture.shared_edge));
+	EXPECT_EQ(qdr_test::edge_incidence_count(
+		fixture.document, make_edge(fixture.shared_edge.a, shared_midpoint)), 2);
+	EXPECT_EQ(qdr_test::edge_incidence_count(
+		fixture.document, make_edge(shared_midpoint, fixture.shared_edge.b)), 2);
+	EXPECT_EQ(qdr_test::edge_incidence_count(
+		fixture.document, selection.edges.front()), 2);
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 }
 
 /// Stores a rectangular quad grid and its vertex IDs in row-major order.
@@ -189,6 +205,57 @@ std::vector<quader::QVec3> compiled_normals_for_vertex(
 		}
 	}
 	return normals;
+}
+
+/// Closes a five-quad strip with pentagon caps containing a collinear corner.
+struct CappedLoopStripFixture {
+	Document document;
+	std::array<ElementId, 6> front_left;
+	std::array<ElementId, 6> front_right;
+	std::array<ElementId, 2> caps;
+};
+
+CappedLoopStripFixture make_capped_loop_strip() {
+	CappedLoopStripFixture fixture;
+	for (std::size_t row = 0U; row < fixture.front_left.size(); ++row) {
+		const float height = static_cast<float>(row);
+		fixture.front_left[row] = add_vertex(
+			fixture.document, { 0.0F, 0.0F, height });
+		fixture.front_right[row] = add_vertex(
+			fixture.document, { 2.0F, 0.0F, height });
+	}
+	for (std::size_t row = 0U; row + 1U < fixture.front_left.size(); ++row) {
+		EXPECT_NE(add_face(fixture.document, std::array {
+			fixture.front_left[row], fixture.front_right[row],
+			fixture.front_right[row + 1U], fixture.front_left[row + 1U] }),
+			kInvalidElementId);
+	}
+	const ElementId back_left_bottom = add_vertex(fixture.document, { 0.0F, 1.0F, 0.0F });
+	const ElementId back_middle_bottom = add_vertex(fixture.document, { 1.0F, 1.0F, 0.0F });
+	const ElementId back_right_bottom = add_vertex(fixture.document, { 2.0F, 1.0F, 0.0F });
+	const ElementId back_left_top = add_vertex(fixture.document, { 0.0F, 1.0F, 5.0F });
+	const ElementId back_middle_top = add_vertex(fixture.document, { 1.0F, 1.0F, 5.0F });
+	const ElementId back_right_top = add_vertex(fixture.document, { 2.0F, 1.0F, 5.0F });
+	std::vector<ElementId> left_side(fixture.front_left.begin(), fixture.front_left.end());
+	left_side.insert(left_side.end(), { back_left_top, back_left_bottom });
+	EXPECT_NE(add_face(fixture.document, left_side), kInvalidElementId);
+	std::vector<ElementId> right_side(fixture.front_right.rbegin(), fixture.front_right.rend());
+	right_side.insert(right_side.end(), { back_right_bottom, back_right_top });
+	EXPECT_NE(add_face(fixture.document, right_side), kInvalidElementId);
+	EXPECT_NE(add_face(fixture.document, std::array {
+		back_right_bottom, back_middle_bottom, back_left_bottom,
+		back_left_top, back_middle_top, back_right_top }), kInvalidElementId);
+	fixture.caps[0] = add_face(fixture.document, std::array {
+		fixture.front_left.front(), back_left_bottom, back_middle_bottom,
+		back_right_bottom, fixture.front_right.front() });
+	fixture.caps[1] = add_face(fixture.document, std::array {
+		fixture.front_left.back(), fixture.front_right.back(),
+		back_right_top, back_middle_top, back_left_top });
+	EXPECT_NE(fixture.caps[0], kInvalidElementId);
+	EXPECT_NE(fixture.caps[1], kInvalidElementId);
+	EXPECT_TRUE(qdr_test::every_edge_is_closed(fixture.document));
+	qdr_test::expect_valid_polygon_document(fixture.document, "closed pentagon-capped loop strip");
+	return fixture;
 }
 
 } // namespace
@@ -285,7 +352,7 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests,
-	 InsertEdgeLoopRetainsAStoppedTriangleHardEdgeAndUsesItAsTheSecondConnectorDonor) {
+	 InsertEdgeLoopRemapsAStoppedTriangleHardEdgeAndUsesItAsTheSecondConnectorDonor) {
 	NonQuadLoopPathFixture fixture = make_nonquad_loop_path_fixture(3U);
 	fixture.document.hard_normal_edges = { fixture.shared_edge };
 	Selection selection =
@@ -307,8 +374,8 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 		make_edge(fixture.shared_edge.a, *midpoint);
 	const Edge second_descendant =
 		make_edge(*midpoint, fixture.shared_edge.b);
-	ASSERT_EQ(fixture.document.hard_normal_edges.size(), 4U);
-	EXPECT_TRUE(qdr_test::contains_edge(
+	ASSERT_EQ(fixture.document.hard_normal_edges.size(), 3U);
+	EXPECT_FALSE(qdr_test::contains_edge(
 		fixture.document.hard_normal_edges, fixture.shared_edge));
 	EXPECT_TRUE(qdr_test::contains_edge(
 		fixture.document.hard_normal_edges, first_descendant));
@@ -316,12 +383,16 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 		fixture.document.hard_normal_edges, second_descendant));
 	EXPECT_TRUE(qdr_test::contains_edge(
 		fixture.document.hard_normal_edges, selection.edges.front()));
-	EXPECT_TRUE(qdr_test::document_has_edge(
+	EXPECT_FALSE(qdr_test::document_has_edge(
 		fixture.document, fixture.shared_edge));
 	EXPECT_TRUE(qdr_test::document_has_edge(
 		fixture.document, first_descendant));
 	EXPECT_TRUE(qdr_test::document_has_edge(
 		fixture.document, second_descendant));
+	EXPECT_EQ(qdr_test::edge_incidence_count(
+		fixture.document, first_descendant), 2);
+	EXPECT_EQ(qdr_test::edge_incidence_count(
+		fixture.document, second_descendant), 2);
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests,
@@ -543,6 +614,207 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 TEST(QdrDocumentOperationInsertEdgeLoopTests,
 	 InsertEdgeLoopCommitSplitsQuadAtNgonPath) {
 	expect_nonquad_path_commit_splits_quad(5U);
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     StoppedNonQuadFacesShareCutVerticesAndRetainIndependentCornerAttributes) {
+	for (const std::size_t side_count : { 3U, 5U }) {
+		for (const bool reverse_winding : { false, true }) {
+			for (const float factor : { 0.25F, 0.75F }) {
+				SCOPED_TRACE(side_count);
+				SCOPED_TRACE(reverse_winding);
+				SCOPED_TRACE(factor);
+				NonQuadLoopPathFixture fixture = make_nonquad_loop_path_fixture(side_count);
+				for (std::size_t index = 0U; index < fixture.document.faces.size(); ++index) {
+					Face& face = fixture.document.faces[index];
+					face.material_slot = index == 0U ? 7U : 19U;
+					face.normal_shading = index == 0U ? SurfaceShading::Smooth : SurfaceShading::Flat;
+					face.texture_transform = index == 0U
+						? FaceTextureTransform { { -2.0F, 0.5F }, { 0.25F, 0.75F }, 45.0F }
+						: FaceTextureTransform { { 0.75F, -3.0F }, { -0.25F, 1.5F }, -17.0F };
+					const float offset = index == 0U ? 0.0F : 100.0F;
+					for (const ElementId vertex_id : face.vertices) {
+						const auto position = find_vertex(fixture.document, vertex_id)->position;
+						face.uvs.push_back({ position.x * 4.0F + offset, position.y * 3.0F - offset });
+					}
+					if (reverse_winding) {
+						std::ranges::reverse(face.vertices);
+						std::ranges::reverse(face.uvs);
+					}
+				}
+				fixture.document.hard_normal_edges = { fixture.seed };
+				fixture.document.soft_normal_edges = { fixture.shared_edge };
+				const Document source = fixture.document;
+				Selection selection = qdr_test::edge_selection({ fixture.seed }, fixture.seed);
+
+				const OperationResult result = insert_edge_loop(fixture.document, selection, factor);
+
+				ASSERT_TRUE(result.success) << result.message;
+				ASSERT_TRUE(result.changed);
+				ASSERT_EQ(selection.edges.size(), 1U);
+				const ElementId seed_vertex = qdr_test::vertex_at_position(
+					fixture.document, { factor, 0.0F, 0.0F });
+				const ElementId shared_vertex = qdr_test::vertex_at_position(
+					fixture.document, { factor, 1.0F, 0.0F });
+				ASSERT_NE(seed_vertex, kInvalidElementId);
+				ASSERT_NE(shared_vertex, kInvalidElementId);
+				EXPECT_EQ(selection.edges.front(), make_edge(seed_vertex, shared_vertex));
+				EXPECT_FALSE(qdr_test::document_has_edge(fixture.document, fixture.seed));
+				EXPECT_FALSE(qdr_test::document_has_edge(fixture.document, fixture.shared_edge));
+				for (const ElementId endpoint : { fixture.shared_edge.a, fixture.shared_edge.b }) {
+					const Edge descendant = make_edge(endpoint, shared_vertex);
+					EXPECT_EQ(qdr_test::edge_incidence_count(fixture.document, descendant), 2);
+					EXPECT_TRUE(qdr_test::contains_edge(fixture.document.soft_normal_edges, descendant));
+				}
+				for (const ElementId endpoint : { fixture.seed.a, fixture.seed.b }) {
+					const Edge descendant = make_edge(endpoint, seed_vertex);
+					EXPECT_EQ(qdr_test::edge_incidence_count(fixture.document, descendant), 1);
+					EXPECT_TRUE(qdr_test::contains_edge(fixture.document.hard_normal_edges, descendant));
+				}
+				EXPECT_FALSE(qdr_test::contains_edge(fixture.document.hard_normal_edges, fixture.seed));
+				EXPECT_FALSE(qdr_test::contains_edge(fixture.document.soft_normal_edges, fixture.shared_edge));
+				EXPECT_EQ(qdr_test::edge_incidence_count(fixture.document, selection.edges.front()), 2);
+				EXPECT_EQ(std::ranges::count_if(fixture.document.faces, [shared_vertex](const Face& face) {
+					return std::ranges::find(face.vertices, shared_vertex) != face.vertices.end();
+				}), 3);
+				const Face* stopped_face = find_face(fixture.document, fixture.non_quad_face);
+				ASSERT_NE(stopped_face, nullptr);
+				ASSERT_EQ(stopped_face->vertices.size(), side_count + 1U);
+				for (const Face& face : fixture.document.faces) {
+					const Face& donor = face.id == fixture.non_quad_face ? source.faces[1] : source.faces[0];
+					EXPECT_EQ(face.material_slot, donor.material_slot);
+					EXPECT_EQ(face.normal_shading, donor.normal_shading);
+					EXPECT_EQ(face.texture_transform, donor.texture_transform);
+					ASSERT_EQ(face.uvs.size(), face.vertices.size());
+					const float offset = face.id == fixture.non_quad_face ? 100.0F : 0.0F;
+					for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+						const auto position = find_vertex(fixture.document, face.vertices[corner])->position;
+						EXPECT_FLOAT_EQ(face.uvs[corner].x, position.x * 4.0F + offset);
+						EXPECT_FLOAT_EQ(face.uvs[corner].y, position.y * 3.0F - offset);
+					}
+				}
+				qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+				EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+			}
+		}
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     FiveQuadStripEndingAtCollinearPentagonCapsRemainsClosed) {
+	CappedLoopStripFixture fixture = make_capped_loop_strip();
+	const Document source = fixture.document;
+	const Edge seed = make_edge(fixture.front_left.front(), fixture.front_right.front());
+	Selection selection = qdr_test::edge_selection({ seed }, seed);
+
+	const OperationResult result = insert_edge_loop(fixture.document, selection, 0.25F);
+
+	ASSERT_TRUE(result.success) << result.message;
+	ASSERT_TRUE(result.changed);
+	EXPECT_EQ(fixture.document.vertices.size(), source.vertices.size() + 6U);
+	EXPECT_EQ(fixture.document.faces.size(), source.faces.size() + 5U);
+	ASSERT_EQ(selection.edges.size(), 5U);
+	for (std::size_t row = 0U; row < fixture.front_left.size(); ++row) {
+		SCOPED_TRACE(row);
+		const Edge split_edge = make_edge(fixture.front_left[row], fixture.front_right[row]);
+		const ElementId midpoint = qdr_test::vertex_at_position(
+			fixture.document, { 0.5F, 0.0F, static_cast<float>(row) });
+		ASSERT_NE(midpoint, kInvalidElementId);
+		EXPECT_FALSE(qdr_test::document_has_edge(fixture.document, split_edge));
+		EXPECT_EQ(qdr_test::edge_incidence_count(
+			fixture.document, make_edge(split_edge.a, midpoint)), 2);
+		EXPECT_EQ(qdr_test::edge_incidence_count(
+			fixture.document, make_edge(midpoint, split_edge.b)), 2);
+		EXPECT_EQ(std::ranges::count_if(fixture.document.faces, [midpoint](const Face& face) {
+			return std::ranges::find(face.vertices, midpoint) != face.vertices.end();
+		}), row == 0U || row + 1U == fixture.front_left.size() ? 3 : 4);
+	}
+	for (std::size_t index = 0U; index < fixture.caps.size(); ++index) {
+		const Face* cap = find_face(fixture.document, fixture.caps[index]);
+		ASSERT_NE(cap, nullptr);
+		EXPECT_EQ(cap->vertices.size(), 6U);
+		const ElementId endpoint = qdr_test::vertex_at_position(
+			fixture.document, { 0.5F, 0.0F, index == 0U ? 0.0F : 5.0F });
+		EXPECT_NE(std::ranges::find(cap->vertices, endpoint), cap->vertices.end());
+	}
+	EXPECT_TRUE(qdr_test::every_edge_is_closed(fixture.document));
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     UnrelatedCollapsedFacesAndCoincidentLooseVerticesSurviveBoundarySplicing) {
+	NonQuadLoopPathFixture fixture = make_nonquad_loop_path_fixture(5U);
+	const Document island = qdr_test::append_unrelated_authored_geometry(fixture.document);
+	const std::size_t vertex_count = fixture.document.vertices.size();
+	const std::size_t face_count = fixture.document.faces.size();
+	Selection selection = qdr_test::edge_selection({ fixture.seed }, fixture.seed);
+
+	const OperationResult result = insert_edge_loop(fixture.document, selection, 0.25F);
+
+	ASSERT_TRUE(result.success) << result.message;
+	ASSERT_TRUE(result.changed);
+	EXPECT_EQ(fixture.document.vertices.size(), vertex_count + 2U);
+	EXPECT_EQ(fixture.document.faces.size(), face_count + 1U);
+	qdr_test::expect_unrelated_authored_geometry_preserved(fixture.document, island);
+	EXPECT_TRUE(validate_polygon_document(fixture.document,
+		PolygonDocumentValidationPolicy::AuthoredTopology).ok());
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     InvalidAuthoredBoundaryDataAndNonfiniteFactorsRejectWithoutMutation) {
+	for (const qdr_test::AuthoredInputFault fault : qdr_test::kAuthoredInputFaults) {
+		SCOPED_TRACE(static_cast<int>(fault));
+		NonQuadLoopPathFixture fixture = make_nonquad_loop_path_fixture(5U);
+		static_cast<void>(qdr_test::append_unrelated_authored_geometry(fixture.document));
+		qdr_test::corrupt_unrelated_authored_geometry(fixture.document, fault);
+		Selection selection = qdr_test::edge_selection({ fixture.seed }, fixture.seed);
+		const auto source = qdr_test::document_fingerprint(fixture.document);
+		const auto source_selection = qdr_test::selection_fingerprint(selection);
+
+		const OperationResult result = insert_edge_loop(fixture.document, selection, 0.25F);
+
+		EXPECT_FALSE(result.success);
+		EXPECT_FALSE(result.changed);
+		EXPECT_FALSE(result.message.empty());
+		EXPECT_EQ(qdr_test::document_fingerprint(fixture.document), source);
+		EXPECT_EQ(qdr_test::selection_fingerprint(selection), source_selection);
+	}
+	for (const float factor : { std::numeric_limits<float>::quiet_NaN(),
+		std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity() }) {
+		NonQuadLoopPathFixture fixture = make_nonquad_loop_path_fixture(3U);
+		Selection selection = qdr_test::edge_selection({ fixture.seed }, fixture.seed);
+		const auto source = qdr_test::document_fingerprint(fixture.document);
+		const auto source_selection = qdr_test::selection_fingerprint(selection);
+
+		const OperationResult result = insert_edge_loop(fixture.document, selection, factor);
+
+		EXPECT_FALSE(result.success);
+		EXPECT_FALSE(result.changed);
+		EXPECT_FALSE(result.message.empty());
+		EXPECT_EQ(qdr_test::document_fingerprint(fixture.document), source);
+		EXPECT_EQ(qdr_test::selection_fingerprint(selection), source_selection);
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+     CollapsedWalkedQuadRejectsWithoutPublishingBoundarySplices) {
+	NonQuadLoopPathFixture fixture = make_nonquad_loop_path_fixture(5U);
+	find_vertex(fixture.document, fixture.seed.a)->position.y = 1.0F;
+	find_vertex(fixture.document, fixture.seed.b)->position.y = 1.0F;
+	ASSERT_TRUE(validate_polygon_document(fixture.document,
+		PolygonDocumentValidationPolicy::AuthoredTopology).ok());
+	Selection selection = qdr_test::edge_selection({ fixture.seed }, fixture.seed);
+	const auto source = qdr_test::document_fingerprint(fixture.document);
+	const auto source_selection = qdr_test::selection_fingerprint(selection);
+
+	const OperationResult result = insert_edge_loop(fixture.document, selection, 0.25F);
+
+	EXPECT_FALSE(result.success);
+	EXPECT_FALSE(result.changed);
+	EXPECT_FALSE(result.message.empty());
+	EXPECT_EQ(qdr_test::document_fingerprint(fixture.document), source);
+	EXPECT_EQ(qdr_test::selection_fingerprint(selection), source_selection);
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopAllowsUnrelatedNonManifoldTopology) {

@@ -332,6 +332,22 @@ bool QuaderSceneApi::can_unparent_selection() const {
          session.document_commands().can_unparent_selection();
 }
 
+bool QuaderSceneApi::can_group_selection() const {
+  const SceneSession &session = scene_session(session_);
+  const ModelingSelectionMode mode = session.modeling().selection_mode();
+  return (mode == ModelingSelectionMode::Object ||
+          mode == ModelingSelectionMode::Group) &&
+         session.document_commands().can_group_selection();
+}
+
+bool QuaderSceneApi::can_ungroup_selection() const {
+  const SceneSession &session = scene_session(session_);
+  const ModelingSelectionMode mode = session.modeling().selection_mode();
+  return (mode == ModelingSelectionMode::Object ||
+          mode == ModelingSelectionMode::Group) &&
+         session.document_commands().can_ungroup_selection();
+}
+
 QuaderApiVoidResult QuaderSceneApi::set_transform(EntityId entity,
                                                   QuaderTransform transform) {
   SceneSession &session = scene_session(session_);

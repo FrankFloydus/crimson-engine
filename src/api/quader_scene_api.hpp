@@ -173,6 +173,8 @@ public:
     QuaderApiVoidResult unparent_selection();
     [[nodiscard]] bool can_parent_selection_to_active() const;
     [[nodiscard]] bool can_unparent_selection() const;
+    [[nodiscard]] bool can_group_selection() const;
+    [[nodiscard]] bool can_ungroup_selection() const;
     QuaderApiVoidResult set_transform(EntityId entity,
                                       QuaderTransform transform);
     QuaderApiVoidResult

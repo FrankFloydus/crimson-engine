@@ -9,6 +9,7 @@
 #include "assets/mesh_asset.hpp"
 
 #include <cstdint>
+#include <array>
 #include <span>
 #include <vector>
 
@@ -22,6 +23,20 @@ struct MeshQuadUvInterpolation final {
   QVec2 uv_correction{};
   bool enabled = false;
 };
+
+/// Retains exclusive authored quad corner bindings independently of coordinates.
+struct MeshQuadUvInterpolationPlan final {
+  std::size_t vertex_count = 0u;
+  std::vector<std::array<std::uint32_t, 4u>> corners;
+};
+
+[[nodiscard]] MeshQuadUvInterpolationPlan prepare_mesh_quad_uv_interpolation(
+    std::size_t vertex_count, std::span<const std::uint32_t> indices,
+    std::span<const MeshPrimitiveSpan> primitives);
+
+[[nodiscard]] std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
+    std::span<const MeshVertex> vertices, const MeshQuadUvInterpolationPlan &plan,
+    std::span<const QVec3> positions = {});
 
 /// Builds optional inverse-bilinear UV correction from original, uncoalesced
 /// compiler face spans. Nonzero distinct source vertex IDs and exclusive corner

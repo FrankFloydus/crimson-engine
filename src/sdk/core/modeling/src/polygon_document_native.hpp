@@ -18,17 +18,63 @@
 
 namespace quader::modeling {
 
+struct PolygonDocumentPublication;
+struct PreparedSelectionTransformWorkState;
+
+/**
+ * Pins authored topology and an optional immutable coordinate publication.
+ * Legacy dereference materializes once; metadata reads never detach topology.
+ */
+class PolygonDocumentStorage final {
+public:
+  PolygonDocumentStorage();
+  explicit PolygonDocumentStorage(
+      std::shared_ptr<const quader_poly::Document> document);
+  PolygonDocumentStorage &operator=(
+      std::shared_ptr<const quader_poly::Document> document);
+  [[nodiscard]] const quader_poly::Document &operator*() const;
+  [[nodiscard]] const quader_poly::Document *operator->() const;
+  [[nodiscard]] PolygonContentIdentity identity() const noexcept;
+  [[nodiscard]] PolygonContentIdentity topology_identity() const noexcept;
+  [[nodiscard]] PolygonDocumentReadSnapshot read_snapshot() const;
+  [[nodiscard]] std::size_t vertex_count() const noexcept;
+  [[nodiscard]] std::size_t face_count() const noexcept;
+  [[nodiscard]] quader_poly::ElementId next_vertex_id() const noexcept;
+  [[nodiscard]] quader_poly::ElementId next_face_id() const noexcept;
+  [[nodiscard]] std::shared_ptr<const quader_poly::Document>
+  materialized_document() const;
+  [[nodiscard]] static PolygonDocumentStorage with_positions(
+      std::shared_ptr<const quader_poly::Document> source,
+      std::shared_ptr<const std::vector<std::size_t>> vertex_indices,
+      std::shared_ptr<const std::vector<VertexPositionUpdate>> positions,
+      std::shared_ptr<PreparedSelectionTransformWorkState> work_state,
+      PolygonContentIdentity topology_identity);
+  friend bool operator==(const PolygonDocumentStorage &,
+                         const PolygonDocumentStorage &) = default;
+
+private:
+  [[nodiscard]] const quader_poly::Document &read_document() const;
+  explicit PolygonDocumentStorage(
+      std::shared_ptr<const PolygonDocumentPublication> publication);
+  std::shared_ptr<const PolygonDocumentPublication> publication_;
+};
+
+/** Retains allocation cursors independently of lazy coordinate materialization. */
+struct PolygonDocumentIdentityHighWater {
+  quader_poly::ElementId next_vertex_id = 1;
+  quader_poly::ElementId next_face_id = 1;
+};
+
 /**
  * Stores the native polygon document state hidden behind the SDK facade.
  */
 struct PolygonDocumentImpl {
-  std::shared_ptr<const quader_poly::Document> document =
-      std::make_shared<const quader_poly::Document>();
+  PolygonDocumentStorage document;
   std::shared_ptr<const quader_poly::Selection> selection =
       std::make_shared<const quader_poly::Selection>();
   std::uint64_t content_revision = 1;
   std::uint64_t selection_revision = 0;
-  mutable std::shared_ptr<const quader_poly::Document> edge_cache_document;
+  mutable PolygonContentIdentity edge_cache_document;
   mutable std::shared_ptr<const std::vector<quader_poly::Edge>> edge_cache;
 };
 
@@ -71,6 +117,12 @@ public:
   [[nodiscard]] static const quader_poly::Document &
   document(const PolygonDocument &document) {
     return *document.impl_->document;
+  }
+
+  [[nodiscard]] static PolygonDocumentIdentityHighWater
+  identity_high_water(const PolygonDocument &document) noexcept {
+    return {.next_vertex_id = document.impl_->document.next_vertex_id(),
+            .next_face_id = document.impl_->document.next_face_id()};
   }
 
   [[nodiscard]] static const quader_poly::Selection &

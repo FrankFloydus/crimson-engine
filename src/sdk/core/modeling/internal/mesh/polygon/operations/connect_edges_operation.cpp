@@ -50,6 +50,11 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
     return OperationResult::failure("Connect Edges needs edge selection mode.");
   }
 
+    const OperationResult source_validation = validate_authored_operation_candidate(document, document);
+    if (!source_validation.success) {
+        return source_validation;
+    }
+
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.size() < 2) {
         return OperationResult::failure("Select at least two valid edges to connect.");
@@ -154,6 +159,17 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             continue;
         }
 
+        Face expanded_source = face;
+        expanded_source.vertices = expanded_loop;
+        const std::size_t chord_count = cut_indices.size() == 2U ? 1U : cut_indices.size();
+        for (std::size_t index = 0; index < chord_count; ++index) {
+            if (!authored_face_chord_is_valid(candidate, expanded_source,
+                    expanded_loop[cut_indices[index]],
+                    expanded_loop[cut_indices[(index + 1U) % cut_indices.size()]])) {
+                return OperationResult::failure("Connect Edges needs chords inside the authored face boundary.");
+            }
+        }
+
         if (cut_indices.size() == 2) {
             std::vector<ElementId> first_loop = unique_valid_face_loop(loop_between_indices(expanded_loop, cut_indices[0], cut_indices[1]));
             std::vector<ElementId> second_loop = unique_valid_face_loop(loop_between_indices(expanded_loop, cut_indices[1], cut_indices[0]));
@@ -230,7 +246,6 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
     }
 
     candidate.faces = std::move(rebuilt_faces);
-    prune_invalid_faces(candidate);
     restore_source_face_orientation(document, candidate);
     remap_normal_edge_states_after_edge_splits(
         document, candidate, split_vertices);
@@ -247,8 +262,9 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
     }
     (void)copy_edge_normal_modes(
         document, candidate, connector_normal_mode_copies);
-    if (!every_face_triangulates(candidate)) {
-        return OperationResult::failure("Connect Edges would create invalid face geometry.");
+    const OperationResult validation = validate_authored_operation_candidate(document, candidate);
+    if (!validation.success) {
+        return validation;
     }
 
     document = std::move(candidate);

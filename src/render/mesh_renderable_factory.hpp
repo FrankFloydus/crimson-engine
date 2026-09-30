@@ -78,6 +78,77 @@ public:
         bool depth_only = false,
         std::uint8_t channel = kViewportDefaultRenderableChannel,
         const RenderInstanceBounds *local_bounds_override = nullptr);
+    /// Owns dynamic vertex/index buffers without an entity or material. Destroy
+    /// every borrowing instance chunk before destroying this owner; upload each
+    /// validated family update through the owner exactly once.
+    MeshRenderableProxy create_dynamic_geometry(
+        const RenderMeshAssetSnapshot &mesh,
+        std::span<const QVec3> dynamic_positions = {});
+    static constexpr std::size_t kEditableSurfaceMaximumOccurrences = 64u;
+    static constexpr std::size_t kEditableSurfaceMaximumVertices = 65536u;
+    static constexpr std::size_t kEditableSurfaceMaximumIndices = 262144u;
+    static constexpr float kEditableSurfaceMaximumPlacementOffset = 4096.0f;
+    /// One canonical mesh occurrence. Selected primitive spans share the
+    /// chunk's resolved material; an empty span includes the complete index list.
+    /// Borrowed spans remain immutable until CPU preparation has joined.
+    struct EditableSurfaceSource final {
+      RenderMeshAssetSnapshot mesh;
+      std::span<const QVec3> positions;
+      std::shared_ptr<const std::vector<QVec3>> position_payload;
+      std::span<const MeshPrimitiveSpan> primitives;
+      QMat4 world_from_local;
+      QMat4 sampling_from_local;
+      std::uint64_t position_revision = 0u;
+    };
+    /// Owns validated immutable CPU streams, palette and material parameters.
+    /// Geometry descriptors are single-use; presentation parameters are shared
+    /// by the rendered, shaded and depth borrowers of one geometry owner.
+    struct EditableSurfaceUpdate;
+    /// Shares canonical CPU packs only across one joined preparation batch.
+    /// Concurrent chunk workers may use it; it owns no Filament resources.
+    struct EditableSurfacePreparationContext;
+    [[nodiscard]] static std::shared_ptr<EditableSurfacePreparationContext>
+    create_editable_surface_preparation_context();
+    /// Register immutable stream identities before starting preparation workers.
+    /// Unique sources bypass the shared-promise interner entirely.
+    static void register_editable_surface_sources(
+        EditableSurfacePreparationContext &context,
+        std::span<const EditableSurfaceSource> sources);
+    [[nodiscard]] static bool supports_editable_surface_transform(const QMat4 &transform);
+    [[nodiscard]] static std::shared_ptr<EditableSurfaceUpdate>
+    prepare_editable_surface_update(std::span<const EditableSurfaceSource> sources,
+                                    const MeshRenderableProxy *existing = nullptr,
+                                    std::shared_ptr<EditableSurfacePreparationContext> context = {});
+    [[nodiscard]] static bool editable_surface_update_reuses_geometry(
+        const EditableSurfaceUpdate &prepared);
+    [[nodiscard]] static RenderInstanceBounds editable_surface_world_bounds(
+        const EditableSurfaceUpdate &prepared);
+    /// Owns combined buffers and the palette without an entity or material.
+    /// Destroy all pass borrowers before destroying this owner.
+    MeshRenderableProxy create_editable_surface_geometry(
+        std::shared_ptr<EditableSurfaceUpdate> prepared);
+    MeshRenderableProxy create_editable_surface_proxy(
+        const MeshRenderableProxy &geometry_owner,
+        const RenderMaterialAssetSnapshot *material,
+        const RenderInstanceBounds &world_bounds, bool cast_shadows,
+        bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
+        bool editor_unlit = false, bool depth_only = false,
+        std::uint8_t channel = kViewportDefaultRenderableChannel,
+        std::uint8_t presentation_flags = 0u);
+    [[nodiscard]] bool validate_editable_surface_update(
+        const MeshRenderableProxy &owner, const EditableSurfaceUpdate &prepared) const;
+    [[nodiscard]] bool validate_editable_surface_presentation(
+        const MeshRenderableProxy &proxy, const MeshRenderableProxy &owner,
+        const EditableSurfaceUpdate &prepared) const;
+    /// Apply only after validating the complete owner/pass publication batch.
+    bool update_editable_surface_geometry(MeshRenderableProxy &owner,
+        std::shared_ptr<EditableSurfaceUpdate> prepared);
+    bool update_editable_surface_presentation(MeshRenderableProxy &proxy,
+        const EditableSurfaceUpdate &prepared,
+        const RenderInstanceBounds &world_bounds, bool cast_shadows);
+    /// An optional dynamic geometry owner supplies already-created buffers.
+    /// The caller guarantees identical geometry for every occurrence; the
+    /// owner outlives the returned chunk and owns all subsequent uploads.
     MeshRenderableProxy create_explicit_instances(
         const RenderMeshAssetSnapshot &mesh,
         const RenderMaterialBindingSnapshot *material,
@@ -87,7 +158,8 @@ public:
         bool editor_unlit = false, bool depth_only = false,
         std::uint8_t channel = kViewportDefaultRenderableChannel,
         std::uint8_t presentation_flags = 0u,
-        std::size_t instance_capacity = 0u);
+        std::size_t instance_capacity = 0u,
+        const MeshRenderableProxy *geometry_source = nullptr);
     MeshRenderableProxy create_instance_selection_fill(
         const RenderMeshAssetSnapshot &mesh, filament::Material &material,
         std::span<const QMat4> world_transforms,
@@ -106,6 +178,19 @@ public:
     bool update_explicit_instances(
         const MeshRenderableProxy &proxy,
         std::span<const QMat4> world_transforms,
+        const RenderInstanceBounds &world_bounds);
+    /// Converts instance transforms before a batch mutates retained geometry.
+    /// The immutable result can update sibling passes without host allocation.
+    struct ExplicitInstanceUpdate;
+    [[nodiscard]] static std::shared_ptr<ExplicitInstanceUpdate>
+    prepare_explicit_instance_update(std::span<const QMat4> world_transforms);
+    /// Requires an existing renderable with the prepared exact active count.
+    [[nodiscard]] bool validate_explicit_instances(
+        const MeshRenderableProxy &proxy,
+        const ExplicitInstanceUpdate &prepared) const;
+    bool update_explicit_instances_prepared(
+        const MeshRenderableProxy &proxy,
+        const ExplicitInstanceUpdate &prepared,
         const RenderInstanceBounds &world_bounds);
     /// Uploads a compact visible prefix and changes the active instance count
     /// without replacing the entity, geometry, material, or InstanceBuffer.
@@ -142,14 +227,18 @@ public:
     struct DynamicGeometryUpdate;
     /// Callers keep borrowed inputs alive and immutable until the prepared
     /// result is consumed once; snapshot-owned geometry is pinned internally.
+    /// An unconsumed equivalent update may share its immutable packed bytes;
+    /// mismatched geometry or effective positions reject reuse before upload.
     [[nodiscard]] static std::shared_ptr<DynamicGeometryUpdate>
     prepare_dynamic_geometry_update(
         const RenderMeshAssetSnapshot &mesh,
-        std::span<const QVec3> dynamic_positions = {});
+        std::span<const QVec3> dynamic_positions = {},
+        const std::shared_ptr<DynamicGeometryUpdate> &equivalent_update = {});
     /// Refreshes every mutable stream of a topology-retained preview. The
     /// vertex/index counts stay fixed, while deformation-derived normals,
     /// tangent frames, UVs, surface-grid projections, and triangulation may
-    /// change together with positions.
+    /// change together with positions. Only owning proxies accept uploads;
+    /// an entity-less owner leaves each instance chunk's world bounds intact.
     bool update_dynamic_geometry(const MeshRenderableProxy &proxy,
                                  const RenderMeshAssetSnapshot &mesh,
                                  std::span<const QVec3> dynamic_positions = {},
@@ -199,6 +288,20 @@ public:
       std::uint64_t upload_count = 0u;
       std::uint64_t uploaded_vertex_bytes = 0u;
       std::uint64_t uploaded_index_bytes = 0u;
+      std::uint64_t dynamic_geometry_create_count = 0u;
+      std::uint64_t dynamic_geometry_upload_count = 0u;
+      std::uint64_t dynamic_uploaded_vertex_bytes = 0u;
+      std::uint64_t dynamic_uploaded_index_bytes = 0u;
+      std::size_t editable_surface_live_geometry_count = 0u;
+      std::uint64_t editable_surface_geometry_create_count = 0u;
+      std::uint64_t editable_surface_attribute_pack_count = 0u;
+      std::uint64_t editable_surface_canonical_reuse_count = 0u;
+      std::uint64_t editable_surface_position_upload_count = 0u;
+      std::uint64_t editable_surface_attribute_upload_count = 0u;
+      std::uint64_t editable_surface_index_upload_count = 0u;
+      std::uint64_t editable_surface_palette_upload_count = 0u;
+      std::uint64_t editable_surface_uploaded_vertex_bytes = 0u;
+      std::uint64_t editable_surface_uploaded_index_bytes = 0u;
     };
 
     [[nodiscard]] GeometryCacheStats geometry_cache_stats() const;

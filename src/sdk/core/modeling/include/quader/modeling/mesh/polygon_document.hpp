@@ -23,9 +23,13 @@ namespace quader::modeling {
 
 struct PolygonDocumentImpl;
 class PolygonDocumentNativeAccess;
+class PolygonDocumentReadSnapshot;
 class PreparedFaceExtrusion;
 struct PreparedFaceExtrusionImpl;
 struct FaceExtrusionEvaluation;
+class PreparedSelectionTransform;
+struct PreparedSelectionTransformImpl;
+struct SelectionTransformEvaluation;
 
 /**
  * Enumerates SDK polygon component selection modes.
@@ -180,6 +184,7 @@ struct PolygonSelectionTopologyEligibility {
   bool bridge_edge_pair = false;
   bool selected_edges_belong_to_faces = false;
   bool selected_edges_are_interior = false;
+  bool selected_edges_are_open_boundary = false;
   bool three_selected_open_boundary_edges = false;
   bool selected_vertices_belong_to_faces = false;
   bool selected_vertices_share_face = false;
@@ -289,6 +294,10 @@ public:
   [[nodiscard]] Result<OperationResult> translate_selection(Vec3 delta);
   [[nodiscard]] Result<OperationResult>
   transform_selection(Transform3 transform);
+  /// Captures the source and selected vertex storage indices for repeated
+  /// topology-preserving transform evaluations relative to this document.
+  [[nodiscard]] Result<PreparedSelectionTransform>
+  prepare_selection_transform() const;
   [[nodiscard]] Result<OperationResult>
   set_vertex_positions(std::span<const VertexPositionUpdate> updates);
   [[nodiscard]] Result<OperationResult>
@@ -380,11 +389,51 @@ public:
 
 private:
   friend class PolygonDocumentNativeAccess;
+  friend PolygonDocumentReadSnapshot
+  polygon_document_read_snapshot(const PolygonDocument &document);
   friend class PreparedFaceExtrusion;
+  friend class PreparedSelectionTransform;
 
   explicit PolygonDocument(std::unique_ptr<PolygonDocumentImpl> impl);
 
   std::unique_ptr<PolygonDocumentImpl> impl_;
+};
+
+/** Carries an immutable transform candidate and its receipt against the source. */
+struct SelectionTransformEvaluation {
+  PolygonDocument document;
+  OperationResult receipt;
+  /// All prepared targets in source storage order, including unchanged targets.
+  /// Shares the candidate's authoritative coordinates; null for an empty target.
+  std::shared_ptr<const std::vector<VertexPositionUpdate>> positions;
+};
+
+/** Reports coordinate publication and legacy materialization work for one plan. */
+struct PreparedSelectionTransformWorkStats {
+  std::uint64_t coordinate_publication_count = 0;
+  std::uint64_t evaluated_vertex_count = 0;
+  std::uint64_t topology_materialization_count = 0;
+  std::uint64_t coordinate_snapshot_count = 0;
+};
+
+/**
+ * Resolves component selection once for a topology-preserving gesture. Each
+ * evaluation starts from the captured source, preserves selection and authored
+ * UVs, and rejects nonfinite input or output without changing earlier results.
+ * Identity/no-op evaluations retain the source's immutable topology identity.
+ */
+class PreparedSelectionTransform final {
+public:
+  [[nodiscard]] bool valid() const noexcept { return impl_ != nullptr; }
+  [[nodiscard]] Result<SelectionTransformEvaluation>
+  evaluate_translation(Vec3 delta) const;
+  [[nodiscard]] Result<SelectionTransformEvaluation>
+  evaluate_transform(Transform3 transform) const;
+  [[nodiscard]] PreparedSelectionTransformWorkStats work_stats() const noexcept;
+
+private:
+  friend class PolygonDocument;
+  std::shared_ptr<const PreparedSelectionTransformImpl> impl_;
 };
 
 /** An evaluated candidate and its complete receipt relative to the captured source. */

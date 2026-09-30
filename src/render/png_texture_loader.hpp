@@ -34,6 +34,8 @@ struct PngTextureLoadOptions {
   bool flip_y = false;
   bool generate_mipmaps = false;
   const char *label = "PNG texture";
+  /// Optional decode-time result; false on failure or any non-opaque alpha.
+  bool *opaque_output = nullptr;
 };
 
 [[nodiscard]] filament::Texture *

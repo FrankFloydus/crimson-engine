@@ -1,5 +1,8 @@
 # Lasso Select icon provenance
 
+This earlier revision is superseded by the SVG-based artwork documented in
+[modeling_tool_icons.provenance.md](modeling_tool_icons.provenance.md).
+
 Created for Quader on 2026-09-08 with the built-in `image_gen` tool at the user's request. This is original generated project artwork, using the supplied lasso/cursor concept and the existing toolbar's visual style.
 
 Asset: `tool_lasso.png`.

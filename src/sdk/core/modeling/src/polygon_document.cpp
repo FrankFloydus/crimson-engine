@@ -12,18 +12,22 @@
 #include <quader/modeling/neutral/polygon/document_builder.hpp>
 #include <quader/modeling/neutral/polygon/document_mesh_compilation.hpp>
 #include <quader/modeling/neutral/polygon/document_operations.hpp>
+#include <quader/modeling/neutral/polygon/document_read_snapshot.hpp>
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <map>
+#include <mutex>
 #include <numeric>
 #include <optional>
 #include <ranges>
@@ -36,10 +40,193 @@
 
 namespace quader::modeling {
 
+namespace {
+
+[[nodiscard]] PolygonContentIdentity next_polygon_content_identity() noexcept {
+  static std::atomic<std::uint64_t> next_identity{1U};
+  return {next_identity.fetch_add(1U, std::memory_order_relaxed)};
+}
+
+} // namespace
+
+/** Counts work across immutable candidates produced by one prepared gesture. */
+struct PreparedSelectionTransformWorkState {
+  std::atomic<std::uint64_t> coordinate_publication_count{0U};
+  std::atomic<std::uint64_t> evaluated_vertex_count{0U};
+  std::atomic<std::uint64_t> topology_materialization_count{0U};
+  std::atomic<std::uint64_t> coordinate_snapshot_count{0U};
+};
+
+/**
+ * Owns one immutable authored publication independently of its materialized
+ * storage. Coordinate candidates pin a flat source, never another candidate.
+ */
+struct PolygonDocumentPublication {
+  explicit PolygonDocumentPublication(
+      std::shared_ptr<const quader_poly::Document> source_document,
+      std::shared_ptr<const std::vector<std::size_t>> selected_indices = {},
+      std::shared_ptr<const std::vector<VertexPositionUpdate>> selected_positions = {},
+      std::shared_ptr<PreparedSelectionTransformWorkState> statistics = {},
+      PolygonContentIdentity retained_topology_identity = {})
+      : source(std::move(source_document)),
+        vertex_indices(std::move(selected_indices)),
+        positions(std::move(selected_positions)), work_state(std::move(statistics)),
+        identity(next_polygon_content_identity()),
+        topology_identity(retained_topology_identity.valid()
+                              ? retained_topology_identity : identity) {}
+
+  std::shared_ptr<const quader_poly::Document> source;
+  std::shared_ptr<const std::vector<std::size_t>> vertex_indices;
+  std::shared_ptr<const std::vector<VertexPositionUpdate>> positions;
+  std::shared_ptr<PreparedSelectionTransformWorkState> work_state;
+  PolygonContentIdentity identity;
+  PolygonContentIdentity topology_identity;
+  mutable std::once_flag coordinate_snapshot_once;
+  mutable std::shared_ptr<const std::vector<quader_poly::Vertex>> coordinate_vertices;
+  mutable std::once_flag materialization_once;
+  mutable std::shared_ptr<const quader_poly::Document> materialized;
+};
+
+PolygonDocumentStorage::PolygonDocumentStorage()
+    : PolygonDocumentStorage(std::make_shared<const quader_poly::Document>()) {}
+
+PolygonDocumentStorage::PolygonDocumentStorage(
+    std::shared_ptr<const quader_poly::Document> document)
+    : publication_(std::make_shared<const PolygonDocumentPublication>(
+          std::move(document))) {}
+
+PolygonDocumentStorage::PolygonDocumentStorage(
+    std::shared_ptr<const PolygonDocumentPublication> publication)
+    : publication_(std::move(publication)) {}
+
+PolygonDocumentStorage &PolygonDocumentStorage::operator=(
+    std::shared_ptr<const quader_poly::Document> document) {
+  publication_ = std::make_shared<const PolygonDocumentPublication>(
+      std::move(document));
+  return *this;
+}
+
+const quader_poly::Document &PolygonDocumentStorage::read_document() const {
+  if (!publication_->positions) {
+    return *publication_->source;
+  }
+  std::call_once(publication_->materialization_once, [this] {
+    QDR_PROFILE_SCOPE("PolygonDocument materialize coordinate publication");
+    auto materialized =
+        std::make_shared<quader_poly::Document>(*publication_->source);
+    for (std::size_t index = 0U; index < publication_->vertex_indices->size();
+         ++index) {
+      const auto &position = (*publication_->positions)[index].position;
+      materialized->vertices[(*publication_->vertex_indices)[index]].position =
+          {position.x, position.y, position.z};
+    }
+    publication_->materialized = std::move(materialized);
+    if (publication_->work_state) {
+      publication_->work_state->topology_materialization_count.fetch_add(
+          1U, std::memory_order_relaxed);
+    }
+  });
+  return *publication_->materialized;
+}
+
+std::shared_ptr<const quader_poly::Document>
+PolygonDocumentStorage::materialized_document() const {
+  (void)read_document();
+  return publication_->positions ? publication_->materialized
+                                 : publication_->source;
+}
+
+const quader_poly::Document &PolygonDocumentStorage::operator*() const {
+  return read_document();
+}
+
+const quader_poly::Document *PolygonDocumentStorage::operator->() const {
+  return &read_document();
+}
+
+PolygonContentIdentity PolygonDocumentStorage::identity() const noexcept {
+  return publication_->identity;
+}
+
+PolygonContentIdentity PolygonDocumentStorage::topology_identity() const noexcept {
+  return publication_->topology_identity;
+}
+
+PolygonDocumentReadSnapshot PolygonDocumentStorage::read_snapshot() const {
+  if (publication_->positions) {
+    std::call_once(publication_->coordinate_snapshot_once, [this] {
+      QDR_PROFILE_SCOPE("PolygonDocument publish coordinate snapshot");
+      auto vertices = std::make_shared<std::vector<quader_poly::Vertex>>(
+          publication_->source->vertices);
+      for (std::size_t index = 0U; index < publication_->vertex_indices->size();
+           ++index) {
+        const auto &position = (*publication_->positions)[index].position;
+        (*vertices)[(*publication_->vertex_indices)[index]].position =
+            {position.x, position.y, position.z};
+      }
+      publication_->coordinate_vertices = std::move(vertices);
+      if (publication_->work_state) {
+        publication_->work_state->coordinate_snapshot_count.fetch_add(
+            1U, std::memory_order_relaxed);
+      }
+    });
+    return {publication_->source, publication_->coordinate_vertices,
+            publication_->identity, publication_->topology_identity};
+  }
+  return {publication_->source, {}, publication_->identity,
+          publication_->topology_identity};
+}
+
+PolygonDocumentReadSnapshot
+polygon_document_read_snapshot(const PolygonDocument &document) {
+  return document.impl_->document.read_snapshot();
+}
+
+std::size_t PolygonDocumentStorage::vertex_count() const noexcept {
+  return publication_->source->vertices.size();
+}
+
+std::size_t PolygonDocumentStorage::face_count() const noexcept {
+  return publication_->source->faces.size();
+}
+
+quader_poly::ElementId PolygonDocumentStorage::next_vertex_id() const noexcept {
+  return publication_->source->next_vertex_id;
+}
+
+quader_poly::ElementId PolygonDocumentStorage::next_face_id() const noexcept {
+  return publication_->source->next_face_id;
+}
+
+PolygonDocumentStorage PolygonDocumentStorage::with_positions(
+    std::shared_ptr<const quader_poly::Document> source,
+    std::shared_ptr<const std::vector<std::size_t>> vertex_indices,
+    std::shared_ptr<const std::vector<VertexPositionUpdate>> positions,
+    std::shared_ptr<PreparedSelectionTransformWorkState> work_state,
+    PolygonContentIdentity topology_identity) {
+  return PolygonDocumentStorage(std::make_shared<const PolygonDocumentPublication>(
+      std::move(source), std::move(vertex_indices), std::move(positions),
+      std::move(work_state), topology_identity));
+}
+
 /** Owns the source snapshot and immutable neutral extrusion generation. */
 struct PreparedFaceExtrusionImpl {
   PolygonDocument source;
   quader_poly::FaceExtrusionPreparation preparation;
+};
+
+/** Retains immutable authored state and dense transform targets for a gesture. */
+struct PreparedSelectionTransformImpl {
+  explicit PreparedSelectionTransformImpl(const PolygonDocument &document)
+      : source(document) {}
+
+  PolygonDocument source;
+  std::shared_ptr<const quader_poly::Document> source_document;
+  PolygonContentIdentity source_topology_identity;
+  std::shared_ptr<const std::vector<std::size_t>> vertex_indices;
+  std::shared_ptr<const std::vector<VertexPositionUpdate>> source_positions;
+  std::shared_ptr<PreparedSelectionTransformWorkState> work_state =
+      std::make_shared<PreparedSelectionTransformWorkState>();
 };
 
 namespace {
@@ -885,6 +1072,66 @@ apply_operation(PolygonDocumentImpl &impl, Operation operation,
   return operation_success(std::move(result));
 }
 
+[[nodiscard]] bool finite_position(quader::QVec3 position) {
+  return std::isfinite(position.x) && std::isfinite(position.y) &&
+         std::isfinite(position.z);
+}
+
+template <typename TransformPosition>
+[[nodiscard]] Result<SelectionTransformEvaluation>
+evaluate_prepared_selection_transform(
+    const PreparedSelectionTransformImpl &prepared,
+    TransformPosition transform_position) {
+  QDR_PROFILE_SCOPE("PolygonDocument evaluate prepared selection transform");
+  const auto &source = *prepared.source_document;
+  std::shared_ptr<std::vector<VertexPositionUpdate>> positions;
+  if (!prepared.vertex_indices->empty()) {
+    positions = std::make_shared<std::vector<VertexPositionUpdate>>();
+    positions->reserve(prepared.vertex_indices->size());
+  }
+  bool changed = false;
+  for (const std::size_t index : *prepared.vertex_indices) {
+    const auto &vertex = source.vertices[index];
+    const auto position = vertex.position;
+    const auto desired = transform_position(position);
+    if (!finite_position(desired)) {
+      return Result<SelectionTransformEvaluation>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Vertex position updates must contain finite coordinates."));
+    }
+    const bool vertex_changed = desired.x != position.x ||
+                                desired.y != position.y || desired.z != position.z;
+    changed = changed || vertex_changed;
+    positions->push_back({.vertex = vertex_id(vertex.id),
+                          .position = from_native(vertex_changed ? desired : position)});
+  }
+  prepared.work_state->evaluated_vertex_count.fetch_add(
+      prepared.vertex_indices->size(), std::memory_order_relaxed);
+
+  SelectionTransformEvaluation evaluation{.document = prepared.source};
+  evaluation.receipt.changed = changed;
+  evaluation.receipt.dirty.geometry = changed;
+  if (prepared.vertex_indices->empty()) {
+    evaluation.receipt.message = "No polygon elements are selected.";
+  }
+  if (changed) {
+    // The SDK candidate and native preview share the same immutable coordinates.
+    // Faces, UVs and connectivity remain pinned until a legacy consumer asks for
+    // a complete document; validation precedes any candidate publication.
+    evaluation.positions = std::move(positions);
+    auto &candidate = PolygonDocumentNativeAccess::impl(evaluation.document);
+    candidate.document = PolygonDocumentStorage::with_positions(
+        prepared.source_document, prepared.vertex_indices, evaluation.positions,
+        prepared.work_state, prepared.source_topology_identity);
+    bump_content(candidate, true);
+    prepared.work_state->coordinate_publication_count.fetch_add(
+        1U, std::memory_order_relaxed);
+  } else {
+    evaluation.positions = prepared.source_positions;
+  }
+  return Result<SelectionTransformEvaluation>::success(std::move(evaluation));
+}
+
 } // namespace
 
 PolygonDocument::PolygonDocument()
@@ -916,14 +1163,15 @@ PolygonDocument::operator=(PolygonDocument &&other) noexcept = default;
 PolygonDocument::~PolygonDocument() = default;
 
 void PolygonDocument::preserve_identity_high_water(const PolygonDocument &other) {
-  const quader_poly::Document &current = *impl_->document;
-  const quader_poly::Document &observed = *other.impl_->document;
-  const auto next_vertex_id = std::max(current.next_vertex_id, observed.next_vertex_id);
-  const auto next_face_id = std::max(current.next_face_id, observed.next_face_id);
-  if (next_vertex_id == current.next_vertex_id && next_face_id == current.next_face_id) {
+  const auto next_vertex_id = std::max(impl_->document.next_vertex_id(),
+                                       other.impl_->document.next_vertex_id());
+  const auto next_face_id = std::max(impl_->document.next_face_id(),
+                                     other.impl_->document.next_face_id());
+  if (next_vertex_id == impl_->document.next_vertex_id() &&
+      next_face_id == impl_->document.next_face_id()) {
     return;
   }
-  quader_poly::Document reconciled = current;
+  quader_poly::Document reconciled = *impl_->document;
   reconciled.next_vertex_id = next_vertex_id;
   reconciled.next_face_id = next_face_id;
   impl_->document = std::make_shared<const quader_poly::Document>(std::move(reconciled));
@@ -1278,11 +1526,11 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
 }
 
 std::size_t PolygonDocument::vertex_count() const {
-  return impl_->document->vertices.size();
+  return impl_->document.vertex_count();
 }
 
 std::size_t PolygonDocument::face_count() const {
-  return impl_->document->faces.size();
+  return impl_->document.face_count();
 }
 
 bool PolygonDocument::selected_faces_have_open_perimeter() const {
@@ -1383,6 +1631,7 @@ PolygonDocument::selection_topology_eligibility() const {
     result.bridge_edge_pair = selection.edges.size() == 2U;
     result.selected_edges_belong_to_faces = true;
     result.selected_edges_are_interior = true;
+    result.selected_edges_are_open_boundary = true;
     std::uint32_t open_boundary_count = 0U;
     for (const auto &selected : selection.edges) {
       const auto edge = quader_poly::make_edge(selected.a, selected.b);
@@ -1390,9 +1639,11 @@ PolygonDocument::selection_topology_eligibility() const {
       const int incidence = found == face_edge_counts.end() ? 0 : found->second;
       result.selected_edges_belong_to_faces &= incidence >= 1;
       result.selected_edges_are_interior &= incidence == 2;
+      result.selected_edges_are_open_boundary &= incidence == 1;
       open_boundary_count += incidence == 1;
     }
     result.three_selected_open_boundary_edges = open_boundary_count >= 3U;
+    result.bridge_edge_pair &= result.selected_edges_are_open_boundary;
   }
   return result;
 }
@@ -1427,8 +1678,7 @@ PolygonDocument::whole_mesh_topology_eligibility() const {
 }
 
 PolygonContentIdentity PolygonDocument::content_identity() const noexcept {
-  return PolygonContentIdentity{static_cast<std::uint64_t>(
-      reinterpret_cast<std::uintptr_t>(impl_->document.get()))};
+  return impl_->document.identity();
 }
 
 std::uint64_t PolygonDocument::content_revision() const {
@@ -1447,11 +1697,11 @@ bool PolygonDocument::shares_topology_with(
 [[nodiscard]] const std::vector<quader_poly::Edge> &
 cached_document_edges(const PolygonDocumentImpl &impl) {
   if (impl.edge_cache == nullptr ||
-      impl.edge_cache_document != impl.document) {
+      impl.edge_cache_document != impl.document.identity()) {
     impl.edge_cache =
         std::make_shared<const std::vector<quader_poly::Edge>>(
             quader_poly::document_edges(*impl.document));
-    impl.edge_cache_document = impl.document;
+    impl.edge_cache_document = impl.document.identity();
   }
   return *impl.edge_cache;
 }
@@ -2002,8 +2252,9 @@ Result<std::vector<FaceTextureSettings>> PolygonDocument::face_texture_settings(
 }
 
 Result<MeshPayload> PolygonDocument::compile_mesh() const {
+  const auto snapshot = impl_->document.read_snapshot();
   const quader_poly::CompiledMesh compiled =
-      quader_poly::compile_document(*impl_->document);
+      quader_poly::compile_document(snapshot.view());
   MeshPayload payload;
   payload.content_revision = impl_->content_revision;
   payload.vertices.reserve(compiled.vertices.size());
@@ -2434,6 +2685,92 @@ PolygonDocument::transform_selection(Transform3 transform) {
                                          to_native(transform));
     return result;
   });
+}
+
+Result<PreparedSelectionTransform>
+PolygonDocument::prepare_selection_transform() const {
+  QDR_PROFILE_SCOPE("PolygonDocument prepare selection transform");
+  auto prepared = std::make_shared<PreparedSelectionTransformImpl>(*this);
+  // Flatten at gesture preparation, never by chaining another coordinate
+  // publication into a per-sample candidate.
+  prepared->source_document = impl_->document.materialized_document();
+  prepared->source_topology_identity = impl_->document.topology_identity();
+  const auto &source = *prepared->source_document;
+  auto selected_ids =
+      quader_poly::selected_vertex_ids(source, *impl_->selection);
+  std::ranges::sort(selected_ids);
+  auto vertex_indices = std::make_shared<std::vector<std::size_t>>();
+  auto positions = std::make_shared<std::vector<VertexPositionUpdate>>();
+  vertex_indices->reserve(selected_ids.size());
+  positions->reserve(selected_ids.size());
+  for (std::size_t index = 0U; index < source.vertices.size(); ++index) {
+    const auto &vertex = source.vertices[index];
+    if (!finite_position(vertex.position)) {
+      return Result<PreparedSelectionTransform>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Transform source must contain finite coordinates."));
+    }
+    if (std::ranges::binary_search(selected_ids, vertex.id)) {
+      vertex_indices->push_back(index);
+      positions->push_back({.vertex = vertex_id(vertex.id),
+                            .position = from_native(vertex.position)});
+    }
+  }
+  prepared->vertex_indices = std::move(vertex_indices);
+  if (!positions->empty()) {
+    prepared->source_positions = std::move(positions);
+  }
+  PreparedSelectionTransform value;
+  value.impl_ = std::move(prepared);
+  return Result<PreparedSelectionTransform>::success(std::move(value));
+}
+
+Result<SelectionTransformEvaluation>
+PreparedSelectionTransform::evaluate_translation(Vec3 delta) const {
+  if (!valid() || !finite_position(to_native(delta))) {
+    return Result<SelectionTransformEvaluation>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Translation requires a preparation and a finite delta."));
+  }
+  return evaluate_prepared_selection_transform(
+      *impl_, [native_delta = to_native(delta)](quader::QVec3 position) {
+        return position + native_delta;
+      });
+}
+
+Result<SelectionTransformEvaluation>
+PreparedSelectionTransform::evaluate_transform(Transform3 transform) const {
+  const auto native_transform = to_native(transform);
+  if (!valid() || !finite_position(native_transform.x_axis) ||
+      !finite_position(native_transform.y_axis) ||
+      !finite_position(native_transform.z_axis) ||
+      !finite_position(native_transform.origin)) {
+    return Result<SelectionTransformEvaluation>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Transform requires a preparation and finite coefficients."));
+  }
+  return evaluate_prepared_selection_transform(
+      *impl_, [native_transform](quader::QVec3 position) {
+        return quader_poly::document_internal::transform_point(native_transform,
+                                                                position);
+      });
+}
+
+PreparedSelectionTransformWorkStats
+PreparedSelectionTransform::work_stats() const noexcept {
+  if (!impl_) {
+    return {};
+  }
+  return {
+      .coordinate_publication_count =
+          impl_->work_state->coordinate_publication_count.load(std::memory_order_relaxed),
+      .evaluated_vertex_count =
+          impl_->work_state->evaluated_vertex_count.load(std::memory_order_relaxed),
+      .topology_materialization_count =
+          impl_->work_state->topology_materialization_count.load(std::memory_order_relaxed),
+      .coordinate_snapshot_count =
+          impl_->work_state->coordinate_snapshot_count.load(std::memory_order_relaxed),
+  };
 }
 
 Result<OperationResult> PolygonDocument::set_vertex_positions(

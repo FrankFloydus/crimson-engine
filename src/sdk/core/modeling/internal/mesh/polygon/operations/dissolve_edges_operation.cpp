@@ -177,10 +177,36 @@ bool shared_chain_endpoints(
     return true;
 }
 
+/// Normal dissolve preserves boundary bends larger than five degrees.
+bool boundary_corner_is_straight(
+    const Document& document, ElementId vertex_id,
+    std::span<const ElementId> neighbors)
+{
+    const Vertex* vertex = find_vertex(document, vertex_id);
+    const Vertex* first = find_vertex(document, neighbors[0]);
+    const Vertex* second = find_vertex(document, neighbors[1]);
+    if (vertex == nullptr || first == nullptr || second == nullptr) {
+        return false;
+    }
+    const quader::QVec3 incoming =
+        normalize_or_zero(vertex->position - first->position);
+    const quader::QVec3 outgoing =
+        normalize_or_zero(second->position - vertex->position);
+    constexpr float kMinimumBoundaryStraightness = 0.996194698F; // cos(5 degrees).
+    return dot(incoming, outgoing) >= kMinimumBoundaryStraightness;
+}
+
 /// Collapse only the captured degree-two vertices, retaining surviving corner data.
 bool dissolve_edge_endpoints(Document& document, const std::set<ElementId>& candidates)
 {
     const VertexNeighbors joined_neighbors = vertex_neighbors(document);
+    std::set<ElementId> boundary_vertices;
+    for (const auto& [edge, incidence] : edge_incidence_counts(document)) {
+        if (incidence == 1) {
+            boundary_vertices.insert(edge.first);
+            boundary_vertices.insert(edge.second);
+        }
+    }
     const EdgeNormalModeLookup source_modes(document);
     std::map<EdgeKey, EdgeNormalMode> pending_modes;
     std::vector<EdgeNormalModeAssignment> assignments;
@@ -203,6 +229,10 @@ bool dissolve_edge_endpoints(Document& document, const std::set<ElementId>& cand
         }
         // Polygon documents cannot retain a face collapsed to a wire edge.
         if (neighbors.size() != 2U || !preserves_faces) {
+            continue;
+        }
+        if (boundary_vertices.contains(vertex_id) &&
+            !boundary_corner_is_straight(document, vertex_id, neighbors)) {
             continue;
         }
         const Edge replacement_edge = make_edge(neighbors[0], neighbors[1]);
@@ -269,6 +299,11 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
   if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
     return OperationResult::failure("Select one or more edges to dissolve.");
   }
+
+    const OperationResult source_validation = validate_authored_operation_candidate(document, document);
+    if (!source_validation.success) {
+        return source_validation;
+    }
 
     std::vector<Edge> selected_edges;
     const auto original_adjacency = face_indices_by_edge(document);
@@ -354,7 +389,7 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
         candidate.faces.erase(candidate.faces.begin() + static_cast<std::ptrdiff_t>(second_index));
         // Removing the edge also removes its interior UV seam. Retain the stored
         // boundary corners while allowing the merged face's interpolation to change.
-        if (!every_face_triangulates(candidate)) {
+        if (triangulate_face_local_indices(candidate, candidate.faces[first_index]).empty()) {
             return OperationResult::failure("Dissolve would create invalid face geometry.");
         }
 
@@ -369,7 +404,7 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
         return OperationResult::failure("No dissolvable selected edges were found.");
     }
 
-    if (!dissolve_edge_endpoints(candidate, vertex_candidates) || !every_face_triangulates(candidate)) {
+    if (!dissolve_edge_endpoints(candidate, vertex_candidates)) {
         return OperationResult::failure("Dissolve would create invalid face geometry.");
     }
     std::set<ElementId> used_vertices;
@@ -381,6 +416,11 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
     });
     prune_normal_edge_states(candidate);
     std::erase_if(merged_face_ids, [&](ElementId face_id) { return find_face(candidate, face_id) == nullptr; });
+
+    const OperationResult validation = validate_authored_operation_candidate(document, candidate);
+    if (!validation.success) {
+        return validation;
+    }
 
     document = std::move(candidate);
     selection.clear();

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
@@ -21,6 +22,59 @@
 #include <utility>
 
 namespace quader {
+
+const MeshGeometryPayload &MeshAsset::geometry() const {
+  return geometry_projection_ ? *geometry_projection_->materialized_geometry() : *geometry_;
+}
+
+std::shared_ptr<const MeshGeometryPayload> MeshAsset::geometry_payload() const {
+  editable_geometry_.reset();
+  return geometry_projection_ ? geometry_projection_->materialized_geometry() : geometry_;
+}
+
+void MeshAsset::share_geometry_projection(
+    std::shared_ptr<const MeshGeometryProjection> projection) {
+  if (!projection) return;
+  if (!projection->source_geometry || !projection->positions ||
+      projection->positions->size() != projection->vertices().size()) return;
+  geometry_ = projection->source_geometry;
+  geometry_projection_ = std::move(projection);
+  editable_geometry_.reset();
+  invalidate_wire_geometry_payload();
+}
+
+std::span<const MeshVertex> MeshAsset::geometry_vertices() const noexcept {
+  return geometry_projection_ ? geometry_projection_->vertices() : std::span<const MeshVertex>(geometry_->vertices);
+}
+
+std::span<const QVec3> MeshAsset::geometry_positions() const noexcept {
+  return geometry_projection_ && geometry_projection_->positions
+      ? std::span<const QVec3>(*geometry_projection_->positions) : std::span<const QVec3>{};
+}
+
+std::span<const std::uint32_t> MeshAsset::geometry_indices() const noexcept {
+  return geometry_projection_ ? geometry_projection_->indices() : std::span<const std::uint32_t>(geometry_->indices);
+}
+
+std::span<const MeshPrimitiveSpan> MeshAsset::geometry_primitives() const noexcept {
+  return geometry_projection_ ? geometry_projection_->primitives() : std::span<const MeshPrimitiveSpan>(geometry_->primitives);
+}
+
+std::uintptr_t MeshAsset::geometry_token() const noexcept {
+  return reinterpret_cast<std::uintptr_t>(geometry_projection_
+      ? static_cast<const void *>(geometry_projection_.get()) : geometry_.get());
+}
+
+std::size_t MeshAsset::geometry_byte_size() const noexcept {
+  return geometry_vertices().size() * sizeof(MeshVertex) +
+      geometry_indices().size() * sizeof(std::uint32_t) +
+      geometry_primitives().size() * sizeof(MeshPrimitiveSpan);
+}
+
+MeshGeometryContentId MeshAsset::geometry_content_id() const noexcept {
+  editable_geometry_.reset();
+  return geometry_projection_ ? geometry_projection_->content_id() : geometry_->content_id();
+}
 
 AssetRegistry::AssetRegistry() : owner_thread_(std::this_thread::get_id()) {}
 
@@ -1033,6 +1087,13 @@ AssetRegistry::set_material_texture(AssetId material, std::string_view slot,
 
 AssetRegistryValidationResult
 AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
+  if (mesh.has_authored_polygon_document != static_cast<bool>(mesh.authored_polygon_document)) {
+    return {.ok = false, .message = "Mesh authored polygon document state is inconsistent"};
+  }
+  const auto &projection = mesh.geometry_projection();
+  const bool sdk_authored = mesh.authored_polygon_document.read_snapshot() != nullptr;
+  if (projection && sdk_authored &&
+      projection->asset_geometry_validated_.load(std::memory_order_acquire)) return {};
   const auto finite_vec2 = [](QVec2 value) {
     return std::isfinite(value.x) && std::isfinite(value.y);
   };
@@ -1041,9 +1102,16 @@ AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
            std::isfinite(value.z);
   };
 
-  const MeshGeometryPayload &geometry = mesh.geometry();
-  for (const MeshVertex &vertex : geometry.vertices) {
-    if (!finite_vec3(vertex.position) || !finite_vec3(vertex.normal) ||
+  const auto vertices = mesh.geometry_vertices();
+  const auto positions = mesh.geometry_positions();
+  const auto indices = mesh.geometry_indices();
+  if (!positions.empty() && positions.size() != vertices.size()) {
+    return {.ok = false, .message = "Mesh position stream size is inconsistent"};
+  }
+  for (std::size_t vertex_index = 0u; vertex_index < vertices.size(); ++vertex_index) {
+    const MeshVertex &vertex = vertices[vertex_index];
+    const QVec3 position = positions.empty() ? vertex.position : positions[vertex_index];
+    if (!finite_vec3(position) || !finite_vec3(vertex.normal) ||
         !finite_vec2(vertex.uv) ||
         !finite_vec3(vertex.uv_geometric_normal) ||
         std::ranges::any_of(vertex.uv_carrier, [](float value) {
@@ -1052,25 +1120,25 @@ AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
       return {.ok = false, .message = "Mesh vertex data must be finite"};
     }
   }
-  if (geometry.indices.size() % 3u != 0u) {
+  if (indices.size() % 3u != 0u) {
     return {.ok = false,
             .message = "Mesh indices must describe complete triangles"};
   }
-  for (const std::uint32_t index : geometry.indices) {
-    if (index >= geometry.vertices.size()) {
+  for (const std::uint32_t index : indices) {
+    if (index >= vertices.size()) {
       return {.ok = false,
               .message = "Mesh index references a missing vertex"};
     }
   }
 
-  if (mesh.has_authored_polygon_document !=
-      static_cast<bool>(mesh.authored_polygon_document)) {
-    return {.ok = false,
-            .message = "Mesh authored polygon document state is inconsistent"};
-  }
-  if (mesh.authored_polygon_document) {
+  if (projection) projection->asset_geometry_validated_.store(true, std::memory_order_release);
+  // A source-only SDK read snapshot pins an already accepted, validated owner
+  // publication. Revalidating its unchanged authored faces per logical asset
+  // repeats work and would defeat the immutable publication boundary.
+  if (mesh.authored_polygon_document && !sdk_authored) {
+    const auto authored = mesh.authored_polygon_document.read_view();
     for (const quader_poly::Vertex &vertex :
-         mesh.authored_polygon_document->vertices) {
+         authored.vertices) {
       if (!finite_vec3(vertex.position)) {
         return {.ok = false,
                 .message =
@@ -1078,7 +1146,7 @@ AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
       }
     }
     for (const quader_poly::Face &face :
-         mesh.authored_polygon_document->faces) {
+         authored.faces) {
       if (!quader_poly::valid_face_texture_transform(face.texture_transform)) {
         return {.ok = false,
                 .message = "Mesh authored face texture transform is invalid"};
@@ -1283,6 +1351,10 @@ TextureAssetRevision AssetRegistry::texture_revision(AssetId id) const {
 
 void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
   assert_owner_thread();
+  // Accepted projections already share immutable stream owners across exact
+  // equivalent families. Hash interning here would eagerly assemble every
+  // authored document and compiled payload merely to rediscover that sharing.
+  if (mesh.geometry_projection() && mesh.authored_polygon_document.read_snapshot()) return;
   std::shared_ptr<const MeshGeometryPayload> geometry = mesh.geometry_payload();
   const std::uint64_t content_id = geometry->content_id().value;
   auto &geometry_candidates = mesh_geometry_pool_[content_id];

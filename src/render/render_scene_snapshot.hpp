@@ -8,6 +8,7 @@
 
 #include "assets/material_document.hpp"
 #include "assets/mesh_asset.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "assets/texture_asset.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
@@ -33,6 +34,7 @@ namespace quader {
 class CurveSolidGeometryCache;
 struct RenderSceneMaterialBindingCache;
 struct CurveSamplePayload;
+struct MeshGeometryProjection;
 
 /**
  * Captures one render-visible texture asset dependency for a material snapshot.
@@ -96,11 +98,14 @@ struct RenderMeshAssetSnapshot {
   AssetId mesh_id = kInvalidAssetId;
   std::uint64_t mesh_revision = 0;
   std::shared_ptr<const MeshGeometryPayload> geometry_payload;
+  std::shared_ptr<const MeshGeometryProjection> geometry_projection;
   std::uintptr_t geometry_token = 0u;
   MeshGeometryContentId geometry_content_id;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
   std::span<const MeshPrimitiveSpan> primitives;
+  /// Overrides MeshVertex.position when a retained preview separates streams.
+  std::span<const QVec3> positions;
   bool present = false;
   bool has_stable_cpu_topology = true;
 
@@ -288,8 +293,13 @@ struct RenderToolPreviewMeshRecord {
   // mean the retained render group does not need a position upload.
   std::uint64_t position_revision = 0u;
   std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
+  std::shared_ptr<const MeshGeometryProjection> geometry_projection;
 
   [[nodiscard]] bool renderable() const {
+    if (geometry_projection) {
+      return !geometry_projection->vertices().empty() &&
+             !geometry_projection->indices().empty();
+    }
     return !mesh.geometry().vertices.empty() &&
            !mesh.geometry().indices.empty();
   }
@@ -359,6 +369,9 @@ struct RenderToolPreviewSceneSnapshot final {
   bool complete = true;
   std::uint64_t revision = 0u;
   std::vector<RenderToolPreviewMeshRecord> meshes;
+  /// Accepted component coordinates deform the retained semantic overlay base;
+  /// they do not draw preview surfaces or suppress committed scene objects.
+  std::vector<RenderToolPreviewMeshRecord> accepted_overlay_coordinates;
   std::vector<RenderToolPreviewCurveRecord> curves;
   std::vector<RenderToolPreviewLightRecord> lights;
   std::vector<RenderToolPreviewGroupMarkerRecord> group_markers;

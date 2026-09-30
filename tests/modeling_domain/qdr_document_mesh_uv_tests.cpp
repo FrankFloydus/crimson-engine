@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
+#include "operation/operation_atomicity_test_helpers.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
@@ -476,4 +477,43 @@ TEST(QdrDocumentMeshUvTests, EffectiveUvInverseCarriesUvsThroughGeometricReflect
         EXPECT_NEAR(actual.x, desired[corner].x, 1.0e-5F);
         EXPECT_NEAR(actual.y, desired[corner].y, 1.0e-5F);
     }
+}
+
+TEST(QdrDocumentMeshUvTests,
+     SplitUvDensityStitchesOnlyAssignedFacesInDocumentOrder) {
+  using namespace quader_poly::document_internal;
+  Document document;
+  const ElementId a = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId b = add_vertex(document, {1.0F, 0.0F, 0.0F});
+  const ElementId c = add_vertex(document, {0.0F, 1.0F, 1.0F});
+  const ElementId d = add_vertex(document, {1.0F, 1.0F, 1.0F});
+  const ElementId reference_id = add_face(document, std::array<ElementId, 3>{a, b, c});
+  const ElementId unrelated_id = add_face(document, std::array<ElementId, 3>{b, d, c});
+  const ElementId target_id = add_face(document, std::array<ElementId, 3>{b, d, c});
+  find_face(document, reference_id)->uvs = {{0, 0}, {2, 0}, {0, 2}};
+  find_face(document, unrelated_id)->uvs = {{100, 100}, {200, 200}, {300, 300}};
+  find_face(document, target_id)->uvs = {{0.25F, 0.25F}, {0.5F, 0.5F}, {0, 0.5F}};
+  const auto unrelated_uvs = find_face(document, unrelated_id)->uvs;
+  const std::array<MergeFaceUvAssignment, 2> assignments{{
+      {target_id, {.inherited_loop_basis = true}},
+      {reference_id, {.inherited_loop_basis = true}}}};
+
+  stitch_merge_split_uv_density(document, assignments);
+
+  const Face* target = find_face(document, target_id);
+  ASSERT_NE(target, nullptr);
+  ASSERT_EQ(target->uvs.size(), 3U);
+  EXPECT_FLOAT_EQ(target->uvs[0].x, 2.0F);
+  EXPECT_FLOAT_EQ(target->uvs[0].y, 0.0F);
+  EXPECT_FLOAT_EQ(target->uvs[1].x, 4.0F);
+  EXPECT_FLOAT_EQ(target->uvs[1].y, 2.0F);
+  EXPECT_FLOAT_EQ(target->uvs[2].x, 0.0F);
+  EXPECT_FLOAT_EQ(target->uvs[2].y, 2.0F);
+  for (std::size_t index = 0; index < unrelated_uvs.size(); ++index) {
+    EXPECT_FLOAT_EQ(find_face(document, unrelated_id)->uvs[index].x, unrelated_uvs[index].x);
+    EXPECT_FLOAT_EQ(find_face(document, unrelated_id)->uvs[index].y, unrelated_uvs[index].y);
+  }
+  const auto source = qdr_test::document_fingerprint(document);
+  stitch_merge_split_uv_density(document, {});
+  EXPECT_EQ(qdr_test::document_fingerprint(document), source);
 }

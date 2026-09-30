@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
 
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
@@ -26,6 +28,8 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -480,6 +484,11 @@ void remap_edge_normal_modes_after_vertex_merge(
         const std::set<ElementId>& merge_vertex_ids,
         ElementId survivor_vertex_id)
 {
+    if (source.hard_normal_edges.empty() && source.soft_normal_edges.empty()) {
+        candidate.hard_normal_edges.clear();
+        candidate.soft_normal_edges.clear();
+        return;
+    }
     const std::vector<Edge> source_edges = document_edges(source);
     const std::vector<Edge> candidate_edges = document_edges(candidate);
     const EdgeNormalModeLookup source_modes(source);
@@ -624,6 +633,196 @@ bool every_face_triangulates(const Document& document)
     return std::ranges::all_of(document.faces, [&document](const Face& face) {
         return !triangulate_face_local_indices(document, face).empty();
     });
+}
+
+namespace {
+
+OperationResult validate_authored_operation_structure(
+    const Document& document, bool allow_nonmanifold_edges)
+{
+    const VertexLookupIndex vertex_lookup(document);
+    std::set<ElementId> vertex_ids;
+    for (const Vertex& vertex : document.vertices) {
+        if (vertex.id == kInvalidElementId || !vertex_ids.insert(vertex.id).second ||
+            !std::isfinite(vertex.position.x) || !std::isfinite(vertex.position.y) ||
+            !std::isfinite(vertex.position.z)) {
+            return OperationResult::failure("Operation encountered invalid vertex identities or non-finite positions.");
+        }
+    }
+    std::set<ElementId> face_ids;
+    std::map<std::pair<ElementId, ElementId>, unsigned> incidence;
+    for (const Face& face : document.faces) {
+        if (face.id == kInvalidElementId || !face_ids.insert(face.id).second ||
+            face.vertices.size() < 3U || has_repeated_vertex(face.vertices) ||
+            (!face.uvs.empty() && face.uvs.size() != face.vertices.size()) ||
+            !valid_face_texture_transform(face.texture_transform) ||
+            (face.normal_shading != SurfaceShading::Flat &&
+             face.normal_shading != SurfaceShading::Smooth &&
+             face.normal_shading != SurfaceShading::Authored)) {
+            return OperationResult::failure("Operation encountered invalid authored face data.");
+        }
+        for (const ElementId vertex_id : face.vertices) {
+            if (!vertex_ids.contains(vertex_id)) {
+                return OperationResult::failure("Operation encountered a missing face vertex.");
+            }
+        }
+        const quader::QVec3 normal = face.texture_transform == FaceTextureTransform{}
+            ? quader::QVec3{} : face_normal_from_vertex_lookup(face, vertex_lookup);
+        for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+            if (!face.uvs.empty() &&
+                (!std::isfinite(face.uvs[index].x) || !std::isfinite(face.uvs[index].y))) {
+                return OperationResult::failure("Operation encountered non-finite face UVs.");
+            }
+            if (face.texture_transform != FaceTextureTransform{}) {
+                const auto base_uv = face.uvs.empty()
+                    ? generated_texture_uv(vertex_lookup.find(face.vertices[index])->position, normal)
+                    : face.uvs[index];
+                const auto uv = apply_face_texture_transform(base_uv, face.texture_transform);
+                if (!std::isfinite(uv.x) || !std::isfinite(uv.y)) {
+                    return OperationResult::failure("Operation encountered non-finite transformed face UVs.");
+                }
+            }
+            const Edge edge = make_edge(face.vertices[index], face.vertices[(index + 1U) % face.vertices.size()]);
+            if (++incidence[{edge.a, edge.b}] > 2U && !allow_nonmanifold_edges) {
+                return OperationResult::failure("Operation encountered nonmanifold authored edges.");
+            }
+        }
+    }
+    std::set<std::pair<ElementId, ElementId>> normal_edges;
+    for (const auto& edges : {std::span<const Edge>(document.hard_normal_edges),
+                              std::span<const Edge>(document.soft_normal_edges)}) {
+        for (const Edge edge : edges) {
+            const Edge canonical = make_edge(edge.a, edge.b);
+            if (edge != canonical || edge.a == edge.b ||
+                !incidence.contains({edge.a, edge.b}) ||
+                !normal_edges.insert({edge.a, edge.b}).second) {
+                return OperationResult::failure("Operation encountered invalid authored normal-edge data.");
+            }
+        }
+    }
+    return {};
+}
+
+} // namespace
+
+OperationResult validate_authored_operation_candidate(
+    const Document& source, const Document& candidate,
+    bool preserve_unaffected_authored_geometry, bool allow_nonmanifold_edges)
+{
+    const OperationResult source_result =
+        validate_authored_operation_structure(source, allow_nonmanifold_edges);
+    if (!source_result.success) {
+        return source_result;
+    }
+    if (&source == &candidate && preserve_unaffected_authored_geometry) {
+        return {};
+    }
+    const OperationResult candidate_result =
+        validate_authored_operation_structure(candidate, allow_nonmanifold_edges);
+    if (!candidate_result.success) {
+        return candidate_result;
+    }
+    const VertexLookupIndex candidate_vertices(candidate);
+    const VertexLookupIndex source_vertices(source);
+    std::unordered_map<ElementId, const Face*> source_faces;
+    source_faces.reserve(source.faces.size());
+    for (const Face& face : source.faces) {
+        source_faces.emplace(face.id, &face);
+    }
+    for (const Face& face : candidate.faces) {
+        const auto previous_face = source_faces.find(face.id);
+        const Face* source_face = previous_face == source_faces.end()
+            ? nullptr : previous_face->second;
+        const bool unchanged = preserve_unaffected_authored_geometry && source_face != nullptr &&
+            source_face->vertices == face.vertices &&
+            std::ranges::all_of(face.vertices, [&](ElementId vertex_id) {
+                const Vertex* previous = source_vertices.find(vertex_id);
+                const Vertex* current = candidate_vertices.find(vertex_id);
+                return previous != nullptr && current != nullptr &&
+                    previous->position.x == current->position.x &&
+                    previous->position.y == current->position.y &&
+                    previous->position.z == current->position.z;
+            });
+        if (unchanged) {
+            continue;
+        }
+        const auto triangles = triangulate_face_local_indices(candidate, face, candidate_vertices);
+        if (triangles.empty() || !triangulation_preserves_face_boundary(face, candidate_vertices, triangles)) {
+            return OperationResult::failure("Operation would create a face that cannot be triangulated completely.");
+        }
+    }
+    return {};
+}
+
+bool authored_face_chord_is_valid(
+    const Document& document, const Face& face,
+    ElementId first_vertex, ElementId second_vertex)
+{
+    const auto first = std::ranges::find(face.vertices, first_vertex);
+    const auto second = std::ranges::find(face.vertices, second_vertex);
+    if (first == face.vertices.end() || second == face.vertices.end() || first == second) {
+        return false;
+    }
+    std::vector<quader_geometry::QVec3d> positions;
+    positions.reserve(face.vertices.size());
+    const Vertex* anchor_vertex = find_vertex(document, face.vertices.front());
+    if (anchor_vertex == nullptr) {
+        return false;
+    }
+    const quader_geometry::QVec3d anchor{anchor_vertex->position.x, anchor_vertex->position.y, anchor_vertex->position.z};
+    double scale = 0.0;
+    for (const ElementId vertex_id : face.vertices) {
+        const Vertex* vertex = find_vertex(document, vertex_id);
+        if (vertex == nullptr) {
+            return false;
+        }
+        const quader_geometry::QVec3d local = quader_geometry::QVec3d{vertex->position.x, vertex->position.y, vertex->position.z} - anchor;
+        scale = std::max({scale, std::abs(local.x), std::abs(local.y), std::abs(local.z)});
+        positions.push_back(local);
+    }
+    if (!std::isfinite(scale) || scale == 0.0) {
+        return false;
+    }
+    quader_geometry::QVec3d normal{};
+    for (auto& position : positions) {
+        position = position * (1.0 / scale);
+    }
+    for (std::size_t index = 0; index < positions.size(); ++index) {
+        normal = normal + quader_geometry::cross(positions[index], positions[(index + 1U) % positions.size()]);
+    }
+    const auto magnitudes = std::array{std::abs(normal.x), std::abs(normal.y), std::abs(normal.z)};
+    const std::size_t dropped_axis = static_cast<std::size_t>(std::distance(magnitudes.begin(), std::ranges::max_element(magnitudes)));
+    if (magnitudes[dropped_axis] <= 1.0e-12) {
+        return false;
+    }
+    std::vector<quader_geometry::QVec2d> projected;
+    projected.reserve(positions.size());
+    for (const auto position : positions) {
+        projected.push_back(dropped_axis == 0U ? quader_geometry::QVec2d{position.y, position.z}
+            : dropped_axis == 1U ? quader_geometry::QVec2d{position.x, position.z}
+                                 : quader_geometry::QVec2d{position.x, position.y});
+    }
+    const std::size_t first_index = static_cast<std::size_t>(std::distance(face.vertices.begin(), first));
+    const std::size_t second_index = static_cast<std::size_t>(std::distance(face.vertices.begin(), second));
+    const auto a = projected[first_index];
+    const auto b = projected[second_index];
+    constexpr double kChordEpsilon = 1.0e-10;
+    if (quader_geometry::length_squared(a - b) <= kChordEpsilon * kChordEpsilon) {
+        return false;
+    }
+    for (std::size_t index = 0; index < projected.size(); ++index) {
+        const std::size_t next = (index + 1U) % projected.size();
+        const auto intersection = quader_geometry::intersect_segments_2d(a, b, projected[index], projected[next], kChordEpsilon);
+        if (!intersection.hit) {
+            continue;
+        }
+        if (intersection.kind == quader_geometry::QSegmentIntersectionKind2::Overlap ||
+            (intersection.first_factors[0] > kChordEpsilon && intersection.first_factors[0] < 1.0 - kChordEpsilon)) {
+            return false;
+        }
+    }
+    return quader_geometry::point_in_or_on_polygon_2d((a + b) * 0.5,
+        std::span<const quader_geometry::QVec2d>(projected), kChordEpsilon);
 }
 
 ElementId mapped_vertex_for_merge(ElementId vertex_id, const std::set<ElementId>& merge_vertex_ids, ElementId active_vertex_id)
@@ -789,11 +988,38 @@ std::vector<ElementId> duplicate_face_key(const Face& face)
     return best;
 }
 
+std::uint64_t duplicate_face_vertex_fingerprint(const Face& face)
+{
+    constexpr std::uint64_t kSizeMultiplier = 0x9e3779b97f4a7c15ULL;
+    constexpr std::uint64_t kFirstMultiplier = 0xbf58476d1ce4e5b9ULL;
+    constexpr std::uint64_t kSecondMultiplier = 0x94d049bb133111ebULL;
+    std::uint64_t fingerprint =
+        static_cast<std::uint64_t>(face.vertices.size()) * kSizeMultiplier;
+    for (const ElementId vertex_id : face.vertices) {
+        std::uint64_t value = static_cast<std::uint64_t>(vertex_id);
+        value = (value ^ (value >> 30U)) * kFirstMultiplier;
+        value = (value ^ (value >> 27U)) * kSecondMultiplier;
+        fingerprint += value ^ (value >> 31U);
+    }
+    return fingerprint;
+}
+
 bool remove_duplicate_faces_created_by_merge(
         Document& document, const std::set<ElementId>& touched_face_ids,
         std::map<ElementId, ElementId>& merged_face_ids)
 {
     if (touched_face_ids.empty()) {
+        return false;
+    }
+
+    std::unordered_set<std::uint64_t> touched_fingerprints;
+    touched_fingerprints.reserve(touched_face_ids.size());
+    for (const Face& face : document.faces) {
+        if (touched_face_ids.contains(face.id)) {
+            touched_fingerprints.insert(duplicate_face_vertex_fingerprint(face));
+        }
+    }
+    if (touched_fingerprints.empty()) {
         return false;
     }
 
@@ -803,6 +1029,13 @@ bool remove_duplicate_faces_created_by_merge(
     bool removed = false;
 
     for (const Face& face : document.faces) {
+        // A duplicate can be removed only when one participant was repaired.
+        // This allocation-free filter is order-independent; hash collisions
+        // still pass through the exact canonical loop comparison below.
+        if (!touched_fingerprints.contains(duplicate_face_vertex_fingerprint(face))) {
+            unique_faces.push_back(face);
+            continue;
+        }
         std::vector<ElementId> key = duplicate_face_key(face);
         if (key.size() < 3U || has_repeated_vertex(key)) {
             unique_faces.push_back(face);
@@ -1012,7 +1245,35 @@ OperationResult build_topology_vertex_merge_candidate(
         return { false, "No selected vertices were merged." };
     }
 
-    restore_source_face_orientation(document, candidate);
+    const VertexLookupIndex source_vertices(document);
+    const VertexLookupIndex candidate_vertices(candidate);
+    const Vertex* previous_survivor = source_vertices.find(survivor_vertex_id);
+    const bool survivor_position_changed = previous_survivor != nullptr &&
+        (previous_survivor->position.x != target_position.x ||
+         previous_survivor->position.y != target_position.y ||
+         previous_survivor->position.z != target_position.z);
+    // Other face loops and positions are identical to the source. Computing
+    // their normals again cannot change orientation, and grows with every
+    // sequential distance cluster instead of its affected neighborhood.
+    for (Face& face : candidate.faces) {
+        if (!merge_touched_face_ids.contains(face.id) &&
+            !(survivor_position_changed && face_uses_vertex(face, survivor_vertex_id))) {
+            continue;
+        }
+        const Face* source_face = find_face(document, face.id);
+        if (source_face == nullptr) {
+            continue;
+        }
+        const quader::QVec3 source_normal =
+            face_normal_from_vertex_lookup(*source_face, source_vertices);
+        const quader::QVec3 candidate_normal =
+            face_normal_from_vertex_lookup(face, candidate_vertices);
+        if (length_squared(source_normal) > kEpsilon &&
+            length_squared(candidate_normal) > kEpsilon &&
+            dot(source_normal, candidate_normal) < 0.0F) {
+            reverse_face_winding(face);
+        }
+    }
     if (find_vertex(candidate, survivor_vertex_id) == nullptr) {
         return OperationResult::failure("Merge would remove the survivor vertex.");
     }
@@ -1020,7 +1281,7 @@ OperationResult build_topology_vertex_merge_candidate(
         candidate.faces, [&](const Face &face) {
             return (preserve_unaffected_authored_geometry &&
                     !merge_touched_face_ids.contains(face.id)) ||
-                   !triangulate_face_local_indices(candidate, face).empty();
+                   !triangulate_face_local_indices(candidate, face, candidate_vertices).empty();
         });
     if (!repaired_faces_triangulate) {
         return OperationResult::failure("Merge would create a face that cannot be triangulated.");

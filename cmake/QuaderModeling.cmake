@@ -618,6 +618,8 @@ endif()
 if(QUADER_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
     add_executable(quader_modeling_sdk_consumer_tests
+        tests/sdk/component_merge_intent_tests.cpp
+        tests/sdk/component_operation_workflow_tests.cpp
         tests/sdk/modeling_auto_merge_tests.cpp
         tests/sdk/headers/mesh_handle_header_compile.cpp
         tests/sdk/headers/previews_header_compile.cpp

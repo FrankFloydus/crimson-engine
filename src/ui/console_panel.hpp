@@ -8,7 +8,11 @@
 
 #include <QWidget>
 
+#include <spdlog/common.h>
+
+#include <functional>
 #include <memory>
+#include <string_view>
 
 namespace quader {
 
@@ -23,6 +27,13 @@ public:
   ~ConsolePanel() override;
 
   void refresh(UIContext &context);
+  void set_command_handler(std::function<void(std::string_view)> handler);
+  void append_command_reply(spdlog::level::level_enum level,
+                            std::string_view text);
+
+protected:
+  void changeEvent(QEvent *event) override;
+  bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
   struct Impl;

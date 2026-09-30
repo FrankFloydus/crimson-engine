@@ -1,0 +1,100 @@
+material {
+    name : QuaderComponentSelection,
+    shadingModel : unlit,
+    blending : opaque,
+    depthWrite : true,
+    depthCulling : true,
+    doubleSided : true,
+    vertexDomain : device,
+    requires : [ custom0, custom1, custom2 ],
+    variables : [ triangleA, triangleB, triangleC, identity ],
+    parameters : [
+        { type : float3, name : cameraOrigin, precision : high },
+        { type : float3, name : cameraRight, precision : high },
+        { type : float3, name : cameraUp, precision : high },
+        { type : float3, name : cameraForward, precision : high },
+        { type : float2, name : projectionScale, precision : high },
+        { type : float, name : orthographicProjection },
+        { type : float, name : depthError, precision : high },
+        { type : int, name : layerIndex },
+        { type : sampler2d, name : previous0, precision : high },
+        { type : sampler2d, name : previous1, precision : high },
+        { type : sampler2d, name : previous2, precision : high }
+    ]
+}
+
+vertex {
+    highp vec3 projectSelectionPoint(highp vec3 world) {
+        highp vec3 relative = world - materialParams.cameraOrigin;
+        highp float depth = dot(relative, materialParams.cameraForward);
+        highp vec2 xy = vec2(dot(relative, materialParams.cameraRight),
+                             dot(relative, materialParams.cameraUp));
+        if (materialParams.orthographicProjection < 0.5) xy /= max(depth, 0.000001);
+        highp vec2 screen = (xy * materialParams.projectionScale * 0.5 + 0.5) * getResolution().xy;
+        return vec3(screen, depth);
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        highp vec3 a = projectSelectionPoint(getPosition().xyz);
+        highp vec3 b = projectSelectionPoint(getCustom0().xyz);
+        highp vec3 c = projectSelectionPoint(getCustom1().xyz);
+        highp vec3 control = getCustom2().xyz;
+        highp vec2 lower = max(min(a.xy, min(b.xy, c.xy)) - 2.0, vec2(-2.0));
+        highp vec2 upper = min(max(a.xy, max(b.xy, c.xy)) + 2.0, getResolution().xy + 2.0);
+        highp vec2 position = mix(lower, upper, control.xy) * getResolution().zw * 2.0 - 1.0;
+        bool valid = min(a.z, min(b.z, c.z)) > 0.000001;
+        material.clipSpaceTransform = mat4(0.0);
+        material.clipSpaceTransform[3] = valid ? vec4(position, 0.0, 1.0) : vec4(4.0, 4.0, 0.0, 1.0);
+        material.triangleA = vec4(a, 0.0);
+        material.triangleB = vec4(b, 0.0);
+        material.triangleC = vec4(c, 0.0);
+        material.identity = vec4(control.z, valid ? 1.0 : 0.0, 0.0, 0.0);
+    }
+}
+
+fragment {
+    highp float crossSelectionEdge(highp vec2 a, highp vec2 b) {
+        return a.x * b.y - a.y * b.x;
+    }
+
+    bool outsideSelectionEdge(highp vec2 a, highp vec2 b, highp vec2 point,
+                              highp float winding, highp float error) {
+        highp vec2 edge = b - a;
+        return winding * crossSelectionEdge(edge, point - a) <
+                -2.0 * (abs(edge.x) + abs(edge.y)) - error;
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        highp float id = variable_identity.x;
+        if (variable_identity.y < 0.5) discard;
+        ivec2 pixel = ivec2(gl_FragCoord.xy);
+        // Exclude IDs, not depths: equally deep and coincident triangles must
+        // occupy distinct layers before the CPU can prove exhaustion.
+        if (materialParams.layerIndex > 0 && texelFetch(materialParams_previous0, pixel, 0).r == id) discard;
+        if (materialParams.layerIndex > 1 && texelFetch(materialParams_previous1, pixel, 0).r == id) discard;
+        if (materialParams.layerIndex > 2 && texelFetch(materialParams_previous2, pixel, 0).r == id) discard;
+        highp vec2 a = variable_triangleA.xy;
+        highp vec2 b = variable_triangleB.xy;
+        highp vec2 c = variable_triangleC.xy;
+        highp float area = crossSelectionEdge(b - a, c - a);
+        highp float extent = max(length(b - a), max(length(c - a), length(c - b)));
+        highp float error = max(0.001, extent * extent * 0.000008);
+        if (abs(area) > error) {
+            highp float winding = area > 0.0 ? 1.0 : -1.0;
+            highp vec2 geometricPixel = getFragCoord(getResolution().xy).xy;
+            if (outsideSelectionEdge(a, b, geometricPixel, winding, error) ||
+                outsideSelectionEdge(b, c, geometricPixel, winding, error) ||
+                outsideSelectionEdge(c, a, geometricPixel, winding, error)) discard;
+        }
+        // The minimum vertex camera depth bounds every point of a positive-
+        // depth triangle. Keeping this loose bound avoids ill-conditioned
+        // inverse-depth gradients on slivers; excess overlap falls back to CPU.
+        highp float lowerDepth = max(0.0, min(variable_triangleA.z,
+                min(variable_triangleB.z, variable_triangleC.z)) - materialParams.depthError);
+        highp float key = 1.0 / (1.0 + lowerDepth);
+        key = min(1.0, uintBitsToFloat(floatBitsToUint(key) + 2u));
+        gl_FragDepth = key;
+        material.baseColor = vec4(id, key, 1.0, 1.0);
+    }
+}

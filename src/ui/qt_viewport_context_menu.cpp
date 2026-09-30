@@ -355,6 +355,88 @@ void add_separator_after_content(QMenu &menu) {
 
 } // namespace
 
+std::vector<QtViewportContextCommand> qt_viewport_context_commands(
+    QuaderEditorApi &editor, const QuaderSelectionSummary &selection,
+    const LocalizationService &localization) {
+  const auto scope = context_menu_scope(editor, selection, selection.has_selection);
+  const auto action_set = editor.modeling().available_action_set({
+      .surface = QuaderActionSurface::ViewportContextMenu,
+      .include_disabled = true,
+  });
+  const auto supplemental = supplemental_modeling_commands(editor, action_set, scope);
+  std::vector<QtViewportContextCommand> result;
+  std::unordered_set<std::string> added;
+  const auto append = [&](std::string command_id, QString label,
+                          ViewportContextMenuActionSection section) {
+    if (!viewport_context_menu_allows_command(scope, command_id) ||
+        added.contains(command_id)) {
+      return;
+    }
+    const auto descriptor = editor.commands().descriptor(command_id);
+    if (!descriptor.has_value() || !descriptor->enabled) {
+      return;
+    }
+    added.insert(command_id);
+    result.push_back({std::move(command_id), std::move(label), section});
+  };
+  const auto append_fixed = [&](QuaderCommandId id, std::string_view key,
+                                std::string_view fallback,
+                                ViewportContextMenuActionSection section) {
+    append(std::string(id.string()),
+           QString::fromStdString(localization.text(key, fallback)), section);
+  };
+  using Section = ViewportContextMenuActionSection;
+  if (!scope.has_selection) {
+    append_fixed(quader_command::kPasteSelection, "ui.menu.edit.paste", "Paste",
+                 Section::MeshData);
+    return result;
+  }
+  if (selection.mode == QuaderSelectionMode::Object ||
+      selection.mode == QuaderSelectionMode::Group) {
+    const bool group = selection.mode == QuaderSelectionMode::Group;
+    append_fixed(quader_command::kDuplicateSelection,
+                 group ? "ui.viewport.context_menu.command.duplicate_group"
+                       : "ui.viewport.context_menu.command.duplicate_object",
+                 group ? "Duplicate Groups" : "Duplicate Objects", Section::Primary);
+    append_fixed(quader_command::kEditCreateInstance, "ui.menu.edit.create_instance",
+                 "Create Instance", Section::Primary);
+    append_fixed(group ? quader_command::kUngroupSelection : quader_command::kGroupSelection,
+                 group ? "ui.menu.edit.ungroup" : "ui.menu.edit.group",
+                 group ? "Ungroup" : "Group", Section::Primary);
+    append_fixed(quader_command::kParentToActive, "ui.menu.edit.parent_to_active",
+                 "Parent to Active", Section::Primary);
+    append_fixed(quader_command::kUnparentSelection, "ui.menu.edit.unparent",
+                 "Unparent", Section::Primary);
+    append_fixed(quader_command::kEditFlattenInstance, "ui.menu.edit.flatten_instance",
+                 "Flatten Instance", Section::Primary);
+  }
+  const auto append_section = [&](Section section) {
+    for (const QuaderActionItem *action :
+         catalog_actions_for_section(action_set, scope, editor, section)) {
+      const auto command_id = action->kind == QuaderActionKind::Tool
+          ? editor.commands().command_id_for_tool_activation(action->tool_id)
+          : editor.commands().command_id_for_modeling_action(action->action_id);
+      append(command_id, localized_action_label(*action, scope, localization), section);
+    }
+    for (const auto &command : supplemental) {
+      if (presentation_section(command.presentation) == section) {
+        append(command.descriptor.id,
+               localized_command_label(command.descriptor, scope, localization), section);
+      }
+    }
+  };
+  for (const Section section : {Section::Primary, Section::MeshData,
+                               Section::Topology, Section::Merge, Section::Normals,
+                               Section::Arrange}) {
+    append_section(section);
+  }
+  append_fixed(quader_command::kCutSelection, "ui.menu.edit.cut", "Cut", Section::MeshData);
+  append_fixed(quader_command::kCopySelection, "ui.menu.edit.copy", "Copy", Section::MeshData);
+  append_fixed(quader_command::kPasteSelection, "ui.menu.edit.paste", "Paste", Section::MeshData);
+  append_section(Section::Destructive);
+  return result;
+}
+
 void QtViewportContextMenuPresenter::apply_ui_scale(
     const QtUiScaleMetrics &metrics) {
   ui_scale_metrics_ = metrics;

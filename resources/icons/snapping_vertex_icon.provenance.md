@@ -1,5 +1,8 @@
 # Vertex Snapping toolbar icon provenance
 
+This earlier revision is superseded by the current set documented in
+[snapping_icons.provenance.md](snapping_icons.provenance.md).
+
 Created on 2026-09-25 with the built-in ImageGen tool at the user's request.
 
 Asset: `snapping_vertex.png`.

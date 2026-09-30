@@ -11,6 +11,7 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_query_api.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
@@ -23,12 +24,30 @@
 #include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "render/scene_render_bridge.hpp"
+#include "render/viewport_renderer.hpp"
+#include "editor/placement/scene_surface_query.hpp"
+#include "editor/viewport/viewport_scene_hit_policy.hpp"
 #include "editor/session/scene_session.hpp"
 #include "scene/scene_texture_mapping.hpp"
 
 #include <utility>
 
 namespace quader {
+
+void QuaderRenderApiRuntimeAccess::prepare_selection_depth(
+    QuaderRenderApi &api, ViewportRenderer &renderer,
+    const ViewportCameraController &camera, bool eligible) {
+  auto *session = QuaderApiSessionInternalAccess::active_scene_session(api.session_);
+  if (!session) return;
+  auto &surfaces = session->scene_surface_query();
+  auto &accelerator = renderer.component_selection();
+  surfaces.set_selection_depth_source(accelerator.source());
+  const auto projection = ViewportSceneProjectionCamera(camera).selection_depth_camera();
+  if (accelerator.wants_geometry(projection, eligible)) {
+    accelerator.prepare(surfaces.snapshot().selection_depth_geometry(), projection);
+  }
+}
+
 namespace {
 
 const SceneSession &read_scene_session(QuaderApiSession session) {
@@ -209,6 +228,8 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
   const std::uint64_t native_array_asset_revision =
       RenderSignatureBuilder{}
           .add_value(project.assets().revision())
+          .add_value(project.modeling().selection_revision())
+          .add_value(project.scene().revision())
           .add_value(project_material_revision)
           .add_value(project.scene().render_component_revision())
           .add_value(project.scene().texture_mapping_revision())
@@ -365,16 +386,39 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
           .position_revision = preview_mesh.position_revision,
           .dynamic_position_payload =
               std::move(preview_mesh.dynamic_position_payload),
+          .geometry_projection = std::move(preview_mesh.geometry_projection),
       });
     }
   }
   RenderToolPreviewSceneSnapshot preview_snapshot =
       bridge.build_tool_preview_scene_snapshot(
           std::move(neutral_preview), session.assets, &local_visibility);
+  if (native_array_kind == 0u && !transform_preview_active) {
+    if (const auto coordinates = project.modeling().accepted_overlay_coordinates()) {
+      QDR_PROFILE_SCOPE("Render extract accepted overlay coordinates");
+      preview_snapshot.accepted_overlay_coordinates.reserve(coordinates->meshes.size());
+      for (const auto &mesh : coordinates->meshes) {
+        if (!local_visibility.allows(mesh.source_entity)) continue;
+        preview_snapshot.accepted_overlay_coordinates.push_back({
+            .source_object_id = mesh.source_object_id,
+            .source_entity = mesh.source_entity,
+            .visibility_entity = mesh.source_entity,
+            .mesh = mesh.mesh,
+            .transform = mesh.transform,
+            .dynamic_positions = true,
+            .layout_key = mesh.layout_key,
+            .position_revision = mesh.position_revision,
+            .dynamic_position_payload = mesh.dynamic_position_payload,
+            .geometry_projection = mesh.geometry_projection,
+        });
+      }
+    }
+  }
   const bool compound_publication_required =
       native_array_kind == 3u || !preview_snapshot.curves.empty() ||
       !preview_snapshot.lights.empty() ||
-      !preview_snapshot.group_markers.empty();
+      !preview_snapshot.group_markers.empty() ||
+      !preview_snapshot.accepted_overlay_coordinates.empty();
   ToolPreviewSubmissionResult preview_result;
   if (!preview_snapshot.complete) {
     preview_result = ToolPreviewSubmissionResult::Failed;

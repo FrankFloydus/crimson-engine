@@ -33,9 +33,12 @@ struct FacePerimeterInfo {
 };
 
 [[nodiscard]] std::vector<Edge> document_edges(const Document& document);
+[[nodiscard]] std::vector<Edge> document_edges(const DocumentReadView& document);
 [[nodiscard]] FacePerimeterInfo face_perimeter_info(const Document& document, ElementId face_id);
 [[nodiscard]] FacePerimeterInfo selected_faces_perimeter_info(const Document& document, const Selection& selection);
 [[nodiscard]] quader::QVec3 face_normal(const Document& document, const Face& face);
+[[nodiscard]] quader::QVec3 face_normal(const DocumentReadView &document,
+                                       const Face &face);
 [[nodiscard]] std::optional<float> edge_factor_from_position(const Document& document, Edge edge, quader::QVec3 position);
 [[nodiscard]] std::optional<float> edge_factor_from_ray(const Document& document, Edge edge, const Ray& ray);
 [[nodiscard]] std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge);

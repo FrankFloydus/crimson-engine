@@ -14,6 +14,7 @@
 #endif
 #include "api/quader_project_api.hpp"
 #include "api/quader_scene_documents_api.hpp"
+#include "api/quader_selection_diagnostics_api.hpp"
 #include "api/quader_preferences_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "api/quader_ui_api.hpp"
@@ -1082,12 +1083,14 @@ public:
          QuaderSceneDocumentsApi &scene_documents,
          QuaderViewportApi& viewports, QuaderToolsApi& tools,
          QuaderPreferencesApi& preferences, QuaderUIApi &ui,
+         QuaderSelectionDiagnosticsApi &selection_diagnostics,
          QuaderDevToolsApi& dev_tools);
 #else
     Impl(QuaderApi& api, QuaderProjectApi& project,
          QuaderSceneDocumentsApi &scene_documents,
          QuaderViewportApi& viewports, QuaderToolsApi& tools,
-         QuaderPreferencesApi& preferences, QuaderUIApi &ui);
+         QuaderPreferencesApi& preferences, QuaderUIApi &ui,
+         QuaderSelectionDiagnosticsApi &selection_diagnostics);
 #endif
 
     QuaderApiVoidResult execute(std::string_view command_id);
@@ -1249,6 +1252,7 @@ public:
     QuaderToolsApi& tools_;
     QuaderPreferencesApi& preferences_;
     QuaderUIApi &ui_;
+    QuaderSelectionDiagnosticsApi &selection_diagnostics_;
 #ifndef NDEBUG
     QuaderDevToolsApi& dev_tools_;
 #endif
@@ -1268,7 +1272,8 @@ public:
 QuaderCommandsApi::Impl::Impl(
     QuaderApi &api, QuaderProjectApi &project,
     QuaderSceneDocumentsApi &scene_documents, QuaderViewportApi &viewports,
-    QuaderToolsApi &tools, QuaderPreferencesApi &preferences, QuaderUIApi &ui
+    QuaderToolsApi &tools, QuaderPreferencesApi &preferences, QuaderUIApi &ui,
+    QuaderSelectionDiagnosticsApi &selection_diagnostics
 #ifndef NDEBUG
     ,
     QuaderDevToolsApi &dev_tools
@@ -1281,6 +1286,7 @@ QuaderCommandsApi::Impl::Impl(
     , tools_(tools)
     , preferences_(preferences)
     , ui_(ui)
+    , selection_diagnostics_(selection_diagnostics)
 #ifndef NDEBUG
     , dev_tools_(dev_tools)
 #endif
@@ -2099,6 +2105,7 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   ViewportShortcut shortcut;
   if (viewport_router_shortcut_for_target_id(
           dispatch.target_id, state.grid_preset, shortcut)) {
+    shortcut.initiating_chord = chord;
     return {
         .kind = QuaderViewportKeybindingDispatch::Kind::ViewportShortcut,
         .shortcut = shortcut,
@@ -2730,10 +2737,11 @@ void QuaderCommandsApi::Impl::register_commands() {
             api_.scene().group_selection();
         return quader_api_status_from_result(result);
       },
-      "Ctrl+G");
+      "Ctrl+G", [this] { return api_.scene().can_group_selection(); });
   register_command(
       quader_command::kUngroupSelection, "Ungroup Selection",
-      [this] { return api_.scene().ungroup_selection(); }, "Shift+Ctrl+G");
+      [this] { return api_.scene().ungroup_selection(); }, "Shift+Ctrl+G",
+      [this] { return api_.scene().can_ungroup_selection(); });
   register_command(
       quader_command::kParentToActive, "Parent to Active",
       [this] { return api_.scene().parent_selection_to_active(); }, "P",
@@ -2853,6 +2861,11 @@ void QuaderCommandsApi::Impl::register_commands() {
                    },
                    "Ctrl+Shift+C");
 #endif
+  register_command(quader_command::kDiagnosticsDumpSelection,
+                   "Dump Selection", [this] {
+                     return quader_api_status_from_result(
+                         selection_diagnostics_.request_dump());
+                   });
   register_command(
       quader_command::kModelingApplyActivePreview, "Apply Active Preview",
       [this] {
@@ -3501,6 +3514,11 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       stable_keybinding_localization_key("viewport.shading_popup"),
       QuaderKeybindingContextKind::Viewport,
       std::string(viewport_command_keybinding_context()));
+  register_keybinding_target_metadata(
+      viewport_input_action_target_id("marking_menu"), "Open Marking Menu",
+      stable_keybinding_localization_key("viewport.marking_menu"),
+      QuaderKeybindingContextKind::Viewport,
+      std::string(viewport_command_keybinding_context()));
 
   for (const ViewportInputActionBindingDescriptor &descriptor :
        viewport_input_action_binding_catalog()) {
@@ -3595,6 +3613,9 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       std::string(viewport_command_keybinding_context()), 10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("shading_popup"), "Z",
+      std::string(viewport_command_keybinding_context()), 10);
+  keybindings_.add_default_keybinding(
+      viewport_input_action_target_id("marking_menu"), "Q",
       std::string(viewport_command_keybinding_context()), 10);
   for (const ViewportInputActionBindingDescriptor &descriptor :
        viewport_input_action_binding_catalog()) {
@@ -3849,9 +3870,11 @@ QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderToolsApi &tools,
                                      QuaderPreferencesApi &preferences,
                                      QuaderUIApi &ui,
+                                     QuaderSelectionDiagnosticsApi &selection_diagnostics,
                                      QuaderDevToolsApi &dev_tools)
     : impl_(std::make_unique<Impl>(api, project, scene_documents, viewports,
-                                   tools, preferences, ui, dev_tools)) {}
+                                   tools, preferences, ui, selection_diagnostics,
+                                   dev_tools)) {}
 #else
 QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderProjectApi &project,
@@ -3859,9 +3882,10 @@ QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderViewportApi &viewports,
                                      QuaderToolsApi &tools,
                                      QuaderPreferencesApi &preferences,
-                                     QuaderUIApi &ui)
+                                     QuaderUIApi &ui,
+                                     QuaderSelectionDiagnosticsApi &selection_diagnostics)
     : impl_(std::make_unique<Impl>(api, project, scene_documents, viewports,
-                                   tools, preferences, ui)) {}
+                                   tools, preferences, ui, selection_diagnostics)) {}
 #endif
 
 QuaderCommandsApi::~QuaderCommandsApi() = default;

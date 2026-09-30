@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_validation_test_helpers.hpp"
+#include "operation_atomicity_test_helpers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -212,4 +212,66 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsAnUnorderedWallStrip
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
         EXPECT_TRUE(selection.edges.size() == 3U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+}
+
+TEST(QdrDocumentOperationConnectEdgesTests, PreservesUnrelatedCollapsedFacesAndLooseVertices) {
+    auto fixture = qdr_test::make_quad_document();
+    const Document island = qdr_test::append_unrelated_authored_geometry(fixture.document);
+    Selection selection = qdr_test::edge_selection({
+        make_edge(fixture.bottom_left, fixture.bottom_right),
+        make_edge(fixture.top_right, fixture.top_left)});
+
+    const auto result = connect_selected_edges(fixture.document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_EQ(selection.edges.size(), 1U);
+    EXPECT_TRUE(qdr_test::edge_positions_match_unordered(fixture.document, selection.edges.front(),
+        {0.0F, -1.0F, 0.0F}, {0.0F, 1.0F, 0.0F}));
+    qdr_test::expect_unrelated_authored_geometry_preserved(fixture.document, island);
+}
+
+TEST(QdrDocumentOperationConnectEdgesTests, RejectsMalformedUnrelatedAuthoredDataAtomically) {
+    for (const auto fault : qdr_test::kAuthoredInputFaults) {
+        auto fixture = qdr_test::make_quad_document();
+        static_cast<void>(qdr_test::append_unrelated_authored_geometry(fixture.document));
+        qdr_test::corrupt_unrelated_authored_geometry(fixture.document, fault);
+        Selection selection = qdr_test::edge_selection({
+            make_edge(fixture.bottom_left, fixture.bottom_right),
+            make_edge(fixture.top_right, fixture.top_left)});
+        const auto source = qdr_test::document_fingerprint(fixture.document);
+        const auto source_selection = qdr_test::selection_fingerprint(selection);
+
+        const auto result = connect_selected_edges(fixture.document, selection);
+
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(result.changed);
+        EXPECT_EQ(qdr_test::document_fingerprint(fixture.document), source);
+        EXPECT_EQ(qdr_test::selection_fingerprint(selection), source_selection);
+    }
+}
+
+TEST(QdrDocumentOperationConnectEdgesTests, RejectsMidpointChordAcrossConcaveExteriorAtomically) {
+    Document document;
+    const std::array positions{
+        quader::QVec3{0.0F, 0.0F, 0.0F}, quader::QVec3{3.0F, 0.0F, 0.0F},
+        quader::QVec3{3.0F, 3.0F, 0.0F}, quader::QVec3{2.0F, 3.0F, 0.0F},
+        quader::QVec3{2.0F, 1.0F, 0.0F}, quader::QVec3{1.0F, 1.0F, 0.0F},
+        quader::QVec3{1.0F, 3.0F, 0.0F}, quader::QVec3{0.0F, 3.0F, 0.0F}};
+    std::vector<ElementId> loop;
+    for (const auto position : positions) {
+        loop.push_back(add_vertex(document, position));
+    }
+    ASSERT_NE(add_face(document, loop), kInvalidElementId);
+    Selection selection = qdr_test::edge_selection({make_edge(loop[2], loop[3]), make_edge(loop[6], loop[7])});
+    const auto source = qdr_test::document_fingerprint(document);
+    const auto source_selection = qdr_test::selection_fingerprint(selection);
+
+    const auto result = connect_selected_edges(document, selection);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.changed);
+    EXPECT_FALSE(result.message.empty());
+    EXPECT_EQ(qdr_test::document_fingerprint(document), source);
+    EXPECT_EQ(qdr_test::selection_fingerprint(selection), source_selection);
 }

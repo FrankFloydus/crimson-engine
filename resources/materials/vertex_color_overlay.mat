@@ -6,12 +6,26 @@ material {
     depthCulling : false,
     doubleSided : true,
     parameters : [
+        { type : bool, name : sharedPositionsEnabled },
+        { type : sampler2d, name : sharedPositions, precision : high },
         { type : bool, name : useUniformColor },
         { type : float4, name : uniformColor }
     ],
     requires : [
         color
     ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        if (materialParams.sharedPositionsEnabled) {
+            int index = int(getPosition().x);
+            int width = textureSize(materialParams_sharedPositions, 0).x;
+            highp vec3 position = texelFetch(materialParams_sharedPositions,
+                    ivec2(index % width, index / width), 0).xyz;
+            material.worldPosition = getWorldFromModelMatrix() * vec4(position, 1.0);
+        }
+    }
 }
 
 fragment {

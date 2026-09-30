@@ -100,7 +100,17 @@ filament::Texture *upload_png_texture(
   if (levels > 1u) {
     texture->generateMipmaps(engine);
   }
-  LOG_INFO("Loaded {} '{}' ({}x{})", options.label, source, width, height);
+  if (options.opaque_output != nullptr) {
+    bool opaque = true;
+    for (std::size_t alpha = kRgbaChannelCount - 1u; alpha < pixels.size();
+         alpha += kRgbaChannelCount) {
+      if (pixels[alpha] != 255u) {
+        opaque = false;
+        break;
+      }
+    }
+    *options.opaque_output = opaque;
+  }
   return texture;
 }
 
@@ -109,6 +119,9 @@ filament::Texture *upload_png_texture(
 filament::Texture *
 load_png_texture(filament::Engine &engine, const std::filesystem::path &path,
                  PngTextureLoadOptions options) {
+  if (options.opaque_output != nullptr) {
+    *options.opaque_output = false;
+  }
   std::vector<unsigned char> pixels;
   unsigned width = 0u;
   unsigned height = 0u;
@@ -126,6 +139,9 @@ filament::Texture *
 load_png_texture(filament::Engine &engine,
                  std::span<const std::byte> encoded_file_bytes,
                  PngTextureLoadOptions options) {
+  if (options.opaque_output != nullptr) {
+    *options.opaque_output = false;
+  }
   if (encoded_file_bytes.empty()) {
     return nullptr;
   }
@@ -149,6 +165,9 @@ filament::Texture *load_rgba_texture(
     filament::Engine &engine, std::span<const std::byte> rgba8_pixels,
     std::uint32_t width, std::uint32_t height,
     PngTextureLoadOptions options) {
+  if (options.opaque_output != nullptr) {
+    *options.opaque_output = false;
+  }
   const std::uint64_t expected = static_cast<std::uint64_t>(width) *
                                  static_cast<std::uint64_t>(height) *
                                  kRgbaChannelCount;

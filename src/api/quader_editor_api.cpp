@@ -58,17 +58,18 @@ public:
         , standard_material_documents(session)
         , scene_documents(session)
         , tools(session)
+        , selection_diagnostics(session)
 #ifndef NDEBUG
         , dev_tools(session)
         , preferences()
         , ui()
         , commands(api, project, scene_documents, viewports, tools,
-                   preferences, ui, dev_tools)
+                   preferences, ui, selection_diagnostics, dev_tools)
 #else
         , preferences()
         , ui()
         , commands(api, project, scene_documents, viewports, tools,
-                   preferences, ui)
+                   preferences, ui, selection_diagnostics)
 #endif
         , render(session, api) {
       attach_document_lifecycle();
@@ -85,17 +86,18 @@ public:
         , standard_material_documents(project_api_session(project_session))
         , scene_documents(project_session)
         , tools(project_api_session(project_session))
+        , selection_diagnostics(project_api_session(project_session))
 #ifndef NDEBUG
         , dev_tools(project_api_session(project_session))
         , preferences()
         , ui()
         , commands(api, project, scene_documents, viewports, tools,
-                   preferences, ui, dev_tools)
+                   preferences, ui, selection_diagnostics, dev_tools)
 #else
         , preferences()
         , ui()
         , commands(api, project, scene_documents, viewports, tools,
-                   preferences, ui)
+                   preferences, ui, selection_diagnostics)
 #endif
         , render(project_api_session(project_session), api) {
       attach_document_lifecycle();
@@ -239,6 +241,7 @@ public:
       project_assets.rebind_session(session);
       standard_material_documents.rebind_session(session);
       tools.rebind_session(session);
+      selection_diagnostics.rebind_session(session);
 #ifndef NDEBUG
       dev_tools.rebind_session(session);
 #endif
@@ -262,6 +265,7 @@ public:
     QuaderSceneDocumentsApi scene_documents;
     QuaderViewportApi viewports;
     QuaderToolsApi tools;
+    QuaderSelectionDiagnosticsApi selection_diagnostics;
 #ifndef NDEBUG
     QuaderDevToolsApi dev_tools;
 #endif
@@ -387,6 +391,14 @@ QuaderSelectionApi& QuaderEditorApi::selection() {
 
 const QuaderSelectionApi& QuaderEditorApi::selection() const {
     return impl_->api.selection();
+}
+
+QuaderSelectionDiagnosticsApi &QuaderEditorApi::selection_diagnostics() {
+  return impl_->selection_diagnostics;
+}
+
+const QuaderSelectionDiagnosticsApi &QuaderEditorApi::selection_diagnostics() const {
+  return impl_->selection_diagnostics;
 }
 
 QuaderAssetApi& QuaderEditorApi::assets() {

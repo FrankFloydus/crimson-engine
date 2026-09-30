@@ -98,6 +98,7 @@ void bind_mesh_texture_mappings(
   if (sampling_from_local.size() > kMeshTextureMappingCapacity) {
     return;
   }
+  material_instance.setParameter("coarseGeometryEnabled", 0.0f);
   std::array<filament::math::mat4f, kMeshTextureMappingCapacity> matrices;
   std::array<filament::math::mat3f, kMeshTextureMappingCapacity> cofactors;
   const std::size_t count =
@@ -125,6 +126,28 @@ void bind_mesh_texture_mappings(
                                  count);
   material_instance.setParameter("textureSamplingCofactor", cofactors.data(),
                                  count);
+}
+
+void bind_coarse_mesh_parameters(
+    filament::MaterialInstance &material_instance,
+    std::span<const filament::math::mat4f> sampling_from_local,
+    std::span<const filament::math::mat3f> sampling_cofactors,
+    std::span<const filament::math::mat3f> world_normal_from_local) {
+  const std::size_t count = sampling_from_local.size();
+  const bool valid = count != 0u && count <= kMeshTextureMappingCapacity &&
+                     sampling_cofactors.size() == count &&
+                     world_normal_from_local.size() == count;
+  assert(valid);
+  if (!valid) {
+    return;
+  }
+  material_instance.setParameter("textureSamplingFromLocal",
+                                 sampling_from_local.data(), count);
+  material_instance.setParameter("textureSamplingCofactor",
+                                 sampling_cofactors.data(), count);
+  material_instance.setParameter("coarseWorldNormalFromLocal",
+                                 world_normal_from_local.data(), count);
+  material_instance.setParameter("coarseGeometryEnabled", 1.0f);
 }
 
 void bind_standard_material_texture_transform(
@@ -343,19 +366,36 @@ MaterialBindingService::create_mesh_material_instance(
   return material_instance;
 }
 
-filament::MaterialInstance *
-MaterialBindingService::create_mesh_material_instance(
-    const RenderMaterialAssetSnapshot *material, bool double_sided,
-    bool editor_unlit) const {
+const RenderMaterialAssetSnapshot *MaterialBindingService::effective_material(
+    const RenderMaterialAssetSnapshot *material) const {
   const RenderMaterialAssetSnapshot *default_override =
       project_material_resolver_ != nullptr
           ? project_material_resolver_->default_material_override()
           : nullptr;
   if (default_override != nullptr) {
-    material = default_override;
-  } else if (!release_has_feature(ReleaseFeature::Materials)) {
-    material = &packaged_default_render_material();
+    return default_override;
   }
+  return release_has_feature(ReleaseFeature::Materials)
+             ? material : &packaged_default_render_material();
+}
+
+bool MaterialBindingService::material_is_known_opaque(
+    const RenderMaterialAssetSnapshot *material) const {
+  return material_opacity(material) == MaterialOpacity::Opaque;
+}
+
+MaterialOpacity MaterialBindingService::material_opacity(
+    const RenderMaterialAssetSnapshot *material) const {
+  return initialized()
+             ? texture_binding_->base_color_opacity(effective_material(material))
+             : MaterialOpacity::Unknown;
+}
+
+filament::MaterialInstance *
+MaterialBindingService::create_mesh_material_instance(
+    const RenderMaterialAssetSnapshot *material, bool double_sided,
+    bool editor_unlit) const {
+  material = effective_material(material);
   if (!shaded_mesh_material_ || !rendered_mesh_material_ || !texture_binding_) {
     return nullptr;
   }

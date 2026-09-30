@@ -307,6 +307,12 @@ TEST(QuaderMeshMaterialTests,
 
 TEST(QuaderMeshMaterialTests,
      TextureSamplingUsesPortableChartsAndPerInstanceTransforms) {
+  const std::string vertex_helpers =
+      read_source_file("resources/materials/mesh_vertex_normal_mapping.glsl");
+  EXPECT_TRUE(source_contains_compact(vertex_helpers,
+      "return materialParams.coarseGeometryEnabled > 0.5 ? int(getCustom6().x) : getInstanceIndex()"));
+  EXPECT_TRUE(source_contains_compact(vertex_helpers,
+      "return materialParams.coarseGeometryEnabled > 0.5 ? getCustom5().xyz : getPosition().xyz"));
   const std::array<std::string, 2> sources{
       read_source_file("resources/materials/quader_mesh.mat"),
       read_source_file("resources/materials/quader_mesh_lit.mat"),
@@ -338,7 +344,9 @@ TEST(QuaderMeshMaterialTests,
     const std::string vertex =
         source.substr(vertex_begin, vertex_end - vertex_begin);
     vertex_blocks[index] = vertex;
-    EXPECT_NE(vertex.find("int instanceIndex = getInstanceIndex()"),
+    EXPECT_NE(vertex.find("#include \"mesh_vertex_normal_mapping.glsl\""),
+              std::string::npos);
+    EXPECT_NE(vertex.find("int instanceIndex = meshOccurrenceIndex()"),
               std::string::npos);
     EXPECT_NE(vertex.find("textureSamplingFromLocal[instanceIndex]"),
               std::string::npos);
@@ -380,7 +388,7 @@ TEST(QuaderMeshMaterialTests,
               std::string::npos);
     const std::size_t identity_bypass =
         vertex.find("if (samplingFromLocal == mat4(1.0))");
-    const std::size_t position_read = vertex.find("position = getPosition()");
+    const std::size_t position_read = vertex.find("position = meshLocalPosition()");
     ASSERT_NE(identity_bypass, std::string::npos);
     ASSERT_NE(position_read, std::string::npos);
     EXPECT_LT(identity_bypass, position_read);
@@ -801,6 +809,16 @@ TEST(QuaderMeshMaterialTests,
 }
 
 TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
+  const std::string vertex_helpers =
+      read_source_file("resources/materials/mesh_vertex_normal_mapping.glsl");
+  const std::string world_normal = source_slice(vertex_helpers,
+      "vec3 meshSurfaceWorldNormal(", "bool requiresWorldTextureNormalCorrection(");
+  EXPECT_NE(world_normal.find("if (materialParams.coarseGeometryEnabled > 0.5)"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(world_normal,
+      "return materialParams.coarseWorldNormalFromLocal[meshOccurrenceIndex()] * localNormal"));
+  EXPECT_NE(world_normal.find("return getWorldFromModelNormalMatrix() * localNormal"),
+            std::string::npos);
   const std::array<std::string, 2> sources = {
       read_source_file("resources/materials/quader_mesh.mat"),
       read_source_file("resources/materials/quader_mesh_lit.mat"),
@@ -818,7 +836,9 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
     EXPECT_NE(material.find("custom0"), std::string::npos);
     EXPECT_NE(material.find("surfaceGridProjection"), std::string::npos);
     EXPECT_NE(material.find("getCustom0()"), std::string::npos);
-    EXPECT_NE(material.find("getWorldFromModelNormalMatrix()"),
+    EXPECT_NE(material.find("#include \"mesh_vertex_normal_mapping.glsl\""),
+              std::string::npos);
+    EXPECT_NE(material.find("meshSurfaceWorldNormal(projection.xyz)"),
               std::string::npos);
   }
 
@@ -1028,8 +1048,17 @@ TEST(QuaderMeshMaterialTests,
   EXPECT_TRUE(source_contains_compact(
       preview_source, "vertex.normal.z, 0.0f"));
 
-  // The same materials are used by static meshes, streaming previews, and the
-  // isolated material preview: each upload must supply all sampling attributes.
+  // Static, streamed and retained coarse geometry share the sampling contract.
+  // Check each allocation path so an extra declaration cannot hide a missing
+  // attribute in another path.
+  const std::array<std::string, 3u> upload_paths{
+      source_slice(factory_source, "bool MeshRenderableFactory::acquire_geometry(",
+                   "bool MeshRenderableFactory::acquire_collision_geometry("),
+      source_slice(factory_source, "bool MeshRenderableFactory::acquire_dynamic_geometry(",
+                   "void MeshRenderableFactory::release_geometry("),
+      source_slice(factory_source, "MeshRenderableProxy MeshRenderableFactory::create_editable_surface_geometry(",
+                   "MeshRenderableProxy MeshRenderableFactory::create_editable_surface_proxy("),
+  };
   for (const std::string_view vertex_type :
        {"RenderVertex", "DynamicRenderVertexStatic"}) {
     for (const std::string_view attribute :
@@ -1044,7 +1073,9 @@ TEST(QuaderMeshMaterialTests,
                                           "CUSTOM4"}) {
     const std::string qualified =
         "filament::VertexAttribute::" + std::string(attribute);
-    EXPECT_EQ(count_occurrences(factory_source, qualified), 2u);
+    for (const auto &upload : upload_paths) {
+      EXPECT_EQ(count_occurrences(upload, qualified), 1u) << qualified;
+    }
     EXPECT_NE(preview_source.find(qualified), std::string::npos);
   }
   for (const std::string_view attribute :
@@ -1058,7 +1089,8 @@ TEST(QuaderMeshMaterialTests,
       factory_source, "build_mesh_quad_uv_interpolations("
                       "mesh.vertices, mesh.indices, mesh.primitives, positions)"));
   EXPECT_EQ(count_occurrences(
-                factory_source, "build_render_vertices(mesh, dynamic_positions)"),
+                factory_source,
+                "build_render_vertices<DynamicRenderVertexStatic>(mesh, dynamic_positions)"),
             2u);
   for (const std::string_view instance :
        {"shaded_instance", "rendered_instance", "wire_instance"}) {
@@ -1180,7 +1212,7 @@ TEST(ViewportOverlayPolicyTests,
                 "selection_overlay_options)"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find(
-                "modeling_.selection_overlay_frame(options_)"),
+                "modeling_.selection_overlay_render_frame(options_)"),
             std::string::npos);
   EXPECT_EQ(viewport_panel_source.find("selection_overlay_cache_"),
             std::string::npos);
@@ -1222,7 +1254,7 @@ TEST(ViewportOverlayPolicyTests,
       source.find("modeling.selection_overlay_signature("
                   "selection_overlay_options)"),
       std::string::npos);
-  EXPECT_NE(source.find("modeling_.selection_overlay_frame(options_)"),
+  EXPECT_NE(source.find("modeling_.selection_overlay_render_frame(options_)"),
             std::string::npos);
   EXPECT_NE(source.find(".scene_revision = document.revision()"),
             std::string::npos);
@@ -1895,7 +1927,7 @@ TEST(SceneRenderBridgeTests, AppliesSharedOverlayStateThroughProxyFactory) {
   EXPECT_NE(bridge_source.find("RenderToolPreviewSceneSnapshot preview"),
             std::string::npos);
   EXPECT_NE(
-      bridge_source.find("tool_preview_cache_.set_meshes(preview.meshes)"),
+      bridge_source.find("tool_preview_cache_.set_meshes(editable_surface_cache_.prepared_fallback_meshes())"),
             std::string::npos);
   EXPECT_NE(tool_preview_cache_source.find("current_generation_"),
             std::string::npos);
@@ -2054,29 +2086,50 @@ TEST(SceneRenderBridgeTests,
                 "Tool preview build hidden candidate generation"),
             std::string::npos);
 
+  const std::size_t preview_begin = bridge_source.find("ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(");
+  ASSERT_NE(preview_begin, std::string::npos);
+  const std::size_t surface_prepare = bridge_source.find("editable_surface_cache_.prepare(", preview_begin);
+  const std::size_t surface_failed = bridge_source.find("surface_result == ToolPreviewSubmissionResult::Failed", surface_prepare);
   const std::size_t light_prepare =
-      bridge_source.find("tool_preview_light_cache_.prepare(preview.lights)");
+      bridge_source.find("tool_preview_light_cache_.prepare(preview.lights)", surface_failed);
   const std::size_t publish = bridge_source.find(
-      "tool_preview_cache_.set_meshes(preview.meshes)", light_prepare);
+      "tool_preview_cache_.set_meshes(editable_surface_cache_.prepared_fallback_meshes())", light_prepare);
   const std::size_t failed = bridge_source.find(
       "mesh_result == ToolPreviewSubmissionResult::Failed", publish);
+  const std::size_t surface_discard = bridge_source.find("editable_surface_cache_.discard_prepared()", failed);
+  const std::size_t light_discard = bridge_source.find("tool_preview_light_cache_.discard_prepared()", failed);
+  const std::size_t surface_publish = bridge_source.find("editable_surface_cache_.publish_prepared()", failed);
   const std::size_t light_publish = bridge_source.find(
-      "tool_preview_light_cache_.publish_prepared()", failed);
+      "tool_preview_light_cache_.publish_prepared()", surface_publish);
+  const std::size_t exclusion = bridge_source.find("sync_service_.set_retained_mesh_exclusion(", light_publish);
   const std::size_t overlay = bridge_source.find(
-      "overlay_cache_.set_transform_position_streams(preview.meshes)",
+      "overlay_cache_.set_transform_position_streams(",
       light_publish);
   const std::size_t suppression = bridge_source.find(
       "Tool preview update source suppression", overlay);
+  ASSERT_NE(surface_prepare, std::string::npos);
+  ASSERT_NE(surface_failed, std::string::npos);
   ASSERT_NE(light_prepare, std::string::npos);
   ASSERT_NE(publish, std::string::npos);
   ASSERT_NE(failed, std::string::npos);
+  ASSERT_NE(surface_discard, std::string::npos);
+  ASSERT_NE(light_discard, std::string::npos);
+  ASSERT_NE(surface_publish, std::string::npos);
   ASSERT_NE(light_publish, std::string::npos);
+  ASSERT_NE(exclusion, std::string::npos);
   ASSERT_NE(overlay, std::string::npos);
   ASSERT_NE(suppression, std::string::npos);
+  EXPECT_LT(surface_prepare, surface_failed);
+  EXPECT_LT(surface_failed, light_prepare);
   EXPECT_LT(light_prepare, publish);
   EXPECT_LT(publish, failed);
-  EXPECT_LT(failed, light_publish);
-  EXPECT_LT(light_publish, overlay);
+  EXPECT_LT(failed, light_discard);
+  EXPECT_LT(failed, surface_discard);
+  EXPECT_LT(light_discard, surface_publish);
+  EXPECT_LT(surface_discard, surface_publish);
+  EXPECT_LT(surface_publish, light_publish);
+  EXPECT_LT(light_publish, exclusion);
+  EXPECT_LT(exclusion, overlay);
   EXPECT_LT(overlay, suppression);
 
   const std::size_t api_submission = render_api_source.find(
@@ -2417,8 +2470,14 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
   const std::string source =
       read_source_file("src/render/mesh_renderable_factory.cpp");
 
-  EXPECT_NE(source.find("mesh_tangent_frames(mesh)"),
+  EXPECT_NE(source.find("mesh_tangent_frames(mesh, positions)"),
             std::string::npos);
+  EXPECT_NE(source.find("positions = effective_mesh_positions(mesh, positions)"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(source,
+      "positions.empty() ? v1.position - v0.position : positions[i1] - positions[i0]"));
+  EXPECT_TRUE(source_contains_compact(source,
+      "positions.empty() ? v2.position - v0.position : positions[i2] - positions[i0]"));
   EXPECT_NE(source.find("tangent_frame_from_basis("),
             std::string::npos);
   EXPECT_NE(source.find("delta1.x * delta2.y - delta1.y * delta2.x"),
@@ -2701,8 +2760,13 @@ TEST(RenderSystemTests, InitializeUnwindsPartialFilamentStateOnFailure) {
 
   EXPECT_NE(header.find("[[nodiscard]] bool initialized() const"),
             std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      source, "shutdown(); LOG_INFO(\"Initializing Filament renderer"));
+  const std::size_t initialize = source.find("bool RenderSystem::initialize(");
+  ASSERT_NE(initialize, std::string::npos);
+  const std::size_t first_shutdown = source.find("shutdown();", initialize);
+  const std::size_t engine_creation = source.find("engine_ = filament::Engine::create", initialize);
+  ASSERT_NE(first_shutdown, std::string::npos);
+  ASSERT_NE(engine_creation, std::string::npos);
+  EXPECT_LT(first_shutdown, engine_creation);
   EXPECT_NE(source.find("const auto fail = [&](std::string_view message)"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(source, "shutdown(); return false;"));

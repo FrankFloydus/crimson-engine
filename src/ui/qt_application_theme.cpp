@@ -18,6 +18,25 @@
 
 namespace quader {
 
+QColor qt_log_message_color(QtLogMessageSeverity severity,
+                            const QPalette &palette, bool themed) {
+  if (!themed || palette.currentColorGroup() == QPalette::Disabled) {
+    return palette.color(QPalette::Text);
+  }
+  const bool inactive = palette.currentColorGroup() == QPalette::Inactive;
+  switch (severity) {
+  case QtLogMessageSeverity::Error:
+    return inactive ? QColor(215, 126, 128) : QColor(240, 123, 125);
+  case QtLogMessageSeverity::Warning:
+    return inactive ? QColor(198, 178, 119) : QColor(220, 193, 119);
+  case QtLogMessageSeverity::Subdued:
+    return palette.color(QPalette::PlaceholderText);
+  case QtLogMessageSeverity::Information:
+    return palette.color(QPalette::Text);
+  }
+  return palette.color(QPalette::Text);
+}
+
 QColor qt_current_item_outline_color() {
   // The orange authored in the face-selection toolbar icon.
   return QColor(255, 143, 24);

@@ -12,7 +12,9 @@ material {
         custom1,
         custom2,
         custom3,
-        custom4
+        custom4,
+        custom5,
+        custom6
     ],
     variables : [
         surfaceGridProjection,
@@ -21,6 +23,15 @@ material {
         quadUvCorrection
     ],
     parameters : [
+        {
+            type : float,
+            name : coarseGeometryEnabled
+        },
+        {
+            type : mat3[64],
+            name : coarseWorldNormalFromLocal,
+            precision : high
+        },
         {
             type : mat4[64],
             name : textureSamplingFromLocal,
@@ -181,7 +192,7 @@ vertex {
     }
 
     void applyTextureSampling(inout MaterialVertexInputs material) {
-        int instanceIndex = getInstanceIndex();
+        int instanceIndex = meshOccurrenceIndex();
         highp mat4 samplingFromLocal =
                 materialParams.textureSamplingFromLocal[instanceIndex];
         material.textureSamplingCorrection = vec4(0.0);
@@ -193,7 +204,7 @@ vertex {
             return;
         }
 
-        highp vec3 position = getPosition().xyz;
+        highp vec3 position = meshLocalPosition();
         highp vec3 geometricNormal = getCustom2().xyz;
         bool linearSampling = mat3(samplingFromLocal) != mat3(1.0);
         highp vec3 samplingNormal =
@@ -251,7 +262,7 @@ vertex {
             material.textureSamplingCorrection.x = 1.0;
         }
         vec4 projection = getCustom0();
-        vec3 worldNormal = getWorldFromModelNormalMatrix() * projection.xyz;
+        vec3 worldNormal = meshSurfaceWorldNormal(projection.xyz);
         float normalLengthSquared = dot(worldNormal, worldNormal);
         material.surfaceGridProjection = vec4(
                 normalLengthSquared > 0.000001

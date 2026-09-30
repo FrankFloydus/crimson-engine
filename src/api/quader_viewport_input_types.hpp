@@ -6,7 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_input_types.hpp"
 #include "api/quader_viewport_layout_types.hpp"
+
+#include <optional>
 
 namespace quader {
 
@@ -161,6 +164,7 @@ enum class ViewportShortcutKind {
     FlipVertical,
     AddPopup,
     ShadingPopup,
+    MarkingMenu,
 };
 
 /**
@@ -225,6 +229,8 @@ struct ViewportShortcut {
     ViewportMirrorAxis mirror_axis = ViewportMirrorAxis::X;
     int grid_preset = 0;
     ViewportView view = ViewportView::Perspective;
+    /// Completing physical chord retained for remappable hold/release launchers.
+    std::optional<QuaderInputChord> initiating_chord;
 };
 
 /**

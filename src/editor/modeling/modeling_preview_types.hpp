@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/mesh_asset.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "scene/components.hpp"
@@ -31,6 +32,8 @@ struct ModelingToolPreviewMesh {
   // loses per-primitive slot overrides and cannot faithfully represent a
   // project-owned material while the source renderable is suppressed.
   MaterialComponent material;
+  // Source metadata and fallback geometry. A present geometry_projection owns
+  // the effective compiled streams while this source remains immutable.
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
@@ -55,6 +58,22 @@ struct ModelingToolPreviewMesh {
   // publish one separately pinned packed position stream per revision. This
   // keeps render snapshots valid without cloning indices or primitive spans.
   std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
+  /// Canonical derived streams over the retained source mesh, when available.
+  std::shared_ptr<const MeshGeometryProjection> geometry_projection;
+};
+
+/**
+ * Immutable accepted coordinates for a retained component-overlay base.
+ * These are derived committed presentation data, never an active tool preview.
+ * Source revisions identify the frozen semantic frame whose element bindings
+ * resolve through these complete, owned coordinate streams.
+ */
+struct ModelingAcceptedOverlayCoordinates final {
+  std::uint64_t source_content_revision = 0u;
+  std::uint64_t source_selection_revision = 0u;
+  std::uint64_t source_scene_revision = 0u;
+  std::uint64_t source_object_map_revision = 0u;
+  std::vector<ModelingToolPreviewMesh> meshes;
 };
 
 /** Carries one renderer-neutral authored Curve preview participant. */

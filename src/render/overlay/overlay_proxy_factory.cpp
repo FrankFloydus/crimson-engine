@@ -7,6 +7,8 @@
 #include "render/overlay/overlay_proxy_factory.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "core/color_space.hpp"
+#include "render/overlay/overlay_point_mesh_builder.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/render_layers.hpp"
@@ -27,9 +29,11 @@
 #include <utils/EntityManager.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -39,6 +43,40 @@ namespace quader {
 namespace {
 
 using AttributeType = filament::backend::ElementType;
+
+filament::TextureSampler shared_position_sampler() {
+  return {filament::TextureSampler::MinFilter::NEAREST,
+          filament::TextureSampler::MagFilter::NEAREST,
+          filament::TextureSampler::WrapMode::CLAMP_TO_EDGE};
+}
+
+std::vector<filament::MaterialInstance *> proxy_materials(
+    const OverlayRenderableProxy &proxy) {
+  std::vector<filament::MaterialInstance *> materials{
+          proxy.material_instance, proxy.occluded_material_instance,
+          proxy.component_point_materials[0u], proxy.component_point_materials[1u],
+          proxy.component_point_materials[2u]};
+  materials.insert(materials.end(), proxy.face_fill_materials.begin(),
+                   proxy.face_fill_materials.end());
+  return materials;
+}
+
+filament::backend::PixelBufferDescriptor shared_position_pixels(
+    std::vector<OverlayFloat4> positions) {
+  auto storage = FilamentBufferDescriptorFactory::vector(std::move(positions));
+  filament::backend::PixelBufferDescriptor pixels(
+      storage.buffer, storage.size, filament::backend::PixelDataFormat::RGBA,
+      filament::backend::PixelDataType::FLOAT, storage.getCallback(), storage.getUser());
+  storage.setCallback(nullptr);
+  return pixels;
+}
+
+/// Static ribbon controls stay separate from preview-updated endpoints.
+struct RetainedEditWireVertex {
+  OverlayFloat4 position;
+  OverlayFloat4 control;
+  std::uint32_t color = 0u;
+};
 
 // The shared viewport scale is sanitized to at most 15x. Keep one native texel
 // available per displayed pixel at that upper bound, then let Filament's mip chain
@@ -257,6 +295,16 @@ private:
     bool active_ = true;
 };
 
+void publish_overlay_proxy(filament::Scene &scene, OverlayRenderableProxy &proxy,
+                           std::vector<OverlayRenderableProxy> &proxies,
+                           OverlayProxyCreationGuard &creation_guard) {
+  const auto entity = to_filament_entity(proxy.entity_id);
+  scene.addEntity(entity);
+  creation_guard.mark_scene_added();
+  proxies.push_back(std::move(proxy));
+  creation_guard.release();
+}
+
 filament::MaterialInstance::DepthFunc
 to_filament_depth_func(OverlayDepthFunc depth_func) {
   switch (depth_func) {
@@ -329,6 +377,18 @@ void destroy_overlay_proxy_resources(filament::Engine &engine,
     engine.destroy(proxy.occluded_material_instance);
     proxy.occluded_material_instance = nullptr;
   }
+  for (auto *&material : proxy.component_point_materials) {
+    if (material != nullptr) {
+      engine.destroy(material);
+      material = nullptr;
+    }
+  }
+  for (auto *material : proxy.face_fill_materials) {
+    if (material != nullptr) engine.destroy(material);
+  }
+  proxy.face_fill_materials.clear();
+  proxy.face_fill_colors.clear();
+  proxy.face_fill_triangle_colors.clear();
   if (proxy.vertex_buffer) {
     engine.destroy(proxy.vertex_buffer);
     proxy.vertex_buffer = nullptr;
@@ -343,6 +403,7 @@ void destroy_overlay_proxy_resources(filament::Engine &engine,
   }
   proxy.visibility_point_indices.clear();
   proxy.point_visibility_stream.clear();
+  proxy.component_point_appearance.clear();
 }
 
 template <typename Vertex, typename ConfigureAttributes,
@@ -463,10 +524,7 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
         .globalBlendOrderEnabled(1u, true);
   }
   renderable_builder.build(engine, entity);
-  scene.addEntity(entity);
-  creation_guard.mark_scene_added();
-  proxies.push_back(std::move(proxy));
-  creation_guard.release();
+  publish_overlay_proxy(scene, proxy, proxies, creation_guard);
 }
 
 template <typename Vertex>
@@ -474,6 +532,8 @@ bool proxy_can_update_mesh(const OverlayRenderableProxy &proxy,
                            OverlayRenderableProxyKind kind,
                            const OverlayMesh<Vertex> &mesh) {
   return !mesh.empty() && proxy.kind == kind &&
+         proxy.edit_wire_slot_capacity == 0u &&
+         proxy.face_fill_colors.empty() &&
          proxy.vertex_buffer != nullptr && proxy.index_buffer != nullptr &&
          proxy.material_instance != nullptr &&
          proxy.vertex_count == mesh.vertices.size() &&
@@ -582,6 +642,312 @@ void update_canonical_quad_proxy_vertices(filament::Engine &engine,
 
 } // namespace
 
+/// Keeps candidate host storage independent of every live overlay stream.
+struct OverlayProxyFactory::RetainedEditWireUpdate final {
+  /// Coalesces adjacent changed slots into one upload per attribute stream.
+  struct Range final {
+    std::uint32_t first_vertex = 0u;
+    std::vector<OverlayFloat4> starts;
+    std::vector<OverlayFloat4> ends;
+    filament::backend::BufferDescriptor static_upload;
+    filament::backend::BufferDescriptor start_upload;
+    filament::backend::BufferDescriptor end_upload;
+  };
+  filament::VertexBuffer *expected_vertices = nullptr;
+  filament::IndexBuffer *expected_indices = nullptr;
+  std::uint32_t expected_entity = 0u;
+  std::uint64_t expected_revision = 0u;
+  std::uint32_t slot_capacity = 0u;
+  std::uint32_t index_count = 0u;
+  std::vector<Range> ranges;
+  std::vector<OverlayPositionStreamBinding> bindings;
+  filament::backend::BufferDescriptor index_upload;
+  bool indices_changed = false;
+  bool consolidated = false;
+  bool consumed = false;
+};
+
+std::shared_ptr<OverlayProxyFactory::RetainedEditWireUpdate>
+OverlayProxyFactory::prepare_retained_edit_wire_update(
+    const OverlayRenderableProxy *existing,
+    std::span<const ViewportOverlayLine> slots,
+    std::span<const std::uint32_t> dirty_slots,
+    std::span<const std::uint32_t> active_indices,
+    std::span<const OverlayPositionStreamBinding> active_bindings,
+    bool indices_changed) {
+  QDR_PROFILE_FUNCTION();
+  constexpr std::size_t kMaximumSlots =
+      std::numeric_limits<std::uint32_t>::max() /
+      (4u * sizeof(RetainedEditWireVertex));
+  if (slots.empty() || slots.size() > kMaximumSlots ||
+      active_indices.empty() || active_indices.size() % 6u != 0u ||
+      active_indices.size() > slots.size() * 6u) {
+    return {};
+  }
+  const auto vertex_count = static_cast<std::uint32_t>(slots.size() * 4u);
+  if (existing != nullptr &&
+      (existing->kind != OverlayRenderableProxyKind::EditWire ||
+       existing->edit_wire_slot_capacity != slots.size() ||
+       existing->vertex_count != vertex_count ||
+       existing->vertex_buffer == nullptr || existing->index_buffer == nullptr ||
+       existing->material_instance == nullptr || existing->entity_id == 0u ||
+       existing->primary_position_stream4.size() != vertex_count ||
+       existing->secondary_position_stream4.size() != vertex_count ||
+       (!indices_changed && existing->index_count != active_indices.size()))) {
+    return {};
+  }
+  constexpr std::array<std::uint32_t, 6u> kQuadIndices{0u, 1u, 2u, 0u, 2u, 3u};
+  for (std::size_t index = 0u; index < active_indices.size(); index += 6u) {
+    const auto first = active_indices[index];
+    if (first % 4u != 0u || first >= vertex_count) {
+      return {};
+    }
+    for (std::size_t corner = 0u; corner < kQuadIndices.size(); ++corner) {
+      if (active_indices[index + corner] != first + kQuadIndices[corner]) {
+        return {};
+      }
+    }
+  }
+  for (std::size_t index = 0u; index < dirty_slots.size(); ++index) {
+    if (dirty_slots[index] >= slots.size() ||
+        (index != 0u && dirty_slots[index - 1u] >= dirty_slots[index])) {
+      return {};
+    }
+  }
+  const auto finite_position = [](QVec3 point) {
+    return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+  };
+  if (existing == nullptr) {
+    for (const auto &line : slots) {
+      if (!finite_position(line.start) || !finite_position(line.end)) return {};
+    }
+  } else {
+    for (const auto slot : dirty_slots) {
+      if (!finite_position(slots[slot].start) || !finite_position(slots[slot].end)) return {};
+    }
+  }
+  for (const auto &binding : active_bindings) {
+    if (binding.object_id < 0 || binding.vertex_id < 0 ||
+        binding.first_vertex % 4u != 0u || binding.first_vertex >= vertex_count ||
+        binding.vertex_count != 4u ||
+        (binding.stream != OverlayPositionStream::Primary &&
+         binding.stream != OverlayPositionStream::Secondary)) {
+      return {};
+    }
+    const auto &line = slots[binding.first_vertex / 4u];
+    const bool primary = binding.stream == OverlayPositionStream::Primary;
+    const auto position = primary ? line.start : line.end;
+    if (binding.object_id != line.element.object_id ||
+        binding.vertex_id != (primary ? line.element.edge_a : line.element.edge_b) ||
+        binding.base_position.x != position.x || binding.base_position.y != position.y ||
+        binding.base_position.z != position.z || binding.base_position.w != 1.0f) {
+      return {};
+    }
+  }
+
+  auto prepared = std::make_shared<RetainedEditWireUpdate>();
+  prepared->slot_capacity = static_cast<std::uint32_t>(slots.size());
+  prepared->index_count = static_cast<std::uint32_t>(active_indices.size());
+  prepared->indices_changed = existing == nullptr || indices_changed;
+  prepared->bindings.assign(active_bindings.begin(), active_bindings.end());
+  if (existing != nullptr) {
+    prepared->expected_vertices = existing->vertex_buffer;
+    prepared->expected_indices = existing->index_buffer;
+    prepared->expected_entity = existing->entity_id;
+    prepared->expected_revision = existing->edit_wire_update_revision;
+  }
+  if (prepared->indices_changed) {
+    prepared->index_upload = FilamentBufferDescriptorFactory::span(active_indices);
+  }
+  const auto append_range = [&](std::uint32_t first_slot, std::uint32_t end_slot,
+                                bool preserve_unchanged = false) {
+    auto &range = prepared->ranges.emplace_back();
+    range.first_vertex = first_slot * 4u;
+    const std::size_t count = static_cast<std::size_t>(end_slot - first_slot) * 4u;
+    std::vector<RetainedEditWireVertex> vertices;
+    vertices.reserve(count);
+    range.starts.reserve(count);
+    range.ends.reserve(count);
+    constexpr std::array<OverlayFloat4, 4u> kControls{{
+        {-1.0f, -1.0f, 0.0f, 0.0f}, {-1.0f, 1.0f, 1.0f, 0.0f},
+        {1.0f, 1.0f, 1.0f, 0.0f}, {1.0f, -1.0f, 0.0f, 0.0f}}};
+    auto dirty = std::lower_bound(dirty_slots.begin(), dirty_slots.end(), first_slot);
+    for (std::uint32_t slot = first_slot; slot < end_slot; ++slot) {
+      const auto &line = slots[slot];
+      const auto color = rgba8_srgb_to_linear(line.color);
+      const bool changed = !preserve_unchanged ||
+                           (dirty != dirty_slots.end() && *dirty == slot);
+      if (dirty != dirty_slots.end() && *dirty == slot) ++dirty;
+      for (std::size_t corner = 0u; corner < kControls.size(); ++corner) {
+        vertices.push_back({{0.0f, 0.0f, 0.0f, 1.0f}, kControls[corner], color});
+        const std::size_t vertex = static_cast<std::size_t>(slot) * 4u + corner;
+        // A consolidated gap may currently carry preview positions. Keep its
+        // exact accepted endpoints rather than resetting it to the frame base.
+        range.starts.push_back(changed
+            ? OverlayFloat4{line.start.x, line.start.y, line.start.z, 1.0f}
+            : existing->primary_position_stream4[vertex]);
+        range.ends.push_back(changed
+            ? OverlayFloat4{line.end.x, line.end.y, line.end.z, 1.0f}
+            : existing->secondary_position_stream4[vertex]);
+      }
+    }
+    range.static_upload = FilamentBufferDescriptorFactory::vector(std::move(vertices));
+    range.start_upload = FilamentBufferDescriptorFactory::vector(range.starts);
+    range.end_upload = FilamentBufferDescriptorFactory::vector(range.ends);
+  };
+  if (existing == nullptr) {
+    append_range(0u, prepared->slot_capacity);
+  } else {
+    constexpr std::size_t kMaximumPartialRanges = 64u;
+    std::size_t range_count = 0u;
+    for (std::size_t index = 0u; index < dirty_slots.size(); ++index) {
+      range_count += index == 0u || dirty_slots[index - 1u] + 1u != dirty_slots[index];
+    }
+    if (range_count > kMaximumPartialRanges) {
+      // Each range emits three backend commands. A committed deformation can
+      // dirty tens of thousands of isolated edges; stage one bounded submission
+      // instead of overflowing Filament's fixed command arena before beginFrame.
+      prepared->consolidated = true;
+      append_range(dirty_slots.front(), dirty_slots.back() + 1u, true);
+    } else {
+      for (std::size_t index = 0u; index < dirty_slots.size();) {
+        const auto first = dirty_slots[index++];
+        auto end = first + 1u;
+        while (index < dirty_slots.size() && dirty_slots[index] == end) {
+          ++index;
+          ++end;
+        }
+        append_range(first, end);
+      }
+    }
+  }
+  return prepared;
+}
+
+OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
+    const OverlayEditWireBatch &presentation, std::uint8_t layer_mask,
+    std::shared_ptr<RetainedEditWireUpdate> prepared) {
+  QDR_PROFILE_FUNCTION();
+  OverlayRenderableProxy proxy;
+  if (!initialized() || !prepared || prepared->consumed ||
+      prepared->expected_vertices != nullptr || prepared->ranges.size() != 1u ||
+      prepared->slot_capacity == 0u || prepared->index_count == 0u) {
+    return proxy;
+  }
+  std::vector<OverlayRenderableProxy> proxies;
+  proxies.reserve(1u);
+  const auto entity = utils::EntityManager::get().create();
+  proxy.entity_id = to_overlay_entity_id(entity);
+  OverlayProxyCreationGuard guard(*engine_, *scene_, proxy);
+  proxy.kind = OverlayRenderableProxyKind::EditWire;
+  proxy.vertex_count = prepared->slot_capacity * 4u;
+  proxy.index_count = prepared->index_count;
+  proxy.edit_wire_slot_capacity = prepared->slot_capacity;
+  proxy.edit_wire_update_revision = 1u;
+  proxy.material_instance = edit_wire_line_material_->createInstance();
+  if (proxy.material_instance == nullptr) return {};
+  configure_edit_wire_material(*proxy.material_instance, presentation);
+  proxy.vertex_buffer = filament::VertexBuffer::Builder()
+      .vertexCount(proxy.vertex_count).bufferCount(3u)
+      .attribute(filament::VertexAttribute::POSITION, 0u, AttributeType::FLOAT4,
+                 offsetof(RetainedEditWireVertex, position), sizeof(RetainedEditWireVertex))
+      .attribute(filament::VertexAttribute::CUSTOM0, 1u, AttributeType::FLOAT4,
+                 0u, sizeof(OverlayFloat4))
+      .attribute(filament::VertexAttribute::CUSTOM1, 2u, AttributeType::FLOAT4,
+                 0u, sizeof(OverlayFloat4))
+      .attribute(filament::VertexAttribute::CUSTOM2, 0u, AttributeType::FLOAT4,
+                 offsetof(RetainedEditWireVertex, control), sizeof(RetainedEditWireVertex))
+      .attribute(filament::VertexAttribute::COLOR, 0u, AttributeType::UBYTE4,
+                 offsetof(RetainedEditWireVertex, color), sizeof(RetainedEditWireVertex))
+      .normalized(filament::VertexAttribute::COLOR).build(*engine_);
+  if (proxy.vertex_buffer == nullptr) return {};
+  proxy.index_buffer = filament::IndexBuffer::Builder()
+      .indexCount(proxy.edit_wire_slot_capacity * 6u)
+      .bufferType(filament::IndexBuffer::IndexType::UINT).build(*engine_);
+  if (proxy.index_buffer == nullptr) return {};
+  auto &range = prepared->ranges.front();
+  proxy.vertex_buffer->setBufferAt(*engine_, 0u, std::move(range.static_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 1u, std::move(range.start_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(range.end_upload));
+  proxy.index_buffer->setBuffer(*engine_, std::move(prepared->index_upload));
+  prepared->consumed = true;
+  const auto built = filament::RenderableManager::Builder(1u)
+      .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                proxy.vertex_buffer, proxy.index_buffer, 0u, proxy.index_count)
+      .material(0u, proxy.material_instance)
+      .blendOrder(0u, presentation.state.blend_order)
+      .globalBlendOrderEnabled(0u, true)
+      .layerMask(kViewportAllLayerMask, layer_mask)
+      .boundingBox(overlay_mesh_bounds()).culling(false)
+      .castShadows(false).receiveShadows(false).build(*engine_, entity);
+  if (built != filament::RenderableManager::Builder::Success) return {};
+  proxy.primary_position_stream4 = std::move(range.starts);
+  proxy.secondary_position_stream4 = std::move(range.ends);
+  proxy.position_stream_bindings = std::move(prepared->bindings);
+  publish_overlay_proxy(*scene_, proxy, proxies, guard);
+  ++upload_stats_.geometry_creation_count;
+  ++upload_stats_.static_upload_count;
+  upload_stats_.position_upload_count += 2u;
+  ++upload_stats_.index_upload_count;
+  upload_stats_.retained_edit_wire_uploaded_slot_count += proxy.edit_wire_slot_capacity;
+  return std::move(proxies.front());
+}
+
+bool OverlayProxyFactory::update_retained_edit_wire_proxy(
+    OverlayRenderableProxy &proxy, const OverlayEditWireBatch &presentation,
+    std::uint8_t layer_mask, std::shared_ptr<RetainedEditWireUpdate> prepared) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized() || !prepared || prepared->consumed ||
+      proxy.kind != OverlayRenderableProxyKind::EditWire ||
+      proxy.vertex_buffer != prepared->expected_vertices ||
+      proxy.index_buffer != prepared->expected_indices ||
+      proxy.entity_id != prepared->expected_entity ||
+      proxy.edit_wire_update_revision != prepared->expected_revision ||
+      proxy.edit_wire_slot_capacity != prepared->slot_capacity ||
+      proxy.material_instance == nullptr ||
+      proxy.primary_position_stream4.size() != prepared->slot_capacity * 4u ||
+      proxy.secondary_position_stream4.size() != prepared->slot_capacity * 4u) {
+    return false;
+  }
+  auto &renderables = engine_->getRenderableManager();
+  const auto instance = renderables.getInstance(to_filament_entity(proxy.entity_id));
+  if (!instance || renderables.getPrimitiveCount(instance) != 1u) return false;
+  if (!clear_shared_positions(proxy)) return false;
+  prepared->consumed = true;
+  for (auto &range : prepared->ranges) {
+    std::copy(range.starts.begin(), range.starts.end(),
+              proxy.primary_position_stream4.begin() + range.first_vertex);
+    std::copy(range.ends.begin(), range.ends.end(),
+              proxy.secondary_position_stream4.begin() + range.first_vertex);
+    proxy.vertex_buffer->setBufferAt(*engine_, 0u, std::move(range.static_upload),
+        range.first_vertex * sizeof(RetainedEditWireVertex));
+    proxy.vertex_buffer->setBufferAt(*engine_, 1u, std::move(range.start_upload),
+        range.first_vertex * sizeof(OverlayFloat4));
+    proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(range.end_upload),
+        range.first_vertex * sizeof(OverlayFloat4));
+    upload_stats_.retained_edit_wire_uploaded_slot_count += range.starts.size() / 4u;
+  }
+  if (prepared->indices_changed) {
+    proxy.index_buffer->setBuffer(*engine_, std::move(prepared->index_upload));
+    ++upload_stats_.index_upload_count;
+  }
+  if (proxy.index_count != prepared->index_count) {
+    renderables.setGeometryAt(instance, 0u,
+        filament::RenderableManager::PrimitiveType::TRIANGLES,
+        proxy.vertex_buffer, proxy.index_buffer, 0u, prepared->index_count);
+    proxy.index_count = prepared->index_count;
+  }
+  proxy.position_stream_bindings = std::move(prepared->bindings);
+  ++proxy.edit_wire_update_revision;
+  configure_edit_wire_material(*proxy.material_instance, presentation);
+  renderables.setBlendOrderAt(instance, 0u, presentation.state.blend_order);
+  renderables.setLayerMask(instance, kViewportAllLayerMask, layer_mask);
+  upload_stats_.static_upload_count += prepared->ranges.size();
+  upload_stats_.position_upload_count += prepared->ranges.size() * 2u;
+  upload_stats_.retained_edit_wire_consolidated_upload_count += prepared->consolidated ? 1u : 0u;
+  return true;
+}
+
 void OverlayProxyFactory::initialize(
     filament::Engine &engine, filament::Scene &scene,
     filament::Material &overlay_material,
@@ -598,11 +964,44 @@ void OverlayProxyFactory::initialize(
   edit_wire_line_material_ = &edit_wire_line_material;
   overlay_point_material_ = &overlay_point_material;
   overlay_icon_material_ = &overlay_icon_material;
+  shared_position_fallback_texture_ = filament::Texture::Builder()
+      .width(1u).height(1u).levels(1u)
+      .sampler(filament::Texture::Sampler::SAMPLER_2D)
+      .format(filament::Texture::InternalFormat::RGBA8).build(engine);
+  const unsigned char fallback[] = {0u, 0u, 0u, 255u};
+  shared_position_fallback_texture_->setImage(engine, 0u,
+      FilamentBufferDescriptorFactory::rgba_pixels(fallback, sizeof(fallback)));
+  for (auto *material : {overlay_material_, overlay_line_material_,
+                        edit_wire_line_material_, overlay_point_material_}) {
+    if (material->hasParameter("sharedPositionsEnabled") &&
+        material->hasParameter("sharedPositions")) {
+      material->setDefaultParameter("sharedPositionsEnabled", false);
+      material->setDefaultParameter("sharedPositions",
+          shared_position_fallback_texture_, shared_position_sampler());
+    }
+  }
   load_icon_textures(resource_root);
 }
 
 void OverlayProxyFactory::shutdown() {
   destroy_icon_textures();
+  if (engine_ != nullptr) {
+    for (auto *material : {overlay_material_, overlay_line_material_,
+                          edit_wire_line_material_, overlay_point_material_}) {
+      if (material != nullptr && material->hasParameter("sharedPositions")) {
+        material->setDefaultParameter("sharedPositions",
+            static_cast<filament::Texture *>(nullptr), shared_position_sampler());
+      }
+    }
+    if (shared_position_texture_ != nullptr) engine_->destroy(shared_position_texture_);
+    if (shared_position_fallback_texture_ != nullptr) {
+      engine_->destroy(shared_position_fallback_texture_);
+    }
+  }
+  shared_position_texture_ = nullptr;
+  shared_position_fallback_texture_ = nullptr;
+  shared_position_materials_.clear();
+  shared_position_count_ = 0u;
   engine_ = nullptr;
   scene_ = nullptr;
   overlay_material_ = nullptr;
@@ -635,6 +1034,16 @@ OverlayProxyFactory::create_layer_proxies(const OverlayLayerBuildPlan &plan,
   }
   for (const OverlayIconBatch &batch : plan.icon_batches) {
     create_icon_proxy(batch, layer_mask, proxies);
+  }
+  for (const auto &proxy : proxies) {
+    ++upload_stats_.geometry_creation_count;
+    ++upload_stats_.static_upload_count;
+    ++upload_stats_.index_upload_count;
+    upload_stats_.position_upload_count +=
+        proxy.secondary_position_stream4.empty() ? 1u : 2u;
+    if (!proxy.point_visibility_stream.empty()) {
+      ++upload_stats_.visibility_upload_count;
+    }
   }
   return proxies;
 }
@@ -702,6 +1111,9 @@ bool OverlayProxyFactory::update_layer_proxies(
     }
   }
 
+  for (auto &proxy : proxies) {
+    if (!clear_shared_positions(proxy)) return false;
+  }
   index = 0;
   for (const OverlayFaceFillBatch &batch : plan.face_fill_batches) {
     if (!batch.mesh.empty()) {
@@ -728,13 +1140,468 @@ bool OverlayProxyFactory::update_layer_proxies(
       update_icon_proxy(proxies[index++], batch, layer_mask);
     }
   }
+  for (const auto &proxy : proxies) {
+    ++upload_stats_.static_upload_count;
+    upload_stats_.position_upload_count +=
+        proxy.secondary_position_stream4.empty() ? 1u : 2u;
+    if (proxy.kind == OverlayRenderableProxyKind::Triangle ||
+        proxy.kind == OverlayRenderableProxyKind::Icon) {
+      ++upload_stats_.index_upload_count;
+    }
+  }
   return true;
 }
 
 bool OverlayProxyFactory::update_position_streams(
     OverlayRenderableProxy &proxy) {
-  return engine_ != nullptr &&
-         upload_proxy_position_streams(*engine_, proxy);
+  if (proxy.shared_positions_bound) return clear_shared_positions(proxy);
+  if (engine_ == nullptr || !upload_proxy_position_streams(*engine_, proxy)) {
+    return false;
+  }
+  upload_stats_.position_upload_count +=
+      proxy.secondary_position_stream4.empty() ? 1u : 2u;
+  if (proxy.edit_wire_slot_capacity != 0u) {
+    ++proxy.edit_wire_update_revision;
+  }
+  return true;
+}
+
+OverlayRenderableProxy OverlayProxyFactory::create_retained_face_proxy(
+    std::span<const ViewportOverlayTriangle> source_triangles,
+    std::span<const std::uint32_t> triangle_colors,
+    std::span<const std::uint32_t> indices,
+    std::span<const OverlayRetainedFaceDraw> draws,
+    std::uint8_t layer_mask) {
+  QDR_PROFILE_SCOPE("Overlay create retained face arena");
+  OverlayRenderableProxy proxy;
+  if (!initialized() || source_triangles.empty() || indices.empty() || draws.empty() ||
+      triangle_colors.size() != source_triangles.size() ||
+      source_triangles.size() > std::numeric_limits<std::uint32_t>::max() / 3u ||
+      indices.size() > source_triangles.size() * 3u) return proxy;
+  proxy.vertex_count = static_cast<std::uint32_t>(source_triangles.size() * 3u);
+  for (const auto index : indices) if (index >= proxy.vertex_count) return {};
+  for (const auto &draw : draws) {
+    if (static_cast<std::size_t>(draw.first_index) + draw.index_count > indices.size()) return {};
+  }
+  proxy.kind = OverlayRenderableProxyKind::Triangle;
+  proxy.index_count = static_cast<std::uint32_t>(indices.size());
+  proxy.position_stream3.reserve(proxy.vertex_count);
+  proxy.position_stream_bindings.reserve(proxy.vertex_count);
+  proxy.face_fill_colors.reserve(proxy.vertex_count);
+  proxy.face_fill_triangle_colors.assign(triangle_colors.begin(), triangle_colors.end());
+  for (std::size_t triangle_index = 0u; triangle_index < source_triangles.size(); ++triangle_index) {
+    const auto &triangle = source_triangles[triangle_index];
+    const std::array positions{triangle.a, triangle.b, triangle.c};
+    const std::array vertex_ids{triangle.element.vertex_id, triangle.element.edge_a,
+                                triangle.element.edge_b};
+    const auto color = rgba8_srgb_to_linear(triangle_colors[triangle_index]);
+    for (std::size_t corner = 0u; corner < positions.size(); ++corner) {
+      const auto position = positions[corner];
+      const auto vertex = static_cast<std::uint32_t>(proxy.position_stream3.size());
+      proxy.position_stream3.push_back({position.x, position.y, position.z});
+      proxy.face_fill_colors.push_back(color);
+      proxy.position_stream_bindings.push_back({
+          .object_id = triangle.element.object_id, .vertex_id = vertex_ids[corner],
+          .first_vertex = vertex, .vertex_count = 1u,
+          .stream = OverlayPositionStream::Primary,
+          .base_position = {position.x, position.y, position.z, 1.0f}});
+    }
+  }
+  const auto entity = utils::EntityManager::get().create();
+  proxy.entity_id = to_overlay_entity_id(entity);
+  OverlayProxyCreationGuard guard(*engine_, *scene_, proxy);
+  proxy.vertex_buffer = filament::VertexBuffer::Builder()
+      .vertexCount(proxy.vertex_count).bufferCount(2u)
+      .attribute(filament::VertexAttribute::POSITION, 1u, AttributeType::FLOAT3,
+                 0u, sizeof(OverlayFloat3))
+      .attribute(filament::VertexAttribute::COLOR, 0u, AttributeType::UBYTE4,
+                 0u, sizeof(std::uint32_t))
+      .normalized(filament::VertexAttribute::COLOR).build(*engine_);
+  proxy.index_buffer = filament::IndexBuffer::Builder().indexCount(proxy.vertex_count)
+      .bufferType(filament::IndexBuffer::IndexType::UINT).build(*engine_);
+  if (proxy.vertex_buffer == nullptr || proxy.index_buffer == nullptr) return {};
+  proxy.vertex_buffer->setBufferAt(*engine_, 0u,
+      FilamentBufferDescriptorFactory::vector(proxy.face_fill_colors));
+  proxy.vertex_buffer->setBufferAt(*engine_, 1u,
+      FilamentBufferDescriptorFactory::vector(proxy.position_stream3));
+  proxy.index_buffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::span(indices));
+  proxy.face_fill_materials.reserve(draws.size() - 1u);
+  filament::RenderableManager::Builder builder(draws.size());
+  for (std::size_t pass = 0u; pass < draws.size(); ++pass) {
+    auto *material = overlay_material_->createInstance();
+    if (material == nullptr) return {};
+    if (pass == 0u) proxy.material_instance = material;
+    else proxy.face_fill_materials.push_back(material);
+    configure_overlay_material(*material, draws[pass].state);
+    material->setParameter("useUniformColor", false);
+    builder.geometry(pass, filament::RenderableManager::PrimitiveType::TRIANGLES,
+        proxy.vertex_buffer, proxy.index_buffer, draws[pass].first_index, draws[pass].index_count)
+        .material(pass, material).blendOrder(pass, draws[pass].state.blend_order)
+        .globalBlendOrderEnabled(pass, true);
+  }
+  builder.layerMask(kViewportAllLayerMask, layer_mask).boundingBox(overlay_mesh_bounds())
+      .culling(false).castShadows(false).receiveShadows(false).build(*engine_, entity);
+  scene_->addEntity(entity);
+  guard.mark_scene_added();
+  guard.release();
+  ++upload_stats_.geometry_creation_count;
+  ++upload_stats_.position_upload_count;
+  ++upload_stats_.appearance_upload_count;
+  ++upload_stats_.index_upload_count;
+  return proxy;
+}
+
+bool OverlayProxyFactory::update_retained_face_proxy(
+    OverlayRenderableProxy &proxy,
+    std::span<const std::uint32_t> triangle_colors,
+    std::span<const std::uint32_t> indices,
+    std::span<const OverlayRetainedFaceDraw> draws,
+    std::uint8_t layer_mask, bool indices_changed) {
+  QDR_PROFILE_SCOPE("Overlay update retained face membership");
+  if (!initialized() || proxy.face_fill_colors.empty() ||
+      proxy.vertex_buffer == nullptr || proxy.index_buffer == nullptr ||
+      triangle_colors.size() * 3u != proxy.vertex_count ||
+      triangle_colors.size() != proxy.face_fill_triangle_colors.size() ||
+      draws.size() != proxy.face_fill_materials.size() + 1u ||
+      indices.size() > proxy.vertex_count) return false;
+  auto &renderables = engine_->getRenderableManager();
+  const auto instance = renderables.getInstance(to_filament_entity(proxy.entity_id));
+  if (!instance || renderables.getPrimitiveCount(instance) != draws.size()) return false;
+  for (const auto index : indices) if (index >= proxy.vertex_count) return false;
+  for (const auto &draw : draws) {
+    if (static_cast<std::size_t>(draw.first_index) + draw.index_count > indices.size()) return false;
+  }
+  if (indices_changed && !clear_shared_positions(proxy)) return false;
+  std::size_t first_changed = proxy.face_fill_colors.size();
+  std::size_t end_changed = 0u;
+  for (std::size_t triangle = 0u; triangle < triangle_colors.size(); ++triangle) {
+    if (proxy.face_fill_triangle_colors[triangle] == triangle_colors[triangle]) continue;
+    proxy.face_fill_triangle_colors[triangle] = triangle_colors[triangle];
+    const auto color = rgba8_srgb_to_linear(triangle_colors[triangle]);
+    const auto first = triangle * 3u;
+    if (proxy.face_fill_colors[first] == color) continue;
+    std::fill_n(proxy.face_fill_colors.begin() + first, 3u, color);
+    first_changed = std::min(first_changed, first);
+    end_changed = first + 3u;
+  }
+  if (first_changed < end_changed) {
+    proxy.vertex_buffer->setBufferAt(*engine_, 0u,
+        FilamentBufferDescriptorFactory::span(std::span<const std::uint32_t>(proxy.face_fill_colors)
+            .subspan(first_changed, end_changed - first_changed)),
+        static_cast<std::uint32_t>(first_changed * sizeof(std::uint32_t)));
+    ++upload_stats_.appearance_upload_count;
+  }
+  if (indices_changed && !indices.empty()) {
+    proxy.index_buffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::span(indices));
+    ++upload_stats_.index_upload_count;
+  }
+  for (std::size_t pass = 0u; pass < draws.size(); ++pass) {
+    auto *material = pass == 0u ? proxy.material_instance : proxy.face_fill_materials[pass - 1u];
+    configure_overlay_material(*material, draws[pass].state);
+    renderables.setGeometryAt(instance, pass, filament::RenderableManager::PrimitiveType::TRIANGLES,
+        proxy.vertex_buffer, proxy.index_buffer, draws[pass].first_index, draws[pass].index_count);
+    renderables.setBlendOrderAt(instance, pass, draws[pass].state.blend_order);
+  }
+  proxy.index_count = static_cast<std::uint32_t>(indices.size());
+  renderables.setLayerMask(instance, kViewportAllLayerMask, layer_mask);
+  return true;
+}
+
+bool OverlayProxyFactory::upload_shared_positions(
+    std::span<const OverlayFloat3> positions) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized() || positions.empty()) return false;
+  // Float attributes represent every index exactly within this bounded square.
+  constexpr std::size_t kMaximumTextureExtent = 4096u;
+  const auto extent = std::min(kMaximumTextureExtent,
+      filament::Texture::getMaxTextureSize(*engine_, filament::Texture::Sampler::SAMPLER_2D));
+  if (extent == 0u || positions.size() > extent * extent ||
+      !filament::Texture::isTextureFormatSupported(
+          *engine_, filament::Texture::InternalFormat::RGBA32F)) return false;
+  const auto width = static_cast<std::uint32_t>(extent);
+  const auto height = static_cast<std::uint32_t>((positions.size() + extent - 1u) / extent);
+  std::vector<OverlayFloat4> pixels(static_cast<std::size_t>(width) * height);
+  for (std::size_t index = 0u; index < positions.size(); ++index) {
+    const auto position = positions[index];
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+        !std::isfinite(position.z)) return false;
+    pixels[index] = {position.x, position.y, position.z, 1.0f};
+  }
+  if (shared_position_texture_ == nullptr ||
+      shared_position_texture_->getHeight() < height) {
+    auto *texture = filament::Texture::Builder()
+        .width(width).height(height).levels(1u)
+        .sampler(filament::Texture::Sampler::SAMPLER_2D)
+        .format(filament::Texture::InternalFormat::RGBA32F).build(*engine_);
+    if (texture == nullptr) return false;
+    for (auto *material : shared_position_materials_) {
+      material->setParameter("sharedPositions", texture, shared_position_sampler());
+    }
+    if (shared_position_texture_ != nullptr) engine_->destroy(shared_position_texture_);
+    shared_position_texture_ = texture;
+  }
+  shared_position_texture_->setImage(*engine_, 0u, 0u, 0u, width, height,
+      shared_position_pixels(std::move(pixels)));
+  shared_position_count_ = positions.size();
+  ++upload_stats_.shared_position_upload_count;
+  return true;
+}
+
+bool OverlayProxyFactory::bind_shared_positions(
+    OverlayRenderableProxy &proxy,
+    std::span<const std::uint32_t> primary_indices,
+    std::span<const std::uint32_t> secondary_indices) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized() || shared_position_texture_ == nullptr ||
+      proxy.vertex_buffer == nullptr || proxy.material_instance == nullptr ||
+      primary_indices.size() != proxy.vertex_count || primary_indices.empty() ||
+      secondary_indices.size() != proxy.secondary_position_stream4.size() ||
+      (proxy.position_stream3.size() != primary_indices.size() &&
+       proxy.primary_position_stream4.size() != primary_indices.size())) return false;
+  for (auto *material : proxy_materials(proxy)) {
+    if (material != nullptr &&
+        (!material->getMaterial()->hasParameter("sharedPositionsEnabled") ||
+         !material->getMaterial()->hasParameter("sharedPositions"))) return false;
+  }
+  for (const auto indices : {primary_indices, secondary_indices}) {
+    for (const auto index : indices) {
+      if (index >= shared_position_count_) return false;
+    }
+  }
+  filament::backend::BufferDescriptor primary_upload;
+  filament::backend::BufferDescriptor secondary_upload;
+  if (!proxy.position_stream3.empty()) {
+    std::vector<OverlayFloat3> indices(primary_indices.size());
+    for (std::size_t index = 0u; index < indices.size(); ++index) {
+      indices[index].x = static_cast<float>(primary_indices[index]);
+    }
+    primary_upload = FilamentBufferDescriptorFactory::vector(std::move(indices));
+  } else {
+    std::vector<OverlayFloat4> indices(primary_indices.size());
+    for (std::size_t index = 0u; index < indices.size(); ++index) {
+      indices[index] = {static_cast<float>(primary_indices[index]), 0.0f, 0.0f, 1.0f};
+    }
+    primary_upload = FilamentBufferDescriptorFactory::vector(std::move(indices));
+  }
+  if (!secondary_indices.empty()) {
+    std::vector<OverlayFloat4> indices(secondary_indices.size());
+    for (std::size_t index = 0u; index < indices.size(); ++index) {
+      indices[index] = {static_cast<float>(secondary_indices[index]), 0.0f, 0.0f, 1.0f};
+    }
+    secondary_upload = FilamentBufferDescriptorFactory::vector(std::move(indices));
+  }
+  // Register all consumers before publishing, so a later texture growth can
+  // rebind every pass without retaining pointers to movable proxy wrappers.
+  if (!proxy.shared_positions_bound) {
+    shared_position_materials_.reserve(shared_position_materials_.size() +
+                                       5u + proxy.face_fill_materials.size());
+    for (auto *material : proxy_materials(proxy)) {
+      if (material != nullptr) shared_position_materials_.push_back(material);
+    }
+  }
+  proxy.vertex_buffer->setBufferAt(*engine_, 1u, std::move(primary_upload));
+  if (!secondary_indices.empty()) {
+    proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(secondary_upload));
+  }
+  for (auto *material : proxy_materials(proxy)) {
+    if (material != nullptr) {
+      material->setParameter("sharedPositions", shared_position_texture_, shared_position_sampler());
+      material->setParameter("sharedPositionsEnabled", true);
+    }
+  }
+  proxy.shared_positions_bound = true;
+  ++upload_stats_.shared_position_bind_count;
+  upload_stats_.shared_position_binding_upload_count += secondary_indices.empty() ? 1u : 2u;
+  if (proxy.edit_wire_slot_capacity != 0u) ++proxy.edit_wire_update_revision;
+  return true;
+}
+
+bool OverlayProxyFactory::clear_shared_positions(OverlayRenderableProxy &proxy) {
+  if (!proxy.shared_positions_bound) return true;
+  if (engine_ == nullptr || !upload_proxy_position_streams(*engine_, proxy)) return false;
+  for (auto *material : proxy_materials(proxy)) {
+    if (material != nullptr) {
+      material->setParameter("sharedPositionsEnabled", false);
+      material->setParameter("sharedPositions", shared_position_fallback_texture_,
+          shared_position_sampler());
+      std::erase(shared_position_materials_, material);
+    }
+  }
+  proxy.shared_positions_bound = false;
+  upload_stats_.position_upload_count += proxy.secondary_position_stream4.empty() ? 1u : 2u;
+  if (proxy.edit_wire_slot_capacity != 0u) ++proxy.edit_wire_update_revision;
+  return true;
+}
+
+std::vector<OverlayRenderableProxy>
+OverlayProxyFactory::create_component_point_proxies(
+    std::span<const ViewportOverlayPoint *const> points,
+    std::span<const std::size_t> frame_indices,
+    const ViewportOverlayCamera &camera, std::uint16_t blend_order_bias,
+    std::uint8_t layer_mask) {
+  QDR_PROFILE_FUNCTION();
+  std::vector<OverlayRenderableProxy> proxies;
+  if (!initialized() || points.empty() || points.size() != frame_indices.size() ||
+      points.size() > std::numeric_limits<std::uint32_t>::max() / 6u ||
+      std::any_of(points.begin(), points.end(), [](const auto *point) {
+        return point == nullptr ||
+            (point->layer != ViewportOverlayLayer::UnselectedVertex &&
+             point->layer != ViewportOverlayLayer::SelectedVertex);
+      })) {
+    return proxies;
+  }
+
+  OverlayPointMesh mesh;
+  mesh.vertices.reserve(points.size() * 4u);
+  mesh.indices.reserve(points.size() * 6u);
+  mesh.position_stream_bindings.reserve(points.size());
+  for (const auto *point : points) {
+    OverlayPointMeshBuilder::append_point_quad(
+        mesh, point->position, kOverlayVertexOutlineColor, &point->element);
+  }
+  OverlayRenderableProxy proxy;
+  proxy.kind = OverlayRenderableProxyKind::Point;
+  proxy.vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
+  proxy.index_count = static_cast<std::uint32_t>(mesh.indices.size());
+  proxy.position_stream_bindings = std::move(mesh.position_stream_bindings);
+  proxy.primary_position_stream4.reserve(mesh.vertices.size());
+  for (const auto &vertex : mesh.vertices) {
+    proxy.primary_position_stream4.push_back(vertex.center);
+  }
+  proxy.point_visibility_stream.assign(mesh.vertices.size(), 1.0f);
+  const auto entity = utils::EntityManager::get().create();
+  proxy.entity_id = to_overlay_entity_id(entity);
+  OverlayProxyCreationGuard creation_guard(*engine_, *scene_, proxy);
+  proxy.material_instance = overlay_point_material_->createInstance();
+  for (auto *&material : proxy.component_point_materials) {
+    material = overlay_point_material_->createInstance();
+  }
+  proxy.vertex_buffer = filament::VertexBuffer::Builder()
+      .vertexCount(proxy.vertex_count).bufferCount(4u)
+      .attribute(filament::VertexAttribute::POSITION, 0u, AttributeType::FLOAT4,
+                 offsetof(OverlayPointVertex, position), sizeof(OverlayPointVertex))
+      .attribute(filament::VertexAttribute::UV0, 0u, AttributeType::FLOAT2,
+                 offsetof(OverlayPointVertex, uv), sizeof(OverlayPointVertex))
+      .attribute(filament::VertexAttribute::CUSTOM0, 1u, AttributeType::FLOAT4,
+                 0u, sizeof(OverlayFloat4))
+      .attribute(filament::VertexAttribute::CUSTOM1, 2u, AttributeType::FLOAT,
+                 0u, sizeof(float))
+      .attribute(filament::VertexAttribute::COLOR, 3u, AttributeType::UBYTE4,
+                 offsetof(OverlayComponentPointAppearance, color),
+                 sizeof(OverlayComponentPointAppearance))
+      .normalized(filament::VertexAttribute::COLOR)
+      .attribute(filament::VertexAttribute::CUSTOM2, 3u, AttributeType::FLOAT4,
+                 offsetof(OverlayComponentPointAppearance, control),
+                 sizeof(OverlayComponentPointAppearance))
+      .attribute(filament::VertexAttribute::CUSTOM3, 0u, AttributeType::UBYTE4,
+                 offsetof(OverlayPointVertex, color), sizeof(OverlayPointVertex))
+      .normalized(filament::VertexAttribute::CUSTOM3)
+      .build(*engine_);
+  proxy.vertex_buffer->setBufferAt(
+      *engine_, 0u, FilamentBufferDescriptorFactory::vector(mesh.vertices));
+  proxy.vertex_buffer->setBufferAt(
+      *engine_, 1u, FilamentBufferDescriptorFactory::vector(proxy.primary_position_stream4));
+  proxy.vertex_buffer->setBufferAt(
+      *engine_, 2u, FilamentBufferDescriptorFactory::vector(proxy.point_visibility_stream));
+  proxy.index_buffer = filament::IndexBuffer::Builder()
+      .indexCount(proxy.index_count)
+      .bufferType(filament::IndexBuffer::IndexType::UINT).build(*engine_);
+  proxy.index_buffer->setBuffer(
+      *engine_, FilamentBufferDescriptorFactory::vector(mesh.indices));
+  if (!update_component_point_appearance(
+          proxy, points, frame_indices, camera, blend_order_bias, layer_mask)) {
+    return proxies;
+  }
+  filament::RenderableManager::Builder builder(4u);
+  builder.layerMask(kViewportAllLayerMask, layer_mask)
+      .boundingBox(overlay_mesh_bounds()).culling(false)
+      .castShadows(false).receiveShadows(false);
+  for (std::size_t pass = 0u; pass < 4u; ++pass) {
+    const auto layer = pass < 2u ? ViewportOverlayLayer::UnselectedVertex
+                                : ViewportOverlayLayer::SelectedVertex;
+    auto *material = pass == 0u ? proxy.material_instance
+                               : proxy.component_point_materials[pass - 1u];
+    const auto order = static_cast<std::uint16_t>(
+        viewport_overlay_draw_order(layer) * 64u + blend_order_bias + pass % 2u);
+    builder.geometry(pass, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                     proxy.vertex_buffer, proxy.index_buffer)
+        .material(pass, material).blendOrder(pass, order)
+        .globalBlendOrderEnabled(pass, true);
+  }
+  builder.build(*engine_, entity);
+  publish_overlay_proxy(*scene_, proxy, proxies, creation_guard);
+  ++upload_stats_.geometry_creation_count;
+  ++upload_stats_.static_upload_count;
+  ++upload_stats_.position_upload_count;
+  ++upload_stats_.index_upload_count;
+  ++upload_stats_.visibility_upload_count;
+  return proxies;
+}
+
+bool OverlayProxyFactory::update_component_point_appearance(
+    OverlayRenderableProxy &proxy,
+    std::span<const ViewportOverlayPoint *const> points,
+    std::span<const std::size_t> frame_indices,
+    const ViewportOverlayCamera &camera, std::uint16_t blend_order_bias,
+    std::uint8_t layer_mask) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized() || proxy.vertex_buffer == nullptr ||
+      proxy.component_point_materials.back() == nullptr ||
+      points.size() != frame_indices.size() ||
+      points.size() * 4u != proxy.vertex_count) {
+    return false;
+  }
+  bool changed = proxy.component_point_appearance.size() != proxy.vertex_count;
+  proxy.component_point_appearance.resize(proxy.vertex_count);
+  for (std::size_t index = 0u; index < points.size(); ++index) {
+    const auto &point = *points[index];
+    const OverlayComponentPointAppearance appearance{
+        .color = rgba8_srgb_to_linear(point.color),
+        .control = {
+            viewport_overlay_point_size_pixels(point.layer, point.size_pixels),
+            point.outline_growth_pixels.value_or(
+                viewport_overlay_point_outline_growth_pixels(point.layer)),
+            point.layer == ViewportOverlayLayer::SelectedVertex ? 1.0f : 0.0f,
+            0.0f},
+    };
+    const auto &previous = proxy.component_point_appearance[index * 4u];
+    if (changed || previous.color != appearance.color ||
+        previous.control.x != appearance.control.x ||
+        previous.control.y != appearance.control.y ||
+        previous.control.z != appearance.control.z) {
+      std::fill_n(proxy.component_point_appearance.begin() + index * 4u, 4u, appearance);
+      changed = true;
+    }
+  }
+  if (changed) {
+    proxy.vertex_buffer->setBufferAt(
+        *engine_, 3u, FilamentBufferDescriptorFactory::vector(proxy.component_point_appearance));
+    ++upload_stats_.appearance_upload_count;
+  }
+  proxy.visibility_point_indices.assign(frame_indices.begin(), frame_indices.end());
+  auto &renderables = engine_->getRenderableManager();
+  const auto instance = renderables.getInstance(to_filament_entity(proxy.entity_id));
+  for (std::size_t pass = 0u; pass < 4u; ++pass) {
+    const auto layer = pass < 2u ? ViewportOverlayLayer::UnselectedVertex
+                                : ViewportOverlayLayer::SelectedVertex;
+    const auto order = static_cast<std::uint16_t>(
+        viewport_overlay_draw_order(layer) * 64u + blend_order_bias + pass % 2u);
+    auto *material = pass == 0u ? proxy.material_instance
+                               : proxy.component_point_materials[pass - 1u];
+    configure_overlay_material(*material, OverlayRenderableBuilder::make_state(
+        layer, ViewportOverlayGeometryKind::Points, order));
+    material->setParameter("componentPass", static_cast<float>(pass));
+    material->setParameter("innerRadius", 0.0f);
+    material->setParameter("pointSize", 1.0f);
+    material->setParameter("nearPlane", camera.near_plane);
+    material->setParameter("depthBias", viewport_overlay_depth_bias(
+        layer, ViewportOverlayGeometryKind::Points));
+    if (instance) {
+      renderables.setBlendOrderAt(instance, pass, order);
+    }
+  }
+  update_proxy_layer_mask(*engine_, proxy, layer_mask);
+  return true;
 }
 
 bool OverlayProxyFactory::update_point_visibility(
@@ -773,6 +1640,7 @@ bool OverlayProxyFactory::update_point_visibility(
     proxy.vertex_buffer->setBufferAt(
         *engine_, 2,
         FilamentBufferDescriptorFactory::vector(proxy.point_visibility_stream));
+    ++upload_stats_.visibility_upload_count;
   }
   return changed;
 }
@@ -798,6 +1666,11 @@ void OverlayProxyFactory::update_camera_state(
       [[fallthrough]];
     case OverlayRenderableProxyKind::Point:
       material->setParameter("nearPlane", camera.near_plane);
+      for (auto *component_material : proxy.component_point_materials) {
+        if (component_material != nullptr) {
+          component_material->setParameter("nearPlane", camera.near_plane);
+        }
+      }
       break;
     case OverlayRenderableProxyKind::EditWire:
       material->setParameter("nearPlane", camera.near_plane);
@@ -831,6 +1704,12 @@ void OverlayProxyFactory::destroy(OverlayRenderableProxy& proxy) {
         return;
     }
 
+    if (proxy.shared_positions_bound) {
+      for (auto *material : proxy_materials(proxy)) {
+        if (material != nullptr) std::erase(shared_position_materials_, material);
+      }
+      proxy.shared_positions_bound = false;
+    }
     destroy_overlay_proxy_resources(*engine_, scene_, proxy, true);
 }
 
@@ -979,13 +1858,7 @@ void OverlayProxyFactory::create_edit_wire_proxy(
             .normalized(filament::VertexAttribute::COLOR);
       },
       [this, &batch](filament::MaterialInstance &material) {
-        configure_overlay_material(material, batch.state);
-        material.setParameter("lineWidth", batch.width_pixels);
-        material.setParameter("featherPixels", kOverlayLineFeatherPixels);
-        material.setParameter("nearPlane", batch.near_plane);
-        material.setParameter("farPlane", batch.far_plane);
-        material.setParameter("orthographicProjection",
-                              batch.orthographic_projection ? 1.0f : 0.0f);
+        configure_edit_wire_material(material, batch);
       });
 }
 
@@ -1011,6 +1884,13 @@ void OverlayProxyFactory::create_point_proxy(
                        0, sizeof(OverlayFloat4))
             .attribute(filament::VertexAttribute::CUSTOM1, 2,
                        AttributeType::FLOAT, 0, sizeof(float))
+            .attribute(filament::VertexAttribute::CUSTOM2, 0,
+                       AttributeType::FLOAT4, offsetof(OverlayPointVertex, position),
+                       sizeof(OverlayPointVertex))
+            .attribute(filament::VertexAttribute::CUSTOM3, 0,
+                       AttributeType::UBYTE4, offsetof(OverlayPointVertex, color),
+                       sizeof(OverlayPointVertex))
+            .normalized(filament::VertexAttribute::CUSTOM3)
             .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
                        offsetof(OverlayPointVertex, uv),
                        sizeof(OverlayPointVertex))
@@ -1022,6 +1902,7 @@ void OverlayProxyFactory::create_point_proxy(
       [this, &batch](filament::MaterialInstance &material) {
         configure_overlay_material(material, batch.state);
         material.setParameter("innerRadius", batch.inner_radius);
+        material.setParameter("componentPass", -1.0f);
         material.setParameter("pointSize", batch.size_pixels);
         material.setParameter("nearPlane", batch.near_plane);
         material.setParameter("depthBias", batch.depth_bias);
@@ -1113,15 +1994,18 @@ void OverlayProxyFactory::update_edit_wire_proxy(
     std::uint8_t layer_mask) {
   update_canonical_quad_proxy_vertices(*engine_, proxy, batch.mesh,
                                        layer_mask);
-  configure_overlay_material(*proxy.material_instance, batch.state);
-  proxy.material_instance->setParameter("lineWidth", batch.width_pixels);
-  proxy.material_instance->setParameter("featherPixels",
-                                        kOverlayLineFeatherPixels);
-  proxy.material_instance->setParameter("nearPlane", batch.near_plane);
-  proxy.material_instance->setParameter("farPlane", batch.far_plane);
-  proxy.material_instance->setParameter(
-      "orthographicProjection",
-      batch.orthographic_projection ? 1.0f : 0.0f);
+  configure_edit_wire_material(*proxy.material_instance, batch);
+}
+
+void OverlayProxyFactory::configure_edit_wire_material(
+    filament::MaterialInstance &material, const OverlayEditWireBatch &batch) const {
+  configure_overlay_material(material, batch.state);
+  material.setParameter("lineWidth", batch.width_pixels);
+  material.setParameter("featherPixels", kOverlayLineFeatherPixels);
+  material.setParameter("nearPlane", batch.near_plane);
+  material.setParameter("farPlane", batch.far_plane);
+  material.setParameter("orthographicProjection",
+                        batch.orthographic_projection ? 1.0f : 0.0f);
 }
 
 void OverlayProxyFactory::update_point_proxy(OverlayRenderableProxy &proxy,
@@ -1137,6 +2021,7 @@ void OverlayProxyFactory::update_point_proxy(OverlayRenderableProxy &proxy,
     proxy.vertex_buffer->setBufferAt(
         *engine_, 2,
         FilamentBufferDescriptorFactory::vector(proxy.point_visibility_stream));
+    ++upload_stats_.visibility_upload_count;
   }
   configure_overlay_material(*proxy.material_instance, batch.state);
   proxy.material_instance->setParameter("innerRadius", batch.inner_radius);

@@ -3,6 +3,28 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 
+int meshOccurrenceIndex() {
+    // A heterogeneous chunk is one renderable, with one rigid bone per source.
+    // Ordinary and homogeneous instanced renderables retain Filament's index.
+    return materialParams.coarseGeometryEnabled > 0.5
+            ? int(getCustom6().x) : getInstanceIndex();
+}
+
+highp vec3 meshLocalPosition() {
+    // getPosition() is already skinned before materialVertex runs. Sampling
+    // corrections must continue to use the source's canonical local position.
+    return materialParams.coarseGeometryEnabled > 0.5
+            ? getCustom5().xyz : getPosition().xyz;
+}
+
+vec3 meshSurfaceWorldNormal(vec3 localNormal) {
+    if (materialParams.coarseGeometryEnabled > 0.5) {
+        return materialParams.coarseWorldNormalFromLocal[meshOccurrenceIndex()]
+                * localNormal;
+    }
+    return getWorldFromModelNormalMatrix() * localNormal;
+}
+
 bool requiresWorldTextureNormalCorrection() {
     highp mat3 worldFromModel = mat3(getWorldFromModelMatrix());
     if (any(isnan(worldFromModel[0])) || any(isinf(worldFromModel[0]))

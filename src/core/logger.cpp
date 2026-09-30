@@ -97,6 +97,8 @@ protected:
         entry.logger_name.assign(msg.logger_name.data(),
                                  msg.logger_name.size());
         entry.message = fmt::to_string(formatted);
+        entry.timestamp = msg.time;
+        entry.payload.assign(msg.payload.data(), msg.payload.size());
         if (msg.source.filename != nullptr) {
             entry.file = msg.source.filename;
             entry.line = static_cast<int>(msg.source.line);

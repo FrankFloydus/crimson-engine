@@ -325,7 +325,7 @@ TEST(ModelingSelectionPerformanceTests,
                    .viewport_size = {100.0f, 100.0f}, .orthographic_size = 100.0},
         .start = {45.0f, 45.0f}, .end = {55.0f, 55.0f},
         .edit = ModelingSelectionEdit::Replace,
-        .rule = ModelingBoxSelectionRule::Contain, .select_backfaces = true};
+        .rule = ModelingBoxSelectionRule::Contain, .select_backfaces = false};
     const auto initial = session.selection().query_modeling_marquee_hits(query);
     ASSERT_FALSE(initial.empty());
     EXPECT_EQ(initial.front().target.entity, created.value().entity);
@@ -336,7 +336,7 @@ TEST(ModelingSelectionPerformanceTests,
                    .viewport_size = query.camera.viewport_size,
                    .orthographic_size = query.camera.orthographic_size},
         .start = query.start, .end = query.end, .edit = QuaderSelectionEdit::Replace,
-        .rule = QuaderBoxSelectionRule::Contain, .select_backfaces = true};
+        .rule = QuaderBoxSelectionRule::Contain, .select_backfaces = false};
     std::optional<std::uint64_t> resolution_builds;
     for (int repetition = 0; repetition < 3; ++repetition) {
       SCOPED_TRACE(repetition);
@@ -369,7 +369,9 @@ TEST(ModelingSelectionPerformanceTests,
       EXPECT_EQ(session.modeling().world_picking_geometry_build_count(), world_builds);
     }
 
+    // Move the entire mesh so the visible-only query retains its facing set.
     ASSERT_TRUE(editor.selection().box_select(request).ok());
+    ASSERT_TRUE(editor.selection().select_all().ok());
     const auto first_move = editor.modeling().move_selection({1.0f, 0.0f, 0.0f});
     ASSERT_TRUE(first_move.ok()) << first_move.error_message();
     const auto moved = session.selection().query_modeling_marquee_hits(query);
@@ -384,6 +386,158 @@ TEST(ModelingSelectionPerformanceTests,
     ASSERT_TRUE(editor.modeling().move_selection({1.0f, 0.0f, 0.0f}).ok());
     EXPECT_TRUE(session.selection().query_modeling_marquee_hits(query).empty());
     EXPECT_EQ(session.modeling().world_picking_geometry_build_count(), world_builds + 1u);
+  }
+}
+
+TEST(ModelingSelectionPerformanceTests,
+     ThroughComponentMarqueeRetainsCameraPlaneAndLegacyWitnessRejections) {
+  using namespace quader;
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto front = editor.modeling().create_box(
+        {.min = {-6, -1, -4}, .max = {-4, 1, -2}}, "Front Targets");
+    const auto crossing = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Camera Plane Targets");
+    const auto rear = editor.modeling().create_box(
+        {.min = {4, -1, 2}, .max = {6, 1, 4}}, "Rear Targets");
+    ASSERT_TRUE(front.ok());
+    ASSERT_TRUE(crossing.ok());
+    ASSERT_TRUE(rear.ok());
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    for (const auto rule : {ModelingBoxSelectionRule::Contain,
+                           ModelingBoxSelectionRule::Crossing}) {
+      const ModelingBoxSelectRequest request{
+          .camera = {.orthographic = true, .viewport_size = {200, 200},
+                     .orthographic_size = 20},
+          .start = {0, 0}, .end = {200, 200},
+          .rule = rule, .select_backfaces = true};
+      auto targets = session.selection().query_modeling_marquee_hits(request);
+      ASSERT_FALSE(targets.empty());
+      const bool front_can_skip = mode != QuaderSelectionMode::Face ||
+                                  rule == ModelingBoxSelectionRule::Contain;
+      for (const auto &target : targets) {
+        EXPECT_EQ(target.rectangle_target_only,
+                  front_can_skip && target.target.entity == front.value().entity);
+      }
+      // An unmarked empty witness remains a rejection, even in a mixed batch.
+      ResolvedSelectionHit empty = targets.front();
+      empty.target.entity = rear.value().entity;
+      empty.rectangle_target_only = false;
+      empty.visibility_witnesses.clear();
+      empty.world_position.reset();
+      targets.push_back(std::move(empty));
+      const auto surfaces = session.scene_surface_query().snapshot();
+      const auto hits = collect_viewport_scene_marquee_hits({
+          .camera = request.camera, .start = request.start, .end = request.end,
+          .rule = rule, .scene_surfaces = &surfaces,
+          .resolved_selection_hits = targets,
+          .include_occluded_resolved_modeling_hits = true});
+      const std::size_t front_count = mode == QuaderSelectionMode::Vertex ? 8u
+          : mode == QuaderSelectionMode::Edge ? 12u : 6u;
+      const std::size_t crossing_count = mode == QuaderSelectionMode::Vertex ? 4u
+          : mode == QuaderSelectionMode::Edge ? 8u : 5u;
+      EXPECT_EQ(std::ranges::count(hits, front.value().entity,
+                                  &ViewportSceneHitCandidate::entity), front_count);
+      EXPECT_EQ(std::ranges::count(hits, crossing.value().entity,
+                                  &ViewportSceneHitCandidate::entity), crossing_count);
+      EXPECT_EQ(std::ranges::count(hits, rear.value().entity,
+                                  &ViewportSceneHitCandidate::entity), 0);
+      EXPECT_EQ(hits.size(), front_count + crossing_count);
+    }
+  }
+}
+
+TEST(ModelingSelectionPerformanceTests,
+     ThroughComponentMarqueeSkipsWitnessesAndPreservesCanonicalEdits) {
+  using namespace quader;
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.modeling().create_box(
+        {.min = {-3, -2, -1}, .max = {0, 2, 1}}, "Through Selection Left").ok());
+    ASSERT_TRUE(editor.modeling().create_box(
+        {.min = {1, -2, -4}, .max = {4, 2, -2}}, "Through Selection Right").ok());
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    for (const bool orthographic : {true, false}) {
+      SCOPED_TRACE(orthographic);
+      const ModelingBoxSelectRequest seed{
+          .camera = {.orthographic = orthographic, .origin = {0, 0, 20},
+                     .viewport_size = {200, 200}, .orthographic_size = 20},
+          .start = {65, 75}, .end = {85, 125},
+          .edit = ModelingSelectionEdit::Replace,
+          .rule = ModelingBoxSelectionRule::Crossing, .select_backfaces = true};
+      for (const auto rule : {ModelingBoxSelectionRule::Contain,
+                             ModelingBoxSelectionRule::Crossing}) {
+        SCOPED_TRACE(static_cast<int>(rule));
+        const bool targets_only = mode != QuaderSelectionMode::Face ||
+                                  rule == ModelingBoxSelectionRule::Contain;
+        for (const auto edit : {ModelingSelectionEdit::Replace, ModelingSelectionEdit::Add,
+                               ModelingSelectionEdit::Remove, ModelingSelectionEdit::Toggle}) {
+          SCOPED_TRACE(static_cast<int>(edit));
+          for (const auto end : {QVec2{145, 130}, QVec2{95, 130}, QVec2{10, 10}}) {
+            const ModelingBoxSelectRequest request{
+                .camera = seed.camera,
+                .start = end.x == 10 ? QVec2{5, 5} : QVec2{75, 70}, .end = end,
+                .edit = edit, .rule = rule, .select_backfaces = true};
+            ASSERT_TRUE(editor.selection().clear().ok());
+            (void)session.selection().box_select(seed);
+            const auto world_builds = session.modeling().world_picking_geometry_build_count();
+            const auto targets = session.selection().query_modeling_marquee_hits(request);
+            if (targets_only) {
+              EXPECT_EQ(session.modeling().world_picking_geometry_build_count(), world_builds);
+            }
+            for (const auto &target : targets) {
+              EXPECT_EQ(target.target.domain, ResolvedSelectionDomain::ModelingComponent);
+              EXPECT_EQ(target.rectangle_target_only, targets_only);
+              if (targets_only) {
+                EXPECT_TRUE(target.visibility_witnesses.empty());
+                EXPECT_FALSE(target.world_position.has_value());
+              }
+            }
+            // The native rectangle owner is the independent publication oracle:
+            // it applies exact projected hits without the typed depth arbitration.
+            (void)session.selection().box_select(request);
+            const auto expected = session.modeling().export_selection();
+            ASSERT_TRUE(editor.selection().clear().ok());
+            (void)session.selection().box_select(seed);
+            const QuaderBoxSelectRequest api_request{
+                .camera = {.orthographic = orthographic, .origin = request.camera.origin,
+                           .viewport_size = request.camera.viewport_size,
+                           .orthographic_size = request.camera.orthographic_size},
+                .start = request.start, .end = request.end,
+                .edit = static_cast<QuaderSelectionEdit>(edit),
+                .rule = rule == ModelingBoxSelectionRule::Contain
+                            ? QuaderBoxSelectionRule::Contain : QuaderBoxSelectionRule::Crossing,
+                .select_backfaces = true};
+            const auto applied = editor.selection().box_select(api_request);
+            ASSERT_TRUE(applied.ok()) << applied.error_message();
+            const auto actual = session.modeling().export_selection();
+            EXPECT_EQ(actual.summary.active_object_id, expected.summary.active_object_id);
+            EXPECT_EQ(actual.summary.active_kind, expected.summary.active_kind);
+            EXPECT_EQ(actual.summary.active_vertex_id, expected.summary.active_vertex_id);
+            EXPECT_EQ(actual.summary.active_edge_a, expected.summary.active_edge_a);
+            EXPECT_EQ(actual.summary.active_edge_b, expected.summary.active_edge_b);
+            EXPECT_EQ(actual.summary.active_face_id, expected.summary.active_face_id);
+            ASSERT_EQ(actual.objects.size(), expected.objects.size());
+            for (std::size_t index = 0; index < actual.objects.size(); ++index) {
+              EXPECT_EQ(actual.objects[index].entity, expected.objects[index].entity);
+              EXPECT_EQ(actual.objects[index].selected, expected.objects[index].selected);
+              EXPECT_TRUE(quader_editor_core::polygon_selection_matches(
+                  actual.objects[index].selection, expected.objects[index].selection));
+            }
+            if (targets_only) {
+              EXPECT_EQ(session.modeling().world_picking_geometry_build_count(), world_builds);
+            }
+          }
+        }
+      }
+    }
   }
 }
 

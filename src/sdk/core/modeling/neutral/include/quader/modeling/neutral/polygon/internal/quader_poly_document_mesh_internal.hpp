@@ -29,7 +29,13 @@ namespace quader_poly::document_internal {
 class VertexLookupIndex final {
 public:
     explicit VertexLookupIndex(const Document& document)
-        : vertices_(document.vertices)
+        : VertexLookupIndex(std::span<const Vertex>(document.vertices)) {}
+
+    explicit VertexLookupIndex(const DocumentReadView &document)
+        : VertexLookupIndex(document.vertices) {}
+
+    explicit VertexLookupIndex(std::span<const Vertex> vertices)
+        : vertices_(vertices)
     {
         std::size_t fallback_vertex_count = 0U;
         for (const Vertex& vertex : vertices_) {
@@ -69,7 +75,7 @@ private:
                vertices_[hinted_index].id == id;
     }
 
-    const std::vector<Vertex>& vertices_;
+    std::span<const Vertex> vertices_;
     std::unordered_map<ElementId, const Vertex*> fallback_vertices_;
 };
 
@@ -112,6 +118,9 @@ struct MergeFaceUvAssignment {
 };
 
 [[nodiscard]] int dropped_axis_for_normal(const quader::QVec3& normal);
+/** Reuses a query's vertex index for the canonical geometric face normal. */
+[[nodiscard]] quader::QVec3 face_normal_from_vertex_lookup(
+    const Face &face, const VertexLookupIndex &vertex_lookup);
 [[nodiscard]] std::vector<Triangle> triangulate_face_local_indices(const Document& document, const Face& face);
 [[nodiscard]] std::vector<Triangle> triangulate_face_local_indices(
     const Document& document,
@@ -122,6 +131,9 @@ struct MergeFaceUvAssignment {
     const Face& face,
     const VertexLookupIndex& vertex_lookup,
     const quader::QVec3& normal);
+[[nodiscard]] std::vector<Triangle> triangulate_face_local_indices(
+    const Face &face, const VertexLookupIndex &vertex_lookup,
+    const quader::QVec3 &normal);
 
 // A projected triangulation may skip only corners on a straight 3D boundary.
 [[nodiscard]] bool triangulation_preserves_face_boundary(
@@ -134,6 +146,9 @@ struct MergeFaceUvAssignment {
     const Face& face,
     const quader::QVec3& normal,
     const VertexLookupIndex& vertex_lookup);
+[[nodiscard]] FaceUvBasis generated_face_uv_basis(
+    const Face &face, const quader::QVec3 &normal,
+    const VertexLookupIndex &vertex_lookup);
 [[nodiscard]] FaceUvBasis project_uv_basis_to_face_plane(const FaceUvBasis& generated_basis, const quader::QVec3& normal, const quader::QVec3& origin);
 [[nodiscard]] FaceUvBasis face_local_uv_basis(const Document& document, const Face& face, const quader::QVec3& normal);
 [[nodiscard]] quader::QVec2 generated_face_uv(const quader::QVec3& position, const FaceUvBasis& basis);

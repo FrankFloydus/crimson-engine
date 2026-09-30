@@ -104,6 +104,28 @@ struct SessionBridgePreviewCandidate {
   OperationResult receipt;
 };
 
+/** Identifies one source document and its placement in survivor coordinates. */
+struct SessionMergeSource {
+  ObjectId object{};
+  Transform3 survivor_from_source{};
+  /// Optional host-adapted source, with material slots and texture mapping
+  /// rebased before preparation. Its coordinates use survivor_from_source.
+  std::optional<PolygonDocument> prepared_document;
+};
+
+/** Selects the vertex weld target used by a cross-object merge. */
+enum class SessionMergeIntent {
+  ByDistance,
+  ToActive,
+  ToCenter,
+};
+
+/** Carries the pure survivor candidate produced for a cross-object merge. */
+struct SessionMergePreviewCandidate {
+  PolygonDocument survivor_document;
+  OperationResult receipt;
+};
+
 /**
  * Stores either authored document kind accepted by an SDK preview transaction.
  */
@@ -455,6 +477,23 @@ public:
   prepare_bridge_documents(ObjectId survivor_id, ObjectId source_id,
                            Transform3 survivor_from_source,
                            SelectionKind selection_kind, int steps = 1) const;
+  /**
+   * Prepares vertex or edge merging without changing session state.
+   * Sources exclude the survivor and each operand must have selected elements.
+   * Vertex distance and center use world_from_survivor, including nonuniform
+   * scale; the result remains in survivor coordinates. ToActive requires the
+   * survivor's selected active vertex. ToCenter averages distinct selected
+   * vertices across every operand. Edge merging accepts only ByDistance.
+   * Unchanged results retain the original survivor, so callers must not remove
+   * source objects for a no-op.
+   */
+  [[nodiscard]] Result<SessionMergePreviewCandidate>
+  prepare_merge_documents(ObjectId survivor_id,
+                          std::span<const SessionMergeSource> sources,
+                          SelectionKind selection_kind, float tolerance = 0.0F,
+                          Transform3 world_from_survivor = {},
+                          SessionMergeIntent intent =
+                              SessionMergeIntent::ByDistance) const;
   [[nodiscard]] Result<OperationResult> select_face(ObjectId object_id,
                                                     FaceId face_id);
   [[nodiscard]] Result<OperationResult> translate_selection(Vec3 delta);

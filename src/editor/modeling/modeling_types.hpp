@@ -595,6 +595,8 @@ struct ModelingSelectionHit {
   double pick_distance = 0.0;
   std::optional<QVec3> world_position;
   std::vector<ModelingSelectionVisibilityWitness> visibility_witnesses;
+  /// Exact component rectangle match whose publication needs no depth metrics.
+  bool rectangle_target_only = false;
   std::string signature;
   /// Exact visible occurrence whose projected geometry produced this hit.
   /// Standalone meshes use their own entity; instance editing uses the active

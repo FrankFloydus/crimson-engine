@@ -10,6 +10,7 @@
 #include <backend/PixelBufferDescriptor.h>
 
 #include <cstddef>
+#include <memory>
 #include <span>
 #include <utility>
 #include <vector>
@@ -23,6 +24,11 @@ class FilamentBufferDescriptorFactory {
 public:
   static filament::backend::BufferDescriptor bytes(const void *data,
                                                    std::size_t byte_count);
+  /// Pins immutable storage shared by several asynchronous uploads without
+  /// copying its bytes. The supplied owner must contain the complete span.
+  static filament::backend::BufferDescriptor retained_bytes(
+      const void *data, std::size_t byte_count,
+      std::shared_ptr<const void> owner);
   static filament::backend::PixelBufferDescriptor
   rgba_pixels(const unsigned char *pixels, std::size_t byte_count);
 

@@ -4,12 +4,75 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_validation_test_helpers.hpp"
+#include "operation_atomicity_test_helpers.hpp"
 
 #include <algorithm>
 #include <vector>
 
 using namespace quader_poly;
+
+TEST(QdrDocumentOperationMergeVerticesToCenterTests,
+     PreservesUnrelatedCollapsedFacesAndLooseVertices) {
+    auto fixture = qdr_test::make_quad_document();
+    const Document island =
+        qdr_test::append_unrelated_authored_geometry(fixture.document);
+    const auto vertex_count_before = fixture.document.vertices.size();
+    const auto face_count_before = fixture.document.faces.size();
+    const auto next_vertex_id_before = fixture.document.next_vertex_id;
+    const auto next_face_id_before = fixture.document.next_face_id;
+    Selection selection = qdr_test::vertex_selection(
+        {fixture.bottom_left, fixture.bottom_right}, fixture.bottom_right);
+
+    const auto result =
+        merge_selected_vertices_to_center(fixture.document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_EQ(fixture.document.vertices.size(), vertex_count_before - 1U);
+    EXPECT_EQ(fixture.document.faces.size(), face_count_before);
+    EXPECT_EQ(find_vertex(fixture.document, fixture.bottom_left), nullptr);
+    const Vertex* survivor = find_vertex(fixture.document, fixture.bottom_right);
+    ASSERT_NE(survivor, nullptr);
+    EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, {0.0F, -1.0F, 0.0F}));
+    const Face* face = find_face(fixture.document, fixture.face);
+    ASSERT_NE(face, nullptr);
+    EXPECT_EQ(face->vertices, (std::vector<ElementId>{
+        fixture.bottom_right, fixture.top_right, fixture.top_left}));
+    EXPECT_TRUE(qdr_test::face_compiles_to_triangles(fixture.document, *face));
+    EXPECT_EQ(selection.mode, SelectionMode::Vertex);
+    EXPECT_EQ(selection.vertices, (std::vector<ElementId>{fixture.bottom_right}));
+    EXPECT_TRUE(selection.has_active);
+    EXPECT_EQ(selection.active_kind, ElementKind::Vertex);
+    EXPECT_EQ(selection.active_vertex, fixture.bottom_right);
+    EXPECT_EQ(fixture.document.next_vertex_id, next_vertex_id_before);
+    EXPECT_EQ(fixture.document.next_face_id, next_face_id_before);
+    qdr_test::expect_unrelated_authored_geometry_preserved(fixture.document, island);
+    EXPECT_TRUE(validate_polygon_document(
+        fixture.document, PolygonDocumentValidationPolicy::AuthoredTopology).ok());
+}
+
+TEST(QdrDocumentOperationMergeVerticesToCenterTests,
+     RejectsMalformedUnrelatedAuthoredDataAtomically) {
+    for (const auto fault : qdr_test::kAuthoredInputFaults) {
+        SCOPED_TRACE(static_cast<int>(fault));
+        auto fixture = qdr_test::make_quad_document();
+        static_cast<void>(qdr_test::append_unrelated_authored_geometry(fixture.document));
+        qdr_test::corrupt_unrelated_authored_geometry(fixture.document, fault);
+        Selection selection = qdr_test::vertex_selection(
+            {fixture.bottom_left, fixture.bottom_right}, fixture.bottom_right);
+        const auto source = qdr_test::document_fingerprint(fixture.document);
+        const auto source_selection = qdr_test::selection_fingerprint(selection);
+
+        const auto result =
+            merge_selected_vertices_to_center(fixture.document, selection);
+
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(result.changed);
+        EXPECT_FALSE(result.message.empty());
+        EXPECT_EQ(qdr_test::document_fingerprint(fixture.document), source);
+        EXPECT_EQ(qdr_test::selection_fingerprint(selection), source_selection);
+    }
+}
 
 TEST(QdrDocumentOperationMergeVerticesToCenterTests, MergeVerticesToCenterPlacesTheSurvivorAtTheSelectedCentroid) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();

@@ -63,12 +63,13 @@ OperationResult merge_endpoint_group(Document& working, const std::set<ElementId
     }
 
     Document candidate;
-    const OperationResult candidate_result = build_vertex_merge_candidate(
+    const OperationResult candidate_result = build_topology_vertex_merge_candidate(
         working,
         candidate,
         merge_vertex_ids,
         survivor_vertex_id,
-        survivor_vertex->position);
+        survivor_vertex->position,
+        true);
     if (!candidate_result.changed) {
         return candidate_result;
     }
@@ -76,10 +77,55 @@ OperationResult merge_endpoint_group(Document& working, const std::set<ElementId
     if (find_vertex(candidate, survivor_vertex_id) == nullptr) {
         return OperationResult::failure("Merge Edges would remove the survivor vertex.");
     }
+    const OperationResult validation =
+        validate_authored_operation_candidate(working, candidate);
+    if (!validation.success) {
+        return validation;
+    }
 
     working = std::move(candidate);
-    prune_unused_vertices(working);
     return { true, {} };
+}
+
+OperationResult validate_welded_edge_winding(const Document& source, const Document& candidate)
+{
+    const auto source_adjacency = face_indices_by_edge(source);
+    const auto candidate_adjacency = face_indices_by_edge(candidate);
+    for (const auto& [edge_key, face_indices] : candidate_adjacency) {
+        if (face_indices.size() != 2U) {
+            continue;
+        }
+
+        const Edge edge = make_edge(edge_key.first, edge_key.second);
+        const auto first_direction = oriented_edge_in_face(candidate.faces[face_indices[0]], edge);
+        const auto second_direction = oriented_edge_in_face(candidate.faces[face_indices[1]], edge);
+        if (first_direction && second_direction &&
+            first_direction->first == second_direction->second &&
+            first_direction->second == second_direction->first) {
+            continue;
+        }
+
+        const auto source_faces = source_adjacency.find(edge_key);
+        bool unchanged_adjacency = source_faces != source_adjacency.end() &&
+            source_faces->second.size() == 2U;
+        if (unchanged_adjacency) {
+            for (const std::size_t face_index : face_indices) {
+                const Face& candidate_face = candidate.faces[face_index];
+                const Face* source_face = find_face(source, candidate_face.id);
+                if (source_face == nullptr ||
+                    oriented_edge_in_face(*source_face, edge) !=
+                        oriented_edge_in_face(candidate_face, edge)) {
+                    unchanged_adjacency = false;
+                    break;
+                }
+            }
+        }
+        if (!unchanged_adjacency) {
+            return OperationResult::failure(
+                "Merge Edges would create adjacent faces with matching edge winding.");
+        }
+    }
+    return {};
 }
 
 OperationResult MergeEdgesOperation::apply(Document& document, Selection& selection) const
@@ -87,6 +133,11 @@ OperationResult MergeEdgesOperation::apply(Document& document, Selection& select
   if (selection.mode != SelectionMode::Edge) {
     return OperationResult::failure("Merge Edges needs edge selection mode.");
   }
+    const OperationResult source_validation =
+        validate_authored_operation_candidate(document, document);
+    if (!source_validation.success) {
+        return source_validation;
+    }
 
     std::vector<Edge> selected_edges;
     selected_edges.reserve(selection.edges.size());
@@ -174,6 +225,11 @@ OperationResult MergeEdgesOperation::apply(Document& document, Selection& select
     }
     result = merge_endpoint_group(working, merge_to_b, target_edge.b);
     if (!result.changed) {
+        return result;
+    }
+
+    result = validate_welded_edge_winding(document, working);
+    if (!result.success) {
         return result;
     }
 

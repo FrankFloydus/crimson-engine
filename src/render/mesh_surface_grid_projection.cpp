@@ -16,144 +16,93 @@ namespace {
 constexpr float kNormalEpsilonSquared = 0.000000000001f;
 constexpr float kFlatNormalAlignment = 0.9999f;
 
-/// Stores one primitive's validated vertices and projection orientation.
-struct PrimitiveProjectionCandidate final {
-  std::vector<std::uint32_t> vertices;
-  QVec3 local_normal;
-  bool valid = false;
-  bool flat = false;
-};
-
-PrimitiveProjectionCandidate primitive_projection_candidate(
-    std::span<const MeshVertex> vertices,
-    std::span<const std::uint32_t> indices,
-    MeshPrimitiveSpan primitive,
-    std::vector<std::uint32_t> &vertex_stamps,
-    std::uint32_t stamp) {
-  PrimitiveProjectionCandidate candidate;
-  const std::uint64_t begin = primitive.index_offset;
-  const std::uint64_t end = begin + primitive.index_count;
-  if (primitive.index_count < 3u || begin >= indices.size() ||
-      end > indices.size()) {
-    return candidate;
-  }
-
-  QVec3 area_normal;
-  for (std::uint64_t index = begin; index + 2u < end; index += 3u) {
-    const std::uint32_t i0 = indices[static_cast<std::size_t>(index)];
-    const std::uint32_t i1 = indices[static_cast<std::size_t>(index + 1u)];
-    const std::uint32_t i2 = indices[static_cast<std::size_t>(index + 2u)];
-    if (i0 >= vertices.size() || i1 >= vertices.size() ||
-        i2 >= vertices.size()) {
-      continue;
-    }
-    area_normal += cross(vertices[i1].position - vertices[i0].position,
-                         vertices[i2].position - vertices[i0].position);
-    for (const std::uint32_t vertex_index : {i0, i1, i2}) {
-      if (vertex_stamps[vertex_index] == stamp) {
-        continue;
-      }
-      vertex_stamps[vertex_index] = stamp;
-      candidate.vertices.push_back(vertex_index);
-    }
-  }
-
-  if (candidate.vertices.size() < 3u ||
-      length_squared(area_normal) <= kNormalEpsilonSquared) {
-    return candidate;
-  }
-
-  candidate.local_normal = normalize(area_normal);
-  candidate.valid = true;
-  candidate.flat = std::ranges::all_of(
-      candidate.vertices, [&](const std::uint32_t vertex_index) {
-        const QVec3 vertex_normal = normalize(vertices[vertex_index].normal);
-        return length_squared(vertex_normal) > kNormalEpsilonSquared &&
-               dot(vertex_normal, candidate.local_normal) >=
-                   kFlatNormalAlignment;
-      });
-  return candidate;
-}
-
 } // namespace
+
+MeshSurfaceGridProjectionPlan prepare_mesh_surface_grid_projection(
+    std::size_t vertex_count, std::span<const std::uint32_t> indices,
+    std::span<const MeshPrimitiveSpan> primitives) {
+  MeshSurfaceGridProjectionPlan plan{.vertex_count = vertex_count};
+  std::vector<std::uint32_t> references(vertex_count, 0u);
+  std::vector<std::size_t> stamps(vertex_count, std::numeric_limits<std::size_t>::max());
+  for (std::size_t face = 0u; face < primitives.size(); ++face) {
+    const auto primitive = primitives[face];
+    const std::uint64_t end = static_cast<std::uint64_t>(primitive.index_offset) + primitive.index_count;
+    if (primitive.index_count == 0u || primitive.index_offset >= indices.size() || end > indices.size()) continue;
+    for (std::uint64_t index = primitive.index_offset; index < end; ++index) {
+      const auto vertex = indices[static_cast<std::size_t>(index)];
+      if (vertex < vertex_count && stamps[vertex] != face) {
+        stamps[vertex] = face;
+        ++references[vertex];
+      }
+    }
+  }
+  std::ranges::fill(stamps, std::numeric_limits<std::size_t>::max());
+  plan.faces.reserve(primitives.size());
+  for (std::size_t face = 0u; face < primitives.size(); ++face) {
+    const auto primitive = primitives[face];
+    const std::uint64_t end = static_cast<std::uint64_t>(primitive.index_offset) + primitive.index_count;
+    if (primitive.index_count < 3u || primitive.index_offset >= indices.size() || end > indices.size()) continue;
+    MeshSurfaceGridProjectionPlan::Face binding;
+    for (std::uint64_t index = primitive.index_offset; index + 2u < end; index += 3u) {
+      const std::array triangle{indices[static_cast<std::size_t>(index)],
+          indices[static_cast<std::size_t>(index + 1u)], indices[static_cast<std::size_t>(index + 2u)]};
+      if (std::ranges::any_of(triangle, [&](auto vertex) { return vertex >= vertex_count; })) continue;
+      binding.triangles.push_back(triangle);
+      for (const auto vertex : triangle) {
+        if (stamps[vertex] != face) {
+          stamps[vertex] = face;
+          binding.vertices.push_back(vertex);
+        }
+      }
+    }
+    binding.exclusive = std::ranges::all_of(binding.vertices,
+        [&](auto vertex) { return references[vertex] == 1u; });
+    plan.faces.push_back(std::move(binding));
+  }
+  return plan;
+}
 
 std::vector<MeshSurfaceGridVertexProjection>
 build_mesh_surface_grid_vertex_projections(
-    std::span<const MeshVertex> vertices,
-    std::span<const std::uint32_t> indices,
-    std::span<const MeshPrimitiveSpan> primitives) {
+    std::span<const MeshVertex> vertices, const MeshSurfaceGridProjectionPlan &plan,
+    std::span<const QVec3> positions) {
   std::vector<MeshSurfaceGridVertexProjection> projections;
   projections.reserve(vertices.size());
-  for (const MeshVertex &vertex : vertices) {
+  for (const auto &vertex : vertices) {
     const QVec3 normal = normalize(vertex.normal);
-    projections.push_back({
-        .local_normal = length_squared(normal) > kNormalEpsilonSquared
-                            ? normal
-                            : QVec3{0.0f, 1.0f, 0.0f},
-        .face_projected = false,
-    });
+    projections.push_back({.local_normal = length_squared(normal) > kNormalEpsilonSquared
+        ? normal : QVec3{0.0f, 1.0f, 0.0f}, .face_projected = false});
   }
-  if (vertices.empty() || indices.empty() || primitives.empty()) {
-    return projections;
-  }
-
-  std::vector<std::uint32_t> primitive_reference_counts(vertices.size(), 0u);
-  std::vector<std::uint32_t> vertex_stamps(vertices.size(), 0u);
-  std::uint32_t stamp = 1u;
-  for (const MeshPrimitiveSpan primitive : primitives) {
-    const std::uint64_t begin = primitive.index_offset;
-    const std::uint64_t end = begin + primitive.index_count;
-    if (primitive.index_count == 0u || begin >= indices.size() ||
-        end > indices.size()) {
-      continue;
+  if (plan.vertex_count != vertices.size() ||
+      (!positions.empty() && positions.size() != vertices.size())) return projections;
+  const auto position = [&](std::uint32_t index) {
+    return positions.empty() ? vertices[index].position : positions[index];
+  };
+  for (const auto &face : plan.faces) {
+    if (face.vertices.size() < 3u || !face.exclusive) continue;
+    QVec3 area_normal;
+    for (const auto triangle : face.triangles) {
+      area_normal += cross(position(triangle[1]) - position(triangle[0]),
+                           position(triangle[2]) - position(triangle[0]));
     }
-    for (std::uint64_t index = begin; index < end; ++index) {
-      const std::uint32_t vertex_index =
-          indices[static_cast<std::size_t>(index)];
-      if (vertex_index >= vertices.size() ||
-          vertex_stamps[vertex_index] == stamp) {
-        continue;
-      }
-      vertex_stamps[vertex_index] = stamp;
-      ++primitive_reference_counts[vertex_index];
-    }
-    if (stamp == std::numeric_limits<std::uint32_t>::max()) {
-      std::ranges::fill(vertex_stamps, 0u);
-      stamp = 1u;
-    } else {
-      ++stamp;
-    }
-  }
-
-  std::ranges::fill(vertex_stamps, 0u);
-  stamp = 1u;
-  for (const MeshPrimitiveSpan primitive : primitives) {
-    PrimitiveProjectionCandidate candidate =
-        primitive_projection_candidate(vertices, indices, primitive,
-                                       vertex_stamps, stamp);
-    if (stamp == std::numeric_limits<std::uint32_t>::max()) {
-      std::ranges::fill(vertex_stamps, 0u);
-      stamp = 1u;
-    } else {
-      ++stamp;
-    }
-    if (!candidate.valid ||
-        (candidate.vertices.size() != 3u && !candidate.flat) ||
-        !std::ranges::all_of(candidate.vertices,
-                            [&](const std::uint32_t vertex_index) {
-                              return primitive_reference_counts[vertex_index] ==
-                                     1u;
-                            })) {
-      continue;
-    }
-    for (const std::uint32_t vertex_index : candidate.vertices) {
-      projections[vertex_index] = {
-          .local_normal = candidate.local_normal,
-          .face_projected = true,
-      };
-    }
+    if (length_squared(area_normal) <= kNormalEpsilonSquared) continue;
+    const auto normal = normalize(area_normal);
+    if (face.vertices.size() != 3u && !std::ranges::all_of(face.vertices, [&](auto index) {
+      const auto vertex_normal = normalize(vertices[index].normal);
+      return length_squared(vertex_normal) > kNormalEpsilonSquared &&
+          dot(vertex_normal, normal) >= kFlatNormalAlignment;
+    })) continue;
+    for (const auto vertex : face.vertices) projections[vertex] = {normal, true};
   }
   return projections;
+}
+
+std::vector<MeshSurfaceGridVertexProjection>
+build_mesh_surface_grid_vertex_projections(
+    std::span<const MeshVertex> vertices, std::span<const std::uint32_t> indices,
+    std::span<const MeshPrimitiveSpan> primitives, std::span<const QVec3> positions) {
+  return build_mesh_surface_grid_vertex_projections(vertices,
+      prepare_mesh_surface_grid_projection(vertices.size(), indices, primitives), positions);
 }
 
 } // namespace quader

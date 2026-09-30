@@ -175,12 +175,6 @@ int main(int argc, char** argv) {
                                    "It works!");
   }
 #endif
-  LOG_INFO("Booting Quader from {}", exe.string());
-  LOG_INFO("Product release: {}",
-           quader::product_release_label(quader::current_product_release()));
-  LOG_INFO("Qt Widgets style: Fusion with accessibility-aware Obsidian palette");
-  LOG_INFO("Render backend: {}",
-           quader::to_string(command_line.render_backend));
 
   try {
     auto app = std::make_unique<quader::App>();
@@ -198,7 +192,6 @@ int main(int argc, char** argv) {
 
     const int result = app->run();
     app->shutdown();
-    LOG_INFO("Quader shutdown complete");
     app.reset();
 #if defined(QUADER_ENABLE_SENTRY) && QUADER_ENABLE_SENTRY
     quader::shutdown_sentry_client();

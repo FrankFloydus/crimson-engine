@@ -233,6 +233,8 @@ private:
   void apply_ui_scale_to_retained_surfaces(const QtUiScaleMetrics &metrics);
   void apply_viewport_settings_to_workspace();
   void synchronize_settings_surfaces(bool refresh_dialog);
+  void synchronize_tool_toolbar(const QuaderSelectionSummary &selection,
+                                bool force = false);
   void show_settings_dialog();
   void show_autosave_recovery();
   void show_material_browser();
@@ -406,6 +408,8 @@ private:
   struct ToolbarOwnerPresentationStamp final {
     bool owner_available = false;
     std::uint64_t scene_revision = 0u;
+    std::uint64_t asset_revision = 0u;
+    std::uint64_t scene_layer_revision = 0u;
     std::uint64_t scene_selection_revision = 0u;
     std::uint64_t modeling_content_revision = 0u;
     std::uint64_t modeling_selection_revision = 0u;
@@ -417,6 +421,7 @@ private:
     ViewportPaneId pane = ViewportPaneId::Perspective;
     std::uint64_t pane_control_revision = 0u;
     std::uint64_t active_tool_revision = 0u;
+    std::uint64_t availability_revision = 0u;
     std::uint64_t keybindings_revision = 0u;
     QuaderPrimitiveCreationShape preferred_primitive_shape =
         QuaderPrimitiveCreationShape::Box;

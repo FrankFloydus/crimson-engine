@@ -49,6 +49,7 @@ public:
   }
   [[nodiscard]] double near_plane() const noexcept { return near_plane_; }
   [[nodiscard]] double far_plane() const noexcept { return far_plane_; }
+  [[nodiscard]] ViewportSelectionDepthCamera selection_depth_camera() const noexcept;
   [[nodiscard]] const quader_editor_core::ViewportCameraState &
   runtime_camera() const noexcept {
     return runtime_camera_;
@@ -56,6 +57,8 @@ public:
 
 private:
   quader_editor_core::ViewportCameraState runtime_camera_;
+  quader_editor_core::PreparedViewportProjection prepared_projection_;
+  QVec3 depth_forward_;
   double near_plane_ = 0.01;
   double far_plane_ = 1000000.0;
 };

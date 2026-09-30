@@ -7,6 +7,7 @@
 #pragma once
 
 #include "render/instance_edit_style.hpp"
+#include "render/component_selection_renderer.hpp"
 #include "render/overlay/overlay_stencil_reset.hpp"
 #include "render/overlay/selected_mesh_outline_renderer.hpp"
 #include "render/texture_registry.hpp"
@@ -106,6 +107,9 @@ public:
                                    bool solid, bool mesh_grid_visible = true);
     void set_material_debug_mode(ViewportMaterialDebugMode mode);
     void render(filament::Renderer& renderer);
+    /// Supplies the derived selection capability without exposing Filament handles.
+    ComponentSelectionRenderer &component_selection() { return component_selection_renderer_; }
+    bool configure_component_selection(filament::Material &material, filament::Texture &fallback);
 
     RenderTextureHandle texture_handle() const {
       return render_target_.texture_handle();
@@ -144,6 +148,7 @@ public:
     SelectedMeshOutlineMaskCache *selected_mesh_outline_cache_ = nullptr;
     ViewportRenderPassCoordinator render_pass_coordinator_;
     ViewportRenderTarget render_target_;
+    ComponentSelectionRenderer component_selection_renderer_;
     ViewportRenderTarget overlay_render_target_;
     TextureSampleColorSpace scene_texture_sample_color_space_ =
         TextureSampleColorSpace::LinearSrgb;

@@ -30,6 +30,7 @@ struct OverlayFrameSignatures {
   std::array<std::size_t, kViewportOverlayLayerCount> line_counts{};
   std::array<std::size_t, kViewportOverlayLayerCount> point_counts{};
   std::array<std::size_t, kViewportOverlayLayerCount> icon_counts{};
+  std::uint64_t component_point_geometry_signature = 0u;
   bool has_source_wire_depth_stamp = false;
 };
 

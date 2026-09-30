@@ -43,6 +43,15 @@ Document document_from_hull_geometry( const Document& source_document, const Hul
 bool document_is_simple_convex_hull(const Document& document);
 bool build_convex_hull_vertex_merge_candidate( const Document& document, Document& candidate, const std::set<ElementId>& merge_vertex_ids, ElementId survivor_vertex_id, quader::QVec3 target_position);
 bool every_face_triangulates(const Document& document);
+/// Validates authored data globally and geometry only where the candidate changed it.
+OperationResult validate_authored_operation_candidate(
+    const Document& source, const Document& candidate,
+    bool preserve_unaffected_authored_geometry = true,
+    bool allow_nonmanifold_edges = false);
+/// A new face chord must meet its boundary only at its endpoints and lie inside.
+bool authored_face_chord_is_valid(
+    const Document& document, const Face& face,
+    ElementId first_vertex, ElementId second_vertex);
 ElementId mapped_vertex_for_merge(ElementId vertex_id, const std::set<ElementId>& merge_vertex_ids, ElementId active_vertex_id);
 float face_loop_area_score(const Document& document, std::span<const ElementId> vertex_ids);
 bool face_loop_is_valid_after_merge(const Document& document, std::span<const ElementId> vertex_ids);

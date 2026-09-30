@@ -15,6 +15,7 @@
 #include "render/overlay/instanced_wire_render_backend.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/scene_render_bridge.hpp"
+#include "render/scene_render_sync_service.hpp"
 #include "render/texture_binding_service.hpp"
 #include "support/texture_lifetime_harness.hpp"
 
@@ -26,6 +27,7 @@
 #include <QTemporaryDir>
 
 #include <filament/Camera.h>
+#include <filament/LightManager.h>
 #include <filament/Renderer.h>
 #include <filament/RenderableManager.h>
 #include <filament/SwapChain.h>
@@ -44,6 +46,7 @@
 #include <filesystem>
 #include <memory>
 #include <iostream>
+#include <unordered_set>
 #include <vector>
 
 namespace quader {
@@ -408,6 +411,309 @@ TEST(RenderTextureLifetimeTests, PreviewDuplicatePinsImageAfterPrototypeRelease)
   EXPECT_EQ(harness.stats().upload_count, harness.stats().destroy_count);
 }
 
+TEST(RenderTextureLifetimeTests,
+     RetirementDetachesComponentsBeforeBoundedMaterialDisposal) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  TexturedTriangle triangle;
+  constexpr std::size_t kMeshCount = 96u;
+  for (std::size_t index = 0u; index < kMeshCount; ++index) {
+    triangle.record.entity_id = index + 1u;
+    harness.cache().sync_mesh(triangle.record);
+  }
+  auto &renderables = harness.engine().getRenderableManager();
+  ASSERT_EQ(renderables.getComponentCount(), kMeshCount * 3u);
+  ASSERT_EQ(harness.stats().material_consumer_count, kMeshCount * 3u);
+
+  harness.cache().remove_except({1u});
+  constexpr std::size_t kRetiredCount = (kMeshCount - 1u) * 3u;
+  EXPECT_EQ(renderables.getComponentCount(), 3u);
+  EXPECT_TRUE(harness.cache().contains(1u));
+  EXPECT_FALSE(harness.cache().contains(2u));
+  EXPECT_EQ(harness.cache().retired_proxy_count(), kRetiredCount);
+  EXPECT_EQ(harness.cache().update_stats().retired_material_instance_count,
+            kRetiredCount);
+  EXPECT_EQ(harness.stats().material_consumer_count, kMeshCount * 3u)
+      << "detached materials must retain their texture pins until disposal";
+
+  // Reappearance creates current components without reviving a retired proxy.
+  triangle.record.entity_id = 2u;
+  harness.cache().sync_mesh(triangle.record);
+  EXPECT_EQ(renderables.getComponentCount(), 6u);
+  EXPECT_EQ(harness.cache().retired_proxy_count(), kRetiredCount);
+  harness.cache().drain_retired_destroy_queue(32u, std::chrono::hours(1));
+  EXPECT_EQ(harness.cache().retired_proxy_count(), kRetiredCount - 32u);
+  EXPECT_EQ(harness.cache().update_stats().retired_material_instance_count,
+            kRetiredCount - 32u);
+  EXPECT_EQ(harness.cache().update_stats().destroyed_retired_proxy_count, 32u);
+  EXPECT_EQ(harness.stats().material_consumer_count, kRetiredCount - 32u + 6u);
+  EXPECT_EQ(harness.stats().upload_count, 1u);
+
+  harness.cache().drain_retired_destroy_queue(0u);
+  harness.cache().drain_retired_destroy_queue(
+      kRetiredCount, std::chrono::nanoseconds::zero());
+  EXPECT_EQ(harness.cache().retired_proxy_count(), kRetiredCount - 32u);
+  EXPECT_EQ(harness.cache().update_stats().destroyed_retired_proxy_count, 32u);
+  harness.drain_retired();
+  EXPECT_EQ(renderables.getComponentCount(), 6u);
+  EXPECT_EQ(harness.stats().material_consumer_count, 6u);
+  EXPECT_EQ(harness.cache().update_stats().retired_material_instance_count, 0u);
+  EXPECT_EQ(harness.cache().update_stats().destroyed_retired_proxy_count,
+            kRetiredCount);
+  EXPECT_EQ(harness.cache().update_stats().retired_proxy_high_watermark,
+            kRetiredCount);
+
+  harness.cache().remove_except({});
+  EXPECT_EQ(renderables.getComponentCount(), 0u);
+  EXPECT_EQ(harness.stats().resource_count, 1u);
+  harness.drain_retired();
+  EXPECT_EQ(harness.stats().material_consumer_count, 0u);
+  EXPECT_EQ(harness.stats().resource_count, 0u);
+  EXPECT_EQ(harness.factory().geometry_cache_stats().resource_count, 1u)
+      << "material retirement preserves the immutable geometry cache";
+}
+
+TEST(RenderTextureLifetimeTests, UnchangedSceneSyncDrainsRetiredMaterialBacklog) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  const auto destroy_scene = [&harness](filament::Scene *scene) {
+    harness.engine().destroy(scene);
+  };
+  const std::unique_ptr<filament::Scene, decltype(destroy_scene)> scene(
+      harness.engine().createScene(), destroy_scene);
+  ASSERT_NE(scene, nullptr);
+  InstanceRenderableCache instances;
+  instances.initialize(harness.factory(), 64u);
+  SceneRenderSyncService sync;
+  sync.initialize(harness.engine(), *scene, harness.cache(), instances,
+                  harness.materials());
+  RenderSceneSnapshot snapshot;
+  snapshot.scene_binding.scene_session_id = 1u;
+  ASSERT_TRUE(sync.sync(snapshot));
+
+  TexturedTriangle triangle;
+  constexpr std::size_t kMeshCount = 96u;
+  for (std::size_t index = 0u; index < kMeshCount; ++index) {
+    triangle.record.entity_id = index + 1u;
+    harness.cache().sync_mesh(triangle.record);
+  }
+  harness.cache().remove_except({});
+  const auto initial_stats = harness.cache().update_stats();
+  ASSERT_EQ(initial_stats.retired_proxy_count, kMeshCount * 3u);
+  for (std::size_t frame = 0u;
+       frame < initial_stats.retired_proxy_count &&
+       harness.cache().retired_proxy_count() != 0u;
+       ++frame) {
+    const auto before = harness.cache().retired_proxy_count();
+    EXPECT_FALSE(sync.sync(snapshot));
+    const auto after = harness.cache().retired_proxy_count();
+    EXPECT_LT(after, before);
+    EXPECT_LE(before - after, 256u);
+  }
+  EXPECT_EQ(harness.cache().retired_proxy_count(), 0u);
+  EXPECT_EQ(harness.cache().update_stats().retired_material_instance_count, 0u);
+  EXPECT_EQ(harness.cache().update_stats().destroyed_retired_proxy_count,
+            initial_stats.retired_proxy_count);
+  EXPECT_EQ(harness.stats().material_consumer_count, 0u);
+  EXPECT_EQ(harness.stats().resource_count, 0u);
+  EXPECT_EQ(harness.cache().update_stats().full_proxy_rebuild_count,
+            initial_stats.full_proxy_rebuild_count);
+  EXPECT_FALSE(sync.sync(snapshot));
+  EXPECT_EQ(harness.cache().update_stats().destroyed_retired_proxy_count,
+            initial_stats.retired_proxy_count);
+}
+
+TEST(RenderTextureLifetimeTests,
+     RetainedMeshCoverageChangesResyncAndRestoreWithoutSourceChanges) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  const auto destroy_scene = [&harness](filament::Scene *scene) {
+    harness.engine().destroy(scene);
+  };
+  const std::unique_ptr<filament::Scene, decltype(destroy_scene)> scene(
+      harness.engine().createScene(), destroy_scene);
+  ASSERT_NE(scene, nullptr);
+  InstanceRenderableCache instances;
+  instances.initialize(harness.factory(), 64u);
+  SceneRenderSyncService sync;
+  sync.initialize(harness.engine(), *scene, harness.cache(), instances,
+                  harness.materials());
+  TexturedTriangle triangle;
+  RenderSceneSnapshot snapshot;
+  snapshot.scene_binding.scene_session_id = 1u;
+  snapshot.meshes = {triangle.record, triangle.record};
+  snapshot.meshes.back().entity_id = 2u;
+  snapshot.live_mesh_entities = {1u, 2u};
+  RenderSceneLightRecord light;
+  light.entity_id = 20u;
+  light.light.type = LightType::Point;
+  light.light.intensity = 2.0f;
+  light.light.range = 2.0f;
+  light.rebuild_revision = LightRenderableCache::light_signature(light.light);
+  snapshot.lights.push_back(light);
+  snapshot.live_light_entities.insert(light.entity_id);
+  ASSERT_TRUE(sync.sync(snapshot));
+  ASSERT_TRUE(harness.cache().contains(1u));
+  ASSERT_TRUE(harness.cache().contains(2u));
+  const RenderSourceStamp original_stamp = snapshot;
+
+  RenderToolPreviewSuppressionSnapshot exclusion;
+  exclusion.signature = 1u;
+  exclusion.entities = {1u};
+  ASSERT_TRUE(sync.set_retained_mesh_exclusion(exclusion));
+  ASSERT_TRUE(sync.sync(snapshot));
+  EXPECT_FALSE(harness.cache().contains(1u));
+  EXPECT_TRUE(harness.cache().contains(2u));
+  EXPECT_EQ(harness.engine().getRenderableManager().getComponentCount(), 3u);
+  harness.drain_retired();
+  const auto retained_stats = harness.cache().update_stats();
+  const auto geometry_uploads = harness.factory().geometry_cache_stats().upload_count;
+  const auto texture_uploads = harness.stats().upload_count;
+  for (std::size_t frame = 0u; frame < 3u; ++frame) {
+    EXPECT_FALSE(sync.set_retained_mesh_exclusion(exclusion));
+    EXPECT_FALSE(sync.sync(snapshot));
+  }
+  EXPECT_EQ(harness.cache().update_stats().full_proxy_rebuild_count,
+            retained_stats.full_proxy_rebuild_count);
+  EXPECT_EQ(harness.cache().update_stats().destroyed_retired_proxy_count,
+            retained_stats.destroyed_retired_proxy_count);
+  EXPECT_EQ(harness.factory().geometry_cache_stats().upload_count, geometry_uploads);
+  EXPECT_EQ(harness.stats().upload_count, texture_uploads);
+
+  // Exact coverage must win even when its signature and source stamps match.
+  exclusion.entities = {2u};
+  ASSERT_TRUE(sync.set_retained_mesh_exclusion(exclusion));
+  ASSERT_TRUE(sync.sync(snapshot));
+  EXPECT_TRUE(harness.cache().contains(1u));
+  EXPECT_FALSE(harness.cache().contains(2u));
+  EXPECT_EQ(static_cast<const RenderSourceStamp &>(snapshot), original_stamp);
+
+  auto &lights = harness.engine().getLightManager();
+  ASSERT_EQ(lights.getComponentCount(), 1u);
+  const auto light_entity = lights.getEntities()[0u];
+  const float original_intensity = lights.getIntensity(lights.getInstance(light_entity));
+  snapshot.lights.front().light.intensity *= 2.0f;
+  snapshot.lights.front().rebuild_revision =
+      LightRenderableCache::light_signature(snapshot.lights.front().light);
+  ++snapshot.light_property_revision;
+  ++snapshot.scene_revision;
+  ASSERT_TRUE(sync.sync(snapshot));
+  ASSERT_TRUE(lights.hasComponent(light_entity));
+  EXPECT_FLOAT_EQ(lights.getIntensity(lights.getInstance(light_entity)),
+                  original_intensity * 2.0f);
+  EXPECT_TRUE(harness.cache().contains(1u));
+  EXPECT_FALSE(harness.cache().contains(2u));
+
+  const RenderSourceStamp restore_stamp = snapshot;
+  ASSERT_TRUE(sync.set_retained_mesh_exclusion({}));
+  ASSERT_TRUE(sync.sync(snapshot));
+  EXPECT_TRUE(harness.cache().contains(1u));
+  EXPECT_TRUE(harness.cache().contains(2u));
+  EXPECT_EQ(harness.engine().getRenderableManager().getComponentCount(), 6u);
+  EXPECT_EQ(static_cast<const RenderSourceStamp &>(snapshot), restore_stamp);
+  EXPECT_FALSE(sync.set_retained_mesh_exclusion({}));
+  EXPECT_FALSE(sync.sync(snapshot));
+}
+
+TEST(RenderTextureLifetimeTests,
+     InstancePreviewSuppressionCannotRestoreExternallyCoveredOccurrences) {
+  TextureLifetimeHarness harness;
+  ASSERT_TRUE(harness.initialize());
+  const auto destroy_scene = [&harness](filament::Scene *scene) {
+    harness.engine().destroy(scene);
+  };
+  const std::unique_ptr<filament::Scene, decltype(destroy_scene)> scene(
+      harness.engine().createScene(), destroy_scene);
+  ASSERT_NE(scene, nullptr);
+  InstanceRenderableCache instances;
+  instances.initialize(harness.factory(), 64u);
+  SceneRenderSyncService sync;
+  sync.initialize(harness.engine(), *scene, harness.cache(), instances,
+                  harness.materials());
+  TexturedTriangle triangle;
+  RenderSceneSnapshot snapshot;
+  snapshot.scene_binding.scene_session_id = 1u;
+  for (EntityId member = 11u; member <= 12u; ++member) {
+    RenderSceneInstancePrimitiveRecord primitive;
+    primitive.definition_entity = 10u;
+    primitive.member_entity = member;
+    primitive.key.geometry_payload = member;
+    primitive.key.index_count = 3u;
+    primitive.mesh = triangle.record.mesh;
+    primitive.primitive.index_count = 3u;
+    primitive.material = triangle.record.material;
+    primitive.local_bounds = MeshRenderableFactory::compute_local_bounds(primitive.mesh);
+    for (EntityId entity = 101u; entity <= 104u; ++entity) {
+      primitive.occurrences.push_back({.entity_id = entity,
+                                       .occurrence = member * 100u + entity});
+    }
+    snapshot.instance_primitives.push_back(std::move(primitive));
+  }
+  ASSERT_TRUE(sync.sync(snapshot));
+  ASSERT_EQ(instances.stats().participant_count, 8u);
+  const RenderSourceStamp original_stamp = snapshot;
+  RenderToolPreviewSuppressionSnapshot exclusion;
+  exclusion.signature = 1u;
+  exclusion.entities = {104u};
+  exclusion.occurrences = {{.source_entity = 11u, .occurrence = 101u},
+                           {.source_entity = 10u, .occurrence = 103u},
+                           {.source_entity = 999u, .occurrence = 102u}};
+  ASSERT_TRUE(sync.set_retained_mesh_exclusion(exclusion));
+  ASSERT_TRUE(sync.sync(snapshot));
+  ASSERT_EQ(instances.stats().participant_count, 3u);
+  const auto ordinary = sync.ordinary_instance_primitives(snapshot);
+  ASSERT_EQ(ordinary.size(), 2u);
+  ASSERT_EQ(ordinary[0u].occurrences.size(), 1u);
+  EXPECT_EQ(ordinary[0u].member_entity, 11u);
+  EXPECT_EQ(ordinary[0u].occurrences[0u].entity_id, 102u);
+  ASSERT_EQ(ordinary[1u].occurrences.size(), 2u);
+  EXPECT_EQ(ordinary[1u].member_entity, 12u);
+  EXPECT_EQ(ordinary[1u].occurrences[0u].entity_id, 101u);
+  EXPECT_EQ(ordinary[1u].occurrences[1u].entity_id, 102u);
+  EXPECT_EQ(snapshot.instance_primitives[0u].occurrences.size(), 4u);
+  EXPECT_EQ(snapshot.instance_primitives[1u].occurrences.size(), 4u);
+  const auto retained_stats = instances.stats();
+  EXPECT_FALSE(sync.set_retained_mesh_exclusion(exclusion));
+  EXPECT_FALSE(sync.sync(snapshot));
+  EXPECT_EQ(instances.stats().rebuild_count, retained_stats.rebuild_count);
+  EXPECT_EQ(instances.stats().transform_update_count,
+            retained_stats.transform_update_count);
+  EXPECT_EQ(instances.stats().proxy_creation_count,
+            retained_stats.proxy_creation_count);
+
+  instances.set_preview_suppressed_entities(
+      {102u}, {}, sync.ordinary_instance_primitives(snapshot));
+  ASSERT_TRUE(instances.last_sync_succeeded());
+  EXPECT_EQ(instances.stats().participant_count, 1u);
+  instances.set_preview_suppressed_entities(
+      {102u}, {{.source_entity = 10u, .occurrence = 101u}},
+      sync.ordinary_instance_primitives(snapshot));
+  ASSERT_TRUE(instances.last_sync_succeeded());
+  EXPECT_EQ(instances.stats().participant_count, 0u);
+  instances.set_preview_suppressed_entities(
+      {}, {}, sync.ordinary_instance_primitives(snapshot));
+  ASSERT_TRUE(instances.last_sync_succeeded());
+  EXPECT_EQ(instances.stats().participant_count, 3u);
+  EXPECT_FALSE(sync.sync(snapshot));
+  EXPECT_EQ(instances.stats().participant_count, 3u);
+
+  // Excluding the last occurrence of a member drops that primitive entirely.
+  exclusion.occurrences.push_back({.source_entity = 11u, .occurrence = 102u});
+  ASSERT_TRUE(sync.set_retained_mesh_exclusion(exclusion));
+  ASSERT_TRUE(sync.sync(snapshot));
+  ASSERT_EQ(sync.ordinary_instance_primitives(snapshot).size(), 1u);
+  EXPECT_EQ(sync.ordinary_instance_primitives(snapshot).front().member_entity, 12u);
+  EXPECT_EQ(instances.stats().participant_count, 2u);
+  ASSERT_TRUE(sync.set_retained_mesh_exclusion({}));
+  ASSERT_TRUE(sync.sync(snapshot));
+  EXPECT_EQ(instances.stats().participant_count, 8u);
+  ASSERT_EQ(sync.ordinary_instance_primitives(snapshot).size(), 2u);
+  EXPECT_EQ(sync.ordinary_instance_primitives(snapshot)[0u].occurrences.size(), 4u);
+  EXPECT_EQ(sync.ordinary_instance_primitives(snapshot)[1u].occurrences.size(), 4u);
+  EXPECT_EQ(static_cast<const RenderSourceStamp &>(snapshot), original_stamp);
+  EXPECT_FALSE(sync.sync(snapshot));
+}
+
 TEST(RenderTextureLifetimeTests, VulkanMaterialEditAndRetirementStress) {
   if (qEnvironmentVariable("QUADER_RUN_VULKAN_TEXTURE_TESTS") !=
       QStringLiteral("1")) {
@@ -607,6 +913,23 @@ TEST(RenderTextureLifetimeTests, VulkanLargeSceneShutdownRetiresMeshResources) {
   ASSERT_TRUE(harness.frame());
   ASSERT_EQ(harness.engine().getRenderableManager().getComponentCount(), kMeshCount * 3u);
   ASSERT_EQ(harness.factory().geometry_cache_stats().resource_count, kMeshCount);
+
+  std::unordered_set<EntityId> retained_entities;
+  for (std::size_t index = 0u; index < kMeshCount / 2u; ++index) {
+    retained_entities.insert(index + 1u);
+  }
+  harness.cache().remove_except(retained_entities);
+  EXPECT_EQ(harness.engine().getRenderableManager().getComponentCount(),
+            kMeshCount / 2u * 3u);
+  ASSERT_EQ(harness.cache().retired_proxy_count(), kMeshCount / 2u * 3u);
+  EXPECT_EQ(harness.stats().material_consumer_count, kMeshCount * 3u);
+  harness.cache().drain_retired_destroy_queue(128u, std::chrono::milliseconds(2));
+  const auto retired_stats = harness.cache().update_stats();
+  EXPECT_GT(retired_stats.destroyed_retired_proxy_count, 0u);
+  EXPECT_LE(retired_stats.destroyed_retired_proxy_count, 128u);
+  EXPECT_EQ(retired_stats.retired_material_instance_count,
+            retired_stats.retired_proxy_count);
+  ASSERT_TRUE(harness.frame());
 
   const auto retirement_start = std::chrono::steady_clock::now();
   harness.cache().shutdown();
