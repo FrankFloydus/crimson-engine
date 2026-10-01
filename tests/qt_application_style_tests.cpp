@@ -9,6 +9,7 @@
 #include "ui/qt_application_style.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
+#include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAction>
@@ -20,6 +21,7 @@
 #include <QIcon>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLayout>
 #include <QMenu>
 #include <QMainWindow>
 #include <QPainter>
@@ -34,6 +36,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -54,6 +57,16 @@ protected:
   char application_name_[24] = "quader_style_test";
   std::array<char *, 2> argv_{application_name_, nullptr};
   std::unique_ptr<QApplication> application_;
+};
+
+class InspectableMenu final : public QMenu {
+public:
+  [[nodiscard]] QStyleOptionMenuItem action_option(QAction *action) const {
+    QStyleOptionMenuItem option;
+    initStyleOption(&option, action);
+    option.rect = actionGeometry(action);
+    return option;
+  }
 };
 
 QImage render_primitive(const QStyle &style, QStyle::PrimitiveElement element,
@@ -386,6 +399,168 @@ TEST_F(QtApplicationStyleTests,
                        QStyle::State_KeyboardFocusChange));
       EXPECT_NE(render(idle), render(idle | QStyle::State_On));
       EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
+    }
+  }
+}
+
+TEST_F(QtApplicationStyleTests,
+       NativeToolbarDividersKeepVisibleSpacingAndOnePhysicalPixelWidth) {
+  QMainWindow host;
+  host.setAttribute(Qt::WA_DontShowOnScreen, true);
+  QToolBar toolbar(&host);
+  toolbar.setMovable(false);
+  QAction *before = toolbar.addAction(QStringLiteral("Before"));
+  QAction *divider = toolbar.addSeparator();
+  QAction *after = toolbar.addAction(QStringLiteral("After"));
+  QStyle &presentation =
+      quader::install_native_toolbar_button_presentation(toolbar);
+  for (QAction *action : {before, after}) {
+    quader::configure_native_toolbar_button_face(toolbar, *action, presentation);
+  }
+  QAction *late_divider = toolbar.addSeparator();
+  QAction *last = toolbar.addAction(QStringLiteral("Later"));
+  quader::configure_native_toolbar_button_face(toolbar, *last, presentation);
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+  const auto review = [&](const quader::QtUiScaleMetrics &metrics,
+                          Qt::Orientation orientation,
+                          Qt::LayoutDirection direction,
+                          const QString &palette_name, int scale_pass) {
+    SCOPED_TRACE(::testing::Message()
+                 << metrics.factor() << ' ' << orientation << ' ' << direction
+                 << ' ' << palette_name.toStdString());
+    host.removeToolBar(&toolbar);
+    host.addToolBar(orientation == Qt::Horizontal ? Qt::TopToolBarArea
+                                                : Qt::LeftToolBarArea,
+                    &toolbar);
+    toolbar.setLayoutDirection(direction);
+    quader::apply_native_toolbar_presentation_ui_scale(toolbar, metrics);
+    for (QAction *action : {before, after, last}) {
+      quader::apply_native_toolbar_button_face_ui_scale(toolbar, *action, metrics);
+    }
+    host.resize(metrics.size(orientation == Qt::Horizontal ? QSize(280, 100)
+                                                           : QSize(100, 280)));
+    host.show();
+    toolbar.show();
+    for (int pass = 0; pass != 3; ++pass) {
+      QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      QApplication::processEvents();
+      toolbar.layout()->activate();
+      host.layout()->activate();
+    }
+    QWidget *separator_widget = toolbar.widgetForAction(divider);
+    QWidget *late_separator_widget = toolbar.widgetForAction(late_divider);
+    ASSERT_NE(separator_widget, nullptr);
+    ASSERT_NE(late_separator_widget, nullptr);
+    EXPECT_EQ(separator_widget->style(), &presentation);
+    EXPECT_EQ(late_separator_widget->style(), &presentation);
+    ASSERT_TRUE(separator_widget->isVisible());
+    EXPECT_FALSE(separator_widget->geometry().intersects(toolbar.actionGeometry(before)));
+    EXPECT_FALSE(separator_widget->geometry().intersects(toolbar.actionGeometry(after)));
+    const QImage image = separator_widget->grab().toImage();
+    ASSERT_FALSE(image.isNull());
+    QStyleOption option;
+    option.initFrom(separator_widget);
+    option.rect = separator_widget->rect();
+    option.state.setFlag(QStyle::State_Horizontal, orientation == Qt::Horizontal);
+    EXPECT_EQ(quader::qt_application_style_active(&option),
+              palette_name == QStringLiteral("themed"));
+    if (quader::qt_application_style_active(&option)) {
+      const int extent = orientation == Qt::Horizontal ? separator_widget->width()
+                                                      : separator_widget->height();
+      EXPECT_EQ(extent, metrics.px(12));
+      EXPECT_EQ(orientation == Qt::Horizontal ? late_separator_widget->width()
+                                             : late_separator_widget->height(),
+                metrics.px(12));
+      const QPalette::ColorGroup group =
+          quader::qt_toolbar_button_color_group(option.state);
+      const QColor line_color = option.palette.color(group, QPalette::Midlight);
+      EXPECT_GE(contrast_ratio(line_color,
+                               option.palette.color(group, QPalette::Window)), 1.5);
+      QRect line_bounds;
+      for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+          if (image.pixelColor(x, y) == line_color) {
+            line_bounds |= QRect(x, y, 1, 1);
+          }
+        }
+      }
+      ASSERT_FALSE(line_bounds.isEmpty());
+      EXPECT_TRUE(contains_color(late_separator_widget->grab().toImage(),
+                                 line_color));
+      EXPECT_EQ(orientation == Qt::Horizontal ? line_bounds.width()
+                                             : line_bounds.height(), 1);
+      const int line_length = orientation == Qt::Horizontal ? line_bounds.height()
+                                                           : line_bounds.width();
+      EXPECT_GE(line_length, qRound(metrics.px(24.0) * image.devicePixelRatioF()));
+      EXPECT_TRUE(image.rect().adjusted(1, 1, -1, -1).contains(line_bounds));
+      toolbar.setEnabled(false);
+      QApplication::processEvents();
+      EXPECT_TRUE(contains_color(separator_widget->grab().toImage(),
+          option.palette.color(QPalette::Disabled, QPalette::Midlight)));
+      toolbar.setEnabled(true);
+    } else {
+      std::unique_ptr<QStyle> fusion(QStyleFactory::create(QStringLiteral("fusion")));
+      ASSERT_NE(fusion, nullptr);
+      EXPECT_EQ(render_primitive(presentation, QStyle::PE_IndicatorToolBarSeparator,
+                                 option),
+                render_primitive(*fusion, QStyle::PE_IndicatorToolBarSeparator,
+                                 option));
+    }
+    if (!review_directory.isEmpty()) {
+      EXPECT_TRUE(toolbar.grab().save(QDir(review_directory).filePath(
+          QStringLiteral("toolbar-dividers-%1-%2-%3-%4-%5.png")
+              .arg(palette_name)
+              .arg(orientation == Qt::Horizontal ? QStringLiteral("horizontal")
+                                                 : QStringLiteral("vertical"))
+              .arg(direction == Qt::LeftToRight ? QStringLiteral("ltr")
+                                                : QStringLiteral("rtl"))
+              .arg(qRound(metrics.factor() * 100.0F)).arg(scale_pass))));
+    }
+  };
+  int scale_pass = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    const quader::QtUiScaleMetrics metrics(factor,
+        static_cast<std::uint64_t>(scale_pass));
+    for (const auto orientation : {Qt::Horizontal, Qt::Vertical}) {
+      for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+        ASSERT_NO_FATAL_FAILURE(review(metrics, orientation, direction,
+                                       QStringLiteral("themed"), scale_pass));
+      }
+    }
+    ++scale_pass;
+  }
+  QApplication::setPalette(QPalette{});
+  scale_pass = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    const quader::QtUiScaleMetrics metrics(factor,
+        static_cast<std::uint64_t>(scale_pass));
+    for (const auto orientation : {Qt::Horizontal, Qt::Vertical}) {
+      for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+        ASSERT_NO_FATAL_FAILURE(review(metrics, orientation, direction,
+                                       QStringLiteral("high-contrast"), scale_pass));
+      }
+    }
+    ++scale_pass;
+  }
+  QApplication::setPalette(quader::qt_obsidian_application_palette(
+      QApplication::style()->standardPalette()));
+  std::unique_ptr<QStyle> fusion(QStyleFactory::create(QStringLiteral("fusion")));
+  ASSERT_NE(fusion, nullptr);
+  QPalette light_palette = fusion->standardPalette();
+  light_palette.setColor(QPalette::Window, Qt::white);
+  light_palette.setColor(QPalette::WindowText, Qt::black);
+  light_palette.setColor(QPalette::Base, Qt::white);
+  light_palette.setColor(QPalette::Text, Qt::black);
+  light_palette.setColor(QPalette::Button, Qt::white);
+  light_palette.setColor(QPalette::ButtonText, Qt::black);
+  toolbar.setPalette(light_palette);
+  for (const auto orientation : {Qt::Horizontal, Qt::Vertical}) {
+    for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+      ASSERT_NO_FATAL_FAILURE(review(quader::QtUiScaleMetrics{}, orientation,
+                                     direction, QStringLiteral("light"), 0));
     }
   }
 }
@@ -764,6 +939,76 @@ TEST_F(QtApplicationStyleTests,
       send_menu_key(menu, Qt::Key_Return);
       EXPECT_TRUE(triggered);
       EXPECT_FALSE(menu.isVisible());
+    }
+  }
+}
+
+TEST_F(QtApplicationStyleTests,
+       LongMenuLabelsKeepTheirCompleteNativeRasterBesideShortcutColumns) {
+  quader::apply_qt_obsidian_application_theme(
+      QApplication::style()->standardPalette());
+  quader::QtUiScaleApplicationController controller(*application_);
+  InspectableMenu menu;
+  menu.setAttribute(Qt::WA_DontShowOnScreen, true);
+  menu.addAction(QStringLiteral("Undo\tCtrl+Z"));
+  menu.addAction(QStringLiteral("Redo\tCtrl+Shift+Z"));
+  menu.addMenu(QStringLiteral("Undo History"))->addAction(QStringLiteral("Create Box"));
+  menu.addSeparator();
+  QAction *long_label = menu.addAction(QStringLiteral("Find and Replace Materials"));
+  long_label->setEnabled(false);
+  menu.addAction(QStringLiteral("Preferences"));
+  struct ScaleCase final {
+    float factor;
+    const char *suffix;
+  };
+  constexpr std::array<ScaleCase, 3> kScales{{
+      {1.0F, "100"}, {2.0F, "200"}, {1.0F, "scale-down"},
+  }};
+  for (const ScaleCase &scale : kScales) {
+    (void)controller.apply_factor(scale.factor);
+    for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+      SCOPED_TRACE(::testing::Message() << "scale=" << scale.suffix
+                                       << " direction=" << direction);
+      menu.setLayoutDirection(direction);
+      menu.popup(QPoint(20, 20));
+      QCoreApplication::processEvents();
+      ASSERT_TRUE(menu.isVisible());
+      QStyleOptionMenuItem option = menu.action_option(long_label);
+      option.rect = QRect(QPoint{}, option.rect.size());
+      ASSERT_GT(option.reservedShortcutWidth, 0);
+      const QImage actual = render_menu_item(*menu.style(), option, menu);
+      QStyleOptionMenuItem blank_option(option);
+      blank_option.text.clear();
+      const QImage blank = render_menu_item(*menu.style(), blank_option, menu);
+      const QRect actual_ink = changed_pixels(blank, actual);
+      ASSERT_FALSE(actual_ink.isEmpty());
+
+      // Extra space guarantees an unelided native reference without duplicating
+      // Fusion's private text rectangle, check gutter or shortcut geometry.
+      option.rect.setWidth(option.rect.width() +
+                           option.fontMetrics.horizontalAdvance(option.text));
+      const QImage roomy = render_menu_item(*menu.style(), option, menu);
+      blank_option = option;
+      blank_option.text.clear();
+      const QImage roomy_blank = render_menu_item(*menu.style(), blank_option, menu);
+      const QRect full_ink = changed_pixels(roomy_blank, roomy);
+      ASSERT_FALSE(full_ink.isEmpty());
+      EXPECT_EQ(actual.copy(actual_ink), roomy.copy(full_ink));
+
+      const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+      if (!directory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(directory));
+        QImage image(menu.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        menu.render(&image);
+        const QString filename = QStringLiteral("menu-long-label-%1-%2.png")
+            .arg(direction == Qt::LeftToRight ? QStringLiteral("ltr")
+                                            : QStringLiteral("rtl"))
+            .arg(QString::fromLatin1(scale.suffix));
+        EXPECT_TRUE(image.save(QDir(directory).filePath(filename)));
+      }
+      menu.close();
+      QCoreApplication::processEvents();
     }
   }
 }

@@ -150,7 +150,7 @@ constexpr std::array<ToolDescriptor, 18> kViewportToolDescriptors{{
         .tool = ViewportToolId::UvPeel,
         .modeling_tool = ModelingViewportTool::Select,
         .id = "uv_peel",
-        .label = "Guided UV Peel",
+        .label = "UV Peel",
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Modeling,
         .allows_selection_fallback = true,

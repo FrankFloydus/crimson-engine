@@ -23914,7 +23914,7 @@
         }
       },
       "before": "7f79ce502586191454f24f844b37f1d8",
-      "after": "9b4722f8679d179ac1e4babf8c1cca2a",
+      "after": "cd1a0454a75d10734690e6304c356fd8",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "ef48cd96d2c90190cd956126b2df441e",
@@ -23935,7 +23935,7 @@
         "selection": "52bc3f7c6305d3b9fd04d4001802f9d8",
         "overlay": "ab9e78d655b34e30b449cd7e9532727f",
         "assets": "17809c4e62207959d8696f19d43cad46",
-        "history": "cc053e8195d4cfdf8ecf23aa415b978c",
+        "history": "b335aa26901cc9cf44bd1931afe16615",
         "tools": "4f6814a82d727def9299cc506ab85861",
         "viewports": "24b6b38757ce513015ba256f71292d95",
         "preferences": "75692e13ba180ffe5d898807e971e0d9",
@@ -25683,5 +25683,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Replace the Z Shading popup with a focused-pane Wireframe/Shaded toggle and allow Insert Edge Loop cancellation from viewport and editor focus"
+  "approved_change_reason": "Top bar reorganization uses authored undo operation labels, including Slice Quad, instead of Apply Tool Preview or internal IDs."
 }

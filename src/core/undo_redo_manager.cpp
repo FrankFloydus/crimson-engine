@@ -136,6 +136,30 @@ const std::string *UndoRedoManager::redo_label() const {
   return &redo_stack_.back().command->label();
 }
 
+std::vector<UndoRedoHistoryEntry>
+UndoRedoManager::history_entries(std::size_t limit) const {
+  const std::size_t total = undo_stack_.size() + redo_stack_.size();
+  const std::size_t count = std::min(limit, total);
+  const bool include_original = can_restore_original_state() && count < limit;
+  std::vector<UndoRedoHistoryEntry> entries;
+  entries.reserve(count + (include_original ? 1u : 0u));
+  for (std::size_t index = 0; index < count; ++index) {
+    const std::size_t applied_count = total - index;
+    const StackEntry &entry = applied_count > undo_stack_.size()
+                                  ? redo_stack_[index]
+                                  : undo_stack_[applied_count - 1];
+    entries.push_back({.applied_count = applied_count,
+                       .label = entry.command->label(),
+                       .current = applied_count == undo_stack_.size()});
+  }
+  if (include_original) {
+    entries.push_back({.applied_count = 0,
+                       .label = "Original",
+                       .current = undo_stack_.empty()});
+  }
+  return entries;
+}
+
 bool UndoRedoManager::latest_merge_key_matches(std::string_view key) const {
   return !key.empty() && redo_stack_.empty() && !undo_stack_.empty() &&
          undo_stack_.back().merge_key == key;
@@ -160,6 +184,9 @@ void UndoRedoManager::trim_to_limit() {
   // Never evict a command between the current state and a retained transition.
   const std::size_t excess = count - max_steps_;
   const std::size_t undo_removed = std::min(excess, undo_stack_.size());
+  if (undo_removed != 0) {
+    original_state_retained_ = false;
+  }
   undo_stack_.erase(undo_stack_.begin(),
                     undo_stack_.begin() +
                         static_cast<std::ptrdiff_t>(undo_removed));
@@ -169,10 +196,11 @@ void UndoRedoManager::trim_to_limit() {
                         static_cast<std::ptrdiff_t>(redo_removed));
 }
 
-void UndoRedoManager::clear() {
+void UndoRedoManager::clear(UndoRedoHistoryBaseline baseline) {
   ++revision_;
   undo_stack_.clear();
   redo_stack_.clear();
+  original_state_retained_ = baseline == UndoRedoHistoryBaseline::Original;
 }
 
 } // namespace quader

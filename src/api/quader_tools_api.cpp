@@ -672,7 +672,7 @@ QuaderToolSettingsTarget uv_peel_tool_settings_target(
       .active = true,
       .preview_active = uv_peel.preview_valid(),
       .tool_id = "uv_peel",
-      .title = "Guided UV Peel",
+      .title = "UV Peel",
       .description =
           "Select edge chains to guide U or V texture flow across adjacent "
           "faces, adjust the preview, then Apply or Cancel. Connected patches "

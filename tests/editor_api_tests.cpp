@@ -3720,7 +3720,7 @@ TEST(EditorApiTests, UvPeelCommandActivatesBeforeSelectionAndPreservesOverrides)
   EXPECT_TRUE(typed_command_ids().contains(std::string(kCommand.string())));
   const auto descriptor = editor.commands().descriptor(kCommand);
   ASSERT_TRUE(descriptor.has_value());
-  EXPECT_EQ(descriptor->label, "Guided UV Peel");
+  EXPECT_EQ(descriptor->label, "UV Peel");
   EXPECT_TRUE(descriptor->enabled);
 
   const auto catalog = editor.commands().keybinding_catalog();
@@ -13372,7 +13372,7 @@ TEST(EditorApiTests, ActivePreviewCommandsApplyAndCancelSliceQuadWithoutUi) {
         ASSERT_TRUE(apply.ok()) << apply.error_message();
         EXPECT_TRUE(apply.changed());
         EXPECT_EQ(harness.editor.query().history().undo_label,
-                  "Apply Tool Preview");
+                  "Slice Quad");
         const std::optional<quader::QuaderMeshSnapshot> committed = harness.editor.query().mesh(box.mesh);
         ASSERT_TRUE(committed.has_value());
         EXPECT_EQ(committed->vertex_count,
@@ -13473,6 +13473,7 @@ TEST(EditorApiTests, HistoryUndoAcceptsBevelPreviewThenUndoesItWithRedoAvailable
     EXPECT_EQ(restored->vertex_count, before->vertex_count);
     EXPECT_EQ(restored->primitive_count, before->primitive_count);
     ASSERT_TRUE(editor.history().can_redo());
+    EXPECT_EQ(editor.query().history().redo_label, "Bevel Edges");
     ASSERT_TRUE(editor.history().redo().ok());
     const auto redone = editor.query().mesh(box.mesh);
     ASSERT_TRUE(redone.has_value());
@@ -13503,6 +13504,7 @@ TEST(EditorApiTests, ProjectSaveAcceptsPendingModelingAndNativePreviews) {
     EXPECT_TRUE(std::filesystem::exists(path));
     EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
     EXPECT_FALSE(editor.project().dirty());
+    EXPECT_EQ(editor.query().history().undo_label, "Bevel Edges");
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_TRUE(editor.project().dirty());
     const auto undone = editor.query().mesh(box.mesh);
@@ -13759,6 +13761,55 @@ TEST(EditorApiTests,
   EXPECT_FALSE(entity_named(editor, kName).has_value());
 }
 
+TEST(EditorApiTests, OperationPreviewHistoryUsesAuthoredLabelsAndRetainsCallerLabels) {
+  constexpr std::array<std::pair<std::string_view, std::string_view>, 2>
+      kOperations{{{"slice_quad", "Slice Quad"},
+                   {"thicken_faces", "Thicken Faces"}}};
+  for (const auto &[action_id, operation_label] : kOperations) {
+    for (const bool custom_label : {false, true}) {
+      SCOPED_TRACE(action_id);
+      SCOPED_TRACE(custom_label);
+      CommandTestHarness harness;
+      auto &editor = harness.editor;
+      const auto object =
+          create_polygon_mesh(editor, 4U, "Preview History Label Quad");
+      ASSERT_TRUE(editor.selection().select_object(object).ok());
+      ASSERT_TRUE(
+          editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+      ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+      const auto before = editor.query().mesh(object.mesh);
+      ASSERT_TRUE(before.has_value());
+
+      const auto preview = editor.modeling().begin_preview(action_id);
+      ASSERT_TRUE(preview.ok()) << preview.error_message();
+      const auto applied = custom_label
+                               ? editor.modeling().commit_preview("Named Edit")
+                               : editor.modeling().commit_preview();
+      ASSERT_TRUE(applied.ok()) << applied.error_message();
+      ASSERT_TRUE(applied.changed());
+      const std::string_view expected_label =
+          custom_label ? "Named Edit" : operation_label;
+      EXPECT_EQ(editor.query().history().undo_label, expected_label);
+      const auto committed = editor.query().mesh(object.mesh);
+      ASSERT_TRUE(committed.has_value());
+
+      ASSERT_TRUE(editor.history().undo().ok());
+      EXPECT_EQ(editor.query().history().redo_label, expected_label);
+      const auto restored = editor.query().mesh(object.mesh);
+      ASSERT_TRUE(restored.has_value());
+      EXPECT_EQ(restored->vertex_count, before->vertex_count);
+      EXPECT_EQ(restored->primitive_count, before->primitive_count);
+
+      ASSERT_TRUE(editor.history().redo().ok());
+      EXPECT_EQ(editor.query().history().undo_label, expected_label);
+      const auto redone = editor.query().mesh(object.mesh);
+      ASSERT_TRUE(redone.has_value());
+      EXPECT_EQ(redone->vertex_count, committed->vertex_count);
+      EXPECT_EQ(redone->primitive_count, committed->primitive_count);
+    }
+  }
+}
+
 TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAndSelection) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
@@ -13786,7 +13837,7 @@ TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAn
     const quader::QuaderApiVoidResult apply = editor.commands().execute(
         quader::quader_command::kModelingApplyActivePreview);
     ASSERT_TRUE(apply.ok()) << apply.error_message();
-    EXPECT_EQ(editor.query().history().undo_label, "Apply Tool Preview");
+    EXPECT_EQ(editor.query().history().undo_label, "Slice Quad");
     const quader::QuaderSelectionSummary committed_selection =
         editor.selection().summary();
     EXPECT_GT(committed_selection.selected_face_count, 1u);

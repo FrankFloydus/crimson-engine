@@ -158,9 +158,10 @@ Recovery owner/tests: [autosave service](src/editor/session/project_autosave_ser
   cancellation or a changed runtime binding prevents dispatch. Recovery actions do not belong in
   Settings. Normal startup does not auto-restore, matching Blender's normal launch workflow.
   Blender's Windows crash-dialog Restart is a separate path that can reopen its latest autosave.
-  File > Open Recent retains five saved scenes in per-user `recent-scenes.json`. Successful
-  opens/saves and committed edits promote them; autosaves and unsaved tabs do not. Cross-project
-  opens stage the requested scene before Save/Discard/Cancel and workspace replacement.
+  File > Open Recent retains five saved scenes per physical project in per-user `recent-scenes.json`
+  and lists only the opened project's scenes. Successful opens/saves and committed edits promote
+  them; autosaves and unsaved tabs do not. Foreign-project and stale rows are rejected before
+  dirty prompts or preview settlement. See [recent scene workflows](tests/project_recent_scenes_tests.cpp).
   Portable paths and JSON names use explicit UTF-8; Windows native paths remain wide. Do not use
   `path.string()` to serialize names or paths: the Windows code page can corrupt accented/CJK names.
   Atomic-write diagnostics also use UTF-8; an ACP conversion failure while preparing backup
@@ -1000,7 +1001,7 @@ Tests: [normal behavior](tests/modeling_domain/operation/qdr_document_operation_
   restores Curve subselection exactly. Layout-only edits do not rescan source hierarchy/texture plans.
 - Solidified Curves participate in the shared material-surface policy. Material-only changes rebind
   without retessellation; eligibility changes advance material-binding revision, point edits do not.
-- Guided UV Peel is a native toolbar tool: activate into Edge mode, select guides, preview,
+- UV Peel is a native toolbar tool: activate into Edge mode, select guides, preview,
   then Apply or Cancel through the shared lifecycle. Selection edits rebuild the UV preview
   from committed coordinates; invalid or empty guides restore them without ending the tool.
   Apply records one UV history entry and captured repeat options; Cancel keeps selected guides

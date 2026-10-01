@@ -131,6 +131,59 @@ TEST_F(RecentSceneStoreTests, KeepsFiveMostRecentScenesAndPromotesReopenedScene)
   EXPECT_EQ(promoted.value()[4].scene_id, ids[2]);
 }
 
+TEST_F(RecentSceneStoreTests, KeepsFivePerProjectBeforeFilteringAndPreservesOtherProjects) {
+  ASSERT_TRUE(std::filesystem::create_directory(root_ / "Other"));
+  auto created = ProjectManifestStore::create_in_empty_directory(root_ / "Other");
+  ASSERT_TRUE(created.ok()) << created.error().message;
+  auto other = created.take_value();
+  std::vector<SceneId> current_ids;
+  std::vector<SceneId> other_ids;
+  for (int index = 0; index < 7; ++index) {
+    const auto path = recent_scene_test_path("Scenes/Scene" +
+                                            std::to_string(index) + ".qdr");
+    current_ids.push_back(SceneId::generate());
+    other_ids.push_back(SceneId::generate());
+    add_scene(workspace_, current_ids.back(), path);
+    add_scene(other, other_ids.back(), path);
+    remember(current_ids.back(), path);
+    ASSERT_TRUE(store_.remember(other.manifest, other.manifest_path,
+                                other_ids.back(), "Other scene", path).ok());
+  }
+
+  const RecentSceneStore restarted(store_.storage_path());
+  const auto all = restarted.load();
+  ASSERT_TRUE(all.ok()) << all.error().message;
+  EXPECT_EQ(all.value().size(), 10u);
+  const auto current = restarted.load(workspace_.manifest_path);
+  const auto foreign = restarted.load(other.manifest_path);
+  ASSERT_TRUE(current.ok()) << current.error().message;
+  ASSERT_TRUE(foreign.ok()) << foreign.error().message;
+  ASSERT_EQ(current.value().size(), 5u);
+  ASSERT_EQ(foreign.value().size(), 5u);
+  for (std::size_t index = 0; index < 5u; ++index) {
+    EXPECT_EQ(current.value()[index].scene_id, current_ids[6u - index]);
+    EXPECT_EQ(foreign.value()[index].scene_id, other_ids[6u - index]);
+    EXPECT_EQ(current.value()[index].manifest_path, workspace_.manifest_path);
+    EXPECT_EQ(foreign.value()[index].manifest_path, other.manifest_path);
+  }
+  const auto encoded = nlohmann::json::parse(
+      read_recent_scene_test_file(store_.storage_path()));
+  EXPECT_EQ(encoded["version"], 1u);
+
+  ASSERT_TRUE(workspace_.manifest.unregister_scene(current_ids.back()).ok());
+  ASSERT_TRUE(store_.synchronize_project(workspace_.manifest,
+                                        workspace_.manifest_path).ok());
+  const auto synchronized = restarted.load(workspace_.manifest_path);
+  ASSERT_TRUE(synchronized.ok()) << synchronized.error().message;
+  EXPECT_EQ(synchronized.value().size(), 4u);
+  const auto other_after = restarted.load(other.manifest_path);
+  ASSERT_TRUE(other_after.ok()) << other_after.error().message;
+  ASSERT_EQ(other_after.value().size(), foreign.value().size());
+  for (std::size_t index = 0; index < foreign.value().size(); ++index) {
+    EXPECT_EQ(other_after.value()[index].scene_id, foreign.value()[index].scene_id);
+  }
+}
+
 TEST_F(RecentSceneStoreTests, CanonicalManifestAndScenePathsDoNotDuplicateRows) {
   const auto first_id = SceneId::generate();
   const auto path = recent_scene_test_path("Scenes/Scene.qdr");
@@ -151,6 +204,10 @@ TEST_F(RecentSceneStoreTests, CanonicalManifestAndScenePathsDoNotDuplicateRows) 
   EXPECT_EQ(loaded.value().front().scene_path, path);
   EXPECT_EQ(loaded.value().front().manifest_path,
             std::filesystem::canonical(workspace_.manifest_path));
+  const auto scoped = store_.load(manifest_alias);
+  ASSERT_TRUE(scoped.ok()) << scoped.error().message;
+  ASSERT_EQ(scoped.value().size(), 1u);
+  EXPECT_EQ(scoped.value().front().scene_id, replaced_id);
 }
 
 TEST_F(RecentSceneStoreTests, SaveAsReplacesSameSceneIdentityWithinTheProject) {
@@ -222,6 +279,14 @@ TEST_F(RecentSceneStoreTests, CopiedProjectsWithIdenticalIdsRemainDistinct) {
   EXPECT_NE(loaded.value()[0].manifest_path, loaded.value()[1].manifest_path);
   EXPECT_TRUE(loaded.value()[0].available);
   EXPECT_TRUE(loaded.value()[1].available);
+  const auto current = store_.load(workspace_.manifest_path);
+  const auto copy = store_.load(copied.manifest_path);
+  ASSERT_TRUE(current.ok()) << current.error().message;
+  ASSERT_TRUE(copy.ok()) << copy.error().message;
+  ASSERT_EQ(current.value().size(), 1u);
+  ASSERT_EQ(copy.value().size(), 1u);
+  EXPECT_EQ(current.value().front().manifest_path, workspace_.manifest_path);
+  EXPECT_EQ(copy.value().front().manifest_path, copied.manifest_path);
 }
 
 TEST_F(RecentSceneStoreTests, UnicodeManifestPathsRoundTripAsUtf8) {

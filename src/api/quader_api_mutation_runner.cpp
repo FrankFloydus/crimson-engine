@@ -21,6 +21,7 @@
 #include "scene/scene_document.hpp"
 
 #include <memory>
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -486,6 +487,59 @@ QuaderApiVoidResult QuaderApiMutationRunner::redo() {
   EditorCommandService commands = editor_commands();
   CommandResult result = commands.redo();
   return status_from(std::move(result), QuaderMutationKind::Document, "Redo");
+}
+
+std::string QuaderApiMutationRunner::history_restore_unavailable_reason() const {
+  if (!available()) {
+    return "No scene is active.";
+  }
+  SceneSession &session = scene_session();
+  if (session.document_commands().property_edit_active() ||
+      session.native_tools().active_history_state() ||
+      session.native_tools().has_pending_history_preview() ||
+      session.modeling().can_cancel_active_preview_for_undo() ||
+      session.modeling().pending_operation_active() ||
+      session.history().transaction_active()) {
+    return "Apply or cancel the active edit before restoring undo history.";
+  }
+  return {};
+}
+
+QuaderApiVoidResult QuaderApiMutationRunner::restore_history(
+    const QuaderUndoHistorySnapshot &snapshot, std::size_t applied_count) {
+  if (!available()) {
+    return quader_api_failure_status(scene_session(), "No scene is active.");
+  }
+  SceneSession &session = scene_session();
+  if (!belongs_to_active_scene(snapshot.scene_session_id) ||
+      snapshot.document_binding_generation !=
+          session.document_binding_generation() ||
+      snapshot.history_revision != session.history().revision()) {
+    return quader_api_failure_status(
+        session, "Undo history belongs to a stale or inactive document state.");
+  }
+  const bool listed = std::any_of(
+      snapshot.entries.begin(), snapshot.entries.end(),
+      [applied_count](const QuaderUndoHistoryEntry &entry) {
+        return entry.applied_count == applied_count;
+      });
+  if (!listed ||
+      applied_count > history().undo_count() + history().redo_count()) {
+    return quader_api_failure_status(session,
+                                      "Undo history entry is unavailable.");
+  }
+  if (!snapshot.can_restore) {
+    return quader_api_failure_status(
+        session, snapshot.unavailable_reason.empty()
+                     ? "Undo history selection is unavailable."
+                     : snapshot.unavailable_reason);
+  }
+  const std::string unavailable = history_restore_unavailable_reason();
+  if (!unavailable.empty()) {
+    return quader_api_failure_status(session, unavailable);
+  }
+  return status_from(history().restore_history(applied_count),
+                     QuaderMutationKind::Document, "Undo History");
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::repeat_last_action() {

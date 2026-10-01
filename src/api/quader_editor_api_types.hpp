@@ -69,7 +69,7 @@ struct QuaderRecentProject final {
   std::optional<std::uintmax_t> manifest_size_bytes;
 };
 
-/// Describes one saved scene in the application-wide Open Recent menu.
+/// Describes one saved scene in the opened project's Open Recent menu.
 struct QuaderRecentScene final {
   SceneId scene_id;
   std::string scene_name;

@@ -1279,6 +1279,10 @@ TEST(PrimitiveCreationToolServiceTests,
 
   ASSERT_TRUE(harness.tool.apply().ok);
   EXPECT_EQ(harness.history.undo_count(), 2U);
+  const auto retained_history = harness.history.history_entries(10);
+  ASSERT_EQ(retained_history.size(), 2U);
+  EXPECT_NE(retained_history.back().applied_count, 0U);
+  EXPECT_FALSE(harness.history.restore_history(0).ok);
   ASSERT_TRUE(harness.history.undo().ok);
   ASSERT_TRUE(harness.history.undo().ok);
   EXPECT_FALSE(harness.history.can_undo());

@@ -2417,7 +2417,7 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::execute_modeling_preview_intent(
   const auto pane = origin.serial != 0u ? origin.pane : viewports_.focused_pane();
   const auto previous_tool = tools_.active_tool();
   auto result = intent == QuaderNativeToolSettingsIntent::Apply
-      ? api_.modeling().commit_preview("Apply Tool Preview")
+      ? api_.modeling().commit_preview()
       : api_.modeling().cancel_preview();
   // A lifecycle callback may synchronously replace the document or start a
   // different operation. Only synchronize the owner that actually completed.

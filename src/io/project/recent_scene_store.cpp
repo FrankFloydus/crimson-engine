@@ -137,7 +137,8 @@ bool contains_required_strings(const Json &entry) {
 
 } // namespace
 
-ProjectIoResult<std::vector<RecentSceneEntry>> RecentSceneStore::load() const {
+ProjectIoResult<std::vector<RecentSceneEntry>> RecentSceneStore::load(
+    const std::filesystem::path &project_manifest) const {
   if (storage_path_.empty()) {
     return EntriesResult::failure(ProjectIoErrorCode::InvalidArgument,
                                   "Recent scene storage path is empty.");
@@ -188,7 +189,10 @@ ProjectIoResult<std::vector<RecentSceneEntry>> RecentSceneStore::load() const {
     }
 
     std::vector<RecentSceneEntry> entries;
-    entries.reserve(std::min(root["scenes"].size(), kMaximumEntries));
+    entries.reserve(project_manifest.empty()
+                        ? root["scenes"].size()
+                        : std::min(root["scenes"].size(), kMaximumEntries));
+    const RecentSceneEntry requested_project{.manifest_path = project_manifest};
     for (const Json &encoded : root["scenes"]) {
       if (!contains_required_strings(encoded)) {
         return EntriesResult::failure(ProjectIoErrorCode::ManifestMalformed,
@@ -212,7 +216,12 @@ ProjectIoResult<std::vector<RecentSceneEntry>> RecentSceneStore::load() const {
           .manifest_path = normalized_manifest_path(manifest),
           .scene_path = path.take_value(),
       };
-      if (entries.size() == kMaximumEntries ||
+      if ((!project_manifest.empty() &&
+           !same_project(entry, requested_project)) ||
+          std::count_if(entries.begin(), entries.end(),
+                        [&](const RecentSceneEntry &existing) {
+                          return same_project(existing, entry);
+                        }) >= kMaximumEntries ||
           std::any_of(entries.begin(), entries.end(),
                       [&](const RecentSceneEntry &existing) {
                         return same_scene(existing, entry);
@@ -269,8 +278,13 @@ ProjectIoResult<void> RecentSceneStore::remember(
       return same_scene(existing, entry);
     });
     entries.insert(entries.begin(), std::move(entry));
-    if (entries.size() > kMaximumEntries) {
-      entries.resize(kMaximumEntries);
+    std::size_t project_count = 0u;
+    std::erase_if(entries, [&](const RecentSceneEntry &existing) {
+      return same_project(existing, entries.front()) &&
+             ++project_count > kMaximumEntries;
+    });
+    if (entries.size() > kMaximumDecodedEntries) {
+      entries.resize(kMaximumDecodedEntries);
     }
     return save(entries);
   } catch (const std::exception &exception) {
@@ -318,7 +332,8 @@ RecentSceneStore::synchronize_project(
 ProjectIoResult<void>
 RecentSceneStore::save(std::span<const RecentSceneEntry> entries) const {
   Json scenes = Json::array();
-  for (const auto &entry : entries.first(std::min(entries.size(), kMaximumEntries))) {
+  for (const auto &entry :
+       entries.first(std::min(entries.size(), kMaximumDecodedEntries))) {
     const auto manifest_utf8 = entry.manifest_path.generic_u8string();
     scenes.push_back(Json{
         {"sceneId", std::string(entry.scene_id.str())},

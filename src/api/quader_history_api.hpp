@@ -28,6 +28,11 @@ public:
     [[nodiscard]] bool can_undo() const;
     [[nodiscard]] bool can_redo() const;
     [[nodiscard]] QuaderHistorySnapshot snapshot() const;
+    /// Queries retained operation states without settling active edits or tools.
+    [[nodiscard]] QuaderUndoHistorySnapshot
+    undo_history(std::size_t limit = 10) const;
+    QuaderApiVoidResult restore_history(const QuaderUndoHistorySnapshot &snapshot,
+                                        std::size_t applied_count);
 
 private:
     QuaderApiSession session_;

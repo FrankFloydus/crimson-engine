@@ -89,30 +89,30 @@ file except through prior written authorization from Francesco Di Blasi.
   on unhandled paths. Input follows [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md): Qt adaptation,
   canonical keybindings, then semantic viewport frames. Do not add a parallel `QAction` shortcut map.
 - `QtToolToolbar` retains activatable modeling tool launchers and the source actions used by
-  viewport controls. Immediate modeling operations belong in the Q and RMB menus, not a second
+  viewport controls. Immediate modeling operations belong in the Q menu, not a second
   mode-specific toolbar. Consume canonical command availability and keep requirement-driven
   enabled states. Use existing authored icons and text buttons when no icon exists. Preserve
   native workspace placement and the Tools visibility command.
   Delete actions must never appear in a toolbar; keep deletion in its existing menu/input owners.
+  Viewport display controls belong in each pane's strip; their retained action source is hidden
+  and has no main-window toolbar or workspace visibility entry.
 - `QtMarkingMenu` owns gesture presentation only: compact floating labels with transparent gaps,
   never an enclosing rectangular panel. Button widths follow their labels; a bright, fixed-color
   live line connects the cursor to the gesture origin, independent of hover state. Supplemental
-  commands use the relevant RMB command policy and form a compact menu below
+  commands use the shared modeling context command policy and form a compact menu below
   the radial actions, without a More launcher. `QtViewportMarkingMenuPresenter` projects the shared
   modeling-operation catalog on opening, keeps compass slots stable even for disabled or absent
   entries so gestures remain memorable, and revalidates
   pane, session, revisions, runtime and command availability before dispatch. Its initiating
   chord comes from semantic viewport input; the popup consumes release and the surface abandons
   stale held input afterward. Do not add a private Q shortcut or copy modeling availability.
-- The viewport RMB menu presents applicable modeling commands directly, separated by dividers.
-  Apply the explicit operand scope in `viewport_context_menu_policy` to catalog, supplemental,
-  and fixed actions alike before checking native availability. Activation eligibility is not menu
-  relevance: component/control selections must not expose whole-object operations. All toolbar
-  tool launchers stay outside RMB; selection operations with previews remain eligible.
-  Clipboard requires supported mesh/instance targets. Supplement
-  from canonical presentation metadata only on popup opening, deduplicate stable command IDs,
-  and keep disabled commands out. General selection, view, and UV-editing commands stay outside
-  this menu. Its three face material/texture transfers
+- The viewport RMB menu retains clicked-face material/texture transfers and curve Apply Solidify.
+  Generic operations already reachable through the Q radial actions or supplemental list stay out
+  of RMB. The shared Q command collector applies the explicit operand scope in
+  `viewport_context_menu_policy` before native availability and queries canonical metadata only on
+  popup opening. Activation eligibility is not relevance: component/control selections must not
+  expose whole-object operations; clipboard requires supported mesh/instance targets.
+  Its three face material/texture transfers
   retain the selected source/destinations separately from the clicked face and reuse their public
   modeling API routes; the nested menu's revision fence protects both targets.
 - `QtStatusMessage` owns error contrast and the portable Qt system alert. Announce new failures once;
@@ -141,7 +141,13 @@ file except through prior written authorization from Francesco Di Blasi.
   `SessionPreferences`: stage changes, merge per field, persist, then publish SessionCommit.
   File > Recover > Auto Save opens the native file picker in the owner-provided autosave folder;
   use `scene_documents().recover_autosave_native_path()` and reject stale runtime bindings.
-  File > Open Recent loads its five scene records on menu opening, never during frame refresh.
+  File > Open Recent loads the opened project's five scene records on menu opening, never during
+  frame refresh; its owner rejects foreign-project and stale rows before scene transitions.
+  Edit > Undo History queries its ten newest retained states only on submenu opening and presents
+  ordinary list actions, never checkboxes. User selection commands remain visible; internal
+  selection belongs to its enclosing operation. Original appears only while its initial state is retained.
+  Its snapshot fences history selection against edits, scene rebinding and document replacement;
+  active drafts keep ordinary Undo/Redo ownership and prevent jumping through committed history.
   Give each group one purpose: language and interface scaling are separate groups; do not join
   unrelated controls under a combined heading merely because they share a page.
   Settings contains preferences without equivalent controls in other menus, panels, or toolbars.

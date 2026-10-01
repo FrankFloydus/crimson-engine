@@ -482,8 +482,10 @@ TEST(PathArrayUiCatalogTests,
   ASSERT_NE(radial_action, actions.end());
   ASSERT_NE(path_action, actions.end());
   ASSERT_NE(curve_action, actions.end());
-  EXPECT_EQ(std::next(radial_action), path_action);
-  EXPECT_EQ(std::next(path_action), curve_action);
+  ASSERT_NE(std::next(radial_action), actions.end());
+  EXPECT_TRUE((*std::next(radial_action))->isSeparator());
+  EXPECT_EQ(std::next(radial_action, 2), curve_action);
+  EXPECT_EQ(std::next(curve_action), path_action);
 
   SceneSession session;
   QuaderEditorApi editor(

@@ -69,4 +69,30 @@ QuaderHistorySnapshot QuaderHistoryApi::snapshot() const {
     return result;
 }
 
+QuaderUndoHistorySnapshot
+QuaderHistoryApi::undo_history(std::size_t limit) const {
+  QuaderUndoHistorySnapshot result;
+  result.unavailable_reason = mutations_.history_restore_unavailable_reason();
+  if (!mutations_.available()) {
+    return result;
+  }
+  const SceneSession &session = read_scene_session(session_);
+  result.scene_session_id = mutations_.scene_session_id();
+  result.document_binding_generation = session.document_binding_generation();
+  result.history_revision = session.history().revision();
+  result.can_restore = result.unavailable_reason.empty();
+  for (const UndoRedoHistoryEntry &entry :
+       session.history().history_entries(limit)) {
+    result.entries.push_back({.applied_count = entry.applied_count,
+                              .label = entry.label,
+                              .current = entry.current});
+  }
+  return result;
+}
+
+QuaderApiVoidResult QuaderHistoryApi::restore_history(
+    const QuaderUndoHistorySnapshot &snapshot, std::size_t applied_count) {
+  return mutations_.restore_history(snapshot, applied_count);
+}
+
 } // namespace quader

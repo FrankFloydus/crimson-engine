@@ -501,9 +501,13 @@ bool UISystem::initialize(RenderSystem &render_system,
 
   viewport_display_toolbar_ =
       new QtViewportDisplayToolbar(main_window_.get());
+  viewport_display_toolbar_->setObjectName(
+      QStringLiteral("viewportDisplaySources"));
   viewport_display_toolbar_->set_localization(localization_);
   viewport_display_toolbar_->setEnabled(false);
-  main_window_->addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_);
+  // Retain display action sources for pane strips without a workspace toolbar.
+  viewport_display_toolbar_->toggleViewAction()->setVisible(false);
+  viewport_display_toolbar_->hide();
 
   if (release_has_feature(ReleaseFeature::UvEditing)) {
     texture_toolbar_ = new QtTextureToolbar(main_window_.get());
@@ -1337,17 +1341,6 @@ void UISystem::install_runtime_hooks(
               [this](bool visible) {
                 if (snapping_toolbar_ != nullptr) {
                   snapping_toolbar_->setVisible(visible);
-                }
-              },
-          .viewport_display_toolbar_visible =
-              [this]() {
-                return viewport_display_toolbar_ != nullptr &&
-                       viewport_display_toolbar_->isVisible();
-              },
-          .set_viewport_display_toolbar_visible =
-              [this](bool visible) {
-                if (viewport_display_toolbar_ != nullptr) {
-                  viewport_display_toolbar_->setVisible(visible);
                 }
               },
           .texture_toolbar_visible =
@@ -2917,8 +2910,6 @@ void UISystem::show_workspace() {
   }
   if (viewport_display_toolbar_ != nullptr) {
     viewport_display_toolbar_->setEnabled(true);
-    viewport_display_toolbar_->setVisible(
-        viewport_display_toolbar_workspace_visible_);
   }
   if (texture_toolbar_ != nullptr) {
     texture_toolbar_->setEnabled(true);
@@ -3658,9 +3649,6 @@ void UISystem::capture_workspace_window_state() {
       selection_toolbar_ != nullptr && !selection_toolbar_->isHidden();
   snapping_toolbar_workspace_visible_ =
       snapping_toolbar_ != nullptr && !snapping_toolbar_->isHidden();
-  viewport_display_toolbar_workspace_visible_ =
-      viewport_display_toolbar_ != nullptr &&
-      !viewport_display_toolbar_->isHidden();
   texture_toolbar_workspace_visible_ =
       texture_toolbar_ != nullptr && !texture_toolbar_->isHidden();
   tool_toolbar_workspace_visible_ =
@@ -3998,7 +3986,6 @@ bool UISystem::startup_layout_ready() const {
   for (const QToolBar *toolbar :
        {static_cast<const QToolBar *>(selection_toolbar_),
         static_cast<const QToolBar *>(snapping_toolbar_),
-        static_cast<const QToolBar *>(viewport_display_toolbar_),
         static_cast<const QToolBar *>(texture_toolbar_),
         static_cast<const QToolBar *>(tool_toolbar_)}) {
     if (toolbar != nullptr && toolbar->isVisible() &&
@@ -4054,7 +4041,6 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
   };
   mix_toolbar(selection_toolbar_);
   mix_toolbar(snapping_toolbar_);
-  mix_toolbar(viewport_display_toolbar_);
   mix_toolbar(texture_toolbar_);
   mix_toolbar(tool_toolbar_);
   return signature;

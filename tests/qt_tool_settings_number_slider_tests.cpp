@@ -1757,7 +1757,7 @@ TEST(QtToolSettingsPanelTests,
                 QStringLiteral("tool_settings.reset_defaults")), nullptr);
   EXPECT_TRUE(panel.has_settings());
   EXPECT_EQ(panel.target_id(), "uv_peel");
-  EXPECT_EQ(header->text(), QStringLiteral("Guided UV Peel"));
+  EXPECT_EQ(header->text(), QStringLiteral("UV Peel"));
   EXPECT_EQ(header->arrowType(), Qt::DownArrow);
   EXPECT_EQ(header->accessibleName(), header->text());
   EXPECT_EQ(panel.windowTitle(), header->text());
@@ -1810,7 +1810,7 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_TRUE(italian.load(
       std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "it-IT"));
   panel.set_localization(italian);
-  EXPECT_EQ(header->text(), QStringLiteral("Distensione UV guidata"));
+  EXPECT_EQ(header->text(), QStringLiteral("Distensione UV"));
   EXPECT_EQ(header->accessibleName(), header->text());
   EXPECT_FALSE(panel.expanded());
   panel.set_expanded(true);

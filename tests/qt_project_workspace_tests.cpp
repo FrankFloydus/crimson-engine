@@ -665,6 +665,15 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_LE(toolbar.width(), 70);
   EXPECT_TRUE(button->isVisible());
   review(QStringLiteral("narrow-dock"));
+  for (const float factor : {2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    const auto &metrics = scale_controller.metrics();
+    toolbar.apply_ui_scale(metrics);
+    host.resize(metrics.size(QSize(360, 880)));
+    settle_layout();
+    EXPECT_LE(toolbar.width(), metrics.px(70));
+    review(QStringLiteral("narrow-dock-%1").arg(qRound(factor * 100.0F)));
+  }
   toolbar.setLayoutDirection(Qt::RightToLeft);
   review(QStringLiteral("rtl"));
   EXPECT_EQ(menu->layoutDirection(), Qt::RightToLeft);
@@ -684,6 +693,10 @@ TEST(QtProjectWorkspaceTests,
   application.processEvents();
   EXPECT_EQ(application.palette().resolveMask(), 0u);
   review(QStringLiteral("native-high-contrast-fallback"));
+  toolbar.setOrientation(Qt::Vertical);
+  toolbar.resize(toolbar.sizeHint());
+  application.processEvents();
+  review(QStringLiteral("vertical-native-high-contrast-fallback"));
 }
 
 TEST(QtProjectWorkspaceTests,
@@ -1990,13 +2003,18 @@ TEST(QtProjectWorkspaceTests,
   auto *snapping = dynamic_cast<quader::QtSnappingToolbar *>(
       window->findChild<QToolBar *>(QStringLiteral("snappingToolbar")));
   auto *display = dynamic_cast<quader::QtViewportDisplayToolbar *>(
-      window->findChild<QToolBar *>(QStringLiteral("viewportDisplayToolbar")));
+      window->findChild<QToolBar *>(QStringLiteral("viewportDisplaySources")));
   ASSERT_NE(workspace, nullptr);
   ASSERT_NE(container, nullptr);
   ASSERT_NE(viewport, nullptr);
   ASSERT_NE(tools, nullptr);
   ASSERT_NE(snapping, nullptr);
   ASSERT_NE(display, nullptr);
+  EXPECT_EQ(window->toolBarArea(display), Qt::NoToolBarArea);
+  EXPECT_TRUE(display->isHidden());
+  EXPECT_FALSE(display->toggleViewAction()->isVisible());
+  EXPECT_EQ(window->findChild<QToolBar *>(QStringLiteral("viewportDisplayToolbar")),
+            nullptr);
   viewport->set_startup_presentation_blocked(false);
   EXPECT_EQ(window->findChild<QWidget *>(QStringLiteral("viewportControlStrip")), nullptr);
   EXPECT_EQ(workspace->viewport_widget(), container);
@@ -2025,6 +2043,30 @@ TEST(QtProjectWorkspaceTests,
   window->resize(1800, 1000);
   window->show();
   synchronize();
+  EXPECT_EQ(window->toolBarArea(display), Qt::NoToolBarArea);
+  EXPECT_TRUE(display->isHidden());
+  QByteArray legacy_layout;
+  {
+    QToolBar obsolete_display(window);
+    obsolete_display.setObjectName(QStringLiteral("viewportDisplayToolbar"));
+    window->addToolBar(Qt::TopToolBarArea, &obsolete_display);
+    legacy_layout = window->saveState();
+  }
+  ASSERT_TRUE(window->restoreState(legacy_layout));
+  synchronize();
+  EXPECT_EQ(window->toolBarArea(display), Qt::NoToolBarArea);
+  EXPECT_TRUE(display->isHidden());
+  EXPECT_EQ(window->findChild<QToolBar *>(QStringLiteral("viewportDisplayToolbar")),
+            nullptr);
+  {
+    std::unique_ptr<QMenu> toolbar_menu(window->createPopupMenu());
+    ASSERT_NE(toolbar_menu, nullptr);
+    for (const QAction *action : toolbar_menu->actions()) {
+      if (action == display->toggleViewAction()) {
+        EXPECT_FALSE(action->isVisible());
+      }
+    }
+  }
   const auto saved_layout = window->saveState();
   for (QToolBar *toolbar : window->findChildren<QToolBar *>()) toolbar->hide();
   synchronize();
@@ -2349,6 +2391,8 @@ TEST(QtProjectWorkspaceTests,
   }
   ASSERT_TRUE(window->restoreState(saved_layout));
   synchronize();
+  EXPECT_EQ(window->toolBarArea(display), Qt::NoToolBarArea);
+  EXPECT_TRUE(display->isHidden());
   EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[0]), quader::ViewportToolId::Move);
   EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[1]), quader::ViewportToolId::Scale);
   EXPECT_NE(snapping->findChild<QComboBox *>(QStringLiteral("snappingGridSizeCombo")), nullptr);
@@ -6266,7 +6310,7 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
-     PassiveOtherPaneContextMenuPreservesPendingExtrusion) {
+     PassiveOtherPaneRightClickPreservesPendingExtrusionWithoutQOperations) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   NativePaneInputHarness harness;
   ASSERT_NO_FATAL_FAILURE(harness.initialize());
@@ -6288,6 +6332,7 @@ TEST(QtProjectWorkspaceTests,
   const auto origin = harness.editor.tools().active_settings_presentation_origin();
   const auto undo_count = harness.scene.history().undo_count();
   const auto redo_count = harness.scene.history().redo_count();
+  const auto selection = harness.editor.selection().summary();
   const auto candidate = harness.editor.query().compiled_object_mesh(object.value());
   ASSERT_TRUE(candidate.has_value());
   harness.focus(kTop);
@@ -6307,7 +6352,8 @@ TEST(QtProjectWorkspaceTests,
   harness.mouse(kTop, QEvent::MouseButtonRelease, {40, 40}, Qt::RightButton, Qt::NoButton);
   harness.process();
   dismiss_menu.stop();
-  ASSERT_TRUE(menu_observed) << "the real native context menu must have opened";
+  EXPECT_FALSE(menu_observed) << "generic operations are presented through Q";
+  EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
   EXPECT_TRUE(harness.editor.tools().active_settings().preview_active);
   EXPECT_TRUE(harness.editor.tools().pane_owns_executing_tool(kPerspective));
   EXPECT_EQ(harness.editor.tools().active_settings_presentation_origin(), origin);
@@ -6315,6 +6361,11 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(harness.editor.viewports().selected_tool(kPerspective), quader::ViewportToolId::Extrude);
   EXPECT_EQ(harness.scene.history().undo_count(), undo_count);
   EXPECT_EQ(harness.scene.history().redo_count(), redo_count);
+  const auto selection_after = harness.editor.selection().summary();
+  EXPECT_EQ(selection_after.selection_revision, selection.selection_revision);
+  EXPECT_EQ(selection_after.active_object_id, selection.active_object_id);
+  EXPECT_EQ(selection_after.active_face_id, selection.active_face_id);
+  EXPECT_EQ(selection_after.selected_face_count, selection.selected_face_count);
   const auto after = harness.editor.query().compiled_object_mesh(object.value());
   ASSERT_TRUE(after.has_value());
   EXPECT_EQ(after->indices, candidate->indices);

@@ -147,7 +147,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
 
 TEST(QdrEditorMetadataUiPlacementTests, HostContractUIPlacementsResolveToKnownDescriptorOnlyTargets) {
 	const std::span<const qhc::HostUiPlacementDescriptor> placements = qhc::ui_placement_catalog();
-	EXPECT_TRUE(placements.size() == 36U);
+	EXPECT_TRUE(placements.size() == 39U);
 
 	for (const qhc::HostUiPlacementDescriptor& placement : placements) {
 		EXPECT_FALSE(placement.id.empty());
@@ -204,15 +204,23 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractMainMenuPlacementPreservesEd
 
 	const qhc::HostUiPlacementDescriptor& new_scene = require_placement("menu_new_scene");
 	EXPECT_TRUE(same_text(new_scene.group_id, "file"));
+	EXPECT_TRUE(same_text(new_scene.label, "New"));
 	EXPECT_FALSE(new_scene.separator_before);
+	EXPECT_TRUE(same_text(require_placement("menu_open_scene").label, "Open"));
+	EXPECT_TRUE(same_text(require_placement("menu_save_scene").label, "Save"));
+	EXPECT_TRUE(same_text(require_placement("menu_save_scene_as").label, "Save As"));
+	EXPECT_TRUE(same_text(require_placement("menu_save_all_scenes").label, "Save All"));
 	EXPECT_TRUE(new_scene.order < require_placement("menu_open_scene").order);
 	EXPECT_TRUE(require_placement("menu_open_scene").order < require_placement("menu_save_scene").order);
 	EXPECT_TRUE(require_placement("menu_save_scene").order < require_placement("menu_save_scene_as").order);
 	EXPECT_TRUE(require_placement("menu_save_scene_as").order < require_placement("menu_save_all_scenes").order);
-	EXPECT_TRUE(require_placement("menu_save_all_scenes").order < require_placement("menu_close_scene").order);
-	EXPECT_TRUE(require_placement("menu_close_scene").order < require_placement("menu_next_scene").order);
-	EXPECT_TRUE(require_placement("menu_next_scene").separator_before);
-	EXPECT_TRUE(require_placement("menu_next_scene").order < require_placement("menu_previous_scene").order);
+	EXPECT_TRUE(require_placement("menu_save_scene").separator_before);
+	EXPECT_EQ(qhc::find_ui_placement_descriptor("menu_close_scene"), nullptr);
+	EXPECT_EQ(qhc::find_ui_placement_descriptor("menu_next_scene"), nullptr);
+	EXPECT_EQ(qhc::find_ui_placement_descriptor("menu_previous_scene"), nullptr);
+	EXPECT_TRUE(has_interaction_kind("close_scene", qhc::HostInteractionKind::EditorAction));
+	EXPECT_TRUE(has_interaction_kind("next_scene", qhc::HostInteractionKind::EditorAction));
+	EXPECT_TRUE(has_interaction_kind("previous_scene", qhc::HostInteractionKind::EditorAction));
 
 	const qhc::HostUiPlacementDescriptor& layout = require_placement("menu_layout_single_view");
 	EXPECT_TRUE(same_text(layout.group_id, "viewport_layout"));
@@ -230,20 +238,35 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractMainMenuPlacementPreservesEd
 }
 
 TEST(QdrEditorMetadataUiPlacementTests, HostContractToolbarPlacementMirrorsCurrentEditorChromeOrder) {
-	check_toolbar_order("viewport_tool_toolbar", std::array<std::string_view, 7> {{
-		"move",
-		"rotate",
-		"scale",
+	check_toolbar_order("viewport_tool_toolbar", std::array<std::string_view, 13> {{
+		"create_primitive",
+		"pivot",
+		"extrude",
+		"insert_edge_loop",
 		"knife",
 		"cut",
 		"mirror",
 		"poly",
+		"linear_array",
+		"radial_array",
+		"curve",
+		"path_array",
+		"uv_peel",
 	}});
 
-	EXPECT_TRUE(same_text(require_placement("toolbar_move_tool").group_id, "transform_tools"));
-	EXPECT_FALSE(require_placement("toolbar_move_tool").separator_before);
+	EXPECT_TRUE(same_text(require_placement("toolbar_pivot_tool").group_id, "transform_tools"));
+	EXPECT_FALSE(require_placement("toolbar_create_primitive_tool").separator_before);
 	EXPECT_TRUE(same_text(require_placement("toolbar_knife_tool").group_id, "modal_modeling_tools"));
 	EXPECT_FALSE(require_placement("toolbar_knife_tool").separator_before);
+	EXPECT_TRUE(require_placement("toolbar_linear_array_tool").separator_before);
+	EXPECT_FALSE(require_placement("toolbar_radial_array_tool").separator_before);
+	EXPECT_TRUE(require_placement("toolbar_curve_tool").separator_before);
+	EXPECT_FALSE(require_placement("toolbar_path_array_tool").separator_before);
+	EXPECT_TRUE(require_placement("toolbar_uv_peel_tool").separator_before);
+	EXPECT_TRUE(same_text(require_placement("toolbar_uv_peel_tool").label, "UV Peel"));
+	EXPECT_EQ(qhc::find_ui_placement_descriptor("toolbar_move_tool"), nullptr);
+	EXPECT_EQ(qhc::find_ui_placement_descriptor("toolbar_rotate_tool"), nullptr);
+	EXPECT_EQ(qhc::find_ui_placement_descriptor("toolbar_scale_tool"), nullptr);
 }
 
 TEST(QdrEditorMetadataUiPlacementTests, HostContractOperationTopBarPlacesSelectionScopedPanels) {

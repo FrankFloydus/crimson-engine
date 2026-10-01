@@ -434,6 +434,27 @@ bool EditorHistoryService::can_undo() const {
   return active_transaction_ == nullptr && undo_redo_->can_undo();
 }
 
+CommandResult EditorHistoryService::restore_history(std::size_t applied_count) {
+  if (active_transaction_ != nullptr) {
+    return command_invalid_result(
+        "Cannot restore history while an editor transaction is active");
+  }
+  if ((applied_count == 0 && !undo_redo_->can_restore_original_state()) ||
+      applied_count > undo_count() + redo_count()) {
+    return command_invalid_result("History entry is no longer retained");
+  }
+  bool changed = false;
+  while (undo_count() != applied_count) {
+    CommandResult result = undo_count() > applied_count ? undo() : redo();
+    if (!result.ok) {
+      result.changed = result.changed || changed;
+      return result;
+    }
+    changed = true;
+  }
+  return changed ? command_changed_result() : command_unchanged_result();
+}
+
 bool EditorHistoryService::can_redo() const {
   return active_transaction_ == nullptr && undo_redo_->can_redo();
 }
@@ -462,6 +483,11 @@ std::uint64_t EditorHistoryService::revision() const {
   return undo_redo_->revision();
 }
 
+std::vector<UndoRedoHistoryEntry>
+EditorHistoryService::history_entries(std::size_t limit) const {
+  return undo_redo_->history_entries(limit);
+}
+
 bool EditorHistoryService::can_merge_with_latest(
     std::string_view merge_key, std::uint64_t revision) const {
   return active_transaction_ == nullptr && undo_redo_->revision() == revision &&
@@ -472,7 +498,9 @@ void EditorHistoryService::set_max_steps(std::size_t max_steps) {
   undo_redo_->set_max_steps(std::min(max_steps, kMaximumMaxSteps));
 }
 
-void EditorHistoryService::clear() { undo_redo_->clear(); }
+void EditorHistoryService::clear(UndoRedoHistoryBaseline baseline) {
+  undo_redo_->clear(baseline);
+}
 
 void EditorHistoryService::set_change_observer(
     std::function<void()> observer) {

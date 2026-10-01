@@ -6,12 +6,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_tools_api.hpp"
 #include "core/undo_redo_manager.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 
 #include <gtest/gtest.h>
 
@@ -31,9 +33,10 @@ namespace {
 class RetainedValueCommand final : public IUndoableCommand {
 public:
   RetainedValueCommand(int &value, int after,
-                       std::shared_ptr<int> retained = {})
+                       std::shared_ptr<int> retained = {},
+                       std::string label = "Change value")
       : value_(value), before_(value), after_(after),
-        retained_(std::move(retained)) {
+        retained_(std::move(retained)), label_(std::move(label)) {
     if (retained_) {
       ++*retained_;
     }
@@ -307,6 +310,363 @@ TEST(EditorHistoryLimitTests, PruningDoesNotChangeContentRevisionOrSavedState) {
   ASSERT_NE(session.scene().name(entity.value().id), nullptr);
   EXPECT_EQ(session.scene().name(entity.value().id)->name, "Changed");
   EXPECT_FALSE(api.history().can_undo());
+}
+
+TEST(EditorHistoryLimitTests,
+     HistoryListShowsNewestTenRetainedOperationStatesAcrossUndoAndRedo) {
+  UndoRedoManager history;
+  int value = 0;
+  for (int next = 1; next <= 12; ++next) {
+    ASSERT_TRUE(history.execute(std::make_unique<RetainedValueCommand>(
+        value, next, std::shared_ptr<int>{},
+        "Operation " + std::to_string(next))).ok);
+  }
+  for (int step = 0; step < 3; ++step) {
+    ASSERT_TRUE(history.undo().ok);
+  }
+  const auto revision = history.revision();
+  const auto entries = history.history_entries(10);
+  ASSERT_EQ(entries.size(), 10u);
+  for (std::size_t index = 0; index < entries.size(); ++index) {
+    const auto expected = 12u - index;
+    EXPECT_EQ(entries[index].applied_count, expected);
+    EXPECT_EQ(entries[index].label, "Operation " + std::to_string(expected));
+    EXPECT_EQ(entries[index].current, expected == 9u);
+  }
+  EXPECT_TRUE(history.history_entries(0).empty());
+  EXPECT_EQ(history.history_entries(100).size(), 13u);
+  EXPECT_EQ(history.revision(), revision);
+  EXPECT_EQ(value, 9);
+}
+
+TEST(EditorHistoryLimitTests,
+     OriginalStateIsVisibleBeforeEditingAndRestoresThroughPublicUndoAndRedo) {
+  SceneSession session;
+  QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto original = api.history().undo_history();
+  ASSERT_EQ(original.entries.size(), 1u);
+  EXPECT_EQ(original.entries.front().applied_count, 0u);
+  EXPECT_EQ(original.entries.front().label, "Original");
+  EXPECT_TRUE(original.entries.front().current);
+  EXPECT_TRUE(original.can_restore);
+  const auto initial_revision = session.history().revision();
+  const auto unchanged = api.history().restore_history(original, 0);
+  EXPECT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(session.history().revision(), initial_revision);
+  const auto original_entity_count = api.query().entities().size();
+  const auto created = api.scene().create_entity(
+      {.name = "First operation", .select_created = true});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(api.scene().rename(created.value().id, "Second operation").ok());
+  const auto edited = api.history().undo_history();
+  ASSERT_EQ(edited.entries.size(), 3u);
+  EXPECT_EQ(edited.entries.back().applied_count, 0u);
+  EXPECT_FALSE(edited.entries.back().current);
+  const auto edited_revision = session.history().revision();
+  EXPECT_FALSE(api.history().restore_history(original, 0).ok());
+  EXPECT_EQ(session.history().revision(), edited_revision);
+  const auto restored = api.history().restore_history(edited, 0);
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  EXPECT_TRUE(restored.changed());
+  EXPECT_EQ(api.query().entities().size(), original_entity_count);
+  EXPECT_FALSE(api.query().entity(created.value().id).has_value());
+  EXPECT_EQ(session.history().undo_count(), 0u);
+  EXPECT_EQ(session.history().redo_count(), 2u);
+  const auto undone = api.history().undo_history();
+  ASSERT_EQ(undone.entries.size(), 3u);
+  EXPECT_TRUE(undone.entries.back().current);
+  ASSERT_TRUE(api.history().restore_history(undone, 2).ok());
+  const auto redone = api.query().entity(created.value().id);
+  ASSERT_TRUE(redone.has_value());
+  EXPECT_EQ(redone->name, "Second operation");
+  EXPECT_TRUE(redone->selected);
+  EXPECT_TRUE(redone->active);
+  EXPECT_EQ(session.history().undo_count(), 2u);
+  EXPECT_EQ(session.history().redo_count(), 0u);
+}
+
+TEST(EditorHistoryLimitTests,
+     OriginalStateDisappearsAfterAppliedPrefixPruningOrRetainedBaselineReset) {
+  SceneSession session;
+  QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session));
+  session.set_history_max_steps(2);
+  int value = 0;
+  set_value(session.history(), value, 1);
+  set_value(session.history(), value, 2);
+  const auto before_pruning = api.history().undo_history();
+  ASSERT_EQ(before_pruning.entries.size(), 3u);
+  EXPECT_EQ(before_pruning.entries.back().applied_count, 0u);
+  set_value(session.history(), value, 3);
+  const auto pruned = api.history().undo_history();
+  ASSERT_EQ(pruned.entries.size(), 2u);
+  EXPECT_NE(pruned.entries.back().applied_count, 0u);
+  const auto revision = session.history().revision();
+  EXPECT_FALSE(api.history().restore_history(before_pruning, 0).ok());
+  EXPECT_FALSE(api.history().restore_history(pruned, 0).ok());
+  EXPECT_FALSE(session.history().restore_history(0).ok);
+  EXPECT_EQ(session.history().revision(), revision);
+  EXPECT_EQ(value, 3);
+  ASSERT_TRUE(session.history().undo().ok);
+  ASSERT_TRUE(session.history().undo().ok);
+  EXPECT_EQ(value, 1);
+  EXPECT_FALSE(session.history().restore_history(0).ok);
+  session.history().clear(UndoRedoHistoryBaseline::Retained);
+  EXPECT_TRUE(session.history().history_entries(10).empty());
+  EXPECT_FALSE(session.history().restore_history(0).ok);
+  set_value(session.history(), value, 2);
+  const auto retained = session.history().history_entries(10);
+  ASSERT_EQ(retained.size(), 1u);
+  EXPECT_EQ(retained.front().applied_count, 1u);
+  EXPECT_FALSE(session.history().restore_history(0).ok);
+  session.history().clear();
+  const auto reset = session.history().history_entries(10);
+  ASSERT_EQ(reset.size(), 1u);
+  EXPECT_EQ(reset.front().applied_count, 0u);
+  EXPECT_TRUE(reset.front().current);
+  EXPECT_EQ(value, 2);
+}
+
+TEST(EditorHistoryLimitTests, PruningOnlyDistantRedoPreservesOriginalState) {
+  EditorHistoryService history;
+  int value = 0;
+  for (int next = 1; next <= 4; ++next) {
+    set_value(history, value, next);
+  }
+  ASSERT_TRUE(history.restore_history(0).ok);
+  EXPECT_EQ(value, 0);
+  EXPECT_EQ(history.undo_count(), 0u);
+  EXPECT_EQ(history.redo_count(), 4u);
+  history.set_max_steps(2);
+  const auto entries = history.history_entries(10);
+  ASSERT_EQ(entries.size(), 3u);
+  EXPECT_EQ(entries.front().applied_count, 2u);
+  EXPECT_EQ(entries.back().applied_count, 0u);
+  EXPECT_TRUE(entries.back().current);
+  ASSERT_TRUE(history.restore_history(2).ok);
+  EXPECT_EQ(value, 2);
+  ASSERT_TRUE(history.restore_history(0).ok);
+  EXPECT_EQ(value, 0);
+  EXPECT_EQ(history.undo_count(), 0u);
+  EXPECT_EQ(history.redo_count(), 2u);
+}
+
+TEST(EditorHistoryLimitTests, DisabledRetentionCreatesNoPhantomOriginalState) {
+  EditorHistoryService history;
+  int value = 0;
+  history.set_max_steps(0);
+  EXPECT_TRUE(history.history_entries(10).empty());
+  EXPECT_FALSE(history.restore_history(0).ok);
+  set_value(history, value, 1);
+  EXPECT_TRUE(history.history_entries(10).empty());
+  EXPECT_EQ(history.undo_count(), 0u);
+  EXPECT_EQ(history.redo_count(), 0u);
+  EXPECT_FALSE(history.restore_history(0).ok);
+  EXPECT_EQ(value, 1);
+  history.set_max_steps(2);
+  EXPECT_TRUE(history.history_entries(10).empty());
+  EXPECT_FALSE(history.restore_history(0).ok);
+  history.clear();
+  ASSERT_EQ(history.history_entries(10).size(), 1u);
+  EXPECT_TRUE(history.restore_history(0).ok);
+  EXPECT_EQ(value, 1);
+}
+
+TEST(EditorHistoryLimitTests,
+     HistoryJumpReplaysObserversAndReportsSuccessfulStepsBeforeFailure) {
+  EditorHistoryService history;
+  int value = 0;
+  RetainedValueCommand *failing = nullptr;
+  for (int next = 1; next <= 4; ++next) {
+    auto command = std::make_unique<RetainedValueCommand>(value, next);
+    if (next == 2) {
+      failing = command.get();
+    }
+    ASSERT_TRUE(history.execute(std::move(command)).ok);
+  }
+  ASSERT_NE(failing, nullptr);
+  failing->fail_undo = true;
+  int changes = 0;
+  int settled = 0;
+  history.set_change_observer([&] { ++changes; });
+  history.set_content_settled_observer([&](bool committed) {
+    EXPECT_TRUE(committed);
+    ++settled;
+  });
+  const auto rejected = history.restore_history(1);
+  EXPECT_FALSE(rejected.ok);
+  EXPECT_TRUE(rejected.changed);
+  EXPECT_EQ(value, 2);
+  EXPECT_EQ(history.undo_count(), 2u);
+  EXPECT_EQ(history.redo_count(), 2u);
+  EXPECT_EQ(changes, 2);
+  EXPECT_EQ(settled, 2);
+  failing->fail_undo = false;
+  ASSERT_TRUE(history.restore_history(4).ok);
+  EXPECT_EQ(value, 4);
+  EXPECT_EQ(changes, 4);
+  EXPECT_EQ(settled, 4);
+  const auto unchanged = history.restore_history(4);
+  EXPECT_TRUE(unchanged.ok);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(changes, 4);
+  EXPECT_FALSE(history.restore_history(5).ok);
+  EXPECT_EQ(value, 4);
+}
+
+TEST(EditorHistoryLimitTests,
+     PublicHistoryJumpRestoresSelectionAndPublishesMonotonicRevisions) {
+  SceneSession session;
+  QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const EntityId first = session.scene().create_entity("First");
+  const EntityId second = session.scene().create_entity("Second");
+  ASSERT_TRUE(api.selection().select_objects({first}, first).ok());
+  ASSERT_TRUE(api.selection().select_objects({second}, second).ok());
+  const auto history = api.history().undo_history();
+  ASSERT_TRUE(history.can_restore);
+  ASSERT_EQ(history.entries.size(), 3u);
+  EXPECT_EQ(history.entries[0].applied_count, 2u);
+  EXPECT_TRUE(history.entries[0].current);
+  const auto selection_revision = api.selection().summary().selection_revision;
+  const auto restored = api.history().restore_history(history, 1);
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  EXPECT_TRUE(restored.changed());
+  EXPECT_EQ(session.scene().selected_entities(), std::vector<EntityId>{first});
+  EXPECT_EQ(session.scene().primary_selection(), first);
+  EXPECT_GT(api.selection().summary().selection_revision, selection_revision);
+  ASSERT_TRUE(api.query().entity(first).has_value());
+  EXPECT_TRUE(api.query().entity(first)->selected);
+  EXPECT_FALSE(api.query().entity(second)->selected);
+  const auto undone = api.history().undo_history();
+  ASSERT_EQ(undone.entries.size(), 3u);
+  EXPECT_FALSE(undone.entries[0].current);
+  EXPECT_TRUE(undone.entries[1].current);
+  ASSERT_TRUE(api.history().restore_history(undone, 2).ok());
+  EXPECT_EQ(session.scene().selected_entities(), std::vector<EntityId>{second});
+  EXPECT_EQ(session.scene().primary_selection(), second);
+  const auto current = api.history().undo_history();
+  const auto current_revision = session.history().revision();
+  const auto unchanged = api.history().restore_history(current, 2);
+  EXPECT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(session.history().revision(), current_revision);
+}
+
+TEST(EditorHistoryLimitTests,
+     PublicHistoryRejectsStaleEditsRetentionAndUnlistedTargetsWithoutMutation) {
+  SceneSession session;
+  QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session));
+  int value = 0;
+  for (int next = 1; next <= 12; ++next) {
+    set_value(session.history(), value, next);
+  }
+  const auto snapshot = api.history().undo_history();
+  ASSERT_EQ(snapshot.entries.size(), 10u);
+  const auto revision = session.history().revision();
+  EXPECT_FALSE(api.history().restore_history(snapshot, 1).ok());
+  EXPECT_EQ(value, 12);
+  EXPECT_EQ(session.history().revision(), revision);
+  set_value(session.history(), value, 13);
+  const auto edited_revision = session.history().revision();
+  EXPECT_FALSE(api.history().restore_history(snapshot, 11).ok());
+  EXPECT_EQ(value, 13);
+  EXPECT_EQ(session.history().revision(), edited_revision);
+  const auto before_retention = api.history().undo_history();
+  session.set_history_max_steps(2);
+  const auto retained_revision = session.history().revision();
+  EXPECT_FALSE(api.history().restore_history(before_retention, 12).ok());
+  EXPECT_EQ(value, 13);
+  EXPECT_EQ(session.history().revision(), retained_revision);
+  const auto retained = api.history().undo_history();
+  ASSERT_EQ(retained.entries.size(), 2u);
+  EXPECT_EQ(retained.entries.front().applied_count, 2u);
+  ASSERT_TRUE(api.history().undo().ok());
+  ASSERT_TRUE(api.history().redo().ok());
+  EXPECT_FALSE(api.history().restore_history(retained, 1).ok());
+  EXPECT_EQ(value, 13);
+}
+
+TEST(EditorHistoryLimitTests,
+     PublicHistoryRejectsSceneRebindingAndDocumentReplacement) {
+  SceneSession first;
+  SceneSession second;
+  int first_value = 0;
+  int second_value = 0;
+  set_value(first.history(), first_value, 1);
+  set_value(first.history(), first_value, 2);
+  set_value(second.history(), second_value, 1);
+  set_value(second.history(), second_value, 2);
+  const auto api_session =
+      QuaderApiSessionInternalAccess::from_scene_session(first);
+  QuaderApi api(api_session);
+  const auto original = api.history().undo_history();
+  QuaderApiSessionInternalAccess::rebind(
+      api_session, QuaderApiSessionInternalAccess::from_scene_session(second));
+  EXPECT_FALSE(api.history().restore_history(original, 1).ok());
+  EXPECT_FALSE(api.history().restore_history(original, 0).ok());
+  EXPECT_EQ(first_value, 2);
+  EXPECT_EQ(second_value, 2);
+  const auto rebound = api.history().undo_history();
+  second.replace_document(SceneContentDocument{});
+  const auto revision = second.history().revision();
+  EXPECT_FALSE(api.history().restore_history(rebound, 1).ok());
+  EXPECT_FALSE(api.history().restore_history(rebound, 0).ok());
+  EXPECT_EQ(second.history().revision(), revision);
+  EXPECT_EQ(second_value, 2);
+}
+
+TEST(EditorHistoryLimitTests,
+     PublicHistoryQueriesAndRejectedJumpsPreserveActivePropertyToolAndTransaction) {
+  for (int mode = 0; mode < 3; ++mode) {
+    SCOPED_TRACE(mode);
+    SceneSession session;
+    const auto api_session =
+        QuaderApiSessionInternalAccess::from_scene_session(session);
+    QuaderApi api(api_session);
+    QuaderToolsApi tools(api_session);
+    int value = 0;
+    set_value(session.history(), value, 1);
+    set_value(session.history(), value, 2);
+    const auto before_draft = api.history().undo_history();
+    std::optional<EditorTransaction> transaction;
+    if (mode == 0) {
+      transaction.emplace(session.history().begin_transaction("Draft"));
+      ASSERT_TRUE(transaction->active());
+    } else if (mode == 1) {
+      const auto edit = api.scene().begin_environment_color_edit();
+      ASSERT_TRUE(edit.ok()) << edit.error_message();
+      ASSERT_TRUE(api.scene().update_environment_color_edit(
+          edit.value(), {0.3F, 0.4F, 0.5F}).ok());
+    } else {
+      ASSERT_TRUE(tools.begin_primitive_creation(
+          QuaderPrimitiveCreationShape::Box).ok());
+      ASSERT_TRUE(session.native_tools().active_history_state().has_value());
+    }
+    const auto history_revision = session.history().revision();
+    const auto scene_revision = session.scene().revision();
+    const auto unavailable = api.history().undo_history();
+    EXPECT_FALSE(unavailable.can_restore);
+    EXPECT_FALSE(unavailable.unavailable_reason.empty());
+    ASSERT_EQ(unavailable.entries.size(), 3u);
+    EXPECT_FALSE(api.history().restore_history(unavailable, 1).ok());
+    EXPECT_FALSE(api.history().restore_history(before_draft, 1).ok());
+    EXPECT_EQ(session.history().revision(), history_revision);
+    EXPECT_EQ(session.scene().revision(), scene_revision);
+    EXPECT_EQ(value, 2);
+    if (mode == 0) {
+      EXPECT_TRUE(transaction->active());
+      ASSERT_TRUE(transaction->cancel().ok);
+    } else if (mode == 1) {
+      EXPECT_TRUE(session.document_commands().property_edit_active());
+      EXPECT_FLOAT_EQ(api.query().scene_settings().environment.clear_color.x,
+                      0.3F);
+      ASSERT_TRUE(session.document_commands().cancel_active_property_edit().ok);
+    } else {
+      EXPECT_TRUE(tools.has_active_primitive_creation());
+      ASSERT_TRUE(tools.cancel_active_tool_preview().ok());
+    }
+    EXPECT_TRUE(api.history().undo_history().can_restore);
+  }
 }
 
 TEST(EditorHistoryLimitTests, SceneReplacementKeepsConfiguredLimit) {

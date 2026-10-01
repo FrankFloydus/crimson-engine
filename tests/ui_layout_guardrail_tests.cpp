@@ -1649,7 +1649,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     TopToolbarSeparatorsShareTheStatusBarSubtleEdgeColor) {
+     ToolbarGroupDividersStayDistinctFromSubtleChromeEdges) {
   const std::string button_presentation =
       read_source_file("src/ui/qt_toolbar_button_presentation.cpp");
   const std::string main_window =
@@ -1658,6 +1658,12 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(button_presentation,
                   "element == PE_IndicatorToolBarSeparator");
+  const std::string divider = source_slice(
+      button_presentation, "if (element == PE_IndicatorToolBarSeparator",
+      "if (element != PE_PanelButtonCommand");
+  expect_contains(divider, "QPalette::Midlight");
+  expect_contains(divider, "qt_application_style_active(option)");
+  expect_contains(button_presentation, "PM_ToolBarSeparatorExtent");
   expect_contains(button_presentation,
                   "option->palette.brush(QPalette::Dark)");
   expect_contains(button_presentation,
@@ -1857,7 +1863,7 @@ TEST(UiLayoutGuardrailTests,
   // Only the icon is drawn locally; native button painting remains unchanged.
   expect_missing(toolbar, "paintEvent(");
   expect_contains(toolbar, "QIcon curve_tool_icon(const QPalette &palette)");
-  expect_contains(toolbar, "{ViewportToolId::UvPeel, \":/quader/icons/tool_uv_peel.png\"}");
+  expect_contains(toolbar, "{ViewportToolId::UvPeel, \":/quader/icons/tool_uv_peel.png\"");
   expect_contains(toolbar, "refresh_curve_tool_icon()");
   expect_contains(toolbar, "QEvent::PaletteChange");
   expect_contains(toolbar, "QPainter painter(&pixmap)");
@@ -1972,7 +1978,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     ViewportDisplayToolbarUsesTypedCommandsAndRetainedOwnerState) {
+     ViewportDisplaySourcesStayInPaneStripsWithRetainedOwnerState) {
   const std::string toolbar_header =
       read_source_file("src/ui/qt_viewport_display_toolbar.hpp");
   const std::string toolbar =
@@ -2029,23 +2035,17 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(ui_header,
                   "QtViewportDisplayToolbar *viewport_display_toolbar_");
-  expect_contains(
+  expect_missing(
       ui_system,
       "addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_)");
-  const std::size_t snapping_add = ui_system.find(
-      "addToolBar(Qt::TopToolBarArea, snapping_toolbar_)");
-  const std::size_t display_add = ui_system.find(
-      "addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_)");
-  ASSERT_NE(snapping_add, std::string::npos);
-  ASSERT_NE(display_add, std::string::npos);
-  EXPECT_LT(snapping_add, display_add)
-      << "the viewport display toolbar belongs immediately right of snapping";
+  expect_contains(ui_system, "viewport_display_toolbar_->hide()");
+  expect_contains(ui_system, "viewport_display_toolbar_->viewport_actions()");
   expect_contains(ui_system,
                   "editor_->commands().execute(command_id)");
-  expect_contains(ui_system, "mix_toolbar(viewport_display_toolbar_)");
-  expect_contains(menu_header, "viewport_display_toolbar_visible");
-  expect_contains(menu_header, "set_viewport_display_toolbar_visible");
-  expect_contains(menu,
+  expect_missing(ui_system, "mix_toolbar(viewport_display_toolbar_)");
+  expect_missing(menu_header, "viewport_display_toolbar_visible");
+  expect_missing(menu_header, "set_viewport_display_toolbar_visible");
+  expect_missing(menu,
                   "QStringLiteral(\"toolbar_viewport_display\")");
 }
 
@@ -2078,13 +2078,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar,
                   "presented_keybindings_revision_ == keybindings_revision");
 
-  const std::size_t display_add = ui.find(
-      "addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_)");
+  const std::size_t snapping_add = ui.find(
+      "addToolBar(Qt::TopToolBarArea, snapping_toolbar_)");
   const std::size_t texture_add = ui.find(
       "addToolBar(Qt::TopToolBarArea, texture_toolbar_)");
-  ASSERT_NE(display_add, std::string::npos);
+  ASSERT_NE(snapping_add, std::string::npos);
   ASSERT_NE(texture_add, std::string::npos);
-  EXPECT_LT(display_add, texture_add);
+  EXPECT_LT(snapping_add, texture_add);
   expect_contains(ui, "texture_toolbar_->hide()");
   expect_contains(ui, "texture_toolbar_workspace_visible_");
   expect_contains(ui, "mix_toolbar(texture_toolbar_)");
@@ -2264,7 +2264,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source,
                   "selection_toolbar_workspace_visible_");
   expect_contains(ui_source, "snapping_toolbar_workspace_visible_");
-  expect_contains(ui_source,
+  expect_missing(ui_source,
                   "viewport_display_toolbar_workspace_visible_");
   expect_contains(ui_source, "tool_toolbar_workspace_visible_");
   expect_contains(ui_header, "workspace_window_state_");
@@ -3081,18 +3081,23 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(context_selected_action, std::string::npos);
   EXPECT_LT(context_exec, context_exec_gate);
   EXPECT_LT(context_exec_gate, context_selected_action);
-  const std::size_t context_command = context_menu_source.find(
-      "editor.commands().execute(selected->command_id)");
-  const std::size_t context_command_gate = context_menu_source.find(
-      "if (!runtime_binding.current())", context_command);
-  const std::size_t context_router_sync =
-      context_menu_source.find("input_router.set_selection_mode",
-                               context_command);
-  ASSERT_NE(context_command, std::string::npos);
-  ASSERT_NE(context_command_gate, std::string::npos);
-  ASSERT_NE(context_router_sync, std::string::npos);
-  EXPECT_LT(context_command, context_command_gate);
-  EXPECT_LT(context_command_gate, context_router_sync);
+  for (const std::string_view mutation : {
+           "editor.tools().execute_action(\"curve\", \"curve.solidify.apply\")",
+           "editor.modeling().apply_selected_face_material_to_face(",
+           "editor.modeling().apply_face_material_to_selected_faces(",
+           "editor.modeling().transfer_face_texture_to_face(",
+       }) {
+    const auto context_mutation = context_menu_source.find(mutation);
+    const auto context_mutation_gate = context_menu_source.find(
+        "if (!runtime_binding.current())", context_mutation);
+    const auto context_notification = context_menu_source.find(
+        "editor.ui().notify(", context_mutation);
+    ASSERT_NE(context_mutation, std::string::npos);
+    ASSERT_NE(context_mutation_gate, std::string::npos);
+    ASSERT_NE(context_notification, std::string::npos);
+    EXPECT_LT(context_mutation, context_mutation_gate);
+    EXPECT_LT(context_mutation_gate, context_notification);
+  }
 
   const std::size_t confirmation_exec =
       delete_popup_source.find("return confirmation.present(");
@@ -3173,13 +3178,13 @@ TEST(UiLayoutGuardrailTests,
   const std::size_t context_target_gate = input.find(
       "runtime_binding_generation_ != input_binding_generation",
       context_target_pick);
-  const std::size_t context_actions =
-      input.find("editor.modeling().available_action_set(query)", context_target_pick);
+  const std::size_t context_presenter =
+      input.find("context_menu_presenter_.show(", context_target_pick);
   ASSERT_NE(context_target_pick, std::string::npos);
   ASSERT_NE(context_target_gate, std::string::npos);
-  ASSERT_NE(context_actions, std::string::npos);
+  ASSERT_NE(context_presenter, std::string::npos);
   EXPECT_LT(context_target_pick, context_target_gate);
-  EXPECT_LT(context_target_gate, context_actions);
+  EXPECT_LT(context_target_gate, context_presenter);
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -3535,7 +3540,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "qt_event_target_belongs_to_tool_settings(target)");
   expect_contains(panel, "qt_object_belongs_to_tool_settings_panel(target)");
   expect_missing(panel, "floating.tool_settings");
-  expect_contains(panel, "editor.modeling().available_action_set(query)");
+  expect_missing(panel, "editor.modeling().available_action_set(query)");
   expect_missing(panel, "editor.modeling().available_actions(query)");
   expect_missing(panel, "modeling.context_actions(query)");
 
@@ -3580,17 +3585,16 @@ TEST(UiLayoutGuardrailTests,
                   "editor.commands().command_id_for_tool_activation(");
   expect_contains(presenter,
                   "editor.commands().command_id_for_modeling_action(");
-  expect_contains(presenter, "editor.commands().execute(selected->command_id)");
+  expect_missing(presenter, "editor.commands().execute(selected->command_id)");
   expect_missing(presenter, "editor.commands().available()");
   expect_contains(presenter, "editor.commands().descriptor(command_id)");
-  expect_contains(presenter, "editor.commands().shortcut_for(command_id)");
+  expect_contains(presenter, "editor.commands().shortcut_for(id)");
   expect_contains(
       presenter,
       "const QuaderRevisionStamp presented_context = editor.revisions()");
   expect_contains(presenter,
                   "same_context_revision(presented_context, editor.revisions())");
-  expect_contains(presenter,
-                  "editor.commands().descriptor(selected->command_id)");
+  expect_contains(presenter, "editor.tools().execute_action(\"curve\", \"curve.solidify.apply\")");
   expect_contains(presenter, "QLatin1Char('\\t')");
   expect_contains(presenter, "QStringLiteral(\"RightMouseClick\")");
   expect_contains(presenter, "QStringLiteral(\"LeftMouseClick\")");
@@ -3601,7 +3605,7 @@ TEST(UiLayoutGuardrailTests,
                   "viewport_context_menu_action_disposition(mode,");
   expect_contains(presenter, "find_command_presentation(command_id)");
   expect_contains(presenter, "QuaderSelectionMode::Group");
-  expect_contains(presenter, "input_router.set_selection_mode(");
+  expect_missing(presenter, "input_router.set_selection_mode(");
   expect_contains(presenter, "menu.addSeparator()");
   expect_missing(presenter, "setStyleSheet(");
   expect_missing(presenter, "QMenu::item");

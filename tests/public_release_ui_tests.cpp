@@ -239,10 +239,23 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
   auto *snapping = dynamic_cast<QtSnappingToolbar *>(
       ui.main_window()->findChild<QToolBar *>(QStringLiteral("snappingToolbar")));
   auto *display = dynamic_cast<QtViewportDisplayToolbar *>(
-      ui.main_window()->findChild<QToolBar *>(QStringLiteral("viewportDisplayToolbar")));
+      ui.main_window()->findChild<QToolBar *>(QStringLiteral("viewportDisplaySources")));
   ASSERT_NE(tools, nullptr);
   ASSERT_NE(snapping, nullptr);
   ASSERT_NE(display, nullptr);
+  EXPECT_EQ(ui.main_window()->toolBarArea(display), Qt::NoToolBarArea);
+  EXPECT_TRUE(display->isHidden());
+  EXPECT_FALSE(display->toggleViewAction()->isVisible());
+  EXPECT_EQ(ui.main_window()->findChild<QToolBar *>(
+                QStringLiteral("viewportDisplayToolbar")), nullptr);
+  const auto tool_actions = tools->actions();
+  ASSERT_EQ(tool_actions.size(), 3);
+  EXPECT_EQ(tool_actions[0]->objectName(), QStringLiteral("tool_create_primitive"));
+  EXPECT_EQ(tool_actions[1]->objectName(), QStringLiteral("tool_insert_edge_loop"));
+  EXPECT_EQ(tool_actions[2]->objectName(), QStringLiteral("tool_knife"));
+  for (QAction *action : tool_actions) {
+    EXPECT_FALSE(action->isSeparator());
+  }
   EXPECT_EQ(ui.main_window()->findChild<QWidget *>(QStringLiteral("viewportControlStrip")), nullptr);
   const auto snapping_actions = snapping->viewport_actions();
   const auto display_actions = display->viewport_actions();
@@ -517,7 +530,7 @@ TEST_F(PublicReleaseUiTests, MeshInspectorRetainsDoubleSidedWithoutCastShadows) 
   EXPECT_EQ(mesh->cast_shadows, before_shadows);
 }
 
-TEST_F(PublicReleaseUiTests, ObjectMenuKeepsOnlyFlatPublicGroups) {
+TEST_F(PublicReleaseUiTests, ObjectMenuKeepsPublicGroupsAndNestedCleanUp) {
   apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
   QtUiScaleApplicationController scale_controller(*qApp);
   SceneSession session;
@@ -540,8 +553,8 @@ TEST_F(PublicReleaseUiTests, ObjectMenuKeepsOnlyFlatPublicGroups) {
   EXPECT_FALSE(actions.back()->isSeparator());
   QStringList rows;
   for (auto *action : actions) {
-    EXPECT_EQ(action->menu(), nullptr);
     rows.append(action->isSeparator() ? QStringLiteral("separator")
+                : action->menu() != nullptr ? action->menu()->objectName()
                                      : action->objectName());
   }
   EXPECT_EQ(rows, (QStringList{
@@ -551,7 +564,26 @@ TEST_F(PublicReleaseUiTests, ObjectMenuKeepsOnlyFlatPublicGroups) {
       QStringLiteral("command_edit_unparent"),
       QStringLiteral("separator"),
       QStringLiteral("command_edit_duplicate"),
+      QStringLiteral("separator"),
+      QStringLiteral("menu_object_cleanup"),
   }));
+  auto *cleanup = object->findChild<QMenu *>(QStringLiteral("menu_object_cleanup"));
+  ASSERT_NE(cleanup, nullptr);
+  EXPECT_EQ(cleanup->title(), QStringLiteral("Clean Up"));
+  ASSERT_EQ(cleanup->actions().size(), 1);
+  EXPECT_EQ(cleanup->actions().front()->objectName(),
+            QStringLiteral("command_modeling_remove_doubles"));
+  EXPECT_EQ(cleanup->actions().front()->text(), QStringLiteral("Remove Doubles"));
+  EXPECT_EQ(cleanup->actions().front()->menu(), nullptr);
+  auto *mesh = menu_bar.findChild<QMenu *>(QStringLiteral("menu_mesh"));
+  ASSERT_NE(mesh, nullptr);
+  EXPECT_EQ(mesh->findChild<QAction *>(
+                QStringLiteral("command_modeling_remove_doubles")), nullptr);
+  for (const char *name : {"menu_object_align", "menu_object_distribute_centers",
+                           "menu_object_distribute_gaps", "menu_object_instances",
+                           "menu_object_materials"}) {
+    EXPECT_EQ(object->findChild<QMenu *>(QString::fromLatin1(name)), nullptr);
+  }
   EXPECT_TRUE(editor.commands().descriptor(quader_command::kDeleteSelection)
                   .has_value());
 
@@ -612,6 +644,8 @@ TEST_F(PublicReleaseUiTests, ObjectMenuKeepsOnlyFlatPublicGroups) {
     review_menu(*view, QStringLiteral("view-menu-public-") + suffix + ".png",
                 row_height);
     review_menu(*window, QStringLiteral("window-menu-public-") + suffix + ".png",
+                row_height);
+    review_menu(*cleanup, QStringLiteral("object-cleanup-menu-public-") + suffix + ".png",
                 row_height);
   };
   int row_100 = 0;

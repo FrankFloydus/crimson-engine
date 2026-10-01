@@ -8,6 +8,7 @@
 #include "core/localization_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
+#include "ui/qt_application_style.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_main_menu.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -26,6 +27,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QStyle>
+#include <QStyleOption>
 #include <QTemporaryDir>
 
 #include <filesystem>
@@ -40,6 +42,17 @@
 
 namespace quader {
 namespace {
+
+QStringList menu_entry_names(const QMenu &menu) {
+  QStringList result;
+  for (const QAction *action : menu.actions()) {
+    result.append(action->isSeparator()
+                      ? QStringLiteral("--")
+                      : action->menu() != nullptr ? action->menu()->objectName()
+                                                  : action->objectName());
+  }
+  return result;
+}
 
 class QtFileMenuTests : public testing::Test {
 protected:
@@ -65,6 +78,10 @@ protected:
         .modeling = project_->active_scene()->session->modeling(),
         .viewport_settings = viewport_settings_,
         .localization = localization_,
+        .request_quit = [this] { ++quit_requests_; },
+        .show_settings = [this] { ++preferences_requests_; },
+        .show_material_find_replace = [this] { ++material_requests_; },
+        .material_find_replace_available = [this] { return material_available_; },
         .show_autosave_recovery = [this] { ++recovery_requests_; },
         .autosave_recovery_available = [this] { return recovery_available_; },
     });
@@ -95,6 +112,16 @@ protected:
                                           Qt::DirectConnection));
   }
 
+  QMenu *undo_history_menu() const {
+    return menu_bar_->findChild<QMenu *>(QStringLiteral("menu_edit_undo_history"));
+  }
+
+  void show_undo_history_menu() {
+    ASSERT_NE(undo_history_menu(), nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(undo_history_menu(), "aboutToShow",
+                                         Qt::DirectConnection));
+  }
+
   int argc_ = 1;
   char application_name_[23] = "quader-file-menu-tests";
   char *argv_[2] = {application_name_, nullptr};
@@ -108,7 +135,11 @@ protected:
   std::unique_ptr<QMenuBar> menu_bar_;
   std::unique_ptr<QtMainMenu> menu_;
   bool recovery_available_ = false;
+  bool material_available_ = false;
   int recovery_requests_ = 0;
+  int quit_requests_ = 0;
+  int preferences_requests_ = 0;
+  int material_requests_ = 0;
   int runtime_rebinds_ = 0;
 };
 
@@ -188,7 +219,8 @@ TEST_F(QtFileMenuTests, CompactMenusKeepFocusCommandsDirectlyUnderView) {
   }
   EXPECT_FALSE(display->actions().contains(actions[0]));
   for (const char *name : {"command_viewport_toggle_transform_space",
-                           "command_viewport_spawn_window"}) {
+                           "command_viewport_spawn_window",
+                           "toolbar_viewport_display"}) {
     EXPECT_EQ(menu_bar_->findChild<QAction *>(QString::fromLatin1(name)), nullptr);
   }
   EXPECT_TRUE(editor_->commands()
@@ -220,44 +252,193 @@ TEST_F(QtFileMenuTests, SelectMenuSeparatesDistinctSelectionFamilies) {
   }
 }
 
-TEST_F(QtFileMenuTests, ObjectMenuFlattensFormerGroupsAndOmitsDelete) {
+TEST_F(QtFileMenuTests, FileAndEditMenusFollowDocumentAndHistoryOrder) {
+  menu_->refresh();
+  auto *file = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_file"));
+  auto *edit = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_edit"));
+  ASSERT_NE(file, nullptr);
+  ASSERT_NE(edit, nullptr);
+  EXPECT_EQ(menu_entry_names(*file), (QStringList{
+      QStringLiteral("command_scene_document_new"),
+      QStringLiteral("command_scene_document_open"),
+      QStringLiteral("menu_file_open_recent"),
+      QStringLiteral("menu_file_recover"),
+      QStringLiteral("--"),
+      QStringLiteral("command_scene_document_save"),
+      QStringLiteral("command_scene_document_save_as"),
+      QStringLiteral("command_scene_document_save_all"),
+      QStringLiteral("--"),
+      QStringLiteral("command_project_close"),
+      QStringLiteral("action_exit"),
+  }));
+  QStringList file_labels;
+  for (const QAction *action : file->actions()) {
+    if (!action->isSeparator()) {
+      file_labels.append(action->text().section(QLatin1Char('\t'), 0, 0));
+    }
+  }
+  EXPECT_EQ(file_labels, (QStringList{
+      QStringLiteral("New"), QStringLiteral("Open"),
+      QStringLiteral("Open Recent"), QStringLiteral("Recover"),
+      QStringLiteral("Save"), QStringLiteral("Save As"),
+      QStringLiteral("Save All"), QStringLiteral("Quit to Project List"),
+      QStringLiteral("Quit"),
+  }));
+  EXPECT_EQ(menu_entry_names(*edit), (QStringList{
+      QStringLiteral("command_edit_undo"),
+      QStringLiteral("command_edit_redo"),
+      QStringLiteral("menu_edit_undo_history"),
+      QStringLiteral("--"),
+      QStringLiteral("command_edit_cut"),
+      QStringLiteral("command_edit_copy"),
+      QStringLiteral("command_edit_paste"),
+      QStringLiteral("--"),
+      QStringLiteral("action_material_find_replace"),
+      QStringLiteral("--"),
+      QStringLiteral("action_settings"),
+  }));
+  auto *quit = file->findChild<QAction *>(QStringLiteral("action_exit"));
+  auto *preferences = edit->findChild<QAction *>(QStringLiteral("action_settings"));
+  auto *materials = edit->findChild<QAction *>(
+      QStringLiteral("action_material_find_replace"));
+  ASSERT_NE(quit, nullptr);
+  ASSERT_NE(preferences, nullptr);
+  ASSERT_NE(materials, nullptr);
+  EXPECT_EQ(preferences->text(), QStringLiteral("Preferences"));
+  EXPECT_EQ(materials->text(), QStringLiteral("Find and Replace Materials"));
+  EXPECT_FALSE(materials->isEnabled());
+  material_available_ = true;
+  ASSERT_TRUE(QMetaObject::invokeMethod(edit, "aboutToShow", Qt::DirectConnection));
+  EXPECT_TRUE(materials->isEnabled());
+  materials->trigger();
+  preferences->trigger();
+  quit->trigger();
+  EXPECT_EQ(material_requests_, 1);
+  EXPECT_EQ(preferences_requests_, 1);
+  EXPECT_EQ(quit_requests_, 1);
+}
+
+TEST_F(QtFileMenuTests, ObjectArrangementsAreNestedAndInstancesLeadMesh) {
+  menu_->refresh();
+  auto *object = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_object"));
+  auto *mesh = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_mesh"));
+  ASSERT_NE(object, nullptr);
+  ASSERT_NE(mesh, nullptr);
+  EXPECT_EQ(menu_entry_names(*object), (QStringList{
+      QStringLiteral("command_edit_group"),
+      QStringLiteral("command_edit_ungroup"),
+      QStringLiteral("command_edit_parent_to_active"),
+      QStringLiteral("command_edit_unparent"),
+      QStringLiteral("--"),
+      QStringLiteral("menu_object_align"),
+      QStringLiteral("menu_object_distribute_centers"),
+      QStringLiteral("menu_object_distribute_gaps"),
+      QStringLiteral("--"),
+      QStringLiteral("command_edit_duplicate"),
+      QStringLiteral("--"),
+      QStringLiteral("menu_object_cleanup"),
+  }));
+  auto *align = object->findChild<QMenu *>(QStringLiteral("menu_object_align"));
+  ASSERT_NE(align, nullptr);
+  EXPECT_EQ(align->title(), QStringLiteral("Align"));
+  ASSERT_EQ(align->actions().size(), 3);
+  for (const QString &axis : {QStringLiteral("x"), QStringLiteral("y"),
+                             QStringLiteral("z")}) {
+    auto *axis_menu = align->findChild<QMenu *>(
+        QStringLiteral("menu_object_align_") + axis);
+    ASSERT_NE(axis_menu, nullptr);
+    EXPECT_EQ(axis_menu->title(), axis.toUpper());
+    ASSERT_EQ(axis_menu->actions().size(), 3);
+    for (qsizetype index = 0; index < 3; ++index) {
+      const QString option = QStringList{QStringLiteral("min"),
+          QStringLiteral("center"), QStringLiteral("max")}[index];
+      const QString label = QStringList{QStringLiteral("Min"),
+          QStringLiteral("Center"), QStringLiteral("Max")}[index];
+      EXPECT_EQ(axis_menu->actions()[index]->property("quaderCommandId").toString(),
+                QStringLiteral("modeling.align.") + axis + '.' + option);
+      EXPECT_EQ(axis_menu->actions()[index]->text(), label);
+    }
+  }
+  for (const QString &kind : {QStringLiteral("centers"), QStringLiteral("gaps")}) {
+    auto *distribution = object->findChild<QMenu *>(
+        QStringLiteral("menu_object_distribute_") + kind);
+    ASSERT_NE(distribution, nullptr);
+    ASSERT_EQ(distribution->actions().size(), 3);
+    for (qsizetype index = 0; index < 3; ++index) {
+      const QString axis = QStringList{QStringLiteral("x"),
+          QStringLiteral("y"), QStringLiteral("z")}[index];
+      EXPECT_EQ(distribution->actions()[index]->text(), axis.toUpper());
+      EXPECT_EQ(distribution->actions()[index]->property("quaderCommandId").toString(),
+                QStringLiteral("modeling.distribute.") + kind + '.' + axis);
+    }
+  }
+  ASSERT_GE(mesh->actions().size(), 3);
+  EXPECT_EQ(mesh->actions()[0]->objectName(),
+            QStringLiteral("command_edit_create_instance"));
+  EXPECT_EQ(mesh->actions()[1]->objectName(),
+            QStringLiteral("command_edit_flatten_instance"));
+  EXPECT_TRUE(mesh->actions()[2]->isSeparator());
+  EXPECT_EQ(object->findChild<QAction *>(
+      QStringLiteral("command_edit_create_instance")), nullptr);
+  EXPECT_EQ(object->findChild<QAction *>(
+      QStringLiteral("action_material_find_replace")), nullptr);
+  auto *cleanup = object->findChild<QMenu *>(QStringLiteral("menu_object_cleanup"));
+  ASSERT_NE(cleanup, nullptr);
+  EXPECT_EQ(cleanup->title(), QStringLiteral("Clean Up"));
+  EXPECT_EQ(menu_entry_names(*cleanup), (QStringList{
+      QStringLiteral("command_modeling_remove_doubles"),
+  }));
+  EXPECT_EQ(mesh->findChild<QAction *>(
+      QStringLiteral("command_modeling_remove_doubles")), nullptr);
+  EXPECT_TRUE(editor_->commands().descriptor(quader_command::kDeleteSelection)
+                  .has_value());
+  EXPECT_EQ(editor_->commands().shortcut_for(quader_command::kDeleteSelection),
+            "Delete");
+  EXPECT_EQ(object->actions()[0]->text().section(QLatin1Char('\t'), 0, 0),
+            QStringLiteral("Group"));
+  EXPECT_EQ(object->actions()[1]->text().section(QLatin1Char('\t'), 0, 0),
+            QStringLiteral("Ungroup"));
+}
+
+TEST_F(QtFileMenuTests, FixedMenuLabelsRemainReadableWithoutLocalizationResources) {
+  LocalizationService unloaded_localization;
+  menu_->initialize(*menu_bar_, QtMainMenuContext{
+      .editor = *editor_,
+      .modeling = project_->active_scene()->session->modeling(),
+      .viewport_settings = viewport_settings_,
+      .localization = unloaded_localization,
+  });
+  menu_->refresh();
+  const std::pair<const char *, const char *> labels[] = {
+      {"command_scene_document_new", "New"},
+      {"command_scene_document_open", "Open"},
+      {"command_scene_document_save", "Save"},
+      {"command_scene_document_save_as", "Save As"},
+      {"command_scene_document_save_all", "Save All"},
+      {"command_project_close", "Quit to Project List"},
+      {"command_edit_group", "Group"},
+      {"command_edit_ungroup", "Ungroup"},
+      {"tool_uv_peel", "UV Peel"},
+      {"action_exit", "Quit"},
+      {"action_settings", "Preferences"},
+  };
+  for (const auto &[object_name, label] : labels) {
+    const auto *action = menu_bar_->findChild<QAction *>(QString::fromLatin1(object_name));
+    ASSERT_NE(action, nullptr) << object_name;
+    EXPECT_EQ(action->text().section(QLatin1Char('\t'), 0, 0),
+              QString::fromLatin1(label));
+  }
+}
+
+TEST_F(QtFileMenuTests, ReorganizedMenusPreserveNativeGeometryAndPresentation) {
   QApplication::setStyle(QStringLiteral("Fusion"));
   apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
   QtUiScaleApplicationController scale_controller(*application_);
   auto *object = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_object"));
   ASSERT_NE(object, nullptr);
-  const auto actions = object->actions();
-  ASSERT_FALSE(actions.empty());
-  EXPECT_FALSE(actions.front()->isSeparator());
-  EXPECT_FALSE(actions.back()->isSeparator());
-  QStringList group_starts;
-  bool starts_group = true;
-  for (auto *action : actions) {
-    EXPECT_EQ(action->menu(), nullptr);
-    EXPECT_NE(action->objectName(), QStringLiteral("command_edit_delete"));
-    if (action->isSeparator()) {
-      EXPECT_FALSE(starts_group);
-      starts_group = true;
-    } else if (starts_group) {
-      group_starts.append(action->objectName());
-      starts_group = false;
-    }
-  }
-  EXPECT_EQ(group_starts, (QStringList{
-      QStringLiteral("command_edit_create_instance"),
-      QStringLiteral("command_edit_group"),
-      QStringLiteral("command_modeling_align_x_min"),
-      QStringLiteral("command_modeling_align_y_min"),
-      QStringLiteral("command_modeling_align_z_min"),
-      QStringLiteral("command_modeling_distribute_centers_x"),
-      QStringLiteral("command_modeling_distribute_gaps_x"),
-      QStringLiteral("command_edit_duplicate"),
-      QStringLiteral("action_material_find_replace"),
-  }));
-  EXPECT_TRUE(editor_->commands().descriptor(quader_command::kDeleteSelection)
-                  .has_value());
-  EXPECT_EQ(editor_->commands().shortcut_for(quader_command::kDeleteSelection),
-            "Delete");
+  const auto created = editor_->scene().create_entity({.name = "Visual Review"});
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor_->scene().rename(created.value().id, "Renamed Review").changed());
 
   const auto review_menu = [&](QMenu &reviewed, const QString &filename,
                                int &row_height) {
@@ -267,7 +448,20 @@ TEST_F(QtFileMenuTests, ObjectMenuFlattensFormerGroupsAndOmitsDelete) {
     ASSERT_TRUE(reviewed.isVisible());
     reviewed.setActiveAction(reviewed.actions().front());
     row_height = reviewed.actionGeometry(reviewed.actions().front()).height();
-    EXPECT_GE(row_height, scale_controller.metrics().px(28));
+    QStyleOption menu_option;
+    menu_option.initFrom(&reviewed);
+    EXPECT_GE(row_height, qt_application_style_active(&menu_option)
+                              ? scale_controller.metrics().px(28)
+                              : reviewed.fontMetrics().height());
+    for (QAction *action : reviewed.actions()) {
+      if (action->isSeparator()) {
+        continue;
+      }
+      const QRect row = reviewed.actionGeometry(action);
+      EXPECT_TRUE(reviewed.rect().contains(row));
+      EXPECT_GE(row.width(), reviewed.fontMetrics().horizontalAdvance(
+          action->text().section(QLatin1Char('\t'), 0, 0)));
+    }
     const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
     if (!directory.isEmpty()) {
       ASSERT_TRUE(QDir().mkpath(directory));
@@ -279,16 +473,21 @@ TEST_F(QtFileMenuTests, ObjectMenuFlattensFormerGroupsAndOmitsDelete) {
     reviewed.close();
     QCoreApplication::processEvents();
   };
-  auto *view = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_view"));
-  auto *window = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_window"));
-  ASSERT_NE(view, nullptr);
-  ASSERT_NE(window, nullptr);
   const auto review_roots = [&](const QString &suffix) {
     int row_height = 0;
-    review_menu(*view, QStringLiteral("view-menu-full-") + suffix + ".png",
-                row_height);
-    review_menu(*window, QStringLiteral("window-menu-full-") + suffix + ".png",
-                row_height);
+    for (const QString &name : {QStringLiteral("file"), QStringLiteral("edit"),
+                               QStringLiteral("edit_undo_history"),
+                               QStringLiteral("mesh"),
+                               QStringLiteral("uv"),
+                               QStringLiteral("object_cleanup"),
+                               QStringLiteral("object_align"),
+                               QStringLiteral("object_align_x"),
+                               QStringLiteral("object_distribute_centers")}) {
+      auto *reviewed = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_") + name);
+      ASSERT_NE(reviewed, nullptr);
+      review_menu(*reviewed, name + QStringLiteral("-menu-full-") + suffix + ".png",
+                  row_height);
+    }
   };
   int row_100 = 0;
   review_menu(*object, QStringLiteral("object-menu-full-100.png"), row_100);
@@ -303,6 +502,20 @@ TEST_F(QtFileMenuTests, ObjectMenuFlattensFormerGroupsAndOmitsDelete) {
   review_menu(*object, QStringLiteral("object-menu-full-scale-down.png"), row_down);
   EXPECT_EQ(row_down, row_100);
   review_roots(QStringLiteral("scale-down"));
+  application_->setLayoutDirection(Qt::RightToLeft);
+  int row_rtl = 0;
+  review_menu(*object, QStringLiteral("object-menu-full-rtl.png"), row_rtl);
+  review_roots(QStringLiteral("rtl"));
+  EXPECT_EQ(row_rtl, row_100);
+  application_->setLayoutDirection(Qt::LeftToRight);
+  const QPalette native_palette = QApplication::style()->standardPalette();
+  apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  int row_contrast = 0;
+  review_menu(*object, QStringLiteral("object-menu-full-high-contrast.png"), row_contrast);
+  review_roots(QStringLiteral("high-contrast"));
+  apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::NoPreference);
 }
 
 TEST_F(QtFileMenuTests,
@@ -365,6 +578,20 @@ TEST_F(QtFileMenuTests, RemovedMenuEntriesRetainTheirPublicCommands) {
            quader_command::kToolsActivateCreateSphere,
            quader_command::kToolsActivateCreateCone,
            quader_command::kToolsActivateCreateTorus,
+           quader_command::kToolsActivatePoly,
+           quader_command::kToolsActivateCurve,
+           quader_command::kProjectNew,
+           quader_command::kProjectOpen,
+           quader_command::kProjectExportSelectionObj,
+           quader_command::kSceneDocumentNext,
+           quader_command::kSceneDocumentPrevious,
+           quader_command::kSceneDocumentClose,
+           quader_command::kEditRepeatLastAction,
+           quader_command::kSceneLayersRemoveSelection,
+           quader_command::kToolsActivateLinearArray,
+           quader_command::kToolsActivateRadialArray,
+           quader_command::kToolsActivatePathArray,
+           quader_command::kToolsActivateMirror,
            quader_command::kViewportViewTop,
            quader_command::kViewportShadingShaded,
            quader_command::kSelectToggleBackfaceSelection,
@@ -381,6 +608,194 @@ TEST_F(QtFileMenuTests, RemovedMenuEntriesRetainTheirPublicCommands) {
       quader_command::kViewportShadingSolid).ok());
   EXPECT_EQ(editor_->viewports().shading_mode(ViewportPaneId::Perspective),
             QuaderShadingMode::Solid);
+}
+
+TEST_F(QtFileMenuTests, UndoHistoryLoadsTenLabelsOnOpeningAndRestoresSelectedState) {
+  ASSERT_EQ(undo_history_menu()->actions().size(), 1);
+  EXPECT_EQ(undo_history_menu()->actions().front()->text(),
+            QStringLiteral("No undo history"));
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 1);
+  EXPECT_EQ(undo_history_menu()->actions().front()->text(),
+            QStringLiteral("Original"));
+  EXPECT_FALSE(undo_history_menu()->actions().front()->isEnabled());
+  EXPECT_FALSE(undo_history_menu()->actions().front()->isCheckable());
+
+  EntityId first_entity = kInvalidEntityId;
+  for (int index = 0; index < 12; ++index) {
+    const auto created = editor_->scene().create_entity(
+        {.name = "Entity " + std::to_string(index)});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    if (index == 0) {
+      first_entity = created.value().id;
+    }
+  }
+  ASSERT_TRUE(editor_->scene().rename(first_entity, "Named & Entity").changed());
+  menu_->refresh();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 1);
+  EXPECT_EQ(undo_history_menu()->actions().front()->text(),
+            QStringLiteral("Original"));
+
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 10);
+  EXPECT_EQ(undo_history_menu()->actions().front()->text(),
+            QStringLiteral("Rename Entity"));
+  EXPECT_FALSE(undo_history_menu()->actions().front()->isEnabled());
+  EXPECT_TRUE(undo_history_menu()->actions().front()->shortcut().isEmpty());
+  for (const QAction *action : undo_history_menu()->actions()) {
+    EXPECT_FALSE(action->isCheckable());
+    EXPECT_FALSE(action->isChecked());
+  }
+  for (qsizetype index = 1; index < 10; ++index) {
+    EXPECT_EQ(undo_history_menu()->actions()[index]->text(),
+              QStringLiteral("Create Entity"));
+    EXPECT_FALSE(undo_history_menu()->actions()[index]->isChecked());
+  }
+  undo_history_menu()->actions()[9]->trigger();
+  EXPECT_EQ(editor_->query().entities().size(), 4u);
+  ASSERT_TRUE(editor_->query().entity(first_entity).has_value());
+  EXPECT_EQ(editor_->query().entity(first_entity)->name, "Entity 0");
+  EXPECT_TRUE(editor_->history().can_redo());
+
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 10);
+  for (const QAction *action : undo_history_menu()->actions()) {
+    EXPECT_FALSE(action->isCheckable());
+    EXPECT_FALSE(action->isChecked());
+  }
+  EXPECT_FALSE(undo_history_menu()->actions()[9]->isEnabled());
+  EXPECT_TRUE(undo_history_menu()->actions().front()->isEnabled());
+  undo_history_menu()->actions().front()->trigger();
+  EXPECT_EQ(editor_->query().entities().size(), 12u);
+  EXPECT_EQ(editor_->query().entity(first_entity)->name, "Named & Entity");
+  EXPECT_FALSE(editor_->history().can_redo());
+
+  show_undo_history_menu();
+  QAction *current = undo_history_menu()->actions().front();
+  ASSERT_FALSE(current->isEnabled());
+  EXPECT_FALSE(current->isCheckable());
+  current->trigger();
+  EXPECT_FALSE(current->isCheckable());
+  EXPECT_FALSE(current->isChecked());
+  EXPECT_EQ(editor_->query().entities().size(), 12u);
+}
+
+TEST_F(QtFileMenuTests, OriginalHistoryRowRestoresInitialStateAndKeepsRedoAvailable) {
+  ASSERT_TRUE(editor_->scene().create_entity({.name = "First"}).ok());
+  ASSERT_TRUE(editor_->scene().create_entity({.name = "Second"}).ok());
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 3);
+  QAction *original = undo_history_menu()->actions().back();
+  EXPECT_EQ(original->text(), QStringLiteral("Original"));
+  EXPECT_TRUE(original->isEnabled());
+  EXPECT_FALSE(original->isCheckable());
+  EXPECT_FALSE(original->isChecked());
+  original->trigger();
+  EXPECT_TRUE(editor_->query().entities().empty());
+  EXPECT_FALSE(editor_->history().can_undo());
+  EXPECT_TRUE(editor_->history().can_redo());
+
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 3);
+  EXPECT_FALSE(undo_history_menu()->actions().back()->isEnabled());
+  for (const QAction *action : undo_history_menu()->actions()) {
+    EXPECT_FALSE(action->isCheckable());
+    EXPECT_FALSE(action->isChecked());
+  }
+  undo_history_menu()->actions().front()->trigger();
+  EXPECT_EQ(editor_->query().entities().size(), 2u);
+  EXPECT_TRUE(editor_->history().can_undo());
+  EXPECT_FALSE(editor_->history().can_redo());
+}
+
+TEST_F(QtFileMenuTests, UserSelectionIsListedAndGroupingKeepsItsInternalSelectionInOneStep) {
+  const auto first = editor_->scene().create_entity({.name = "First"});
+  const auto second = editor_->scene().create_entity({.name = "Second"});
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  const auto before_selection = editor_->history().undo_history();
+  ASSERT_TRUE(editor_->selection()
+                  .select_objects({first.value().id, second.value().id},
+                                  second.value().id)
+                  .changed());
+  const auto selected_history = editor_->history().undo_history();
+  ASSERT_EQ(selected_history.entries.size(), before_selection.entries.size() + 1u);
+  ASSERT_FALSE(selected_history.entries.empty());
+  EXPECT_EQ(selected_history.entries.front().label, "Select Entities");
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(),
+            static_cast<qsizetype>(selected_history.entries.size()));
+  EXPECT_EQ(undo_history_menu()->actions().front()->text(),
+            QStringLiteral("Select Entities"));
+  EXPECT_FALSE(undo_history_menu()->actions().front()->isCheckable());
+
+  const QuaderApiVoidResult grouped =
+      editor_->commands().execute(quader_command::kGroupSelection);
+  ASSERT_TRUE(grouped.ok()) << grouped.error_message();
+  ASSERT_TRUE(grouped.changed());
+  const auto grouped_history = editor_->history().undo_history();
+  ASSERT_EQ(grouped_history.entries.size(), selected_history.entries.size() + 1u);
+  EXPECT_EQ(grouped_history.entries.front().applied_count,
+            selected_history.entries.front().applied_count + 1u);
+  std::size_t selection_entries = 0u;
+  for (const QuaderUndoHistoryEntry &entry : grouped_history.entries) {
+    if (entry.label == "Select Entities") {
+      ++selection_entries;
+    }
+  }
+  EXPECT_EQ(selection_entries, 1u);
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(),
+            static_cast<qsizetype>(grouped_history.entries.size()));
+  EXPECT_EQ(undo_history_menu()->actions().front()->text(),
+            QString::fromStdString(editor_->history().snapshot().undo_label));
+  EXPECT_EQ(undo_history_menu()->actions()[1]->text(),
+            QStringLiteral("Select Entities"));
+  for (const QAction *action : undo_history_menu()->actions()) {
+    EXPECT_FALSE(action->isCheckable());
+    EXPECT_FALSE(action->isChecked());
+  }
+}
+
+TEST_F(QtFileMenuTests, UndoHistoryRejectsStaleRowsAndSceneRebinding) {
+  const auto created = editor_->scene().create_entity({.name = "First"});
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor_->scene().create_entity({.name = "Second"}).ok());
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 3);
+  QAction *stale = undo_history_menu()->actions()[1];
+  EXPECT_EQ(stale->text(), QStringLiteral("Create Entity"));
+  ASSERT_TRUE(stale->isEnabled());
+  std::vector<QuaderNotification> notifications;
+  editor_->ui().set_runtime_hooks({
+      .notify = [&](QuaderNotification notification) {
+        notifications.push_back(std::move(notification));
+        return QuaderApiVoidResult{.ok = true};
+      },
+  });
+  ASSERT_TRUE(editor_->scene().rename(created.value().id, "Renamed").changed());
+  stale->trigger();
+  EXPECT_EQ(editor_->query().entity(created.value().id)->name, "Renamed");
+  ASSERT_EQ(notifications.size(), 1u);
+  EXPECT_EQ(notifications.front().level, QuaderNotificationLevel::Error);
+  EXPECT_FALSE(notifications.front().message.empty());
+
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 4);
+  QPointer<QAction> previous_scene = undo_history_menu()->actions()[2];
+  EXPECT_EQ(previous_scene->text(), QStringLiteral("Create Entity"));
+  ASSERT_TRUE(editor_->scene_documents().new_scene().ok());
+  ASSERT_FALSE(previous_scene.isNull());
+  previous_scene->trigger();
+  EXPECT_TRUE(editor_->query().entities().empty());
+  ASSERT_EQ(notifications.size(), 2u);
+  EXPECT_EQ(notifications.back().level, QuaderNotificationLevel::Error);
+  EXPECT_FALSE(notifications.back().message.empty());
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 1);
+  EXPECT_EQ(undo_history_menu()->actions().front()->text(), QStringLiteral("Original"));
+  EXPECT_FALSE(undo_history_menu()->actions().front()->isEnabled());
+  EXPECT_FALSE(undo_history_menu()->actions().front()->isCheckable());
 }
 
 TEST_F(QtFileMenuTests, ComponentMenusPresentOnlyTheInterpolatedBridge) {
@@ -543,9 +958,9 @@ TEST_F(QtFileMenuTests, RecentScenesRefreshOnlyWhenOpenedAndKeepFiveEntries) {
   const QList<QAction *> recent = recent_menu()->actions();
   ASSERT_EQ(recent.size(), 5);
   EXPECT_EQ(recent.front()->text(),
-            QStringLiteral("Scene && Six (Project && One)"));
+            QStringLiteral("Scene && Six"));
   EXPECT_EQ(recent.back()->text(),
-            QStringLiteral("Scene 1 (Project && One)"));
+            QStringLiteral("Scene 1"));
   const std::filesystem::path latest_scene =
       project_->root() / "Scenes" / "Scene & Six.qdr";
   EXPECT_EQ(recent.front()->toolTip(),
@@ -609,6 +1024,52 @@ TEST_F(QtFileMenuTests, RecentSceneActionRebindsInPlaceAndReportsOpenFailure) {
   EXPECT_FALSE(notifications.front().message.empty());
 }
 
+TEST_F(QtFileMenuTests, RecentSceneRowsFollowTheOpenProjectAndRejectStaleActions) {
+  save_active_scene("First Project Scene");
+  const std::filesystem::path first_manifest = editor_->project().manifest_path();
+  show_recent_menu();
+  ASSERT_EQ(recent_menu()->actions().size(), 1);
+  QPointer<QAction> first_action(recent_menu()->actions().front());
+  ASSERT_EQ(first_action->text(), QStringLiteral("First Project Scene"));
+
+  const std::filesystem::path second_root = root_ / "Second Project";
+  ASSERT_TRUE(std::filesystem::create_directory(second_root));
+  ASSERT_TRUE(editor_->project().create(second_root).ok());
+  save_active_scene("Second Project Scene");
+  const SceneSessionId second_scene = project_->active_scene_id();
+  const int rebinds_before = runtime_rebinds_;
+  std::vector<QuaderNotification> notifications;
+  editor_->ui().set_runtime_hooks({
+      .notify = [&](QuaderNotification notification) {
+        notifications.push_back(std::move(notification));
+        return QuaderApiVoidResult{.ok = true};
+      },
+  });
+  ASSERT_FALSE(first_action.isNull());
+  first_action->trigger();
+  EXPECT_EQ(editor_->project().root(), second_root);
+  EXPECT_EQ(project_->active_scene_id(), second_scene);
+  EXPECT_EQ(runtime_rebinds_, rebinds_before);
+  ASSERT_EQ(notifications.size(), 1u);
+  EXPECT_EQ(notifications.front().level, QuaderNotificationLevel::Error);
+
+  show_recent_menu();
+  ASSERT_EQ(recent_menu()->actions().size(), 1);
+  EXPECT_EQ(recent_menu()->actions().front()->text(),
+            QStringLiteral("Second Project Scene"));
+  ASSERT_TRUE(editor_->project().open(first_manifest).ok());
+  show_recent_menu();
+  ASSERT_EQ(recent_menu()->actions().size(), 1);
+  EXPECT_EQ(recent_menu()->actions().front()->text(),
+            QStringLiteral("First Project Scene"));
+  ASSERT_TRUE(editor_->project().close().ok());
+  show_recent_menu();
+  ASSERT_EQ(recent_menu()->actions().size(), 1);
+  EXPECT_EQ(recent_menu()->actions().front()->objectName(),
+            QStringLiteral("action_no_recent_scenes"));
+  EXPECT_FALSE(recent_menu()->actions().front()->isEnabled());
+}
+
 TEST_F(QtFileMenuTests, RebuildLocalizesTheEmptyRecentAndRecoveryMenus) {
   menu_->refresh();
   auto *project_return = menu_bar_->findChild<QAction *>(
@@ -636,6 +1097,17 @@ TEST_F(QtFileMenuTests, RebuildLocalizesTheEmptyRecentAndRecoveryMenus) {
   ASSERT_NE(recover, nullptr);
   EXPECT_EQ(recover->text(), QString::fromStdString(localization_.text(
       "ui.menu.file.recover_autosave", "Auto Save...")));
+  show_undo_history_menu();
+  ASSERT_EQ(undo_history_menu()->actions().size(), 1);
+  EXPECT_EQ(undo_history_menu()->actions().front()->text(),
+            QStringLiteral("Originale"));
+  EXPECT_FALSE(undo_history_menu()->actions().front()->isCheckable());
+  auto *cleanup = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_object_cleanup"));
+  auto *uv_peel = menu_bar_->findChild<QAction *>(QStringLiteral("tool_uv_peel"));
+  ASSERT_NE(cleanup, nullptr);
+  ASSERT_NE(uv_peel, nullptr);
+  EXPECT_EQ(cleanup->title(), QStringLiteral("Pulizia"));
+  EXPECT_EQ(uv_peel->text(), QStringLiteral("Distensione UV"));
 }
 
 } // namespace

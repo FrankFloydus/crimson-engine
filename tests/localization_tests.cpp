@@ -263,8 +263,8 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.current_locale(), "it-IT");
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "&Modifica");
     EXPECT_EQ(localization.text("ui.menu.object.materials.find_replace",
-                                "Find/Replace Materials..."),
-              "Trova/Sostituisci materiali…");
+                                "Find and Replace Materials"),
+              "Trova e sostituisci materiali");
     EXPECT_EQ(localization.text("ui.menu.mesh", "Mesh"), "Me&sh");
     EXPECT_EQ(localization.text("ui.menu.vertex", "Vertex"), "Ver&tice");
     EXPECT_EQ(localization.text("ui.menu.edge", "Edge"), "Spi&golo");
@@ -364,8 +364,8 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_TRUE(localization.select_locale("en-US"));
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "&Edit");
     EXPECT_EQ(localization.text("ui.menu.object.materials.find_replace",
-                                "Find/Replace Materials..."),
-              "Find/Replace Materials…");
+                                "Find and Replace Materials"),
+              "Find and Replace Materials");
     EXPECT_EQ(localization.text("ui.menu.mesh", "Mesh"), "&Mesh");
     EXPECT_EQ(localization.text("ui.menu.vertex", "Vertex"), "&Vertex");
     EXPECT_EQ(localization.text("ui.menu.edge", "Edge"), "Ed&ge");

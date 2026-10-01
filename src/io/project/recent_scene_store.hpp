@@ -28,7 +28,7 @@ struct RecentSceneEntry {
   bool available = false;
 };
 
-/// Persists the five most recently used saved scenes in per-user storage.
+/// Persists each physical project's five most recent saved scenes in user storage.
 class RecentSceneStore final {
 public:
   static constexpr std::size_t kMaximumEntries = 5u;
@@ -40,7 +40,9 @@ public:
     return storage_path_;
   }
 
-  [[nodiscard]] ProjectIoResult<std::vector<RecentSceneEntry>> load() const;
+  /// An optional manifest filters the retained list before its per-project limit.
+  [[nodiscard]] ProjectIoResult<std::vector<RecentSceneEntry>>
+  load(const std::filesystem::path &project_manifest = {}) const;
 
   /**
    * Call after a saved scene is successfully opened, saved or edited. Repeated

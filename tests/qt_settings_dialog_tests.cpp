@@ -5651,7 +5651,19 @@ TEST(QtMainMenuTests,
           ++action_index;
         }
       };
-  expect_cleanup_tail(*mesh_menu, {"command_modeling_remove_doubles"});
+  auto *object_cleanup = object_menu->findChild<QMenu *>(
+      QStringLiteral("menu_object_cleanup"));
+  ASSERT_NE(object_cleanup, nullptr);
+  EXPECT_EQ(object_cleanup->title(), QStringLiteral("Clean Up"));
+  const QList<QAction *> object_actions = object_menu->actions();
+  ASSERT_GE(object_actions.size(), 2);
+  EXPECT_EQ(object_actions.back(), object_cleanup->menuAction());
+  EXPECT_TRUE(object_actions[object_actions.size() - 2]->isSeparator());
+  ASSERT_EQ(object_cleanup->actions().size(), 1);
+  EXPECT_EQ(object_cleanup->actions().front()->objectName(),
+            QStringLiteral("command_modeling_remove_doubles"));
+  EXPECT_EQ(mesh_menu->findChild<QAction *>(
+                QStringLiteral("command_modeling_remove_doubles")), nullptr);
   expect_cleanup_tail(*vertex_menu,
                       {"command_modeling_dissolve_vertices"});
   expect_cleanup_tail(*edge_menu, {"command_modeling_dissolve_edges",
@@ -5773,7 +5785,7 @@ TEST(QtMainMenuTests,
   ASSERT_TRUE(shared_face_shading.has_value());
   EXPECT_TRUE(shared_face_shading->enabled);
   EXPECT_FALSE(shade_faces_smooth->isEnabled());
-  EXPECT_EQ(uv_peel->text(), QStringLiteral("Guided UV Peel"));
+  EXPECT_EQ(uv_peel->text(), QStringLiteral("UV Peel"));
   EXPECT_EQ(align_texture_to_grid->text(), QStringLiteral("To Grid"));
 
   ASSERT_TRUE(insert_edge_loop->isEnabled());
@@ -5987,7 +5999,7 @@ TEST(QtMainMenuTests,
 }
 
 TEST(QtMainMenuTests,
-     DirectArrangementCommandsRemainModeScopedWithoutSubmenus) {
+     NestedArrangementCommandsRemainModeScoped) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-align-menu-tests";
@@ -6031,6 +6043,12 @@ TEST(QtMainMenuTests,
       menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_arrange"));
   auto *snapping_menu =
       menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_snapping"));
+  auto *align_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_align"));
+  auto *align_x_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_align_x"));
+  auto *distribute_centers_menu = menu_bar.findChild<QMenu *>(
+      QStringLiteral("menu_object_distribute_centers"));
   auto *align_x_min = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_align_x_min"));
   auto *grid_snap =
@@ -6039,9 +6057,15 @@ TEST(QtMainMenuTests,
   ASSERT_NE(object_menu, nullptr);
   EXPECT_EQ(arrange_menu, nullptr);
   EXPECT_EQ(snapping_menu, nullptr);
+  ASSERT_NE(align_menu, nullptr);
+  ASSERT_NE(align_x_menu, nullptr);
+  ASSERT_NE(distribute_centers_menu, nullptr);
   ASSERT_NE(align_x_min, nullptr);
   EXPECT_EQ(grid_snap, nullptr);
-  EXPECT_TRUE(object_menu->actions().contains(align_x_min));
+  EXPECT_TRUE(object_menu->actions().contains(align_menu->menuAction()));
+  EXPECT_TRUE(align_menu->actions().contains(align_x_menu->menuAction()));
+  EXPECT_TRUE(align_x_menu->actions().contains(align_x_min));
+  EXPECT_FALSE(object_menu->actions().contains(align_x_min));
   EXPECT_EQ(menu_bar.findChild<QAction *>(
                 QStringLiteral("action_align_snap_to_grid")),
             nullptr);
@@ -6067,13 +6091,18 @@ TEST(QtMainMenuTests,
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
                                         Qt::DirectConnection));
-  EXPECT_EQ(align_x_min->text(), QStringLiteral("Align X Minimum"));
+  EXPECT_EQ(align_menu->title(), QStringLiteral("Align"));
+  EXPECT_EQ(align_x_menu->title(), QStringLiteral("X"));
+  EXPECT_EQ(align_x_min->text(), QStringLiteral("Min"));
   auto *distribute_centers = menu_bar.findChild<QAction *>(
       QStringLiteral("command_modeling_distribute_centers_x"));
   ASSERT_NE(distribute_centers, nullptr);
-  EXPECT_TRUE(object_menu->actions().contains(distribute_centers));
-  EXPECT_EQ(distribute_centers->text(),
-            QStringLiteral("Distribute Centers Along X"));
+  EXPECT_TRUE(object_menu->actions().contains(
+      distribute_centers_menu->menuAction()));
+  EXPECT_TRUE(distribute_centers_menu->actions().contains(distribute_centers));
+  EXPECT_FALSE(object_menu->actions().contains(distribute_centers));
+  EXPECT_EQ(distribute_centers_menu->title(), QStringLiteral("Distribute Center"));
+  EXPECT_EQ(distribute_centers->text(), QStringLiteral("X"));
 
 }
 
@@ -6269,7 +6298,7 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
 }
 
 TEST(QtMainMenuTests,
-     FindReplaceIsPresentationOnlyAndTracksAvailabilityAndLocale) {
+     EditFindReplaceIsPresentationOnlyAndTracksAvailabilityAndLocale) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-main-menu-find-replace-tests";
@@ -6300,14 +6329,17 @@ TEST(QtMainMenuTests,
 
   auto *object_menu =
       menu_bar.findChild<QMenu *>(QStringLiteral("menu_object"));
+  auto *edit_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
   auto *materials_menu =
       menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_materials"));
   auto *find_replace = menu_bar.findChild<QAction *>(
       QStringLiteral("action_material_find_replace"));
   ASSERT_NE(object_menu, nullptr);
+  ASSERT_NE(edit_menu, nullptr);
   EXPECT_EQ(materials_menu, nullptr);
   ASSERT_NE(find_replace, nullptr);
-  EXPECT_TRUE(object_menu->actions().contains(find_replace));
+  EXPECT_TRUE(edit_menu->actions().contains(find_replace));
+  EXPECT_FALSE(object_menu->actions().contains(find_replace));
   EXPECT_TRUE(find_replace->shortcut().isEmpty());
   EXPECT_FALSE(find_replace->isEnabled());
   find_replace->trigger();
@@ -6315,23 +6347,23 @@ TEST(QtMainMenuTests,
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
   available = true;
-  ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
+  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_TRUE(find_replace->isEnabled());
   EXPECT_EQ(find_replace->text(),
-            QString::fromUtf8("Find/Replace Materials…"));
+            QStringLiteral("Find and Replace Materials"));
   find_replace->trigger();
   EXPECT_EQ(presentation_requests, 1);
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
   ASSERT_TRUE(localization.select_locale("it-IT"));
-  ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
+  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_EQ(find_replace->text(),
-            QString::fromUtf8("Trova/Sostituisci materiali…"));
+            QStringLiteral("Trova e sostituisci materiali"));
 
   available = false;
-  ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
+  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
                                         Qt::DirectConnection));
   EXPECT_FALSE(find_replace->isEnabled());
 }
@@ -6399,7 +6431,7 @@ TEST(QtMainMenuTests, RebuildAndDestructionReleaseOwnedHierarchy) {
 }
 
 TEST(QtMainMenuTests,
-     CloseCommandsRebindRuntimeWithoutDestroyingTheirDispatchOwner) {
+     SceneCloseDispatchAndProjectMenuRebindWithoutDestroyingRetainedActions) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-main-menu-rebind-tests";
@@ -6438,12 +6470,12 @@ TEST(QtMainMenuTests,
 
   QPointer<QMenu> file_menu =
       menu_bar.findChild<QMenu *>(QStringLiteral("menu_file"));
-  QPointer<QAction> close_scene = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_scene_document_close"));
   QPointer<QAction> close_project =
       menu_bar.findChild<QAction *>(QStringLiteral("command_project_close"));
   ASSERT_FALSE(file_menu.isNull());
-  ASSERT_FALSE(close_scene.isNull());
+  EXPECT_EQ(menu_bar.findChild<QAction *>(
+                QStringLiteral("command_scene_document_close")),
+            nullptr);
   ASSERT_FALSE(close_project.isNull());
 
   int synchronous_rebinds = 0;
@@ -6452,26 +6484,27 @@ TEST(QtMainMenuTests,
         ++synchronous_rebinds;
         menu.rebind_runtime(editor, replacement.modeling());
         EXPECT_FALSE(file_menu.isNull());
-        EXPECT_FALSE(close_scene.isNull());
         EXPECT_FALSE(close_project.isNull());
       });
 
   QMenu *const retained_file_menu = file_menu.data();
-  QAction *const retained_scene_action = close_scene.data();
   QAction *const retained_project_action = close_project.data();
-  close_scene->trigger();
+  const auto close_scene_result =
+      editor.commands().execute(quader_command::kSceneDocumentClose);
+  ASSERT_TRUE(close_scene_result.ok()) << close_scene_result.error_message();
   EXPECT_EQ(synchronous_rebinds, 1);
   EXPECT_EQ(project.open_scenes().size(), 1u);
   EXPECT_EQ(file_menu.data(), retained_file_menu);
-  EXPECT_EQ(close_scene.data(), retained_scene_action);
   EXPECT_EQ(close_project.data(), retained_project_action);
 
   close_project->trigger();
   EXPECT_EQ(synchronous_rebinds, 2);
   EXPECT_FALSE(project.has_project());
   EXPECT_EQ(file_menu.data(), retained_file_menu);
-  EXPECT_EQ(close_scene.data(), retained_scene_action);
   EXPECT_EQ(close_project.data(), retained_project_action);
+  EXPECT_EQ(menu_bar.findChild<QAction *>(
+                QStringLiteral("command_scene_document_close")),
+            nullptr);
   menu.refresh();
 }
 

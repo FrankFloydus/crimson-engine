@@ -372,6 +372,31 @@ std::string menu_command_localization_key(QuaderCommandId command_id) {
   return command_localization_key(command_id);
 }
 
+std::string menu_command_fallback(QuaderCommandId command_id,
+                                 std::string_view fallback) {
+  struct MenuLabel final {
+    QuaderCommandId command_id;
+    std::string_view label;
+  };
+  constexpr std::array<MenuLabel, 9> kMenuLabels{{
+      {quader_command::kSceneDocumentNew, "New"},
+      {quader_command::kSceneDocumentOpen, "Open"},
+      {quader_command::kSceneDocumentSave, "Save"},
+      {quader_command::kSceneDocumentSaveAs, "Save As"},
+      {quader_command::kSceneDocumentSaveAll, "Save All"},
+      {quader_command::kProjectClose, "Quit to Project List"},
+      {quader_command::kGroupSelection, "Group"},
+      {quader_command::kUngroupSelection, "Ungroup"},
+      {quader_command::kDuplicateSelection, "Duplicate"},
+  }};
+  for (const MenuLabel &entry : kMenuLabels) {
+    if (same_command(command_id, entry.command_id)) {
+      return std::string(entry.label);
+    }
+  }
+  return std::string(fallback);
+}
+
 bool presentation_domain_matches_selection(
     CommandPresentationDomain domain,
     ModelingSelectionMode selection_mode) noexcept {
@@ -443,14 +468,13 @@ struct QtMainMenu::Impl {
     command_actions.clear();
     panel_actions.clear();
     tool_actions.clear();
-    object_menu = nullptr;
+    edit_menu = nullptr;
     file_menu = nullptr;
     window_menu = nullptr;
     autosave_recovery_action = nullptr;
     material_find_replace_action = nullptr;
     selection_toolbar_action = nullptr;
     snapping_toolbar_action = nullptr;
-    viewport_display_toolbar_action = nullptr;
     texture_toolbar_action = nullptr;
     tool_toolbar_action = nullptr;
   }
@@ -478,14 +502,13 @@ struct QtMainMenu::Impl {
   QtMainMenuContext context;
   std::unique_ptr<QObject> connection_context = std::make_unique<QObject>();
   std::vector<QPointer<QMenu>> top_level_menus;
-  QMenu *object_menu = nullptr;
+  QMenu *edit_menu = nullptr;
   QMenu *file_menu = nullptr;
   QMenu *window_menu = nullptr;
   QAction *autosave_recovery_action = nullptr;
   QAction *material_find_replace_action = nullptr;
   QAction *selection_toolbar_action = nullptr;
   QAction *snapping_toolbar_action = nullptr;
-  QAction *viewport_display_toolbar_action = nullptr;
   QAction *texture_toolbar_action = nullptr;
   QAction *tool_toolbar_action = nullptr;
   std::vector<CommandAction> command_actions;
@@ -725,13 +748,25 @@ struct QtMainMenu::Impl {
     }
     const std::optional<QuaderCommandDescriptor> command =
         context.editor.get().commands().descriptor(presentation.command_id);
-    const std::string fallback =
-        command.has_value() ? command->label
-                            : std::string(presentation.command_id.string());
+    const std::string fallback = menu_command_fallback(
+        presentation.command_id,
+        command.has_value() ? std::string_view{command->label}
+                            : presentation.command_id.string());
     return add_command_action(
         menu, presentation.command_id,
         menu_command_localization_key(presentation.command_id), fallback,
         command_checked_state(presentation.command_id), presentation.domain);
+  }
+
+  void add_presented_command(QMenu &menu, QuaderCommandId command_id) {
+    const CommandPresentationDescriptor *presentation =
+        find_command_presentation(command_id);
+    if (presentation != nullptr &&
+        has_command_presentation_surface(
+            *presentation, CommandPresentationSurface::MainMenu) &&
+        release_presents_command(command_id.string())) {
+      (void)add_presented_command_action(menu, *presentation);
+    }
   }
 
   template <typename Predicate>
@@ -892,12 +927,9 @@ struct QtMainMenu::Impl {
       if (descriptor == nullptr || !matches(*descriptor)) {
         continue;
       }
-      const auto command =
-          context.editor.get().commands().descriptor(presentation.command_id);
       add_command_action(menu, presentation.command_id,
-                         std::string(descriptor->keybinding_localization_key),
-                         command.has_value() ? command->label
-                                             : std::string(descriptor->fallback_label));
+                         std::string(descriptor->localization_key),
+                         std::string(descriptor->fallback_label));
     }
   }
 
@@ -925,10 +957,6 @@ struct QtMainMenu::Impl {
                           ? QString::fromStdWString(
                                 entry.scene_path.native_path().filename().wstring())
                           : QString::fromStdString(entry.scene_name);
-      if (!entry.project_name.empty()) {
-        label.append(QStringLiteral(" (%1)")
-                         .arg(QString::fromStdString(entry.project_name)));
-      }
       label.replace(QLatin1Char('&'), QStringLiteral("&&"));
       label.replace(QLatin1Char('\t'), QLatin1Char(' '));
       label.replace(QLatin1Char('\n'), QLatin1Char(' '));
@@ -944,7 +972,7 @@ struct QtMainMenu::Impl {
       QObject::connect(
           action, &QAction::triggered, connection_context.get(),
           [this, entry]() {
-            // A project switch can synchronously rebind the retained menu or
+            // Opening a scene can synchronously rebind the retained menu or
             // destroy its hierarchy. Keep the selected value alive independently.
             const QuaderRecentScene selected = entry;
             const QPointer<QObject> lifetime(connection_context.get());
@@ -970,34 +998,67 @@ struct QtMainMenu::Impl {
     }
   }
 
+  void show_no_undo_history(QMenu &menu) {
+    QAction *empty = menu.addAction(qtext(
+        context.localization, "ui.menu.edit.no_undo_history", "No undo history"));
+    empty->setObjectName(QStringLiteral("action_no_undo_history"));
+    empty->setEnabled(false);
+  }
+
+  void populate_undo_history(QMenu &menu) {
+    // History labels and retained states are queried only when this submenu opens.
+    const auto snapshot = std::make_shared<const QuaderUndoHistorySnapshot>(
+        context.editor.get().history().undo_history(10));
+    menu.clear();
+    if (snapshot->entries.empty()) {
+      show_no_undo_history(menu);
+      return;
+    }
+    for (const QuaderUndoHistoryEntry &entry : snapshot->entries) {
+      QString label = entry.applied_count == 0u
+                          ? qtext(context.localization,
+                                  "ui.menu.edit.undo_history_original", "Original")
+                          : QString::fromStdString(entry.label);
+      label.replace(QLatin1Char('&'), QStringLiteral("&&"));
+      label.replace(QLatin1Char('\t'), QLatin1Char(' '));
+      label.replace(QLatin1Char('\n'), QLatin1Char(' '));
+      label.replace(QLatin1Char('\r'), QLatin1Char(' '));
+      QAction *action = menu.addAction(label);
+      action->setObjectName(QStringLiteral("action_undo_history_%1")
+                                .arg(static_cast<qulonglong>(entry.applied_count)));
+      action->setEnabled(snapshot->can_restore && !entry.current);
+      QObject::connect(
+          action, &QAction::triggered, connection_context.get(),
+          [this, snapshot, applied_count = entry.applied_count]() {
+            const QPointer<QObject> lifetime(connection_context.get());
+            const QuaderApiVoidResult result = context.editor.get().history()
+                .restore_history(*snapshot, applied_count);
+            if (lifetime.isNull() || result.ok()) {
+              return;
+            }
+            (void)context.editor.get().ui().notify({
+                .level = QuaderNotificationLevel::Error,
+                .message = result.error_message(),
+            });
+          });
+    }
+  }
+
   void build_file_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.file", "&File");
     file_menu = menu;
     menu->setObjectName(QStringLiteral("menu_file"));
-    (void)add_presented_group(*menu, CommandPresentationDomain::File,
-                              CommandPresentationGroup::Project);
-    (void)append_presented_group(*menu, CommandPresentationDomain::File,
-                                 CommandPresentationGroup::SceneDocument);
+    add_presented_command(*menu, quader_command::kSceneDocumentNew);
+    add_presented_command(*menu, quader_command::kSceneDocumentOpen);
 
     QMenu *recent_menu = menu->addMenu(
         qtext(context.localization, "ui.menu.file.open_recent", "Open Recent"));
     recent_menu->setObjectName(QStringLiteral("menu_file_open_recent"));
     recent_menu->setToolTipsVisible(true);
-    // Place recent scenes directly after Open Scene while preserving the
-    // metadata-owned order of every command-backed row.
-    const QList<QAction *> file_actions = menu->actions();
-    for (qsizetype index = 0; index + 1 < file_actions.size(); ++index) {
-      if (file_actions[index]->objectName() ==
-          QStringLiteral("command_scene_document_open")) {
-        menu->insertMenu(file_actions[index + 1], recent_menu);
-        break;
-      }
-    }
     show_no_recent_scenes(*recent_menu);
     QObject::connect(recent_menu, &QMenu::aboutToShow, connection_context.get(),
                      [this, recent_menu] { populate_recent_scenes(*recent_menu); });
 
-    menu->addSeparator();
     QMenu *recover_menu = menu->addMenu(
         qtext(context.localization, "ui.menu.file.recover", "Recover"));
     recover_menu->setObjectName(QStringLiteral("menu_file_recover"));
@@ -1019,11 +1080,14 @@ struct QtMainMenu::Impl {
             }
           }
         });
-    if (!menu->actions().isEmpty()) {
-      menu->addSeparator();
-    }
+    menu->addSeparator();
+    add_presented_command(*menu, quader_command::kSceneDocumentSave);
+    add_presented_command(*menu, quader_command::kSceneDocumentSaveAs);
+    add_presented_command(*menu, quader_command::kSceneDocumentSaveAll);
+    menu->addSeparator();
+    add_presented_command(*menu, quader_command::kProjectClose);
     QAction *exit_action = menu->addAction(
-        qtext(context.localization, "ui.menu.file.exit", "Exit"));
+        qtext(context.localization, "ui.menu.file.exit", "Quit"));
     exit_action->setObjectName(QStringLiteral("action_exit"));
     QObject::connect(
         exit_action, &QAction::triggered, connection_context.get(), [this]() {
@@ -1036,16 +1100,43 @@ struct QtMainMenu::Impl {
 
   void build_edit_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.edit", "&Edit");
+    edit_menu = menu;
     menu->setObjectName(QStringLiteral("menu_edit"));
-    (void)add_presented_group(*menu, CommandPresentationDomain::Edit,
-                              CommandPresentationGroup::History);
+    add_presented_command(*menu, quader_command::kEditUndo);
+    add_presented_command(*menu, quader_command::kEditRedo);
+    QMenu *history = menu->addMenu(qtext(
+        context.localization, "ui.menu.edit.undo_history", "Undo History"));
+    history->setObjectName(QStringLiteral("menu_edit_undo_history"));
+    show_no_undo_history(*history);
+    QObject::connect(history, &QMenu::aboutToShow, connection_context.get(),
+                     [this, history] { populate_undo_history(*history); });
     (void)append_presented_group(*menu, CommandPresentationDomain::Edit,
                                  CommandPresentationGroup::Clipboard);
     if (!menu->actions().isEmpty()) {
       menu->addSeparator();
     }
+    if (release_has_feature(ReleaseFeature::Materials)) {
+      material_find_replace_action = menu->addAction(
+          qtext(context.localization, "ui.menu.object.materials.find_replace",
+                "Find and Replace Materials"));
+      material_find_replace_action->setObjectName(
+          QStringLiteral("action_material_find_replace"));
+      material_find_replace_action->setEnabled(
+          context.material_find_replace_available
+              ? context.material_find_replace_available()
+              : false);
+      QObject::connect(material_find_replace_action, &QAction::triggered,
+                       connection_context.get(), [this]() {
+                         QDR_PROFILE_SCOPE(
+                             "Qt main menu dispatch presentation action");
+                         if (context.show_material_find_replace) {
+                           context.show_material_find_replace();
+                         }
+                       });
+      menu->addSeparator();
+    }
     QAction *settings = menu->addAction(
-        qtext(context.localization, "ui.menu.edit.settings", "Settings..."));
+        qtext(context.localization, "ui.menu.edit.settings", "Preferences"));
     settings->setObjectName(QStringLiteral("action_settings"));
     QObject::connect(
         settings, &QAction::triggered, connection_context.get(), [this]() {
@@ -1076,22 +1167,49 @@ struct QtMainMenu::Impl {
     if (!release_has_feature(ReleaseFeature::Arrangement)) {
       return;
     }
-    for (const auto axis : {QuaderTransformAxis::X, QuaderTransformAxis::Y,
-                            QuaderTransformAxis::Z}) {
-      if (!menu.actions().isEmpty()) {
-        menu.addSeparator();
-      }
+    menu.addSeparator();
+    QMenu *align = menu.addMenu(
+        qtext(context.localization, "ui.menu.object.align", "Align"));
+    align->setObjectName(QStringLiteral("menu_object_align"));
+    struct AxisMenu final {
+      QuaderTransformAxis axis;
+      std::string_view localization_key;
+      std::string_view fallback;
+    };
+    constexpr std::array<AxisMenu, 3> kAxisMenus{{
+        {QuaderTransformAxis::X, "ui.menu.align.axis_x", "X"},
+        {QuaderTransformAxis::Y, "ui.menu.align.axis_y", "Y"},
+        {QuaderTransformAxis::Z, "ui.menu.align.axis_z", "Z"},
+    }};
+    for (const AxisMenu &entry : kAxisMenus) {
+      QMenu *axis_menu = align->addMenu(
+          qtext(context.localization, entry.localization_key, entry.fallback));
+      axis_menu->setObjectName(QStringLiteral("menu_object_align_%1")
+                                  .arg(QString::fromUtf8(
+                                           entry.fallback.data(),
+                                           static_cast<qsizetype>(entry.fallback.size()))
+                                           .toLower()));
       add_arrangement_actions(
-          menu, [axis](const QuaderMeshArrangementDescriptor &entry) {
-            return entry.kind == QuaderMeshArrangementKind::Alignment &&
-                   entry.axis == axis;
+          *axis_menu,
+          [axis = entry.axis](const QuaderMeshArrangementDescriptor &descriptor) {
+            return descriptor.kind == QuaderMeshArrangementKind::Alignment &&
+                   descriptor.axis == axis;
           });
     }
     for (const auto distribution : {QuaderMeshDistribution::Centers,
                                     QuaderMeshDistribution::Gaps}) {
-      menu.addSeparator();
+      const bool centers = distribution == QuaderMeshDistribution::Centers;
+      QMenu *distribution_menu = menu.addMenu(qtext(
+          context.localization,
+          centers ? "ui.menu.align.distribute_centers"
+                  : "ui.menu.align.distribute_gaps",
+          centers ? "Distribute Center" : "Distribute Gaps"));
+      distribution_menu->setObjectName(
+          centers ? QStringLiteral("menu_object_distribute_centers")
+                  : QStringLiteral("menu_object_distribute_gaps"));
       add_arrangement_actions(
-          menu, [distribution](const QuaderMeshArrangementDescriptor &entry) {
+          *distribution_menu,
+          [distribution](const QuaderMeshArrangementDescriptor &entry) {
             return entry.kind == QuaderMeshArrangementKind::Distribution &&
                    entry.distribution == distribution;
           });
@@ -1111,49 +1229,28 @@ struct QtMainMenu::Impl {
 
   void build_object_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.object", "&Object");
-    object_menu = menu;
     menu->setObjectName(QStringLiteral("menu_object"));
-
-    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
-                                 CommandPresentationGroup::Instances);
-    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
-                                 CommandPresentationGroup::Grouping);
-    append_arrangement_groups(*menu);
-    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
-                                 CommandPresentationGroup::Duplication);
-
-    if (release_has_feature(ReleaseFeature::Materials)) {
-      if (!menu->actions().isEmpty()) {
-        menu->addSeparator();
-      }
-      (void)add_presented_group(*menu, CommandPresentationDomain::Object,
-                                CommandPresentationGroup::Materials);
-      material_find_replace_action = menu->addAction(
-          qtext(context.localization, "ui.menu.object.materials.find_replace",
-                "Find/Replace Materials..."));
-      material_find_replace_action->setObjectName(
-          QStringLiteral("action_material_find_replace"));
-      material_find_replace_action->setEnabled(
-          context.material_find_replace_available
-              ? context.material_find_replace_available()
-              : false);
-      QObject::connect(material_find_replace_action, &QAction::triggered,
-                       connection_context.get(), [this]() {
-                         QDR_PROFILE_SCOPE(
-                             "Qt main menu dispatch presentation action");
-                         if (context.show_material_find_replace) {
-                           context.show_material_find_replace();
-                         }
-                       });
-
+    for (const QuaderCommandId command_id : {
+             quader_command::kGroupSelection, quader_command::kUngroupSelection,
+             quader_command::kParentToActive, quader_command::kUnparentSelection}) {
+      add_presented_command(*menu, command_id);
     }
+    append_arrangement_groups(*menu);
+    menu->addSeparator();
+    add_presented_command(*menu, quader_command::kDuplicateSelection);
+    menu->addSeparator();
+    (void)add_presented_submenu(
+        *menu, "ui.menu.object.cleanup", "Clean Up", "menu_object_cleanup",
+        CommandPresentationDomain::Object, CommandPresentationGroup::Cleanup);
   }
 
   void build_mesh_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.mesh", "&Mesh");
     menu->setObjectName(QStringLiteral("menu_mesh"));
     (void)add_presented_group(*menu, CommandPresentationDomain::Mesh,
-                              CommandPresentationGroup::Tools);
+                              CommandPresentationGroup::Instances);
+    (void)append_presented_group(*menu, CommandPresentationDomain::Mesh,
+                                 CommandPresentationGroup::Tools);
     (void)append_presented_group(*menu, CommandPresentationDomain::Mesh,
                                  CommandPresentationGroup::Duplication);
     (void)append_presented_group(*menu, CommandPresentationDomain::Mesh,
@@ -1322,20 +1419,6 @@ struct QtMainMenu::Impl {
                            "Qt main menu dispatch toolbar visibility");
                        if (context.set_snapping_toolbar_visible) {
                          context.set_snapping_toolbar_visible(visible);
-                       }
-                     });
-    viewport_display_toolbar_action = toolbars->addAction(
-        qtext(context.localization, "ui.toolbar.viewport_display.title",
-              "Viewport Display"));
-    viewport_display_toolbar_action->setObjectName(
-        QStringLiteral("toolbar_viewport_display"));
-    viewport_display_toolbar_action->setCheckable(true);
-    QObject::connect(viewport_display_toolbar_action, &QAction::toggled,
-                     connection_context.get(), [this](bool visible) {
-                       QDR_PROFILE_SCOPE(
-                           "Qt main menu dispatch toolbar visibility");
-                       if (context.set_viewport_display_toolbar_visible) {
-                         context.set_viewport_display_toolbar_visible(visible);
                        }
                      });
     if (release_has_feature(ReleaseFeature::UvEditing)) {
@@ -1531,16 +1614,6 @@ struct QtMainMenu::Impl {
                             ? context.snapping_toolbar_visible()
                             : false);
       }
-      if (viewport_display_toolbar_action != nullptr) {
-        present_text(*viewport_display_toolbar_action,
-                     qtext(context.localization,
-                           "ui.toolbar.viewport_display.title",
-                           "Viewport Display"));
-        present_checked(*viewport_display_toolbar_action,
-                        context.viewport_display_toolbar_visible
-                            ? context.viewport_display_toolbar_visible()
-                            : false);
-      }
       if (texture_toolbar_action != nullptr) {
         present_text(*texture_toolbar_action,
                      qtext(context.localization, "ui.toolbar.texture.title",
@@ -1553,12 +1626,12 @@ struct QtMainMenu::Impl {
 
     }
 
-    if (&menu == object_menu && material_find_replace_action != nullptr) {
-      QDR_PROFILE_SCOPE("Qt main menu sync object presentation actions");
+    if (&menu == edit_menu && material_find_replace_action != nullptr) {
+      QDR_PROFILE_SCOPE("Qt main menu sync edit presentation actions");
       present_text(*material_find_replace_action,
                    qtext(context.localization,
                          "ui.menu.object.materials.find_replace",
-                         "Find/Replace Materials..."));
+                         "Find and Replace Materials"));
       present_enabled(*material_find_replace_action,
                       context.material_find_replace_available
                           ? context.material_find_replace_available()

@@ -8,6 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "api/quader_api_session.hpp"
+#include "api/quader_api_snapshot.hpp"
 #include "core/command_result.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/commands/editor_command_service.hpp"
@@ -92,6 +93,9 @@ public:
   [[nodiscard]] bool can_redo() const;
   QuaderApiVoidResult undo();
   QuaderApiVoidResult redo();
+  [[nodiscard]] std::string history_restore_unavailable_reason() const;
+  QuaderApiVoidResult restore_history(const QuaderUndoHistorySnapshot &snapshot,
+                                     std::size_t applied_count);
   QuaderApiVoidResult repeat_last_action();
 
 private:

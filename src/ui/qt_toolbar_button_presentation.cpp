@@ -10,16 +10,20 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAction>
+#include <QActionEvent>
 #include <QColor>
 #include <QEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QProxyStyle>
+#include <QPointer>
 #include <QStyleOption>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 
 #include <algorithm>
+#include <cmath>
 
 namespace quader {
 namespace {
@@ -32,9 +36,24 @@ QColor blend(const QColor &from, const QColor &to, qreal amount) {
       from.alphaF() + ((to.alphaF() - from.alphaF()) * amount));
 }
 
+void bind_native_toolbar_separators(QToolBar &toolbar, QStyle &presentation) {
+  for (QAction *action : toolbar.actions()) {
+    if (!action->isSeparator()) {
+      continue;
+    }
+    if (QWidget *separator = toolbar.widgetForAction(action)) {
+      if (separator->style() != &presentation) {
+        separator->setStyle(&presentation);
+      }
+      separator->updateGeometry();
+      separator->update();
+    }
+  }
+}
+
 /**
- * Adapts only the semantic face state; the scale-aware Fusion base still draws
- * the complete button, label, focus rectangle, disabled state, and press.
+ * Adapts toolbar faces and native group dividers; the scale-aware Fusion base
+ * retains button labels, focus rectangles, disabled state, and press behavior.
  */
 class QtToolbarButtonPresentationStyle final : public QProxyStyle {
 public:
@@ -45,6 +64,29 @@ public:
   }
 
   bool eventFilter(QObject *watched, QEvent *event) override {
+    auto *toolbar = qobject_cast<QToolBar *>(watched);
+    const bool action_event = event->type() == QEvent::ActionAdded ||
+                              event->type() == QEvent::ActionChanged;
+    const QAction *changed_action =
+        action_event ? static_cast<QActionEvent *>(event)->action() : nullptr;
+    const bool separator_action_event =
+        toolbar != nullptr && changed_action != nullptr &&
+        changed_action->isSeparator();
+    const bool presentation_event = event->type() == QEvent::StyleChange ||
+                                    event->type() == QEvent::PaletteChange ||
+                                    event->type() == QEvent::ApplicationPaletteChange;
+    if (toolbar != nullptr && (separator_action_event || presentation_event) &&
+        !toolbar_separator_refresh_pending_) {
+      toolbar_separator_refresh_pending_ = true;
+      // ActionAdded arrives before Qt creates its native separator widget.
+      QTimer::singleShot(0, this,
+                        [this, toolbar_guard = QPointer<QToolBar>(toolbar)] {
+                          toolbar_separator_refresh_pending_ = false;
+                          if (toolbar_guard != nullptr) {
+                            bind_native_toolbar_separators(*toolbar_guard, *this);
+                          }
+                        });
+    }
     auto *button = qobject_cast<QToolButton *>(watched);
     if (button != nullptr && button->isCheckable() &&
         (event->type() == QEvent::MouseButtonPress ||
@@ -64,11 +106,24 @@ public:
       return false;
     }
     scaled_metrics_style_.set_metrics(metrics);
+    if (auto *toolbar = qobject_cast<QToolBar *>(parent())) {
+      bind_native_toolbar_separators(*toolbar, *this);
+    }
     return true;
   }
 
   int pixelMetric(PixelMetric metric, const QStyleOption *option,
                   const QWidget *widget) const override {
+    if (metric == PM_ToolBarSeparatorExtent) {
+      QStyleOption toolbar_option;
+      if (widget != nullptr) {
+        toolbar_option.initFrom(widget);
+      }
+      if (qt_application_style_active(option != nullptr ? option
+                                                       : &toolbar_option)) {
+        return scaled_metrics_style_.metrics().px(12);
+      }
+    }
     return scaled_metrics_style_.pixelMetric(metric, option, widget);
   }
 
@@ -120,7 +175,7 @@ public:
       return;
     }
     if (element == PE_IndicatorToolBarSeparator && option != nullptr &&
-        painter != nullptr) {
+        painter != nullptr && qt_application_style_active(option)) {
       const qreal device_pixel_ratio =
           painter->device() != nullptr
               ? painter->device()->devicePixelRatioF()
@@ -128,13 +183,19 @@ public:
       const qreal extent = 1.0 / std::max<qreal>(1.0, device_pixel_ratio);
       const QRectF bounds(option->rect);
       const bool horizontal = option->state.testFlag(State_Horizontal);
+      const qreal inset = scaled_metrics_style_.metrics().px(4.0);
+      const qreal center = horizontal ? bounds.center().x() : bounds.center().y();
+      const qreal aligned_center =
+          std::floor(center / extent) * extent;
       const QRectF line =
           horizontal
-              ? QRectF(bounds.center().x(), bounds.top(), extent,
-                       bounds.height())
-              : QRectF(bounds.left(), bounds.center().y(), bounds.width(),
-                       extent);
-      painter->fillRect(line, option->palette.brush(QPalette::Dark));
+              ? QRectF(aligned_center, bounds.top() + inset, extent,
+                       std::max<qreal>(0.0, bounds.height() - 2.0 * inset))
+              : QRectF(bounds.left() + inset, aligned_center,
+                       std::max<qreal>(0.0, bounds.width() - 2.0 * inset), extent);
+      painter->fillRect(
+          line, option->palette.brush(qt_toolbar_button_color_group(option->state),
+                                     QPalette::Midlight));
       return;
     }
     if (element != PE_PanelButtonCommand || option == nullptr ||
@@ -212,6 +273,7 @@ public:
 
 private:
   QtUiScaleProxyStyle scaled_metrics_style_;
+  bool toolbar_separator_refresh_pending_ = false;
 };
 
 void synchronize_accessibility(QToolButton &button, const QAction &action) {
@@ -236,8 +298,11 @@ QStyle &install_native_toolbar_button_presentation(QWidget &host) {
 }
 
 QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar) {
-  return install_native_toolbar_button_presentation(
+  QStyle &presentation = install_native_toolbar_button_presentation(
       static_cast<QWidget &>(toolbar));
+  toolbar.installEventFilter(&presentation);
+  bind_native_toolbar_separators(toolbar, presentation);
+  return presentation;
 }
 
 void apply_native_toolbar_presentation_ui_scale(

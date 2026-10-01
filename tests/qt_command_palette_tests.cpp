@@ -131,7 +131,7 @@ TEST(QtCommandPaletteTests,
   QTreeWidgetItem *uv_peel =
       find_command_item(*results, quader_command::kModelingUvPeel.string());
   ASSERT_NE(uv_peel, nullptr);
-  EXPECT_EQ(uv_peel->text(0), QStringLiteral("Guided UV Peel"));
+  EXPECT_EQ(uv_peel->text(0), QStringLiteral("UV Peel"));
   EXPECT_TRUE(
       uv_peel->text(1).startsWith(QStringLiteral("UV \u203a Texture")));
 

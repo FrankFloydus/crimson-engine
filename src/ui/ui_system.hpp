@@ -626,7 +626,6 @@ private:
   bool viewport_initialized_ = false;
   bool selection_toolbar_workspace_visible_ = true;
   bool snapping_toolbar_workspace_visible_ = true;
-  bool viewport_display_toolbar_workspace_visible_ = true;
   bool texture_toolbar_workspace_visible_ = true;
   bool tool_toolbar_workspace_visible_ = true;
   std::string workspace_window_state_;

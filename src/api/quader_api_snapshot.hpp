@@ -102,6 +102,23 @@ struct QuaderHistorySnapshot {
   std::string redo_label;
 };
 
+/// Identifies a retained document state; index zero denotes the reachable Original state.
+struct QuaderUndoHistoryEntry {
+  std::size_t applied_count = 0;
+  std::string label;
+  bool current = false;
+};
+
+/// Captures a bounded history list and the freshness fences for selecting it.
+struct QuaderUndoHistorySnapshot {
+  SceneSessionId scene_session_id;
+  std::uint64_t document_binding_generation = 0;
+  std::uint64_t history_revision = 0;
+  bool can_restore = false;
+  std::string unavailable_reason;
+  std::vector<QuaderUndoHistoryEntry> entries;
+};
+
 /**
  * Stores the Quader API Snapshot data contract used by the public Quader API surface.
  */

@@ -288,10 +288,14 @@ QSize QtUiScaleProxyStyle::sizeFromContents(
       item->menuItemType == QStyleOptionMenuItem::SubMenu) {
     const int height = std::max({size.height(), metrics_.px(28),
                                 item->fontMetrics.height() + metrics_.px(8)});
-    // Fusion derives its check/icon column from the painted row height.
-    // Reserve the added height horizontally too, so longer labels and the
-    // shortcut column retain their native separation at every scale.
-    size.rwidth() += height - size.height();
+    // Fusion paints its check/icon gutter from the final row height, while its
+    // content measurement can reserve a smaller column. Delegate measurement
+    // with room for that full gutter rather than copying native paint constants.
+    QStyleOptionMenuItem measured_item(*item);
+    measured_item.maxIconWidth = std::max(item->maxIconWidth, height);
+    const QSize measured_size = QProxyStyle::sizeFromContents(
+        type, &measured_item, contents_size, widget);
+    size.setWidth(std::max(size.width(), measured_size.width()));
     size.setHeight(height);
   }
   return size;

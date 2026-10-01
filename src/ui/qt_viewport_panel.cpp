@@ -4848,7 +4848,6 @@ void QtViewportPanel::process_viewport_input(
 
   bool show_context_menu = false;
   QPoint context_menu_global_point;
-  QuaderActionSet context_menu_action_set;
   QuaderSelectionSummary context_menu_selection;
   std::optional<QuaderHoverTarget> context_menu_material_face_target;
   const bool selection_fallback_active =
@@ -4883,36 +4882,14 @@ void QtViewportPanel::process_viewport_input(
     if (runtime_binding_generation_ != input_binding_generation) {
       return;
     }
-    const QuaderActionQuery query{
-        .surface = QuaderActionSurface::ViewportContextMenu,
-        .modal_tool_owns_viewport = modal_tool_owns_viewport(),
-        .include_disabled = true,
-        .include_hidden = false,
-    };
-    context_menu_action_set = editor.modeling().available_action_set(query);
-    const bool has_modeling_actions = std::any_of(
-        context_menu_action_set.panels.begin(),
-        context_menu_action_set.panels.end(),
-        [](const QuaderActionPanel &panel) {
-          return std::any_of(
-              panel.actions.begin(), panel.actions.end(),
-              [](const QuaderActionItem &action) {
-                return action.visibility != QuaderActionVisibility::Hidden;
-              });
-        });
     pending_context_menu_request.target_hit =
         context_menu_selection.has_selection ||
         context_menu_material_face_target.has_value();
-    // Cut/Copy/Paste remain useful target-independent context actions. Keeping
-    // this explicit also lets Paste open from an empty viewport.
-    pending_context_menu_request.has_target_independent_actions = true;
+    // The presenter resolves pointer-specific transfers and curve settings.
+    // Generic operations remain in Q; empty-space RMB has no independent actions.
+    pending_context_menu_request.has_target_independent_actions = false;
     pending_context_menu_request.has_actions =
-        viewport_context_menu_has_available_actions(
-            has_modeling_actions,
-            context_menu_selection.mode == QuaderSelectionMode::Object ||
-                context_menu_selection.mode == QuaderSelectionMode::Group,
-            context_menu_selection.has_selection,
-            context_menu_material_face_target.has_value(), true);
+        pending_context_menu_request.target_hit;
     show_context_menu =
         should_open_viewport_context_menu(pending_context_menu_request) &&
         localization_ != nullptr;
@@ -4944,7 +4921,7 @@ void QtViewportPanel::process_viewport_input(
   if (show_context_menu) {
     context_menu_presenter_.show(
         *pane_state.surface_container, context_menu_global_point, editor,
-        input_router_, *localization_, context_menu_action_set,
+        input_router_, *localization_, {},
         context_menu_selection, pending_context_menu_request.target_hit,
         context_menu_material_face_target,
         {.current_generation = &runtime_binding_generation_,

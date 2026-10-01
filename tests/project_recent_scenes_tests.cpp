@@ -25,11 +25,6 @@
 #include <string_view>
 #include <vector>
 
-#if defined(_WIN32)
-#define NOMINMAX
-#include <Windows.h>
-#endif
-
 using namespace quader;
 using namespace std::chrono_literals;
 
@@ -53,30 +48,6 @@ struct SavedRecentScene final {
   ProjectRelativePath path;
   EntityId entity = kInvalidEntityId;
 };
-
-#if defined(_WIN32)
-/// Leaves the candidate readable while refusing atomic manifest replacement.
-class RecentSceneManifestWriteLock final {
-public:
-  explicit RecentSceneManifestWriteLock(const std::filesystem::path &path)
-      : handle_(::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-                              nullptr)) {}
-
-  ~RecentSceneManifestWriteLock() {
-    if (ready()) {
-      ::CloseHandle(handle_);
-    }
-  }
-
-  [[nodiscard]] bool ready() const noexcept {
-    return handle_ != INVALID_HANDLE_VALUE;
-  }
-
-private:
-  HANDLE handle_ = INVALID_HANDLE_VALUE;
-};
-#endif
 
 /// Exercises the public recent-scene workflows with an isolated user MRU file.
 class ProjectRecentScenesTests : public ::testing::Test {
@@ -113,7 +84,7 @@ protected:
     return {scene.value(), path, entity.value().id};
   }
 
-  QuaderRecentScene closed_candidate() {
+  QuaderRecentScene foreign_candidate() {
     std::error_code error;
     const auto candidate_root = root_ / "Candidate";
     std::filesystem::create_directory(candidate_root, error);
@@ -134,6 +105,16 @@ protected:
                     .ok());
     EXPECT_TRUE(editor.scene_documents().close(target_id).ok());
     return target;
+  }
+
+  QuaderRecentScene closed_recent_scene() {
+    const auto target = save_scene("Requested");
+    const auto entries = editor_.project().recent_scenes();
+    EXPECT_FALSE(entries.empty());
+    const auto recent = entries.empty() ? QuaderRecentScene{} : entries.front();
+    save_scene("Other");
+    EXPECT_TRUE(editor_.scene_documents().close(target.session_id).ok());
+    return recent;
   }
 
   std::vector<std::string> recent_paths() const {
@@ -160,6 +141,8 @@ TEST_F(ProjectRecentScenesTests, SavesRetainFiveNewestScenesAcrossSessions) {
   EXPECT_EQ(recent_paths(), expected);
   ProjectSession restarted(storage_);
   QuaderEditorApi restarted_editor(restarted);
+  EXPECT_TRUE(restarted_editor.project().recent_scenes().empty());
+  ASSERT_TRUE(restarted_editor.project().open(project_.manifest_path()).ok());
   const auto entries = restarted_editor.project().recent_scenes();
   ASSERT_EQ(entries.size(), expected.size());
   for (std::size_t index = 0; index < entries.size(); ++index) {
@@ -169,6 +152,57 @@ TEST_F(ProjectRecentScenesTests, SavesRetainFiveNewestScenesAcrossSessions) {
     EXPECT_FALSE(entries[index].scene_name.empty());
     EXPECT_FALSE(entries[index].project_name.empty());
   }
+}
+
+TEST_F(ProjectRecentScenesTests, OtherProjectsCannotOccupyCurrentProjectsFiveRecentSlots) {
+  for (int index = 0; index < 7; ++index) {
+    save_scene("Current" + std::to_string(index));
+  }
+  const auto expected = recent_paths();
+  ASSERT_EQ(expected.size(), 5u);
+  ASSERT_TRUE(std::filesystem::create_directory(root_ / "OtherProject"));
+  ProjectSession other(storage_);
+  QuaderEditorApi other_editor(other);
+  ASSERT_TRUE(other_editor.project().create(root_ / "OtherProject").ok());
+  for (int index = 0; index < 7; ++index) {
+    const auto scene = other_editor.scene_documents().new_scene();
+    ASSERT_TRUE(scene.ok()) << scene.error_message();
+    ASSERT_TRUE(other_editor.scene_documents()
+                    .save_as(scene.value(), recent_scene_path(
+                        "Scenes/Other" + std::to_string(index) + ".qdr"))
+                    .ok());
+  }
+  EXPECT_EQ(recent_paths(), expected);
+  const auto foreign = other_editor.project().recent_scenes();
+  ASSERT_EQ(foreign.size(), 5u);
+  EXPECT_EQ(foreign.front().scene_path.portable_string(), "Scenes/Other6.qdr");
+  for (const auto &entry : foreign) {
+    EXPECT_EQ(entry.manifest_path, other.manifest_path());
+  }
+}
+
+TEST_F(ProjectRecentScenesTests, ProjectSwitchRejectsEarlierRecentEntryAndRebindsList) {
+  save_scene("Current");
+  const auto original_manifest = project_.manifest_path();
+  const auto original = editor_.project().recent_scenes();
+  ASSERT_EQ(original.size(), 1u);
+  const auto foreign = foreign_candidate();
+  ASSERT_TRUE(editor_.project().open(foreign.manifest_path).ok());
+  const auto rebound = editor_.project().recent_scenes();
+  ASSERT_EQ(rebound.size(), 2u);
+  for (const auto &entry : rebound) {
+    EXPECT_EQ(entry.manifest_path, foreign.manifest_path);
+  }
+  const auto active = project_.active_scene_id();
+  const auto before = recent_file_bytes(storage_);
+  const auto rejected = editor_.project().open_recent_scene(original.front());
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_EQ(project_.manifest_path(), foreign.manifest_path);
+  EXPECT_EQ(project_.active_scene_id(), active);
+  EXPECT_EQ(recent_file_bytes(storage_), before);
+  ASSERT_TRUE(editor_.project().open(original_manifest).ok());
+  EXPECT_EQ(recent_paths(), (std::vector<std::string>{"Scenes/Current.qdr"}));
 }
 
 TEST_F(ProjectRecentScenesTests, ActivationDoesNotPromoteButRepeatedDirtyEditsDo) {
@@ -218,7 +252,7 @@ TEST_F(ProjectRecentScenesTests, UnsavedAndRecoveredTabsStayOutUntilExplicitSave
 }
 
 TEST_F(ProjectRecentScenesTests, OpenRecentLoadsClosedSceneAndReusesResidentTab) {
-  const auto target = closed_candidate();
+  const auto target = closed_recent_scene();
   const auto opened = editor_.project().open_recent_scene(target);
   ASSERT_TRUE(opened.ok()) << opened.error_message();
   ASSERT_TRUE(opened.changed());
@@ -237,7 +271,7 @@ TEST_F(ProjectRecentScenesTests, OpenRecentLoadsClosedSceneAndReusesResidentTab)
 }
 
 TEST_F(ProjectRecentScenesTests, InvalidTargetPreservesWorkspaceAndActivePreview) {
-  const auto target = closed_candidate();
+  const auto target = closed_recent_scene();
   const auto box = editor_.modeling().create_box(
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Preview");
   ASSERT_TRUE(box.ok());
@@ -276,44 +310,38 @@ TEST_F(ProjectRecentScenesTests, InvalidTargetPreservesWorkspaceAndActivePreview
   }
 }
 
-TEST_F(ProjectRecentScenesTests, CanceledReplacementAndSavePickerPreserveWorkspace) {
-  const auto target = closed_candidate();
+TEST_F(ProjectRecentScenesTests, OpeningRecentSceneKeepsOtherDirtyScenesWithoutPrompts) {
+  const auto target = closed_recent_scene();
   ASSERT_TRUE(editor_.scene().create_entity({.name = "Keep unsaved"}).ok());
   auto *const active = project_.active_scene();
   const auto current_root = project_.root();
   const auto recent_before = recent_file_bytes(storage_);
   int prompts = 0;
   int save_pickers = 0;
-  auto decision = QuaderDirtySceneDecision::Cancel;
   editor_.scene_documents().set_runtime_hooks({
       .choose_save_scene_as_path = [&save_pickers](SceneSessionId)
           -> QuaderSceneSavePathResult {
         ++save_pickers;
         return {};
       },
-      .confirm_dirty_scene = [&prompts, &decision](const QuaderSceneDocumentInfo &,
-                                                 std::string_view action) {
-        EXPECT_EQ(action, "project.open_recent_scene");
+      .confirm_dirty_scene = [&prompts](const QuaderSceneDocumentInfo &,
+                                      std::string_view) {
         ++prompts;
-        return decision;
+        return QuaderDirtySceneDecision::Cancel;
       }});
-  for (const auto next : {QuaderDirtySceneDecision::Cancel,
-                          QuaderDirtySceneDecision::Save}) {
-    decision = next;
-    const auto result = editor_.project().open_recent_scene(target);
-    EXPECT_TRUE(result.ok()) << result.error_message();
-    EXPECT_FALSE(result.changed());
-    EXPECT_EQ(project_.root(), current_root);
-    EXPECT_EQ(project_.active_scene(), active);
-    EXPECT_TRUE(active->dirty());
-    EXPECT_EQ(recent_file_bytes(storage_), recent_before);
-  }
-  EXPECT_EQ(prompts, 2);
-  EXPECT_EQ(save_pickers, 1);
+  const auto result = editor_.project().open_recent_scene(target);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_TRUE(result.changed());
+  EXPECT_EQ(project_.root(), current_root);
+  EXPECT_NE(project_.active_scene(), active);
+  EXPECT_TRUE(active->dirty());
+  EXPECT_NE(recent_file_bytes(storage_), recent_before);
+  EXPECT_EQ(prompts, 0);
+  EXPECT_EQ(save_pickers, 0);
 }
 
-TEST_F(ProjectRecentScenesTests, DirtyMaterialPreflightCanCancelRecentOpen) {
-  const auto target = closed_candidate();
+TEST_F(ProjectRecentScenesTests, OpeningRecentSceneKeepsDirtyMaterialDocument) {
+  const auto target = closed_recent_scene();
   const auto material = ProjectAssetId::parse(kDefaultProjectMaterialId);
   ASSERT_TRUE(material.has_value());
   ASSERT_TRUE(editor_.standard_material_documents().open(*material).ok());
@@ -323,18 +351,17 @@ TEST_F(ProjectRecentScenesTests, DirtyMaterialPreflightCanCancelRecentOpen) {
   const auto recent_before = recent_file_bytes(storage_);
   int prompts = 0;
   editor_.project().set_runtime_hooks({
-      .prepare_material_document_close = [&prompts](std::string_view action) {
-        EXPECT_EQ(action, "project.open_recent_scene");
+      .prepare_material_document_close = [&prompts](std::string_view) {
         ++prompts;
         return false;
       }});
   const auto result = editor_.project().open_recent_scene(target);
-  EXPECT_FALSE(result.ok());
-  EXPECT_FALSE(result.changed());
-  EXPECT_EQ(prompts, 1);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_TRUE(result.changed());
+  EXPECT_EQ(prompts, 0);
   EXPECT_EQ(project_.root(), current_root);
   EXPECT_TRUE(project_.has_dirty_material());
-  EXPECT_EQ(recent_file_bytes(storage_), recent_before);
+  EXPECT_NE(recent_file_bytes(storage_), recent_before);
 }
 
 TEST_F(ProjectRecentScenesTests, RecentStoreFailureDoesNotUndoSuccessfulSceneSave) {
@@ -393,11 +420,8 @@ TEST_F(ProjectRecentScenesTests, TransactionPromotesOnlyAfterWholeCommit) {
   EXPECT_EQ(editor_.query().entity(first.entity)->name, "Committed");
 }
 
-TEST_F(ProjectRecentScenesTests, ManifestWriteFailurePrecedesDestructivePreflight) {
-#if !defined(_WIN32)
-  GTEST_SKIP() << "The manifest sharing lock is Windows-specific.";
-#else
-  const auto target = closed_candidate();
+TEST_F(ProjectRecentScenesTests, ForeignRecentSceneRejectsBeforeSettlingDraftsOrPrompting) {
+  const auto target = foreign_candidate();
   const auto box = editor_.modeling().create_box(
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Keep preview");
   ASSERT_TRUE(box.ok());
@@ -426,10 +450,9 @@ TEST_F(ProjectRecentScenesTests, ManifestWriteFailurePrecedesDestructivePrefligh
         ++material_prompts;
         return editor_.standard_material_documents().close(true).ok();
       }});
-  RecentSceneManifestWriteLock lock(target.manifest_path);
-  ASSERT_TRUE(lock.ready());
   const auto result = editor_.project().open_recent_scene(target);
   EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.changed());
   EXPECT_EQ(scene_prompts, 0);
   EXPECT_EQ(material_prompts, 0);
   EXPECT_EQ(project_.root(), original_root);
@@ -438,7 +461,6 @@ TEST_F(ProjectRecentScenesTests, ManifestWriteFailurePrecedesDestructivePrefligh
   EXPECT_TRUE(editor_.modeling().can_cancel_active_tool_or_preview());
   EXPECT_TRUE(project_.has_dirty_material());
   EXPECT_EQ(recent_file_bytes(storage_), recent_before);
-#endif
 }
 
 TEST_F(ProjectRecentScenesTests, PrimitiveApplyPromotesWithHistoryDisabled) {
@@ -543,6 +565,9 @@ TEST_F(ProjectRecentScenesTests, UnicodeSceneAndProjectNamesSurviveRecentReopen)
       << "Closing the project with a Unicode root.";
   ASSERT_TRUE(closed.ok()) << closed.error_message();
   ASSERT_FALSE(editor.project().has_project());
+  EXPECT_TRUE(editor.project().recent_scenes().empty());
+  EXPECT_FALSE(editor.project().open_recent_scene(entry).ok());
+  ASSERT_TRUE(editor.project().open(entry.manifest_path).ok());
   QuaderApiVoidResult opened;
   ASSERT_NO_THROW(opened = editor.project().open_recent_scene(entry))
       << "Reopening the persisted Unicode recent-scene entry.";

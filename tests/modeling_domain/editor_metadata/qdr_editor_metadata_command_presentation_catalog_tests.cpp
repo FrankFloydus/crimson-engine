@@ -313,6 +313,7 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
 
   const CommandPresentationDescriptor &remove_doubles =
       require_presentation(quader::quader_command::kModelingRemoveDoubles);
+  EXPECT_EQ(remove_doubles.domain, CommandPresentationDomain::Object);
   EXPECT_EQ(remove_doubles.group, CommandPresentationGroup::Cleanup);
   EXPECT_TRUE(contains(remove_doubles.aliases, "weld duplicate vertices"));
 
@@ -455,6 +456,89 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
 
   EXPECT_EQ(checked_operation_count, 38u);
   EXPECT_EQ(unique_operation_commands.size(), checked_operation_count);
+}
+
+TEST(QdrEditorMetadataCommandPresentationCatalogTests,
+     KeepsRemovedTopMenuEntriesAvailableOnTheirOtherSurfaces) {
+  constexpr std::array<quader::QuaderCommandId, 14> kCommands{{
+      quader::quader_command::kProjectNew,
+      quader::quader_command::kProjectOpen,
+      quader::quader_command::kProjectExportSelectionObj,
+      quader::quader_command::kSceneDocumentNext,
+      quader::quader_command::kSceneDocumentPrevious,
+      quader::quader_command::kSceneDocumentClose,
+      quader::quader_command::kEditRepeatLastAction,
+      quader::quader_command::kToolsActivatePoly,
+      quader::quader_command::kToolsActivateCurve,
+      quader::quader_command::kSceneLayersRemoveSelection,
+      quader::quader_command::kToolsActivateMirror,
+      quader::quader_command::kToolsActivateLinearArray,
+      quader::quader_command::kToolsActivateRadialArray,
+      quader::quader_command::kToolsActivatePathArray,
+  }};
+
+  for (const quader::QuaderCommandId command_id : kCommands) {
+    const CommandPresentationDescriptor &presentation =
+        require_presentation(command_id);
+    EXPECT_FALSE(quader::has_command_presentation_surface(
+        presentation, CommandPresentationSurface::MainMenu))
+        << command_id.string();
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        presentation, CommandPresentationSurface::CommandPalette))
+        << command_id.string();
+  }
+
+  for (const quader::QuaderCommandId tool_command : {
+           quader::quader_command::kToolsActivatePoly,
+           quader::quader_command::kToolsActivateCurve,
+           quader::quader_command::kToolsActivateMirror,
+           quader::quader_command::kToolsActivateLinearArray,
+           quader::quader_command::kToolsActivateRadialArray,
+           quader::quader_command::kToolsActivatePathArray,
+       }) {
+    const CommandPresentationDescriptor &presentation =
+        require_presentation(tool_command);
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        presentation, CommandPresentationSurface::ViewportContextMenu))
+        << tool_command.string();
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        presentation, CommandPresentationSurface::Toolbar))
+        << tool_command.string();
+  }
+}
+
+TEST(QdrEditorMetadataCommandPresentationCatalogTests,
+     PlacesMeshInstancesBeforeMeshToolsAndKeepsExitContextual) {
+  const CommandPresentationDescriptor &create_instance =
+      require_presentation(quader::quader_command::kEditCreateInstance);
+  const CommandPresentationDescriptor &flatten_instance =
+      require_presentation(quader::quader_command::kEditFlattenInstance);
+  for (const CommandPresentationDescriptor *instance : {
+           &create_instance, &flatten_instance,
+       }) {
+    EXPECT_EQ(instance->domain, CommandPresentationDomain::Mesh);
+    EXPECT_EQ(instance->group, CommandPresentationGroup::Instances);
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        *instance, CommandPresentationSurface::MainMenu));
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        *instance, CommandPresentationSurface::ViewportContextMenu));
+    EXPECT_TRUE(quader::has_command_presentation_surface(
+        *instance, CommandPresentationSurface::HierarchyContextMenu));
+  }
+  EXPECT_LT(create_instance.rank, flatten_instance.rank);
+  EXPECT_LT(flatten_instance.rank,
+            require_presentation(quader::quader_command::kToolsActivateExtrude)
+                .rank);
+
+  const CommandPresentationDescriptor &exit_instance =
+      require_presentation(quader::quader_command::kEditExitInstanceEdit);
+  EXPECT_EQ(exit_instance.palette_policy, CommandPalettePolicy::ContextOnly);
+  EXPECT_FALSE(quader::has_command_presentation_surface(
+      exit_instance, CommandPresentationSurface::MainMenu));
+  EXPECT_TRUE(quader::has_command_presentation_surface(
+      exit_instance, CommandPresentationSurface::ViewportContextMenu));
+  EXPECT_TRUE(quader::has_command_presentation_surface(
+      exit_instance, CommandPresentationSurface::HierarchyContextMenu));
 }
 
 TEST(QdrEditorMetadataCommandPresentationCatalogTests,

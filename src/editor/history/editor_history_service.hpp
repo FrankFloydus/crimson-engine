@@ -10,6 +10,7 @@
 #include "core/i_undoable_command.hpp"
 #include "core/session_preferences.hpp"
 #include "core/undo_redo_execute_options.hpp"
+#include "core/undo_redo_history_entry.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -90,6 +91,8 @@ public:
     CommandResult record_executed(std::unique_ptr<IUndoableCommand> command);
     CommandResult undo();
     CommandResult redo();
+    /// Replays existing transitions to a retained state; zero selects Original.
+    CommandResult restore_history(std::size_t applied_count);
 
     [[nodiscard]] bool can_undo() const;
     [[nodiscard]] bool can_redo() const;
@@ -99,6 +102,8 @@ public:
     [[nodiscard]] std::size_t redo_count() const;
     [[nodiscard]] std::size_t max_steps() const;
     [[nodiscard]] std::uint64_t revision() const;
+    [[nodiscard]] std::vector<UndoRedoHistoryEntry>
+    history_entries(std::size_t limit) const;
     /// True only while the expected committed head is still eligible to merge.
     [[nodiscard]] bool can_merge_with_latest(std::string_view merge_key,
                                              std::uint64_t revision) const;
@@ -107,7 +112,8 @@ public:
     // available for rollback even when retention is disabled during a gesture.
     void set_max_steps(std::size_t max_steps);
 
-    void clear();
+    void clear(UndoRedoHistoryBaseline baseline =
+                   UndoRedoHistoryBaseline::Original);
     void set_change_observer(std::function<void()> observer);
     /// True for committed edits/undo/redo; false after a transaction rolls back.
     void set_content_settled_observer(std::function<void(bool)> observer);

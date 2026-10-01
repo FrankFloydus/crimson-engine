@@ -40,23 +40,25 @@ struct ToolIconSpec {
   ViewportToolId tool;
   const char *icon_path;
   bool toolbar_visible = true;
+  bool separator_before = false;
 };
 
 constexpr std::array<ToolIconSpec, 18> kToolIconSpecs{{
-    {ViewportToolId::Knife, ":/quader/icons/tool_knife.png"},
+    {ViewportToolId::CreatePrimitive, ":/quader/icons/tool_create_box.png"},
+    {ViewportToolId::Pivot, ":/quader/icons/tool_pivot.png"},
     {ViewportToolId::Extrude, ":/quader/icons/tool_extrude.png"},
     {ViewportToolId::InsertEdgeLoop,
      ":/quader/icons/tool_insert_edge_loop.png"},
-    {ViewportToolId::CreatePrimitive, ":/quader/icons/tool_create_box.png"},
-    {ViewportToolId::Poly, ":/quader/icons/tool_poly.png"},
-    {ViewportToolId::Curve, nullptr},
-    {ViewportToolId::Mirror, ":/quader/icons/tool_mirror.png"},
+    {ViewportToolId::Knife, ":/quader/icons/tool_knife.png"},
     {ViewportToolId::Cut, ":/quader/icons/tool_cut.png"},
-    {ViewportToolId::LinearArray, ":/quader/icons/tool_linear_array.png"},
+    {ViewportToolId::Mirror, ":/quader/icons/tool_mirror.png"},
+    {ViewportToolId::Poly, ":/quader/icons/tool_poly.png"},
+    {ViewportToolId::LinearArray, ":/quader/icons/tool_linear_array.png", true,
+     true},
     {ViewportToolId::RadialArray, ":/quader/icons/tool_radial_array.png"},
+    {ViewportToolId::Curve, nullptr, true, true},
     {ViewportToolId::PathArray, ":/quader/icons/tool_path_array.png"},
-    {ViewportToolId::Pivot, ":/quader/icons/tool_pivot.png"},
-    {ViewportToolId::UvPeel, ":/quader/icons/tool_uv_peel.png"},
+    {ViewportToolId::UvPeel, ":/quader/icons/tool_uv_peel.png", true, true},
     {ViewportToolId::Select, ":/quader/icons/tool_select.png", false},
     {ViewportToolId::LassoSelect, ":/quader/icons/tool_lasso.png", false},
     {ViewportToolId::Move, ":/quader/icons/tool_move.png", false},
@@ -149,8 +151,10 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
 
   auto *action_group = new QActionGroup(this);
   action_group->setExclusive(true);
+  bool separator_pending = false;
   for (std::size_t index = 0; index < kToolIconSpecs.size(); ++index) {
     const ToolIconSpec &spec = kToolIconSpecs[index];
+    separator_pending = separator_pending || spec.separator_before;
     const std::string_view tool_id = viewport_tool_catalog_id(spec.tool);
     if (!release_allows_tool(tool_id)) {
       continue;
@@ -162,6 +166,10 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
             : qt_multiresolution_icon(QString::fromUtf8(spec.icon_path));
     QAction *action = new QAction(icon, QString::fromUtf8(fallback.data()), this);
     if (spec.toolbar_visible) {
+      if (separator_pending && !actions().empty()) {
+        addSeparator();
+      }
+      separator_pending = false;
       addAction(action);
     }
     action->setObjectName(

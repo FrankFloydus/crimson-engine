@@ -123,13 +123,13 @@ TEST(QdrEditorMetadataConsumerSmokeTests, CustomEngineShellCanAssembleChromeFrom
 		}
 	}
 
-	EXPECT_TRUE(menu_items.size() == 18U);
+	EXPECT_TRUE(menu_items.size() == 15U);
 	EXPECT_TRUE(contains_target(menu_items, "open_editor"));
 	EXPECT_TRUE(contains_target(menu_items, "save_scene_as"));
 	EXPECT_TRUE(contains_target(menu_items, "save_all_scenes"));
-	EXPECT_TRUE(contains_target(menu_items, "close_scene"));
-	EXPECT_TRUE(contains_target(menu_items, "next_scene"));
-	EXPECT_TRUE(contains_target(menu_items, "previous_scene"));
+	EXPECT_FALSE(contains_target(menu_items, "close_scene"));
+	EXPECT_FALSE(contains_target(menu_items, "next_scene"));
+	EXPECT_FALSE(contains_target(menu_items, "previous_scene"));
 	EXPECT_TRUE(contains_target(menu_items, "layout_four_view_quad"));
 	EXPECT_TRUE(contains_target(menu_items, "viewport_settings"));
 
@@ -139,14 +139,20 @@ TEST(QdrEditorMetadataConsumerSmokeTests, CustomEngineShellCanAssembleChromeFrom
 	EXPECT_TRUE(contains_target(operation_bar_items, "edge_operations"));
 	EXPECT_TRUE(contains_target(operation_bar_items, "face_operations"));
 
-	EXPECT_TRUE(viewport_toolbar_items.size() == 7U);
-	EXPECT_TRUE(contains_target(viewport_toolbar_items, "move"));
-	EXPECT_TRUE(contains_target(viewport_toolbar_items, "rotate"));
-	EXPECT_TRUE(contains_target(viewport_toolbar_items, "scale"));
+	EXPECT_TRUE(viewport_toolbar_items.size() == 13U);
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "create_primitive"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "pivot"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "extrude"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "insert_edge_loop"));
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "knife"));
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "cut"));
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "mirror"));
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "poly"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "linear_array"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "radial_array"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "curve"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "path_array"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "uv_peel"));
 
 	EXPECT_TRUE(settings_panel_items.size() == 7U);
 	EXPECT_TRUE(contains_target(settings_panel_items, "operation.bridge"));

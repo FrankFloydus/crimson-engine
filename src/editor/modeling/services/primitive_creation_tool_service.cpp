@@ -743,7 +743,7 @@ CommandResult PrimitiveCreationToolService::apply() {
   if (session_->accepted_shapes > session_->history_cursor) {
     // Evicted shapes become the new permanent baseline. Older native mementos
     // predate those shapes and cannot safely remain reachable through Undo.
-    history_.clear();
+    history_.clear(UndoRedoHistoryBaseline::Retained);
   }
   for (auto &command : commands) {
     const CommandResult recorded = history_.record_executed(std::move(command));

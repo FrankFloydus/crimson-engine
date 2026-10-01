@@ -25,7 +25,7 @@ class LocalizationService;
 class QuaderEditorApi;
 class ViewportInputRouter;
 
-/// One canonical RMB command projected without pointer-target-only transfers.
+/// One selected-operand command supplied to the Q menu below its radial actions.
 struct QtViewportContextCommand final {
   std::string command_id;
   QString label;
@@ -33,16 +33,16 @@ struct QtViewportContextCommand final {
       ViewportContextMenuActionSection::Topology;
 };
 
-/// Collects selected-operand RMB commands using the context menu's own policies.
+/// Collects the Q menu supplement through shared operand and command policies.
 [[nodiscard]] std::vector<QtViewportContextCommand>
 qt_viewport_context_commands(QuaderEditorApi &editor,
                              const QuaderSelectionSummary &selection,
                              const LocalizationService &localization);
 
 /**
- * Presents the modeling operations available at a viewport position through a
- * stock Qt context menu. Modeling availability and execution remain owned by
- * the public editor API.
+ * Presents pointer-specific face transfers and curve solidification through a
+ * stock Qt context menu. Generic operations remain in Q; modeling availability
+ * and execution remain owned by the public editor API.
  */
 class QtViewportContextMenuPresenter final {
 public:

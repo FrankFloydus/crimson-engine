@@ -2377,7 +2377,10 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
 }
 
 std::vector<RecentSceneEntry> ProjectSession::recent_scenes() const {
-  auto loaded = recent_scene_store_.load();
+  if (!workspace_.has_value()) {
+    return {};
+  }
+  auto loaded = recent_scene_store_.load(workspace_->manifest_path);
   return loaded.ok() ? loaded.take_value() : std::vector<RecentSceneEntry>{};
 }
 

@@ -15,6 +15,8 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 
+#include <editor/metadata/host_contract.hpp>
+
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -135,11 +137,33 @@ ModelingCommandResult from_command_result(CommandResult result) {
   };
 }
 
-std::string command_label(const CommandTool *tool, std::string_view tool_id) {
-  if (tool == nullptr || tool->label().empty()) {
-    return std::string(tool_id);
+std::string modeling_history_label(std::string_view label,
+                                   std::string_view action_id) {
+  if (!label.empty()) {
+    return std::string(label);
   }
-  return std::string(tool->label());
+  if (const auto *action =
+          quader_host_contract::find_action_descriptor(action_id);
+      action != nullptr && !action->label.empty()) {
+    return std::string(action->label);
+  }
+  if (const auto *operation =
+          quader_host_contract::find_operation_descriptor(action_id);
+      operation != nullptr && !operation->label.empty()) {
+    return std::string(operation->label);
+  }
+  if (const auto *tool =
+          quader_host_contract::find_tool_descriptor(action_id);
+      tool != nullptr && !tool->label.empty()) {
+    return std::string(tool->label);
+  }
+  return "Modeling Operation";
+}
+
+std::string command_label(const CommandTool *tool, std::string_view tool_id) {
+  return modeling_history_label(tool == nullptr ? std::string_view{}
+                                                : tool->label(),
+                                tool_id);
 }
 
 } // namespace
@@ -303,7 +327,7 @@ ModelingCommandResult ModelingCommandExecutionService::begin_preview(
   return from_command_result(
       history.execute(std::make_unique<ModelingActionHistoryCommand>(
           modeling, std::string(action_id),
-          found->label.empty() ? std::string(action_id) : found->label)));
+          modeling_history_label(found->label, action_id))));
 }
 
 ModelingCommandResult ModelingCommandExecutionService::begin_preview_untracked(
@@ -320,7 +344,10 @@ ModelingCommandResult ModelingCommandExecutionService::commit_preview(
     EditorHistoryService &history, ModelingSessionService &modeling,
     std::string label) {
   if (label.empty()) {
-    label = "Commit Operation Preview";
+    const ModelingToolSettingsTarget target = modeling.tool_settings_target();
+    label = modeling_history_label(
+        target.label,
+        target.action_id.empty() ? target.operation_id : target.action_id);
   }
   return ModelingPreviewCommandService::commit(history, modeling,
                                                std::move(label));

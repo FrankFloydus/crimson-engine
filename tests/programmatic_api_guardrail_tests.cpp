@@ -2716,7 +2716,7 @@ TEST(ProgrammaticApiGuardrailTests,
 
   const std::string find_replace_action = source_slice(
       main_menu, "material_find_replace_action = menu->addAction(",
-      "void build_mesh_menu()");
+      "void build_select_menu()");
   ASSERT_FALSE(find_replace_action.empty());
   EXPECT_NE(find_replace_action.find(
                 "ui.menu.object.materials.find_replace"),

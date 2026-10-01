@@ -22,19 +22,21 @@
 namespace {
 
 constexpr std::array<quader::ViewportToolId, 13> kModelingTools{
-    quader::ViewportToolId::Knife,
+    quader::ViewportToolId::CreatePrimitive,
+    quader::ViewportToolId::Pivot,
     quader::ViewportToolId::Extrude,
     quader::ViewportToolId::InsertEdgeLoop,
-    quader::ViewportToolId::CreatePrimitive,
-    quader::ViewportToolId::Poly,
-    quader::ViewportToolId::Curve,
-    quader::ViewportToolId::Mirror,
+    quader::ViewportToolId::Knife,
     quader::ViewportToolId::Cut,
+    quader::ViewportToolId::Mirror,
+    quader::ViewportToolId::Poly,
     quader::ViewportToolId::LinearArray,
     quader::ViewportToolId::RadialArray,
+    quader::ViewportToolId::Curve,
     quader::ViewportToolId::PathArray,
-    quader::ViewportToolId::Pivot,
     quader::ViewportToolId::UvPeel};
+
+constexpr std::array<qsizetype, 3> kSeparatorPositions{8, 11, 14};
 
 } // namespace
 
@@ -49,7 +51,8 @@ TEST(QtToolToolbarTests, RetainsAllModelingLaunchersAcrossSelectionModes) {
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
   quader::QtToolToolbar toolbar;
   EXPECT_EQ(toolbar.objectName(), QStringLiteral("toolToolbar"));
-  ASSERT_EQ(toolbar.actions().size(), kModelingTools.size());
+  ASSERT_EQ(toolbar.actions().size(),
+            kModelingTools.size() + kSeparatorPositions.size());
   for (const auto mode : {quader::QuaderSelectionMode::Vertex,
                           quader::QuaderSelectionMode::Edge,
                           quader::QuaderSelectionMode::Face,
@@ -58,15 +61,28 @@ TEST(QtToolToolbarTests, RetainsAllModelingLaunchersAcrossSelectionModes) {
     SCOPED_TRACE(static_cast<int>(mode));
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     toolbar.synchronize(editor, editor.selection().summary());
-    for (std::size_t index = 0; index < kModelingTools.size(); ++index) {
-      QAction *action = toolbar.tool_action(kModelingTools[index]);
+    const auto actions = toolbar.actions();
+    std::size_t tool_index = 0;
+    std::size_t separator_index = 0;
+    for (qsizetype index = 0; index < actions.size(); ++index) {
+      if (separator_index < kSeparatorPositions.size() &&
+          index == kSeparatorPositions[separator_index]) {
+        EXPECT_TRUE(actions[index]->isSeparator());
+        ++separator_index;
+        continue;
+      }
+      ASSERT_LT(tool_index, kModelingTools.size());
+      QAction *action = toolbar.tool_action(kModelingTools[tool_index++]);
       ASSERT_NE(action, nullptr);
-      EXPECT_EQ(toolbar.actions()[index], action);
+      EXPECT_EQ(actions[index], action);
+      EXPECT_FALSE(action->isSeparator());
       EXPECT_TRUE(action->isVisible());
       EXPECT_TRUE(action->isCheckable());
       EXPECT_TRUE(action->shortcuts().isEmpty());
       EXPECT_NE(toolbar.widgetForAction(action), nullptr);
     }
+    EXPECT_EQ(tool_index, kModelingTools.size());
+    EXPECT_EQ(separator_index, kSeparatorPositions.size());
   }
   for (const auto tool : {quader::ViewportToolId::Select,
                           quader::ViewportToolId::LassoSelect,
