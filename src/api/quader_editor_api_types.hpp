@@ -36,6 +36,7 @@ enum class QuaderShadingMode {
     Metalness,
     Normal,
     Shaded,
+    Uv,
     // Material is the legacy public name for the rendered presentation.
     Rendered = Material,
 };

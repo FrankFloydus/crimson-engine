@@ -584,6 +584,13 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     input_context.outliner_focused = outliner_focused;
     input_context.editor_focused = !viewport_focused && !outliner_focused;
     input_context.asset_browser_focused = asset_browser_focused;
+    if (state.active_tool == ViewportToolId::InsertEdgeLoop &&
+        !editor_->tools().pane_owns_executing_tool(
+            editor_->viewports().focused_pane())) {
+      input_context.operation_preview_active = false;
+      input_context.active_transform_drag = false;
+      input_context.modal_tool_active = false;
+    }
     if (!viewport_focused && !text_input_active && !asset_browser_focused) {
       // A panel can publish selection before the next viewport frame samples it.
       state.selection_mode = app_selection_mode_to_viewport(
@@ -800,6 +807,15 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         case ViewportShortcutKind::SetGridPreset:
           return command_editor->viewports().set_grid_preset(
               dispatch.shortcut.grid_preset);
+        case ViewportShortcutKind::CancelActiveTool: {
+          consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+          const auto pane = command_editor->viewports().focused_pane();
+          if (!command_editor->tools().pane_owns_executing_tool(pane)) {
+            return command_editor->viewports().record_selected_tool(
+                pane, ViewportToolId::Select);
+          }
+          return command_editor->tools().cancel_modal_tool();
+        }
         default:
           return std::nullopt;
         }

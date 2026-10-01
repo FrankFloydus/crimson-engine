@@ -163,7 +163,6 @@ enum class ViewportShortcutKind {
     FlipHorizontal,
     FlipVertical,
     AddPopup,
-    ShadingPopup,
     MarkingMenu,
 };
 

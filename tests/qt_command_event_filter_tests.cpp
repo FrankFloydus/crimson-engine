@@ -24,6 +24,7 @@
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
@@ -52,6 +53,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QTabBar>
+#include <QToolButton>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeWidget>
@@ -111,6 +113,122 @@ TEST(QtCommandEventFilterTests,
     return true;
   }));
   EXPECT_EQ(queries, 1);
+}
+
+TEST(QtCommandEventFilterTests,
+     InsertEdgeLoopToolbarActivationCancelsFromEditorFocusWithCanonicalMapping) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-loop-toolbar-cancel-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const int mapping : {0, 1, 2}) {
+    SCOPED_TRACE(mapping);
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    if (mapping == 1) {
+      ASSERT_TRUE(editor.commands().set_shortcut(
+          "viewport.cancel_active_tool", "F18").ok());
+    } else if (mapping == 2) {
+      ASSERT_TRUE(editor.commands().remove_shortcut("viewport.cancel_active_tool").ok());
+    }
+    const auto box = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Toolbar loop box");
+    ASSERT_TRUE(box.ok()) << box.error_message();
+    ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+    session.history().clear();
+    ASSERT_TRUE(editor.scene().rename(box.value().entity, "Redo toolbar loop box").ok());
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto content_before = editor.selection().summary().content_revision;
+
+    QMainWindow window;
+    QWidget panel(&window);
+    panel.setFocusPolicy(Qt::StrongFocus);
+    window.setCentralWidget(&panel);
+    quader::QtToolToolbar toolbar(&window);
+    window.addToolBar(&toolbar);
+    toolbar.set_tool_requested_callback([&](std::string_view tool_id) {
+      const auto activated = editor.tools().activate(tool_id);
+      EXPECT_TRUE(activated.ok()) << activated.error_message();
+    });
+    auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(
+        toolbar.tool_action(quader::ViewportToolId::InsertEdgeLoop)));
+    ASSERT_NE(button, nullptr);
+    window.resize(700, 400);
+    window.show();
+    window.activateWindow();
+    panel.setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), &panel);
+
+    quader::QtCommandEventFilter filter(editor, [&] {
+      return quader::ViewportToolState{
+          .active_tool = editor.viewports().selected_tool(),
+          .selection_mode = quader::ViewportSelectionMode::Edge};
+    });
+    filter.set_input_context_provider([&] {
+      return quader::QuaderViewportKeybindingContext{
+          .modal_tool_active = session.modeling().modal_tool_owns_viewport()};
+    });
+    application.installEventFilter(&filter);
+    const QPointF local = button->rect().center();
+    const QPointF global = button->mapToGlobal(local.toPoint());
+    QMouseEvent press(QEvent::MouseButtonPress, local, global,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, local, global,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(button, &press);
+    QApplication::sendEvent(button, &release);
+    ASSERT_EQ(editor.viewports().selected_tool(), quader::ViewportToolId::InsertEdgeLoop);
+    ASSERT_EQ(editor.tools().active_tool(), "insert_edge_loop");
+    const auto selected_before = editor.selection().summary();
+    const auto key = [&](int value, bool repeat = false) {
+      auto *focused = QApplication::focusWidget();
+      ASSERT_NE(focused, nullptr);
+      QKeyEvent key_press(QEvent::KeyPress, value, Qt::NoModifier, {}, repeat);
+      QApplication::sendEvent(focused, &key_press);
+    };
+    const auto key_release = [&](int value) {
+      auto *focused = QApplication::focusWidget();
+      ASSERT_NE(focused, nullptr);
+      QKeyEvent event(QEvent::KeyRelease, value, Qt::NoModifier);
+      QApplication::sendEvent(focused, &event);
+    };
+    key(Qt::Key_Escape);
+    if (mapping != 0) {
+      EXPECT_EQ(editor.tools().active_tool(), "insert_edge_loop");
+      key_release(Qt::Key_Escape);
+      key(Qt::Key_F18);
+    }
+    if (mapping == 2) {
+      EXPECT_EQ(editor.tools().active_tool(), "insert_edge_loop");
+    } else {
+      EXPECT_EQ(editor.tools().active_tool(), "select");
+      EXPECT_EQ(editor.viewports().selected_tool(), quader::ViewportToolId::Select);
+      key(mapping == 0 ? Qt::Key_Escape : Qt::Key_F18, true);
+      EXPECT_EQ(editor.selection().summary().selected_edge_count,
+                selected_before.selected_edge_count);
+    }
+    key_release(mapping == 0 ? Qt::Key_Escape : Qt::Key_F18);
+    const auto after = editor.selection().summary();
+    EXPECT_EQ(after.mode, quader::QuaderSelectionMode::Edge);
+    EXPECT_EQ(after.active_edge_a, selected_before.active_edge_a);
+    EXPECT_EQ(after.active_edge_b, selected_before.active_edge_b);
+    EXPECT_EQ(after.selection_revision, selected_before.selection_revision);
+    EXPECT_EQ(after.content_revision, content_before);
+    EXPECT_EQ(session.history().undo_count(), 0u);
+    EXPECT_EQ(session.history().redo_count(), 1u);
+
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Knife).ok());
+    key(Qt::Key_Escape);
+    key_release(Qt::Key_Escape);
+    EXPECT_EQ(editor.tools().active_tool(), "knife");
+    application.removeEventFilter(&filter);
+  }
 }
 
 TEST(QtCommandEventFilterTests,

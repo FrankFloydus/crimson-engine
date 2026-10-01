@@ -317,6 +317,8 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Domain::Preferences, Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kViewportShadingWireframe, Fixture::Viewport,
                kViewportDomains, Outcome::ChangeRequired),
+      contract(quader_command::kViewportShadingToggleWireframeShaded,
+               Fixture::Viewport, kViewportDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportShadingSolid, Fixture::Viewport,
                kViewportDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportShadingShaded, Fixture::Viewport,
@@ -812,9 +814,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 224U);
+  static_assert(std::size(kContracts) == 225U);
 #else
-  static_assert(std::size(kContracts) == 223U);
+  static_assert(std::size(kContracts) == 224U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

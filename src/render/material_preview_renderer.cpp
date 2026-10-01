@@ -279,6 +279,8 @@ struct MaterialPreviewRenderer::Impl final {
         filament::TextureSampler::MagFilter::LINEAR,
         filament::TextureSampler::WrapMode::REPEAT);
     solid_sampler.setAnisotropy(kPreviewTextureAnisotropy);
+    rendered_instance->setParameter("uvDebugTexture", fallback_textures[0],
+                                    solid_sampler);
     shaded_instance->setParameter("solidColorTexture", &solid_color_texture,
                                   solid_sampler);
     wire_instance->setParameter("solidColorTexture", &solid_color_texture,

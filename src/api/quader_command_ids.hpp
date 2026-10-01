@@ -148,6 +148,8 @@ inline constexpr QuaderCommandId kViewportToggleTextureLockScale{
     "viewport.toggle_texture_lock_scale"};
 inline constexpr QuaderCommandId kViewportShadingWireframe{
     "viewport.shading.wireframe"};
+inline constexpr QuaderCommandId kViewportShadingToggleWireframeShaded{
+    "viewport.shading.toggle_wireframe_shaded"};
 inline constexpr QuaderCommandId kViewportShadingSolid{
     "viewport.shading.solid"};
 inline constexpr QuaderCommandId kViewportShadingShaded{
@@ -499,6 +501,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportToggleTextureLock,
     kViewportToggleTextureLockScale,
     kViewportShadingWireframe,
+    kViewportShadingToggleWireframeShaded,
     kViewportShadingSolid,
     kViewportShadingShaded,
     kViewportShadingRendered,

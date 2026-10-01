@@ -264,8 +264,11 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   Active Tool command (Escape by default) clears transient loop state and returns to Select while
   retaining Edge component mode, content, history, and redo. Normal undo/redo clears its stale seed
   after successful restoration without exiting the tool; failure compensation preserves transient
-  state. Shared cancellation reports actual tool changes instead of assuming every modal
-  cancellation returns to Select.
+  state. Viewport cancellation must also synchronize the pane's remembered tool so the next
+  frame does not reactivate Loop. Canceling Loop selected in a non-owning pane records Select
+  only for that pane and preserves the executing pane's operation and preview; editor-panel
+  cancellation uses the same canonical binding. Shared cancellation reports actual tool changes
+  instead of assuming every modal cancellation returns to Select.
 - Insert Edge Loop acquisition, retained hover, and dragging share the projected cursor factor,
   including edges crossing the camera plane; grid snapping remains measured along the world edge.
   Preview vertices are deduplicated by authored edge identity and use the normal hover-vertex

@@ -341,6 +341,9 @@ MaterialBindingService::create_mesh_material_instance(
   material_instance->setParameter("normalStrength", 1.0f);
   material_instance->setParameter("normalYSign", 1.0f);
   if (!editor_unlit) {
+    material_instance->setParameter("uvDebugTexture",
+                                    texture_binding_->uv_debug_texture(),
+                                    sampler);
     material_instance->setParameter(
         material_texture_slot::kRoughness,
         texture_binding_->resolve_texture(
@@ -454,6 +457,9 @@ MaterialBindingService::create_mesh_material_instance(
       "normalYSign",
       material && material->present && material->directx_normal ? -1.0f : 1.0f);
   if (!editor_unlit) {
+    material_instance->setParameter("uvDebugTexture",
+                                    texture_binding_->uv_debug_texture(),
+                                    sampler);
     material_instance->setParameter(
         material_texture_slot::kRoughness,
         texture_binding_->resolve_texture(

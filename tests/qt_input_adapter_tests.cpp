@@ -32,6 +32,7 @@
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
 #include "ui/qt_application_cursor.hpp"
+#include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
@@ -2469,6 +2470,243 @@ TEST(QtViewportSurfaceInputTests,
     process();
     EXPECT_TRUE(label->isHidden());
   }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     InsertEdgeLoopCancelMappingExitsIdleHoverAndDragWithoutChangingHistory) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-loop-cancel-phase-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const int phase : {0, 1, 2}) {
+    for (const int mapping : {0, 1, 2}) {
+      SCOPED_TRACE(phase);
+      SCOPED_TRACE(mapping);
+      NavigationPanelTestContext context;
+      ASSERT_NE(context.surface, nullptr);
+      auto &editor = context.editor;
+      auto &modeling = context.session.modeling();
+      if (mapping == 1) {
+        ASSERT_TRUE(editor.commands().set_shortcut(
+            "viewport.cancel_active_tool", "F18").ok());
+      } else if (mapping == 2) {
+        ASSERT_TRUE(editor.commands().remove_shortcut("viewport.cancel_active_tool").ok());
+      }
+      const auto box = editor.modeling().create_box(
+          {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Cancel phase loop box");
+      ASSERT_TRUE(box.ok()) << box.error_message();
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+      context.camera.focus_origin(5);
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::InsertEdgeLoop).ok());
+      context.session.history().clear();
+      ASSERT_TRUE(editor.scene().rename(box.value().entity, "Redo cancel phase loop box").ok());
+      ASSERT_TRUE(editor.history().undo().ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::InsertEdgeLoop).ok());
+      const auto document_before =
+          *context.session.assets().mesh(box.value().mesh)->authored_polygon_document;
+      const auto selected_before = editor.selection().summary();
+      const auto history_before = editor.history().snapshot();
+      context.process();
+      const auto projected = context.camera.project_world_point({1, 0, 1});
+      ASSERT_TRUE(projected.visible);
+      const QPointF local{projected.position.x / context.surface->devicePixelRatio(),
+                          projected.position.y / context.surface->devicePixelRatio()};
+      if (phase != 0) {
+        context.mouse(QEvent::MouseMove, local, Qt::NoButton, Qt::NoButton);
+        context.process();
+        ASSERT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
+      }
+      if (phase == 2) {
+        context.mouse(QEvent::MouseButtonPress, local, Qt::LeftButton, Qt::LeftButton);
+        // Seed a pending owner drag while retaining the physical held button.
+        (void)context.surface->take_input_frame(1.0f / 60.0f, false);
+        const quader::ModelingToolRayEvent event{
+            .ray = {.origin = {1, 0, 5}, .direction = {0, 0, -1}},
+            .grid_size = 1.0,
+            .edge_radius = 0.2,
+            .snap_enabled = false};
+        ASSERT_TRUE(modeling.begin_insert_edge_loop_drag(event).ok);
+        ASSERT_TRUE(modeling.tool_status().insert_edge_loop_dragging);
+      }
+      context.key(Qt::Key_Escape);
+      if (mapping != 0) {
+        EXPECT_EQ(editor.tools().active_tool(), "insert_edge_loop");
+        context.key(Qt::Key_F18);
+      }
+      if (mapping == 2) {
+        EXPECT_EQ(editor.tools().active_tool(), "insert_edge_loop");
+        ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+      } else {
+        EXPECT_EQ(context.panel.tool_state().active_tool, quader::ViewportToolId::Select);
+        EXPECT_EQ(editor.tools().active_tool(), "select");
+        EXPECT_EQ(editor.viewports().selected_tool(), quader::ViewportToolId::Select);
+        EXPECT_EQ(modeling.tool_status().active_tool, quader::ModelingViewportTool::Select);
+        EXPECT_FALSE(modeling.tool_status().insert_edge_loop_has_preview);
+        EXPECT_FALSE(modeling.tool_status().insert_edge_loop_dragging);
+        context.process();
+        EXPECT_EQ(context.panel.tool_state().active_tool, quader::ViewportToolId::Select);
+        EXPECT_EQ(editor.viewports().selected_tool(), quader::ViewportToolId::Select);
+      }
+      if (phase == 2) {
+        context.mouse(QEvent::MouseButtonRelease, local, Qt::LeftButton, Qt::NoButton);
+        context.process();
+      }
+      const auto &after = *context.session.assets().mesh(box.value().mesh)->authored_polygon_document;
+      EXPECT_TRUE(quader_poly::has_same_geometry(after, document_before));
+      EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+      EXPECT_EQ(editor.selection().summary().selected_edge_count,
+                selected_before.selected_edge_count);
+      EXPECT_EQ(editor.selection().summary().content_revision, selected_before.content_revision);
+      EXPECT_EQ(context.session.history().undo_count(), 0u);
+      EXPECT_EQ(context.session.history().redo_count(), 1u);
+      expect_history_unchanged(editor.history().snapshot(), history_before);
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     InsertEdgeLoopEscapeInNonOwningPanePreservesOtherPaneOperation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-loop-pane-cancel-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const bool editor_focus : {false, true}) {
+    for (const int pending : {0, 1, 2, 3}) {
+      SCOPED_TRACE(editor_focus);
+      SCOPED_TRACE(pending);
+      NavigationPanelTestContext context;
+      auto &editor = context.editor;
+      ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::TwoHorizontal).ok());
+      context.panel.refresh_workspace_layout();
+      const auto box = editor.modeling().create_box(
+          {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Other pane knife box");
+      ASSERT_TRUE(box.ok());
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Knife).ok());
+      if (pending == 1) {
+        const quader::ModelingToolRayEvent event{
+            .ray = {.origin = {-1, -1, 5}, .direction = {0, 0, -1}},
+            .camera = {.orthographic = true, .origin = {-1, -1, 5}},
+            .snap_enabled = false};
+        ASSERT_TRUE(context.session.modeling().accept_knife_point(event).ok);
+        ASSERT_TRUE(context.session.modeling().tool_status().knife_has_active_stroke);
+      } else if (pending == 2) {
+        ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+        ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+        ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 2.15).ok());
+        ASSERT_TRUE(context.session.extrude().preview_active());
+      } else if (pending == 3) {
+        ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+        ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+        ASSERT_TRUE(editor.commands().execute(
+            editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+        ASSERT_TRUE(context.session.modeling().operation_preview_active());
+      } else {
+        ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+      }
+      context.session.history().clear();
+      const auto document_before =
+          *context.session.assets().mesh(box.value().mesh)->authored_polygon_document;
+      const auto origin_before = editor.tools().active_settings_presentation_origin();
+      const auto history_before = editor.history().snapshot();
+      const auto tool_before = editor.tools().active_tool();
+      const auto preview_before = editor.query().compiled_object_mesh(box.value());
+      ASSERT_TRUE(preview_before.has_value());
+      constexpr auto kPaneId = quader::ViewportPaneId::Top;
+      ASSERT_TRUE(editor.viewports().record_selected_tool(
+          kPaneId, quader::ViewportToolId::InsertEdgeLoop).ok());
+      QEvent leave(QEvent::Leave);
+      QFocusEvent blur(QEvent::FocusOut);
+      QApplication::sendEvent(context.surface, &leave);
+      QApplication::sendEvent(context.surface, &blur);
+      context.surface = context.panel.surface(kPaneId);
+      ASSERT_NE(context.surface, nullptr);
+      context.surface->resize(800, 600);
+      ASSERT_TRUE(editor.viewports().focus_pane(kPaneId).ok());
+      ASSERT_FALSE(editor.tools().pane_owns_executing_tool(kPaneId));
+      QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+      QFocusEvent focus(QEvent::FocusIn);
+      QApplication::sendEvent(context.surface, &enter);
+      QApplication::sendEvent(context.surface, &focus);
+      context.process();
+      if (editor_focus) {
+        QWidget panel;
+        panel.setFocusPolicy(Qt::StrongFocus);
+        panel.show();
+        panel.activateWindow();
+        panel.setFocus(Qt::OtherFocusReason);
+        QCoreApplication::processEvents();
+        quader::QtCommandEventFilter filter(editor, [&] { return context.panel.tool_state(); });
+        filter.set_input_context_provider([&] {
+          return quader::QuaderViewportKeybindingContext{
+              .modal_tool_active = context.session.modeling().modal_tool_owns_viewport(),
+              .operation_preview_active = context.session.modeling().operation_preview_active()};
+        });
+        application.installEventFilter(&filter);
+        QKeyEvent key_press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QKeyEvent key_release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&panel, &key_press);
+        QApplication::sendEvent(&panel, &key_release);
+        application.removeEventFilter(&filter);
+      } else {
+        context.key(Qt::Key_Escape);
+        EXPECT_EQ(context.panel.tool_state().active_tool, quader::ViewportToolId::Select);
+      }
+      EXPECT_EQ(editor.viewports().selected_tool(kPaneId), quader::ViewportToolId::Select);
+      EXPECT_EQ(editor.tools().active_tool(), tool_before);
+      EXPECT_EQ(context.session.modeling().tool_status().knife_has_active_stroke, pending == 1);
+      EXPECT_EQ(context.session.extrude().preview_active(), pending == 2);
+      EXPECT_EQ(context.session.modeling().operation_preview_active(), pending == 3);
+      EXPECT_EQ(editor.tools().active_settings_presentation_origin(), origin_before);
+      EXPECT_TRUE(quader_poly::has_same_geometry(
+          *context.session.assets().mesh(box.value().mesh)->authored_polygon_document,
+          document_before));
+      const auto preview_after = editor.query().compiled_object_mesh(box.value());
+      ASSERT_TRUE(preview_after.has_value());
+      EXPECT_EQ(preview_after->indices, preview_before->indices);
+      ASSERT_EQ(preview_after->vertices.size(), preview_before->vertices.size());
+      for (std::size_t index = 0; index < preview_before->vertices.size(); ++index) {
+        EXPECT_EQ(preview_after->vertices[index].position.x, preview_before->vertices[index].position.x);
+        EXPECT_EQ(preview_after->vertices[index].position.y, preview_before->vertices[index].position.y);
+        EXPECT_EQ(preview_after->vertices[index].position.z, preview_before->vertices[index].position.z);
+      }
+      expect_history_unchanged(editor.history().snapshot(), history_before);
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ZPressReleaseTogglesFocusedPaneBetweenShadedAndWireframeWithoutPopup) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-wireframe-shaded-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  ASSERT_TRUE(context.editor.viewports().set_layout(quader::ViewportLayoutId::TwoHorizontal).ok());
+  context.panel.refresh_workspace_layout();
+  ASSERT_TRUE(context.editor.viewports().set_shading_mode(
+      quader::ViewportPaneId::Perspective, quader::QuaderShadingMode::Shaded).ok());
+  ASSERT_TRUE(context.editor.viewports().set_shading_mode(
+      quader::ViewportPaneId::Top, quader::QuaderShadingMode::Shaded).ok());
+  context.process();
+  context.key(Qt::Key_Z);
+  EXPECT_EQ(context.editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
+            quader::QuaderShadingMode::Wireframe);
+  EXPECT_EQ(context.editor.viewports().shading_mode(quader::ViewportPaneId::Top),
+            quader::QuaderShadingMode::Shaded);
+  EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+  context.key(Qt::Key_Z);
+  EXPECT_EQ(context.editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
+            quader::QuaderShadingMode::Shaded);
+  EXPECT_EQ(context.editor.viewports().shading_mode(quader::ViewportPaneId::Top),
+            quader::QuaderShadingMode::Shaded);
+  EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
 }
 
 TEST(QtViewportSurfaceInputTests,

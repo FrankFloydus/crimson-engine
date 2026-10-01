@@ -196,7 +196,7 @@ private:
     QMenu *debug_view_menu = nullptr;
     std::array<QAction *, 4> shading_actions = {};
     std::array<QAction *, 7> camera_actions = {};
-    std::array<QAction *, 6> debug_view_actions = {};
+    std::array<QAction *, 7> debug_view_actions = {};
     QLabel *info_overlay = nullptr;
     QLabel *primitive_feedback = nullptr;
     std::uint64_t primitive_feedback_revision = 0u;

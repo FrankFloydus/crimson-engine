@@ -265,7 +265,8 @@ bool editor_panel_can_apply_shortcut(std::string_view target_id) {
   ViewportShortcut shortcut;
   return viewport_shortcut_for_command_target_id(target_id, shortcut) &&
          (shortcut.kind == ViewportShortcutKind::SetSelectionMode ||
-          shortcut.kind == ViewportShortcutKind::SetGridPreset);
+          shortcut.kind == ViewportShortcutKind::SetGridPreset ||
+          shortcut.kind == ViewportShortcutKind::CancelActiveTool);
 }
 
 constexpr std::string_view primitive_flip_keybinding_context() {
@@ -401,6 +402,10 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
 
 std::string_view
 default_keybinding_context_for_command(std::string_view command_id) {
+  if (command_id ==
+      quader_command::kViewportShadingToggleWireframeShaded.string()) {
+    return viewport_command_keybinding_context();
+  }
   if (command_id == quader_command::kUiAssetBrowser.string()) {
     return "true";
   }
@@ -746,6 +751,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   }
   if (is(quader_command::kViewportShadingWireframe)) {
     return "Set Viewport Shading to Wireframe";
+  }
+  if (is(quader_command::kViewportShadingToggleWireframeShaded)) {
+    return "Toggle Wireframe/Shaded";
   }
   if (is(quader_command::kViewportShadingSolid)) {
     return "Set Viewport Shading to Solid";
@@ -2049,7 +2057,7 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
       return false;
     }
     const bool registered = registry_.contains(target_id);
-    // Editor panels execute commands and the two owner-only mode/grid intents.
+    // Editor panels execute commands and scoped mode/grid/tool-cancel intents.
     // Pointer, navigation, and popup targets need the viewport's semantic router.
     // Exclude those before resolving a sequence so they cannot take a prefix.
     if (panel_owns_input && !registered &&
@@ -3176,6 +3184,18 @@ void QuaderCommandsApi::Impl::register_commands() {
       },
       "F5");
   register_command(
+      quader_command::kViewportShadingToggleWireframeShaded,
+      "Toggle Wireframe/Shaded",
+      [this] {
+        const ViewportPaneId pane = viewports_.focused_pane();
+        const QuaderShadingMode mode =
+            viewports_.shading_mode(pane) == QuaderShadingMode::Wireframe
+                ? QuaderShadingMode::Shaded
+                : QuaderShadingMode::Wireframe;
+        return viewports_.set_shading_mode(pane, mode);
+      },
+      "Z");
+  register_command(
       quader_command::kViewportShadingSolid, "Solid",
       [this] {
         return viewports_.set_shading_mode(viewports_.focused_pane(),
@@ -3488,10 +3508,11 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       viewport_input_action_target_id("cancel_active_tool"),
       "Cancel Tool", "keybindings.action.tools.cancel.label",
       QuaderKeybindingContextKind::ModalTool,
-      "viewportFocus && !textInputActive && !navigation.active && "
+      "(viewportFocus || ((outlinerFocus || editorFocus) && "
+      "activeTool.insert_edge_loop)) && !textInputActive && !navigation.active && "
       "!operationPreview.active && !activeTool.create_primitive && "
       "(modalTool.active || activeTool.ownsViewport || "
-      "transformDrag.active || activeTool.nativeLifecycle)",
+      "transformDrag.active || activeTool.nativeLifecycle || activeTool.insert_edge_loop)",
       {}, "tools.cancel");
   register_keybinding_target_metadata(
       viewport_input_action_target_id("toggle_maximized"),
@@ -3507,11 +3528,6 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
   register_keybinding_target_metadata(
       viewport_input_action_target_id("add_popup"), "Open Add Menu",
       stable_keybinding_localization_key("viewport.add_popup"),
-      QuaderKeybindingContextKind::Viewport,
-      std::string(viewport_command_keybinding_context()));
-  register_keybinding_target_metadata(
-      viewport_input_action_target_id("shading_popup"), "Open Shading Menu",
-      stable_keybinding_localization_key("viewport.shading_popup"),
       QuaderKeybindingContextKind::Viewport,
       std::string(viewport_command_keybinding_context()));
   register_keybinding_target_metadata(
@@ -3597,10 +3613,11 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
 
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("cancel_active_tool"), "Escape",
-      "viewportFocus && !textInputActive && !navigation.active && "
+      "(viewportFocus || ((outlinerFocus || editorFocus) && "
+      "activeTool.insert_edge_loop)) && !textInputActive && !navigation.active && "
       "!operationPreview.active && !activeTool.create_primitive && "
       "(modalTool.active || activeTool.ownsViewport || "
-      "transformDrag.active || activeTool.nativeLifecycle)",
+      "transformDrag.active || activeTool.nativeLifecycle || activeTool.insert_edge_loop)",
       10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("toggle_maximized"), "Space",
@@ -3610,9 +3627,6 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       std::string(viewport_command_keybinding_context()), 10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("add_popup"), "Shift+A",
-      std::string(viewport_command_keybinding_context()), 10);
-  keybindings_.add_default_keybinding(
-      viewport_input_action_target_id("shading_popup"), "Z",
       std::string(viewport_command_keybinding_context()), 10);
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("marking_menu"), "Q",

@@ -16,7 +16,6 @@
 #include "viewport/viewport_input_router.hpp"
 
 #include <QAction>
-#include <QActionGroup>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QKeyEvent>
@@ -49,9 +48,6 @@ struct QuickActionSnapshot final {
   bool widget_action = false;
   bool widget_visible = false;
   bool widget_focusable = false;
-  bool checkable = false;
-  bool checked = false;
-  bool exclusive_group = false;
   bool shortcut_empty = true;
   QString widget_text;
   std::vector<QuickActionSnapshot> children;
@@ -80,10 +76,6 @@ QuickActionSnapshot snapshot_action(const QAction &action) {
       .object_name = action.objectName(),
       .enabled = action.isEnabled(),
       .separator = action.isSeparator(),
-      .checkable = action.isCheckable(),
-      .checked = action.isChecked(),
-      .exclusive_group =
-          action.actionGroup() != nullptr && action.actionGroup()->isExclusive(),
       .shortcut_empty = action.shortcut().isEmpty(),
   };
   if (const auto *widget_action =
@@ -204,10 +196,8 @@ TEST(QtViewportQuickMenuTests,
                        QStringLiteral("viewport_add_quick_menu"));
   });
   EXPECT_FALSE(presenter.show(
-      quader::QtViewportQuickMenuKind::Add, owner,
-      requested_global_position, quader::ViewportPaneId::Perspective,
-      quader::ViewportShadingMode::Shaded, editor, input_router,
-      localization));
+      owner, requested_global_position, quader::ViewportPaneId::Perspective,
+      editor, input_router, localization));
 
   ASSERT_TRUE(snapshot.opened);
   EXPECT_EQ(snapshot.title, QStringLiteral("Add"));
@@ -296,10 +286,10 @@ TEST(QtViewportQuickMenuTests,
 }
 
 TEST(QtViewportQuickMenuTests,
-     ShadingMenuHasExclusiveFourModeOrderAndDispatchesSelectedMode) {
+     AddMenuDispatchesSelectedCommandAndReturnsViewportFocus) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char application_name[] = "quader-viewport-shading-quick-menu-tests";
+  char application_name[] = "quader-viewport-add-dispatch-tests";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
@@ -313,81 +303,18 @@ TEST(QtViewportQuickMenuTests,
   quader::QtViewportQuickMenuPresenter presenter;
   QWidget owner;
   prepare_viewport_owner(owner);
-  QuickMenuSnapshot snapshot;
+  const auto entity_count = editor.query().entities().size();
 
   QTimer::singleShot(0, &owner, [&]() {
     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
-    if (menu == nullptr ||
-        menu->objectName() !=
-            QStringLiteral("viewport_shading_quick_menu")) {
-      ADD_FAILURE() << "Expected the viewport shading quick menu.";
-      if (QWidget *popup = QApplication::activePopupWidget()) {
-        popup->close();
-      }
-      return;
-    }
-    snapshot.opened = true;
-    snapshot.object_name = menu->objectName();
-    snapshot.title = menu->title();
-    snapshot.accessible_name = menu->accessibleName();
-    snapshot.global_position = menu->pos();
-    for (const QAction *action : menu->actions()) {
-      if (action != nullptr) {
-        snapshot.actions.push_back(snapshot_action(*action));
-      }
-    }
-    (void)accept_action(*menu, QStringLiteral("viewport.shading.solid"));
+    ASSERT_NE(menu, nullptr);
+    (void)accept_action(*menu, QStringLiteral("scene.create_empty"));
   });
 
   EXPECT_TRUE(presenter.show(
-      quader::QtViewportQuickMenuKind::Shading, owner, QPoint(160, 180),
-      quader::ViewportPaneId::Perspective,
-      quader::ViewportShadingMode::Shaded, editor, input_router,
-      localization));
-  ASSERT_TRUE(snapshot.opened);
-  EXPECT_EQ(snapshot.title, QStringLiteral("Shading"));
-  EXPECT_EQ(snapshot.accessible_name, QStringLiteral("Shading"));
-  ASSERT_EQ(snapshot.actions.size(), 6u);
-  const QuickActionSnapshot &title = snapshot.actions[0];
-  EXPECT_EQ(title.object_name,
-            QStringLiteral("viewport_shading_quick_menu_title"));
-  EXPECT_EQ(title.text, QStringLiteral("Shading"));
-  EXPECT_FALSE(title.enabled);
-  EXPECT_FALSE(title.separator);
-  EXPECT_TRUE(title.widget_action);
-  EXPECT_TRUE(title.widget_visible);
-  EXPECT_FALSE(title.widget_focusable);
-  EXPECT_EQ(title.widget_text, QStringLiteral("Shading"));
-  EXPECT_TRUE(title.shortcut_empty);
-  const QuickActionSnapshot &title_separator = snapshot.actions[1];
-  EXPECT_EQ(
-      title_separator.object_name,
-      QStringLiteral("viewport_shading_quick_menu_title_separator"));
-  EXPECT_TRUE(title_separator.separator);
-  EXPECT_TRUE(title_separator.shortcut_empty);
-  const std::vector<QString> expected_ids{
-      QStringLiteral("viewport.shading.wireframe"),
-      QStringLiteral("viewport.shading.solid"),
-      QStringLiteral("viewport.shading.shaded"),
-      QStringLiteral("viewport.shading.rendered"),
-  };
-  const std::vector<QString> expected_labels{
-      QStringLiteral("Wireframe"), QStringLiteral("Solid"),
-      QStringLiteral("Shaded"), QStringLiteral("Rendered"),
-  };
-  for (std::size_t index = 0; index < expected_ids.size(); ++index) {
-    const QuickActionSnapshot &action = snapshot.actions[index + 2u];
-    EXPECT_EQ(action.object_name, expected_ids[index]);
-    EXPECT_EQ(action.text, expected_labels[index]);
-    EXPECT_TRUE(action.enabled);
-    EXPECT_TRUE(action.checkable);
-    EXPECT_EQ(action.checked, index == 2u);
-    EXPECT_TRUE(action.exclusive_group);
-    EXPECT_TRUE(action.shortcut_empty);
-  }
-  EXPECT_EQ(editor.viewports().shading_mode(
-                quader::ViewportPaneId::Perspective),
-            quader::QuaderShadingMode::Solid);
+      owner, QPoint(160, 180), quader::ViewportPaneId::Perspective, editor,
+      input_router, localization));
+  EXPECT_EQ(editor.query().entities().size(), entity_count + 1u);
   EXPECT_EQ(owner.focusWidget(), &owner);
 }
 
@@ -419,10 +346,8 @@ TEST(QtViewportQuickMenuTests,
                        QStringLiteral("viewport_add_quick_menu"));
   });
   EXPECT_FALSE(presenter.show(
-      quader::QtViewportQuickMenuKind::Add, owner, QPoint(180, 200),
-      quader::ViewportPaneId::Perspective,
-      quader::ViewportShadingMode::Shaded, editor, input_router,
-      localization));
+      owner, QPoint(180, 200), quader::ViewportPaneId::Perspective, editor,
+      input_router, localization));
 
   ASSERT_TRUE(snapshot.opened);
   const QuickActionSnapshot *curve = find_action(
@@ -451,10 +376,8 @@ TEST(QtViewportQuickMenuTests,
                         QStringLiteral("tools.activate.create_curve"));
   });
   EXPECT_FALSE(presenter.show(
-      quader::QtViewportQuickMenuKind::Add, owner, QPoint(190, 210),
-      quader::ViewportPaneId::Perspective,
-      quader::ViewportShadingMode::Shaded, editor, input_router,
-      localization));
+      owner, QPoint(190, 210), quader::ViewportPaneId::Perspective, editor,
+      input_router, localization));
   EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision)
       << "a command that becomes disabled inside QMenu::exec must not be "
          "dispatched";
@@ -483,6 +406,8 @@ TEST(QtViewportQuickMenuTests,
       "Quick Menu Fence Box");
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  const auto entity_count = editor.query().entities().size();
+  const auto command_status_revision = editor.commands().last_status_revision();
 
   quader::ViewportInputRouter input_router;
   quader::LocalizationService localization = loaded_localization();
@@ -494,15 +419,13 @@ TEST(QtViewportQuickMenuTests,
     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
     ASSERT_NE(menu, nullptr);
     ASSERT_TRUE(editor.selection().clear().ok());
-    (void)accept_action(*menu, QStringLiteral("viewport.shading.solid"));
+    (void)accept_action(*menu, QStringLiteral("scene.create_empty"));
   });
   EXPECT_FALSE(presenter.show(
-      quader::QtViewportQuickMenuKind::Shading, owner, QPoint(200, 220),
-      quader::ViewportPaneId::Top,
-      quader::ViewportShadingMode::Wireframe, editor, input_router,
-      localization));
-  EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Top),
-            quader::QuaderShadingMode::Wireframe);
+      owner, QPoint(200, 220), quader::ViewportPaneId::Top, editor,
+      input_router, localization));
+  EXPECT_EQ(editor.query().entities().size(), entity_count);
+  EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision);
   EXPECT_EQ(editor.viewports().focused_pane(), quader::ViewportPaneId::Top);
 
   QTimer::singleShot(0, &owner, [&]() {
@@ -510,18 +433,13 @@ TEST(QtViewportQuickMenuTests,
     ASSERT_NE(menu, nullptr);
     ASSERT_TRUE(session.viewport_workspace().focus_pane(
         quader::ViewportPaneId::Perspective));
-    (void)accept_action(*menu, QStringLiteral("viewport.shading.solid"));
+    (void)accept_action(*menu, QStringLiteral("scene.create_empty"));
   });
   EXPECT_FALSE(presenter.show(
-      quader::QtViewportQuickMenuKind::Shading, owner, QPoint(210, 230),
-      quader::ViewportPaneId::Top,
-      quader::ViewportShadingMode::Wireframe, editor, input_router,
-      localization));
-  EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Top),
-            quader::QuaderShadingMode::Wireframe);
-  EXPECT_EQ(editor.viewports().shading_mode(
-                quader::ViewportPaneId::Perspective),
-            quader::QuaderShadingMode::Shaded);
+      owner, QPoint(210, 230), quader::ViewportPaneId::Top, editor,
+      input_router, localization));
+  EXPECT_EQ(editor.query().entities().size(), entity_count);
+  EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision);
 }
 
 TEST(QtViewportQuickMenuTests,
@@ -539,6 +457,8 @@ TEST(QtViewportQuickMenuTests,
   quader::ViewportInputRouter input_router;
   quader::LocalizationService localization = loaded_localization();
   quader::QtViewportQuickMenuPresenter presenter;
+  const auto entity_count = editor.query().entities().size();
+  const auto command_status_revision = editor.commands().last_status_revision();
 
   QWidget owner;
   prepare_viewport_owner(owner);
@@ -551,16 +471,13 @@ TEST(QtViewportQuickMenuTests,
     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
     ASSERT_NE(menu, nullptr);
     ++runtime_generation;
-    (void)accept_action(*menu, QStringLiteral("viewport.shading.solid"));
+    (void)accept_action(*menu, QStringLiteral("scene.create_empty"));
   });
   EXPECT_FALSE(presenter.show(
-      quader::QtViewportQuickMenuKind::Shading, owner, QPoint(220, 240),
-      quader::ViewportPaneId::Perspective,
-      quader::ViewportShadingMode::Shaded, editor, input_router,
-      localization, runtime_binding));
-  EXPECT_EQ(editor.viewports().shading_mode(
-                quader::ViewportPaneId::Perspective),
-            quader::QuaderShadingMode::Shaded);
+      owner, QPoint(220, 240), quader::ViewportPaneId::Perspective, editor,
+      input_router, localization, runtime_binding));
+  EXPECT_EQ(editor.query().entities().size(), entity_count);
+  EXPECT_EQ(editor.commands().last_status_revision(), command_status_revision);
 
   QPointer<QWidget> destroyed_owner = new QWidget();
   destroyed_owner->setFocusPolicy(Qt::StrongFocus);
@@ -575,9 +492,7 @@ TEST(QtViewportQuickMenuTests,
     }
   });
   EXPECT_FALSE(presenter.show(
-      quader::QtViewportQuickMenuKind::Add, *destroyed_owner.data(),
-      QPoint(240, 260), quader::ViewportPaneId::Perspective,
-      quader::ViewportShadingMode::Shaded, editor, input_router,
-      localization));
+      *destroyed_owner.data(), QPoint(240, 260),
+      quader::ViewportPaneId::Perspective, editor, input_router, localization));
   EXPECT_TRUE(destroyed_owner.isNull());
 }

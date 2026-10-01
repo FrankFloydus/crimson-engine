@@ -461,6 +461,30 @@ TEST(QtViewportChromeLayoutTests,
   EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective), perspective_shading);
   EXPECT_EQ(top_camera->text(), QStringLiteral("Front"));
   EXPECT_EQ(top_shading->text(), QStringLiteral("Solid"));
+
+  QMenu *debug_menu = nullptr;
+  for (auto *action : top_shading->menu()->actions()) {
+    if (action->menu() != nullptr &&
+        action->menu()->title() == QStringLiteral("Debug View")) {
+      debug_menu = action->menu();
+    }
+  }
+  ASSERT_NE(debug_menu, nullptr);
+  QAction *uv = nullptr;
+  for (auto *action : debug_menu->actions()) {
+    if (action->text() == QStringLiteral("UV")) {
+      uv = action;
+    }
+  }
+  ASSERT_NE(uv, nullptr);
+  uv->trigger();
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Top),
+            quader::ViewportShadingMode::Uv);
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            perspective_shading);
+  EXPECT_TRUE(uv->isChecked());
+  EXPECT_FALSE(solid->isChecked());
+  EXPECT_EQ(top_shading->text(), QStringLiteral("UV"));
 }
 
 TEST(QtViewportChromeLayoutTests,

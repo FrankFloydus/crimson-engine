@@ -26,13 +26,14 @@ Run from the repository root in the single `build/vs2026` tree. For an app chang
 
 ```powershell
 cmake --preset vs2026
-cmake --build --preset vs2026-release --target quader
+cmake --build --preset vs2026-release --target quader_public_app
+tools/verify_native_build.ps1 -Profile Full,Public
 ```
 
-For the public feature release, build `quader_public_app`, producing
-`build/vs2026/Release/quader-0.1.exe`. Its dependency on `quader` serializes deployment
-of the two shared-directory hosts. Public distribution includes only the public executable,
-its required runtime files/resources and `quader_fatal_diagnostics.exe`; exclude `quader.exe`,
+Every feature/fix handoff builds both `build/vs2026/Release/quader.exe` and
+`build/vs2026/Release/quader-0.1.exe`. The `quader_public_app` target depends on `quader`
+and serializes deployment of the two shared-directory hosts. Public distribution includes only
+the public executable, its required runtime files/resources and `quader_fatal_diagnostics.exe`; exclude `quader.exe`,
 tests, examples, inspection tools and developer artifacts. Do not archive the whole build directory.
 After the public Release build passes validation, run
 `tools/package_public_release.ps1 -PlanOnly` to inspect the allowlist, then run it without
@@ -42,10 +43,11 @@ host, diagnostics helper, required Release DLLs/Qt plugins, runtime resources, M
 and a SHA-256 manifest. Dependency notices come from the current repository's `thirdparty/licenses`.
 Full/developer binaries, libraries, symbols and logs are excluded.
 
-Configure only when needed. Release is the default and only required native executable; build
+Configure only when needed. Release is the default and only required native configuration; build
 Debug/Profile only on explicit request. Test targets can use `vs2026-debug` without building the
-Debug app. Documentation/tooling changes need their own checks, not app builds. Report only the
-artifact actually built. Allow ten minutes per process; asynchronous yields must not terminate it.
+Debug app. Documentation/tooling changes need their own checks, not app builds. Report both Release
+artifact paths and their build/verification results. Allow ten minutes per process; asynchronous
+yields must not terminate it.
 
 - `affected_check.ps1 -PlanOnly -ChangedPath <path>` prints targets and filters for current-task
   paths. Omit `-PlanOnly` to run them. Include affected tests in one pass; do not run the same suites
@@ -73,15 +75,16 @@ artifact actually built. Allow ten minutes per process; asynchronous yields must
 - `regression_gate.ps1` is the complete, read-only test path for broad risks in root policy, not an
   additional pass after equivalent affected coverage. Keep its full suite and baseline protections.
   `-NoConfigure` reuses the configured tree. The script builds test targets and runs full CTest;
-  it does not build an app. Build Release once for app changes.
+  it does not build an app. Build both Release hosts once for app changes through `quader_public_app`.
 - `verify_native_build.ps1` checks the Release artifact by default: optimization,
   Tracy/Sentry separation, PE symbol policy and the recursively deployed Qt/DLL dependency closure.
   Pass `-Configuration Debug` only for an explicitly requested Debug/Profile build, or select both
   after explicitly requested dual builds. It must not require an unused configuration's executable.
   Each runtime also requires the isolated `quader_fatal_diagnostics.exe` companion and its imports.
   It shares read-only assertions with `boot_tracy.ps1` through `native_build_contract.ps1`.
-  Select `-Profile Public` for `quader-0.1.exe`, or `-Profile Full,Public` to validate both.
-  Full remains the default. Profile selection never selects a different build configuration.
+  Use `-Profile Full,Public` for the required dual Release handoff. Select `-Profile Public`
+  for a public-only check; Full remains the script default. Profile selection never selects
+  a different build configuration.
 - `update_command_behavior_baseline.ps1` is the separate intentional-change path. It must require a
   non-empty reason and leave the resulting baseline diff for review.
 

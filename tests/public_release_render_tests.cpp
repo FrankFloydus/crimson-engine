@@ -271,7 +271,7 @@ TEST(PublicReleaseRenderTests, RejectsExcludedShadingAndSanitizesRestoredModes) 
       QuaderShadingMode::Rendered, QuaderShadingMode::DiffuseOnly,
       QuaderShadingMode::SpecularOnly, QuaderShadingMode::Albedo,
       QuaderShadingMode::Roughness, QuaderShadingMode::Metalness,
-      QuaderShadingMode::Normal};
+      QuaderShadingMode::Normal, QuaderShadingMode::Uv};
   for (const auto mode : kBlocked) {
     const auto result = viewports.set_shading_mode(kPane, mode);
     EXPECT_FALSE(result.ok());
@@ -287,6 +287,7 @@ TEST(PublicReleaseRenderTests, RejectsExcludedShadingAndSanitizesRestoredModes) 
   workspace.pane(kPane).perspective_shading = ViewportShadingMode::Rendered;
   EXPECT_EQ(workspace.shading_mode(kPane), ViewportShadingMode::Shaded);
   EXPECT_FALSE(workspace.set_shading_mode(kPane, ViewportShadingMode::Albedo));
+  EXPECT_FALSE(workspace.set_shading_mode(kPane, ViewportShadingMode::Uv));
   workspace.pane(ViewportPaneId::Top).orthographic_shading =
       ViewportShadingMode::Normal;
   EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Top),

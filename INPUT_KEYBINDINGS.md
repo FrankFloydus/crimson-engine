@@ -118,6 +118,13 @@ dispatcher. The viewport adapter captures the initiating pane and pointer positi
 presenter uses stack-local popup menus and revalidates the runtime, scene session, revisions, pane,
 and selected command after the nested popup loop returns. Menu actions do not own private shortcuts.
 
+`Z` defaults to the canonical `viewport.shading.toggle_wireframe_shaded` command. It toggles the
+focused pane's active perspective/orthographic shading slot: Wireframe becomes Shaded, and every
+other mode becomes Wireframe. The pane strip's Shading menu retains its existing commands. The
+former `viewport.shading_popup` target and cursor-position Shading popup are retired.
+The command requires viewport focus outside text editing and navigation; active tools' Z-axis
+constraints retain their contextual precedence.
+
 Escape defaults to the shared Clear Selection command when the active tool's descriptor permits
 selection fallback, from the viewport or Outliner in every selection mode. The command context uses
 that capability rather than a tool-name list. Active transform drags, previews, and modal tools retain
@@ -174,6 +181,8 @@ starts a new operation from the selected caps; accepted geometry is never adjust
 Repeated E retains the current pending operation instead of accepting it implicitly.
 Insert Edge Loop and Knife activation enter Edge mode from any selection mode, including through
 Shift+R and C respectively; Edge mode is an activation result, not a shortcut precondition.
+Insert Edge Loop reserves canonical Cancel while active, including idle and hover-only states.
+Escape exits to Select, discards transient loop previews, and keeps accepted loops and their history.
 Dragging follows the visible gizmo axis in every extrusion mode. When the axis points
 directly into the view and has no visible direction, dragging upward increases Amount.
 Extrusion dragging is unsnapped by default. Holding Ctrl snaps the total extrusion
@@ -205,8 +214,8 @@ face clicks cannot alter a pending extrusion's source; the disk accepts Ctrl and
 - Persist only action groups whose effective mapping differs from defaults. Legacy target-level JSON
   remains loadable: latest assignment wins within a group, and stored `when` text is rebound to the
   current app-owned scope. Loading normalizes in memory without rewriting the legacy file.
-  Retired implicit-material assignments and removals are discarded by exact target ID; other
-  unknown targets remain errors, preserving strict validation of unrelated overrides.
+  Retired implicit-material and `viewport.shading_popup` assignments/removals are discarded by
+  exact target ID; other unknown targets remain errors, preserving strict validation of unrelated overrides.
 - Retained menus/tooltips refresh on keybinding commits/revisions, outside the frame loop. They must
   not enumerate the complete catalog or repeat unchanged Qt setters every frame.
 - Release-disabled targets remain registered and their overrides remain persisted, but are absent

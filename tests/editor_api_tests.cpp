@@ -5201,9 +5201,10 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
 }
 
 TEST(EditorApiTests,
-     CursorPopupBindingsPreserveZPrecedenceModifiersAndPersistence) {
+     ViewportShadingTogglePreservesZPrecedenceModifiersAndPersistence) {
   constexpr std::string_view kAddPopup = "viewport.add_popup";
-  constexpr std::string_view kShadingPopup = "viewport.shading_popup";
+  constexpr auto kShadingToggle =
+      quader::quader_command::kViewportShadingToggleWireframeShaded;
   constexpr std::string_view kLinearArrayZ =
       "viewport.linear_array.constraint_z";
   const std::filesystem::path path =
@@ -5218,7 +5219,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.history().can_redo());
 
   EXPECT_EQ(editor.commands().shortcut_for(kAddPopup), "Shift+A");
-  EXPECT_EQ(editor.commands().shortcut_for(kShadingPopup), "Z");
+  EXPECT_EQ(editor.commands().shortcut_for(kShadingToggle.string()), "Z");
 
   const auto expect_popup = [](quader::QuaderEditorApi &owner,
                                std::string_view binding,
@@ -5232,7 +5233,16 @@ TEST(EditorApiTests,
     EXPECT_EQ(dispatch.shortcut.kind, expected) << binding;
   };
   expect_popup(editor, "Shift+A", quader::ViewportShortcutKind::AddPopup);
-  expect_popup(editor, "Z", quader::ViewportShortcutKind::ShadingPopup);
+  const auto expect_toggle = [](quader::QuaderEditorApi &owner,
+                                std::string_view binding) {
+    const auto dispatch = owner.commands().dispatch_viewport_input_binding(
+        single_input_chord(binding), {}, true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(dispatch.command_id,
+              quader::quader_command::kViewportShadingToggleWireframeShaded.string());
+  };
+  expect_toggle(editor, "Z");
 
   for (const std::string_view binding : {"Shift+A", "Z"}) {
     SCOPED_TRACE(binding);
@@ -5291,7 +5301,7 @@ TEST(EditorApiTests,
   const auto catalog = editor.commands().keybinding_catalog();
   const auto *add = find_keybinding_catalog_entry(catalog, kAddPopup);
   const auto *shading =
-      find_keybinding_catalog_entry(catalog, kShadingPopup);
+      find_keybinding_catalog_entry(catalog, kShadingToggle.string());
   ASSERT_NE(add, nullptr);
   ASSERT_NE(shading, nullptr);
   EXPECT_EQ(add->default_shortcut, "Shift+A");
@@ -5308,7 +5318,7 @@ TEST(EditorApiTests,
                      quader::QuaderKeybindingCollisionKind::ExactConflict;
         });
   };
-  EXPECT_TRUE(has_exact_conflict(kShadingPopup));
+  EXPECT_TRUE(has_exact_conflict(kShadingToggle.string()));
   EXPECT_TRUE(has_exact_conflict(kLinearArrayZ));
   const quader::QuaderApiVoidResult rejected_z =
       editor.preferences().set_action_shortcut(
@@ -5316,18 +5326,18 @@ TEST(EditorApiTests,
   EXPECT_FALSE(rejected_z.ok());
   EXPECT_FALSE(rejected_z.changed());
   EXPECT_EQ(editor.commands().shortcut_for(kAddPopup), "Shift+A");
-  EXPECT_EQ(editor.commands().shortcut_for(kShadingPopup), "Z");
+  EXPECT_EQ(editor.commands().shortcut_for(kShadingToggle.string()), "Z");
 
   ASSERT_TRUE(
       editor.preferences().set_shortcut(kAddPopup, "Ctrl+Alt+F20").ok());
   ASSERT_TRUE(editor.preferences()
-                  .set_shortcut(kShadingPopup, "Ctrl+Alt+F21")
+                  .set_shortcut(kShadingToggle.string(), "Ctrl+Alt+F21")
                   .ok());
   CommandTestHarness reloaded_harness;
   quader::QuaderEditorApi &reloaded = reloaded_harness.editor;
   ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
   EXPECT_EQ(reloaded.commands().shortcut_for(kAddPopup), "Ctrl+Alt+F20");
-  EXPECT_EQ(reloaded.commands().shortcut_for(kShadingPopup), "Ctrl+Alt+F21");
+  EXPECT_EQ(reloaded.commands().shortcut_for(kShadingToggle.string()), "Ctrl+Alt+F21");
   EXPECT_EQ(reloaded.commands()
                 .dispatch_viewport_input_binding(single_input_chord("Shift+A"),
                                                  {}, true, false)
@@ -5340,27 +5350,83 @@ TEST(EditorApiTests,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
   expect_popup(reloaded, "Ctrl+Alt+F20",
                quader::ViewportShortcutKind::AddPopup);
-  expect_popup(reloaded, "Ctrl+Alt+F21",
-               quader::ViewportShortcutKind::ShadingPopup);
+  expect_toggle(reloaded, "Ctrl+Alt+F21");
 
   ASSERT_TRUE(reloaded.preferences().remove_shortcut(kAddPopup).ok());
-  ASSERT_TRUE(reloaded.preferences().remove_shortcut(kShadingPopup).ok());
+  ASSERT_TRUE(reloaded.preferences().remove_shortcut(kShadingToggle.string()).ok());
   CommandTestHarness removed_harness;
   quader::QuaderEditorApi &removed = removed_harness.editor;
   ASSERT_TRUE(removed.commands().set_keybinding_storage_path(path).ok());
   EXPECT_TRUE(removed.commands().shortcut_for(kAddPopup).empty());
-  EXPECT_TRUE(removed.commands().shortcut_for(kShadingPopup).empty());
+  EXPECT_TRUE(removed.commands().shortcut_for(kShadingToggle.string()).empty());
 
   ASSERT_TRUE(removed.preferences().reset_shortcut(kAddPopup).ok());
-  ASSERT_TRUE(removed.preferences().reset_shortcut(kShadingPopup).ok());
+  ASSERT_TRUE(removed.preferences().reset_shortcut(kShadingToggle.string()).ok());
   CommandTestHarness reset_harness;
   quader::QuaderEditorApi &reset = reset_harness.editor;
   ASSERT_TRUE(reset.commands().set_keybinding_storage_path(path).ok());
   EXPECT_EQ(reset.commands().shortcut_for(kAddPopup), "Shift+A");
-  EXPECT_EQ(reset.commands().shortcut_for(kShadingPopup), "Z");
+  EXPECT_EQ(reset.commands().shortcut_for(kShadingToggle.string()), "Z");
   expect_popup(reset, "Shift+A", quader::ViewportShortcutKind::AddPopup);
-  expect_popup(reset, "Z", quader::ViewportShortcutKind::ShadingPopup);
+  expect_toggle(reset, "Z");
   std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
+     ViewportShadingToggleChangesOnlyFocusedPaneAndCurrentProjection) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto selected = create_selected_box(editor, "Shading Toggle Selection");
+  (void)create_selected_box(editor, "Shading Toggle Redo");
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.selection().select_object(selected).ok());
+  const auto revisions = editor.revisions();
+  const auto toggle = [&] {
+    const auto result = editor.commands().execute(
+        quader::quader_command::kViewportShadingToggleWireframeShaded);
+    EXPECT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+  };
+  constexpr auto kPerspective = quader::ViewportPaneId::Perspective;
+  constexpr auto kTop = quader::ViewportPaneId::Top;
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  ASSERT_TRUE(editor.viewports().focus_pane(kPerspective).ok());
+  for (const auto mode : {quader::QuaderShadingMode::Shaded,
+                          quader::QuaderShadingMode::Solid,
+                          quader::QuaderShadingMode::Rendered}) {
+    ASSERT_TRUE(editor.viewports().set_shading_mode(kPerspective, mode).ok());
+    toggle();
+    EXPECT_EQ(editor.viewports().shading_mode(kPerspective),
+              quader::QuaderShadingMode::Wireframe);
+    toggle();
+    EXPECT_EQ(editor.viewports().shading_mode(kPerspective),
+              quader::QuaderShadingMode::Shaded);
+    EXPECT_EQ(editor.viewports().shading_mode(kTop),
+              quader::QuaderShadingMode::Wireframe);
+  }
+  ASSERT_TRUE(editor.viewports().focus_pane(kTop).ok());
+  toggle();
+  EXPECT_EQ(editor.viewports().shading_mode(kTop),
+            quader::QuaderShadingMode::Shaded);
+  ASSERT_TRUE(editor.viewports().set_view(kTop, quader::ViewportView::Perspective).ok());
+  toggle();
+  EXPECT_EQ(editor.viewports().shading_mode(kTop),
+            quader::QuaderShadingMode::Wireframe);
+  ASSERT_TRUE(editor.viewports().set_view(kTop, quader::ViewportView::Top).ok());
+  EXPECT_EQ(editor.viewports().shading_mode(kTop),
+            quader::QuaderShadingMode::Shaded);
+  EXPECT_EQ(editor.viewports().shading_mode(kPerspective),
+            quader::QuaderShadingMode::Shaded);
+  EXPECT_EQ(editor.selection().summary().selected_object_count, 1u);
+  EXPECT_EQ(editor.selection().summary().active_object_id,
+            selected.modeling_object_id);
+  EXPECT_EQ(editor.revisions().modeling_content_revision,
+            revisions.modeling_content_revision);
+  EXPECT_TRUE(editor.history().can_undo());
+  EXPECT_TRUE(editor.history().can_redo());
+  const auto catalog = editor.commands().keybinding_catalog();
+  EXPECT_EQ(find_keybinding_catalog_entry(catalog, "viewport.shading_popup"), nullptr);
+  EXPECT_TRUE(editor.commands().shortcut_for("viewport.shading_popup").empty());
 }
 
 TEST(EditorApiTests,
@@ -10367,11 +10433,12 @@ TEST(EditorApiTests, RetiredMaterialActionsHaveNoCommandsCatalogEntriesOrDefault
 }
 
 TEST(EditorApiTests,
-     RetiredMaterialBindingOverridesAndRemovalsPreserveOtherUserBindings) {
+     RetiredBindingOverridesAndRemovalsPreserveOtherUserBindings) {
   for (const bool removal : {false, true}) {
     for (const std::string_view retired : {
              "edit.apply_material", "viewport.material.sample_face",
-             "viewport.material.apply_active_to_selection"}) {
+             "viewport.material.apply_active_to_selection",
+             "viewport.shading_popup"}) {
       SCOPED_TRACE(retired);
       SCOPED_TRACE(removal);
       const auto path = keybinding_test_path(
@@ -15683,13 +15750,14 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     EXPECT_EQ(
         editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
         quader::QuaderShadingMode::Shaded);
-    constexpr std::array<quader::QuaderShadingMode, 6> kDebugModes{
+    constexpr std::array<quader::QuaderShadingMode, 7> kDebugModes{
         quader::QuaderShadingMode::DiffuseOnly,
         quader::QuaderShadingMode::SpecularOnly,
         quader::QuaderShadingMode::Albedo,
         quader::QuaderShadingMode::Roughness,
         quader::QuaderShadingMode::Metalness,
         quader::QuaderShadingMode::Normal,
+        quader::QuaderShadingMode::Uv,
     };
     for (quader::QuaderShadingMode mode : kDebugModes) {
       EXPECT_TRUE(viewport.set_shading_mode(mode).ok());
@@ -15701,7 +15769,7 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
         viewport.set_shading_mode(quader::QuaderShadingMode::XRay).ok());
     EXPECT_EQ(
         editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
-        quader::QuaderShadingMode::Normal);
+        quader::QuaderShadingMode::Uv);
 
     EXPECT_TRUE(viewport.set_view(quader::ViewportView::Top).ok());
     EXPECT_EQ(editor.viewports().view(quader::ViewportPaneId::Perspective), quader::ViewportView::Top);
@@ -15716,7 +15784,7 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
                     .ok());
     EXPECT_EQ(editor.viewports().view(quader::ViewportPaneId::Perspective), quader::ViewportView::Perspective);
     EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
-              quader::QuaderShadingMode::Normal);
+              quader::QuaderShadingMode::Uv);
     EXPECT_TRUE(viewport.set_view(quader::ViewportView::Top).changed());
     EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
               quader::QuaderShadingMode::Rendered);
@@ -23354,9 +23422,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 224u);
+  EXPECT_EQ(commands.size(), 225u);
 #else
-  EXPECT_EQ(commands.size(), 223u);
+  EXPECT_EQ(commands.size(), 224u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -23422,7 +23490,7 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 60u);
+  EXPECT_EQ(non_command_target_count, 59u);
   EXPECT_TRUE(has_keybinding_catalog_entry(catalog, "viewport.marking_menu", "Q"));
 
   for (const std::string &typed_id : typed_command_ids()) {

@@ -18,6 +18,7 @@
 
 #include <QBuffer>
 #include <QDir>
+#include <QFile>
 #include <QImage>
 #include <QString>
 
@@ -335,6 +336,43 @@ public:
 
   RenderMaterialBindingSnapshot preview_material() const { return material_; }
 
+  std::optional<SurfaceGridImage> render_debug_surface(
+      const RenderMaterialBindingSnapshot &material, float debug_mode,
+      const RenderStandardMaterialTextureTransformSnapshot &transform = {}) {
+    material_ = material;
+    SurfaceGridOptions grid;
+    grid.debug_mode = debug_mode;
+    SurfaceGridImage image;
+    if (!render_surface({0.0f, 0.0f, 1.0f}, false, transform, {}, false,
+                        0.0f, 1.0f, 0.0f, &grid, &image)) {
+      return std::nullopt;
+    }
+    return image;
+  }
+
+  std::optional<SurfaceGridImage> render_current_debug_view(float debug_mode) {
+    set_debug_view(debug_mode);
+    return read_current_mesh();
+  }
+
+  void set_debug_view(float debug_mode) {
+    view_->setMaterialGlobal(
+        0u, filament::math::float4{debug_mode, 0.0f, 0.0f, 1.0f});
+  }
+
+  utils::Entity current_surface_entity() const {
+    return proxy_ ? proxy_->entity : utils::Entity{};
+  }
+
+  std::vector<filament::MaterialInstance *> current_surface_materials() const {
+    return proxy_ ? proxy_->material_instances
+                  : std::vector<filament::MaterialInstance *>{};
+  }
+
+  TextureBindingService::CacheStats texture_counters() const {
+    return textures_.cache_stats();
+  }
+
   std::optional<SurfaceGridImage> render_preview_meshes(
       const std::vector<RenderToolPreviewMeshRecord> &meshes) {
     if (!previews_.initialized()) previews_.initialize(factory_, materials_, 64u);
@@ -362,7 +400,8 @@ public:
   void clear_previews() { previews_.clear(); }
 
   std::optional<SurfaceGridImage> render_standard_previews(
-      const std::vector<RenderToolPreviewMeshRecord> &meshes, bool show_grid = false, QVec3 camera_target = {}) {
+      const std::vector<RenderToolPreviewMeshRecord> &meshes, bool show_grid = false,
+      QVec3 camera_target = {}, std::optional<float> debug_mode = {}) {
     std::vector<MeshRenderableProxy> proxies;
     bool complete = true;
     for (const auto &mesh : meshes) {
@@ -393,7 +432,7 @@ public:
                            -1.5, 1.5, -1.5, 1.5, 0.1, 20.0);
     camera_->lookAt({camera_target.x, camera_target.y, static_cast<double>(camera_target.z) + 4.0},
                     {camera_target.x, camera_target.y, camera_target.z}, {0.0, 1.0, 0.0});
-    view_->setMaterialGlobal(0u, filament::math::float4{show_grid ? 0.0f : 6.0f, 0.0f, 0.0f, 1.0f});
+    set_debug_view(debug_mode.value_or(show_grid ? 0.0f : 6.0f));
     auto image = complete ? read_current_mesh() : std::nullopt;
     for (auto &proxy : proxies) factory_.destroy(proxy);
     return image;
@@ -453,7 +492,8 @@ public:
       const RenderSceneSnapshot &base,
       const std::vector<RenderToolPreviewMeshRecord> &meshes,
       const RenderToolPreviewSuppressionSnapshot &suppression = {},
-      bool show_grid = false, QVec3 camera_target = {}) {
+      bool show_grid = false, QVec3 camera_target = {},
+      std::optional<float> debug_mode = {}) {
     if (!editable_.initialized()) editable_.initialize(factory_, materials_);
     if (!previews_.initialized()) previews_.initialize(factory_, materials_, 64u);
     if (editable_.prepare(base, meshes, suppression) == ToolPreviewSubmissionResult::Failed) return {};
@@ -466,7 +506,7 @@ public:
     settings.set_bool_value(ViewportBoolSettingId::ShowMeshGrid, show_grid);
     editable_.update_surface_grid(0.25f, settings);
     previews_.update_surface_grid(0.25f, settings);
-    view_->setMaterialGlobal(0u, filament::math::float4{show_grid ? 0.0f : 6.0f, 0.0f, 0.0f, 1.0f});
+    set_debug_view(debug_mode.value_or(show_grid ? 0.0f : 6.0f));
     camera_->setProjection(filament::Camera::Projection::ORTHO,
                            -1.5, 1.5, -1.5, 1.5, 0.1, 20.0);
     camera_->lookAt({camera_target.x, camera_target.y, static_cast<double>(camera_target.z) + 4.0},
@@ -646,6 +686,98 @@ float maximum_pixel_difference(const SurfaceGridImage &first,
         std::abs(first.rgba[index] - second.rgba[index]));
   }
   return difference;
+}
+
+std::optional<RenderMaterialBindingSnapshot> uv_checker_reference_material(
+    RenderMaterialBindingSnapshot material) {
+  QFile file(QDir(qEnvironmentVariable("QT_PLUGIN_PATH"))
+                 .filePath("textures/uv_checker.png"));
+  if (!file.open(QIODevice::ReadOnly)) return std::nullopt;
+  const QByteArray encoded = file.readAll();
+  if (encoded.isEmpty()) return std::nullopt;
+  const auto *begin = reinterpret_cast<const std::byte *>(encoded.constData());
+  RenderTextureAssetSnapshot texture;
+  texture.slot = material_texture_slot::kBaseColor;
+  texture.project_texture_id = *ProjectAssetId::parse(
+      "9ef0a00c-dfe6-4093-ad8d-f86f1d510850");
+  texture.content_revision = 1u;
+  texture.texture.color_space = TextureColorSpace::Srgb;
+  texture.encoded_file_bytes = std::make_shared<const std::vector<std::byte>>(
+      begin, begin + encoded.size());
+  texture.present = true;
+  material.primary_material.textures = {std::move(texture)};
+  material.primary_material.document.base_color = {1.0f, 1.0f, 1.0f};
+  material.primary_material.document.roughness = 1.0f;
+  material.primary_material.document.metallic = 0.0f;
+  material.primary_material.normal_strength = 0.0f;
+  return material;
+}
+
+TEST(RenderNormalMappingRuntimeTests,
+     UvDebugUsesPackagedCheckerAndRetainsSurfaceResourcesAcrossViewSwitches) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_NORMAL_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_NORMAL_TESTS=1 for Vulkan coverage";
+  }
+  NormalMappingHarness harness;
+  NormalMappingHarness reference;
+  ASSERT_TRUE(harness.initialize(kGridTargetSize));
+  ASSERT_TRUE(reference.initialize(kGridTargetSize));
+  auto material = harness.preview_material();
+  material.primary_material.document.base_color = {0.07f, 0.3f, 0.8f};
+  const auto checker = uv_checker_reference_material(material);
+  ASSERT_TRUE(checker);
+  std::array<RenderStandardMaterialTextureTransformSnapshot, 2u> transforms;
+  transforms[1].scale = {0.77f, 1.19f};
+  transforms[1].offset = {0.21f, 0.13f};
+  transforms[1].rotation_degrees = 29.0f;
+  std::optional<SurfaceGridImage> first_checker;
+  for (const auto &transform : transforms) {
+    const auto ordinary = harness.render_debug_surface(material, 3.0f, transform);
+    const auto expected = reference.render_debug_surface(*checker, 3.0f, transform);
+    ASSERT_TRUE(ordinary);
+    ASSERT_TRUE(expected);
+    const auto entity = harness.current_surface_entity();
+    const auto instances = harness.current_surface_materials();
+    const auto geometry_before = harness.geometry_counters();
+    const auto textures_before = harness.texture_counters();
+    const auto actual = harness.render_current_debug_view(7.0f);
+    ASSERT_TRUE(actual);
+    expect_same_pixels(*actual, *expected);
+    EXPECT_GT(maximum_pixel_difference(*actual, *ordinary), 0.1f);
+    for (auto *instance : instances) {
+      instance->setParameter("baseColorFactor", filament::math::float4{
+          material.primary_material.document.base_color.x,
+          material.primary_material.document.base_color.y,
+          material.primary_material.document.base_color.z, 0.0f});
+      instance->setParameter("instanceEditDim", 1.0f);
+      instance->setParameter("instanceEditContextStrength", 1.0f);
+      instance->setParameter("instanceEditContextTintAmount", 1.0f);
+    }
+    const auto alpha_dimmed = harness.render_current_debug_view(7.0f);
+    ASSERT_TRUE(alpha_dimmed);
+    expect_same_pixels(*alpha_dimmed, *expected);
+    for (auto *instance : instances) {
+      instance->setParameter("baseColorFactor", filament::math::float4{
+          material.primary_material.document.base_color.x,
+          material.primary_material.document.base_color.y,
+          material.primary_material.document.base_color.z, 1.0f});
+      instance->setParameter("instanceEditDim", 0.0f);
+    }
+    const auto restored = harness.render_current_debug_view(3.0f);
+    ASSERT_TRUE(restored);
+    expect_same_pixels(*restored, *ordinary);
+    EXPECT_EQ(harness.current_surface_entity(), entity);
+    EXPECT_EQ(harness.current_surface_materials(), instances);
+    EXPECT_EQ(harness.geometry_counters().upload_count, geometry_before.upload_count);
+    EXPECT_EQ(harness.geometry_counters().resource_count, geometry_before.resource_count);
+    EXPECT_EQ(harness.texture_counters().upload_count, textures_before.upload_count);
+    EXPECT_EQ(harness.texture_counters().resource_count, textures_before.resource_count);
+    if (first_checker) {
+      EXPECT_GT(maximum_pixel_difference(*actual, *first_checker), 0.1f);
+    } else {
+      first_checker = actual;
+    }
+  }
 }
 
 std::vector<RenderToolPreviewMeshRecord> visible_dynamic_occurrences(
@@ -2249,6 +2381,67 @@ TEST(EditableMeshSurfaceRuntimeTests, SamplingGridAndUnusedMaterialSlotsMatchOrd
   ASSERT_TRUE(deleted_reference);
   expect_same_pixels(*deleted, *deleted_reference);
   EXPECT_EQ(harness.editable_exclusion().entities.size(), 5u);
+}
+
+TEST(EditableMeshSurfaceRuntimeTests,
+     UvCheckerMatchesOrdinaryInstancedAndRetainedEditableGeometry) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_NORMAL_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_NORMAL_TESTS=1 for Vulkan coverage";
+  }
+  NormalMappingHarness harness;
+  NormalMappingHarness reference;
+  ASSERT_TRUE(harness.initialize());
+  ASSERT_TRUE(reference.initialize());
+  auto material = harness.preview_material();
+  material.primary_material.texture_transform = {
+      .scale = {0.7f, 1.2f}, .offset = {0.17f, 0.31f},
+      .rotation_degrees = 19.0f};
+  const auto checker = uv_checker_reference_material(material);
+  ASSERT_TRUE(checker);
+  auto instances = visible_dynamic_occurrences(material);
+  auto reference_instances = instances;
+  for (auto &record : reference_instances) record.material = *checker;
+  const auto expected_instances = reference.render_standard_previews(
+      reference_instances, false, {}, 3.0f);
+  ASSERT_TRUE(expected_instances);
+  harness.set_debug_view(7.0f);
+  const auto actual_instances = harness.render_preview_meshes(instances);
+  ASSERT_TRUE(actual_instances);
+  expect_same_pixels(*actual_instances, *expected_instances);
+  harness.clear_previews();
+
+  auto records = unique_editable_surfaces(material, 6u);
+  auto reference_records = records;
+  for (auto &record : reference_records) record.material = *checker;
+  const auto expected = reference.render_standard_previews(
+      reference_records, false, {}, 3.0f);
+  ASSERT_TRUE(expected);
+  const auto base = editable_base_scene(records, 1u);
+  const auto actual = harness.render_editable_meshes(
+      base, records, {}, true, {}, 7.0f);
+  ASSERT_TRUE(actual);
+  expect_same_pixels(*actual, *expected);
+  EXPECT_EQ(harness.editable_counters().eligible_record_count, records.size());
+  const auto geometry = harness.geometry_counters();
+  const auto textures = harness.texture_counters();
+  const auto batches = harness.editable_counters().batch_create_count;
+  const auto ordinary = harness.render_current_debug_view(6.0f);
+  ASSERT_TRUE(ordinary);
+  EXPECT_GT(maximum_pixel_difference(*ordinary, *actual), 0.1f);
+  const auto restored = harness.render_current_debug_view(7.0f);
+  ASSERT_TRUE(restored);
+  expect_same_pixels(*restored, *expected);
+  EXPECT_EQ(harness.editable_counters().batch_create_count, batches);
+  EXPECT_EQ(harness.geometry_counters().editable_surface_geometry_create_count,
+            geometry.editable_surface_geometry_create_count);
+  EXPECT_EQ(harness.geometry_counters().editable_surface_position_upload_count,
+            geometry.editable_surface_position_upload_count);
+  EXPECT_EQ(harness.geometry_counters().editable_surface_attribute_upload_count,
+            geometry.editable_surface_attribute_upload_count);
+  EXPECT_EQ(harness.geometry_counters().editable_surface_index_upload_count,
+            geometry.editable_surface_index_upload_count);
+  EXPECT_EQ(harness.texture_counters().upload_count, textures.upload_count);
+  EXPECT_EQ(harness.texture_counters().resource_count, textures.resource_count);
 }
 
 } // namespace

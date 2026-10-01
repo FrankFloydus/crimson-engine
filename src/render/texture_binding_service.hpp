@@ -73,6 +73,11 @@ public:
       return solid_color_texture_;
     }
 
+    /** App-owned checker shared by every material diagnostic view. */
+    filament::Texture *uv_debug_texture() const {
+      return uv_debug_texture_ ? uv_debug_texture_ : fallback_albedo_texture_;
+    }
+
     // Every non-fallback texture is pinned by the material instance that uses it.
     // Release only after destroying that instance, including detached previews.
     filament::Texture *resolve_texture(const filament::MaterialInstance &consumer,
@@ -179,6 +184,7 @@ public:
     filament::Texture *fallback_roughness_texture_ = nullptr;
     filament::Texture *fallback_metallic_texture_ = nullptr;
     filament::Texture *fallback_normal_texture_ = nullptr;
+    filament::Texture *uv_debug_texture_ = nullptr;
     // Outlives this scene binding and every material instance created from it.
     filament::Texture *solid_color_texture_ = nullptr;
 };

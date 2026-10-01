@@ -49,6 +49,10 @@ material {
         },
         {
             type : sampler2d,
+            name : uvDebugTexture
+        },
+        {
+            type : sampler2d,
             name : roughnessTexture
         },
         {
@@ -282,6 +286,18 @@ fragment {
     void material(inout MaterialInputs material) {
         vec2 uv = applyTextureTransform(
                 applyQuadUvInterpolation(vec2(getUV0().x, 1.0 - getUV0().y)));
+        float debugMode = floor(getMaterialGlobal0().x + 0.5);
+        if (debugMode == 7.0) {
+            material.normal = vec3(0.0, 0.0, 1.0);
+            prepareMaterial(material);
+            vec3 checker = texture(materialParams_uvDebugTexture, uv).rgb;
+            material.baseColor = vec4(checker, 1.0);
+            material.roughness = 1.0;
+            material.metallic = 0.0;
+            material.postLightingColor = vec4(checker, 1.0);
+            material.postLightingMixFactor = 1.0;
+            return;
+        }
         vec3 normalSample = sampleTextureNormal(uv);
         material.normal = normalSample;
 
@@ -296,7 +312,6 @@ fragment {
                 roughnessSample * materialParams.roughnessFactor, 0.04, 1.0);
         float metallic = clamp(
                 metallicSample * materialParams.metallicFactor, 0.0, 1.0);
-        float debugMode = floor(getMaterialGlobal0().x + 0.5);
 
         vec3 baseColor = albedo;
         vec4 edited = applyInstanceEditContext(

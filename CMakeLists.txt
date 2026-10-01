@@ -771,10 +771,13 @@ set(QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE
     "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_material.qmat")
 set(QUADER_SOLID_VIEWPORT_TEXTURE
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/textures/default_texture.png")
+set(QUADER_UV_DEBUG_TEXTURE
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/textures/uv_checker.png")
 quader_require_existing_path("${QUADER_DEFAULT_ALBEDO_TEXTURE}" "app-owned default material albedo texture")
 quader_require_existing_path("${QUADER_DEFAULT_ROUGHNESS_TEXTURE}" "app-owned default material roughness texture")
 quader_require_existing_path("${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}" "app-owned default project material template")
 quader_require_existing_path("${QUADER_SOLID_VIEWPORT_TEXTURE}" "app-owned Solid viewport texture")
+quader_require_existing_path("${QUADER_UV_DEBUG_TEXTURE}" "app-owned UV debug texture")
 
 quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh resources/materials/mesh_quad_uv.glsl resources/materials/mesh_normal_mapping.glsl resources/materials/mesh_vertex_normal_mapping.glsl resources/materials/instance_edit.glsl resources/materials/mesh_surface_grid.glsl)
 quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit resources/materials/mesh_quad_uv.glsl resources/materials/mesh_normal_mapping.glsl resources/materials/mesh_vertex_normal_mapping.glsl resources/materials/instance_edit.glsl resources/materials/mesh_surface_grid.glsl)
@@ -1501,6 +1504,7 @@ set(QUADER_RUNTIME_RESOURCE_INPUTS
     "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}"
     "${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}"
     "${QUADER_SOLID_VIEWPORT_TEXTURE}"
+    "${QUADER_UV_DEBUG_TEXTURE}"
     ${QUADER_FILAMENT_MATERIAL_OUTPUTS}
     ${QUADER_RUNTIME_IBL_INPUTS}
     ${QUADER_RUNTIME_LOCALE_INPUTS})
@@ -1586,6 +1590,9 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${QUADER_SOLID_VIEWPORT_TEXTURE}"
             "${QUADER_RUNTIME_DEPLOY_DIR}/textures/default_texture.png"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${QUADER_UV_DEBUG_TEXTURE}"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/textures/uv_checker.png"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${QUADER_RUNTIME_DEPLOY_DIR}/licenses"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different

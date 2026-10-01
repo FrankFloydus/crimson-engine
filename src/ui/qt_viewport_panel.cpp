@@ -480,15 +480,17 @@ shading_command_id(ViewportShadingMode shading) {
   case ViewportShadingMode::Roughness:
   case ViewportShadingMode::Metalness:
   case ViewportShadingMode::Normal:
+  case ViewportShadingMode::Uv:
     return std::nullopt;
   }
   return std::nullopt;
 }
 
-constexpr std::array<ViewportShadingMode, 6> kDebugViewModes{
+constexpr std::array<ViewportShadingMode, 7> kDebugViewModes{
     ViewportShadingMode::DiffuseOnly, ViewportShadingMode::SpecularOnly,
     ViewportShadingMode::Albedo,      ViewportShadingMode::Roughness,
     ViewportShadingMode::Metalness,   ViewportShadingMode::Normal,
+    ViewportShadingMode::Uv,
 };
 
 QString localized_view_label(const LocalizationService *localization,
@@ -522,6 +524,8 @@ std::string_view shading_stable_id(ViewportShadingMode shading) {
     return "metalness";
   case ViewportShadingMode::Normal:
     return "normal";
+  case ViewportShadingMode::Uv:
+    return "uv";
   }
   return "shaded";
 }
@@ -548,6 +552,8 @@ std::string_view shading_label(ViewportShadingMode shading) {
     return "Metalness";
   case ViewportShadingMode::Normal:
     return "Normal";
+  case ViewportShadingMode::Uv:
+    return "UV";
   }
   return "Shaded";
 }
@@ -587,6 +593,8 @@ viewport_material_debug_mode(ViewportShadingMode shading) {
     return ViewportMaterialDebugMode::Metalness;
   case ViewportShadingMode::Normal:
     return ViewportMaterialDebugMode::Normal;
+  case ViewportShadingMode::Uv:
+    return ViewportMaterialDebugMode::Uv;
   case ViewportShadingMode::Wireframe:
   case ViewportShadingMode::Solid:
   case ViewportShadingMode::Shaded:
@@ -3590,6 +3598,10 @@ void QtViewportPanel::process_viewport_input(
                                         input.modal_tool_active);
   input.operation_preview_active = modeling.operation_preview_active();
   const ViewportToolId keybinding_tool = input_router_.state().active_tool;
+  if (!pane_owns_tool && keybinding_tool == ViewportToolId::InsertEdgeLoop) {
+    input.operation_preview_active = false;
+    input.active_transform_drag = false;
+  }
   const bool passive_curve_controls_available =
       interaction_controller_.active_tool_allows_selection_fallback(
           keybinding_tool) &&
@@ -4054,15 +4066,10 @@ void QtViewportPanel::process_viewport_input(
       result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::DeletePopup &&
       localization_ != nullptr;
-  const bool show_add_popup =
+  const bool show_quick_menu =
       result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::AddPopup &&
       localization_ != nullptr;
-  const bool show_shading_popup =
-      result.shortcut_handled &&
-      result.shortcut.kind == ViewportShortcutKind::ShadingPopup &&
-      localization_ != nullptr;
-  const bool show_quick_menu = show_add_popup || show_shading_popup;
   const bool show_marking_menu =
       result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::MarkingMenu &&
@@ -4207,6 +4214,17 @@ void QtViewportPanel::process_viewport_input(
       is_viewport_context_menu_click_gesture(pending_context_menu_request);
   const QVec2 pending_context_menu_local_mouse =
       context_menu_pointer.release_local;
+  if (result.cancel_requested &&
+      !editor.tools().pane_owns_executing_tool(*input_pane)) {
+    const auto canceled = editor.viewports().record_selected_tool(
+        *input_pane, ViewportToolId::Select);
+    if (runtime_binding_generation_ != input_binding_generation) {
+      return;
+    }
+    if (canceled.ok()) {
+      input_router_.set_active_tool(ViewportToolId::Select);
+    }
+  }
   if (!editor.tools().pane_owns_executing_tool(*input_pane)) {
     // Another pane owns the sole modeling session. Camera motion and commands
     // above remain available; passive focus/hover must not update its preview.
@@ -4255,9 +4273,8 @@ void QtViewportPanel::process_viewport_input(
            .expected_generation = input_binding_generation});
     } else if (show_quick_menu) {
       (void)quick_menu_presenter_.show(
-          show_add_popup ? QtViewportQuickMenuKind::Add : QtViewportQuickMenuKind::Shading,
           *pane_state.surface_container, shortcut_popup_global_point,
-          *input_pane, workspace_->shading_mode(*input_pane), editor,
+          *input_pane, editor,
           input_router_, *localization_,
           {.current_generation = &runtime_binding_generation_,
            .expected_generation = input_binding_generation});
@@ -4373,6 +4390,7 @@ void QtViewportPanel::process_viewport_input(
     if (runtime_binding_generation_ != input_binding_generation) {
       return false;
     }
+    editor.tools().synchronize_pane_tool_after_execution(*input_pane);
     if (cancel_failure.has_value()) {
       notify_command_failure(editor, *cancel_failure);
       if (runtime_binding_generation_ != input_binding_generation) {
@@ -4947,10 +4965,8 @@ void QtViewportPanel::process_viewport_input(
     (void)workspace_->focus_pane(*input_pane);
     update_focused_pane_indicator();
     if (quick_menu_presenter_.show(
-            show_add_popup ? QtViewportQuickMenuKind::Add
-                           : QtViewportQuickMenuKind::Shading,
             *pane_state.surface_container, shortcut_popup_global_point,
-            *input_pane, workspace_->shading_mode(*input_pane), editor,
+            *input_pane, editor,
             input_router_, *localization_,
             {.current_generation = &runtime_binding_generation_,
              .expected_generation = input_binding_generation})) {

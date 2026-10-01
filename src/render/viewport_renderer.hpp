@@ -55,6 +55,7 @@ enum class ViewportMaterialDebugMode : std::uint8_t {
     Roughness = 4,
     Metalness = 5,
     Normal = 6,
+    Uv = 7,
 };
 
 /**

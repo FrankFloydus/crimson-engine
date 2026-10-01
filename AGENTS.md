@@ -250,13 +250,18 @@ This is standing user authorization: do not ask the user to close Quader or requ
 Prefer a normal window close and wait for exit. If it does not exit, terminate only verified
 Quader processes using this checkout's build artifacts, then continue the build.
 
-For feature/fix handoff, build **Release only** by default. Build the Debug/Profile executable
-only when the user explicitly requests it. Keep both configurations available in the canonical tree:
+For feature/fix handoff, always build both the Full and public 0.1 executables in **Release**.
+Build the Debug/Profile executable only when the user explicitly requests it. Keep both
+configurations available in the canonical tree:
 
 ```powershell
 cmake --preset vs2026
-cmake --build --preset vs2026-release --target quader
+cmake --build --preset vs2026-release --target quader_public_app
+tools/verify_native_build.ps1 -Profile Full,Public
 ```
+
+`quader_public_app` depends on `quader`, so this target builds both executables and serializes
+their deployment into the shared runtime directory.
 
 Documentation-only and tooling-only changes do not require native executables. Test-only changes
 build their test target. The `vs2026-debug` test preset remains valid; building a test target does
@@ -267,13 +272,13 @@ Configure only when needed; do not clean-rebuild routinely. Allow build/test pro
 | Configuration | Required contract |
 | --- | --- |
 | Debug/Profile | `build/vs2026/Debug/quader.exe`: optimized `/O2`, embedded debug information, Tracy on-demand; Release CRT/dependencies, `NDEBUG`, unchecked STL, Release Qt/vcpkg and Filament `md`. Never ship it. |
-| Release | `build/vs2026/Release/quader.exe`: `/O2`, aggressive inlining, COMDAT and whole-program/link-time optimization; no debug info, Tracy definitions or Tracy client. This is the shipping artifact. |
+| Release | `build/vs2026/Release/quader.exe` and `build/vs2026/Release/quader-0.1.exe`: `/O2`, aggressive inlining, COMDAT and whole-program/link-time optimization; no debug info, Tracy definitions or Tracy client. Public distribution ships `quader-0.1.exe`. |
 
-Canonical presets disable Sentry for both artifacts. Deployment uses vcpkg's recursive
+Canonical presets disable Sentry for both configurations. Deployment uses vcpkg's recursive
 Release-bin app-local resolver and `windeployqt --force --release`; direct-DLL copying
 misses Qt private dependencies. `tools/boot_tracy.ps1` is Debug/Profile-only.
 
-Report success/failure and the absolute path for the executable built. Do not present an older
+Report success/failure and the absolute paths for both Release executables. Do not present an older
 executable from another configuration as containing this task's changes.
 
 ## Verification

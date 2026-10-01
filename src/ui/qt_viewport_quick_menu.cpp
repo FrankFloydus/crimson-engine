@@ -19,7 +19,6 @@
 #include "viewport/viewport_input_router.hpp"
 
 #include <QAction>
-#include <QActionGroup>
 #include <QFont>
 #include <QLabel>
 #include <QMenu>
@@ -186,54 +185,11 @@ void build_add_menu(QMenu &menu,
       quader_command::kSceneCreateEmpty);
 }
 
-void build_shading_menu(
-    QMenu &menu, std::vector<BoundQuickMenuCommand> &bound_commands,
-    QuaderEditorApi &editor, const LocalizationService &localization,
-    ViewportShadingMode current_shading) {
-  menu.setObjectName(QStringLiteral("viewport_shading_quick_menu"));
-  const QString title = localized(
-      localization, "ui.viewport.quick_menu.shading.title", "Shading");
-  menu.setTitle(title);
-  menu.setAccessibleName(title);
-  add_menu_title(menu, title,
-                 QStringLiteral("viewport_shading_quick_menu_title"));
-
-  QActionGroup *group = new QActionGroup(&menu);
-  group->setExclusive(true);
-  const auto add_shading_action = [&](std::string_view localization_key,
-                                      std::string_view fallback,
-                                      QuaderCommandId command_id,
-                                      ViewportShadingMode shading) {
-    QAction *action = add_command_action(
-        menu, bound_commands, editor, localization, localization_key,
-        fallback, command_id);
-    if (action == nullptr) {
-      return;
-    }
-    action->setCheckable(true);
-    action->setChecked(current_shading == shading);
-    group->addAction(action);
-  };
-  add_shading_action("viewport.shading.wireframe", "Wireframe",
-                     quader_command::kViewportShadingWireframe,
-                     ViewportShadingMode::Wireframe);
-  add_shading_action("viewport.shading.solid", "Solid",
-                     quader_command::kViewportShadingSolid,
-                     ViewportShadingMode::Solid);
-  add_shading_action("viewport.shading.shaded", "Shaded",
-                     quader_command::kViewportShadingShaded,
-                     ViewportShadingMode::Shaded);
-  add_shading_action("viewport.shading.rendered", "Rendered",
-                     quader_command::kViewportShadingRendered,
-                     ViewportShadingMode::Rendered);
-}
-
 } // namespace
 
 bool QtViewportQuickMenuPresenter::show(
-    QtViewportQuickMenuKind kind, QWidget &focus_parent,
-    const QPoint &global_point, ViewportPaneId initiating_pane,
-    ViewportShadingMode current_shading, QuaderEditorApi &editor,
+    QWidget &focus_parent, const QPoint &global_point,
+    ViewportPaneId initiating_pane, QuaderEditorApi &editor,
     ViewportInputRouter &input_router, LocalizationService &localization,
     ViewportRuntimeBindingToken runtime_binding) const {
   QDR_PROFILE_SCOPE("Qt viewport quick menu show");
@@ -255,15 +211,10 @@ bool QtViewportQuickMenuPresenter::show(
   // this stack object before show() can reach its QPointer fence.
   QMenu menu;
   std::vector<BoundQuickMenuCommand> bound_commands;
-  bound_commands.reserve(kind == QtViewportQuickMenuKind::Add ? 9U : 4U);
+  bound_commands.reserve(9U);
   {
     QDR_PROFILE_SCOPE("Qt viewport quick menu build");
-    if (kind == QtViewportQuickMenuKind::Add) {
-      build_add_menu(menu, bound_commands, editor, localization);
-    } else {
-      build_shading_menu(menu, bound_commands, editor, localization,
-                         current_shading);
-    }
+    build_add_menu(menu, bound_commands, editor, localization);
   }
 
   QAction *selected_action = nullptr;

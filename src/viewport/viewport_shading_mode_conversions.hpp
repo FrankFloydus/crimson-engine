@@ -36,6 +36,8 @@ quader_api_to_viewport_shading_mode(QuaderShadingMode mode) {
     return ViewportShadingMode::Metalness;
   case QuaderShadingMode::Normal:
     return ViewportShadingMode::Normal;
+  case QuaderShadingMode::Uv:
+    return ViewportShadingMode::Uv;
   }
   return ViewportShadingMode::Shaded;
 }
@@ -63,6 +65,8 @@ quader_api_from_viewport_shading_mode(ViewportShadingMode mode) {
     return QuaderShadingMode::Metalness;
   case ViewportShadingMode::Normal:
     return QuaderShadingMode::Normal;
+  case ViewportShadingMode::Uv:
+    return QuaderShadingMode::Uv;
   }
   return QuaderShadingMode::Shaded;
 }

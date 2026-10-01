@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # CMake Guide
 
-Root [AGENTS.md](../AGENTS.md) owns the Release-only default handoff and version contract.
+Root [AGENTS.md](../AGENTS.md) owns the handoff of both Release hosts and the version contract.
 [tools/AGENTS.md](../tools/AGENTS.md) lists operational commands; [tests/AGENTS.md](../tests/AGENTS.md)
 owns verification selection.
 
@@ -21,9 +21,11 @@ owns verification selection.
   unless the target already intentionally uses one.
 - Preserve the one canonical multi-config tree and its presets: `vs2026`, `vs2026-debug`,
   `vs2026-release`, and `ctest --preset vs2026-debug`. Do not add alternate native build trees.
-- Build the Release app for normal handoff; build the Debug/Profile app only on explicit request.
-  Debug test targets remain available without building the Debug app. Configure when CMake inputs
-  change. Source-list-only edits need the affected targets/tests, not a full SDK install fixture.
+- Build both Full and public 0.1 Release executables for normal feature/fix handoff through
+  `cmake --build --preset vs2026-release --target quader_public_app`, then verify them with
+  `tools/verify_native_build.ps1 -Profile Full,Public`. Build the Debug/Profile app only on explicit
+  request. Debug test targets remain available without building the Debug app. Configure when CMake
+  inputs change. Source-list-only edits need the affected targets/tests, not a full SDK install fixture.
 - `QuaderBuildOptions.cmake` owns options and dependency locations. `QuaderModeling.cmake` owns
   portable SDK targets, focused modeling test targets, SDK installation, and native-only Tracy
   integration. `QuaderSdkOnlyBuildCheck.cmake` verifies an isolated SDK install and external consumer.

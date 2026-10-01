@@ -41,6 +41,13 @@ void TextureBindingService::initialize(filament::Engine &engine,
       create_solid_texture(255, 255, 255, 255, TextureColorSpace::Linear);
   fallback_normal_texture_ =
       create_solid_texture(128, 128, 255, 255, TextureColorSpace::Linear);
+  uv_debug_texture_ = load_png_texture(
+      engine, resource_root_ / "textures" / "uv_checker.png",
+      PngTextureLoadOptions{
+          .color_space = PngTextureColorSpace::Srgb,
+          .generate_mipmaps = true,
+          .label = "UV debug checker",
+      });
 }
 
 void TextureBindingService::shutdown() {
@@ -62,6 +69,7 @@ void TextureBindingService::shutdown() {
     destroy_texture(fallback_roughness_texture_);
     destroy_texture(fallback_metallic_texture_);
     destroy_texture(fallback_normal_texture_);
+    destroy_texture(uv_debug_texture_);
     solid_color_texture_ = nullptr;
     scene_binding_ = {};
     resource_root_.clear();

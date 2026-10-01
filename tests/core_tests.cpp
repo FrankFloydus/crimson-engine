@@ -9541,10 +9541,11 @@ TEST(ViewportWorkspaceServiceTests,
 
 TEST(ViewportWorkspaceServiceTests,
      DebugShadingModesAreOwnedIndependentlyPerPane) {
-  constexpr std::array<ViewportShadingMode, 6> kDebugModes{
+  constexpr std::array<ViewportShadingMode, 7> kDebugModes{
       ViewportShadingMode::DiffuseOnly, ViewportShadingMode::SpecularOnly,
       ViewportShadingMode::Albedo,      ViewportShadingMode::Roughness,
       ViewportShadingMode::Metalness,   ViewportShadingMode::Normal,
+      ViewportShadingMode::Uv,
   };
   ViewportWorkspaceService workspace;
 
@@ -9565,10 +9566,19 @@ TEST(ViewportWorkspaceServiceTests,
       ViewportShadingMode::SpecularOnly));
   EXPECT_FALSE(
       viewport_shading_uses_scene_lighting(ViewportShadingMode::Albedo));
+  EXPECT_FALSE(viewport_shading_uses_scene_lighting(ViewportShadingMode::Uv));
+  EXPECT_FALSE(viewport_shading_shows_light_gizmos(ViewportShadingMode::Uv));
   EXPECT_FALSE(workspace.set_shading_mode(
       ViewportPaneId::Perspective, static_cast<ViewportShadingMode>(999)));
   EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
-            ViewportShadingMode::Normal);
+            ViewportShadingMode::Uv);
+}
+
+TEST(ViewportWorkspaceServiceTests, PublicUvDebugModeRoundTripsThroughTheApi) {
+  EXPECT_EQ(quader_api_to_viewport_shading_mode(QuaderShadingMode::Uv),
+            ViewportShadingMode::Uv);
+  EXPECT_EQ(quader_api_from_viewport_shading_mode(ViewportShadingMode::Uv),
+            QuaderShadingMode::Uv);
 }
 
 TEST(ViewportWorkspaceServiceTests,
@@ -11515,7 +11525,7 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
     ViewportShortcut shortcut;
   };
 
-  const std::array<ShortcutCase, 22> shortcuts{{
+  const std::array<ShortcutCase, 21> shortcuts{{
       {"Ctrl+A select all",
        test_router_shortcut(ViewportShortcutKind::SelectAll,
                             ViewportShortcutContext::Global)},
@@ -11553,8 +11563,6 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
        test_router_shortcut(ViewportShortcutKind::DeletePopup)},
       {"Shift+A add popup",
        test_router_shortcut(ViewportShortcutKind::AddPopup)},
-      {"Z shading popup",
-       test_router_shortcut(ViewportShortcutKind::ShadingPopup)},
       {"Shift+X mirror X", test_mirror_shortcut(ViewportMirrorAxis::X)},
       {"Shift+Y mirror Y", test_mirror_shortcut(ViewportMirrorAxis::Y)},
       {"Shift+Z mirror Z", test_mirror_shortcut(ViewportMirrorAxis::Z)},
@@ -11818,7 +11826,6 @@ TEST(ViewportInputRouterTests,
   for (const ViewportShortcutKind popup_kind : {
            ViewportShortcutKind::DeletePopup,
            ViewportShortcutKind::AddPopup,
-           ViewportShortcutKind::ShadingPopup,
            ViewportShortcutKind::MarkingMenu,
        }) {
     SCOPED_TRACE(static_cast<int>(popup_kind));
@@ -11950,8 +11957,6 @@ TEST(ViewportHostContractAdapterTests,
      CursorPopupTargetsMapToViewportRouterShortcuts) {
   for (const auto &[target_id, expected_kind] : {
            std::pair{"viewport.add_popup", ViewportShortcutKind::AddPopup},
-           std::pair{"viewport.shading_popup",
-                     ViewportShortcutKind::ShadingPopup},
            std::pair{"viewport.marking_menu",
                      ViewportShortcutKind::MarkingMenu},
        }) {
