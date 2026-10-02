@@ -315,6 +315,12 @@ public:
     return point_at_plane(image_pixel, z);
   }
 
+  QVec2 overlay_audit_image_point(QVec3 world) const {
+    auto pixel = camera_.project_world_point(world).position;
+    pixel.y = static_cast<float>(kHeight - 1u) - pixel.y;
+    return pixel;
+  }
+
   bool create_outline_depth_quad(const std::array<MeshVertex, 4u> &points) {
     QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
     quader_poly::Document document;
@@ -2210,6 +2216,124 @@ TEST(SelectionOverlayRuntimeTests,
     const auto heterogeneous = harness.capture();
     ASSERT_FALSE(heterogeneous.isNull());
     EXPECT_EQ(heterogeneous, harness.capture_legacy_point_frame(frame));
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanSlopedComponentSourceWirePreservesSurfaceDepth) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-sloped-component-wire-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    for (const float far_z : {-20.0f, -145.0f}) {
+      SCOPED_TRACE(static_cast<int>(projection));
+      SCOPED_TRACE(far_z);
+      SelectionOverlayRuntimeHarness harness;
+      ASSERT_TRUE(harness.initialize(0.0f, false));
+      ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+      std::array<MeshVertex, 4u> surface;
+      const std::array<QVec2, 4u> corners{{
+          {80.0f, 140.0f}, {180.0f, 140.0f},
+          {180.0f, 340.0f}, {80.0f, 340.0f}}};
+      for (std::size_t index = 0u; index < surface.size(); ++index) {
+        const float z = index == 0u || index == 3u ? 0.0f : far_z;
+        surface[index].position = harness.overlay_audit_world_point(corners[index], z);
+      }
+      ASSERT_TRUE(harness.create_outline_depth_quad(surface));
+      harness.set_overlay_audit_frame({});
+      harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+      const auto background = harness.capture();
+      ASSERT_FALSE(background.isNull());
+      ASSERT_NE(background.pixelColor(130, 240), background.pixelColor(320, 400));
+
+      ViewportOverlayFrame frame;
+      for (int index = 0; index < 2; ++index) {
+        const float y = index == 0 ? 200.0f : 290.0f;
+        const float behind_surface = index == 0 ? 0.0f : -0.1f;
+        frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = harness.overlay_audit_world_point({80.0f, y}, behind_surface),
+            .end = harness.overlay_audit_world_point({180.0f, y}, far_z + behind_surface),
+            .color = rgba8(40, 225, 255), .width_pixels = 2.5f,
+            .style_role = ViewportOverlayStyleRole::ExplicitColor,
+            .source = ViewportOverlaySource::ComponentSelection,
+            .element = {.object_id = 1, .edge_a = index * 2, .edge_b = index * 2 + 1}});
+      }
+      const auto expect_visibility = [&](const QImage &image) {
+        ASSERT_FALSE(image.isNull());
+        // Square caps extend past the authored endpoints. Their projected depth
+        // must extend by the same distance: stretching endpoint depths across
+        // the wider ribbon hides the near half of this coplanar internal edge.
+        for (const float projected_fraction : {0.1f, 0.25f, 0.5f, 0.7f, 0.9f}) {
+          SCOPED_TRACE(projected_fraction);
+          const float fraction = projection == ViewportProjection::Perspective
+              ? projected_fraction * 5.0f /
+                  ((1.0f - projected_fraction) * (5.0f - far_z) + projected_fraction * 5.0f)
+              : projected_fraction;
+          const auto &visible = frame.lines[0];
+          const auto visible_probe = harness.overlay_audit_image_point(
+              visible.start + (visible.end - visible.start) * fraction);
+          EXPECT_GE(cyan_pixels(image, visible_probe), 3)
+              << "A visible source edge must remain continuous on its own sloped surface.";
+          const auto &hidden = frame.lines[1];
+          const auto hidden_probe = harness.overlay_audit_image_point(
+              hidden.start + (hidden.end - hidden.start) * fraction);
+          EXPECT_EQ(cyan_pixels(image, hidden_probe), 0)
+              << "Correcting the ribbon depth must preserve real surface occlusion.";
+        }
+      };
+      const auto expect_retained_uploads = [&](const OverlayProxyUploadStats &before) {
+        const auto after = harness.component_overlay_stats().uploads;
+        EXPECT_EQ(after.geometry_creation_count, before.geometry_creation_count);
+        EXPECT_EQ(after.position_upload_count, before.position_upload_count);
+        EXPECT_EQ(after.index_upload_count, before.index_upload_count);
+        EXPECT_EQ(after.static_upload_count, before.static_upload_count);
+      };
+      harness.set_overlay_audit_frame(frame);
+      QImage initial;
+      for (const float scale : {1.0f, 2.0f, 1.0f}) {
+        SCOPED_TRACE(scale);
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        const auto image = harness.capture();
+        expect_visibility(image);
+        if (scale == 1.0f) {
+          if (initial.isNull()) initial = image;
+          else EXPECT_EQ(image, initial) << "Scale-down must restore the source-wire presentation.";
+        }
+        const auto uploads = harness.component_overlay_stats().uploads;
+        EXPECT_EQ(harness.component_overlay_stats().retained_source_wire_edges, 2u);
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        expect_retained_uploads(uploads);
+        EXPECT_EQ(harness.capture(false), image);
+
+        // Camera movement updates shader projection without rebuilding the
+        // semantic edge population or uploading unchanged endpoint geometry.
+        ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.2f, projection));
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        expect_retained_uploads(uploads);
+        expect_visibility(harness.capture());
+        ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        expect_retained_uploads(uploads);
+        EXPECT_EQ(harness.capture(), image);
+        const auto output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+        if (!output.isEmpty()) {
+          ASSERT_TRUE(QDir().mkpath(output));
+          ASSERT_TRUE(image.save(QDir(output).filePath(
+              QStringLiteral("sloped-component-source-wire-%1-%2-%3.png")
+                  .arg(static_cast<int>(projection)).arg(int(5.0f - far_z)).arg(int(scale * 100)))));
+        }
+      }
+    }
   }
 }
 
