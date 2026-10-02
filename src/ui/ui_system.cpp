@@ -570,6 +570,11 @@ bool UISystem::initialize(RenderSystem &render_system,
     }
   }
   viewport_panel_ = new QtViewportPanel(viewport_container);
+  viewport_panel_->set_presentation_requested_callback([this]() {
+    if (viewport_presentation_requested_) {
+      viewport_presentation_requested_();
+    }
+  });
   viewport_panel_->set_control_actions(
       viewport_actions, tool_toolbar_->tool_action(ViewportToolId::LassoSelect));
   viewport_panel_->set_control_action_requested_callback(
@@ -3075,6 +3080,7 @@ void UISystem::schedule_retained_message_box_prewarm() {
 }
 
 void UISystem::shutdown() {
+  viewport_presentation_requested_ = {};
   if (main_window_ == nullptr && render_system_ == nullptr) {
     return;
   }
@@ -5383,6 +5389,11 @@ void UISystem::refresh_localized_chrome() {
 void UISystem::set_session_settings_changed_callback(
     std::function<void(const SessionPreferences &)> callback) {
   session_settings_changed_ = std::move(callback);
+}
+
+void UISystem::set_viewport_presentation_requested_callback(
+    std::function<void()> callback) {
+  viewport_presentation_requested_ = std::move(callback);
 }
 
 void UISystem::set_default_material_texture_changed_callback(

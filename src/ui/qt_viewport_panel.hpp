@@ -108,6 +108,8 @@ public:
                            QAction *lasso_action = nullptr);
   void set_control_action_requested_callback(
       std::function<void(ViewportPaneId, QAction &)> callback);
+  /// Requests the owning app's frame flow after native pane geometry/exposure changes.
+  void set_presentation_requested_callback(std::function<void()> callback);
   void refresh_control_actions(QuaderEditorApi &editor);
   /// Adopts one retained settings overlay; null detaches the host callbacks.
   void set_settings_panel(QtToolSettingsPanel *panel);
@@ -308,6 +310,7 @@ private:
   LocalizationService *localization_ = nullptr;
   std::function<QuaderMaterialReference()> primitive_creation_material_provider_;
   std::function<void(ViewportPaneId, QAction &)> control_action_requested_;
+  std::function<void()> presentation_requested_;
   RenderFramePerformanceStats render_performance_ = {};
   ViewportSettings fallback_settings_ = ViewportSettings::defaults();
   ViewportLayoutId displayed_layout_ = ViewportLayoutId::Single;

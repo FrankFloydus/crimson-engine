@@ -58,6 +58,7 @@ private:
   void save_window_settings();
   void bind_active_scene(SceneSession &scene);
   bool render_frame(const FrameTiming &frame_timing);
+  void request_viewport_presentation();
   void schedule_next_frame(bool submitted = false);
   void poll_autosave();
 
@@ -69,6 +70,7 @@ private:
   QPointer<QScreen> display_refresh_screen_;
   AppFrameClock frame_clock_;
   AppFrameSchedule frame_schedule_;
+  AppFramePresentationRequest viewport_presentation_request_;
   RenderSystem render_system_;
   SceneRenderBridge render_bridge_;
   std::unique_ptr<ProjectSessionRenderMaterialResolver> project_material_resolver_;

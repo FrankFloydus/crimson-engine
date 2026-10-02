@@ -158,6 +158,7 @@ public:
   [[nodiscard]] std::size_t render_viewports();
   [[nodiscard]] std::size_t render_surfaces(bool render_scene_viewports);
   [[nodiscard]] bool needs_continuous_rendering() const;
+  void set_viewport_presentation_requested_callback(std::function<void()> callback);
   /// Counts complete material projections for retained-presentation diagnostics.
   [[nodiscard]] std::uint64_t material_presentation_snapshot_build_count() const {
     return material_presentation_snapshot_build_count_;
@@ -353,6 +354,7 @@ private:
       session_settings_changed_;
   std::function<void(const std::filesystem::path &)>
       default_material_texture_changed_;
+  std::function<void()> viewport_presentation_requested_;
   UISettingsPaths settings_paths_;
   QtAuxiliaryWindowState auxiliary_window_state_;
   ViewportSettings viewport_settings_;

@@ -10,6 +10,33 @@
 
 namespace quader {
 
+/// Coalesces native presentation changes without consuming active-frame requests.
+class AppFramePresentationRequest final {
+public:
+  [[nodiscard]] bool request() noexcept {
+    requested_ = true;
+    if (queued_) {
+      return false;
+    }
+    queued_ = true;
+    return true;
+  }
+
+  void deliver() noexcept { queued_ = false; }
+
+  [[nodiscard]] bool take(bool rendering_frame) noexcept {
+    if (!requested_ || queued_ || rendering_frame) {
+      return false;
+    }
+    requested_ = false;
+    return true;
+  }
+
+private:
+  bool requested_ = false;
+  bool queued_ = false;
+};
+
 /** Schedules uncapped frames only while submissions make progress. */
 class AppFrameSchedule final {
 public:

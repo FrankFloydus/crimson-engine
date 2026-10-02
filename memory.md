@@ -958,6 +958,11 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
 - Native transient windows yield viewport submission until first Paint completes, then resume while
   still open; pausing for the entire modal lifetime breaks live previews. Retain generation/QPointer
   guards across nested, hidden, destroyed, and re-shown windows.
+- Native viewport resize/exposure requests a current full App frame through the existing timer.
+  Coalesce requests after the geometry/command stack unwinds; an active frame must not consume
+  the pending request before its normal rescheduling. Preserve transient first-paint and GPU
+  readiness gates. Qt native size can already be final before the deferred resize event or camera
+  preparation, so settled dock bounds alone do not prove current image presentation.
 - Fusion remains the style; qt_application_theme owns the Obsidian palette. Windows High Contrast
   removes the forced scheme and uses unresolved system palette roles. Theme transitions are events.
 - User interface scale multiplies immutable logical baselines; Qt owns monitor DPR. Raster overlay
@@ -978,7 +983,7 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
 
 Owners: [theme](src/ui/qt_application_theme.cpp), [scale metrics](src/ui/qt_ui_scale_metrics.cpp),
 [dimension HUD](src/ui/qt_viewport_edge_length_hud.cpp), [native geometry](src/platform/native_window_input.cpp),
-[first-paint gate](src/app/app_frame_presentation.hpp).
+[first-paint gate](src/app/app_frame_presentation.hpp), [frame scheduling](src/app/app_frame_schedule.hpp).
 Tests: [theme](tests/qt_application_theme_tests.cpp), [Qt settings](tests/qt_settings_dialog_tests.cpp),
 [dimension HUD](tests/qt_viewport_edge_length_hud_tests.cpp), [startup](tests/qt_startup_presentation_tests.cpp),
 [first-paint scheduling](tests/app_frame_clock_tests.cpp).

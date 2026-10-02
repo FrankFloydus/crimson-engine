@@ -782,6 +782,11 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
   native_surface_startup_ = {};
   bool success = true;
   for (Pane &pane_state : panes_) {
+    pane_state.surface->set_surface_changed_callback([this]() {
+      if (presentation_requested_) {
+        presentation_requested_();
+      }
+    });
     pane_state.surface_container->hide();
     pane_state.surface_presented = false;
     success =
@@ -796,6 +801,10 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
 }
 
 void QtViewportPanel::shutdown() {
+  presentation_requested_ = {};
+  for (Pane &pane_state : panes_) {
+    pane_state.surface->set_surface_changed_callback({});
+  }
   if (environment_popup_ != nullptr) {
     environment_popup_->abandon_runtime();
   }
@@ -1096,6 +1105,11 @@ void QtViewportPanel::refresh_selection_tool_actions(Pane &pane_state) {
 void QtViewportPanel::set_control_action_requested_callback(
     std::function<void(ViewportPaneId, QAction &)> callback) {
   control_action_requested_ = std::move(callback);
+}
+
+void QtViewportPanel::set_presentation_requested_callback(
+    std::function<void()> callback) {
+  presentation_requested_ = std::move(callback);
 }
 
 void QtViewportPanel::refresh_control_actions(QuaderEditorApi &editor) {

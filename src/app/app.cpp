@@ -269,6 +269,7 @@ bool App::initialize(QApplication &application,
                      AppOptions options) {
   shutdown_complete_ = false;
   running_ = false;
+  viewport_presentation_request_ = {};
   application_ = &application;
   const std::filesystem::path executable_dir = executable_path.parent_path();
   project_session_.set_resource_root(executable_dir);
@@ -403,6 +404,8 @@ bool App::initialize(QApplication &application,
                    });
   QObject::connect(application_, &QApplication::aboutToQuit, frame_timer_.get(),
                    [this]() { running_ = false; });
+  ui_.set_viewport_presentation_requested_callback(
+      [this]() { request_viewport_presentation(); });
   autosave_timer_ = std::make_unique<QTimer>();
   autosave_timer_->setTimerType(Qt::CoarseTimer);
   autosave_timer_->setInterval(1000);
@@ -451,6 +454,8 @@ void App::shutdown() {
 
   shutdown_complete_ = true;
   running_ = false;
+  ui_.set_viewport_presentation_requested_callback({});
+  viewport_presentation_request_ = {};
   if (frame_timer_) {
     frame_timer_->stop();
   }
@@ -761,8 +766,37 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   return submitted > 0u;
 }
 
+void App::request_viewport_presentation() {
+  if (!frame_timer_ || !running_ || shutdown_complete_) {
+    return;
+  }
+  if (!viewport_presentation_request_.request()) {
+    return;
+  }
+  // Coalesce native resize/expose events after their command/layout stack.
+  // The timer retains ownership of first-paint gates, scene sync and submission.
+  QMetaObject::invokeMethod(
+      frame_timer_.get(),
+      [this]() {
+        viewport_presentation_request_.deliver();
+        if (!frame_timer_ || !running_ || shutdown_complete_) {
+          return;
+        }
+        if (viewport_presentation_request_.take(rendering_frame_)) {
+          frame_timer_->start(0);
+        }
+      },
+      Qt::QueuedConnection);
+}
+
 void App::schedule_next_frame(bool submitted) {
   if (!frame_timer_ || !running_) {
+    return;
+  }
+  // A nested Qt loop may deliver the queued request during render_frame().
+  // Keep that request across the ordinary cadence update at the frame's end.
+  if (viewport_presentation_request_.take(rendering_frame_)) {
+    frame_timer_->start(0);
     return;
   }
   const bool continuous = ui_.needs_continuous_rendering();

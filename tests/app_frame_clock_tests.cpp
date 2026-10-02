@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "app/app_frame_clock.hpp"
 #include "app/app_frame_presentation.hpp"
+#include "app/app_frame_schedule.hpp"
 #include "ui/qt_unsaved_confirmation_dialog.hpp"
 
 #include <gtest/gtest.h>
@@ -14,6 +15,7 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QEvent>
+#include <QEventLoop>
 #include <QMenu>
 #include <QPaintEvent>
 #include <QPushButton>
@@ -104,6 +106,106 @@ TEST(AppFrameClockTests, ProducesClampedFrameTimingAndMonotonicFrameIndex) {
     EXPECT_NEAR(clamped.delta_seconds, AppFrameClock::kMaxDeltaSeconds,
                 0.000001);
     EXPECT_NEAR(clamped.elapsed_seconds, 2.0, 0.000001);
+}
+
+TEST(AppFramePresentationRequestTests,
+     CoalescesNativeBurstAndRetainsRejectedSubmissionBackoff) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-frame-request-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  AppFramePresentationRequest request;
+  AppFrameSchedule schedule;
+  QTimer frame_timer;
+  frame_timer.setSingleShot(true);
+  frame_timer.setInterval(1000);
+  QEventLoop loop;
+  int queued_deliveries = 0;
+  int timer_frames = 0;
+  QObject::connect(&frame_timer, &QTimer::timeout, &loop, [&]() {
+    ++timer_frames;
+    EXPECT_EQ(frame_timer.interval(), 0);
+    EXPECT_FALSE(request.take(false));
+    frame_timer.setInterval(schedule.next_interval_ms(true, false, 0, false));
+    loop.quit();
+  });
+  frame_timer.start();
+  for (int event = 0; event < 4; ++event) {
+    if (request.request()) {
+      QMetaObject::invokeMethod(
+          &frame_timer,
+          [&]() {
+            ++queued_deliveries;
+            request.deliver();
+            if (request.take(false)) {
+              frame_timer.start(0);
+            }
+          },
+          Qt::QueuedConnection);
+    }
+  }
+  EXPECT_FALSE(request.take(false));
+  EXPECT_EQ(frame_timer.interval(), 1000);
+  QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+  loop.exec();
+  EXPECT_EQ(queued_deliveries, 1);
+  EXPECT_EQ(timer_frames, 1);
+  EXPECT_EQ(frame_timer.interval(), 1);
+  EXPECT_FALSE(request.take(false));
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 2);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 4);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false), 4);
+}
+
+TEST(AppFramePresentationRequestTests,
+     NestedDeliverySurvivesActiveFrameAndRestartsExistingTimerOnce) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-nested-frame-request-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  AppFramePresentationRequest request;
+  QTimer frame_timer;
+  frame_timer.setSingleShot(true);
+  frame_timer.setInterval(1000);
+  bool rendering_frame = true;
+  QEventLoop nested_loop;
+  ASSERT_TRUE(request.request());
+  EXPECT_FALSE(request.request());
+  EXPECT_FALSE(request.take(false));
+  QMetaObject::invokeMethod(
+      &frame_timer,
+      [&]() {
+        request.deliver();
+        EXPECT_FALSE(request.take(rendering_frame));
+        EXPECT_EQ(frame_timer.interval(), 1000);
+        nested_loop.quit();
+      },
+      Qt::QueuedConnection);
+  QTimer::singleShot(2000, &nested_loop, &QEventLoop::quit);
+  nested_loop.exec();
+  // A nested timer's cadence update cannot consume the outer frame's request.
+  EXPECT_FALSE(request.take(rendering_frame));
+  rendering_frame = false;
+  ASSERT_TRUE(request.take(rendering_frame));
+  EXPECT_FALSE(request.take(rendering_frame));
+
+  QEventLoop presentation_loop;
+  int timer_frames = 0;
+  QObject::connect(&frame_timer, &QTimer::timeout, &presentation_loop, [&]() {
+    ++timer_frames;
+    presentation_loop.quit();
+  });
+  frame_timer.start(0);
+  QTimer::singleShot(2000, &presentation_loop, &QEventLoop::quit);
+  presentation_loop.exec();
+  EXPECT_EQ(timer_frames, 1);
+  EXPECT_FALSE(request.take(false));
 }
 
 TEST(QtUnsavedConfirmationDialogTests,
