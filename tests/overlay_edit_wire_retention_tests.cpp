@@ -351,5 +351,38 @@ TEST(OverlayEditWireRetentionTests, AmbiguousSurfaceOccurrencesAndNonmanifoldEdg
   EXPECT_EQ(ambiguous.surface_support[1].vertex_id, -1);
 }
 
+TEST(OverlayEditWireRetentionTests, ReversedNativeEndpointsKeepCanonicalIdentityAndSurfaceSupports) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back(source_edge(1, 0, 1));
+  frame.triangles.push_back(source_surface(frame.lines[0], 10, 2, {0.0f, 2.0f, 3.0f}));
+  frame.triangles.push_back(source_surface(frame.lines[0], 11, 3, {0.0f, -2.0f, 4.0f}));
+  // Native wire geometry follows its face loop while authored IDs stay canonical.
+  std::swap(frame.lines[0].start, frame.lines[0].end);
+  OverlayWireSurfaceSupportCache support;
+  support.prepare(frame, OverlayRenderableBuilder::frame_signatures(frame));
+  auto reversed = frame.lines[0];
+  support.apply(reversed);
+  EXPECT_EQ(reversed.element.edge_a, 0);
+  EXPECT_EQ(reversed.element.edge_b, 1);
+  EXPECT_FLOAT_EQ(reversed.start.x, frame.lines[0].start.x);
+  EXPECT_FLOAT_EQ(reversed.start.y, frame.lines[0].start.y);
+  EXPECT_FLOAT_EQ(reversed.end.x, frame.lines[0].end.x);
+  EXPECT_FLOAT_EQ(reversed.end.y, frame.lines[0].end.y);
+  EXPECT_EQ(reversed.surface_support[0].vertex_id, 2);
+  EXPECT_EQ(reversed.surface_support[1].vertex_id, 3);
+  EXPECT_FLOAT_EQ(reversed.surface_support[0].position.z, 3.0f);
+  EXPECT_FLOAT_EQ(reversed.surface_support[1].position.z, 4.0f);
+
+  const auto plan = OverlayRenderableBuilder::build_layer(
+      frame, ViewportOverlayCamera{}, ViewportOverlayLayer::SourceWire);
+  ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+  ASSERT_EQ(plan.edit_wire_batches[0].mesh.vertices.size(), 4u);
+  const auto &vertex = plan.edit_wire_batches[0].mesh.vertices[0];
+  EXPECT_FLOAT_EQ(vertex.start.x, frame.lines[0].start.x);
+  EXPECT_FLOAT_EQ(vertex.end.x, frame.lines[0].end.x);
+  EXPECT_FLOAT_EQ(vertex.support0.z, 3.0f);
+  EXPECT_FLOAT_EQ(vertex.support1.z, 4.0f);
+}
+
 } // namespace
 } // namespace quader

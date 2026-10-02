@@ -217,12 +217,15 @@ void OverlayWireSurfaceSupportCache::apply(ViewportOverlayLine &line) const {
       std::min(element.edge_a, element.edge_b), std::max(element.edge_a, element.edge_b)});
   if (found == supports_.end() || found->second.ambiguous) return;
   const auto &support = found->second;
-  const bool ordered = element.edge_a < element.edge_b;
-  const auto first = ordered ? line.start : line.end;
-  const auto second = ordered ? line.end : line.start;
-  if (first.x != support.first.x || first.y != support.first.y ||
-      first.z != support.first.z || second.x != support.second.x ||
-      second.y != support.second.y || second.z != support.second.z) return;
+  const auto same_position = [](QVec3 left, QVec3 right) {
+    return left.x == right.x && left.y == right.y && left.z == right.z;
+  };
+  // Canonical edge IDs do not prescribe the native face-loop traversal.
+  const bool forward = same_position(line.start, support.first) &&
+                       same_position(line.end, support.second);
+  const bool reversed = same_position(line.start, support.second) &&
+                        same_position(line.end, support.first);
+  if (!forward && !reversed) return;
   line.surface_support = support.points;
 }
 

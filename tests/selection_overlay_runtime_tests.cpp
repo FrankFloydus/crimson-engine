@@ -14,6 +14,7 @@
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
@@ -59,6 +60,7 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -126,7 +128,9 @@ public:
     renderer_ = engine_->createRenderer();
     swapchain_ = engine_->createSwapChain(
         kWidth, kHeight, filament::SwapChain::CONFIG_READABLE |
-                            filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
+                            filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER |
+                            (surface == ViewportRenderSurface::SrgbSwapchain
+                                 ? filament::SwapChain::CONFIG_SRGB_COLORSPACE : 0u));
     if (!scene_ || !renderer_ || !swapchain_ ||
         !materials_.initialize(*engine_, resources)) return false;
     solid_color_texture_ = create_test_solid_color_texture(*engine_);
@@ -345,7 +349,7 @@ public:
 
   bool create_diagonal_inside_corner_sample(
       ViewportOverlayFrame &frame, ViewportProjection projection, float phase,
-      const QuaderTransform3 *support_transform = nullptr) {
+      const QuaderTransform3 *support_transform = nullptr, bool reverse_first_face = false) {
     const QVec2 start_pixel{160.0f + phase, 100.0f};
     const QVec2 end_pixel{450.0f + phase, 350.0f};
     const float length = std::hypot(end_pixel.x - start_pixel.x, end_pixel.y - start_pixel.y);
@@ -380,9 +384,12 @@ public:
     for (std::size_t index = 0u; index < points.size(); ++index) {
       vertices[index] = quader_poly::add_vertex(document, points[index]);
     }
-    const std::array faces{
-        quader_poly::add_face(document, std::array{vertices[0], vertices[1], vertices[2], vertices[3]}),
-        quader_poly::add_face(document, std::array{vertices[0], vertices[4], vertices[5], vertices[1]})};
+    const auto positive_face = std::array{vertices[0], vertices[1], vertices[2], vertices[3]};
+    const auto negative_face = std::array{vertices[1], vertices[0], vertices[4], vertices[5]};
+    const auto first_face = quader_poly::add_face(document, reverse_first_face ? negative_face : positive_face);
+    const auto second_face = quader_poly::add_face(document, reverse_first_face ? positive_face : negative_face);
+    const std::array faces{reverse_first_face ? second_face : first_face,
+                           reverse_first_face ? first_face : second_face};
     const auto object = api.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Diagonal inward corner wire regression"});
@@ -416,6 +423,88 @@ public:
                       .edge_a = static_cast<int>(vertices[triangle[1]]),
                       .edge_b = static_cast<int>(vertices[triangle[2]]),
                       .face_id = static_cast<int>(faces[index / 2u])}});
+    }
+    return true;
+  }
+
+  bool select_inside_corner_native_wire() {
+    auto &editor = array_editor();
+    return editor.selection().select_object(inside_corner_object_).ok() &&
+        editor.selection().set_mode(QuaderSelectionMode::Edge).ok();
+  }
+
+  bool open_native_project_sample(const std::filesystem::path &manifest) {
+    captured_project_ = std::make_unique<ProjectSession>(manifest.parent_path() / "runtime-recent-scenes.json");
+    captured_project_->set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) / "resources/modeling_assets");
+    array_editor_ = std::make_unique<QuaderEditorApi>(*captured_project_);
+    const auto opened = array_editor_->project().open(manifest);
+    if (!opened.ok()) {
+      std::cout << "PROJECT_OVERLAY_OPEN_FAILED " << opened.error_message() << std::endl;
+      return false;
+    }
+    const auto *active = captured_project_->active_scene();
+    if (active == nullptr || active->session == nullptr) return false;
+    captured_project_scene_ = active->session.get();
+    const auto objects = array_editor_->query().modeling_objects();
+    if (objects.empty()) return false;
+    const auto object = array_editor_->query().modeling_object_for_id(objects.front().modeling_object_id);
+    if (!object || !array_editor_->selection().select_object(*object).ok() ||
+        !array_editor_->selection().set_mode(QuaderSelectionMode::Edge).ok()) return false;
+    captured_project_materials_ = std::make_unique<ProjectSessionRenderMaterialResolver>(*captured_project_);
+    bridge_.set_project_material_resolver(captured_project_materials_.get());
+    camera_ = captured_project_scene_->viewport_workspace().camera(ViewportPaneId::Perspective);
+    camera_.set_viewport_size(kWidth, kHeight);
+    const auto &scene_settings = captured_project_scene_->scene().scene_settings();
+    camera_.set_clip_planes(scene_settings.camera.near_plane, scene_settings.camera.far_plane);
+    auto settings = ViewportSettings::defaults();
+    (void)settings.set_bool_value(ViewportBoolSettingId::ShowMeshGrid, true);
+    const float grid_size = viewport_grid_world_size_from_contract(array_editor_->viewports().grid_preset());
+    view_.set_material_presentation(ViewportMaterialDebugMode::None, false,
+        settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
+    view_.set_scene_layer_mask(kViewportShadedSceneLayerMask);
+    view_.apply_scene_settings(scene_settings, false, settings);
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, grid_size, settings,
+        settings.bool_value(ViewportBoolSettingId::ShowGrid));
+    bridge_.update_mesh_surface_grid(grid_size, settings);
+    const auto pose = camera_.pose();
+    std::cout << "PROJECT_OVERLAY_CAMERA eye=" << pose.eye.x << ',' << pose.eye.y << ',' << pose.eye.z
+              << " target=" << pose.target.x << ',' << pose.target.y << ',' << pose.target.z
+              << " near=" << camera_.state().near_plane << " far=" << camera_.state().far_plane << std::endl;
+    return QuaderRenderApiRuntimeAccess::sync_scene(array_editor_->render(), bridge_).ok();
+  }
+
+  bool present_native_project_sample(float scale = 1.0f, bool overlays_visible = true) {
+    if (captured_project_scene_ == nullptr ||
+        !QuaderRenderApiRuntimeAccess::sync_scene(array_editor_->render(), bridge_).ok()) return false;
+    const auto &modeling = captured_project_scene_->modeling();
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.layer_mask = viewport_grid_layer_mask(0u), .raster_scale = scale,
+         .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
+         .selection_source = {.source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+             .content_revision = modeling.content_revision(), .selection_revision = modeling.selection_revision(),
+             .scene_revision = captured_project_scene_->scene().revision(),
+             .asset_revision = captured_project_scene_->assets().revision(),
+             .overlay_signature = modeling.selection_overlay_signature(),
+             .selection_context = ViewportOverlaySelectionContext::Edge},
+         .selection_frame_provider = this, .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = ViewportOverlaySelectionContext::Edge,
+         .overlays_visible = overlays_visible, .selection_dimensions_visible = false},
+        ViewportSettings::defaults());
+    return true;
+  }
+
+  bool native_project_line_is_visible(const ViewportOverlayLine &line) const {
+    if (captured_project_scene_ == nullptr) return false;
+    for (int index = 1; index < 32; ++index) {
+      const QVec3 point = line.start + (line.end - line.start) * (static_cast<float>(index) / 32.0f);
+      const auto projected = camera_.project_world_point(point);
+      if (!projected.visible || projected.position.x < 8.0f || projected.position.x >= kWidth - 8.0f ||
+          projected.position.y < 8.0f || projected.position.y >= kHeight - 8.0f) return false;
+      const auto ray = camera_.ray_from_viewport_point(projected.position);
+      const auto surface = array_editor_->query().mesh_surface_distance({.origin = ray.origin, .direction = ray.direction});
+      const float expected_distance = dot(point - ray.origin, ray.direction);
+      if (!surface || std::abs(*surface - expected_distance) > 0.0001 * std::max(1.0f, expected_distance)) return false;
     }
     return true;
   }
@@ -1304,7 +1393,8 @@ public:
 
   ViewportOverlayFrame build_selection_overlay_frame() const override {
     ++selection_frame_builds_;
-    return session_.modeling().selection_overlay_render_frame();
+    return (captured_project_scene_ != nullptr ? *captured_project_scene_ : session_)
+        .modeling().selection_overlay_render_frame();
   }
 
   std::uint64_t selection_frame_builds() const { return selection_frame_builds_; }
@@ -1457,6 +1547,9 @@ private:
   }
 
   SceneSession session_;
+  std::unique_ptr<ProjectSession> captured_project_;
+  std::unique_ptr<ProjectSessionRenderMaterialResolver> captured_project_materials_;
+  SceneSession *captured_project_scene_ = nullptr;
   std::unique_ptr<QuaderEditorApi> array_editor_;
   ViewportRenderSurface surface_ = ViewportRenderSurface::Swapchain;
   QuaderModelingObjectRef face_fill_object_;
@@ -1497,6 +1590,61 @@ int cyan_pixels(const QImage &image, QVec2 center) {
     }
   }
   return count;
+}
+
+void expect_native_wire_coverage(const QImage &actual, const QImage &reference,
+    const QImage &backdrop, QVec2 start, QVec2 end, float scale, const char *label) {
+  ASSERT_FALSE(actual.isNull());
+  ASSERT_FALSE(reference.isNull());
+  ASSERT_FALSE(backdrop.isNull());
+  const float length = std::hypot(end.x - start.x, end.y - start.y);
+  ASSERT_GT(length, 20.0f);
+  const QVec2 direction{(end.x - start.x) / length, (end.y - start.y) / length};
+  std::vector<int> expected_bins(static_cast<std::size_t>(std::ceil(length)), 0);
+  std::vector<int> actual_bins(expected_bins.size(), 0);
+  int expected_pixels = 0;
+  int missing_pixels = 0;
+  int feather_pixels = 0;
+  int maximum_error = 0;
+  for (int y = 0; y < reference.height(); ++y) {
+    for (int x = 0; x < reference.width(); ++x) {
+      const float px = x + 0.5f - start.x;
+      const float py = y + 0.5f - start.y;
+      const float along = px * direction.x + py * direction.y;
+      const float across = -px * direction.y + py * direction.x;
+      if (along < 8.0f || along > length - 8.0f || std::abs(across) > 3.0f * scale) continue;
+      const auto base = backdrop.pixelColor(x, y);
+      const auto expected = reference.pixelColor(x, y);
+      const auto observed = actual.pixelColor(x, y);
+      const int expected_delta = std::max({std::abs(expected.red() - base.red()),
+          std::abs(expected.green() - base.green()), std::abs(expected.blue() - base.blue())});
+      if (expected_delta < 4) continue;
+      const int actual_delta = std::max({std::abs(observed.red() - base.red()),
+          std::abs(observed.green() - base.green()), std::abs(observed.blue() - base.blue())});
+      ++expected_pixels;
+      missing_pixels += actual_delta * 2 < expected_delta ? 1 : 0;
+      feather_pixels += expected_delta < 100 ? 1 : 0;
+      expected_bins[static_cast<std::size_t>(along)] += expected_delta;
+      actual_bins[static_cast<std::size_t>(along)] += actual_delta;
+      maximum_error = std::max({maximum_error, std::abs(expected.red() - observed.red()),
+          std::abs(expected.green() - observed.green()), std::abs(expected.blue() - observed.blue())});
+    }
+  }
+  int gap = 0;
+  int longest_gap = 0;
+  for (std::size_t index = 0u; index < expected_bins.size(); ++index) {
+    gap = expected_bins[index] > 4 && actual_bins[index] * 2 < expected_bins[index] ? gap + 1 : 0;
+    longest_gap = std::max(longest_gap, gap);
+  }
+  std::cout << "NATIVE_SOURCE_WIRE sample=" << label << " scale=" << scale
+            << " expected_pixels=" << expected_pixels << " missing_pixels=" << missing_pixels
+            << " feather_pixels=" << feather_pixels << " longest_gap=" << longest_gap
+            << " maximum_error=" << maximum_error << std::endl;
+  EXPECT_GT(expected_pixels, static_cast<int>(length * 0.8f));
+  EXPECT_GT(feather_pixels, 0);
+  EXPECT_EQ(missing_pixels, 0);
+  EXPECT_EQ(longest_gap, 0) << "Native traversal must preserve continuous diagonal coverage.";
+  EXPECT_LE(maximum_error, 3);
 }
 
 TEST(SelectionOverlayRuntimeTests,
@@ -2757,6 +2905,217 @@ TEST(SelectionOverlayRuntimeTests,
     EXPECT_EQ(harness.component_overlay_stats().shared_position_proxy_count, 0u);
     EXPECT_EQ(harness.capture(false), baseline)
         << "Cancel must restore the original support planes as well as the unchanged endpoints.";
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanNativeReversedSourceWireKeepsContinuousCoverage) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-native-reversed-wire-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, ViewportProjection::Perspective));
+  ViewportOverlayFrame authored;
+  ASSERT_TRUE(harness.create_diagonal_inside_corner_sample(
+      authored, ViewportProjection::Perspective, 0.25f, nullptr, true));
+  ASSERT_TRUE(harness.select_inside_corner_native_wire());
+  const auto native = harness.modeling().selection_overlay_render_frame();
+  const auto found = std::ranges::find_if(native.lines, [](const ViewportOverlayLine &line) {
+    return line.layer == ViewportOverlayLayer::SourceWire &&
+        line.element.edge_a == 1 && line.element.edge_b == 2;
+  });
+  ASSERT_NE(found, native.lines.end());
+  EXPECT_FLOAT_EQ(found->start.x, authored.lines.front().end.x);
+  EXPECT_FLOAT_EQ(found->start.y, authored.lines.front().end.y);
+  EXPECT_FLOAT_EQ(found->start.z, authored.lines.front().end.z);
+  EXPECT_FLOAT_EQ(found->end.x, authored.lines.front().start.x);
+  EXPECT_FLOAT_EQ(found->end.y, authored.lines.front().start.y);
+  EXPECT_FLOAT_EQ(found->end.z, authored.lines.front().start.z);
+  auto supported = *found;
+  OverlayWireSurfaceSupportCache support_cache;
+  support_cache.prepare(native, OverlayRenderableBuilder::frame_signatures(native));
+  support_cache.apply(supported);
+  std::cout << "NATIVE_REVERSED_ENDPOINTS edge_a=" << found->element.edge_a
+            << " edge_b=" << found->element.edge_b
+            << " support0=" << supported.surface_support[0].vertex_id
+            << " support1=" << supported.surface_support[1].vertex_id << std::endl;
+  auto reference_frame = native;
+  const auto line_index = static_cast<std::size_t>(found - native.lines.begin());
+  reference_frame.lines[line_index].layer = ViewportOverlayLayer::ToolHandle;
+  reference_frame.lines[line_index].source = ViewportOverlaySource::Tool;
+  reference_frame.lines[line_index].element = {};
+  const auto start = harness.overlay_audit_image_point(found->start);
+  const auto end = harness.overlay_audit_image_point(found->end);
+  harness.set_overlay_audit_frame({});
+  harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+  const auto backdrop = harness.capture();
+  const auto output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) ASSERT_TRUE(QDir().mkpath(output));
+  for (const float scale : {1.0f, 2.0f, 1.0f}) {
+    SCOPED_TRACE(scale);
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+    const auto actual = harness.capture(false);
+    harness.set_overlay_audit_frame(reference_frame);
+    harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+    const auto reference = harness.capture(false);
+    if (!output.isEmpty()) {
+      const auto stem = QStringLiteral("native-reversed-source-wire-%1").arg(int(scale * 100));
+      ASSERT_TRUE(actual.save(QDir(output).filePath(stem + QStringLiteral(".png"))));
+      ASSERT_TRUE(reference.save(QDir(output).filePath(stem + QStringLiteral("-reference.png"))));
+    }
+    expect_native_wire_coverage(actual, reference, backdrop, start, end, scale, "reversed-api-frame");
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+    EXPECT_EQ(harness.capture(false), actual);
+    const auto uploads = harness.component_overlay_stats().uploads;
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+    EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.geometry_creation_count, uploads.geometry_creation_count);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.position_upload_count, uploads.position_upload_count);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.static_upload_count, uploads.static_upload_count);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.index_upload_count, uploads.index_upload_count);
+  }
+  std::array<MeshVertex, 4u> occluder;
+  const std::array<QVec2, 4u> pixels{{
+      {300.0f, 190.0f}, {340.0f, 190.0f}, {340.0f, 290.0f}, {300.0f, 290.0f}}};
+  for (std::size_t index = 0u; index < pixels.size(); ++index) {
+    occluder[index].position = harness.overlay_audit_world_point(pixels[index], 2.0f);
+  }
+  ASSERT_TRUE(harness.create_outline_depth_quad(occluder));
+  ASSERT_TRUE(harness.select_inside_corner_native_wire());
+  harness.set_overlay_audit_frame({});
+  harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+  const auto hidden_backdrop = harness.capture(false);
+  ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+  const auto occluded = harness.capture(false);
+  EXPECT_EQ(occluded.copy({305, 195, 30, 90}), hidden_backdrop.copy({305, 195, 30, 90}));
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanSavedProjectNativeSourceWireKeepsContinuousCoverage) {
+  const auto source_path = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_PROJECT");
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1") || source_path.isEmpty()) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 and QUADER_SELECTION_OVERLAY_PROJECT to capture a copied project.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-saved-project-source-wire-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const std::filesystem::path source_manifest(source_path.toStdWString());
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_manifest));
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const auto copy_root = std::filesystem::path(temporary.path().toStdWString()) / source_manifest.stem();
+  std::error_code error;
+  ASSERT_TRUE(std::filesystem::create_directories(copy_root, error));
+  ASSERT_FALSE(error) << error.message();
+  // Project opening may provision assets or restore workspace state. Clone
+  // every authored root entry while excluding autosaves and bridge records.
+  for (const auto &entry : std::filesystem::directory_iterator(source_manifest.parent_path())) {
+    if (entry.path().filename() == ".quader" || entry.path().filename() == ".git") continue;
+    std::filesystem::copy(entry.path(), copy_root / entry.path().filename(),
+        std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_symlinks, error);
+    ASSERT_FALSE(error) << error.message();
+  }
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::SrgbSwapchain));
+  ASSERT_TRUE(harness.open_native_project_sample(copy_root / source_manifest.filename()));
+  const auto native = harness.build_selection_overlay_frame();
+  OverlayWireSurfaceSupportCache support_cache;
+  support_cache.prepare(native, OverlayRenderableBuilder::frame_signatures(native));
+  const auto same_position = [](QVec3 first, QVec3 second) {
+    return first.x == second.x && first.y == second.y && first.z == second.z;
+  };
+  std::size_t source_edges = 0u;
+  std::size_t boundary_edges = 0u;
+  std::size_t reversed_edges = 0u;
+  std::size_t supported_endpoints = 0u;
+  std::optional<std::size_t> selected_line;
+  float selected_length = 0.0f;
+  for (std::size_t index = 0u; index < native.lines.size(); ++index) {
+    const auto &line = native.lines[index];
+    if (line.layer != ViewportOverlayLayer::SourceWire) continue;
+    ++source_edges;
+    std::array<std::optional<QVec3>, 2u> endpoints;
+    std::unordered_set<int> incident_faces;
+    for (const auto &triangle : native.triangles) {
+      if (triangle.layer != ViewportOverlayLayer::SourceWireDepthStamp ||
+          triangle.element.object_id != line.element.object_id) continue;
+      const std::array ids{triangle.element.vertex_id, triangle.element.edge_a, triangle.element.edge_b};
+      const std::array positions{triangle.a, triangle.b, triangle.c};
+      bool first_found = false;
+      bool second_found = false;
+      for (std::size_t corner = 0u; corner < ids.size(); ++corner) {
+        if (ids[corner] == line.element.edge_a) {
+          endpoints[0] = positions[corner];
+          first_found = true;
+        }
+        if (ids[corner] == line.element.edge_b) {
+          endpoints[1] = positions[corner];
+          second_found = true;
+        }
+      }
+      if (first_found && second_found) incident_faces.insert(triangle.element.face_id);
+    }
+    boundary_edges += incident_faces.size() == 1u ? 1u : 0u;
+    auto supported = line;
+    support_cache.apply(supported);
+    supported_endpoints += supported.surface_support[0].vertex_id >= 0 ? 1u : 0u;
+    supported_endpoints += supported.surface_support[1].vertex_id >= 0 ? 1u : 0u;
+    const bool reversed = endpoints[0] && endpoints[1] &&
+        same_position(line.start, *endpoints[1]) && same_position(line.end, *endpoints[0]);
+    reversed_edges += reversed ? 1u : 0u;
+    if (!reversed || incident_faces.size() != 2u) continue;
+    const auto start = harness.overlay_audit_image_point(line.start);
+    const auto end = harness.overlay_audit_image_point(line.end);
+    const float length = std::hypot(end.x - start.x, end.y - start.y);
+    if (length > selected_length && std::abs(end.x - start.x) > 4.0f &&
+        std::abs(end.y - start.y) > 4.0f && harness.native_project_line_is_visible(line)) {
+      selected_line = index;
+      selected_length = length;
+    }
+  }
+  std::cout << "PROJECT_NATIVE_SOURCE_WIRE edges=" << source_edges << " endpoint_count=" << source_edges * 2u
+            << " boundary_edges=" << boundary_edges << " reversed_edges=" << reversed_edges
+            << " resolved_supports=" << supported_endpoints << std::endl;
+  ASSERT_TRUE(selected_line.has_value()) << "The saved camera must expose a reversed shared diagonal crease.";
+  const auto &crease = native.lines[*selected_line];
+  std::cout << "PROJECT_NATIVE_CREASE object=" << crease.element.object_id << " edge_a=" << crease.element.edge_a
+            << " edge_b=" << crease.element.edge_b << " length=" << selected_length << std::endl;
+  auto reference_frame = native;
+  reference_frame.lines[*selected_line].layer = ViewportOverlayLayer::ToolHandle;
+  reference_frame.lines[*selected_line].source = ViewportOverlaySource::Tool;
+  reference_frame.lines[*selected_line].element = {};
+  ASSERT_TRUE(harness.present_native_project_sample(1.0f, false));
+  const auto backdrop = harness.capture();
+  const auto start = harness.overlay_audit_image_point(crease.start);
+  const auto end = harness.overlay_audit_image_point(crease.end);
+  const auto output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) ASSERT_TRUE(QDir().mkpath(output));
+  for (const float scale : {1.0f, 2.0f}) {
+    SCOPED_TRACE(scale);
+    ASSERT_TRUE(harness.present_native_project_sample(scale));
+    const auto actual = harness.capture(false);
+    harness.set_overlay_audit_frame(reference_frame);
+    harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+    const auto reference = harness.capture(false);
+    if (!output.isEmpty()) {
+      const auto stem = QStringLiteral("saved-project-native-source-wire-%1").arg(int(scale * 100));
+      ASSERT_TRUE(actual.save(QDir(output).filePath(stem + QStringLiteral(".png"))));
+      ASSERT_TRUE(reference.save(QDir(output).filePath(stem + QStringLiteral("-reference.png"))));
+    }
+    expect_native_wire_coverage(actual, reference, backdrop, start, end, scale, "saved-project");
+    ASSERT_TRUE(harness.present_native_project_sample(scale));
+    const auto uploads = harness.component_overlay_stats().uploads;
+    ASSERT_TRUE(harness.present_native_project_sample(scale));
+    EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.geometry_creation_count, uploads.geometry_creation_count);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.position_upload_count, uploads.position_upload_count);
+    EXPECT_EQ(harness.capture(false), actual);
   }
 }
 
