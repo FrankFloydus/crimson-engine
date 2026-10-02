@@ -30,4 +30,40 @@ platform_transparent_overlay_input_result(const void *native_message) noexcept {
   return std::nullopt;
 }
 
+bool platform_native_ancestor_geometry_changes(
+    const void *native_message, std::uintptr_t native_child_window) noexcept {
+#if defined(_WIN32)
+  if (native_message == nullptr || native_child_window == 0U) {
+    return false;
+  }
+  const auto &message = *static_cast<const MSG *>(native_message);
+  const HWND child = reinterpret_cast<HWND>(native_child_window);
+  if (message.message != WM_WINDOWPOSCHANGING || message.lParam == 0 ||
+      message.hwnd == child || !IsChild(message.hwnd, child)) {
+    return false;
+  }
+  const auto &position =
+      *reinterpret_cast<const WINDOWPOS *>(message.lParam);
+  RECT current{};
+  if (!GetWindowRect(message.hwnd, &current)) {
+    return false;
+  }
+  if ((GetWindowLongPtrW(message.hwnd, GWL_STYLE) & WS_CHILD) != 0) {
+    // WINDOWPOS child coordinates belong to the native parent's client area,
+    // whereas GetWindowRect always reports screen coordinates.
+    MapWindowPoints(HWND_DESKTOP, GetParent(message.hwnd),
+                    reinterpret_cast<POINT *>(&current), 2);
+  }
+  return ((position.flags & SWP_NOMOVE) == 0 &&
+          (position.x != current.left || position.y != current.top)) ||
+         ((position.flags & SWP_NOSIZE) == 0 &&
+          (position.cx != current.right - current.left ||
+           position.cy != current.bottom - current.top));
+#else
+  (void)native_message;
+  (void)native_child_window;
+  return false;
+#endif
+}
+
 } // namespace quader

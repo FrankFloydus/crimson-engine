@@ -19,4 +19,12 @@ namespace quader {
 [[nodiscard]] std::optional<std::intptr_t>
 platform_transparent_overlay_input_result(const void *native_message) noexcept;
 
+/**
+ * Identifies a real ancestor-window move or resize before native pixels move.
+ * The child handle must already exist; its own geometry, visibility-only
+ * messages, and unchanged native positions do not invalidate the overlay.
+ */
+[[nodiscard]] bool platform_native_ancestor_geometry_changes(
+    const void *native_message, std::uintptr_t native_child_window) noexcept;
+
 } // namespace quader

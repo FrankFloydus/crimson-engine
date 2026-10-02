@@ -31,6 +31,7 @@
 #include <QPalette>
 #include <QPointF>
 #include <QRegion>
+#include <QScopedValueRollback>
 #include <QSizePolicy>
 #include <QVariant>
 #include <QWidget>
@@ -465,6 +466,15 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
     label->hide();
   }
   parent.installEventFilter(this);
+  if (QCoreApplication *application = QCoreApplication::instance()) {
+    application->installNativeEventFilter(this);
+  }
+}
+
+QtViewportEdgeLengthHud::~QtViewportEdgeLengthHud() {
+  if (QCoreApplication *application = QCoreApplication::instance()) {
+    application->removeNativeEventFilter(this);
+  }
 }
 
 void QtViewportEdgeLengthHud::apply_ui_scale(
@@ -500,6 +510,10 @@ void QtViewportEdgeLengthHud::present(
     const ModelingBoxPreview *footprint_preview, bool footprint_enabled,
     const ViewportSelectionDimensionBounds *selection_bounds,
     std::uint64_t selection_signature, bool selection_enabled) {
+  if (native_cleanup_active_ ||
+      (native_cleanup_pending_ && !clean_native_footprint())) {
+    return;
+  }
   const double effective_font_size =
       std::isfinite(font_size_points)
           ? std::clamp(font_size_points, kMinimumDimensionFontSizePoints,
@@ -752,6 +766,7 @@ void QtViewportEdgeLengthHud::present(
       }
       selection_label_geometries[selection_label_count++] = *geometry;
       present_label_geometry(*label, *geometry);
+      retain_native_footprint(*label);
       continue;
     }
 
@@ -834,6 +849,7 @@ void QtViewportEdgeLengthHud::present(
       }
     }
     present_label_geometry(*label, geometry);
+    retain_native_footprint(*label);
   }
 }
 
@@ -844,6 +860,64 @@ void QtViewportEdgeLengthHud::hide() {
       label->hide();
     }
   }
+  if (!native_footprint_.isEmpty()) {
+    native_cleanup_pending_ = true;
+    (void)clean_native_footprint();
+  }
+}
+
+void QtViewportEdgeLengthHud::retain_native_footprint(const QLabel &label) {
+  QWidget *owner = label.window();
+  const QRect footprint{label.mapTo(owner, QPoint{}), label.size()};
+  native_footprint_owner_ = owner;
+  native_footprint_ = native_footprint_.united(footprint);
+}
+
+bool QtViewportEdgeLengthHud::clean_native_footprint() {
+  if (native_cleanup_active_) {
+    return false;
+  }
+  QWidget *owner = native_footprint_owner_.data();
+  if (owner == nullptr || native_footprint_.isEmpty()) {
+    native_footprint_ = {};
+    native_cleanup_pending_ = false;
+    return true;
+  }
+  auto *pane = static_cast<QWidget *>(parent());
+  if (!owner->isVisible() || !owner->testAttribute(Qt::WA_Mapped) ||
+      !owner->updatesEnabled() ||
+      !pane->updatesEnabled()) {
+    return false;
+  }
+  const QScopedValueRollback cleanup_guard{native_cleanup_active_, true};
+  // Qt can already have changed a child's logical geometry when the native
+  // pre-move message arrives. Repaint the cached top-level coordinates, not a
+  // newly mapped label rectangle, to erase every accepted earlier exposure.
+  owner->repaint(native_footprint_.intersected(owner->rect()));
+  native_footprint_ = {};
+  native_cleanup_pending_ = false;
+  return true;
+}
+
+bool QtViewportEdgeLengthHud::nativeEventFilter(
+    const QByteArray &event_type, void *message, qintptr *result) {
+  (void)result;
+  if (native_cleanup_active_ || native_footprint_.isEmpty() ||
+      event_type != QByteArrayLiteral("windows_generic_MSG")) {
+    return false;
+  }
+  for (const QLabel *label : labels_) {
+    const auto native_window =
+        static_cast<std::uintptr_t>(label->internalWinId());
+    if (native_window == 0U) {
+      continue;
+    }
+    if (platform_native_ancestor_geometry_changes(message, native_window)) {
+      hide();
+    }
+    break;
+  }
+  return false;
 }
 
 void QtViewportEdgeLengthHud::raise() {
@@ -856,7 +930,8 @@ void QtViewportEdgeLengthHud::raise() {
 
 bool QtViewportEdgeLengthHud::eventFilter(QObject *watched, QEvent *event) {
   if (watched == parent() && event != nullptr &&
-      (event->type() == QEvent::Resize || event->type() == QEvent::Hide)) {
+      (event->type() == QEvent::Move || event->type() == QEvent::Resize ||
+       event->type() == QEvent::Hide)) {
     // Native glyph windows keep their accepted pixels across their parent's
     // geometry and exposure changes. Retire that projection before Qt can
     // reveal it over a resized or reactivated viewport; the next presentation

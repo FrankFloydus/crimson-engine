@@ -10,7 +10,9 @@
 #include "render/viewport_overlay_frame.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
+#include <QAbstractNativeEventFilter>
 #include <QObject>
+#include <QPointer>
 #include <QRect>
 #include <QString>
 
@@ -29,10 +31,14 @@ struct ModelingBoxPreview;
 /**
  * Presents compact world-space edge, footprint, and selection dimensions in
  * map units. Borrows existing semantic state; never queries scene meshes.
+ * Owns retirement of accepted native glyph pixels before ancestor geometry
+ * changes, including their historical positions in the shared backing store.
  */
-class QtViewportEdgeLengthHud final : public QObject {
+class QtViewportEdgeLengthHud final : public QObject,
+                                    public QAbstractNativeEventFilter {
 public:
   QtViewportEdgeLengthHud(QWidget &parent, ViewportPaneId pane_id);
+  ~QtViewportEdgeLengthHud() override;
 
   QtViewportEdgeLengthHud(const QtViewportEdgeLengthHud &) = delete;
   QtViewportEdgeLengthHud &operator=(const QtViewportEdgeLengthHud &) = delete;
@@ -55,6 +61,8 @@ public:
 
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
+  bool nativeEventFilter(const QByteArray &event_type, void *message,
+                         qintptr *result) override;
 
 private:
   /// One full semantic span and the optional interior point it faces away from.
@@ -64,6 +72,9 @@ private:
     std::optional<QVec3> outside_reference;
   };
 
+  void retain_native_footprint(const QLabel &label);
+  bool clean_native_footprint();
+
   std::array<QLabel *, 6> labels_ = {};
   QtUiScaleMetrics ui_scale_metrics_;
   std::array<std::optional<Dimension>, 6> dimensions_ = {};
@@ -71,6 +82,8 @@ private:
   std::optional<ViewportSelectionDimensionBounds> selection_bounds_;
   std::array<double, 3> selection_lengths_ = {};
   QRect logical_viewport_bounds_;
+  QPointer<QWidget> native_footprint_owner_;
+  QRect native_footprint_;
   std::uint64_t frame_signature_ = 0;
   std::uint64_t camera_signature_ = 0;
   std::uint64_t selection_signature_ = 0;
@@ -81,6 +94,8 @@ private:
   bool selection_projection_valid_ = false;
   bool font_size_valid_ = false;
   bool view_valid_ = false;
+  bool native_cleanup_pending_ = false;
+  bool native_cleanup_active_ = false;
 };
 
 } // namespace quader

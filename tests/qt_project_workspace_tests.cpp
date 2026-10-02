@@ -6892,6 +6892,75 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
     settle_viewports("browser closing", 4, no_frame_check);
     expect_current_dimensions();
   }
+  auto *content = viewport->findChild<QWidget *>(
+      QStringLiteral("viewportSurfaceContainer_perspective"));
+  auto *dimension = viewport->findChild<QLabel *>(
+      QStringLiteral("viewportSelectionDimensionX_perspective"));
+  auto *surface = viewport->surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(content, nullptr);
+  ASSERT_NE(dimension, nullptr);
+  ASSERT_NE(surface, nullptr);
+  const double baseline_font_points = dimension->font().pointSizeF();
+  constexpr std::array kScaleFactors{1.0, 2.0, 1.0};
+  constexpr std::array kDockWidths{
+      std::array{520, 600}, std::array{600, 520}, std::array{240, 320}};
+  for (const double scale : kScaleFactors) {
+    SCOPED_TRACE(scale);
+    ASSERT_TRUE(editor.preferences().set_interface_scale(scale).ok());
+    window->resize(static_cast<int>(1600 * scale),
+                   static_cast<int>(1000 * scale));
+    window->resizeDocks({outliner, inspector},
+        {static_cast<int>(240 * scale), static_cast<int>(320 * scale)},
+        Qt::Horizontal);
+    (void)window->layout()->activate();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    application.processEvents();
+    settle_viewports("scaled dock baseline", 4, no_frame_check);
+    expect_current_dimensions();
+    EXPECT_DOUBLE_EQ(dimension->font().pointSizeF(),
+                     baseline_font_points * scale);
+    for (int repetition = 0; repetition < 2; ++repetition) {
+      SCOPED_TRACE(repetition);
+      for (std::size_t resize_index = 0U;
+           resize_index < kDockWidths.size(); ++resize_index) {
+        SCOPED_TRACE(resize_index);
+        const QSize prior_content_size = content->size();
+        const QPoint prior_viewport_origin = viewport->mapTo(window, QPoint{});
+        const auto &dock_widths = kDockWidths[resize_index];
+        window->resizeDocks({outliner, inspector},
+            {static_cast<int>(dock_widths[0] * scale),
+             static_cast<int>(dock_widths[1] * scale)}, Qt::Horizontal);
+        (void)window->layout()->activate();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+        expect_dimensions_hidden();
+        application.processEvents();
+        expect_dimensions_hidden();
+        const QPoint viewport_origin = viewport->mapTo(window, QPoint{});
+        if (resize_index == 1U) {
+          // Exchanging equal dock widths moves native ancestors while keeping
+          // pane-local geometry unchanged; the previous glyphs still retire.
+          EXPECT_EQ(content->size(), prior_content_size);
+          EXPECT_NE(viewport_origin.x(), prior_viewport_origin.x());
+        } else {
+          EXPECT_NE(content->width(), prior_content_size.width());
+        }
+        if (resize_index != 2U) {
+          EXPECT_LT(content->width(), static_cast<int>(600 * scale));
+        }
+        settle_viewports("lateral dock geometry transition", 4, no_frame_check);
+        expect_current_dimensions();
+        const auto render_size = surface->render_size_pixels();
+        const auto camera_size = scene.viewport_workspace().camera(
+            quader::ViewportPaneId::Perspective).viewport_size();
+        EXPECT_FLOAT_EQ(camera_size.x, render_size.x);
+        EXPECT_FLOAT_EQ(camera_size.y, render_size.y);
+        EXPECT_NEAR(render_size.x,
+                    content->width() * surface->devicePixelRatio(), 1.0);
+        EXPECT_NEAR(render_size.y,
+                    content->height() * surface->devicePixelRatio(), 1.0);
+      }
+    }
+  }
   ui.shutdown();
 }
 

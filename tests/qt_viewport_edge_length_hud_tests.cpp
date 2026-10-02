@@ -22,6 +22,8 @@
 #include "viewport/viewport_camera_controller.hpp"
 
 #include <QApplication>
+#include <QAbstractNativeEventFilter>
+#include <QBackingStore>
 #include <QColor>
 #include <QCoreApplication>
 #include <QDir>
@@ -45,9 +47,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -68,6 +72,7 @@ public:
     int show = 0;
     int hide = 0;
     int z_order = 0;
+    int paint = 0;
 
     friend bool operator==(const Counts &, const Counts &) = default;
   };
@@ -94,6 +99,9 @@ protected:
         break;
       case QEvent::ZOrderChange:
         ++counts_.z_order;
+        break;
+      case QEvent::Paint:
+        ++counts_.paint;
         break;
       default:
         break;
@@ -134,6 +142,79 @@ quader::ViewportOverlayFrame hover_edge_frame_with_inside_reference(
       };
   return frame;
 }
+
+#if defined(_WIN32)
+/// Observes the old native rectangle after HUD filters retire its glyph pixels,
+/// but before Windows applies the ancestor's proposed geometry.
+class EdgeHudNativeGeometryObserver final : public QAbstractNativeEventFilter {
+public:
+  EdgeHudNativeGeometryObserver() {
+    QCoreApplication::instance()->installNativeEventFilter(this);
+  }
+
+  ~EdgeHudNativeGeometryObserver() override {
+    QCoreApplication::instance()->removeNativeEventFilter(this);
+  }
+
+  void set_observer(std::function<void(const MSG &)> observer) {
+    observer_ = std::move(observer);
+  }
+
+  bool nativeEventFilter(const QByteArray &event_type, void *message,
+                         qintptr *result) override {
+    (void)result;
+    if (observer_ && message != nullptr &&
+        event_type == QByteArrayLiteral("windows_generic_MSG")) {
+      observer_(*static_cast<const MSG *>(message));
+    }
+    return false;
+  }
+
+private:
+  std::function<void(const MSG &)> observer_;
+};
+
+QImage *native_backing_image(QWidget &window) {
+  QBackingStore *store = window.backingStore();
+  return store != nullptr ? dynamic_cast<QImage *>(store->paintDevice())
+                          : nullptr;
+}
+
+QRect native_label_pixel_bounds(const QLabel &label, QWidget &window) {
+  const QPoint origin = label.mapTo(&window, QPoint{});
+  const qreal ratio = window.devicePixelRatioF();
+  const int left = static_cast<int>(std::floor(origin.x() * ratio));
+  const int top = static_cast<int>(std::floor(origin.y() * ratio));
+  const int right = static_cast<int>(
+      std::ceil((origin.x() + label.width()) * ratio));
+  const int bottom = static_cast<int>(
+      std::ceil((origin.y() + label.height()) * ratio));
+  return {left, top, right - left, bottom - top};
+}
+
+int native_dimension_pixel_count(const QImage &image, const QRect &bounds,
+                                const std::array<QColor, 3> &colors) {
+  int count = 0;
+  const QRect clipped = bounds.intersected(image.rect());
+  for (int y = clipped.top(); y <= clipped.bottom(); ++y) {
+    for (int x = clipped.left(); x <= clipped.right(); ++x) {
+      const QColor pixel = image.pixelColor(x, y);
+      // The authored axis alpha is flattened by an opaque Windows backing
+      // store. Its RGB distance from the authored color is bounded by the
+      // missing alpha, unlike the charcoal background and black outline.
+      const bool dimension_pixel = pixel.alpha() > 0 && std::any_of(
+          colors.begin(), colors.end(), [&](const QColor &color) {
+            const int tolerance = 256 - color.alpha();
+            return std::abs(pixel.red() - color.red()) <= tolerance &&
+                   std::abs(pixel.green() - color.green()) <= tolerance &&
+                   std::abs(pixel.blue() - color.blue()) <= tolerance;
+          });
+      count += dimension_pixel ? 1 : 0;
+    }
+  }
+  return count;
+}
+#endif
 
 /// Hosts a real retained label while camera and overlay inputs remain headless.
 class QtViewportEdgeLengthHudTests : public ::testing::Test {
@@ -1022,6 +1103,361 @@ TEST_F(QtViewportEdgeLengthHudTests,
       }
     }
   }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       PaneMoveRetiresDimensionsWithoutChangingTheirRaster) {
+  const auto frame = hover_edge_frame({-2, 0, 0}, {2, 0, 0});
+  present(frame);
+  ASSERT_FALSE(label_->isHidden());
+  const int mask_revision =
+      label_->property("quaderDimensionMaskRevision").toInt();
+  const QRect geometry = label_->geometry();
+  parent_->move(parent_->pos() + QPoint{35, 25});
+  EXPECT_TRUE(label_->isHidden());
+  present(frame);
+  EXPECT_FALSE(label_->isHidden());
+  EXPECT_EQ(label_->geometry(), geometry);
+  EXPECT_EQ(label_->property("quaderDimensionMaskRevision").toInt(),
+            mask_revision);
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       NativeAncestorChangesEraseCurrentAndHistoricalBackingStoreGlyphs) {
+#if defined(_WIN32)
+  if (QGuiApplication::platformName() != QStringLiteral("windows") ||
+      qEnvironmentVariableIntValue("QUADER_RUN_NATIVE_DIMENSION_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_NATIVE_DIMENSION_TESTS=1 for native raster checks";
+  }
+  // Native filters run newest first. This observer precedes the new HUD so its
+  // callback inspects retirement after that HUD and before Windows moves pixels.
+  EdgeHudNativeGeometryObserver observer;
+  QWidget window;
+  QWidget ancestor(&window);
+  QWidget pane(&ancestor);
+  QPalette palette = window.palette();
+  palette.setColor(QPalette::Window, QColor{23, 24, 25});
+  for (QWidget *widget : {&window, &ancestor, &pane}) {
+    widget->setPalette(palette);
+    widget->setAutoFillBackground(true);
+  }
+  window.resize(800, 600);
+  ancestor.setGeometry(60, 50, 620, 440);
+  pane.setGeometry(20, 20, 460, 340);
+  window.show();
+  QCoreApplication::processEvents();
+  auto *pane_hud = new quader::QtViewportEdgeLengthHud(
+      pane, quader::ViewportPaneId::Perspective);
+  std::array<QLabel *, 3> labels{};
+  std::array<QColor, 3> colors{};
+  std::array<EdgeHudWidgetEventCounter, 3> pixel_events;
+  const std::array axis_names{QStringLiteral("X"), QStringLiteral("Y"),
+                              QStringLiteral("Z")};
+  for (std::size_t axis = 0U; axis < labels.size(); ++axis) {
+    labels[axis] = pane.findChild<QLabel *>(
+        QStringLiteral("viewportSelectionDimension%1_perspective")
+            .arg(axis_names[axis]));
+    ASSERT_NE(labels[axis], nullptr);
+    colors[axis] = labels[axis]->palette().color(labels[axis]->foregroundRole());
+    labels[axis]->installEventFilter(&pixel_events[axis]);
+  }
+  camera_.focus_origin(16.0F);
+  camera_.view_axis(quader::ViewportViewAxis::Z, 1);
+  const auto present_bounds = [&](quader::QVec2 anchor,
+                                   std::uint64_t signature) {
+    camera_.set_viewport_size(static_cast<float>(pane.width() * 2),
+                               static_cast<float>(pane.height() * 2));
+    const quader::QVec3 midpoint = point_at_screen(anchor);
+    const quader::ViewportSelectionDimensionBounds bounds{
+        .min = midpoint - quader::QVec3{2, 0, 0},
+        .max = midpoint + quader::QVec3{2, 4, 4}};
+    pane_hud->present({}, 1U, camera_, pane.rect(), false, 12.0, nullptr,
+                       false, &bounds, signature, true);
+  };
+  const auto current_pixel_bounds = [&] {
+    QRect bounds;
+    for (const QLabel *label : labels) {
+      if (!label->isHidden()) {
+        bounds = bounds.united(native_label_pixel_bounds(*label, window));
+      }
+    }
+    return bounds;
+  };
+  const auto paint_accepted_projection = [&] {
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::UpdateRequest);
+    QCoreApplication::processEvents();
+    for (QLabel *label : labels) {
+      if (!label->isHidden()) {
+        // This establishes the accepted BEFORE sample only. Retirement reads
+        // never invoke painting or capture APIs, so residue stays observable.
+        ASSERT_TRUE(label->isVisible());
+        label->repaint();
+      }
+    }
+  };
+  std::uint64_t signature = 0U;
+  present_bounds({460, 340}, ++signature);
+  paint_accepted_projection();
+  ASSERT_FALSE(labels[0]->isHidden());
+  ASSERT_NE(native_backing_image(window), nullptr);
+  const QRect current_bounds = current_pixel_bounds();
+  const QImage natural_before = native_backing_image(window)->copy();
+  ASSERT_GT(native_dimension_pixel_count(natural_before, current_bounds, colors), 8)
+      << "Actual label Paint count=" << pixel_events[0].counts().paint
+      << ", all-store glyph pixels="
+      << native_dimension_pixel_count(natural_before, natural_before.rect(), colors)
+      << ", store=" << natural_before.width() << 'x' << natural_before.height()
+      << ", store DPR=" << natural_before.devicePixelRatio()
+      << ", window DPR=" << window.devicePixelRatioF()
+      << ", footprint=" << current_bounds.x() << ',' << current_bounds.y()
+      << ' ' << current_bounds.width() << 'x' << current_bounds.height();
+  const HWND ancestor_handle =
+      reinterpret_cast<HWND>(ancestor.internalWinId());
+  HWND observed_handle = ancestor_handle;
+  RECT old_native_geometry{};
+  ASSERT_TRUE(GetWindowRect(ancestor_handle, &old_native_geometry));
+  int observed_changes = 0;
+  const auto observe_retirement = [&](const MSG &message,
+                                       const QRect &expected_clean_bounds) {
+    if (message.hwnd != observed_handle ||
+        message.message != WM_WINDOWPOSCHANGING || message.lParam == 0) {
+      return;
+    }
+    const auto &position =
+        *reinterpret_cast<const WINDOWPOS *>(message.lParam);
+    if ((position.flags & (SWP_NOMOVE | SWP_NOSIZE)) ==
+        (SWP_NOMOVE | SWP_NOSIZE)) {
+      return;
+    }
+    ++observed_changes;
+    RECT still_old{};
+    ASSERT_TRUE(GetWindowRect(observed_handle, &still_old));
+    EXPECT_EQ(still_old.left, old_native_geometry.left);
+    EXPECT_EQ(still_old.top, old_native_geometry.top);
+    EXPECT_EQ(still_old.right, old_native_geometry.right);
+    EXPECT_EQ(still_old.bottom, old_native_geometry.bottom);
+    for (const QLabel *label : labels) {
+      EXPECT_TRUE(label->isHidden());
+    }
+    const QImage retired = native_backing_image(window)->copy();
+    EXPECT_EQ(native_dimension_pixel_count(retired, expected_clean_bounds,
+                                            colors), 0)
+        << "Accepted glyph pixels must disappear before native geometry changes.";
+  };
+  observer.set_observer([&](const MSG &message) {
+    observe_retirement(message, current_bounds);
+  });
+  RECT native_position = old_native_geometry;
+  MapWindowPoints(HWND_DESKTOP, GetParent(ancestor_handle),
+                  reinterpret_cast<POINT *>(&native_position), 2);
+  ASSERT_TRUE(SetWindowPos(ancestor_handle, nullptr, native_position.left + 25,
+                           native_position.top + 20, 0, 0,
+                           SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+  observer.set_observer({});
+  EXPECT_GT(observed_changes, 0);
+  QCoreApplication::processEvents();
+  present_bounds({460, 340}, ++signature);
+  ASSERT_FALSE(labels[0]->isHidden());
+
+  // Top-level WINDOWPOS coordinates are screen coordinates, independent of
+  // the child-client branch exercised above.
+  paint_accepted_projection();
+  const QRect top_level_bounds = current_pixel_bounds();
+  const QImage top_level_before = native_backing_image(window)->copy();
+  ASSERT_GT(native_dimension_pixel_count(top_level_before, top_level_bounds,
+                                          colors), 8);
+  observed_handle = reinterpret_cast<HWND>(window.internalWinId());
+  ASSERT_TRUE(GetWindowRect(observed_handle, &old_native_geometry));
+  observed_changes = 0;
+  observer.set_observer([&](const MSG &message) {
+    observe_retirement(message, top_level_bounds);
+  });
+  ASSERT_TRUE(SetWindowPos(observed_handle, nullptr,
+                           old_native_geometry.left + 25,
+                           old_native_geometry.top + 20, 0, 0,
+                           SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+  observer.set_observer({});
+  EXPECT_GT(observed_changes, 0);
+  QCoreApplication::processEvents();
+  present_bounds({460, 340}, ++signature);
+  ASSERT_FALSE(labels[0]->isHidden());
+  observed_handle = ancestor_handle;
+
+  const std::array scales{1.0F, 2.0F, 1.0F};
+  const std::array sizes{QSize{460, 340}, QSize{300, 300}, QSize{460, 340}};
+  for (std::size_t scale_index = 0U; scale_index < scales.size(); ++scale_index) {
+    SCOPED_TRACE(scales[scale_index]);
+    pane.resize(sizes[scale_index]);
+    pane_hud->apply_ui_scale(quader::QtUiScaleMetrics{
+        scales[scale_index], scale_index + 1U});
+    // Samples come only from real accepted glyph exposures. Restoring these
+    // earlier patches models native raster residue deterministically, without
+    // relying on compositor timing or invoking a capture that repaints it away.
+    std::vector<std::pair<QRect, QImage>> history;
+    std::array<QRect, 3> x_exposures;
+    QRect historical_bounds;
+    for (std::size_t position_index = 0U; position_index < 3U; ++position_index) {
+      const float fraction = 0.2F + static_cast<float>(position_index) * 0.3F;
+      present_bounds({pane.width() * 2.0F * fraction,
+                       pane.height() * 2.0F * fraction}, ++signature);
+      paint_accepted_projection();
+      ASSERT_FALSE(labels[0]->isHidden());
+      x_exposures[position_index] = native_label_pixel_bounds(*labels[0], window);
+      QImage *backing = native_backing_image(window);
+      ASSERT_NE(backing, nullptr);
+      for (const QLabel *label : labels) {
+        if (label->isHidden()) continue;
+        const QRect bounds = native_label_pixel_bounds(*label, window);
+        ASSERT_GT(native_dimension_pixel_count(*backing, bounds, colors), 8);
+        history.emplace_back(bounds, backing->copy(bounds));
+        historical_bounds = historical_bounds.united(bounds);
+      }
+    }
+    EXPECT_FALSE(x_exposures[0].intersects(x_exposures[1]));
+    EXPECT_FALSE(x_exposures[1].intersects(x_exposures[2]));
+    window.setUpdatesEnabled(false);
+    pane_hud->hide();
+    for (const QLabel *label : labels) EXPECT_TRUE(label->isHidden());
+    present_bounds({static_cast<float>(pane.width()),
+                     static_cast<float>(pane.height())}, ++signature);
+    for (const QLabel *label : labels) {
+      EXPECT_TRUE(label->isHidden())
+          << "Pending native cleanup must finish before another projection appears.";
+    }
+    window.setUpdatesEnabled(true);
+    {
+      QImage *backing = native_backing_image(window);
+      ASSERT_NE(backing, nullptr);
+      ASSERT_EQ(backing->depth(), 32);
+      // Copy physical samples directly; a painter would apply the image's
+      // device-pixel transform a second time on a scaled Windows monitor.
+      for (const auto &[bounds, pixels] : history) {
+        ASSERT_TRUE(backing->rect().contains(bounds));
+        for (int y = 0; y < bounds.height(); ++y) {
+          std::copy_n(
+              reinterpret_cast<const QRgb *>(pixels.constScanLine(y)),
+              bounds.width(),
+              reinterpret_cast<QRgb *>(backing->scanLine(bounds.top() + y)) +
+                  bounds.left());
+        }
+      }
+    }
+    const QImage historical_before = native_backing_image(window)->copy();
+    for (const auto &[bounds, pixels] : history) {
+      (void)pixels;
+      ASSERT_GT(native_dimension_pixel_count(historical_before, bounds, colors), 8);
+    }
+    ASSERT_TRUE(GetWindowRect(ancestor_handle, &old_native_geometry));
+    observed_changes = 0;
+    observer.set_observer([&](const MSG &message) {
+      observe_retirement(message, historical_bounds);
+    });
+    // QWidget changes its logical position before sending the native message;
+    // cached top-level footprints must still erase the former coordinates.
+    ancestor.setGeometry(ancestor.geometry().translated(12, 9).adjusted(
+        0, 0, scale_index % 2U == 0U ? 10 : -10, 0));
+    observer.set_observer({});
+    EXPECT_GT(observed_changes, 0);
+    const QImage historical_after = native_backing_image(window)->copy();
+    EXPECT_EQ(native_dimension_pixel_count(historical_after, historical_bounds,
+                                            colors), 0);
+    QCoreApplication::processEvents();
+    present_bounds({static_cast<float>(pane.width()),
+                     static_cast<float>(pane.height())}, ++signature);
+    ASSERT_FALSE(labels[0]->isHidden());
+    EXPECT_EQ(labels[0]->text(), QStringLiteral("128"));
+    EXPECT_TRUE(pane.rect().contains(labels[0]->geometry()));
+    const int mask_revision =
+        labels[0]->property("quaderDimensionMaskRevision").toInt();
+    EdgeHudWidgetEventCounter retained_events;
+    labels[0]->installEventFilter(&retained_events);
+    QCoreApplication::processEvents();
+    const auto stable = retained_events.counts();
+    for (int unchanged = 0; unchanged < 32; ++unchanged) {
+      present_bounds({static_cast<float>(pane.width()),
+                       static_cast<float>(pane.height())}, signature);
+    }
+    QCoreApplication::processEvents();
+    EXPECT_EQ(retained_events.counts(), stable);
+    EXPECT_EQ(labels[0]->property("quaderDimensionMaskRevision").toInt(),
+              mask_revision);
+    ASSERT_TRUE(SetWindowPos(ancestor_handle, nullptr, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                                 SWP_NOACTIVATE));
+    EXPECT_FALSE(labels[0]->isHidden())
+        << "No-op native window changes must retain the current projection.";
+
+    EdgeHudWidgetEventCounter window_events;
+    window.installEventFilter(&window_events);
+    const auto before_identical_position = retained_events.counts();
+    RECT identical_geometry{};
+    ASSERT_TRUE(GetWindowRect(ancestor_handle, &identical_geometry));
+    MapWindowPoints(HWND_DESKTOP, GetParent(ancestor_handle),
+                    reinterpret_cast<POINT *>(&identical_geometry), 2);
+    ASSERT_TRUE(SetWindowPos(ancestor_handle, nullptr, identical_geometry.left,
+                             identical_geometry.top,
+                             identical_geometry.right - identical_geometry.left,
+                             identical_geometry.bottom - identical_geometry.top,
+                             SWP_NOZORDER | SWP_NOACTIVATE));
+    EXPECT_FALSE(labels[0]->isHidden());
+    EXPECT_EQ(retained_events.counts(), before_identical_position);
+    EXPECT_EQ(window_events.counts().paint, 0)
+        << "An identical proposed rectangle must not synchronously repaint history.";
+    EXPECT_EQ(labels[0]->property("quaderDimensionMaskRevision").toInt(),
+              mask_revision);
+    window.removeEventFilter(&window_events);
+    labels[0]->removeEventFilter(&retained_events);
+
+    present_bounds({pane.width() * 0.4F, pane.height() * 0.4F}, ++signature);
+    paint_accepted_projection();
+    const QRect unmapped_bounds = current_pixel_bounds();
+    const QImage mapped_before = native_backing_image(window)->copy();
+    ASSERT_GT(native_dimension_pixel_count(mapped_before, unmapped_bounds,
+                                            colors), 8);
+    // Qt discards synchronous UpdateNow paints while the top-level widget is
+    // unmapped. Toggle the public state directly to avoid platform-dependent
+    // minimize timing while preserving the actual native backing image.
+    window.setAttribute(Qt::WA_Mapped, false);
+    pane_hud->hide();
+    present_bounds({pane.width() * 1.6F, pane.height() * 1.6F}, ++signature);
+    for (const QLabel *label : labels) EXPECT_TRUE(label->isHidden());
+    const QImage unmapped_after = native_backing_image(window)->copy();
+    EXPECT_GT(native_dimension_pixel_count(unmapped_after, unmapped_bounds,
+                                            colors), 8)
+        << "An unmapped root must retain pending pixels until painting can resume.";
+    window.setAttribute(Qt::WA_Mapped, true);
+    int observed_reveals = 0;
+    observer.set_observer([&](const MSG &message) {
+      if (message.hwnd != reinterpret_cast<HWND>(labels[0]->internalWinId()) ||
+          message.message != WM_WINDOWPOSCHANGING || message.lParam == 0) {
+        return;
+      }
+      const auto &position =
+          *reinterpret_cast<const WINDOWPOS *>(message.lParam);
+      if ((position.flags & SWP_SHOWWINDOW) == 0) return;
+      ++observed_reveals;
+      const QImage before_reveal = native_backing_image(window)->copy();
+      EXPECT_EQ(native_dimension_pixel_count(before_reveal, unmapped_bounds,
+                                              colors), 0)
+          << "Pending unmapped pixels must clear before a fresh native reveal.";
+    });
+    present_bounds({pane.width() * 1.6F, pane.height() * 1.6F}, ++signature);
+    observer.set_observer({});
+    EXPECT_GT(observed_reveals, 0);
+    EXPECT_FALSE(labels[0]->isHidden());
+
+    pane.hide();
+    for (const QLabel *label : labels) EXPECT_TRUE(label->isHidden());
+    pane.show();
+    QCoreApplication::processEvents();
+    for (const QLabel *label : labels) EXPECT_TRUE(label->isHidden());
+    present_bounds({static_cast<float>(pane.width()),
+                     static_cast<float>(pane.height())}, ++signature);
+    EXPECT_FALSE(labels[0]->isHidden());
+  }
+#else
+  GTEST_SKIP() << "Native backing-store raster checks require Windows.";
+#endif
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,

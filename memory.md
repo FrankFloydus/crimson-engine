@@ -967,11 +967,17 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
   must clear its image first; default uninitialized pixmaps produce random opaque glyph tiles.
 - Dimension HUDs above Vulkan use non-layered masked child windows. Raster and region share a cached
   binary glyph mask/DPI revision; position changes do not rebuild masks. Keep edge-face context so
-  labels choose the exterior. Retire their accepted native projection synchronously on parent
-  Resize/Hide; reveal it only after presentation has projected current camera/content bounds.
+  labels choose the exterior. Retire their accepted native projection before a native ancestor
+  moves or resizes; ordinary Qt Move/Resize notifications arrive after native geometry changes.
+  Cache accepted glyph footprints in top-level logical coordinates, because widget coordinates
+  can already reflect the new geometry during the native pre-change callback. Hide labels and
+  synchronously erase the historical footprint from the shared backing store. Preserve pending
+  erasure while updates are disabled or the owner is unmapped; reveal only after cleanup and a
+  current accepted projection.
   Window restoration accounts for native frame margins before reveal.
 
 Owners: [theme](src/ui/qt_application_theme.cpp), [scale metrics](src/ui/qt_ui_scale_metrics.cpp),
+[dimension HUD](src/ui/qt_viewport_edge_length_hud.cpp), [native geometry](src/platform/native_window_input.cpp),
 [first-paint gate](src/app/app_frame_presentation.hpp).
 Tests: [theme](tests/qt_application_theme_tests.cpp), [Qt settings](tests/qt_settings_dialog_tests.cpp),
 [dimension HUD](tests/qt_viewport_edge_length_hud_tests.cpp), [startup](tests/qt_startup_presentation_tests.cpp),
