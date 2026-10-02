@@ -830,6 +830,16 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   options and compensate only its vertical resolution for backing/visible height, within Filament's
   limits. Retained camera/presentation gates skip redundant Filament setters; cache native geometry
   queries until their layout/DPI/handle inputs change.
+- Establish `Qt::AA_DontCreateNativeWidgetSiblings` before Quader widget construction and set
+  `Qt::WA_DontCreateNativeAncestors` before the viewport panel creates native children. Retained
+  dialogs prewarm hidden native owners; sibling isolation comes from the application attribute.
+  Dimension HUDs watch the bounded QWidget ancestor chain through the window,
+  including non-native containers, and rebuild it on reparenting. Geometry/hide events retire the
+  accepted projection even when the pane's local bounds are unchanged.
+  The panel also observes bounded ancestors and maps its existing QWindow position into the nearest
+  native parent's coordinates, setting it only when different; this never resizes or creates a HWND.
+  Swapping lateral dock widths requires actual OS clip bounds to agree with logical Qt geometry even
+  while pane-local dimensions remain unchanged.
 - Asset Browser visibility holds Qt painting through the synchronous native clip/layout change,
   preserving the prior `updatesEnabled()` and animation flags. This prevents painting the uncovered
   dock footprint across the expanded scene. On reveal, activate the dock's layout after visibility
@@ -870,11 +880,14 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
 
 Owners: [RenderSystem](src/render/render_system.cpp), [frame schedule](src/app/app_frame_schedule.hpp),
 [Filament patch](thirdparty/filament/README.md), [native clip host](src/ui/qt_viewport_panel.cpp),
-[visible input mapping](src/ui/qt_viewport_surface.cpp), [backing projection](src/render/viewport_renderer.cpp).
+[visible input mapping](src/ui/qt_viewport_surface.cpp), [backing projection](src/render/viewport_renderer.cpp),
+[hidden dialog creation](src/ui/qt_retained_message_box.cpp), [HUD ancestor lifetime](src/ui/qt_viewport_edge_length_hud.cpp).
 Tests: [presentation](tests/render_presentation_tests.cpp),
 [opt-in native Vulkan runtime](tests/render_vsync_runtime_tests.cpp),
-[native browser transitions](tests/qt_project_workspace_tests.cpp),
-[crop input and unchanged geometry queries](tests/qt_input_adapter_tests.cpp).
+[native browser transitions and OS clip geometry](tests/qt_project_workspace_tests.cpp),
+[crop input and unchanged geometry queries](tests/qt_input_adapter_tests.cpp),
+[dialog native ownership](tests/qt_retained_message_box_tests.cpp),
+[non-native ancestor retirement](tests/qt_viewport_edge_length_hud_tests.cpp).
 
 ## Dense-scene performance traps
 

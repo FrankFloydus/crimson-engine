@@ -174,6 +174,7 @@ public:
   [[nodiscard]] const QtViewportSurface *surface(ViewportPaneId pane_id) const;
 
 protected:
+  bool event(QEvent *event) override;
   bool eventFilter(QObject *watched, QEvent *event) override;
   void resizeEvent(QResizeEvent *event) override;
 
@@ -234,6 +235,8 @@ private:
   };
 
   void create_pane(Pane &pane);
+  void refresh_native_geometry_ancestors();
+  void synchronize_native_ancestor_position();
   void refresh_pane_controls(Pane &pane);
   void sync_pane_control_selection(Pane &pane);
   void sync_pane_actions(Pane &pane);
@@ -296,6 +299,7 @@ private:
   };
 
   std::array<Pane, kViewportPaneCount> panes_;
+  std::vector<QPointer<QWidget>> native_geometry_ancestors_;
   QtUiScaleMetrics ui_scale_metrics_;
   RenderSystem *render_system_ = nullptr;
   ViewportWorkspaceService *workspace_ = nullptr;

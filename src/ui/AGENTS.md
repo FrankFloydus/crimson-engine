@@ -55,6 +55,13 @@ file except through prior written authorization from Francesco Di Blasi.
   the corresponding owner revisions are unchanged.
 - `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
   cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
+  Establish `Qt::AA_DontCreateNativeWidgetSiblings` before constructing Quader widgets and set
+  `Qt::WA_DontCreateNativeAncestors` on the panel before its native children are created. Keep HWND
+  creation explicit so retained pane children do not promote surrounding dock/sibling widgets.
+  Observe the panel's bounded QWidget ancestor chain and refresh it on reparenting. Synchronize
+  its existing QWindow position in the nearest native parent's coordinates only when it differs, without
+  resizing or creating a HWND. The [native workspace geometry oracle](../../tests/qt_project_workspace_tests.cpp)
+  compares OS clip bounds with logical Qt geometry after lateral dock widths are swapped.
   Each pane reserves a fixed control strip above its visible render area. A native clip host
   contains a vertically reserved backing container only when render advertises hidden native pixels
   (Vulkan). Anchor it at `(0, 0)` so bottom-dock toggles change the visible clip without resizing or
@@ -73,6 +80,9 @@ file except through prior written authorization from Francesco Di Blasi.
   press acquires focus and performs its action in the same gesture. One masked native orange border
   marks the focused pane, including single/maximized layouts; panel focus clears it. It shares the
   current-material outline color and gates geometry/mask/stacking updates before widget work.
+  Dimension HUDs observe the bounded QWidget ancestor chain through the top-level window,
+  including non-native containers. Rebuild that chain on reparenting; geometry/hide transitions
+  retire accepted projections even when pane-local bounds stay unchanged.
 - Each pane's Environment launcher opens one retained `QtEnvironmentSettingsPopup` immediately
   left of the display menu. Its collapsible Environment, Fog, Camera and Post Process controls
   edit document settings through the public query/scene APIs, including empty documents.
@@ -106,6 +116,9 @@ file except through prior written authorization from Francesco Di Blasi.
   `qt_settings_detail::QtSettingsSection` retains its body and settles focused drafts before collapse.
   Keep labels aligned beside native editors, with stacked components where a narrow panel would
   crowd numeric values. Collection panels retain their native tree/list interaction.
+  Retained dialogs prewarm their hidden native owner after polish/layout. Prewarming stays unmapped
+  and keeps the native owner across later presentations; application native-sibling policy keeps
+  ordinary UI widgets non-native. See `tests/qt_retained_message_box_tests.cpp`.
 - Reuse localization, settings descriptors, models, delegates, and signals. Call base event handlers
   on unhandled paths. Input follows [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md): Qt adaptation,
   canonical keybindings, then semantic viewport frames. Do not add a parallel `QAction` shortcut map.

@@ -16,6 +16,7 @@
 #include <QPixmap>
 #include <QProxyStyle>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QWidget>
 
@@ -50,6 +51,13 @@ public:
 TEST(QtRetainedMessageBoxTests,
      ReusesNativeWindowLayoutAndButtonsAcrossPresentations) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const bool native_siblings_disabled = QCoreApplication::testAttribute(
+      Qt::AA_DontCreateNativeWidgetSiblings);
+  const auto restore_native_siblings = qScopeGuard([native_siblings_disabled]() {
+    QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings,
+                                   native_siblings_disabled);
+  });
+  QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
   int argc = 1;
   char application_name[] = "quader-retained-message-box-tests";
   char *argv[] = {application_name, nullptr};
@@ -60,8 +68,12 @@ TEST(QtRetainedMessageBoxTests,
 
   QWidget owner;
   owner.resize(640, 480);
+  QWidget sibling(&owner);
+  sibling.setGeometry(10, 10, 120, 80);
   owner.show();
   QCoreApplication::processEvents();
+  ASSERT_NE(owner.internalWinId(), WId{});
+  ASSERT_EQ(sibling.internalWinId(), WId{});
 
   QtRetainedMessageBox message_box(&owner);
   QPushButton *const primary = message_box.retained_button(
@@ -110,7 +122,13 @@ TEST(QtRetainedMessageBoxTests,
   EXPECT_TRUE(message_box.testAttribute(Qt::WA_WState_Created));
   QLayout *const retained_layout = message_box.layout();
   ASSERT_NE(retained_layout, nullptr);
-  const WId retained_window_id = message_box.winId();
+  const WId retained_window_id = message_box.internalWinId();
+  ASSERT_NE(retained_window_id, WId{});
+  const auto expect_native_isolation = [&]() {
+    EXPECT_EQ(message_box.internalWinId(), retained_window_id);
+    EXPECT_EQ(sibling.internalWinId(), WId{});
+  };
+  expect_native_isolation();
   auto *const icon_label = message_box.findChild<QLabel *>(
       QStringLiteral("qt_msgboxex_icon_label"));
   ASSERT_NE(icon_label, nullptr);
@@ -119,7 +137,7 @@ TEST(QtRetainedMessageBoxTests,
       icon_label->pixmap().deviceIndependentSize();
   ASSERT_TRUE(scale_controller.apply_factor(2.0F));
   message_box.apply_ui_scale(scale_controller.metrics());
-  EXPECT_EQ(message_box.winId(), retained_window_id);
+  expect_native_isolation();
   EXPECT_EQ(message_box.layout(), retained_layout);
   EXPECT_GT(icon_label->pixmap().deviceIndependentSize().width(),
             unscaled_icon_size.width());
@@ -131,10 +149,10 @@ TEST(QtRetainedMessageBoxTests,
   ASSERT_TRUE(scale_controller.apply_factor(1.0F));
   message_box.apply_ui_scale(scale_controller.metrics());
   EXPECT_EQ(icon_label->pixmap().deviceIndependentSize(), unscaled_icon_size);
-  EXPECT_EQ(message_box.winId(), retained_window_id);
+  expect_native_isolation();
 
   QTimer::singleShot(0, &message_box, [&]() {
-    EXPECT_EQ(message_box.winId(), retained_window_id);
+    expect_native_isolation();
     EXPECT_EQ(message_box.objectName(), first.object_name);
     EXPECT_EQ(message_box.windowTitle(), first.title);
     EXPECT_EQ(message_box.text(), first.text);
@@ -151,7 +169,7 @@ TEST(QtRetainedMessageBoxTests,
   EXPECT_EQ(message_box.present(first),
             QtRetainedMessageBoxButton::Secondary);
   EXPECT_TRUE(message_box.testAttribute(Qt::WA_WState_Created));
-  EXPECT_EQ(message_box.winId(), retained_window_id);
+  expect_native_isolation();
 
   const QtRetainedMessageBoxPresentation second{
       .icon = QMessageBox::Question,
@@ -178,7 +196,7 @@ TEST(QtRetainedMessageBoxTests,
       .close_button = QtRetainedMessageBoxButton::Secondary,
   };
   QTimer::singleShot(0, &message_box, [&]() {
-    EXPECT_EQ(message_box.winId(), retained_window_id);
+    expect_native_isolation();
     EXPECT_EQ(message_box.layout(), retained_layout);
     EXPECT_EQ(message_box.retained_button(
                   QtRetainedMessageBoxButton::Primary),
@@ -201,7 +219,7 @@ TEST(QtRetainedMessageBoxTests,
   EXPECT_EQ(message_box.present(second),
             QtRetainedMessageBoxButton::Secondary);
   EXPECT_TRUE(message_box.testAttribute(Qt::WA_WState_Created));
-  EXPECT_EQ(message_box.winId(), retained_window_id);
+  expect_native_isolation();
   EXPECT_EQ(message_box.layout(), retained_layout);
 }
 

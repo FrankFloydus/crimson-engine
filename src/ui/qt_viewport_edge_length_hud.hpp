@@ -19,6 +19,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 class QLabel;
 class QWidget;
@@ -74,8 +75,10 @@ private:
 
   void retain_native_footprint(const QLabel &label);
   bool clean_native_footprint();
+  void refresh_geometry_ancestors();
 
   std::array<QLabel *, 6> labels_ = {};
+  std::vector<QPointer<QWidget>> geometry_ancestors_;
   QtUiScaleMetrics ui_scale_metrics_;
   std::array<std::optional<Dimension>, 6> dimensions_ = {};
   std::array<QString, 6> dimension_texts_ = {};

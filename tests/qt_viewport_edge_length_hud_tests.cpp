@@ -115,6 +115,24 @@ private:
   Counts counts_;
 };
 
+/// Keeps ordinary test ancestors alien without changing later fixtures' policy.
+class ScopedExplicitHudNativeWidgets final {
+public:
+  ScopedExplicitHudNativeWidgets()
+      : previous_(QCoreApplication::testAttribute(
+            Qt::AA_DontCreateNativeWidgetSiblings)) {
+    QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
+  }
+
+  ~ScopedExplicitHudNativeWidgets() {
+    QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings,
+                                   previous_);
+  }
+
+private:
+  bool previous_;
+};
+
 quader::ViewportOverlayFrame hover_edge_frame(quader::QVec3 start,
                                                quader::QVec3 end) {
   quader::ViewportOverlayFrame frame;
@@ -1121,6 +1139,165 @@ TEST_F(QtViewportEdgeLengthHudTests,
   EXPECT_EQ(label_->geometry(), geometry);
   EXPECT_EQ(label_->property("quaderDimensionMaskRevision").toInt(),
             mask_revision);
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       AlienAncestorGeometryRetiresDimensionsWithUnchangedPaneBounds) {
+  const ScopedExplicitHudNativeWidgets native_widgets;
+  QWidget window;
+  QWidget outer(&window);
+  QWidget ancestor(&outer);
+  QWidget pane(&ancestor);
+  pane.setAttribute(Qt::WA_DontCreateNativeAncestors);
+  window.setAttribute(Qt::WA_DontShowOnScreen);
+  window.resize(800, 600);
+  outer.setGeometry(30, 25, 700, 500);
+  ancestor.setGeometry(35, 30, 600, 420);
+  pane.setGeometry(20, 20, 400, 300);
+  auto *pane_hud = new quader::QtViewportEdgeLengthHud(
+      pane, quader::ViewportPaneId::Perspective);
+  QLabel *label = pane.findChild<QLabel *>(
+      QStringLiteral("viewportEdgeLength_perspective"));
+  ASSERT_NE(label, nullptr);
+  const auto frame = hover_edge_frame({-2, 0, 0}, {2, 0, 0});
+  const auto present_projection = [&] {
+    pane_hud->present(
+        frame, quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+        camera_, pane.rect(), true, 12.0);
+  };
+  window.show();
+  QCoreApplication::processEvents();
+  present_projection();
+  QCoreApplication::processEvents();
+  ASSERT_FALSE(label->isHidden());
+  ASSERT_EQ(outer.internalWinId(), WId{});
+  ASSERT_EQ(ancestor.internalWinId(), WId{});
+  const QRect pane_bounds = pane.geometry();
+  const QRect label_bounds = label->geometry();
+  const int mask_revision =
+      label->property("quaderDimensionMaskRevision").toInt();
+
+  for (QWidget *moving_ancestor : {&ancestor, &outer}) {
+    moving_ancestor->move(moving_ancestor->pos() + QPoint{15, 0});
+    EXPECT_EQ(pane.geometry(), pane_bounds);
+    EXPECT_TRUE(label->isHidden())
+        << "An alien origin change must retire the old native projection.";
+    present_projection();
+    ASSERT_FALSE(label->isHidden());
+    EXPECT_EQ(label->geometry(), label_bounds);
+    EXPECT_EQ(label->property("quaderDimensionMaskRevision").toInt(),
+              mask_revision);
+
+    moving_ancestor->resize(moving_ancestor->size() + QSize{10, 5});
+    EXPECT_EQ(pane.geometry(), pane_bounds);
+    EXPECT_TRUE(label->isHidden());
+    present_projection();
+    ASSERT_FALSE(label->isHidden());
+
+    moving_ancestor->hide();
+    EXPECT_TRUE(label->isHidden());
+    moving_ancestor->show();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(label->isHidden())
+        << "Ancestor exposure must wait for a fresh projection.";
+    present_projection();
+    ASSERT_FALSE(label->isHidden());
+    EXPECT_EQ(pane.geometry(), pane_bounds);
+  }
+
+  EdgeHudWidgetEventCounter events;
+  label->installEventFilter(&events);
+  QCoreApplication::processEvents();
+  const auto stable = events.counts();
+  for (int unchanged = 0; unchanged < 32; ++unchanged) {
+    present_projection();
+    ancestor.setGeometry(ancestor.geometry());
+    outer.setGeometry(outer.geometry());
+  }
+  QCoreApplication::processEvents();
+  EXPECT_EQ(events.counts(), stable);
+  EXPECT_EQ(label->property("quaderDimensionMaskRevision").toInt(),
+            mask_revision);
+  EXPECT_EQ(outer.internalWinId(), WId{});
+  EXPECT_EQ(ancestor.internalWinId(), WId{});
+  label->removeEventFilter(&events);
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ReparentedPaneAndAlienAncestorObserveOnlyTheirCurrentGeometryChain) {
+  const ScopedExplicitHudNativeWidgets native_widgets;
+  QWidget window;
+  QWidget old_origin(&window);
+  QWidget new_origin(&window);
+  QWidget ancestor(&old_origin);
+  QWidget pane;
+  pane.setAttribute(Qt::WA_DontCreateNativeAncestors);
+  window.setAttribute(Qt::WA_DontShowOnScreen);
+  pane.setAttribute(Qt::WA_DontShowOnScreen);
+  window.resize(1000, 600);
+  old_origin.setGeometry(20, 20, 450, 500);
+  new_origin.setGeometry(500, 20, 450, 500);
+  ancestor.setGeometry(10, 10, 420, 400);
+  pane.resize(400, 300);
+  auto *pane_hud = new quader::QtViewportEdgeLengthHud(
+      pane, quader::ViewportPaneId::Perspective);
+  QLabel *label = pane.findChild<QLabel *>(
+      QStringLiteral("viewportEdgeLength_perspective"));
+  ASSERT_NE(label, nullptr);
+  const auto frame = hover_edge_frame({-2, 0, 0}, {2, 0, 0});
+  const auto present_projection = [&] {
+    pane_hud->present(
+        frame, quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+        camera_, pane.rect(), true, 12.0);
+  };
+  window.show();
+  pane.show();
+  QCoreApplication::processEvents();
+  present_projection();
+  ASSERT_FALSE(label->isHidden());
+  pane.setParent(&ancestor);
+  EXPECT_TRUE(label->isHidden());
+  pane.move(0, 0);
+  pane.show();
+  QCoreApplication::processEvents();
+  present_projection();
+  ASSERT_FALSE(label->isHidden());
+  ASSERT_EQ(ancestor.internalWinId(), WId{});
+  ASSERT_EQ(old_origin.internalWinId(), WId{});
+  old_origin.move(old_origin.pos() + QPoint{15, 0});
+  EXPECT_TRUE(label->isHidden());
+  present_projection();
+  ASSERT_FALSE(label->isHidden());
+
+  ancestor.setParent(&new_origin);
+  EXPECT_TRUE(label->isHidden());
+  ancestor.show();
+  pane.show();
+  QCoreApplication::processEvents();
+  present_projection();
+  ASSERT_FALSE(label->isHidden());
+  ASSERT_EQ(new_origin.internalWinId(), WId{});
+  const QRect pane_bounds = pane.geometry();
+  const int mask_revision =
+      label->property("quaderDimensionMaskRevision").toInt();
+  EdgeHudWidgetEventCounter events;
+  label->installEventFilter(&events);
+  QCoreApplication::processEvents();
+  const auto stable = events.counts();
+  old_origin.move(old_origin.pos() + QPoint{15, 0});
+  for (int unchanged = 0; unchanged < 32; ++unchanged) present_projection();
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(label->isHidden());
+  EXPECT_EQ(events.counts(), stable)
+      << "The retired ancestor chain must no longer invalidate the HUD.";
+  new_origin.move(new_origin.pos() + QPoint{15, 0});
+  EXPECT_EQ(pane.geometry(), pane_bounds);
+  EXPECT_TRUE(label->isHidden());
+  present_projection();
+  EXPECT_FALSE(label->isHidden());
+  EXPECT_EQ(label->property("quaderDimensionMaskRevision").toInt(),
+            mask_revision);
+  label->removeEventFilter(&events);
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,

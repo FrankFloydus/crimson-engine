@@ -465,6 +465,9 @@ bool UISystem::initialize(RenderSystem &render_system,
     LOG_ERROR("Qt application is unavailable while initializing UI scale");
     return false;
   }
+  // Viewport chrome requests native windows explicitly. Keep ordinary docks
+  // and toolbars in Qt's backing store instead of promoting every sibling HWND.
+  QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
   ui_scale_controller_ = std::make_unique<QtUiScaleApplicationController>(
       *application, settings_.interface_scale());
   localization_.load(executable_dir / "locales", settings_.locale());

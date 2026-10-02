@@ -465,7 +465,7 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
     label->installEventFilter(this);
     label->hide();
   }
-  parent.installEventFilter(this);
+  refresh_geometry_ancestors();
   if (QCoreApplication *application = QCoreApplication::instance()) {
     application->installNativeEventFilter(this);
   }
@@ -928,15 +928,38 @@ void QtViewportEdgeLengthHud::raise() {
   }
 }
 
+void QtViewportEdgeLengthHud::refresh_geometry_ancestors() {
+  for (const QPointer<QWidget> &ancestor : geometry_ancestors_) {
+    if (ancestor != nullptr) ancestor->removeEventFilter(this);
+  }
+  geometry_ancestors_.clear();
+  for (QWidget *ancestor = static_cast<QWidget *>(parent());
+       ancestor != nullptr; ancestor = ancestor->parentWidget()) {
+    geometry_ancestors_.push_back(ancestor);
+    ancestor->installEventFilter(this);
+    if (ancestor->isWindow()) break;
+  }
+}
+
 bool QtViewportEdgeLengthHud::eventFilter(QObject *watched, QEvent *event) {
-  if (watched == parent() && event != nullptr &&
+  const bool watches_geometry_ancestor = std::any_of(
+      geometry_ancestors_.begin(), geometry_ancestors_.end(),
+      [watched](const QPointer<QWidget> &ancestor) {
+        return ancestor != nullptr && ancestor == watched;
+      });
+  if (watches_geometry_ancestor && event != nullptr &&
       (event->type() == QEvent::Move || event->type() == QEvent::Resize ||
-       event->type() == QEvent::Hide)) {
+       event->type() == QEvent::Hide ||
+       event->type() == QEvent::ParentAboutToChange)) {
     // Native glyph windows keep their accepted pixels across their parent's
     // geometry and exposure changes. Retire that projection before Qt can
     // reveal it over a resized or reactivated viewport; the next presentation
     // supplies the current camera and content bounds before showing it again.
     hide();
+  }
+  if (watches_geometry_ancestor && event != nullptr &&
+      event->type() == QEvent::ParentChange) {
+    refresh_geometry_ancestors();
   }
   const bool watches_dimension_label =
       std::find(labels_.begin(), labels_.end(), watched) != labels_.end();

@@ -726,6 +726,9 @@ bool qt_event_target_belongs_to_tool_settings(
 
 QtViewportPanel::QtViewportPanel(QWidget *parent)
     : QWidget(parent), delete_popup_presenter_(*this) {
+  // Native panes retain their clipping hierarchy without promoting workspace
+  // and central-stack widgets into additional windows resized with every dock.
+  setAttribute(Qt::WA_DontCreateNativeAncestors);
   setObjectName(QStringLiteral("viewportWorkspace"));
   setMinimumSize(300, 200);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -767,9 +770,14 @@ QtViewportPanel::QtViewportPanel(QWidget *parent)
     handle.widget->installEventFilter(this);
     handle.widget->hide();
   }
+  refresh_native_geometry_ancestors();
 }
 
 QtViewportPanel::~QtViewportPanel() {
+  for (const QPointer<QWidget> &ancestor : native_geometry_ancestors_) {
+    if (ancestor != nullptr) ancestor->removeEventFilter(this);
+  }
+  native_geometry_ancestors_.clear();
   set_settings_panel(nullptr);
   shutdown();
 }
@@ -2211,7 +2219,57 @@ QtViewportPanel::surface(ViewportPaneId pane_id) const {
   return pane(pane_id).surface;
 }
 
+void QtViewportPanel::refresh_native_geometry_ancestors() {
+  for (const QPointer<QWidget> &ancestor : native_geometry_ancestors_) {
+    if (ancestor != nullptr) ancestor->removeEventFilter(this);
+  }
+  native_geometry_ancestors_.clear();
+  for (QWidget *ancestor = parentWidget(); ancestor != nullptr;
+       ancestor = ancestor->parentWidget()) {
+    native_geometry_ancestors_.emplace_back(ancestor);
+    ancestor->installEventFilter(this);
+    if (ancestor->isWindow()) break;
+  }
+}
+
+void QtViewportPanel::synchronize_native_ancestor_position() {
+  QWindow *native_window = windowHandle();
+  QWidget *native_parent = nativeParentWidget();
+  if (native_window == nullptr || native_window->handle() == nullptr ||
+      native_parent == nullptr || native_parent->windowHandle() == nullptr) {
+    return;
+  }
+  // Alien ancestor moves do not change QWidget-local pane geometry. Place the
+  // retained native window in its real parent's coordinates without resizing it.
+  const QPoint native_position = mapTo(native_parent, QPoint{});
+  if (native_window->position() != native_position) {
+    native_window->setPosition(native_position);
+  }
+}
+
+bool QtViewportPanel::event(QEvent *event) {
+  const bool handled = QWidget::event(event);
+  if (event != nullptr && event->type() == QEvent::ParentChange) {
+    refresh_native_geometry_ancestors();
+    synchronize_native_ancestor_position();
+  }
+  return handled;
+}
+
 bool QtViewportPanel::eventFilter(QObject *watched, QEvent *event) {
+  if (event != nullptr &&
+      (event->type() == QEvent::Move || event->type() == QEvent::Resize ||
+       event->type() == QEvent::ParentChange) &&
+      std::any_of(native_geometry_ancestors_.begin(),
+                  native_geometry_ancestors_.end(),
+                  [watched](const QPointer<QWidget> &ancestor) {
+                    return ancestor.data() == watched;
+                  })) {
+    if (event->type() == QEvent::ParentChange) {
+      refresh_native_geometry_ancestors();
+    }
+    synchronize_native_ancestor_position();
+  }
   if (event != nullptr) {
     for (const Pane &candidate : panes_) {
       if (watched == candidate.surface && candidate.id == interaction_pane_id_ &&
