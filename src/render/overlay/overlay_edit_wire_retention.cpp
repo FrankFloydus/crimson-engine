@@ -25,9 +25,41 @@ bool finite_endpoint(QVec3 point) {
 }
 
 bool same_slot(const ViewportOverlayLine &left, const ViewportOverlayLine &right) {
+  for (std::size_t index = 0u; index < left.surface_support.size(); ++index) {
+    const auto &before = left.surface_support[index];
+    const auto &after = right.surface_support[index];
+    if (before.vertex_id != after.vertex_id ||
+        (after.vertex_id >= 0 && !same_endpoint(before.position, after.position))) return false;
+  }
   return same_endpoint(left.start, right.start) && same_endpoint(left.end, right.end) &&
       left.color == right.color && left.element.object_id == right.element.object_id &&
       left.element.edge_a == right.element.edge_a && left.element.edge_b == right.element.edge_b;
+}
+
+bool finite_support(const ViewportOverlayLine &line) {
+  return std::all_of(line.surface_support.begin(), line.surface_support.end(),
+      [](const auto &support) {
+        return support.vertex_id < 0 || finite_endpoint(support.position);
+      });
+}
+
+void refresh_bindings(std::span<OverlayPositionStreamBinding, 4u> bindings,
+                      const ViewportOverlayLine &line, std::uint32_t slot) {
+  const auto assign = [&](std::size_t index, int vertex_id, QVec3 position,
+                           OverlayPositionStream stream) {
+    bindings[index] = {.object_id = line.element.object_id, .vertex_id = vertex_id,
+        .first_vertex = slot * 4u, .vertex_count = 4u, .stream = stream,
+        .base_position = {position.x, position.y, position.z, 1.0f}};
+  };
+  assign(0u, line.element.edge_a, line.start, OverlayPositionStream::Primary);
+  assign(1u, line.element.edge_b, line.end, OverlayPositionStream::Secondary);
+  for (std::size_t index = 0u; index < line.surface_support.size(); ++index) {
+    const auto &support = line.surface_support[index];
+    // Degenerate supports follow the moving start in CPU and shared GPU paths.
+    assign(index + 2u, support.vertex_id >= 0 ? support.vertex_id : line.element.edge_a,
+           support.vertex_id >= 0 ? support.position : line.start,
+           index == 0u ? OverlayPositionStream::Support0 : OverlayPositionStream::Support1);
+  }
 }
 
 } // namespace
@@ -52,6 +84,7 @@ bool OverlayEditWireRetention::prepare(std::span<const ViewportOverlayLine> line
       const float line_width = viewport_overlay_line_width_pixels(line.layer, line.width_pixels);
       if (line.source != ViewportOverlaySource::ComponentSelection ||
           !finite_endpoint(line.start) || !finite_endpoint(line.end) ||
+          !finite_support(line) ||
           !std::isfinite(line_width) || (source_count != 0u && line_width != width) ||
           line.element.object_id != previous.element.object_id ||
           line.element.edge_a != previous.element.edge_a ||
@@ -77,10 +110,8 @@ bool OverlayEditWireRetention::prepare(std::span<const ViewportOverlayLine> line
       if (!same_slot(slots_[slot], line)) {
         slots_[slot] = line;
         dirty_slots_[slot] = 1u;
-        bindings_[source_index * 2u].base_position =
-            {line.start.x, line.start.y, line.start.z, 1.0f};
-        bindings_[source_index * 2u + 1u].base_position =
-            {line.end.x, line.end.y, line.end.z, 1.0f};
+        refresh_bindings(std::span<OverlayPositionStreamBinding, 4u>(
+            bindings_.data() + source_index * 4u, 4u), line, slot);
       }
       ++source_index;
     }
@@ -110,6 +141,7 @@ bool OverlayEditWireRetention::prepare(std::span<const ViewportOverlayLine> line
         line.element.object_id < 0 || line.element.edge_a < 0 || line.element.edge_b < 0 ||
         line.element.edge_a == line.element.edge_b || !finite_endpoint(line.start) ||
         !finite_endpoint(line.end) || !std::isfinite(line_width) ||
+        !finite_support(line) ||
         (!source.empty() && line_width != width)) {
       clear();
       return false;
@@ -182,15 +214,13 @@ bool OverlayEditWireRetention::prepare(std::span<const ViewportOverlayLine> line
   }
   if (indices_changed_ || !dirty_slots_.empty()) {
     bindings_.clear();
-    bindings_.reserve(next_active.size() * 2u);
+    bindings_.resize(next_active.size() * 4u);
+    std::size_t source_index = 0u;
     for (const auto slot : next_active) {
       const auto &line = slots_[slot];
-      bindings_.push_back({.object_id = line.element.object_id, .vertex_id = line.element.edge_a,
-          .first_vertex = slot * 4u, .vertex_count = 4u, .stream = OverlayPositionStream::Primary,
-          .base_position = {line.start.x, line.start.y, line.start.z, 1.0f}});
-      bindings_.push_back({.object_id = line.element.object_id, .vertex_id = line.element.edge_b,
-          .first_vertex = slot * 4u, .vertex_count = 4u, .stream = OverlayPositionStream::Secondary,
-          .base_position = {line.end.x, line.end.y, line.end.z, 1.0f}});
+      refresh_bindings(std::span<OverlayPositionStreamBinding, 4u>(
+          bindings_.data() + source_index * 4u, 4u), line, slot);
+      ++source_index;
     }
   }
   std::sort(dirty_slots_.begin(), dirty_slots_.end());

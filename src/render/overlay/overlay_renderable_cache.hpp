@@ -160,6 +160,7 @@ public:
         OverlayEditWireRetention source_wire_retention;
         std::array<OverlayEditWireRetention, 2u> selection_wire_retention;
         RetainedFaceSource face_source;
+        OverlayWireSurfaceSupportCache wire_surface_support;
         std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxy_groups;
         OverlayFrameSignatures transform_base_signatures;
         std::uint64_t transform_base_frame_signature = 0u;

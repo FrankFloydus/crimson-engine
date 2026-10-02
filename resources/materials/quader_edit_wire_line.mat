@@ -10,10 +10,13 @@ material {
         color,
         custom0,
         custom1,
-        custom2
+        custom2,
+        custom3,
+        custom4
     ],
     variables : [
-        lineDistancePixels
+        lineDistancePixels,
+        lineSurfaceDepths
     ],
     parameters : [
         { type : bool, name : sharedPositionsEnabled },
@@ -70,6 +73,29 @@ vertex {
             }
         }
         return getClipFromViewMatrix() * (startEndpoint ? startView : endView);
+    }
+
+    highp float surfaceDepth(highp vec4 first, highp vec4 second,
+            highp vec4 support, highp vec2 devicePosition, highp float fallbackDepth) {
+        // A projected face has affine device depth even when its supporting
+        // vertex is behind the camera. Solve in homogeneous XYW rather than
+        // dividing that vertex by W or clipping it to the near plane.
+        first /= max(max(abs(first.x), abs(first.y)), max(abs(first.w), 0.000001));
+        second /= max(max(abs(second.x), abs(second.y)), max(abs(second.w), 0.000001));
+        support /= max(max(abs(support.x), abs(support.y)), max(abs(support.w), 0.000001));
+        highp vec3 firstPoint = first.xyw;
+        highp vec3 secondPoint = second.xyw;
+        highp vec3 supportPoint = support.xyw;
+        highp vec3 secondCrossSupport = cross(secondPoint, supportPoint);
+        highp float determinant = dot(firstPoint, secondCrossSupport);
+        highp float determinantScale = length(firstPoint) * length(secondPoint) * length(supportPoint);
+        if (abs(determinant) <= 0.0000001 * determinantScale) {
+            return fallbackDepth;
+        }
+        highp vec3 plane = (first.z * secondCrossSupport +
+                second.z * cross(supportPoint, firstPoint) +
+                support.z * cross(firstPoint, secondPoint)) / determinant;
+        return dot(plane, vec3(devicePosition, 1.0));
     }
 
     void materialVertex(inout MaterialVertexInputs material) {
@@ -141,6 +167,17 @@ vertex {
         float halfLengthPixels = directionLength * 0.5;
         material.lineDistancePixels = vec4(side * sideDistance,
                 cap * (halfLengthPixels + sideDistance), halfLengthPixels, biasedReversedDepth);
+
+        highp vec4 support0World = getWorldFromModelMatrix() * vec4(overlayPosition(getCustom3().xyz), 1.0);
+        highp vec4 support1World = getWorldFromModelMatrix() * vec4(overlayPosition(getCustom4().xyz), 1.0);
+        highp vec4 support0Clip = getClipFromViewMatrix() * getViewFromWorldMatrix() * support0World;
+        highp vec4 support1Clip = getClipFromViewMatrix() * getViewFromWorldMatrix() * support1World;
+        // Interpolate each incident face independently. Their nearest-depth
+        // crease must be selected per fragment, not across the four corners.
+        material.lineSurfaceDepths = vec4(
+                surfaceDepth(clipStart, clipEnd, support0Clip, finalDevice.xy, ribbonDepth) - deviceOffset * 0.5,
+                surfaceDepth(clipStart, clipEnd, support1Clip, finalDevice.xy, ribbonDepth) - deviceOffset * 0.5,
+                0.0, 0.0);
     }
 }
 
@@ -155,7 +192,10 @@ fragment {
 
         // Keep reverse-Z precision through the DEVICE-domain GL-depth remap.
         // The ribbon has w = 1, so this varying retains its screen-linear depth.
-        gl_FragDepth = variable_lineDistancePixels.w;
+        // Preserve the full antialiased width over the wire's own faces while
+        // keeping unrelated foreground surfaces in the ordinary depth test.
+        gl_FragDepth = max(variable_lineDistancePixels.w,
+                max(variable_lineSurfaceDepths.x, variable_lineSurfaceDepths.y));
 
         vec4 color = getColor();
         color.a *= alphaScale;

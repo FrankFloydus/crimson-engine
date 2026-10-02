@@ -71,6 +71,10 @@ struct OverlayRenderableProxy {
               std::move(other.primary_position_stream4)),
           secondary_position_stream4(
               std::move(other.secondary_position_stream4)),
+          support0_position_stream4(
+              std::move(other.support0_position_stream4)),
+          support1_position_stream4(
+              std::move(other.support1_position_stream4)),
           visibility_point_indices(std::move(other.visibility_point_indices)),
           point_visibility_stream(std::move(other.point_visibility_stream)),
           component_point_appearance(std::move(other.component_point_appearance)) {}
@@ -100,6 +104,8 @@ struct OverlayRenderableProxy {
     std::vector<OverlayFloat3> position_stream3;
     std::vector<OverlayFloat4> primary_position_stream4;
     std::vector<OverlayFloat4> secondary_position_stream4;
+    std::vector<OverlayFloat4> support0_position_stream4;
+    std::vector<OverlayFloat4> support1_position_stream4;
     // One frame-point index per canonical four-vertex marker quad.
     std::vector<std::size_t> visibility_point_indices;
     std::vector<float> point_visibility_stream;

@@ -70,6 +70,10 @@ void add_line_signature(RenderSignatureBuilder &signature,
       .add_vec3(line.start)
       .add_vec3(line.end);
   add_overlay_element_signature(signature, line.element);
+  for (const auto &support : line.surface_support) {
+    signature.add_value(static_cast<std::uint64_t>(static_cast<std::int64_t>(support.vertex_id)));
+    if (support.vertex_id >= 0) signature.add_vec3(support.position);
+  }
 }
 
 void add_point_signature(RenderSignatureBuilder &signature,

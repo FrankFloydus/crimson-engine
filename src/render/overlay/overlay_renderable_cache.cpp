@@ -27,6 +27,17 @@ std::size_t overlay_layer_index(ViewportOverlayLayer layer) {
   return static_cast<std::size_t>(layer);
 }
 
+std::vector<OverlayFloat4> &position_stream(
+    OverlayRenderableProxy &proxy, OverlayPositionStream stream) {
+  switch (stream) {
+  case OverlayPositionStream::Secondary: return proxy.secondary_position_stream4;
+  case OverlayPositionStream::Support0: return proxy.support0_position_stream4;
+  case OverlayPositionStream::Support1: return proxy.support1_position_stream4;
+  case OverlayPositionStream::Primary: return proxy.primary_position_stream4;
+  }
+  return proxy.primary_position_stream4;
+}
+
 bool overlay_camera_material_state_changed(
     const ViewportOverlayCamera &before,
     const ViewportOverlayCamera &after) {
@@ -757,10 +768,16 @@ void OverlayRenderableCache::bind_shared_transform_positions(OverlaySlot &slot) 
         std::vector<std::uint32_t> primary(proxy.vertex_count, kUnmapped);
         std::vector<std::uint32_t> secondary(
             proxy.secondary_position_stream4.empty() ? 0u : proxy.vertex_count, kUnmapped);
+        std::vector<std::uint32_t> support0(
+            proxy.support0_position_stream4.empty() ? 0u : proxy.vertex_count, kUnmapped);
+        std::vector<std::uint32_t> support1(
+            proxy.support1_position_stream4.empty() ? 0u : proxy.vertex_count, kUnmapped);
         for (const auto &binding : proxy.position_stream_bindings) {
           if (binding.source_index >= transform_sources_.size() ||
               binding.position_index >= transform_sources_[binding.source_index].position_count) continue;
-          auto &indices = binding.stream == OverlayPositionStream::Secondary ? secondary : primary;
+          auto &indices = binding.stream == OverlayPositionStream::Secondary ? secondary :
+              binding.stream == OverlayPositionStream::Support0 ? support0 :
+              binding.stream == OverlayPositionStream::Support1 ? support1 : primary;
           const std::size_t end = static_cast<std::size_t>(binding.first_vertex) + binding.vertex_count;
           if (end > indices.size()) continue;
           std::fill(indices.begin() + binding.first_vertex, indices.begin() + end,
@@ -786,9 +803,11 @@ void OverlayRenderableCache::bind_shared_transform_positions(OverlaySlot &slot) 
             if (active[index] != 0u) continue;
             if (primary[index] == kUnmapped) primary[index] = 0u;
             if (index < secondary.size() && secondary[index] == kUnmapped) secondary[index] = 0u;
+            if (index < support0.size() && support0[index] == kUnmapped) support0[index] = 0u;
+            if (index < support1.size() && support1[index] == kUnmapped) support1[index] = 0u;
           }
         }
-        (void)factory_->bind_shared_positions(proxy, primary, secondary);
+        (void)factory_->bind_shared_positions(proxy, primary, secondary, support0, support1);
       }
       if (proxy.shared_positions_bound) ++shared_count;
       else ++fallback_count;
@@ -884,10 +903,7 @@ void OverlayRenderableCache::apply_transform_stream(
                         proxy.position_stream3.begin() + end,
                         OverlayFloat3{position.x, position.y, position.z});
             } else {
-              std::vector<OverlayFloat4> &stream =
-                  binding.stream == OverlayPositionStream::Secondary
-                      ? proxy.secondary_position_stream4
-                      : proxy.primary_position_stream4;
+              auto &stream = position_stream(proxy, binding.stream);
               if (end > stream.size()) {
                 continue;
               }
@@ -982,10 +998,7 @@ void OverlayRenderableCache::restore_transform_base(OverlaySlot &slot,
             std::fill(proxy.position_stream3.begin() + first,
                       proxy.position_stream3.begin() + end, base);
           } else {
-            std::vector<OverlayFloat4> &stream =
-                binding.stream == OverlayPositionStream::Secondary
-                    ? proxy.secondary_position_stream4
-                    : proxy.primary_position_stream4;
+            auto &stream = position_stream(proxy, binding.stream);
             if (end > stream.size()) {
               continue;
             }
@@ -1101,7 +1114,10 @@ void OverlayRenderableCache::update_retained_camera_state(OverlaySlot &slot) {
 void OverlayRenderableCache::rebuild_slot(
     OverlaySlot &slot, bool rebuild_camera_independent_layers) {
   QDR_PROFILE_FUNCTION();
-  if (rebuild_camera_independent_layers) prepare_retained_face_source(slot);
+  if (rebuild_camera_independent_layers) {
+    prepare_retained_face_source(slot);
+    for (auto &line : slot.frame.lines) slot.wire_surface_support.apply(line);
+  }
   bool transformed_binding_group_rebuilt = false;
   // Camera-only updates retain the exact semantic frame and its class partition.
   // Revalidate eligibility when frame content or layer publication changes.
@@ -1176,7 +1192,7 @@ void OverlayRenderableCache::rebuild_slot(
         QDR_PROFILE_SCOPE("Overlay prepare layer mesh");
         return OverlayRenderableBuilder::build_layer(
             slot.frame, slot.camera, layer, &slot.signatures, blend_order_bias_,
-            nullptr, !transform_stream_active_, true);
+            nullptr, !transform_stream_active_, true, &slot.wire_surface_support);
       }();
       if (!plan.point_batches.empty()) ++slot.point_geometry_update_count;
       const std::uint8_t layer_mask = effective_layer_mask(slot, layer);
@@ -1297,6 +1313,7 @@ std::size_t OverlayRenderableCache::FaceTriangleKeyHash::operator()(
 }
 
 void OverlayRenderableCache::prepare_retained_face_source(OverlaySlot &slot) {
+  slot.wire_surface_support.prepare(slot.frame, slot.signatures);
   const auto source_layer = overlay_layer_index(ViewportOverlayLayer::SourceWireDepthStamp);
   const auto signature = slot.signatures.layer_signatures[source_layer];
   if (slot.face_source.signature == signature) return;
@@ -1523,6 +1540,7 @@ void OverlayRenderableCache::destroy_slot(OverlaySlot &slot) {
   slot.source_wire_retention.clear();
   for (auto &retained : slot.selection_wire_retention) retained.clear();
   slot.face_source = {};
+  slot.wire_surface_support = {};
   slot.transform_base_signatures = {};
   slot.transform_base_frame_signature = 0u;
   slot.transform_layout_signature = 0u;

@@ -117,16 +117,18 @@ OverlayRenderState make_state_with_depth_mode(
   return state;
 }
 
+bool edit_wire_layer(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SourceWire ||
+         layer == ViewportOverlayLayer::SelectedFaceEdge ||
+         layer == ViewportOverlayLayer::SelectedEdge ||
+         layer == ViewportOverlayLayer::HoverFaceEdge ||
+         layer == ViewportOverlayLayer::HoverEdge;
+}
+
 bool line_uses_edit_wire_batch(const ViewportOverlayLine &line) {
-  if (line.source != ViewportOverlaySource::ComponentSelection &&
-      line.source != ViewportOverlaySource::ComponentHover) {
-    return false;
-  }
-  return line.layer == ViewportOverlayLayer::SourceWire ||
-         line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
-         line.layer == ViewportOverlayLayer::SelectedEdge ||
-         line.layer == ViewportOverlayLayer::HoverFaceEdge ||
-         line.layer == ViewportOverlayLayer::HoverEdge;
+  return edit_wire_layer(line.layer) &&
+      (line.source == ViewportOverlaySource::ComponentSelection ||
+       line.source == ViewportOverlaySource::ComponentHover);
 }
 
 quader_geometry::QVec3f neutral_point(QVec3 value) {
@@ -134,6 +136,95 @@ quader_geometry::QVec3f neutral_point(QVec3 value) {
 }
 
 } // namespace
+
+std::size_t OverlayWireSurfaceSupportCache::EdgeKeyHash::operator()(
+    const EdgeKey &key) const {
+  std::size_t hash = static_cast<std::uint32_t>(key.object);
+  hash = hash * 16777619u ^ static_cast<std::uint32_t>(key.first);
+  return hash * 16777619u ^ static_cast<std::uint32_t>(key.second);
+}
+
+void OverlayWireSurfaceSupportCache::prepare(
+    const ViewportOverlayFrame &frame, const OverlayFrameSignatures &signatures) {
+  const auto signature = signatures.layer_signatures[
+      overlay_layer_index(ViewportOverlayLayer::SourceWireDepthStamp)];
+  if (prepared_ && signature_ == signature) return;
+  QDR_PROFILE_SCOPE("Overlay retain incident wire surfaces");
+  supports_.clear();
+  supports_.reserve(signatures.triangle_counts[
+      overlay_layer_index(ViewportOverlayLayer::SourceWireDepthStamp)] * 3u);
+  const auto same_position = [](QVec3 left, QVec3 right) {
+    return left.x == right.x && left.y == right.y && left.z == right.z;
+  };
+  const auto finite_position = [](QVec3 position) {
+    return std::isfinite(position.x) && std::isfinite(position.y) &&
+           std::isfinite(position.z);
+  };
+  for (const auto &triangle : frame.triangles) {
+    if (triangle.layer != ViewportOverlayLayer::SourceWireDepthStamp ||
+        (triangle.source != ViewportOverlaySource::ComponentSelection &&
+         triangle.source != ViewportOverlaySource::Selection)) continue;
+    const auto &element = triangle.element;
+    const std::array ids{element.vertex_id, element.edge_a, element.edge_b};
+    if (element.object_id < 0 || element.face_id < 0 ||
+        std::any_of(ids.begin(), ids.end(), [](int id) { return id < 0; }) ||
+        ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2]) continue;
+    const std::array positions{triangle.a, triangle.b, triangle.c};
+    for (std::size_t edge = 0u; edge < 3u; ++edge) {
+      const auto next = (edge + 1u) % 3u;
+      const auto opposite = (edge + 2u) % 3u;
+      const bool ordered = ids[edge] < ids[next];
+      const EdgeKey key{element.object_id, std::min(ids[edge], ids[next]),
+                        std::max(ids[edge], ids[next])};
+      const auto first = positions[ordered ? edge : next];
+      const auto second = positions[ordered ? next : edge];
+      const auto [entry, inserted] = supports_.try_emplace(key);
+      auto &support = entry->second;
+      if (inserted) {
+        support.first = first;
+        support.second = second;
+      }
+      if (!finite_position(first) || !finite_position(second) ||
+          !finite_position(positions[opposite]) ||
+          !same_position(support.first, first) ||
+          !same_position(support.second, second)) {
+        support.ambiguous = true;
+      }
+      if (support.ambiguous ||
+          std::find(support.faces.begin(), support.faces.end(), element.face_id) !=
+              support.faces.end()) continue;
+      if (support.count == support.points.size()) {
+        support.ambiguous = true;
+        continue;
+      }
+      support.faces[support.count] = element.face_id;
+      support.points[support.count++] = {positions[opposite], ids[opposite]};
+    }
+  }
+  signature_ = signature;
+  prepared_ = true;
+  ++build_count_;
+}
+
+void OverlayWireSurfaceSupportCache::apply(ViewportOverlayLine &line) const {
+  if (!line_uses_edit_wire_batch(line) ||
+      line.surface_support[0].vertex_id >= 0 || line.surface_support[1].vertex_id >= 0)
+    return;
+  const auto &element = line.element;
+  if (element.object_id < 0 || element.edge_a < 0 || element.edge_b < 0 ||
+      element.edge_a == element.edge_b) return;
+  const auto found = supports_.find({element.object_id,
+      std::min(element.edge_a, element.edge_b), std::max(element.edge_a, element.edge_b)});
+  if (found == supports_.end() || found->second.ambiguous) return;
+  const auto &support = found->second;
+  const bool ordered = element.edge_a < element.edge_b;
+  const auto first = ordered ? line.start : line.end;
+  const auto second = ordered ? line.end : line.start;
+  if (first.x != support.first.x || first.y != support.first.y ||
+      first.z != support.first.z || second.x != support.second.x ||
+      second.y != support.second.y || second.z != support.second.z) return;
+  line.surface_support = support.points;
+}
 
 /**
  * Resolves editable point visibility against source-wire depth metadata.
@@ -615,6 +706,11 @@ std::uint64_t OverlayRenderableBuilder::layer_build_signature(
     bool retain_point_geometry) {
   RenderSignatureBuilder signature;
   signature.add_value(layer_signature(signatures, layer));
+  if (edit_wire_layer(layer)) {
+    // Incident face motion changes wire depth even when its endpoints stay put.
+    signature.add_value(layer_signature(
+        signatures, ViewportOverlayLayer::SourceWireDepthStamp));
+  }
   if (retain_point_geometry && overlay_layer_can_build_points(layer)) {
     // Camera/source-face visibility lives in a separate flag stream. Point
     // topology, centers, colors and source bindings follow only their owner.
@@ -671,7 +767,8 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     ViewportOverlayLayer layer, const OverlayFrameSignatures *signatures,
     std::uint16_t blend_order_bias,
     OverlayDepthStampPointVisibilityFilter *point_visibility,
-    bool allow_viewport_ray_skips, bool retain_point_geometry) {
+    bool allow_viewport_ray_skips, bool retain_point_geometry,
+    const OverlayWireSurfaceSupportCache *wire_surface_support) {
   QDR_PROFILE_FUNCTION();
   OverlayLayerBuildPlan plan;
   const ViewportOverlayCamera sanitized_camera =
@@ -765,6 +862,18 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     }
     if (!edit_wire_lines.empty()) {
       QDR_PROFILE_SCOPE("Overlay build edit wire batch");
+      OverlayWireSurfaceSupportCache local_support;
+      if (!wire_surface_support) {
+        local_support.prepare(frame, frame_signatures);
+        wire_surface_support = &local_support;
+      }
+      std::vector<ViewportOverlayLine> supported_lines;
+      supported_lines.reserve(edit_wire_lines.size());
+      for (auto &line : edit_wire_lines) {
+        supported_lines.push_back(*line);
+        wire_surface_support->apply(supported_lines.back());
+        line = &supported_lines.back();
+      }
       std::vector<float> edit_wire_widths;
       for (const ViewportOverlayLine *line : edit_wire_lines) {
         const float resolved_width = viewport_overlay_line_width_pixels(

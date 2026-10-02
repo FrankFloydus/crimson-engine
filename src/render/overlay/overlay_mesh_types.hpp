@@ -60,6 +60,10 @@ struct OverlayLineVertex {
     OverlayFloat4 start;
     OverlayFloat4 end;
     OverlayFloat4 control;
+    // One off-edge vertex per incident face lets the shader evaluate the
+    // surface depth across the expanded ribbon without camera-dependent CPU work.
+    OverlayFloat4 support0;
+    OverlayFloat4 support1;
     std::uint32_t color = 0;
 };
 
@@ -89,6 +93,8 @@ struct OverlayIconVertex {
 enum class OverlayPositionStream : std::uint8_t {
     Primary,
     Secondary,
+    Support0,
+    Support1,
 };
 
 /**

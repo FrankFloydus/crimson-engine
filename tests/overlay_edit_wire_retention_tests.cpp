@@ -30,10 +30,10 @@ TEST(OverlayEditWireRetentionTests, SubsetReorderAndReturnPreserveUnchangedEndpo
   std::vector lines{source_edge(1, 0, 1), source_edge(1, 1, 2), source_edge(2, 0, 1)};
   ASSERT_TRUE(retention.prepare(lines));
   EXPECT_TRUE(retention.requires_recreation());
-  ASSERT_EQ(retention.active_bindings().size(), 6u);
-  EXPECT_EQ(retention.active_bindings()[4].object_id, 2);
-  const auto second_slot = retention.active_bindings()[2].first_vertex;
-  const auto third_slot = retention.active_bindings()[4].first_vertex;
+  ASSERT_EQ(retention.active_bindings().size(), 12u);
+  EXPECT_EQ(retention.active_bindings()[8].object_id, 2);
+  const auto second_slot = retention.active_bindings()[4].first_vertex;
+  const auto third_slot = retention.active_bindings()[8].first_vertex;
 
   std::vector subset{lines[2], lines[1]};
   ASSERT_TRUE(retention.prepare(subset));
@@ -52,8 +52,8 @@ TEST(OverlayEditWireRetentionTests, SubsetReorderAndReturnPreserveUnchangedEndpo
   ASSERT_TRUE(retention.prepare(lines));
   EXPECT_FALSE(retention.requires_recreation());
   ASSERT_EQ(retention.dirty_slots().size(), 1u);
-  EXPECT_EQ(retention.active_bindings()[2].first_vertex, second_slot);
-  EXPECT_EQ(retention.active_bindings()[4].first_vertex, third_slot);
+  EXPECT_EQ(retention.active_bindings()[4].first_vertex, second_slot);
+  EXPECT_EQ(retention.active_bindings()[8].first_vertex, third_slot);
 }
 
 TEST(OverlayEditWireRetentionTests, GeometryColorAndReversedOrientationRefreshExactBindings) {
@@ -65,7 +65,7 @@ TEST(OverlayEditWireRetentionTests, GeometryColorAndReversedOrientationRefreshEx
   EXPECT_FALSE(retention.requires_recreation());
   EXPECT_FALSE(retention.indices_changed());
   ASSERT_EQ(retention.dirty_slots().size(), 1u);
-  EXPECT_EQ(retention.active_bindings()[2].base_position.x, lines[1].start.x);
+  EXPECT_EQ(retention.active_bindings()[4].base_position.x, lines[1].start.x);
   lines[0].color = 0xff123456u;
   ASSERT_TRUE(retention.prepare(lines));
   ASSERT_EQ(retention.dirty_slots().size(), 1u);
@@ -238,6 +238,117 @@ TEST(OverlayEditWireRetentionTests, FactoryRejectsMalformedIndicesAndBindingsBef
   EXPECT_FALSE(OverlayProxyFactory::prepare_retained_edit_wire_update(
       nullptr, retention.edge_slots(), duplicate_dirty, retention.active_indices(),
       retention.active_bindings(), true));
+}
+
+TEST(OverlayEditWireRetentionTests, SupportOnlyUpdatesRetainSlotsAndRefreshPreviewBindings) {
+  OverlayEditWireRetention retention;
+  std::vector lines{source_edge(1, 0, 1), source_edge(1, 1, 2)};
+  lines[1].surface_support = {ViewportOverlaySurfaceSupport{{3.0f, 4.0f, 5.0f}, 7},
+                             ViewportOverlaySurfaceSupport{{6.0f, 7.0f, 8.0f}, 8}};
+  ASSERT_TRUE(retention.prepare(lines));
+  const auto *slots = retention.edge_slots().data();
+  const auto *bindings = retention.active_bindings().data();
+  EXPECT_EQ(bindings[2].vertex_id, lines[0].element.edge_a);
+  EXPECT_EQ(bindings[2].base_position.x, lines[0].start.x);
+  EXPECT_EQ(bindings[3].vertex_id, lines[0].element.edge_a);
+  EXPECT_EQ(bindings[6].stream, OverlayPositionStream::Support0);
+  EXPECT_EQ(bindings[6].vertex_id, 7);
+  EXPECT_EQ(bindings[7].vertex_id, 8);
+  lines[1].surface_support[0].position.z += 9.0f;
+  lines[1].surface_support[1] = {};
+  ASSERT_TRUE(retention.prepare(lines));
+  EXPECT_EQ(retention.edge_slots().data(), slots);
+  EXPECT_EQ(retention.active_bindings().data(), bindings);
+  EXPECT_FALSE(retention.indices_changed());
+  EXPECT_FALSE(retention.requires_recreation());
+  ASSERT_EQ(retention.dirty_slots().size(), 1u);
+  EXPECT_EQ(bindings[6].base_position.z, lines[1].surface_support[0].position.z);
+  EXPECT_EQ(bindings[7].vertex_id, lines[1].element.edge_a);
+  EXPECT_EQ(bindings[7].base_position.y, lines[1].start.y);
+  ASSERT_TRUE(retention.prepare(lines));
+  EXPECT_TRUE(retention.dirty_slots().empty());
+}
+
+ViewportOverlayTriangle source_surface(const ViewportOverlayLine &line,
+                                       int face_id, int opposite_id, QVec3 opposite) {
+  return {.layer = ViewportOverlayLayer::SourceWireDepthStamp,
+          .a = line.start, .b = line.end, .c = opposite,
+          .source = ViewportOverlaySource::ComponentSelection,
+          .element = {.object_id = line.element.object_id, .vertex_id = line.element.edge_a,
+                      .edge_a = line.element.edge_b, .edge_b = opposite_id, .face_id = face_id}};
+}
+
+TEST(OverlayEditWireRetentionTests, IncidentSurfacesFollowSourceStampWithoutCameraRebuilds) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back(source_edge(1, 0, 1));
+  frame.triangles.push_back(source_surface(frame.lines[0], 10, 2, {0.0f, 2.0f, 3.0f}));
+  frame.triangles.push_back(source_surface(frame.lines[0], 11, 3, {0.0f, -2.0f, 4.0f}));
+  // A triangulated face contributes one plane per incident authored edge.
+  frame.triangles.push_back(source_surface(frame.lines[0], 10, 4, {0.0f, 3.0f, 4.5f}));
+  OverlayWireSurfaceSupportCache support;
+  auto signatures = OverlayRenderableBuilder::frame_signatures(frame);
+  support.prepare(frame, signatures);
+  auto line = frame.lines[0];
+  support.apply(line);
+  EXPECT_EQ(line.surface_support[0].vertex_id, 2);
+  EXPECT_EQ(line.surface_support[1].vertex_id, 3);
+  EXPECT_EQ(line.surface_support[1].position.z, 4.0f);
+  support.prepare(frame, signatures);
+  EXPECT_EQ(support.build_count(), 1u);
+  frame.lines[0].color = 0xff123456u;
+  support.prepare(frame, OverlayRenderableBuilder::frame_signatures(frame));
+  EXPECT_EQ(support.build_count(), 1u);
+
+  ViewportOverlayCamera camera;
+  const auto previous_build = OverlayRenderableBuilder::layer_build_signature(
+      frame, camera, ViewportOverlayLayer::SourceWire);
+  frame.triangles[1].c.z += 2.0f;
+  signatures = OverlayRenderableBuilder::frame_signatures(frame);
+  EXPECT_NE(previous_build, OverlayRenderableBuilder::layer_build_signature(
+      signatures, camera, ViewportOverlayLayer::SourceWire));
+  support.prepare(frame, signatures);
+  EXPECT_EQ(support.build_count(), 2u);
+  line = frame.lines[0];
+  std::swap(line.start, line.end);
+  std::swap(line.element.edge_a, line.element.edge_b);
+  support.apply(line);
+  EXPECT_EQ(line.surface_support[0].vertex_id, 2);
+  EXPECT_EQ(line.surface_support[1].position.z, 6.0f);
+
+  const auto plan = OverlayRenderableBuilder::build_layer(
+      frame, camera, ViewportOverlayLayer::SourceWire);
+  ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+  ASSERT_EQ(plan.edit_wire_batches[0].mesh.vertices.size(), 4u);
+  EXPECT_EQ(plan.edit_wire_batches[0].mesh.vertices[0].support0.z, 3.0f);
+  EXPECT_EQ(plan.edit_wire_batches[0].mesh.vertices[0].support1.z, 6.0f);
+}
+
+TEST(OverlayEditWireRetentionTests, AmbiguousSurfaceOccurrencesAndNonmanifoldEdgesFallBack) {
+  const auto line = source_edge(1, 0, 1);
+  ViewportOverlayFrame frame;
+  frame.lines.push_back(line);
+  frame.triangles.push_back(source_surface(line, 10, 2, {0.0f, 2.0f, 3.0f}));
+  OverlayWireSurfaceSupportCache support;
+  support.prepare(frame, OverlayRenderableBuilder::frame_signatures(frame));
+  auto displaced = line;
+  displaced.start.x += 10.0f;
+  displaced.end.x += 10.0f;
+  support.apply(displaced);
+  EXPECT_EQ(displaced.surface_support[0].vertex_id, -1);
+  frame.triangles.push_back(source_surface(displaced, 11, 3, {10.0f, 2.0f, 3.0f}));
+  support.prepare(frame, OverlayRenderableBuilder::frame_signatures(frame));
+  auto ambiguous = line;
+  support.apply(ambiguous);
+  EXPECT_EQ(ambiguous.surface_support[0].vertex_id, -1);
+
+  frame.triangles.resize(1u);
+  frame.triangles.push_back(source_surface(line, 11, 3, {0.0f, -2.0f, 3.0f}));
+  frame.triangles.push_back(source_surface(line, 12, 4, {0.0f, 3.0f, 4.0f}));
+  support.prepare(frame, OverlayRenderableBuilder::frame_signatures(frame));
+  ambiguous = line;
+  support.apply(ambiguous);
+  EXPECT_EQ(ambiguous.surface_support[0].vertex_id, -1);
+  EXPECT_EQ(ambiguous.surface_support[1].vertex_id, -1);
 }
 
 } // namespace

@@ -8077,6 +8077,45 @@ TEST(OverlayPointMeshBuilderTests, BuildsPointLightIconBillboardBatch) {
         ViewportOverlayLayer::PointLightGizmo));
 }
 
+TEST(OverlayRenderableBuilderTests, ExplicitWireSurfaceSupportsParticipateInSignaturesAndBindings) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedEdge,
+      .start = {-0.5f, 0.0f, -1.0f}, .end = {0.5f, 0.0f, -1.0f},
+      .color = rgba8(79, 219, 235), .width_pixels = 1.5f,
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 9, .edge_a = 10, .edge_b = 11},
+      .surface_support = {ViewportOverlaySurfaceSupport{{0.0f, 1.0f, -2.0f}, 12},
+                          ViewportOverlaySurfaceSupport{{0.0f, -1.0f, -3.0f}, 13}}});
+  const auto camera = test_overlay_camera();
+  const auto signatures = OverlayRenderableBuilder::frame_signatures(frame);
+  const auto plan = OverlayRenderableBuilder::build_layer(
+      frame, camera, ViewportOverlayLayer::SelectedEdge);
+  ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+  const auto &mesh = plan.edit_wire_batches[0].mesh;
+  ASSERT_EQ(mesh.vertices.size(), 4u);
+  EXPECT_FLOAT_EQ(mesh.vertices[0].support0.z, -2.0f);
+  EXPECT_FLOAT_EQ(mesh.vertices[0].support1.z, -3.0f);
+  ASSERT_EQ(mesh.position_stream_bindings.size(), 4u);
+  EXPECT_EQ(mesh.position_stream_bindings[2].vertex_id, 12);
+  EXPECT_EQ(mesh.position_stream_bindings[2].stream, OverlayPositionStream::Support0);
+  EXPECT_EQ(mesh.position_stream_bindings[3].vertex_id, 13);
+  EXPECT_EQ(mesh.position_stream_bindings[3].stream, OverlayPositionStream::Support1);
+  const auto build_signature = OverlayRenderableBuilder::layer_build_signature(
+      signatures, camera, ViewportOverlayLayer::SelectedEdge);
+  auto moved_camera = camera;
+  moved_camera.eye.x += 10.0f;
+  EXPECT_EQ(build_signature, OverlayRenderableBuilder::layer_build_signature(
+      signatures, moved_camera, ViewportOverlayLayer::SelectedEdge));
+
+  frame.lines[0].surface_support[0].position.z -= 2.0f;
+  auto changed = OverlayRenderableBuilder::frame_signatures(frame);
+  EXPECT_NE(signatures.frame_signature, changed.frame_signature);
+  EXPECT_NE(build_signature, OverlayRenderableBuilder::layer_build_signature(
+      changed, camera, ViewportOverlayLayer::SelectedEdge));
+  frame.lines[0].surface_support[0].vertex_id = 14;
+  EXPECT_NE(changed.frame_signature, OverlayRenderableBuilder::frame_signature(frame));
+}
+
 TEST(OverlayRenderableBuilderTests, SanitizesCameraBeforeSigning) {
   ViewportOverlayCamera camera = test_overlay_camera();
   camera.viewport_size = {0.0f, -3.0f};
@@ -8160,12 +8199,12 @@ TEST(OverlayProxyFactoryTests, CountsOnlyNonEmptyRenderableBatches) {
             {
                 .vertices =
                     {
-                        {{0.0f, 0.0f, 0.0f, 1.0f}, {}, {}, {},
-                         rgba8(255, 255, 255, 255)},
-                        {{1.0f, 0.0f, 0.0f, 1.0f}, {}, {}, {},
-                         rgba8(255, 255, 255, 255)},
-                        {{1.0f, 1.0f, 0.0f, 1.0f}, {}, {}, {},
-                         rgba8(255, 255, 255, 255)},
+                        {.position = {0.0f, 0.0f, 0.0f, 1.0f},
+                         .color = rgba8(255, 255, 255, 255)},
+                        {.position = {1.0f, 0.0f, 0.0f, 1.0f},
+                         .color = rgba8(255, 255, 255, 255)},
+                        {.position = {1.0f, 1.0f, 0.0f, 1.0f},
+                         .color = rgba8(255, 255, 255, 255)},
                     },
                 .indices = {0u, 1u, 2u},
             },

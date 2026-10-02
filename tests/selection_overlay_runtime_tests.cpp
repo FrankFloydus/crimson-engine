@@ -343,6 +343,108 @@ public:
     return true;
   }
 
+  bool create_diagonal_inside_corner_sample(
+      ViewportOverlayFrame &frame, ViewportProjection projection, float phase,
+      const QuaderTransform3 *support_transform = nullptr) {
+    const QVec2 start_pixel{160.0f + phase, 100.0f};
+    const QVec2 end_pixel{450.0f + phase, 350.0f};
+    const float length = std::hypot(end_pixel.x - start_pixel.x, end_pixel.y - start_pixel.y);
+    const QVec2 normal{-(end_pixel.y - start_pixel.y) / length,
+                       (end_pixel.x - start_pixel.x) / length};
+    const auto incident_corner = [&](QVec2 pixel, float z, float side) {
+      pixel.x += normal.x * 80.0f * side;
+      pixel.y += normal.y * 80.0f * side;
+      // An affine reciprocal-depth plane is planar after perspective
+      // projection. Both faces approach the camera away from the crease.
+      const float outer_z = projection == ViewportProjection::Perspective
+          ? 5.0f - 1.0f / (1.0f / (5.0f - z) + 0.04f) : z + 4.0f;
+      return overlay_audit_world_point(pixel, outer_z);
+    };
+    std::array points{
+        overlay_audit_world_point(start_pixel, 0.0f),
+        overlay_audit_world_point(end_pixel, -20.0f),
+        incident_corner(end_pixel, -20.0f, 1.0f),
+        incident_corner(start_pixel, 0.0f, 1.0f),
+        incident_corner(start_pixel, 0.0f, -1.0f),
+        incident_corner(end_pixel, -20.0f, -1.0f)};
+    if (support_transform != nullptr) {
+      for (std::size_t index = 2u; index < points.size(); ++index) {
+        const QVec3 offset = points[index] - points[0];
+        points[index] = points[0] + support_transform->x_axis * offset.x +
+            support_transform->y_axis * offset.y + support_transform->z_axis * offset.z;
+      }
+    }
+    QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    quader_poly::Document document;
+    std::array<quader_poly::ElementId, 6u> vertices;
+    for (std::size_t index = 0u; index < points.size(); ++index) {
+      vertices[index] = quader_poly::add_vertex(document, points[index]);
+    }
+    const std::array faces{
+        quader_poly::add_face(document, std::array{vertices[0], vertices[1], vertices[2], vertices[3]}),
+        quader_poly::add_face(document, std::array{vertices[0], vertices[4], vertices[5], vertices[1]})};
+    const auto object = api.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Diagonal inward corner wire regression"});
+    const auto material = api.assets().add_material(QuaderMaterialAsset{
+        .name = "Diagonal inward corner neutral gray",
+        .base_color = {0.18f, 0.18f, 0.18f}, .roughness = 1.0f});
+    if (!object.ok() || !material.ok() ||
+        !api.assets().assign_material_to_entity(object.value().entity, material.value().id).ok()) return false;
+    inside_corner_object_ = object.value();
+    for (std::size_t index = 0u; index < inside_corner_support_vertices_.size(); ++index) {
+      inside_corner_support_vertices_[index] = static_cast<QuaderElementId>(vertices[index + 2u]);
+    }
+    bridge_.sync(session_.scene(), session_.assets());
+    frame.lines = {{
+        .layer = ViewportOverlayLayer::SourceWire, .start = points[0], .end = points[1],
+        .color = rgba8(40, 225, 255), .width_pixels = kOverlaySourceWireLineWidthPixels,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::ComponentSelection,
+        .element = {.object_id = object.value().modeling_object_id,
+                    .edge_a = static_cast<int>(vertices[0]), .edge_b = static_cast<int>(vertices[1])}}};
+    const std::array<std::array<std::size_t, 3u>, 4u> triangles{{
+        {0u, 1u, 2u}, {0u, 2u, 3u}, {0u, 4u, 5u}, {0u, 5u, 1u}}};
+    for (std::size_t index = 0u; index < triangles.size(); ++index) {
+      const auto &triangle = triangles[index];
+      frame.triangles.push_back({
+          .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+          .a = points[triangle[0]], .b = points[triangle[1]], .c = points[triangle[2]],
+          .source = ViewportOverlaySource::ComponentSelection,
+          .element = {.object_id = object.value().modeling_object_id,
+                      .vertex_id = static_cast<int>(vertices[triangle[0]]),
+                      .edge_a = static_cast<int>(vertices[triangle[1]]),
+                      .edge_b = static_cast<int>(vertices[triangle[2]]),
+                      .face_id = static_cast<int>(faces[index / 2u])}});
+    }
+    return true;
+  }
+
+  bool begin_inside_corner_support_preview() {
+    auto &editor = array_editor();
+    return editor.selection().set_mode(QuaderSelectionMode::Vertex).ok() &&
+        editor.selection().select_vertices(inside_corner_object_,
+            {inside_corner_support_vertices_[0], inside_corner_support_vertices_[1],
+             inside_corner_support_vertices_[2], inside_corner_support_vertices_[3]}).ok() &&
+        editor.modeling().begin_transform_preview().ok();
+  }
+
+  bool sync_inside_corner_support_preview() {
+    auto &editor = array_editor();
+    return QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok() &&
+        QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(), bridge_).ok();
+  }
+
+  bool update_inside_corner_support_preview(const QuaderTransform3 &transform, QVec3 pivot) {
+    return array_editor().modeling().update_transform_matrix(transform, pivot).ok() &&
+        sync_inside_corner_support_preview();
+  }
+
+  bool cancel_inside_corner_support_preview() {
+    return array_editor().modeling().cancel_transform_preview().ok() &&
+        sync_inside_corner_support_preview();
+  }
+
   void set_overlay_audit_frame(ViewportOverlayFrame frame) {
     overlay_audit_frame_.frame = std::move(frame);
     ++revision_;
@@ -1359,6 +1461,8 @@ private:
   ViewportRenderSurface surface_ = ViewportRenderSurface::Swapchain;
   QuaderModelingObjectRef face_fill_object_;
   QuaderModelingObjectRef tool_topology_object_;
+  QuaderModelingObjectRef inside_corner_object_;
+  std::array<QuaderElementId, 4u> inside_corner_support_vertices_{};
   ViewportToolId tool_topology_tool_ = ViewportToolId::Select;
   std::array<EntityId, 2> active_entities_{};
   QVec3 array_probe_world_;
@@ -2334,6 +2438,325 @@ TEST(SelectionOverlayRuntimeTests,
         }
       }
     }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanDiagonalInsideCornerWireKeepsContinuousCoverage) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-diagonal-inside-corner-wire-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    for (const float phase : {0.0f, 0.25f, 0.5f, 0.75f}) {
+      SCOPED_TRACE(static_cast<int>(projection));
+      SCOPED_TRACE(phase);
+      SelectionOverlayRuntimeHarness harness;
+      ASSERT_TRUE(harness.initialize(0.0f, false));
+      ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+      ViewportOverlayFrame source;
+      ASSERT_TRUE(harness.create_diagonal_inside_corner_sample(source, projection, phase));
+      auto reference_frame = source;
+      reference_frame.lines.front().layer = ViewportOverlayLayer::ToolHandle;
+      reference_frame.lines.front().source = ViewportOverlaySource::Tool;
+      reference_frame.lines.front().element = {};
+      harness.set_overlay_audit_frame({});
+      harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+      const auto background = harness.capture();
+      ASSERT_FALSE(background.isNull());
+      ASSERT_NE(background.pixelColor(250, 170), background.pixelColor(600, 50));
+
+      const auto expect_coverage = [&](const QImage &actual, const QImage &reference,
+                                       const QImage &backdrop, float scale, const char *label) {
+        ASSERT_FALSE(actual.isNull());
+        ASSERT_FALSE(reference.isNull());
+        ASSERT_FALSE(backdrop.isNull());
+        const auto start = harness.overlay_audit_image_point(source.lines.front().start);
+        const auto end = harness.overlay_audit_image_point(source.lines.front().end);
+        const float length = std::hypot(end.x - start.x, end.y - start.y);
+        const QVec2 direction{(end.x - start.x) / length, (end.y - start.y) / length};
+        std::vector<double> expected_bins(static_cast<std::size_t>(std::ceil(length)), 0.0);
+        std::vector<double> actual_bins(expected_bins.size(), 0.0);
+        double expected_signal = 0.0;
+        double actual_signal = 0.0;
+        int expected_pixels = 0;
+        int missing_pixels = 0;
+        int partial_pixels = 0;
+        int missing_partial_pixels = 0;
+        int max_color_error = 0;
+        for (int y = 0; y < reference.height(); ++y) {
+          for (int x = 0; x < reference.width(); ++x) {
+            const float px = x + 0.5f - start.x;
+            const float py = y + 0.5f - start.y;
+            const float along = px * direction.x + py * direction.y;
+            const float across = -px * direction.y + py * direction.x;
+            if (along < 8.0f || along > length - 8.0f || std::abs(across) > 3.0f * scale) continue;
+            const auto base = backdrop.pixelColor(x, y);
+            const auto expected = reference.pixelColor(x, y);
+            const auto observed = actual.pixelColor(x, y);
+            const int reference_delta = std::max({std::abs(expected.red() - base.red()),
+                std::abs(expected.green() - base.green()), std::abs(expected.blue() - base.blue())});
+            if (reference_delta < 4) continue;
+            const int actual_delta = std::max({std::abs(observed.red() - base.red()),
+                std::abs(observed.green() - base.green()), std::abs(observed.blue() - base.blue())});
+            const auto bin = static_cast<std::size_t>(along);
+            expected_bins[bin] += reference_delta;
+            actual_bins[bin] += actual_delta;
+            expected_signal += reference_delta;
+            actual_signal += actual_delta;
+            ++expected_pixels;
+            const bool missing = actual_delta * 2 < reference_delta;
+            missing_pixels += missing ? 1 : 0;
+            // Partially blended pixels exercise the analytic feather as well
+            // as the opaque core. Losing just the fringe still fails coverage.
+            if (reference_delta < 100) {
+              ++partial_pixels;
+              missing_partial_pixels += missing ? 1 : 0;
+            }
+            max_color_error = std::max({max_color_error,
+                std::abs(expected.red() - observed.red()), std::abs(expected.green() - observed.green()),
+                std::abs(expected.blue() - observed.blue())});
+          }
+        }
+        int gap = 0;
+        int longest_gap = 0;
+        for (std::size_t bin = 0u; bin < expected_bins.size(); ++bin) {
+          gap = expected_bins[bin] > 4.0 && actual_bins[bin] * 2.0 < expected_bins[bin] ? gap + 1 : 0;
+          longest_gap = std::max(longest_gap, gap);
+        }
+        const double ratio = actual_signal / std::max(1.0, expected_signal);
+        std::cout << "DIAGONAL_SOURCE_WIRE projection=" << static_cast<int>(projection)
+                  << " phase=" << phase << " scale=" << scale << " sample=" << label
+                  << " pixels=" << expected_pixels << " missing_pixels=" << missing_pixels
+                  << " partial_pixels=" << partial_pixels << " missing_partial_pixels=" << missing_partial_pixels
+                  << " signal_ratio=" << ratio << " longest_gap=" << longest_gap
+                  << " max_color_error=" << max_color_error << std::endl;
+        EXPECT_GT(expected_pixels, 300);
+        EXPECT_GT(partial_pixels, 50);
+        EXPECT_EQ(missing_pixels, 0) << "The inward surfaces must not erase the diagonal stroke.";
+        EXPECT_EQ(missing_partial_pixels, 0) << "The complete antialias feather must survive scene depth.";
+        EXPECT_GE(ratio, 0.97);
+        EXPECT_LE(ratio, 1.03);
+        EXPECT_EQ(longest_gap, 0) << "Interior stroke coverage must not become a dashed line.";
+        EXPECT_LE(max_color_error, 3);
+      };
+      const auto expect_uploads_retained = [&](const OverlayProxyUploadStats &before) {
+        const auto after = harness.component_overlay_stats().uploads;
+        EXPECT_EQ(after.geometry_creation_count, before.geometry_creation_count);
+        EXPECT_EQ(after.position_upload_count, before.position_upload_count);
+        EXPECT_EQ(after.index_upload_count, before.index_upload_count);
+        EXPECT_EQ(after.static_upload_count, before.static_upload_count);
+      };
+      QImage initial;
+      for (const float scale : {1.0f, 2.0f, 1.0f}) {
+        SCOPED_TRACE(scale);
+        harness.set_overlay_audit_frame(reference_frame);
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        const auto reference = harness.capture(false);
+        harness.set_overlay_audit_frame(source);
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        const auto image = harness.capture(false);
+        expect_coverage(image, reference, background, scale, "stationary");
+        if (scale == 1.0f) {
+          if (initial.isNull()) initial = image;
+          else EXPECT_EQ(image, initial);
+        }
+        const auto uploads = harness.component_overlay_stats().uploads;
+        harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        expect_uploads_retained(uploads);
+        EXPECT_EQ(harness.capture(false), image);
+        const auto output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+        if (!output.isEmpty()) {
+          ASSERT_TRUE(QDir().mkpath(output));
+          const auto stem = QStringLiteral("diagonal-inside-corner-%1-%2-%3")
+              .arg(static_cast<int>(projection)).arg(int(phase * 100)).arg(int(scale * 100));
+          ASSERT_TRUE(image.save(QDir(output).filePath(stem + QStringLiteral(".png"))));
+          ASSERT_TRUE(reference.save(QDir(output).filePath(stem + QStringLiteral("-reference.png"))));
+        }
+      }
+
+      const auto uploads = harness.component_overlay_stats().uploads;
+      ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.2f, projection));
+      harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      expect_uploads_retained(uploads);
+      const auto moved = harness.capture(false);
+      harness.set_overlay_audit_frame({});
+      harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+      const auto moved_background = harness.capture(false);
+      harness.set_overlay_audit_frame(reference_frame);
+      harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+      const auto moved_reference = harness.capture(false);
+      expect_coverage(moved, moved_reference, moved_background, 1.0f, "camera");
+      ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+
+      std::array<MeshVertex, 4u> occluder;
+      const std::array<QVec2, 4u> occluder_pixels{{
+          {300.0f, 190.0f}, {340.0f, 190.0f}, {340.0f, 290.0f}, {300.0f, 290.0f}}};
+      for (std::size_t index = 0u; index < occluder.size(); ++index) {
+        occluder[index].position = harness.overlay_audit_world_point(occluder_pixels[index], 2.0f);
+      }
+      ASSERT_TRUE(harness.create_outline_depth_quad(occluder));
+      harness.set_overlay_audit_frame({});
+      harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+      const auto occluded_background = harness.capture(false);
+      harness.set_overlay_audit_frame(source);
+      harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+      const auto occluded = harness.capture(false);
+      ASSERT_FALSE(occluded_background.isNull());
+      ASSERT_FALSE(occluded.isNull());
+      EXPECT_EQ(occluded.copy({305, 195, 30, 90}), occluded_background.copy({305, 195, 30, 90}))
+          << "A real foreground surface must still occlude the continuous wire.";
+      const auto output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+      if (!output.isEmpty()) {
+        ASSERT_TRUE(occluded.save(QDir(output).filePath(
+            QStringLiteral("diagonal-inside-corner-%1-%2-occluded.png")
+                .arg(static_cast<int>(projection)).arg(int(phase * 100)))));
+      }
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanInsideCornerSupportOnlyPreviewMatchesRebuiltGeometryAndCancel) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-inside-corner-support-preview-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const auto output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) ASSERT_TRUE(QDir().mkpath(output));
+  for (const float scale : {1.0f, 2.0f}) {
+    SCOPED_TRACE(scale);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, ViewportProjection::Perspective));
+    ViewportOverlayFrame source;
+    ASSERT_TRUE(harness.create_diagonal_inside_corner_sample(
+        source, ViewportProjection::Perspective, 0.25f));
+    const QVec3 pivot = source.lines.front().start;
+    const QVec3 axis = normalize(source.lines.front().end - pivot);
+    // Both endpoints lie on this axis. Rotating only the four outer vertices
+    // changes both incident depth planes while leaving the cyan edge fixed.
+    const auto rotation = [&](float angle) {
+      const float cosine = std::cos(angle);
+      const float sine = std::sin(angle);
+      const auto rotate = [&](QVec3 vector) {
+        return vector * cosine + cross(axis, vector) * sine +
+            axis * (dot(axis, vector) * (1.0f - cosine));
+      };
+      return QuaderTransform3{.x_axis = rotate({1.0f, 0.0f, 0.0f}),
+          .y_axis = rotate({0.0f, 1.0f, 0.0f}), .z_axis = rotate({0.0f, 0.0f, 1.0f})};
+    };
+    const auto add_occluder = [](SelectionOverlayRuntimeHarness &target) {
+      std::array<MeshVertex, 4u> vertices;
+      const std::array<QVec2, 4u> pixels{{
+          {300.0f, 190.0f}, {340.0f, 190.0f}, {340.0f, 290.0f}, {300.0f, 290.0f}}};
+      for (std::size_t index = 0u; index < vertices.size(); ++index) {
+        vertices[index].position = target.overlay_audit_world_point(pixels[index], 2.0f);
+      }
+      return target.create_outline_depth_quad(vertices);
+    };
+    ASSERT_TRUE(add_occluder(harness));
+    harness.set_overlay_audit_frame(source);
+    harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+    const auto baseline = harness.capture();
+    ASSERT_FALSE(baseline.isNull());
+    ASSERT_TRUE(harness.begin_inside_corner_support_preview());
+    OverlayProxyUploadStats previous_uploads;
+    bool have_previous_uploads = false;
+    for (const float angle : {0.15f, 0.35f}) {
+      SCOPED_TRACE(angle);
+      const auto transform = rotation(angle);
+      ASSERT_TRUE(harness.update_inside_corner_support_preview(transform, pivot));
+      harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+      const auto stats = harness.component_overlay_stats();
+      EXPECT_GT(stats.shared_position_proxy_count, 0u);
+      if (have_previous_uploads) {
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_EQ(stats.uploads.geometry_creation_count, previous_uploads.geometry_creation_count);
+        EXPECT_EQ(stats.uploads.position_upload_count, previous_uploads.position_upload_count);
+        EXPECT_EQ(stats.uploads.shared_position_upload_count, previous_uploads.shared_position_upload_count + 1u);
+        EXPECT_EQ(stats.uploads.shared_position_binding_upload_count, previous_uploads.shared_position_binding_upload_count);
+        EXPECT_EQ(stats.uploads.static_upload_count, previous_uploads.static_upload_count);
+        EXPECT_EQ(stats.uploads.index_upload_count, previous_uploads.index_upload_count);
+      }
+      const auto preview = harness.capture(false);
+      ASSERT_FALSE(preview.isNull());
+      EXPECT_NE(preview, baseline) << "The public preview must actually move the incident surfaces.";
+      SelectionOverlayRuntimeHarness rebuilt;
+      ASSERT_TRUE(rebuilt.initialize(0.0f, false));
+      ASSERT_TRUE(rebuilt.prepare_overlay_audit_camera(5.0f, ViewportProjection::Perspective));
+      ViewportOverlayFrame effective;
+      ASSERT_TRUE(rebuilt.create_diagonal_inside_corner_sample(
+          effective, ViewportProjection::Perspective, 0.25f, &transform));
+      ASSERT_TRUE(add_occluder(rebuilt));
+      rebuilt.set_overlay_audit_frame(effective);
+      rebuilt.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+      const auto reference = rebuilt.capture();
+      ASSERT_FALSE(reference.isNull());
+      const auto start = harness.overlay_audit_image_point(pivot);
+      const auto end = harness.overlay_audit_image_point(source.lines.front().end);
+      const float length = std::hypot(end.x - start.x, end.y - start.y);
+      const QVec2 direction{(end.x - start.x) / length, (end.y - start.y) / length};
+      int expected_pixels = 0;
+      int mismatched_pixels = 0;
+      int maximum_error = 0;
+      for (int y = 0; y < reference.height(); ++y) {
+        for (int x = 0; x < reference.width(); ++x) {
+          const float px = x + 0.5f - start.x;
+          const float py = y + 0.5f - start.y;
+          const float along = px * direction.x + py * direction.y;
+          const float across = -px * direction.y + py * direction.x;
+          if (along < 8.0f || along > length - 8.0f || std::abs(across) > 3.0f * scale) continue;
+          const auto expected = reference.pixelColor(x, y);
+          const auto actual = preview.pixelColor(x, y);
+          const int error = std::max({std::abs(expected.red() - actual.red()),
+              std::abs(expected.green() - actual.green()), std::abs(expected.blue() - actual.blue())});
+          expected_pixels += std::min(expected.green(), expected.blue()) > expected.red() + 4 ? 1 : 0;
+          mismatched_pixels += error > 3 ? 1 : 0;
+          maximum_error = std::max(maximum_error, error);
+        }
+      }
+      std::cout << "INSIDE_CORNER_SUPPORT_PREVIEW scale=" << scale << " angle=" << angle
+                << " expected_pixels=" << expected_pixels << " mismatched_pixels=" << mismatched_pixels
+                << " maximum_error=" << maximum_error << std::endl;
+      EXPECT_GT(expected_pixels, 300);
+      EXPECT_EQ(mismatched_pixels, 0)
+          << "Retained support positions must match rebuilt effective geometry across the complete stroke.";
+      EXPECT_LE(maximum_error, 3);
+      EXPECT_EQ(preview.copy({305, 195, 30, 90}), reference.copy({305, 195, 30, 90}))
+          << "The support-only preview must preserve true foreground occlusion.";
+      if (!output.isEmpty()) {
+        const auto stem = QStringLiteral("inside-corner-support-preview-%1-%2")
+            .arg(int(scale * 100)).arg(int(angle * 100));
+        ASSERT_TRUE(preview.save(QDir(output).filePath(stem + QStringLiteral(".png"))));
+        ASSERT_TRUE(reference.save(QDir(output).filePath(stem + QStringLiteral("-rebuilt.png"))));
+      }
+      ASSERT_TRUE(harness.sync_inside_corner_support_preview());
+      harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+                stats.uploads.shared_position_upload_count);
+      EXPECT_EQ(harness.capture(false), preview);
+      previous_uploads = stats.uploads;
+      have_previous_uploads = true;
+    }
+    ASSERT_TRUE(harness.cancel_inside_corner_support_preview());
+    harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Vertex);
+    EXPECT_EQ(harness.component_overlay_stats().shared_position_proxy_count, 0u);
+    EXPECT_EQ(harness.capture(false), baseline)
+        << "Cancel must restore the original support planes as well as the unchanged endpoints.";
   }
 }
 

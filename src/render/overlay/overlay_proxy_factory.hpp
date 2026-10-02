@@ -137,10 +137,14 @@ public:
     /// Indices cover each allocated vertex, including inactive retained slots.
     /// Unsupported materials and indices outside the uploaded stream reject
     /// without changing the proxy. CPU position arrays remain untouched.
+    /// Omitted support indices follow the primary endpoint, keeping unsupported
+    /// incident surfaces degenerate during the shared-position preview path.
     bool bind_shared_positions(
         OverlayRenderableProxy &proxy,
         std::span<const std::uint32_t> primary_indices,
-        std::span<const std::uint32_t> secondary_indices = {});
+        std::span<const std::uint32_t> secondary_indices = {},
+        std::span<const std::uint32_t> support0_indices = {},
+        std::span<const std::uint32_t> support1_indices = {});
     /// Restores the proxy's retained CPU streams and ordinary material path.
     bool clear_shared_positions(OverlayRenderableProxy &proxy);
     /// Uploads only retained world-position attributes. Static quad topology,

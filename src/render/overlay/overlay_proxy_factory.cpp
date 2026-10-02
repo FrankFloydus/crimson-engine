@@ -438,9 +438,13 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
   } else if constexpr (std::is_same_v<Vertex, OverlayLineVertex>) {
     proxy.primary_position_stream4.reserve(mesh.vertices.size());
     proxy.secondary_position_stream4.reserve(mesh.vertices.size());
+    proxy.support0_position_stream4.reserve(mesh.vertices.size());
+    proxy.support1_position_stream4.reserve(mesh.vertices.size());
     for (const Vertex &vertex : mesh.vertices) {
       proxy.primary_position_stream4.push_back(vertex.start);
       proxy.secondary_position_stream4.push_back(vertex.end);
+      proxy.support0_position_stream4.push_back(vertex.support0);
+      proxy.support1_position_stream4.push_back(vertex.support1);
     }
   } else if constexpr (std::is_same_v<Vertex, OverlayPointVertex>) {
     proxy.primary_position_stream4.reserve(mesh.vertices.size());
@@ -467,7 +471,9 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
     buffer_count = 3u;
   } else if (!proxy.position_stream3.empty() ||
              !proxy.primary_position_stream4.empty()) {
-    buffer_count = proxy.secondary_position_stream4.empty() ? 2u : 3u;
+    buffer_count = proxy.support0_position_stream4.empty()
+                       ? (proxy.secondary_position_stream4.empty() ? 2u : 3u)
+                       : 5u;
   }
   vertex_builder.vertexCount(static_cast<std::uint32_t>(mesh.vertices.size()))
       .bufferCount(buffer_count);
@@ -492,6 +498,15 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
     proxy.vertex_buffer->setBufferAt(
         engine, 2, FilamentBufferDescriptorFactory::vector(
                        proxy.secondary_position_stream4));
+  }
+
+  if (!proxy.support0_position_stream4.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 3u, FilamentBufferDescriptorFactory::vector(
+                       proxy.support0_position_stream4));
+    proxy.vertex_buffer->setBufferAt(
+        engine, 4u, FilamentBufferDescriptorFactory::vector(
+                       proxy.support1_position_stream4));
   }
 
   proxy.index_buffer =
@@ -562,6 +577,8 @@ void refresh_proxy_position_streams(OverlayRenderableProxy &proxy,
   proxy.position_stream3.clear();
   proxy.primary_position_stream4.clear();
   proxy.secondary_position_stream4.clear();
+  proxy.support0_position_stream4.clear();
+  proxy.support1_position_stream4.clear();
   if constexpr (std::is_same_v<Vertex, OverlayFaceFillVertex>) {
     proxy.position_stream3.reserve(mesh.vertices.size());
     for (const Vertex &vertex : mesh.vertices) {
@@ -570,9 +587,13 @@ void refresh_proxy_position_streams(OverlayRenderableProxy &proxy,
   } else if constexpr (std::is_same_v<Vertex, OverlayLineVertex>) {
     proxy.primary_position_stream4.reserve(mesh.vertices.size());
     proxy.secondary_position_stream4.reserve(mesh.vertices.size());
+    proxy.support0_position_stream4.reserve(mesh.vertices.size());
+    proxy.support1_position_stream4.reserve(mesh.vertices.size());
     for (const Vertex &vertex : mesh.vertices) {
       proxy.primary_position_stream4.push_back(vertex.start);
       proxy.secondary_position_stream4.push_back(vertex.end);
+      proxy.support0_position_stream4.push_back(vertex.support0);
+      proxy.support1_position_stream4.push_back(vertex.support1);
     }
   } else if constexpr (std::is_same_v<Vertex, OverlayPointVertex>) {
     proxy.primary_position_stream4.reserve(mesh.vertices.size());
@@ -601,8 +622,22 @@ bool upload_proxy_position_streams(filament::Engine &engine,
         engine, 2, FilamentBufferDescriptorFactory::vector(
                        proxy.secondary_position_stream4));
   }
+  if (!proxy.support0_position_stream4.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 3u, FilamentBufferDescriptorFactory::vector(
+                       proxy.support0_position_stream4));
+    proxy.vertex_buffer->setBufferAt(
+        engine, 4u, FilamentBufferDescriptorFactory::vector(
+                       proxy.support1_position_stream4));
+  }
   return !proxy.position_stream3.empty() ||
          !proxy.primary_position_stream4.empty();
+}
+
+std::uint64_t position_stream_upload_count(const OverlayRenderableProxy &proxy) {
+  return 1u + (proxy.secondary_position_stream4.empty() ? 0u : 1u) +
+         (proxy.support0_position_stream4.empty() ? 0u : 1u) +
+         (proxy.support1_position_stream4.empty() ? 0u : 1u);
 }
 
 template <typename Vertex>
@@ -649,9 +684,13 @@ struct OverlayProxyFactory::RetainedEditWireUpdate final {
     std::uint32_t first_vertex = 0u;
     std::vector<OverlayFloat4> starts;
     std::vector<OverlayFloat4> ends;
+    std::vector<OverlayFloat4> support0;
+    std::vector<OverlayFloat4> support1;
     filament::backend::BufferDescriptor static_upload;
     filament::backend::BufferDescriptor start_upload;
     filament::backend::BufferDescriptor end_upload;
+    filament::backend::BufferDescriptor support0_upload;
+    filament::backend::BufferDescriptor support1_upload;
   };
   filament::VertexBuffer *expected_vertices = nullptr;
   filament::IndexBuffer *expected_indices = nullptr;
@@ -693,6 +732,8 @@ OverlayProxyFactory::prepare_retained_edit_wire_update(
        existing->material_instance == nullptr || existing->entity_id == 0u ||
        existing->primary_position_stream4.size() != vertex_count ||
        existing->secondary_position_stream4.size() != vertex_count ||
+       existing->support0_position_stream4.size() != vertex_count ||
+       existing->support1_position_stream4.size() != vertex_count ||
        (!indices_changed && existing->index_count != active_indices.size()))) {
     return {};
   }
@@ -717,28 +758,53 @@ OverlayProxyFactory::prepare_retained_edit_wire_update(
   const auto finite_position = [](QVec3 point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
   };
+  const auto finite_line = [&finite_position](const ViewportOverlayLine &line) {
+    if (!finite_position(line.start) || !finite_position(line.end)) return false;
+    for (const auto &support : line.surface_support) {
+      if (support.vertex_id >= 0 && !finite_position(support.position)) return false;
+    }
+    return true;
+  };
   if (existing == nullptr) {
     for (const auto &line : slots) {
-      if (!finite_position(line.start) || !finite_position(line.end)) return {};
+      if (!finite_line(line)) return {};
     }
   } else {
     for (const auto slot : dirty_slots) {
-      if (!finite_position(slots[slot].start) || !finite_position(slots[slot].end)) return {};
+      if (!finite_line(slots[slot])) return {};
     }
   }
   for (const auto &binding : active_bindings) {
     if (binding.object_id < 0 || binding.vertex_id < 0 ||
         binding.first_vertex % 4u != 0u || binding.first_vertex >= vertex_count ||
-        binding.vertex_count != 4u ||
-        (binding.stream != OverlayPositionStream::Primary &&
-         binding.stream != OverlayPositionStream::Secondary)) {
+        binding.vertex_count != 4u) {
       return {};
     }
     const auto &line = slots[binding.first_vertex / 4u];
-    const bool primary = binding.stream == OverlayPositionStream::Primary;
-    const auto position = primary ? line.start : line.end;
+    QVec3 position;
+    int vertex_id = -1;
+    switch (binding.stream) {
+      case OverlayPositionStream::Primary:
+        position = line.start;
+        vertex_id = line.element.edge_a;
+        break;
+      case OverlayPositionStream::Secondary:
+        position = line.end;
+        vertex_id = line.element.edge_b;
+        break;
+      case OverlayPositionStream::Support0:
+      case OverlayPositionStream::Support1: {
+        const auto index = binding.stream == OverlayPositionStream::Support0 ? 0u : 1u;
+        const auto &support = line.surface_support[index];
+        position = support.vertex_id >= 0 ? support.position : line.start;
+        vertex_id = support.vertex_id >= 0 ? support.vertex_id : line.element.edge_a;
+        break;
+      }
+      default:
+        return {};
+    }
     if (binding.object_id != line.element.object_id ||
-        binding.vertex_id != (primary ? line.element.edge_a : line.element.edge_b) ||
+        binding.vertex_id != vertex_id ||
         binding.base_position.x != position.x || binding.base_position.y != position.y ||
         binding.base_position.z != position.z || binding.base_position.w != 1.0f) {
       return {};
@@ -768,6 +834,8 @@ OverlayProxyFactory::prepare_retained_edit_wire_update(
     vertices.reserve(count);
     range.starts.reserve(count);
     range.ends.reserve(count);
+    range.support0.reserve(count);
+    range.support1.reserve(count);
     constexpr std::array<OverlayFloat4, 4u> kControls{{
         {-1.0f, -1.0f, 0.0f, 0.0f}, {-1.0f, 1.0f, 1.0f, 0.0f},
         {1.0f, 1.0f, 1.0f, 0.0f}, {1.0f, -1.0f, 0.0f, 0.0f}}};
@@ -789,11 +857,22 @@ OverlayProxyFactory::prepare_retained_edit_wire_update(
         range.ends.push_back(changed
             ? OverlayFloat4{line.end.x, line.end.y, line.end.z, 1.0f}
             : existing->secondary_position_stream4[vertex]);
+        const auto support_position = [&line](std::size_t index) {
+          const auto &support = line.surface_support[index];
+          const auto position = support.vertex_id >= 0 ? support.position : line.start;
+          return OverlayFloat4{position.x, position.y, position.z, 1.0f};
+        };
+        range.support0.push_back(changed ? support_position(0u)
+            : existing->support0_position_stream4[vertex]);
+        range.support1.push_back(changed ? support_position(1u)
+            : existing->support1_position_stream4[vertex]);
       }
     }
     range.static_upload = FilamentBufferDescriptorFactory::vector(std::move(vertices));
     range.start_upload = FilamentBufferDescriptorFactory::vector(range.starts);
     range.end_upload = FilamentBufferDescriptorFactory::vector(range.ends);
+    range.support0_upload = FilamentBufferDescriptorFactory::vector(range.support0);
+    range.support1_upload = FilamentBufferDescriptorFactory::vector(range.support1);
   };
   if (existing == nullptr) {
     append_range(0u, prepared->slot_capacity);
@@ -804,7 +883,7 @@ OverlayProxyFactory::prepare_retained_edit_wire_update(
       range_count += index == 0u || dirty_slots[index - 1u] + 1u != dirty_slots[index];
     }
     if (range_count > kMaximumPartialRanges) {
-      // Each range emits three backend commands. A committed deformation can
+      // Each range emits five backend commands. A committed deformation can
       // dirty tens of thousands of isolated edges; stage one bounded submission
       // instead of overflowing Filament's fixed command arena before beginFrame.
       prepared->consolidated = true;
@@ -848,7 +927,7 @@ OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
   if (proxy.material_instance == nullptr) return {};
   configure_edit_wire_material(*proxy.material_instance, presentation);
   proxy.vertex_buffer = filament::VertexBuffer::Builder()
-      .vertexCount(proxy.vertex_count).bufferCount(3u)
+      .vertexCount(proxy.vertex_count).bufferCount(5u)
       .attribute(filament::VertexAttribute::POSITION, 0u, AttributeType::FLOAT4,
                  offsetof(RetainedEditWireVertex, position), sizeof(RetainedEditWireVertex))
       .attribute(filament::VertexAttribute::CUSTOM0, 1u, AttributeType::FLOAT4,
@@ -857,6 +936,10 @@ OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
                  0u, sizeof(OverlayFloat4))
       .attribute(filament::VertexAttribute::CUSTOM2, 0u, AttributeType::FLOAT4,
                  offsetof(RetainedEditWireVertex, control), sizeof(RetainedEditWireVertex))
+      .attribute(filament::VertexAttribute::CUSTOM3, 3u, AttributeType::FLOAT4,
+                 0u, sizeof(OverlayFloat4))
+      .attribute(filament::VertexAttribute::CUSTOM4, 4u, AttributeType::FLOAT4,
+                 0u, sizeof(OverlayFloat4))
       .attribute(filament::VertexAttribute::COLOR, 0u, AttributeType::UBYTE4,
                  offsetof(RetainedEditWireVertex, color), sizeof(RetainedEditWireVertex))
       .normalized(filament::VertexAttribute::COLOR).build(*engine_);
@@ -869,6 +952,8 @@ OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
   proxy.vertex_buffer->setBufferAt(*engine_, 0u, std::move(range.static_upload));
   proxy.vertex_buffer->setBufferAt(*engine_, 1u, std::move(range.start_upload));
   proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(range.end_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 3u, std::move(range.support0_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 4u, std::move(range.support1_upload));
   proxy.index_buffer->setBuffer(*engine_, std::move(prepared->index_upload));
   prepared->consumed = true;
   const auto built = filament::RenderableManager::Builder(1u)
@@ -883,11 +968,13 @@ OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
   if (built != filament::RenderableManager::Builder::Success) return {};
   proxy.primary_position_stream4 = std::move(range.starts);
   proxy.secondary_position_stream4 = std::move(range.ends);
+  proxy.support0_position_stream4 = std::move(range.support0);
+  proxy.support1_position_stream4 = std::move(range.support1);
   proxy.position_stream_bindings = std::move(prepared->bindings);
   publish_overlay_proxy(*scene_, proxy, proxies, guard);
   ++upload_stats_.geometry_creation_count;
   ++upload_stats_.static_upload_count;
-  upload_stats_.position_upload_count += 2u;
+  upload_stats_.position_upload_count += 4u;
   ++upload_stats_.index_upload_count;
   upload_stats_.retained_edit_wire_uploaded_slot_count += proxy.edit_wire_slot_capacity;
   return std::move(proxies.front());
@@ -906,7 +993,9 @@ bool OverlayProxyFactory::update_retained_edit_wire_proxy(
       proxy.edit_wire_slot_capacity != prepared->slot_capacity ||
       proxy.material_instance == nullptr ||
       proxy.primary_position_stream4.size() != prepared->slot_capacity * 4u ||
-      proxy.secondary_position_stream4.size() != prepared->slot_capacity * 4u) {
+      proxy.secondary_position_stream4.size() != prepared->slot_capacity * 4u ||
+      proxy.support0_position_stream4.size() != prepared->slot_capacity * 4u ||
+      proxy.support1_position_stream4.size() != prepared->slot_capacity * 4u) {
     return false;
   }
   auto &renderables = engine_->getRenderableManager();
@@ -919,11 +1008,19 @@ bool OverlayProxyFactory::update_retained_edit_wire_proxy(
               proxy.primary_position_stream4.begin() + range.first_vertex);
     std::copy(range.ends.begin(), range.ends.end(),
               proxy.secondary_position_stream4.begin() + range.first_vertex);
+    std::copy(range.support0.begin(), range.support0.end(),
+              proxy.support0_position_stream4.begin() + range.first_vertex);
+    std::copy(range.support1.begin(), range.support1.end(),
+              proxy.support1_position_stream4.begin() + range.first_vertex);
     proxy.vertex_buffer->setBufferAt(*engine_, 0u, std::move(range.static_upload),
         range.first_vertex * sizeof(RetainedEditWireVertex));
     proxy.vertex_buffer->setBufferAt(*engine_, 1u, std::move(range.start_upload),
         range.first_vertex * sizeof(OverlayFloat4));
     proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(range.end_upload),
+        range.first_vertex * sizeof(OverlayFloat4));
+    proxy.vertex_buffer->setBufferAt(*engine_, 3u, std::move(range.support0_upload),
+        range.first_vertex * sizeof(OverlayFloat4));
+    proxy.vertex_buffer->setBufferAt(*engine_, 4u, std::move(range.support1_upload),
         range.first_vertex * sizeof(OverlayFloat4));
     upload_stats_.retained_edit_wire_uploaded_slot_count += range.starts.size() / 4u;
   }
@@ -943,7 +1040,7 @@ bool OverlayProxyFactory::update_retained_edit_wire_proxy(
   renderables.setBlendOrderAt(instance, 0u, presentation.state.blend_order);
   renderables.setLayerMask(instance, kViewportAllLayerMask, layer_mask);
   upload_stats_.static_upload_count += prepared->ranges.size();
-  upload_stats_.position_upload_count += prepared->ranges.size() * 2u;
+  upload_stats_.position_upload_count += prepared->ranges.size() * 4u;
   upload_stats_.retained_edit_wire_consolidated_upload_count += prepared->consolidated ? 1u : 0u;
   return true;
 }
@@ -1040,7 +1137,7 @@ OverlayProxyFactory::create_layer_proxies(const OverlayLayerBuildPlan &plan,
     ++upload_stats_.static_upload_count;
     ++upload_stats_.index_upload_count;
     upload_stats_.position_upload_count +=
-        proxy.secondary_position_stream4.empty() ? 1u : 2u;
+        position_stream_upload_count(proxy);
     if (!proxy.point_visibility_stream.empty()) {
       ++upload_stats_.visibility_upload_count;
     }
@@ -1143,7 +1240,7 @@ bool OverlayProxyFactory::update_layer_proxies(
   for (const auto &proxy : proxies) {
     ++upload_stats_.static_upload_count;
     upload_stats_.position_upload_count +=
-        proxy.secondary_position_stream4.empty() ? 1u : 2u;
+        position_stream_upload_count(proxy);
     if (proxy.kind == OverlayRenderableProxyKind::Triangle ||
         proxy.kind == OverlayRenderableProxyKind::Icon) {
       ++upload_stats_.index_upload_count;
@@ -1159,7 +1256,7 @@ bool OverlayProxyFactory::update_position_streams(
     return false;
   }
   upload_stats_.position_upload_count +=
-      proxy.secondary_position_stream4.empty() ? 1u : 2u;
+      position_stream_upload_count(proxy);
   if (proxy.edit_wire_slot_capacity != 0u) {
     ++proxy.edit_wire_update_revision;
   }
@@ -1350,12 +1447,24 @@ bool OverlayProxyFactory::upload_shared_positions(
 bool OverlayProxyFactory::bind_shared_positions(
     OverlayRenderableProxy &proxy,
     std::span<const std::uint32_t> primary_indices,
-    std::span<const std::uint32_t> secondary_indices) {
+    std::span<const std::uint32_t> secondary_indices,
+    std::span<const std::uint32_t> support0_indices,
+    std::span<const std::uint32_t> support1_indices) {
   QDR_PROFILE_FUNCTION();
+  // Existing callers without surface metadata keep a degenerate plane at the
+  // moving start vertex instead of interpreting its world coordinate as an index.
+  if (support0_indices.empty() && !proxy.support0_position_stream4.empty()) {
+    support0_indices = primary_indices;
+  }
+  if (support1_indices.empty() && !proxy.support1_position_stream4.empty()) {
+    support1_indices = primary_indices;
+  }
   if (!initialized() || shared_position_texture_ == nullptr ||
       proxy.vertex_buffer == nullptr || proxy.material_instance == nullptr ||
       primary_indices.size() != proxy.vertex_count || primary_indices.empty() ||
       secondary_indices.size() != proxy.secondary_position_stream4.size() ||
+      support0_indices.size() != proxy.support0_position_stream4.size() ||
+      support1_indices.size() != proxy.support1_position_stream4.size() ||
       (proxy.position_stream3.size() != primary_indices.size() &&
        proxy.primary_position_stream4.size() != primary_indices.size())) return false;
   for (auto *material : proxy_materials(proxy)) {
@@ -1363,13 +1472,16 @@ bool OverlayProxyFactory::bind_shared_positions(
         (!material->getMaterial()->hasParameter("sharedPositionsEnabled") ||
          !material->getMaterial()->hasParameter("sharedPositions"))) return false;
   }
-  for (const auto indices : {primary_indices, secondary_indices}) {
+  for (const auto indices : {primary_indices, secondary_indices,
+                             support0_indices, support1_indices}) {
     for (const auto index : indices) {
       if (index >= shared_position_count_) return false;
     }
   }
   filament::backend::BufferDescriptor primary_upload;
   filament::backend::BufferDescriptor secondary_upload;
+  filament::backend::BufferDescriptor support0_upload;
+  filament::backend::BufferDescriptor support1_upload;
   if (!proxy.position_stream3.empty()) {
     std::vector<OverlayFloat3> indices(primary_indices.size());
     for (std::size_t index = 0u; index < indices.size(); ++index) {
@@ -1383,13 +1495,16 @@ bool OverlayProxyFactory::bind_shared_positions(
     }
     primary_upload = FilamentBufferDescriptorFactory::vector(std::move(indices));
   }
-  if (!secondary_indices.empty()) {
-    std::vector<OverlayFloat4> indices(secondary_indices.size());
+  const auto prepare_indices = [](std::span<const std::uint32_t> source) {
+    std::vector<OverlayFloat4> indices(source.size());
     for (std::size_t index = 0u; index < indices.size(); ++index) {
-      indices[index] = {static_cast<float>(secondary_indices[index]), 0.0f, 0.0f, 1.0f};
+      indices[index] = {static_cast<float>(source[index]), 0.0f, 0.0f, 1.0f};
     }
-    secondary_upload = FilamentBufferDescriptorFactory::vector(std::move(indices));
-  }
+    return FilamentBufferDescriptorFactory::vector(std::move(indices));
+  };
+  if (!secondary_indices.empty()) secondary_upload = prepare_indices(secondary_indices);
+  if (!support0_indices.empty()) support0_upload = prepare_indices(support0_indices);
+  if (!support1_indices.empty()) support1_upload = prepare_indices(support1_indices);
   // Register all consumers before publishing, so a later texture growth can
   // rebind every pass without retaining pointers to movable proxy wrappers.
   if (!proxy.shared_positions_bound) {
@@ -1403,6 +1518,12 @@ bool OverlayProxyFactory::bind_shared_positions(
   if (!secondary_indices.empty()) {
     proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(secondary_upload));
   }
+  if (!support0_indices.empty()) {
+    proxy.vertex_buffer->setBufferAt(*engine_, 3u, std::move(support0_upload));
+  }
+  if (!support1_indices.empty()) {
+    proxy.vertex_buffer->setBufferAt(*engine_, 4u, std::move(support1_upload));
+  }
   for (auto *material : proxy_materials(proxy)) {
     if (material != nullptr) {
       material->setParameter("sharedPositions", shared_position_texture_, shared_position_sampler());
@@ -1411,7 +1532,7 @@ bool OverlayProxyFactory::bind_shared_positions(
   }
   proxy.shared_positions_bound = true;
   ++upload_stats_.shared_position_bind_count;
-  upload_stats_.shared_position_binding_upload_count += secondary_indices.empty() ? 1u : 2u;
+  upload_stats_.shared_position_binding_upload_count += position_stream_upload_count(proxy);
   if (proxy.edit_wire_slot_capacity != 0u) ++proxy.edit_wire_update_revision;
   return true;
 }
@@ -1428,7 +1549,7 @@ bool OverlayProxyFactory::clear_shared_positions(OverlayRenderableProxy &proxy) 
     }
   }
   proxy.shared_positions_bound = false;
-  upload_stats_.position_upload_count += proxy.secondary_position_stream4.empty() ? 1u : 2u;
+  upload_stats_.position_upload_count += position_stream_upload_count(proxy);
   if (proxy.edit_wire_slot_capacity != 0u) ++proxy.edit_wire_update_revision;
   return true;
 }
@@ -1800,6 +1921,10 @@ void OverlayProxyFactory::create_line_proxy(
                        AttributeType::FLOAT4,
                        offsetof(OverlayLineVertex, control),
                        sizeof(OverlayLineVertex))
+            .attribute(filament::VertexAttribute::CUSTOM3, 3u,
+                       AttributeType::FLOAT4, 0u, sizeof(OverlayFloat4))
+            .attribute(filament::VertexAttribute::CUSTOM4, 4u,
+                       AttributeType::FLOAT4, 0u, sizeof(OverlayFloat4))
             .attribute(
                 filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
                 offsetof(OverlayLineVertex, color), sizeof(OverlayLineVertex))
@@ -1852,6 +1977,10 @@ void OverlayProxyFactory::create_edit_wire_proxy(
                        AttributeType::FLOAT4,
                        offsetof(OverlayLineVertex, control),
                        sizeof(OverlayLineVertex))
+            .attribute(filament::VertexAttribute::CUSTOM3, 3u,
+                       AttributeType::FLOAT4, 0u, sizeof(OverlayFloat4))
+            .attribute(filament::VertexAttribute::CUSTOM4, 4u,
+                       AttributeType::FLOAT4, 0u, sizeof(OverlayFloat4))
             .attribute(
                 filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
                 offsetof(OverlayLineVertex, color), sizeof(OverlayLineVertex))

@@ -12,14 +12,52 @@
 #include "render/overlay/overlay_mesh_types.hpp"
 #include "render/overlay/overlay_face_fill_composition.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
+
+/// Retains incident surface points for camera-independent component wire depth.
+/// Exact endpoint positions reject ambiguous occurrences of one authored edge.
+class OverlayWireSurfaceSupportCache final {
+public:
+  void prepare(const ViewportOverlayFrame &frame,
+               const OverlayFrameSignatures &signatures);
+  void apply(ViewportOverlayLine &line) const;
+  [[nodiscard]] std::uint64_t build_count() const { return build_count_; }
+
+private:
+  /// Canonical authored edge identity within one object.
+  struct EdgeKey {
+    int object = -1;
+    int first = -1;
+    int second = -1;
+    bool operator==(const EdgeKey &) const = default;
+  };
+  /// Hashes authored identity while exact equality decides support reuse.
+  struct EdgeKeyHash {
+    std::size_t operator()(const EdgeKey &key) const;
+  };
+  /// At most two incident faces support a manifold edge; others fall back.
+  struct EdgeSupport {
+    QVec3 first;
+    QVec3 second;
+    std::array<ViewportOverlaySurfaceSupport, 2u> points;
+    std::array<int, 2u> faces{-1, -1};
+    std::size_t count = 0u;
+    bool ambiguous = false;
+  };
+  std::unordered_map<EdgeKey, EdgeSupport, EdgeKeyHash> supports_;
+  std::uint64_t signature_ = 0u;
+  std::uint64_t build_count_ = 0u;
+  bool prepared_ = false;
+};
 
 /// Reports retained source-face acceleration work independently of camera queries.
 struct OverlayDepthStampPointVisibilityStats {
@@ -225,7 +263,8 @@ public:
               std::uint16_t blend_order_bias = 0u,
               OverlayDepthStampPointVisibilityFilter *point_visibility = nullptr,
               bool allow_viewport_ray_skips = true,
-              bool retain_point_geometry = false);
+              bool retain_point_geometry = false,
+              const OverlayWireSurfaceSupportCache *wire_surface_support = nullptr);
 
 private:
     /**

@@ -8,6 +8,7 @@
 
 #include "math/types.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -162,6 +163,15 @@ constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, st
 }
 
 /**
+ * Pins one incident surface plane to an authored mesh vertex. An invalid
+ * vertex ID leaves the line's depth plane degenerate at its start endpoint.
+ */
+struct ViewportOverlaySurfaceSupport {
+    QVec3 position;
+    int vertex_id = -1;
+};
+
+/**
  * Represents a Viewport Overlay Line value used by the render extraction and Filament resource layer.
  */
 struct ViewportOverlayLine {
@@ -174,6 +184,7 @@ struct ViewportOverlayLine {
         ViewportOverlayStyleRole::LayerDefault;
     ViewportOverlaySource source = ViewportOverlaySource::Unknown;
     ViewportOverlayElementRef element;
+    std::array<ViewportOverlaySurfaceSupport, 2u> surface_support{};
 };
 
 /**
